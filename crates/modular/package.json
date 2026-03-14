@@ -44,7 +44,7 @@
         "artifacts": "napi artifacts",
         "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
         "build": "napi build --platform --release --esm",
-        "build:debug": "napi build --platform",
+        "build:debug": "napi build --platform --esm",
         "format": "run-p format:rs format:toml",
         "format:toml": "taplo format",
         "format:rs": "cargo fmt",

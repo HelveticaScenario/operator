@@ -3,22 +3,22 @@ use serde::Deserialize;
 
 use crate::{
     dsp::utils::voct_to_hz,
-    poly::{PolyOutput, PolySignal},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
     PORT_MAX_CHANNELS,
 };
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct PulseOscillatorParams {
     /// pitch in V/Oct (0V = C4)
     #[signal(type = pitch)]
-    freq: PolySignal,
+    freq: Option<PolySignal>,
     /// pulse width (0-5, 2.5 is square)
     #[signal(default = 2.5, range = (0.0, 5.0))]
-    width: PolySignal,
+    width: Option<PolySignal>,
     /// pulse width modulation CV — added to the width parameter
-    pwm: PolySignal,
+    pwm: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -31,8 +31,13 @@ struct PulseOscillatorOutputs {
 #[derive(Default, Clone, Copy)]
 struct PulseChannelState {
     phase: f32,
-    freq: f32,
     width: Clickless,
+}
+
+/// State for the PulseOscillator module.
+#[derive(Default)]
+struct PulseOscillatorState {
+    channels: [PulseChannelState; PORT_MAX_CHANNELS],
 }
 
 /// Pulse/square wave oscillator with pulse width modulation.
@@ -50,10 +55,9 @@ struct PulseChannelState {
 /// $pulse('c3', { width: 2.5 }).out()
 /// ```
 #[module(name = "$pulse", args(freq))]
-#[derive(Default)]
 pub struct PulseOscillator {
     outputs: PulseOscillatorOutputs,
-    channels: [PulseChannelState; PORT_MAX_CHANNELS],
+    state: PulseOscillatorState,
     params: PulseOscillatorParams,
 }
 
@@ -62,13 +66,13 @@ impl PulseOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
-            let base_width = self.params.width.get_value_or(ch, 2.5);
-            let pwm = self.params.pwm.get_value_or(ch, 0.0);
+            let base_width = self.params.width.value_or(ch, 2.5);
+            let pwm = self.params.pwm.value_or(ch, 0.0);
             state.width.update((base_width + pwm).clamp(0.0, 5.0));
 
-            let frequency = voct_to_hz(self.params.freq.get_value_or(ch, 0.0));
+            let frequency = voct_to_hz(self.params.freq.value_or(ch, 0.0));
             let phase_increment = frequency / sample_rate;
 
             // Pulse width (0.0 to 1.0, 0.5 is square wave)

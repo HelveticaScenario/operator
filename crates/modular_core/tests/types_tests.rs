@@ -8,7 +8,7 @@ use serde_json::json;
 use modular_core::patch::Patch;
 use modular_core::types::{
     ClockMessages, Connect, Message, MessageHandler, MessageTag, MidiControlChange, MidiNoteOn,
-    Sampleable, Signal,
+    Sampleable, Signal, SignalExt,
 };
 
 // The proc-macro expands to `crate::types::...`; provide that module in this integration test crate.
@@ -105,10 +105,17 @@ fn signal_volts_get_value() {
 }
 
 #[test]
-fn signal_disconnected_get_value_or() {
-    let s = Signal::Disconnected;
-    approx_eq(s.get_value_or(42.0), 42.0, 1e-6);
-    approx_eq(s.get_value(), 0.0, 1e-6);
+fn option_signal_none_value_or() {
+    let s: Option<Signal> = None;
+    approx_eq(s.value_or(42.0), 42.0, 1e-6);
+    approx_eq(s.value_or_zero(), 0.0, 1e-6);
+}
+
+#[test]
+fn option_signal_some_value_or() {
+    let s: Option<Signal> = Some(Signal::Volts(3.5));
+    approx_eq(s.value_or(42.0), 3.5, 1e-6);
+    approx_eq(s.value_or_zero(), 3.5, 1e-6);
 }
 
 #[test]
@@ -155,8 +162,14 @@ fn signal_deserialize_tagged_variants_still_work() {
     }
     */
 
-    let disconnected: Signal = serde_json::from_value(json!({"type":"disconnected"})).unwrap();
-    assert!(matches!(disconnected, Signal::Disconnected));
+    // Signal::Disconnected has been removed — deserialization of {"type":"disconnected"}
+    // should now fail.
+    let disconnected_result: std::result::Result<Signal, _> =
+        serde_json::from_value(json!({"type":"disconnected"}));
+    assert!(
+        disconnected_result.is_err(),
+        "Signal::Disconnected was removed; deserialization should fail"
+    );
 }
 
 #[test]
@@ -179,7 +192,7 @@ fn signal_cable_connect_and_read() {
     approx_eq(s.get_value(), 0.0, 1e-6);
 
     s.connect(&patch);
-    approx_eq(s.get_value_or(-999.0), 3.5, 1e-6);
+    approx_eq(s.get_value(), 3.5, 1e-6);
 }
 
 /*
@@ -396,15 +409,16 @@ fn connect_noop_for_non_cable_and_non_track_signals() {
 }
 
 #[test]
-fn foo() {
+fn option_signal_deserialize_missing_field() {
     #[derive(Deserialize, Default, Debug)]
     #[serde(default)]
     struct A {
         foo: String,
-        sig: Signal,
+        sig: Option<Signal>,
     }
 
     let a: A = serde_json::from_str(r#"{"foo":"bar"}"#).unwrap();
+    assert!(a.sig.is_none(), "missing field should deserialize as None");
 
     println!("{:?}", a);
 }

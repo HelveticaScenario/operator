@@ -1065,8 +1065,18 @@ impl AudioState {
     // Construct all modules that appear in desired graph on main thread
     let constructors = get_constructors();
     for (id, module_state) in desired_modules {
+      // Deserialize params FIRST (before construction)
+      let deserialized =
+        crate::deserialize_params(&module_state.module_type, module_state.params, true)
+          .map_err(|e| {
+            napi::Error::from_reason(format!(
+              "Failed to deserialize params for {}: {}",
+              id, e
+            ))
+          })?;
+
       if let Some(constructor) = constructors.get(&module_state.module_type) {
-        match constructor(&id, sample_rate) {
+        match constructor(&id, sample_rate, deserialized.clone()) {
           Ok(module) => {
             update.inserts.push((id.clone(), module));
           }
@@ -1084,16 +1094,7 @@ impl AudioState {
         )));
       }
 
-      // Also add param update with pre-deserialized params (cache-aware)
-      let deserialized =
-        crate::deserialize_params(&module_state.module_type, module_state.params, true)
-          .map_err(|e| {
-            napi::Error::from_reason(format!(
-              "Failed to deserialize params for {}: {}",
-              id, e
-            ))
-          })?;
-      update.param_updates.push((id.clone(), deserialized));
+       update.param_updates.push((id.clone(), deserialized));
     }
 
     // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread

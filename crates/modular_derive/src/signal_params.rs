@@ -5,7 +5,10 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Attribute, Data, DeriveInput, Fields, Token};
 
-use crate::utils::{extract_doc_comments, is_mono_signal_type, is_poly_signal_type};
+use crate::utils::{
+    extract_doc_comments, is_mono_signal_type, is_option_mono_signal_type,
+    is_option_poly_signal_type, is_poly_signal_type,
+};
 
 /// Parsed `#[signal(...)]` attribute data for signal param metadata.
 pub struct SignalAttr {
@@ -97,8 +100,10 @@ pub fn impl_signal_params_macro(ast: &DeriveInput) -> TokenStream {
                         Some(id) => id,
                         None => continue,
                     };
-                    let is_signal =
-                        is_poly_signal_type(&field.ty) || is_mono_signal_type(&field.ty);
+                    let is_signal = is_poly_signal_type(&field.ty)
+                        || is_mono_signal_type(&field.ty)
+                        || is_option_poly_signal_type(&field.ty)
+                        || is_option_mono_signal_type(&field.ty);
                     if !is_signal {
                         continue;
                     }

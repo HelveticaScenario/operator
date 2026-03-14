@@ -1007,25 +1007,6 @@ function capitalizeName(name: string): string {
     return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-function renderParamsInterface(
-    baseName: string,
-    classSpec: ClassSpec,
-    indent: string,
-): string[] {
-    const lines: string[] = [];
-    const paramsInterfaceName = `${capitalizeName(baseName)}Params`;
-    lines.push(`${indent}export interface ${paramsInterfaceName} {`);
-
-    for (const prop of classSpec.properties) {
-        lines.push('');
-        lines.push(...renderDocComment(prop.description, indent + '  '));
-        const type = schemaToTypeExpr(prop.schema, classSpec.rootSchema);
-        lines.push(`${indent}  ${renderPropertyKey(prop.name)}?: ${type};`);
-    }
-    lines.push(`${indent}}`);
-    return lines;
-}
-
 /**
  * Convert snake_case to camelCase
  */
@@ -1171,6 +1152,8 @@ function renderFactoryFunction(
     let args: string[] = [];
     // @ts-ignore
     const positionalArgs = moduleSchema.positionalArgs || [];
+    const schemaRequired: string[] =
+        (moduleSchema.paramsSchema as any).required || [];
 
     // Build docstring lines
     const docLines: string[] = [];
@@ -1178,15 +1161,34 @@ function renderFactoryFunction(
         docLines.push(...moduleSchema.documentation.split(/\r?\n/));
     }
 
-    for (const arg of positionalArgs) {
+    const positionalRequiredness = positionalArgs.map((a: any) =>
+        schemaRequired.includes(a.name),
+    );
+
+    for (let i = 0; i < positionalArgs.length; i++) {
+        const arg = positionalArgs[i];
         // @ts-ignore
         const propSchema = moduleSchema.paramsSchema.properties?.[arg.name];
         // @ts-ignore
         const type = propSchema
             ? schemaToTypeExpr(propSchema, moduleSchema.paramsSchema)
             : 'any';
-        const optional = arg.optional ? '?' : '';
-        args.push(`${arg.name}${optional}: ${type}`);
+
+        const isRequired = positionalRequiredness[i];
+
+        if (isRequired) {
+            args.push(`${arg.name}: ${type}`);
+        } else {
+            // Check if all subsequent positional args are also optional
+            const allSubsequentOptional = positionalRequiredness
+                .slice(i + 1)
+                .every((r: boolean) => !r);
+            if (allSubsequentOptional) {
+                args.push(`${arg.name}?: ${type}`);
+            } else {
+                args.push(`${arg.name}: ${type} | undefined`);
+            }
+        }
 
         // Add @param for positional arg
         const description = propSchema?.description;
@@ -1231,7 +1233,8 @@ function renderFactoryFunction(
                 propSchema,
                 moduleSchema.paramsSchema,
             );
-            configProps.push(`${key}?: ${type}`);
+            const optionalMark = schemaRequired.includes(key) ? '' : '?';
+            configProps.push(`${key}${optionalMark}: ${type}`);
 
             // Collect config param descriptions
             const description = propSchema?.description;
@@ -1258,7 +1261,13 @@ function renderFactoryFunction(
 
     const configType = `{ ${configProps.join('; ')} }`;
 
-    args.push(`config?: ${configType}`);
+    // Config is required if any non-positional param is required
+    const hasRequiredConfigProps = allParamKeys.some(
+        (key: string) =>
+            !positionalKeys.has(key) && schemaRequired.includes(key),
+    );
+    const configOptional = hasRequiredConfigProps ? '' : '?';
+    args.push(`config${configOptional}: ${configType}`);
 
     // Add @param config with nested property descriptions
     if (configParamDocs.length > 0) {

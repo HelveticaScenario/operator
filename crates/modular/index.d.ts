@@ -147,11 +147,21 @@ export interface CurrentAudioState {
 /**
  * Derive the output channel count for a module from its params JSON.
  *
- * Returns the derived channel count, or null if the module type is unknown
- * or the channel count cannot be determined from the params.
+ * Returns a structured result with either the derived channel count or
+ * error information when deserialization fails.
  * This uses the cache, so it also warms the cache for subsequent apply_patch calls.
  */
-export declare function deriveChannelCount(moduleType: string, params: any): number | null
+export declare function deriveChannelCount(moduleType: string, params: any): DeriveChannelCountResult
+
+export interface DeriveChannelCountError {
+  message: string
+  params: Array<string>
+}
+
+export interface DeriveChannelCountResult {
+  channelCount?: number
+  errors?: Array<DeriveChannelCountError>
+}
 
 /** N-API compatible structure for the full device cache */
 export interface DeviceCacheSnapshot {
@@ -319,7 +329,6 @@ export interface PatchGraph {
 
 export interface PositionalArg {
   name: string
-  optional: boolean
 }
 
 export interface Scope {

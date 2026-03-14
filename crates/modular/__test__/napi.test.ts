@@ -250,25 +250,37 @@ describe('validatePatchGraph', () => {
 
 describe('deriveChannelCount', () => {
     test('single note returns 1', () => {
-        const count = deriveChannelCount('$sine', { freq: 'C4' });
-        expect(count).toBe(1);
+        const result = deriveChannelCount('$sine', { freq: 'C4' });
+        expect(result.channelCount).toBe(1);
+        expect(result.errors).toBeUndefined();
     });
 
     test('array of notes returns correct count', () => {
-        const count = deriveChannelCount('$sine', {
+        const result = deriveChannelCount('$sine', {
             freq: ['C4', 'E4', 'G4'],
         });
-        expect(count).toBe(3);
+        expect(result.channelCount).toBe(3);
+        expect(result.errors).toBeUndefined();
     });
 
-    test('unknown module type returns null', () => {
-        const count = deriveChannelCount('$unknownFoo', { x: 1 });
-        expect(count).toBeNull();
+    test('unknown module type returns errors', () => {
+        const result = deriveChannelCount('$unknownFoo', { x: 1 });
+        expect(result.channelCount).toBeUndefined();
+        expect(result.errors).toBeDefined();
+        expect(result.errors!.length).toBeGreaterThan(0);
     });
 
     test('Hz string returns 1', () => {
-        const count = deriveChannelCount('$sine', { freq: '440hz' });
-        expect(count).toBe(1);
+        const result = deriveChannelCount('$sine', { freq: '440hz' });
+        expect(result.channelCount).toBe(1);
+        expect(result.errors).toBeUndefined();
+    });
+
+    test('missing required param returns error with param name', () => {
+        const result = deriveChannelCount('$lpf', { cutoff: 'C4' });
+        expect(result.channelCount).toBeUndefined();
+        expect(result.errors).toBeDefined();
+        expect(result.errors![0].params).toContain('input');
     });
 });
 

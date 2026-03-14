@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::{
     dsp::utils::{changed, voct_to_hz},
-    poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 
@@ -22,15 +22,15 @@ const BUTTERWORTH_Q: f32 = 0.707_107; // 1/sqrt(2)
 
 // ── Params & Outputs ─────────────────────────────────────────────────────────
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct CrossoverParams {
     /// audio input signal
     input: PolySignal,
     /// crossover frequency between low and mid bands (V/Oct, 0V = C4)
-    low_mid_freq: PolySignal,
+    low_mid_freq: Option<PolySignal>,
     /// crossover frequency between mid and high bands (V/Oct, 0V = C4)
-    mid_high_freq: PolySignal,
+    mid_high_freq: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -165,10 +165,16 @@ struct ChannelState {
     smooth_mid_high: Clickless,
 }
 
+/// State for the Crossover module.
+#[derive(Default)]
+struct CrossoverState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
 // ── Module ───────────────────────────────────────────────────────────────────
 
 /// EXPERIMENTAL
-/// 
+///
 /// Three-band crossover / band splitter using Linkwitz-Riley 4th-order filters.
 ///
 /// Splits an input signal into three frequency bands (low, mid, high) with
@@ -189,10 +195,9 @@ struct ChannelState {
 /// $mix(low, mid, high).out()
 /// ```
 #[module(name = "$xover", args(input))]
-#[derive(Default)]
 pub struct Crossover {
     outputs: CrossoverOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: CrossoverState,
     params: CrossoverParams,
 }
 
@@ -201,19 +206,19 @@ impl Crossover {
         let channels = self.channel_count();
 
         for ch in 0..channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
-            let input = self.params.input.get_value_or(ch, 0.0);
+            let input = self.params.input.get_value(ch);
 
             // ── Read and smooth crossover frequencies ────────────────────
             let low_mid_voct = self
                 .params
                 .low_mid_freq
-                .get_value_or(ch, DEFAULT_LOW_MID_FREQ_VOCT);
+                .value_or(ch, DEFAULT_LOW_MID_FREQ_VOCT);
             let mid_high_voct = self
                 .params
                 .mid_high_freq
-                .get_value_or(ch, DEFAULT_MID_HIGH_FREQ_VOCT);
+                .value_or(ch, DEFAULT_MID_HIGH_FREQ_VOCT);
 
             state.smooth_low_mid.update(low_mid_voct);
             state.smooth_mid_high.update(mid_high_voct);

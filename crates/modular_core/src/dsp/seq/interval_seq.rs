@@ -18,14 +18,14 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::{
-    MonoSignal, Patch,
     dsp::{
         utilities::quantizer::ScaleParam,
-        utils::{TempGate, TempGateState, midi_to_voct_f64, min_gate_samples},
+        utils::{midi_to_voct_f64, min_gate_samples, TempGate, TempGateState},
     },
     pattern_system::Pattern,
-    poly::{PORT_MAX_CHANNELS, PolyOutput},
+    poly::{MonoSignalExt, PolyOutput, PORT_MAX_CHANNELS},
     types::Connect,
+    MonoSignal, Patch,
 };
 
 /// Scale parameter for IntervalSeq that supports an optional octave in the root.
@@ -410,24 +410,24 @@ struct IntervalVoiceState {
     last_assigned: f64,
 }
 
-
-
 fn default_channels() -> usize {
     4
 }
 
-#[derive(Clone, Deserialize, Default, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
+#[serde(rename_all = "camelCase")]
 pub struct IntervalSeqParams {
     /// patterns to combine (left-fold with appLeft addition); accepts a single
     /// pattern string or an array of pattern strings
+    #[serde(default)]
     patterns: IntervalPatternParam,
     /// scale for quantizing degrees to pitches (supports optional octave, e.g. "c3(major)")
+    #[serde(default)]
     scale: IntervalScaleParam,
     /// playhead position
     #[default_connection(module = RootClock, port = "playhead", channels = [0, 1])]
     #[signal(range = (0.0, 1.0))]
-    playhead: MonoSignal,
+    playhead: Option<MonoSignal>,
     /// number of polyphonic voices (1–16)
     #[serde(default = "default_channels")]
     pub channels: usize,
@@ -643,6 +643,11 @@ const CAP: usize = 12;
 pub struct IntervalSeq {
     outputs: IntervalSeqOutputs,
     params: IntervalSeqParams,
+    state: IntervalSeqState,
+}
+
+/// State for the IntervalSeq module.
+pub struct IntervalSeqState {
     /// Per-voice state array
     voices: [IntervalVoiceState; PORT_MAX_CHANNELS],
     /// Round-robin voice index for allocation
@@ -659,6 +664,20 @@ pub struct IntervalSeq {
     base_midi: i32,
 }
 
+impl Default for IntervalSeqState {
+    fn default() -> Self {
+        Self {
+            voices: std::array::from_fn(|_| IntervalVoiceState::default()),
+            next_voice: 0,
+            current_cycle: None,
+            current_cycle_haps: None,
+            module_cache: Vec::new(),
+            scale_intervals: [0, 2, 4, 5, 7, 9, 11].into_iter().collect(), // Default major scale
+            base_midi: 60,                                                 // C4
+        }
+    }
+}
+
 /// A combined hap from the folded pattern, ready for voice allocation.
 #[derive(Clone, Debug)]
 pub(crate) struct CombinedHap {
@@ -673,29 +692,12 @@ pub(crate) struct CombinedHap {
     pattern_spans: Vec<Vec<(usize, usize)>>,
 }
 
-impl Default for IntervalSeq {
-    fn default() -> Self {
-        Self {
-            outputs: IntervalSeqOutputs::default(),
-            params: IntervalSeqParams::default(),
-            voices: std::array::from_fn(|_| IntervalVoiceState::default()),
-            next_voice: 0,
-            current_cycle: None,
-            current_cycle_haps: None,
-            module_cache: Vec::new(),
-            scale_intervals: [0, 2, 4, 5, 7, 9, 11].into_iter().collect(), // Default major scale
-            base_midi: 60,                                                 // C4
-            _channel_count: 0,
-        }
-    }
-}
-
 impl IntervalSeq {
     /// Invalidate the cycle cache.
     fn invalidate_cache(&mut self) {
-        self.current_cycle = None;
-        self.current_cycle_haps = None;
-        self.module_cache.clear();
+        self.state.current_cycle = None;
+        self.state.current_cycle_haps = None;
+        self.state.module_cache.clear();
         // Do NOT clear voices — they hold their own Arc
     }
 
@@ -707,11 +709,11 @@ impl IntervalSeq {
 
         let module_idx = (cycle - 1000) as usize;
 
-        if module_idx >= self.module_cache.capacity() {
-            self.module_cache.resize(module_idx + 1, None);
+        if module_idx >= self.state.module_cache.capacity() {
+            self.state.module_cache.resize(module_idx + 1, None);
         }
 
-        if self.module_cache[module_idx].is_some() {
+        if self.state.module_cache[module_idx].is_some() {
             return;
         }
 
@@ -734,7 +736,7 @@ impl IntervalSeq {
                     }
                 })
                 .collect();
-            self.module_cache[module_idx] = Some(Arc::new(combined_haps));
+            self.state.module_cache[module_idx] = Some(Arc::new(combined_haps));
         }
     }
 
@@ -744,7 +746,8 @@ impl IntervalSeq {
             self.params.patterns.cached_haps().get(cycle as usize)
         } else {
             let module_idx = (cycle - 1000) as usize;
-            self.module_cache
+            self.state
+                .module_cache
                 .get(module_idx)
                 .and_then(|opt| opt.as_ref())
         }
@@ -752,12 +755,12 @@ impl IntervalSeq {
 
     /// Convert a scale degree to V/Oct voltage.
     fn degree_to_voltage(&self, degree: i32) -> f64 {
-        if self.scale_intervals.is_empty() {
+        if self.state.scale_intervals.is_empty() {
             // Chromatic fallback
             return midi_to_voct_f64(60.0 + degree as f64);
         }
 
-        let scale_len = self.scale_intervals.len() as i32;
+        let scale_len = self.state.scale_intervals.len() as i32;
 
         // Handle negative degrees with proper wrapping
         let (octave, wrapped_degree) = if degree >= 0 {
@@ -772,13 +775,14 @@ impl IntervalSeq {
 
         // Get semitone offset within octave from scale intervals
         let semitone_in_scale = self
+            .state
             .scale_intervals
             .get(wrapped_degree)
             .copied()
             .unwrap_or(0) as i32;
 
         // Total MIDI note: base_midi (root + octave) + degree_octave*12 + semitone_in_scale
-        let midi = self.base_midi + (octave * 12) + semitone_in_scale;
+        let midi = self.state.base_midi + (octave * 12) + semitone_in_scale;
 
         midi_to_voct_f64(midi as f64)
     }
@@ -786,19 +790,19 @@ impl IntervalSeq {
     /// Update cached scale info from params.
     fn update_scale_cache(&mut self) {
         let scale: &ScaleParam = &self.params.scale;
-        self.base_midi = scale.base_midi();
+        self.state.base_midi = scale.base_midi();
         if let Some(snapper) = scale.snapper() {
-            self.scale_intervals = snapper.scale_intervals().clone();
+            self.state.scale_intervals = snapper.scale_intervals().clone();
         } else {
             // Chromatic - all 12 semitones
-            self.scale_intervals = (0i8..CAP as i8).into_iter().collect();
+            self.state.scale_intervals = (0i8..CAP as i8).into_iter().collect();
         }
     }
 }
 
 impl IntervalSeq {
     fn update(&mut self, sample_rate: f32) {
-        let playhead = self.params.playhead.get_value_f64();
+        let playhead = self.params.playhead.value_or_zero() as f64;
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
 
@@ -809,23 +813,27 @@ impl IntervalSeq {
         if self.params.patterns.pattern().is_none() {
             for ch in 0..num_channels {
                 self.outputs.cv.set(ch, 0.0);
-                self.outputs.gate.set(ch, self.voices[ch].gate.process());
-                self.outputs.trig.set(ch, self.voices[ch].trigger.process());
+                self.outputs
+                    .gate
+                    .set(ch, self.state.voices[ch].gate.process());
+                self.outputs
+                    .trig
+                    .set(ch, self.state.voices[ch].trigger.process());
             }
             return;
         }
 
         // Check if we crossed a cycle boundary
         let current_cycle = playhead.floor() as i64;
-        if self.current_cycle != Some(current_cycle) {
+        if self.state.current_cycle != Some(current_cycle) {
             self.ensure_cycle_cached(current_cycle);
-            self.current_cycle_haps = self.get_cycle_haps(current_cycle).cloned();
-            self.current_cycle = Some(current_cycle);
+            self.state.current_cycle_haps = self.get_cycle_haps(current_cycle).cloned();
+            self.state.current_cycle = Some(current_cycle);
         }
 
         // Collect events to process (avoids borrow conflicts)
         // Store (hap_index, degree) tuples — we'll create CachedIntervalHap from the Arc later
-        let cycle_haps_arc = self.current_cycle_haps.clone();
+        let cycle_haps_arc = self.state.current_cycle_haps.clone();
         let events_to_process: Vec<(usize, i32)> = if let Some(ref cycle_haps) = cycle_haps_arc {
             cycle_haps
                 .iter()
@@ -843,7 +851,7 @@ impl IntervalSeq {
 
                     // Check if already assigned
                     let already_assigned = (0..num_channels).any(|i| {
-                        if let Some(ref existing) = self.voices[i].cached_hap {
+                        if let Some(ref existing) = self.state.voices[i].cached_hap {
                             existing.hap_index == hap_index
                                 && existing.cached_cycle == current_cycle
                         } else {
@@ -870,7 +878,7 @@ impl IntervalSeq {
                 };
                 let voltage = self.degree_to_voltage(degree);
 
-                let voice = &mut self.voices[voice_idx];
+                let voice = &mut self.state.voices[voice_idx];
                 voice.cached_hap = Some(CachedIntervalHap {
                     cycle_haps: cycle_haps.clone(),
                     hap_index,
@@ -889,7 +897,7 @@ impl IntervalSeq {
 
         // Output all voices
         for ch in 0..num_channels {
-            let voice = &mut self.voices[ch];
+            let voice = &mut self.state.voices[ch];
 
             if voice.active {
                 self.outputs.cv.set(ch, voice.cached_voltage as f32);
@@ -902,10 +910,10 @@ impl IntervalSeq {
 
     fn allocate_voice(&mut self, playhead: f64, num_channels: usize) -> Option<usize> {
         for i in 0..num_channels {
-            let voice_idx = (self.next_voice + i) % num_channels;
-            if !self.voices[voice_idx].active {
-                self.next_voice = (voice_idx + 1) % num_channels;
-                self.voices[voice_idx].last_assigned = playhead;
+            let voice_idx = (self.state.next_voice + i) % num_channels;
+            if !self.state.voices[voice_idx].active {
+                self.state.next_voice = (voice_idx + 1) % num_channels;
+                self.state.voices[voice_idx].last_assigned = playhead;
                 return Some(voice_idx);
             }
         }
@@ -916,11 +924,11 @@ impl IntervalSeq {
 
     fn release_ended_voices(&mut self, playhead: f64, num_channels: usize) {
         for i in 0..num_channels {
-            if let Some(ref cached) = self.voices[i].cached_hap {
+            if let Some(ref cached) = self.state.voices[i].cached_hap {
                 if !cached.contains(playhead) {
-                    self.voices[i].active = false;
-                    self.voices[i].cached_hap = None;
-                    self.voices[i]
+                    self.state.voices[i].active = false;
+                    self.state.voices[i].cached_hap = None;
+                    self.state.voices[i]
                         .gate
                         .set_state(TempGateState::Low, TempGateState::Low, 0);
                 }
@@ -939,7 +947,7 @@ impl crate::types::StatefulModule for IntervalSeq {
         let mut per_pattern_spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_sources];
         let mut any_active = false;
 
-        for voice in self.voices.iter().take(num_channels) {
+        for voice in self.state.voices.iter().take(num_channels) {
             if voice.active {
                 if let Some(ref cached) = voice.cached_hap {
                     any_active = true;
@@ -1104,8 +1112,8 @@ mod tests {
     #[test]
     fn test_degree_to_voltage_major() {
         let mut seq = IntervalSeq::default();
-        seq.scale_intervals = [0, 2, 4, 5, 7, 9, 11].iter().copied().collect(); // C major
-        seq.base_midi = 60; // C4
+        seq.state.scale_intervals = [0, 2, 4, 5, 7, 9, 11].iter().copied().collect(); // C major
+        seq.state.base_midi = 60; // C4
 
         // Degree 0 = C4 = MIDI 60 = 0V
         let v0 = seq.degree_to_voltage(0);
@@ -1127,8 +1135,8 @@ mod tests {
     #[test]
     fn test_degree_to_voltage_with_octave() {
         let mut seq = IntervalSeq::default();
-        seq.scale_intervals = [0, 2, 4, 5, 7, 9, 11].iter().copied().collect(); // C major
-        seq.base_midi = 48; // C3
+        seq.state.scale_intervals = [0, 2, 4, 5, 7, 9, 11].iter().copied().collect(); // C major
+        seq.state.base_midi = 48; // C3
 
         // Degree 0 = C3 = MIDI 48 = -1V
         let v0 = seq.degree_to_voltage(0);
@@ -1139,8 +1147,8 @@ mod tests {
         assert!((v7 - 0.0).abs() < 0.001);
 
         // D3 root
-        seq.base_midi = 50; // D3
-        // Degree 0 = D3 = MIDI 50 = -10/12 V
+        seq.state.base_midi = 50; // D3
+                                  // Degree 0 = D3 = MIDI 50 = -10/12 V
         let v0 = seq.degree_to_voltage(0);
         assert!((v0 - (-10.0 / 12.0)).abs() < 0.001);
     }

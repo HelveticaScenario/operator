@@ -1,26 +1,26 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use crate::types::Clickless;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct RemapParams {
     /// signal input to remap
     input: PolySignal,
     /// minimum of input range
     #[signal(default = -5.0)]
-    in_min: PolySignal,
+    in_min: Option<PolySignal>,
     /// maximum of input range
     #[signal(default = 5.0)]
-    in_max: PolySignal,
+    in_max: Option<PolySignal>,
     /// minimum of output range
     #[signal(default = -5.0)]
-    out_min: PolySignal,
+    out_min: Option<PolySignal>,
     /// maximum of output range
     #[signal(default = 5.0)]
-    out_max: PolySignal,
+    out_max: Option<PolySignal>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -29,6 +29,12 @@ struct ChannelState {
     in_max: Clickless,
     out_min: Clickless,
     out_max: Clickless,
+}
+
+/// State for the Remap module.
+#[derive(Default)]
+struct RemapState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -52,10 +58,9 @@ struct RemapOutputs {
 /// $remap(signal, 0, 1, -5, 5)
 /// ```
 #[module(name = "$remap", args(input, outMin, outMax, inMin, inMax))]
-#[derive(Default)]
 pub struct Remap {
     outputs: RemapOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: RemapState,
     params: RemapParams,
 }
 
@@ -65,19 +70,13 @@ impl Remap {
 
         for i in 0..channels as usize {
             let input_val = self.params.input.get_value(i);
-            let state = &mut self.channels[i];
+            let state = &mut self.state.channels[i];
 
             // Smooth range parameters to avoid clicks
-            state
-                .in_min
-                .update(self.params.in_min.get_value_or(i, -5.0));
-            state.in_max.update(self.params.in_max.get_value_or(i, 5.0));
-            state
-                .out_min
-                .update(self.params.out_min.get_value_or(i, -5.0));
-            state
-                .out_max
-                .update(self.params.out_max.get_value_or(i, 5.0));
+            state.in_min.update(self.params.in_min.value_or(i, -5.0));
+            state.in_max.update(self.params.in_max.value_or(i, 5.0));
+            state.out_min.update(self.params.out_min.value_or(i, -5.0));
+            state.out_max.update(self.params.out_max.value_or(i, 5.0));
 
             // Apply remapping using map_range utility
             let output = crate::dsp::utils::map_range(

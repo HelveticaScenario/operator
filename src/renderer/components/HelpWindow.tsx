@@ -281,9 +281,11 @@ export const HelpWindow: React.FC = () => {
     const getSignature = (module: ModuleSchema): string => {
         const positionalArgs = module.positionalArgs || [];
         const positionalKeys = new Set(positionalArgs.map((a) => a.name));
+        const schemaRequired: string[] =
+            (module.paramsSchema as any)?.required || [];
 
         const parts: string[] = positionalArgs.map((a) =>
-            a.optional ? `${a.name}?` : a.name,
+            schemaRequired.includes(a.name) ? a.name : `${a.name}?`,
         );
 
         const configKeys = Object.keys(
@@ -291,7 +293,9 @@ export const HelpWindow: React.FC = () => {
         ).filter((k) => !positionalKeys.has(k));
 
         if (configKeys.length > 0) {
-            parts.push(`{ ${configKeys.map((k) => `${k}?`).join(', ')} }`);
+            parts.push(
+                `{ ${configKeys.map((k) => (schemaRequired.includes(k) ? k : `${k}?`)).join(', ')} }`,
+            );
         }
 
         return `${module.name}(${parts.join(', ')})`;

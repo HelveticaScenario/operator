@@ -1,17 +1,17 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::poly::{PolyOutput, PolySignal};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct ClampParams {
     /// signal to clamp
     input: PolySignal,
     /// lower bound — if omitted the signal is unclamped below
-    min: PolySignal,
+    min: Option<PolySignal>,
     /// upper bound — if omitted the signal is unclamped above
-    max: PolySignal,
+    max: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -34,7 +34,6 @@ struct ClampOutputs {
 /// $clamp(signal, { min: 0 })
 /// ```
 #[module(name = "$clamp", args(input))]
-#[derive(Default)]
 pub struct Clamp {
     outputs: ClampOutputs,
     params: ClampParams,
@@ -51,19 +50,19 @@ impl Clamp {
 
             match (has_min, has_max) {
                 (true, true) => {
-                    let a = self.params.min.get_value(i);
-                    let b = self.params.max.get_value(i);
+                    let a = self.params.min.value_or_zero(i);
+                    let b = self.params.max.value_or_zero(i);
                     let (lo, hi) = if b < a { (b, a) } else { (a, b) };
                     val = val.clamp(lo, hi);
                 }
                 (true, false) => {
-                    let min_val = self.params.min.get_value(i);
+                    let min_val = self.params.min.value_or_zero(i);
                     if val < min_val {
                         val = min_val;
                     }
                 }
                 (false, true) => {
-                    let max_val = self.params.max.get_value(i);
+                    let max_val = self.params.max.value_or_zero(i);
                     if val > max_val {
                         val = max_val;
                     }

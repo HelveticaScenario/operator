@@ -1,10 +1,11 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct NoiseParams {
     /// color of the noise: white, pink, brown
+    #[serde(default)]
     color: NoiseKind,
 }
 
@@ -74,7 +75,7 @@ impl LcgRng {
 ///
 /// Generates random noise in one of three spectral colors:
 /// - **White**: equal energy across all frequencies (bright, hissy)
-/// - **Pink**: equal energy per octave (warm, balanced — good for “ocean” textures)
+/// - **Pink**: equal energy per octave (warm, balanced — good for "ocean" textures)
 /// - **Brown**: steep low-frequency emphasis (deep, rumbling)
 ///
 /// Output range is **±5V**.
@@ -88,10 +89,28 @@ impl LcgRng {
 pub struct Noise {
     outputs: NoiseOutputs,
     params: NoiseParams,
+    state: NoiseState,
+}
+
+/// State for the Noise module.
+pub struct NoiseState {
     generator: LcgRng,
     pink: PinkFilter,
     brown: f32,
     last_noise_type: NoiseKind,
+}
+
+impl Default for NoiseState {
+    fn default() -> Self {
+        Self {
+            generator: LcgRng {
+                state: 0x1234_5678_9abc_def0,
+            },
+            pink: PinkFilter::default(),
+            brown: 0.0,
+            last_noise_type: NoiseKind::default(),
+        }
+    }
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -101,43 +120,26 @@ struct NoiseOutputs {
     sample: f32,
 }
 
-impl Default for Noise {
-    fn default() -> Self {
-        Self {
-            outputs: NoiseOutputs::default(),
-            params: NoiseParams::default(),
-            generator: LcgRng {
-                state: 0x1234_5678_9abc_def0,
-            },
-            pink: PinkFilter::default(),
-            brown: 0.0,
-            last_noise_type: NoiseKind::default(),
-            _channel_count: 0,
-        }
-    }
-}
-
 impl Noise {
     fn refresh_kind(&mut self) {
-        if self.last_noise_type != self.params.color {
-            self.last_noise_type = self.params.color;
-            self.pink.reset();
-            self.brown = 0.0;
+        if self.state.last_noise_type != self.params.color {
+            self.state.last_noise_type = self.params.color;
+            self.state.pink.reset();
+            self.state.brown = 0.0;
         }
     }
 
     fn process_brown(&mut self, white: f32) -> f32 {
-        self.brown = (self.brown + white * 0.02).clamp(-1.0, 1.0);
-        self.brown
+        self.state.brown = (self.state.brown + white * 0.02).clamp(-1.0, 1.0);
+        self.state.brown
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        // self.params
         self.refresh_kind();
-        let white = self.generator.next();
+        let white = self.state.generator.next();
         let colored = match self.params.color {
             NoiseKind::White => white,
-            NoiseKind::Pink => self.pink.process(white),
+            NoiseKind::Pink => self.state.pink.process(white),
             NoiseKind::Brown => self.process_brown(white),
         };
 

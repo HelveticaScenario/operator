@@ -184,13 +184,15 @@ describe('filters', () => {
 describe('envelopes', () => {
     test('$adsr with gate input and config', () => {
         const patch = execPatch(
-            '$adsr($clock.gate, { attack: 0.1, decay: 0.2, sustain: 3, release: 0.5 }).out()',
+            '$adsr($clock.beatTrigger, { attack: 0.1, decay: 0.2, sustain: 3, release: 0.5 }).out()',
         );
         expect(findModules(patch, '$adsr').length).toBe(1);
     });
 
     test('$perc with trigger', () => {
-        const patch = execPatch('$perc($clock.gate, { decay: 0.3 }).out()');
+        const patch = execPatch(
+            '$perc($clock.beatTrigger, { decay: 0.3 }).out()',
+        );
         expect(findModules(patch, '$perc').length).toBe(1);
     });
 });
@@ -362,7 +364,7 @@ describe('modulation routing', () => {
     test('subtractive synth voice (osc → env → filter)', () => {
         const source = `
             const osc = $saw("C3")
-            const env = $adsr($clock.gate, { attack: 0.01, decay: 0.3, sustain: 2, release: 0.5 })
+            const env = $adsr($clock.beatTrigger, { attack: 0.01, decay: 0.3, sustain: 2, release: 0.5 })
             $lpf(osc, env.range("C3", "C6")).out()
         `;
         const patch = execPatch(source);
@@ -415,13 +417,15 @@ describe('utilities', () => {
     });
 
     test('$sah (sample and hold)', () => {
-        const patch = execPatch('$sah($noise("white"), $clock.gate).out()');
+        const patch = execPatch(
+            '$sah($noise("white"), $clock.beatTrigger).out()',
+        );
         expect(findModules(patch, '$sah').length).toBe(1);
     });
 
     test('$slew', () => {
         const patch = execPatch(
-            '$slew($clock.gate, { rise: 0.01, fall: 0.01 }).out()',
+            '$slew($clock.beatTrigger, { rise: 0.01, fall: 0.01 }).out()',
         );
         expect(findModules(patch, '$slew').length).toBe(1);
     });
@@ -432,7 +436,7 @@ describe('utilities', () => {
     });
 
     test('$clockDivider', () => {
-        const patch = execPatch('$clockDivider($clock.trigger, 4).out()');
+        const patch = execPatch('$clockDivider($clock.beatTrigger, 4).out()');
         expect(findModules(patch, '$clockDivider').length).toBe(1);
     });
 
@@ -509,16 +513,16 @@ describe('global settings', () => {
 
 describe('built-in modules', () => {
     test('$clock is available and has outputs', () => {
-        // Use $clock outputs as gate input to an envelope
+        // Use $clock outputs as trigger input to an envelope
         const patch = execPatch(
-            '$adsr($clock.gate, { attack: 0.01, decay: 0.1, sustain: 3, release: 0.2 }).out()',
+            '$adsr($clock.beatTrigger, { attack: 0.01, decay: 0.1, sustain: 3, release: 0.2 }).out()',
         );
         expect(patch.modules.find((m) => m.id === 'ROOT_CLOCK')).toBeDefined();
     });
 
-    test('$clock.gate can modulate another module', () => {
+    test('$clock.beatTrigger can modulate another module', () => {
         const patch = execPatch(
-            '$adsr($clock.gate, { attack: 0.01, decay: 0.1, sustain: 3, release: 0.2 }).out()',
+            '$adsr($clock.beatTrigger, { attack: 0.01, decay: 0.1, sustain: 3, release: 0.2 }).out()',
         );
         expect(patch.modules.find((m) => m.id === 'ROOT_CLOCK')).toBeDefined();
         expect(findModules(patch, '$adsr').length).toBe(1);
@@ -568,7 +572,7 @@ describe('complex patches', () => {
         const source = `
             const seq = $cycle("C3 E3 G3 B3")
             const osc = $saw(seq)
-            const env = $adsr($clock.gate, { attack: 0.01, decay: 0.2, sustain: 2, release: 0.3 })
+            const env = $adsr($clock.beatTrigger, { attack: 0.01, decay: 0.2, sustain: 2, release: 0.3 })
             $lpf(osc, env.range("C3", "C6")).out()
         `;
         const patch = execPatch(source);
@@ -598,5 +602,15 @@ describe('error handling', () => {
 
     test('runtime error throws with DSL prefix', () => {
         expect(() => execPatch('null.out()')).toThrow();
+    });
+
+    test('missing required param throws with module name, line, and param name', () => {
+        expect(() => execPatch('$lpf()')).toThrow(
+            '$lpf (line 1): missing required parameter "input"',
+        );
+    });
+
+    test('providing required param does not throw', () => {
+        expect(() => execPatch('$lpf($sine("C4"), "C4").out()')).not.toThrow();
     });
 });

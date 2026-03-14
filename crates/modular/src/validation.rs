@@ -341,7 +341,7 @@ fn validate_signal_reference(
         });
       }
     }
-    Signal::Volts(..) | Signal::Disconnected => {}
+    Signal::Volts(..) => {}
   }
 }
 
@@ -357,7 +357,7 @@ fn validate_signals_in_json_value(
   // This avoids false positives and reduces cloning.
   if let Some(obj) = value.as_object()
     && let Some(tag) = obj.get("type").and_then(|v| v.as_str())
-    && matches!(tag, "cable" | "track" | "volts" | "disconnected")
+    && matches!(tag, "cable" | "track" | "volts")
     && let Ok(signal) = serde_json::from_value::<Signal>(value.clone())
   {
     validate_signal_reference(&signal, field, location, module_by_id, schema_map, errors);

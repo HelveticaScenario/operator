@@ -89,7 +89,7 @@ export function executePatchScript(
     }
 
     // Create default clock module that runs at 120 BPM
-    const $clock = _clock(120, {
+    const $clock = _clock(120, 4, 4, {
         id: 'ROOT_CLOCK',
     });
 

@@ -3,24 +3,24 @@ use serde::Deserialize;
 
 use crate::{
     dsp::utils::voct_to_hz,
-    poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS},
+    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
 };
 
 fn default_voices() -> usize {
     5
 }
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct SupersawParams {
     /// pitch in V/Oct (0V = C4)
-    freq: PolySignal,
+    freq: Option<PolySignal>,
     /// number of supersaw voices (1–16)
     #[serde(default = "default_voices")]
     voices: usize,
     /// detune spread in semitones (default 0.18)
     #[signal(type = control, default = 0.18, range = (0, 12))]
-    detune: PolySignal,
+    detune: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -34,6 +34,30 @@ struct SupersawOutputs {
 #[allow(private_interfaces)]
 pub fn supersaw_derive_channel_count(params: &SupersawParams) -> usize {
     params.voices.clamp(1, PORT_MAX_CHANNELS)
+}
+
+/// Phase state array for supersaw oscillator voices.
+/// Wraps `[f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS]` to provide a `Default` impl
+/// (since Rust stable doesn't impl Default for arrays > 32 elements).
+struct OscStates([f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS]);
+
+impl Default for OscStates {
+    fn default() -> Self {
+        Self([0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS])
+    }
+}
+
+impl std::ops::Deref for OscStates {
+    type Target = [f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for OscStates {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 /// Supersaw oscillator with multiple detuned sawtooth voices and PolyBLEP anti-aliasing.
@@ -58,21 +82,15 @@ pub fn supersaw_derive_channel_count(params: &SupersawParams) -> usize {
 pub struct Supersaw {
     outputs: SupersawOutputs,
     params: SupersawParams,
-    /// Phase state for matrix mixing: indexed as [input_ch * PORT_MAX_CHANNELS + voice]
-    osc_states: [f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
-    rng_state: u32,
+    state: SupersawState,
 }
 
-impl Default for Supersaw {
-    fn default() -> Self {
-        Self {
-            outputs: SupersawOutputs::default(),
-            params: SupersawParams::default(),
-            osc_states: [0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
-            rng_state: 0,
-            _channel_count: 0,
-        }
-    }
+/// State for the Supersaw module.
+#[derive(Default)]
+struct SupersawState {
+    /// Phase state for matrix mixing: indexed as [input_ch * PORT_MAX_CHANNELS + voice]
+    osc_states: OscStates,
+    rng_state: u32,
 }
 
 /// PolyBLEP correction for sawtooth wave discontinuity at phase wrap.
@@ -111,15 +129,15 @@ fn rand_phase(state: &mut u32) -> f32 {
 
 impl Supersaw {
     fn init(&mut self, _sample_rate: f32) {
-        self.rng_state = self as *const Self as usize as u32;
-        for i in 0..self.osc_states.len() {
-            self.osc_states[i] = rand_phase(&mut self.rng_state);
+        self.state.rng_state = self as *const Self as usize as u32;
+        for i in 0..self.state.osc_states.len() {
+            self.state.osc_states[i] = rand_phase(&mut self.state.rng_state);
         }
     }
 
     fn update(&mut self, sample_rate: f32) {
         let voices = self.params.voices.clamp(1, PORT_MAX_CHANNELS);
-        let input_channels = self.params.freq.channels().max(1);
+        let input_channels = self.params.freq.channel_count().max(1);
 
         let inv_sample_rate = 1.0 / sample_rate;
 
@@ -151,7 +169,7 @@ impl Supersaw {
 
             for input_ch in 0..input_channels {
                 // Detune channel-matches input pitch (per-note detune)
-                let detune = self.params.detune.get_value_or(input_ch, 0.18);
+                let detune = self.params.detune.value_or(input_ch, 0.18);
                 let offset_semitones = if voices > 1 {
                     // lerp from -detune/2 to +detune/2
                     -detune / 2.0 + voice_t[voice] * detune
@@ -159,12 +177,12 @@ impl Supersaw {
                     0.0
                 };
 
-                let pitch = self.params.freq.get_value_or(input_ch, 0.0);
+                let pitch = self.params.freq.value_or(input_ch, 0.0);
                 let freq = voct_to_hz(pitch) * (2.0f32).powf(offset_semitones / 12.0);
                 let dt = freq * inv_sample_rate;
 
                 let state_idx = input_ch * PORT_MAX_CHANNELS + voice;
-                let phase = &mut self.osc_states[state_idx];
+                let phase = &mut self.state.osc_states[state_idx];
 
                 // Advance phase
                 *phase += dt;
@@ -201,18 +219,17 @@ mod tests {
         Supersaw {
             params,
             outputs,
-            osc_states: [0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
-            rng_state: 0,
             _channel_count: channels,
+            state: SupersawState::default(),
         }
     }
 
     #[test]
     fn test_single_voice_output() {
         let mut s = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 1,
-            detune: PolySignal::default(),
+            detune: None,
         });
         // Run several samples to get past initialization
         for _ in 0..100 {
@@ -226,9 +243,9 @@ mod tests {
     #[test]
     fn test_channel_count_equals_voices() {
         let params = SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 7,
-            detune: PolySignal::default(),
+            detune: None,
         };
         assert_eq!(supersaw_derive_channel_count(&params), 7);
     }
@@ -236,9 +253,9 @@ mod tests {
     #[test]
     fn test_output_bounded() {
         let mut s = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 5,
-            detune: PolySignal::default(),
+            detune: None,
         });
         for _ in 0..1000 {
             s.update(48000.0);
@@ -255,16 +272,16 @@ mod tests {
     #[test]
     fn test_voices_clamped_to_16() {
         let params = SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 32,
-            detune: PolySignal::default(),
+            detune: None,
         };
         assert_eq!(supersaw_derive_channel_count(&params), 16);
 
         let params_zero = SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 0,
-            detune: PolySignal::default(),
+            detune: None,
         };
         assert_eq!(supersaw_derive_channel_count(&params_zero), 1);
     }
@@ -273,19 +290,19 @@ mod tests {
     fn test_detune_affects_pitch() {
         // With detune=0, all voices should be identical (same phase progression)
         let mut s_no_detune = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 3,
-            detune: PolySignal::mono(Signal::Volts(0.0)),
+            detune: Some(PolySignal::mono(Signal::Volts(0.0))),
         });
         // Force known phases (overwrite whatever init set)
         for i in 0..PORT_MAX_CHANNELS * PORT_MAX_CHANNELS {
-            s_no_detune.osc_states[i] = 0.25;
+            s_no_detune.state.osc_states[i] = 0.25;
         }
 
         let mut s_detune = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 3,
-            detune: PolySignal::mono(Signal::Volts(2.0)),
+            detune: Some(PolySignal::mono(Signal::Volts(2.0))),
         });
         for i in 0..PORT_MAX_CHANNELS * PORT_MAX_CHANNELS {
             s_detune.osc_states[i] = 0.25;
@@ -317,9 +334,9 @@ mod tests {
     #[test]
     fn test_random_phases_differ() {
         let mut s = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 4,
-            detune: PolySignal::mono(Signal::Volts(0.0)),
+            detune: Some(PolySignal::mono(Signal::Volts(0.0))),
         });
         // Trigger phase initialization via init()
         s.init(48000.0);
@@ -335,9 +352,9 @@ mod tests {
     fn test_matrix_mixing_mono_input() {
         // Mono input with 3 voices -> 3 output channels
         let mut s = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 3,
-            detune: PolySignal::mono(Signal::Volts(0.0)),
+            detune: Some(PolySignal::mono(Signal::Volts(0.0))),
         });
         // Force known phases, zero detune -> all voices should produce identical output
         for i in 0..PORT_MAX_CHANNELS * PORT_MAX_CHANNELS {
@@ -365,9 +382,9 @@ mod tests {
         // With 1 input channel, gain should be 5.0 / sqrt(1) = 5.0
         // A single voice with single input: a saw at mid-phase should give ~0 * 5.0
         let mut s1 = make_supersaw(SupersawParams {
-            freq: PolySignal::mono(Signal::Volts(0.0)),
+            freq: Some(PolySignal::mono(Signal::Volts(0.0))),
             voices: 1,
-            detune: PolySignal::mono(Signal::Volts(0.0)),
+            detune: Some(PolySignal::mono(Signal::Volts(0.0))),
         });
         // Set phase to 0.75 -> naive saw = 2*0.75 - 1 = 0.5
         s1.osc_states[0] = 0.75;
@@ -376,14 +393,14 @@ mod tests {
 
         // With 4 input channels, each contributing the same signal
         let mut s4 = make_supersaw(SupersawParams {
-            freq: PolySignal::poly(&[
+            freq: Some(PolySignal::poly(&[
                 Signal::Volts(0.0),
                 Signal::Volts(0.0),
                 Signal::Volts(0.0),
                 Signal::Volts(0.0),
-            ]),
+            ])),
             voices: 1,
-            detune: PolySignal::mono(Signal::Volts(0.0)),
+            detune: Some(PolySignal::mono(Signal::Volts(0.0))),
         });
         // Set all 4 input channel phases identically
         for input_ch in 0..4 {

@@ -6,18 +6,18 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use crate::types::Clickless;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct CrushParams {
     /// input phase (0 to 1)
     #[signal(range = (0.0, 1.0))]
     input: PolySignal,
     /// crush amount (0-5, where 0 = clean, 5 = maximum distortion)
     #[signal(range = (0.0, 5.0))]
-    amount: PolySignal,
+    amount: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -30,6 +30,12 @@ struct CrushOutputs {
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
     amount: Clickless,
+}
+
+/// State for the Crush module.
+#[derive(Default)]
+struct CrushState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
 }
 
 /// Phase effect: digital bit-crush distortion.
@@ -46,14 +52,10 @@ struct ChannelState {
 /// // Bit-crush a ramp phase and convert to audio with $pSine
 /// $pSine($crush($ramp('c3'), 2)).out()
 /// ```
-#[module(
-    name = "$crush",
-    args(input, amount?)
-)]
-#[derive(Default)]
+#[module(name = "$crush", args(input, amount))]
 pub struct Crush {
     outputs: CrushOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: CrushState,
     params: CrushParams,
 }
 
@@ -62,10 +64,10 @@ impl Crush {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
             let input = self.params.input.get_value(ch);
-            let amount_raw = self.params.amount.get_value_or(ch, 0.0);
+            let amount_raw = self.params.amount.value_or(ch, 0.0);
 
             // Smooth amount parameter
             state.amount.update(amount_raw);

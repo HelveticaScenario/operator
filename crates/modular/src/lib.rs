@@ -1071,16 +1071,62 @@ pub fn validate_patch_graph(
 // Re-export for use in audio.rs
 pub(crate) use params_cache::{deserialize_params};
 
+#[napi(object)]
+pub struct DeriveChannelCountResult {
+  pub channel_count: Option<u32>,
+  pub errors: Option<Vec<DeriveChannelCountError>>,
+}
+
+#[napi(object)]
+pub struct DeriveChannelCountError {
+  pub message: String,
+  pub params: Vec<String>,
+}
+
+/// Parse a serde deserialization error to extract missing field names.
+/// serde_json produces errors like: "missing field `input` at line 1 column 42"
+fn parse_deserialization_error(error: &str) -> (String, Vec<String>) {
+  let mut missing_fields = Vec::new();
+
+  // serde_json only reports the FIRST missing field per deserialization attempt.
+  // For now, report the single missing field from the error message.
+  if let Some(start) = error.find("missing field `") {
+    let after_prefix = &error[start + "missing field `".len()..];
+    if let Some(end) = after_prefix.find('`') {
+      missing_fields.push(after_prefix[..end].to_string());
+    }
+  }
+
+  (error.to_string(), missing_fields)
+}
+
 /// Derive the output channel count for a module from its params JSON.
 ///
-/// Returns the derived channel count, or null if the module type is unknown
-/// or the channel count cannot be determined from the params.
+/// Returns a structured result with either the derived channel count or
+/// error information when deserialization fails.
 /// This uses the cache, so it also warms the cache for subsequent apply_patch calls.
 #[napi]
-pub fn derive_channel_count(module_type: String, params: serde_json::Value) -> Option<u32> {
-  deserialize_params(&module_type, params, true)
-    .ok()
-    .map(|d| d.channel_count as u32)
+pub fn derive_channel_count(
+  module_type: String,
+  params: serde_json::Value,
+) -> DeriveChannelCountResult {
+  match deserialize_params(&module_type, params, true) {
+    Ok(d) => DeriveChannelCountResult {
+      channel_count: Some(d.channel_count as u32),
+      errors: None,
+    },
+    Err(e) => {
+      let error_message = e.to_string();
+      let (message, missing_params) = parse_deserialization_error(&error_message);
+      DeriveChannelCountResult {
+        channel_count: None,
+        errors: Some(vec![DeriveChannelCountError {
+          message,
+          params: missing_params,
+        }]),
+      }
+    }
+  }
 }
 
 /// Parse a mini notation pattern and return all leaf spans.

@@ -2,7 +2,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::{
-    poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 
@@ -25,18 +25,19 @@ impl crate::types::Connect for MixMode {
     fn connect(&mut self, _patch: &crate::Patch) {}
 }
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 pub struct MixParams {
     /// Input signals to mix channel-by-channel.
     ///
     /// Channel `n` from every input is mixed into output channel `n`.
     pub inputs: Vec<PolySignal>,
     /// How inputs are combined.
+    #[serde(default)]
     mode: MixMode,
     /// Final output level (perceptual curve, exponent 3).
     #[signal(default = 5.0, range = (0.0, 10.0))]
-    pub gain: PolySignal,
+    pub gain: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -66,7 +67,7 @@ pub fn mix_derive_channel_count(params: &MixParams) -> usize {
     };
 
     // Get gain channel count
-    let gain_channels = params.gain.channels() as usize;
+    let gain_channels = params.gain.channel_count();
 
     // Output channels = max(max_input_channels, gain_channels), at least 1 if inputs empty
     if params.inputs.is_empty() {
@@ -83,10 +84,15 @@ pub fn mix_derive_channel_count(params: &MixParams) -> usize {
 /// It mixes channel `n` across all inputs into output channel `n`, rather than
 /// folding all channels into a single mono channel.
 #[module(name = "$mix", channels_derive = mix_derive_channel_count, args(inputs))]
-#[derive(Default)]
 pub struct Mix {
     outputs: MixOutputs,
     params: MixParams,
+    state: MixState,
+}
+
+/// State for the Mix module.
+#[derive(Default)]
+struct MixState {
     gain_buffer: [Clickless; PORT_MAX_CHANNELS],
 }
 
@@ -124,7 +130,7 @@ impl Mix {
                 .iter()
                 .map(|input| {
                     if channel < input.channels() as usize {
-                        input.get(channel).get_value()
+                        input.get_value(channel)
                     } else {
                         0.0
                     }
@@ -164,11 +170,11 @@ impl Mix {
         for i in 0..output_channels {
             let pre_gain_index = i % max_input_channels;
             let pre_gain_value = pre_gain_values[pre_gain_index];
-            let amp_val = gain.get_value_or(i, 5.0);
+            let amp_val = gain.value_or(i, 5.0);
             let normalized = (amp_val.abs() / 5.0).max(0.0);
             let curved = amp_val.signum() * normalized.powf(3.0);
-            self.gain_buffer[i].update(curved);
-            let gain_value = *self.gain_buffer[i];
+            self.state.gain_buffer[i].update(curved);
+            let gain_value = *self.state.gain_buffer[i];
             self.outputs.sample.set(i, pre_gain_value * gain_value);
         }
     }
@@ -189,7 +195,7 @@ mod tests {
             params,
             outputs,
             _channel_count: channels,
-            ..Default::default()
+            state: MixState::default(),
         }
     }
 
@@ -202,7 +208,7 @@ mod tests {
                 Signal::Volts(3.0),
             ])],
             mode: MixMode::Sum,
-            gain: PolySignal::default(),
+            gain: None,
         });
         mixer.update(48000.0);
         assert_eq!(mixer.outputs.sample.channels(), 3);
@@ -224,7 +230,7 @@ mod tests {
                 ]),
             ],
             mode: MixMode::Sum,
-            gain: PolySignal::default(),
+            gain: None,
         });
         mixer.update(48000.0);
         // Output should be 3 channels
@@ -246,7 +252,7 @@ mod tests {
                 PolySignal::poly(&[Signal::Volts(6.0), Signal::Volts(8.0)]),
             ],
             mode: MixMode::Average,
-            gain: PolySignal::default(),
+            gain: None,
         });
         mixer.update(48000.0);
         assert_eq!(mixer.outputs.sample.channels(), 2);
@@ -265,7 +271,11 @@ mod tests {
                 PolySignal::poly(&[Signal::Volts(10.0), Signal::Volts(20.0)]),
             ],
             mode: MixMode::Sum,
-            gain: PolySignal::poly(&[Signal::Volts(5.0), Signal::Volts(10.0), Signal::Volts(2.5)]),
+            gain: Some(PolySignal::poly(&[
+                Signal::Volts(5.0),
+                Signal::Volts(10.0),
+                Signal::Volts(2.5),
+            ])),
         });
         mixer.update(48000.0);
         // Output channels = max(2 input channels, 3 gain channels) = 3
@@ -283,7 +293,11 @@ mod tests {
         let mut mixer = make_mix(MixParams {
             inputs: vec![],
             mode: MixMode::Sum,
-            gain: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(2.0), Signal::Volts(3.0)]),
+            gain: Some(PolySignal::poly(&[
+                Signal::Volts(1.0),
+                Signal::Volts(2.0),
+                Signal::Volts(3.0),
+            ])),
         });
         mixer.update(48000.0);
         // Empty inputs with 3-channel gain -> 3 channels of silence
@@ -295,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_mix_empty_inputs_no_gain() {
-        let mut mixer = make_mix(MixParams::default());
+        let mut mixer = make_mix(serde_json::from_value(serde_json::json!({})).unwrap());
         mixer.update(48000.0);
         // Empty inputs with no gain -> 1 channel of silence
         assert_eq!(mixer.outputs.sample.channels(), 1);
@@ -310,7 +324,7 @@ mod tests {
                 PolySignal::poly(&[Signal::Volts(-3.0), Signal::Volts(2.0)]),
             ],
             mode: MixMode::Max,
-            gain: PolySignal::default(),
+            gain: None,
         });
         mixer.update(48000.0);
         assert_eq!(mixer.outputs.sample.channels(), 2);

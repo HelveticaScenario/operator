@@ -1,16 +1,16 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::poly::{PolyOutput, PolySignal};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct CurveParams {
     /// signal to apply curve to
     input: PolySignal,
     /// exponent for the power curve (0 = step, 1 = linear, >1 = audio taper)
     #[signal(range = (0.0, 10.0))]
-    exp: PolySignal,
+    exp: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -34,7 +34,6 @@ struct CurveOutputs {
 /// $curve(signal, 3)    // cubic curve (audio taper)
 /// ```
 #[module(name = "$curve", args(input, exp))]
-#[derive(Default)]
 pub struct Curve {
     outputs: CurveOutputs,
     params: CurveParams,
@@ -46,7 +45,7 @@ impl Curve {
 
         for i in 0..channels as usize {
             let x = self.params.input.get_value(i);
-            let exp = self.params.exp.get_value(i).max(0.0);
+            let exp = self.params.exp.value_or_zero(i).max(0.0);
 
             let normalized = (x.abs() / 5.0).max(0.0);
             let curved = x.signum() * 5.0 * normalized.powf(exp);

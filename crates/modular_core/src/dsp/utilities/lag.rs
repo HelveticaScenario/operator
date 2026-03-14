@@ -1,21 +1,21 @@
 use crate::{
-    poly::{PolyOutput, PolySignal},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
     PORT_MAX_CHANNELS,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct LagProcessorParams {
     /// signal input
     input: PolySignal,
     /// rise rate — seconds to slew 1 volt upward (default 0.01)
     #[signal(default = 0.01, range = (0.0, 10.0))]
-    rise: PolySignal,
+    rise: Option<PolySignal>,
     /// fall rate — seconds to slew 1 volt downward (default 0.01)
     #[signal(default = 0.01, range = (0.0, 10.0))]
-    fall: PolySignal,
+    fall: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -29,6 +29,12 @@ struct LagProcessorOutputs {
 struct SlewChannelState {
     current_value: f32,
     initialized: bool,
+}
+
+/// State for the LagProcessor module.
+#[derive(Default)]
+struct LagProcessorState {
+    channels: [SlewChannelState; PORT_MAX_CHANNELS],
 }
 
 /// Slew limiter that smooths abrupt voltage changes.
@@ -47,11 +53,10 @@ struct SlewChannelState {
 /// $sine($slew(sequencer.pitch, { rise: 0.1, fall: 0.1 }))
 /// ```
 #[module(name = "$slew", args(input))]
-#[derive(Default)]
 pub struct LagProcessor {
     outputs: LagProcessorOutputs,
     params: LagProcessorParams,
-    channels: [SlewChannelState; PORT_MAX_CHANNELS],
+    state: LagProcessorState,
 }
 
 impl LagProcessor {
@@ -59,19 +64,15 @@ impl LagProcessor {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
-            let input = self.params.input.get_value_or(ch, 0.0);
+            let state = &mut self.state.channels[ch];
+            let input = self.params.input.get_value(ch);
             if !state.initialized {
                 state.current_value = input;
                 state.initialized = true;
             }
 
-            let fall_time = self.params.fall.get_value_or(ch, 0.01).max(0.001);
-            let rise_time = if self.params.rise.is_disconnected() {
-                fall_time
-            } else {
-                self.params.rise.get_value_or(ch, 0.01).max(0.001)
-            };
+            let fall_time = self.params.fall.value_or(ch, 0.01).max(0.001);
+            let rise_time = self.params.rise.value_or(ch, fall_time).max(0.001);
 
             // Calculate max change per sample
             // time is seconds for 1.0v change (full scale)

@@ -3,19 +3,19 @@ use serde::Deserialize;
 
 use crate::{
     dsp::utils::voct_to_hz,
-    poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS},
+    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
     types::Clickless,
 };
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct SawOscillatorParams {
     /// pitch in V/Oct (0V = C4)
     #[signal(type = pitch)]
-    freq: PolySignal,
+    freq: Option<PolySignal>,
     /// waveform shape: 0=saw, 2.5=triangle, 5=ramp
     #[signal(range = (0.0, 5.0))]
-    shape: PolySignal,
+    shape: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -30,6 +30,12 @@ struct SawOscillatorOutputs {
 struct ChannelState {
     phase: f32,
     shape: Clickless,
+}
+
+/// State for the SawOscillator module.
+#[derive(Default)]
+struct SawOscillatorState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
 }
 
 /// A variable-symmetry triangle oscillator that morphs between saw, triangle, and ramp.
@@ -49,10 +55,9 @@ struct ChannelState {
 /// $saw('a3', { shape: 2.5 }).out() // triangle wave
 /// ```
 #[module(name = "$saw", args(freq))]
-#[derive(Default)]
 pub struct SawOscillator {
     outputs: SawOscillatorOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: SawOscillatorState,
     params: SawOscillatorParams,
 }
 
@@ -64,13 +69,13 @@ impl SawOscillator {
         let inv_sample_rate = 1.0 / sample_rate;
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
             // Update shape with smoothing - clamp to valid range
-            let shape_val = self.params.shape.get_value_or(ch, 0.0).clamp(0.0, 5.0);
+            let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
             state.shape.update(shape_val);
 
-            let frequency = voct_to_hz(self.params.freq.get_value_or(ch, 0.0));
+            let frequency = voct_to_hz(self.params.freq.value_or(ch, 0.0));
             let phase_increment = frequency * inv_sample_rate;
 
             // Convert shape (0–5) to symmetry (peak position):

@@ -20,7 +20,7 @@ use crate::{
     MonoSignal,
     dsp::utils::{TempGate, TempGateState, min_gate_samples},
     pattern_system::DspHap,
-    poly::{PORT_MAX_CHANNELS, PolyOutput},
+    poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
 use super::seq_value::{SeqPatternParam, SeqValue};
@@ -137,15 +137,16 @@ fn default_channels() -> usize {
     4
 }
 
-#[derive(Clone, Deserialize, Default, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
+#[serde(rename_all = "camelCase")]
 pub struct SeqParams {
     /// pattern string in mini-notation
+    #[serde(default)]
     pattern: SeqPatternParam,
     /// playhead position (driven by the global clock)
     #[default_connection(module = RootClock, port = "playhead", channels = [0, 1])]
     #[signal(range = (0.0, 1.0))]
-    playhead: MonoSignal,
+    playhead: Option<MonoSignal>,
     /// Number of polyphonic voices (1-16)
     pub channels: Option<usize>,
     /// The pattern string (used for serialization)
@@ -328,29 +329,45 @@ struct SeqOutputs {
     stateful,
     patch_update,
 )]
-#[derive(Default)]
 pub struct Seq {
     outputs: SeqOutputs,
     params: SeqParams,
+    state: SeqState,
+}
+
+/// State for the Seq module.
+pub struct SeqState {
     /// Per-voice state array
-    voices: [VoiceState; PORT_MAX_CHANNELS],
+    pub voices: [VoiceState; PORT_MAX_CHANNELS],
     /// Round-robin voice index for allocation
-    next_voice: usize,
+    pub next_voice: usize,
     /// Current cycle number (integer part of playhead)
-    current_cycle: Option<i64>,
+    pub current_cycle: Option<i64>,
     /// Arc-wrapped haps for the current cycle, updated on cycle boundaries
-    current_cycle_haps: Option<Arc<Vec<DspHap<SeqValue>>>>,
+    pub current_cycle_haps: Option<Arc<Vec<DspHap<SeqValue>>>>,
     /// Module-level cache for cycles >= 1000 (element 0 = cycle 1000).
     /// Only accumulates, never clears except on patch update.
-    module_cache: Vec<Option<Arc<Vec<DspHap<SeqValue>>>>>,
+    pub module_cache: Vec<Option<Arc<Vec<DspHap<SeqValue>>>>>,
+}
+
+impl Default for SeqState {
+    fn default() -> Self {
+        Self {
+            voices: std::array::from_fn(|_| VoiceState::default()),
+            next_voice: 0,
+            current_cycle: None,
+            current_cycle_haps: None,
+            module_cache: Vec::new(),
+        }
+    }
 }
 
 impl Seq {
     /// Invalidate the cycle cache, forcing a refresh on next update.
     fn invalidate_cache(&mut self) {
-        self.current_cycle = None;
-        self.current_cycle_haps = None;
-        self.module_cache.clear();
+        self.state.current_cycle = None;
+        self.state.current_cycle_haps = None;
+        self.state.module_cache.clear();
         // Do NOT clear voices — they hold their own Arc, keeping old data alive
     }
 
@@ -365,18 +382,18 @@ impl Seq {
         let module_idx = (cycle - 1000) as usize;
 
         // Grow module cache if needed, filling gaps with None
-        if module_idx >= self.module_cache.len() {
-            self.module_cache.resize(module_idx + 1, None);
+        if module_idx >= self.state.module_cache.len() {
+            self.state.module_cache.resize(module_idx + 1, None);
         }
 
         // If already cached, nothing to do
-        if self.module_cache[module_idx].is_some() {
+        if self.state.module_cache[module_idx].is_some() {
             return;
         }
 
         // Query the pattern and store
         if let Some(pattern) = self.params.pattern.pattern() {
-            self.module_cache[module_idx] = Some(Arc::new(pattern.query_cycle_all(cycle)));
+            self.state.module_cache[module_idx] = Some(Arc::new(pattern.query_cycle_all(cycle)));
         }
     }
 
@@ -388,38 +405,66 @@ impl Seq {
             cached.get(cycle as usize)
         } else {
             let module_idx = (cycle - 1000) as usize;
-            self.module_cache.get(module_idx).and_then(|opt| opt.as_ref())
+            self.state.module_cache.get(module_idx).and_then(|opt| opt.as_ref())
         }
     }
 
     fn update(&mut self, sample_rate: f32) {
-        let playhead = self.params.playhead.get_value_f64();
+        let playhead = self.params.playhead.value_or_zero() as f64;
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
 
-        // Release voices whose haps have ended
-        self.release_ended_voices(playhead, num_channels);
+        // Check if we crossed a cycle boundary - do this BEFORE taking state borrow
+        let current_cycle = playhead.floor() as i64;
+        let new_cycle_haps = if self.state.current_cycle != Some(current_cycle) {
+            self.ensure_cycle_cached(current_cycle);
+            self.get_cycle_haps(current_cycle).cloned()
+        } else {
+            None
+        };
+
+        // Release voices whose haps have ended - also needs to happen before state borrow
+        // since it modifies voice state
+        let voices_to_release: Vec<usize> = (0..num_channels)
+            .filter(|i| {
+                if let Some(ref cached) = self.state.voices[*i].cached_hap {
+                    !cached.contains(playhead)
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        // Now take mutable borrow of state
+        let state = &mut self.state;
+
+        // Update cycle state if we crossed a boundary
+        if new_cycle_haps.is_some() {
+            state.current_cycle_haps = new_cycle_haps;
+            state.current_cycle = Some(current_cycle);
+        }
+
+        // Apply voice releases
+        for i in voices_to_release {
+            state.voices[i].active = false;
+            state.voices[i].cached_hap = None;
+            state.voices[i]
+                .gate
+                .set_state(TempGateState::Low, TempGateState::Low, 0);
+        }
 
         // Get pattern - if no pattern, output silence
         if self.params.pattern.pattern().is_none() {
             for ch in 0..num_channels {
                 self.outputs.cv.set(ch, 0.0);
-                self.outputs.gate.set(ch, self.voices[ch].gate.process());
-                self.outputs.trig.set(ch, self.voices[ch].trigger.process());
+                self.outputs.gate.set(ch, state.voices[ch].gate.process());
+                self.outputs.trig.set(ch, state.voices[ch].trigger.process());
             }
             return;
         }
 
-        // Check if we crossed a cycle boundary
-        let current_cycle = playhead.floor() as i64;
-        if self.current_cycle != Some(current_cycle) {
-            self.ensure_cycle_cached(current_cycle);
-            self.current_cycle_haps = self.get_cycle_haps(current_cycle).cloned();
-            self.current_cycle = Some(current_cycle);
-        }
-
         // Process new onsets using the current cycle haps
-        if let Some(cycle_haps) = self.current_cycle_haps.clone() {
+        if let Some(cycle_haps) = state.current_cycle_haps.clone() {
             for (hap_index, hap) in cycle_haps.iter().enumerate() {
                 if !hap.has_onset() || !hap.part_contains(playhead) {
                     continue;
@@ -431,7 +476,7 @@ impl Seq {
 
                 // Check if this exact hap instance is already assigned to a voice
                 let already_assigned = (0..num_channels).any(|i| {
-                    if let Some(ref existing) = self.voices[i].cached_hap {
+                    if let Some(ref existing) = state.voices[i].cached_hap {
                         existing.hap_index == hap_index
                             && existing.cached_cycle == current_cycle
                     } else {
@@ -451,10 +496,10 @@ impl Seq {
                     // Look for inactive voices starting from next_voice
                     let mut found = None;
                     for i in 0..num_channels {
-                        let idx = (self.next_voice + i) % num_channels;
-                        if !self.voices[idx].active {
-                            self.next_voice = (idx + 1) % num_channels;
-                            self.voices[idx].last_assigned = playhead;
+                        let idx = (state.next_voice + i) % num_channels;
+                        if !state.voices[idx].active {
+                            state.next_voice = (idx + 1) % num_channels;
+                            state.voices[idx].last_assigned = playhead;
                             found = Some(idx);
                             break;
                         }
@@ -467,7 +512,7 @@ impl Seq {
                     }
                 };
 
-                let voice = &mut self.voices[voice_idx];
+                let voice = &mut state.voices[voice_idx];
                 voice.cached_hap = Some(cached);
                 voice.active = true;
                 voice.gate.set_state(TempGateState::Low, TempGateState::High, hold);
@@ -477,7 +522,7 @@ impl Seq {
 
         // Process all voices and update outputs
         for ch in 0..num_channels {
-            let voice = &mut self.voices[ch];
+            let voice = &mut state.voices[ch];
 
             if let Some(ref cached) = voice.cached_hap
                 && let Some(cv) = cached.get_cv()
@@ -493,13 +538,13 @@ impl Seq {
     /// Check for notes that have ended and mark voices as inactive.
     fn release_ended_voices(&mut self, playhead: f64, num_channels: usize) {
         for i in 0..num_channels {
-            if let Some(ref cached) = self.voices[i].cached_hap
+            if let Some(ref cached) = self.state.voices[i].cached_hap
                 && !cached.contains(playhead)
             {
-                self.voices[i].active = false;
-                self.voices[i].cached_hap = None;
+                self.state.voices[i].active = false;
+                self.state.voices[i].cached_hap = None;
                 // Gate goes low
-                self.voices[i]
+                self.state.voices[i]
                     .gate
                     .set_state(TempGateState::Low, TempGateState::Low, 0);
             }
@@ -514,7 +559,7 @@ impl crate::types::StatefulModule for Seq {
         let mut active_spans: Vec<(usize, usize)> = Vec::new();
         let mut any_non_rest = false;
 
-        for voice in self.voices.iter().take(num_channels) {
+        for voice in self.state.voices.iter().take(num_channels) {
             if let Some(ref cached) = voice.cached_hap
                 && !cached.is_rest()
             {

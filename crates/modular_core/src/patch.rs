@@ -155,44 +155,34 @@ impl Patch {
         let params_deserializers = get_params_deserializers();
         let mut patch = Patch::new();
 
-        // 1. Instantiate all modules
+        // 1. Instantiate all modules with their deserialized params
         for module_state in &graph.modules {
             let constructor = constructors
                 .get(&module_state.module_type)
                 .ok_or_else(|| format!("Unknown module type: {}", module_state.module_type))?;
-            let module = constructor(&module_state.id, sample_rate)
-                .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
-            patch.sampleables.insert(module_state.id.clone(), module);
-        }
-
-        // 2. Pre-deserialize and apply params on each module
-        for module_state in &graph.modules {
-            if let Some(module) = patch.sampleables.get(&module_state.id) {
-                let deserializer = params_deserializers
-                    .get(&module_state.module_type)
-                    .ok_or_else(|| {
-                        format!(
-                            "No params deserializer for module type: {}",
-                            module_state.module_type
-                        )
-                    })?;
-                let (stripped, argument_spans) =
-                    extract_argument_spans(module_state.params.clone());
-                let cached = deserializer(stripped).map_err(|e| {
+            let deserializer = params_deserializers
+                .get(&module_state.module_type)
+                .ok_or_else(|| {
                     format!(
-                        "Failed to deserialize params for {}: {}",
-                        module_state.id, e
+                        "No params deserializer for module type: {}",
+                        module_state.module_type
                     )
                 })?;
-                let deserialized = DeserializedParams {
-                    params: cached.params,
-                    argument_spans,
-                    channel_count: cached.channel_count,
-                };
-                module
-                    .apply_deserialized_params(deserialized)
-                    .map_err(|e| format!("Failed to apply params on {}: {}", module_state.id, e))?;
-            }
+            let (stripped, argument_spans) = extract_argument_spans(module_state.params.clone());
+            let cached = deserializer(stripped).map_err(|e| {
+                format!(
+                    "Failed to deserialize params for {}: {}",
+                    module_state.id, e
+                )
+            })?;
+            let deserialized = DeserializedParams {
+                params: cached.params,
+                argument_spans,
+                channel_count: cached.channel_count,
+            };
+            let module = constructor(&module_state.id, sample_rate, deserialized)
+                .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
+            patch.sampleables.insert(module_state.id.clone(), module);
         }
 
         // 3. Connect all modules (resolves Cable weak pointers)

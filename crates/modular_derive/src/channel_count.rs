@@ -4,7 +4,7 @@ use quote::quote;
 use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields};
 
-use crate::utils::is_poly_signal_type;
+use crate::utils::{is_option_poly_signal_type, is_poly_signal_type};
 
 pub fn impl_channel_count_macro(ast: &DeriveInput) -> TokenStream {
     let name = &ast.ident;
@@ -17,7 +17,15 @@ pub fn impl_channel_count_macro(ast: &DeriveInput) -> TokenStream {
                 .filter_map(|field| {
                     let field_ident = field.ident.as_ref()?;
                     if is_poly_signal_type(&field.ty) {
-                        Some(quote! { &self.#field_ident })
+                        // Bare PolySignal: always present, push reference directly
+                        Some(quote! { fields.push(&self.#field_ident); })
+                    } else if is_option_poly_signal_type(&field.ty) {
+                        // Option<PolySignal>: only push if Some (None contributes 0 channels)
+                        Some(quote! {
+                            if let Some(ref ps) = self.#field_ident {
+                                fields.push(ps);
+                            }
+                        })
                     } else {
                         None
                     }
@@ -42,7 +50,9 @@ pub fn impl_channel_count_macro(ast: &DeriveInput) -> TokenStream {
     let generated = quote! {
         impl crate::types::PolySignalFields for #name {
             fn poly_signal_fields(&self) -> Vec<&crate::poly::PolySignal> {
-                vec![#(#poly_signal_field_refs),*]
+                let mut fields = Vec::new();
+                #(#poly_signal_field_refs)*
+                fields
             }
         }
     };

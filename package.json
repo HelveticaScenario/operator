@@ -10,6 +10,7 @@
     },
     "scripts": {
         "start": "yarn build-native && concurrently --handle-input --default-input-target app -n app,rust -c blue,yellow 'node scripts/start-dev.mjs' 'yarn watch-native'",
+        "start:debug": "yarn build-native-debug && electron-forge start --inspect-electron",
         "start:no-watch": "yarn build-native && electron-forge start",
         "profile": "yarn build-native-profile && electron-forge start",
         "package": "yarn build-native && electron-forge package",
@@ -27,6 +28,7 @@
         "lint": "eslint .",
         "watch-native": "node scripts/watch-native.mjs",
         "build-native": "cd crates/modular && yarn build",
+        "build-native-debug": "cd crates/modular && yarn build:debug",
         "build-native-profile": "cd crates/modular && yarn build --features=tracy",
         "generate-lib": "yarn build-native && tsx scripts/generateLib.ts",
         "prepare": "husky"

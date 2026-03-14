@@ -8,21 +8,21 @@ use serde::Deserialize;
 
 use crate::dsp::fx::enosc_tables::aa_pulsar;
 use crate::dsp::utils::voct_to_hz;
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use crate::types::Clickless;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct PulsarParams {
     /// input phase (0 to 1)
     #[signal(range = (0.0, 1.0))]
     input: PolySignal,
     /// compression amount (0-5, where 0 = no compression, 5 = maximum compression)
     #[signal(range = (0.0, 5.0))]
-    amount: PolySignal,
+    amount: Option<PolySignal>,
     /// pitch in V/Oct (optional, reduces aliasing at high frequencies)
     #[signal(type = pitch)]
-    freq: PolySignal,
+    freq: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -35,6 +35,12 @@ struct PulsarOutputs {
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
     amount: Clickless,
+}
+
+/// State for the Pulsar module.
+#[derive(Default)]
+struct PulsarState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
 }
 
 /// Phase effect: pulsar synthesis distortion.
@@ -52,27 +58,23 @@ struct ChannelState {
 /// // Compress the phase with pulsar and convert to audio
 /// $pSine($pulsar($ramp('c3'), 3)).out()
 /// ```
-#[module(
-    name = "$pulsar",
-    args(input, amount?)
-)]
-#[derive(Default)]
+#[module(name = "$pulsar", args(input, amount))]
 pub struct Pulsar {
     outputs: PulsarOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: PulsarState,
     params: PulsarParams,
 }
 
 impl Pulsar {
     fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
-        let freq_connected = !self.params.freq.is_disconnected();
+        let freq_connected = self.params.freq.is_some();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
             let input = self.params.input.get_value(ch);
-            let amount_raw = self.params.amount.get_value_or(ch, 0.0);
+            let amount_raw = self.params.amount.value_or(ch, 0.0);
 
             // Smooth amount parameter to avoid clicks
             state.amount.update(amount_raw);
@@ -88,7 +90,7 @@ impl Pulsar {
 
             // Apply anti-aliasing when freq is connected
             let multiplier = if freq_connected {
-                let freq_hz = voct_to_hz(self.params.freq.get_value(ch));
+                let freq_hz = voct_to_hz(self.params.freq.value_or_zero(ch));
                 aa_pulsar(freq_hz / sample_rate, multiplier)
             } else {
                 multiplier

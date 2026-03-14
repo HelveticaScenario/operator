@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use crate::{
     dsp::utils::{min_gate_samples, TempGate, TempGateState},
-    poly::{PolyOutput, PORT_MAX_CHANNELS},
+    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
     types::Connect,
-    Patch, PolySignal,
+    Patch,
 };
 
 use super::scale::{validate_scale_type, FixedRoot, ScaleSnapper};
@@ -187,16 +187,15 @@ fn default_scale() -> ScaleParam {
     ScaleParam::parse("chromatic").unwrap()
 }
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct QuantizerParams {
     /// Input V/Oct signal to quantize
     #[signal(type = pitch)]
     input: PolySignal,
     /// Offset added to input before quantization (in V/Oct)
-    #[serde(default)]
     #[signal(type = pitch)]
-    offset: PolySignal,
+    offset: Option<PolySignal>,
     /// Scale specification: "chromatic", "C(major)", "D(0 2 4 5 7 9 11)"
     #[serde(default = "default_scale")]
     scale: ScaleParam,
@@ -220,6 +219,23 @@ struct ChannelState {
     trigger: TempGate,
 }
 
+/// State for the Quantizer module.
+pub struct QuantizerState {
+    /// Per-channel state for tracking note changes
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
+impl Default for QuantizerState {
+    fn default() -> Self {
+        Self {
+            channels: std::array::from_fn(|_| ChannelState {
+                prev_quantized: None,
+                trigger: TempGate::new_gate(TempGateState::Low),
+            }),
+        }
+    }
+}
+
 /// Snaps a V/Oct signal to the nearest note in a given scale.
 ///
 /// Feed any continuous pitch signal into **input** and choose a **scale** —
@@ -236,26 +252,11 @@ struct ChannelState {
 /// // quantize a random signal to C major
 /// $sine($quantizer($sine(".1hz").range(0,3), "C(major)"))
 /// ```
-#[module(name = "$quantizer", args(input, scale?))]
+#[module(name = "$quantizer", args(input, scale))]
 pub struct Quantizer {
     outputs: QuantizerOutputs,
     params: QuantizerParams,
-    /// Per-channel state for tracking note changes
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
-impl Default for Quantizer {
-    fn default() -> Self {
-        Self {
-            outputs: QuantizerOutputs::default(),
-            params: QuantizerParams::default(),
-            channels: std::array::from_fn(|_| ChannelState {
-                prev_quantized: None,
-                trigger: TempGate::new_gate(TempGateState::Low),
-            }),
-            _channel_count: 0,
-        }
-    }
+    state: QuantizerState,
 }
 
 impl Quantizer {
@@ -264,14 +265,14 @@ impl Quantizer {
         let hold = min_gate_samples(sample_rate);
 
         for ch in 0..num_channels {
-            let input = self.params.input.get(ch).get_value() as f64;
-            let offset = self.params.offset.get(ch).get_value() as f64;
+            let input = self.params.input.get_value(ch) as f64;
+            let offset = self.params.offset.value_or_zero(ch) as f64;
 
             let combined = input + offset;
 
             let quantized = if let Some(snapper) = self.params.scale.snapper() {
                 let raw_quantized = snapper.snap_voct(combined);
-                let state = &self.channels[ch];
+                let state = &self.state.channels[ch];
 
                 // Apply hysteresis: only change note if input overshoots the
                 // snap boundary by at least HYSTERESIS_VOCT.
@@ -303,7 +304,7 @@ impl Quantizer {
             };
 
             // Check if the note changed
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
             let note_changed = match state.prev_quantized {
                 Some(prev) => (quantized - prev).abs() > 1e-6,
                 None => true, // First sample counts as a change

@@ -2,17 +2,9 @@ use napi::Result;
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::dsp::utils::{min_gate_samples, SchmittTrigger, TempGate, TempGateState};
-use crate::types::ClockMessages;
 use crate::PolyOutput;
-
-fn default_four() -> u32 {
-    4
-}
-
-fn default_tempo() -> f64 {
-    120.0
-}
+use crate::dsp::utils::{SchmittTrigger, TempGate, TempGateState, min_gate_samples};
+use crate::types::ClockMessages;
 
 /// Deserialize a u32 that must be >= 1 (positive integer).
 /// Rejects 0 with a descriptive error so any clock instance gets validated.
@@ -30,39 +22,19 @@ where
 }
 
 #[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 struct ClockParams {
-    /// Tempo in BPM. Defaults to 120.
-    #[serde(default = "default_tempo")]
+    /// Tempo in BPM.
     tempo: f64,
-    /// Time signature numerator (beats per bar). Must be a positive integer. Defaults to 4.
-    #[serde(
-        default = "default_four",
-        deserialize_with = "deserialize_positive_u32"
-    )]
+    /// Time signature numerator (beats per bar). Must be a positive integer.
+    #[serde(deserialize_with = "deserialize_positive_u32")]
     numerator: u32,
-    /// Time signature denominator (beat value). Must be a positive integer. Defaults to 4.
-    #[serde(
-        default = "default_four",
-        deserialize_with = "deserialize_positive_u32"
-    )]
+    /// Time signature denominator (beat value). Must be a positive integer.
+    #[serde(deserialize_with = "deserialize_positive_u32")]
     denominator: u32,
 }
 
-impl Default for ClockParams {
-    fn default() -> Self {
-        Self {
-            tempo: 120.0,
-            numerator: 4,
-            denominator: 4,
-        }
-    }
-}
-
-/// Tempo-synced transport clock for driving sequencers, envelopes, and synced modulation.
-#[module(name = "_clock", channels = 2, args(tempo?))]
-pub struct Clock {
-    outputs: ClockOutputs,
+struct ClockState {
     phase: f64,
     ppq_phase: f64,
     beat_phase: f64,
@@ -79,8 +51,33 @@ pub struct Clock {
     /// Multi-sample beat trigger pulse.
     beat_gate: TempGate,
     running: bool,
-    params: ClockParams,
     loop_index: u64,
+}
+
+impl Default for ClockState {
+    fn default() -> Self {
+        Self {
+            phase: 0.0,
+            ppq_phase: 0.0,
+            beat_phase: 0.0,
+            bar_schmitt: SchmittTrigger::new(0.0, 0.0),
+            ppq_schmitt: SchmittTrigger::new(0.0, 0.0),
+            beat_schmitt: SchmittTrigger::new(0.0, 0.0),
+            bar_gate: TempGate::new_gate(TempGateState::Low),
+            ppq_gate: TempGate::new_gate(TempGateState::Low),
+            beat_gate: TempGate::new_gate(TempGateState::Low),
+            running: true,
+            loop_index: 0,
+        }
+    }
+}
+
+/// Tempo-synced transport clock for driving sequencers, envelopes, and synced modulation.
+#[module(name = "_clock", channels = 2, args(tempo, numerator, denominator))]
+pub struct Clock {
+    outputs: ClockOutputs,
+    state: ClockState,
+    params: ClockParams,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -104,160 +101,121 @@ struct ClockOutputs {
     beat_in_bar: f32,
 }
 
-impl Default for Clock {
-    fn default() -> Self {
-        Self {
-            outputs: ClockOutputs::default(),
-            phase: 0.0,
-            ppq_phase: 0.0,
-            beat_phase: 0.0,
-            bar_schmitt: SchmittTrigger::new(0.0, 0.0),
-            ppq_schmitt: SchmittTrigger::new(0.0, 0.0),
-            beat_schmitt: SchmittTrigger::new(0.0, 0.0),
-            bar_gate: TempGate::new_gate(TempGateState::Low),
-            ppq_gate: TempGate::new_gate(TempGateState::Low),
-            beat_gate: TempGate::new_gate(TempGateState::Low),
-            running: true,
-            params: ClockParams::default(),
-            loop_index: 0,
-            _channel_count: 0,
-        }
-    }
-}
-
 message_handlers!(impl Clock {
     Clock(m) => Clock::on_clock_message,
 });
 
 impl Clock {
     fn update(&mut self, sample_rate: f32) {
-        if !self.running {
-            return; // If not running, skip the rest of the update to keep outputs where they are until clock starts
+        if !self.state.running {
+            return;
         }
 
-        // Tempo is a plain BPM value
         let bpm = self.params.tempo.max(1.0);
         let frequency_hz = bpm / 60.0;
 
-        // Time signature: numerator = beats per bar, denominator = beat value
-        // Clamp to valid values (minimum 1) to avoid division by zero
         let numerator = self.params.numerator.max(1) as f64;
         let denominator = self.params.denominator.max(1) as f64;
 
-        // Calculate phase increment per sample
-        // BPM tempo is in quarter notes per minute, so frequency_hz = quarter notes per second.
-        // quarter_notes_per_bar tells us how many quarter notes fit in one bar given the time sig.
-        // e.g. 4/4 = 4 quarter notes, 3/4 = 3, 6/8 = 3, 7/8 = 3.5
         let quarter_notes_per_bar = numerator * 4.0 / denominator;
         let bar_frequency = frequency_hz / quarter_notes_per_bar;
         let phase_increment = bar_frequency / sample_rate as f64;
 
-        self.phase += phase_increment;
-        self.ppq_phase += phase_increment;
-        self.beat_phase += phase_increment;
+        self.state.phase += phase_increment;
+        self.state.ppq_phase += phase_increment;
+        self.state.beat_phase += phase_increment;
 
-        // Wrap phase at 1.0
-        if self.phase >= 1.0 {
-            self.phase -= 1.0;
-            self.loop_index += 1;
+        if self.state.phase >= 1.0 {
+            self.state.phase -= 1.0;
+            self.state.loop_index += 1;
         }
 
-        // PPQ phase wraps at 12 PPQ per quarter note (= 12 * quarter_notes_per_bar per bar)
         let ppq_period = 1.0 / (12.0 * quarter_notes_per_bar);
-        if self.ppq_phase >= ppq_period {
-            self.ppq_phase -= ppq_period;
+        if self.state.ppq_phase >= ppq_period {
+            self.state.ppq_phase -= ppq_period;
         }
 
-        // Beat phase wraps once per beat (numerator beats per bar)
         let beat_period = 1.0 / numerator;
-        if self.beat_phase >= beat_period {
-            self.beat_phase -= beat_period;
+        if self.state.beat_phase >= beat_period {
+            self.state.beat_phase -= beat_period;
         }
 
-        // Derive beat_in_bar from the bar phase
-        // phase goes from 0..1 over one bar, each beat occupies 1/numerator of the bar
-        self.outputs.beat_in_bar = (self.phase * numerator).floor() as f32;
+        self.outputs.beat_in_bar = (self.state.phase * numerator).floor() as f32;
 
-        self.outputs.playhead.set(0, self.phase as f32);
-        self.outputs.playhead.set(1, self.loop_index as f32);
+        self.outputs.playhead.set(0, self.state.phase as f32);
+        self.outputs.playhead.set(1, self.state.loop_index as f32);
 
-        // Generate ramp output (0 to 5V over one bar)
-        self.outputs.ramp = self.phase as f32 * 5.0;
+        self.outputs.ramp = self.state.phase as f32 * 5.0;
 
         let hold = min_gate_samples(sample_rate);
 
-        // --- Trigger generation via SchmittTrigger + TempGate ---
-        //
-        // For each phase (bar, beat, ppq) the signal `phase_increment − phase`
-        // is negative for most of the cycle and goes positive at the wrap
-        // point (when phase resets near zero). A SchmittTrigger with both
-        // thresholds at 0.0 detects this rising edge, and a TempGate
-        // stretches the single-sample event into a multi-sample 5V pulse
-        // of duration `hold` (≈16 samples at 48 kHz).
-
-        // Bar trigger
         if self
+            .state
             .bar_schmitt
-            .process((phase_increment - self.phase) as f32)
+            .process((phase_increment - self.state.phase) as f32)
         {
-            self.bar_gate
+            self.state
+                .bar_gate
                 .set_state(TempGateState::High, TempGateState::Low, hold);
         }
-        self.outputs.bar_trigger = self.bar_gate.process();
+        self.outputs.bar_trigger = self.state.bar_gate.process();
 
-        // Beat trigger
         if self
+            .state
             .beat_schmitt
-            .process((phase_increment - self.beat_phase) as f32)
+            .process((phase_increment - self.state.beat_phase) as f32)
         {
-            self.beat_gate
+            self.state
+                .beat_gate
                 .set_state(TempGateState::High, TempGateState::Low, hold);
         }
-        self.outputs.beat_trigger = self.beat_gate.process();
+        self.outputs.beat_trigger = self.state.beat_gate.process();
 
-        // PPQ trigger
         if self
+            .state
             .ppq_schmitt
-            .process((phase_increment - self.ppq_phase) as f32)
+            .process((phase_increment - self.state.ppq_phase) as f32)
         {
-            self.ppq_gate
+            self.state
+                .ppq_gate
                 .set_state(TempGateState::High, TempGateState::Low, hold);
         }
-        self.outputs.ppq_trigger = self.ppq_gate.process();
+        self.outputs.ppq_trigger = self.state.ppq_gate.process();
     }
 
     fn on_clock_message(&mut self, m: &ClockMessages) -> Result<()> {
         match m {
             ClockMessages::Start => {
-                self.running = true;
-                // Start implies a transport reset.
-                self.phase = 0.0;
-                self.ppq_phase = 0.0;
-                self.beat_phase = 0.0;
+                self.state.running = true;
+                self.state.phase = 0.0;
+                self.state.ppq_phase = 0.0;
+                self.state.beat_phase = 0.0;
                 self.outputs.playhead.set(0, 0.0);
                 self.outputs.playhead.set(1, 0.0);
-                self.loop_index = 0;
+                self.state.loop_index = 0;
                 self.outputs.beat_in_bar = 0.0;
-                self.bar_schmitt.reset();
-                self.ppq_schmitt.reset();
-                self.beat_schmitt.reset();
-                self.bar_gate
+                self.state.bar_schmitt.reset();
+                self.state.ppq_schmitt.reset();
+                self.state.beat_schmitt.reset();
+                self.state
+                    .bar_gate
                     .set_state(TempGateState::Low, TempGateState::Low, 0);
-                self.ppq_gate
+                self.state
+                    .ppq_gate
                     .set_state(TempGateState::Low, TempGateState::Low, 0);
-                self.beat_gate
+                self.state
+                    .beat_gate
                     .set_state(TempGateState::Low, TempGateState::Low, 0);
             }
             ClockMessages::Stop => {
-                self.running = false;
+                self.state.running = false;
                 println!("Clock stopped");
-                // Ensure triggers are low while stopped.
                 self.outputs.bar_trigger = 0.0;
                 self.outputs.beat_trigger = 0.0;
                 self.outputs.ppq_trigger = 0.0;
                 self.outputs.playhead.set(0, 0.0);
                 self.outputs.playhead.set(1, 0.0);
-                self.loop_index = 0;
+                self.state.loop_index = 0;
                 self.outputs.beat_in_bar = 0.0;
             }
         }
@@ -274,20 +232,18 @@ mod tests {
         let mut c = Clock::default();
         let sr = 48_000.0;
 
-        // Stop should freeze phase.
         let _ = c.on_clock_message(&ClockMessages::Stop);
-        let phase_before = c.phase;
+        let phase_before = c.state.phase;
         for _ in 0..128 {
             c.update(sr);
         }
-        assert!((c.phase - phase_before).abs() < 1e-9);
+        assert!((c.state.phase - phase_before).abs() < 1e-9);
 
-        // Start should reset and run.
         let _ = c.on_clock_message(&ClockMessages::Start);
-        assert!((c.phase - 0.0).abs() < 1e-9);
+        assert!((c.state.phase - 0.0).abs() < 1e-9);
 
         c.update(sr);
-        assert!(c.phase > 0.0);
+        assert!(c.state.phase > 0.0);
     }
 
     /// Helper: count how many trigger events (rising edges) beat_trigger has over a given number of samples
@@ -433,15 +389,13 @@ mod tests {
         let mut c = Clock::default();
         let sr = 48_000.0;
 
-        // Advance partway through a bar
         for _ in 0..24_000 {
             c.update(sr);
         }
 
-        // Start should reset beat phase
         let _ = c.on_clock_message(&ClockMessages::Start);
         assert!(
-            (c.beat_phase - 0.0).abs() < 1e-9,
+            (c.state.beat_phase - 0.0).abs() < 1e-9,
             "beat_phase should be reset on Start"
         );
     }

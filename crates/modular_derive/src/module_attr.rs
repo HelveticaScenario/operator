@@ -2,7 +2,7 @@ use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::{Data, DeriveInput, Fields, LitStr, Token, Type, punctuated::Punctuated};
+use syn::{punctuated::Punctuated, Data, DeriveInput, Fields, LitStr, Token, Type};
 
 use crate::utils::{extract_doc_comments, unwrap_attr};
 
@@ -19,19 +19,12 @@ struct ModuleAttr {
 
 struct ArgAttr {
     name: Ident,
-    optional: bool,
 }
 
 impl syn::parse::Parse for ArgAttr {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         let name: Ident = input.parse()?;
-        let optional = if input.peek(Token![?]) {
-            input.parse::<Token![?]>()?;
-            true
-        } else {
-            false
-        };
-        Ok(ArgAttr { name, optional })
+        Ok(ArgAttr { name })
     }
 }
 
@@ -46,7 +39,7 @@ impl syn::parse::Parse for ArgAttr {
 /// #[module(
 ///     name = "$sine",
 ///     channels = 2,
-///     args(freq, engine?),
+///     args(freq, engine),
 ///     stateful,
 ///     patch_update,
 ///     has_init,
@@ -182,7 +175,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
 ///     // channels_derive = my_derive_fn,        // custom function
 ///     //
 ///     // Positional DSL arguments (optional):
-///     // args(freq, engine?),
+///     // args(freq, engine),
 ///     //
 ///     // Flags (optional):
 ///     // stateful,      // implements StatefulModule
@@ -196,11 +189,10 @@ impl syn::parse::Parse for ModuleAttrArgs {
 /// and a field named `params` whose type derives `Deserialize`, `JsonSchema`,
 /// `Connect`, and `ChannelCount`.
 ///
-/// **Important**: If the struct derives `Default`, the `#[derive(Default)]`
-/// attribute must come *after* `#[module(...)]`, not before it. This is because
-/// `#[module]` injects a `_channel_count` field, and if `#[derive(Default)]`
-/// precedes `#[module]`, the derive expands on the original struct (without
-/// the injected field) and produces a broken `Default` impl.
+/// Module structs do **not** need to derive `Default`. The proc macro generates
+/// per-field initialization in the constructor: `params` comes from deserialization,
+/// `_channel_count` from the computed channel count, and all other fields use
+/// `Default::default()` on their individual types.
 pub fn module_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let attr_args = syn::parse_macro_input!(attr as ModuleAttrArgs);
     let mut ast: DeriveInput = syn::parse_macro_input!(item as DeriveInput);
@@ -247,7 +239,10 @@ fn impl_module_macro_attr(
     let module_documentation = extract_doc_comments(&ast.attrs).ok_or_else(|| {
         syn::Error::new(
             name.span(),
-            format!("Module struct `{}` must have `///` doc comments for documentation", name),
+            format!(
+                "Module struct `{}` must have `///` doc comments for documentation",
+                name
+            ),
         )
     })?;
     let module_documentation_token = quote! { #module_documentation.to_string() };
@@ -277,18 +272,17 @@ fn impl_module_macro_attr(
         .iter()
         .map(|arg| {
             let arg_name = arg.name.to_string();
-            let optional = arg.optional;
             quote! {
                 crate::types::PositionalArg {
                     name: #arg_name.to_string(),
-                    optional: #optional,
                 }
             }
         })
         .collect();
 
     // The module struct must contain a field named `outputs`.
-    let outputs_ty: Type = match ast.data {
+    // Also collect all fields for per-field initialization in the constructor.
+    let (outputs_ty, module_field_inits): (Type, Vec<TokenStream2>) = match ast.data {
         Data::Struct(ref data) => match data.fields {
             Fields::Named(ref fields) => {
                 // Disallow legacy per-field #[output] annotations on the module struct.
@@ -308,7 +302,7 @@ fn impl_module_macro_attr(
                     .iter()
                     .find(|f| f.ident.as_ref().map(|i| i == "outputs").unwrap_or(false));
 
-                match outputs_field {
+                let outputs_ty = match outputs_field {
                     Some(f) => f.ty.clone(),
                     None => {
                         return Err(syn::Error::new(
@@ -316,7 +310,39 @@ fn impl_module_macro_attr(
                             "#[module] requires a field named `outputs` whose type derives Outputs",
                         ));
                     }
-                }
+                };
+
+                // Generate per-field initialization for the inner module struct.
+                // - `params` → use deserialized params
+                // - `_channel_count` → use deserialized channel count
+                // - `outputs` and `state` → use Default::default()
+                // - other fields → error
+                let field_inits: Vec<TokenStream2> = fields
+                    .named
+                    .iter()
+                    .map(|f| {
+                        let field_name = f.ident.as_ref().unwrap();
+                        let field_name_str = field_name.to_string();
+                        match field_name_str.as_str() {
+                            "params" => Ok(quote! { params: *concrete_params }),
+                            "_channel_count" => {
+                                Ok(quote! { _channel_count: deserialized.channel_count })
+                            }
+                            "outputs" | "state" => Ok(quote! { #field_name: Default::default() }),
+                            other => Err(syn::Error::new(
+                                field_name.span(),
+                                format!(
+                                    "Module struct field `{other}` is not allowed. \
+                                     Only `state`, `outputs`, and `params` fields are permitted.",
+                                ),
+                            )),
+                        }
+                    })
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .collect();
+
+                (outputs_ty, field_inits)
             }
             Fields::Unnamed(_) | Fields::Unit => {
                 return Err(syn::Error::new(
@@ -578,19 +604,6 @@ fn impl_module_macro_attr(
             argument_spans: std::cell::UnsafeCell<std::collections::HashMap<String, crate::params::ArgumentSpan>>,
         }
 
-        impl Default for #struct_name {
-            fn default() -> Self {
-                Self {
-                    id: String::new(),
-                    outputs: std::cell::UnsafeCell::new(Default::default()),
-                    module: std::cell::UnsafeCell::new(Default::default()),
-                    processed: core::sync::atomic::AtomicBool::new(false),
-                    sample_rate: 0.0,
-                    argument_spans: std::cell::UnsafeCell::new(std::collections::HashMap::new()),
-                }
-            }
-        }
-
         // SAFETY: This type is only accessed from the audio thread after construction.
         unsafe impl Send for #struct_name {}
         unsafe impl Sync for #struct_name {}
@@ -667,12 +680,30 @@ fn impl_module_macro_attr(
             }
         }
 
-        fn #constructor_name(id: &String, sample_rate: f32) -> napi::Result<std::sync::Arc<Box<dyn crate::types::Sampleable>>> {
+        fn #constructor_name(id: &String, sample_rate: f32, deserialized: crate::params::DeserializedParams) -> napi::Result<std::sync::Arc<Box<dyn crate::types::Sampleable>>> {
+            let concrete_params = deserialized.params.into_any()
+                .downcast::<#params_struct_name>()
+                .map_err(|_| napi::Error::from_reason(
+                    format!("Failed to downcast params for module type {}", #module_name)
+                ))?;
+
+            // Construct inner module with per-field initialization.
+            // `params` comes from deserialization, `_channel_count` from computed channel count,
+            // all other fields use Default::default().
+            let mut inner = #name #static_ty_generics {
+                #(#module_field_inits),*
+            };
+            crate::types::OutputStruct::set_all_channels(&mut inner.outputs, deserialized.channel_count);
+
             let sampleable = #struct_name {
                 id: id.clone(),
                 sample_rate,
-                ..#struct_name::default()
+                outputs: std::cell::UnsafeCell::new(Default::default()),
+                module: std::cell::UnsafeCell::new(inner),
+                processed: core::sync::atomic::AtomicBool::new(false),
+                argument_spans: std::cell::UnsafeCell::new(deserialized.argument_spans),
             };
+
             #has_init_call
             Ok(std::sync::Arc::new(Box::new(sampleable)))
         }

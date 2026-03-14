@@ -550,9 +550,9 @@ fn parse_signal_string(s: &str) -> StdResult<f32, String> {
 
 /// A single-channel signal value.
 ///
-/// This represents either a constant voltage, a cable connection to a specific
-/// channel of another module's output, or a disconnected input.
-#[derive(Clone, Debug, Default)]
+/// This represents either a constant voltage or a cable connection to a specific
+/// channel of another module's output.
+#[derive(Clone, Debug)]
 pub enum Signal {
     /// Static voltage value (mono)
     Volts(f32),
@@ -564,8 +564,6 @@ pub enum Signal {
         /// Which channel of the output to read (0-indexed)
         channel: usize,
     },
-    #[default]
-    Disconnected,
 }
 
 // Custom serde deserialization to allow a bare number as shorthand for volts.
@@ -602,7 +600,6 @@ impl<'de> Deserialize<'de> for Signal {
                 #[serde(default)]
                 channel: usize,
             },
-            Disconnected,
         }
 
         match SignalDe::deserialize(deserializer)? {
@@ -621,7 +618,6 @@ impl<'de> Deserialize<'de> for Signal {
                     port,
                     channel,
                 },
-                SignalTagged::Disconnected => Signal::Disconnected,
             }),
         }
     }
@@ -646,11 +642,6 @@ impl serde::Serialize for Signal {
                 map.serialize_entry("module", module)?;
                 map.serialize_entry("port", port)?;
                 map.serialize_entry("channel", channel)?;
-                map.end()
-            }
-            Signal::Disconnected => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("type", "disconnected")?;
                 map.end()
             }
         }
@@ -680,7 +671,6 @@ enum SignalTaggedSchema {
         #[serde(default)]
         channel: usize,
     },
-    Disconnected,
 }
 
 impl JsonSchema for Signal {
@@ -697,7 +687,6 @@ impl Signal {
     /// Get the mono voltage value from this signal.
     /// For Volts, returns the stored value.
     /// For Cable, fetches the specific channel from the connected module's output.
-    /// For Disconnected, returns 0.0.
     pub fn get_value(&self) -> f32 {
         match self {
             Signal::Volts(v) => *v,
@@ -713,22 +702,42 @@ impl Signal {
                     .unwrap_or(0.0),
                 None => 0.0,
             },
-            Signal::Disconnected => 0.0,
+        }
+    }
+}
+
+/// Extension trait for normalling pattern on optional signals.
+pub trait SignalExt {
+    /// Returns the signal's value, or `default` if None.
+    fn value_or(&self, default: f32) -> f32;
+
+    /// Returns the signal's value, or calls `f` if None.
+    fn value_or_else(&self, f: impl FnOnce() -> f32) -> f32;
+
+    /// Returns the signal's value, or 0.0 if None.
+    fn value_or_zero(&self) -> f32;
+}
+
+impl SignalExt for Option<Signal> {
+    fn value_or(&self, default: f32) -> f32 {
+        match self {
+            Some(s) => s.get_value(),
+            None => default,
         }
     }
 
-    /// Get value with fallback for disconnected inputs (normalled input)
-    pub fn get_value_or(&self, default: f32) -> f32 {
-        if self.is_disconnected() {
-            default
-        } else {
-            self.get_value()
+    fn value_or_else(&self, f: impl FnOnce() -> f32) -> f32 {
+        match self {
+            Some(s) => s.get_value(),
+            None => f(),
         }
     }
 
-    /// Check if the signal is disconnected
-    pub fn is_disconnected(&self) -> bool {
-        matches!(self, Signal::Disconnected)
+    fn value_or_zero(&self) -> f32 {
+        match self {
+            Some(s) => s.get_value(),
+            None => 0.0,
+        }
     }
 }
 
@@ -773,7 +782,6 @@ impl PartialEq for Signal {
                     && module_1 == module_2
                     && channel_1 == channel_2
             }
-            (Signal::Disconnected, Signal::Disconnected) => true,
             _ => false,
         }
     }
@@ -919,7 +927,6 @@ impl FromNapiValue for SchemaContainer {
 #[napi(object)]
 pub struct PositionalArg {
     pub name: String,
-    pub optional: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1026,7 +1033,8 @@ pub struct ModuleIdRemap {
     pub to: String,
 }
 
-pub type SampleableConstructor = Box<dyn Fn(&String, f32) -> Result<Arc<Box<dyn Sampleable>>>>;
+pub type SampleableConstructor =
+    Box<dyn Fn(&String, f32, crate::params::DeserializedParams) -> Result<Arc<Box<dyn Sampleable>>>>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

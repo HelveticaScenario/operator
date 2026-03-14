@@ -8,20 +8,20 @@ use serde::Deserialize;
 
 use crate::dsp::fx::enosc_tables::{aa_segment, interpolate_segment};
 use crate::dsp::utils::voct_to_hz;
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use crate::types::Clickless;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct SegmentParams {
     /// input signal to shape (bipolar, typically -5 to 5)
     input: PolySignal,
     /// segment shape amount (0-5, morphs between 8 shapes)
     #[signal(range = (0.0, 5.0))]
-    amount: PolySignal,
+    amount: Option<PolySignal>,
     /// pitch of the source signal in V/Oct (optional, reduces aliasing at high frequencies)
     #[signal(type = pitch)]
-    freq: PolySignal,
+    freq: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -36,18 +36,20 @@ struct ChannelState {
     amount: Clickless,
 }
 
+/// State for the Segment module.
+#[derive(Default)]
+struct SegmentState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
 /// Waveshaper that morphs through 8 distinct tonal shapes as you sweep the
 /// amount control. Low settings pass the signal cleanly; mid settings compress
 /// and square it off; high settings introduce stepped, ripple-like overtone
 /// patterns. Works best on simple waveforms like sines or triangles.
-#[module(
-    name = "$segment",
-    args(input, amount?)
-)]
-#[derive(Default)]
+#[module(name = "$segment", args(input, amount))]
 pub struct Segment {
     outputs: SegmentOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: SegmentState,
     params: SegmentParams,
 }
 
@@ -57,10 +59,10 @@ impl Segment {
         let freq_connected = !self.params.freq.is_disconnected();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
             let input = self.params.input.get_value(ch);
-            let amount_raw = self.params.amount.get_value_or(ch, 0.0);
+            let amount_raw = self.params.amount.value_or(ch, 0.0);
 
             // Smooth amount parameter to avoid clicks
             state.amount.update(amount_raw);
@@ -71,7 +73,7 @@ impl Segment {
 
             // Apply anti-aliasing when freq is connected
             let amount_norm = if freq_connected {
-                let freq_hz = voct_to_hz(self.params.freq.get_value(ch));
+                let freq_hz = voct_to_hz(self.params.freq.value_or_zero(ch));
                 aa_segment(freq_hz / sample_rate, amount_norm)
             } else {
                 amount_norm

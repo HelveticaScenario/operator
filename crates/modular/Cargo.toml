@@ -54,3 +54,7 @@ napi-build = "2"
 [profile.release]
 lto = true
 strip = "symbols"
+
+[profile.dev]
+opt-level = 0
+debug = true

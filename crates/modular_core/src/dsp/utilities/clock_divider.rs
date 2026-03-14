@@ -3,11 +3,15 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::dsp::utils::{min_gate_samples, SchmittTrigger, TempGate, TempGateState};
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use crate::types::ClockMessages;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+fn default_division() -> u32 {
+    1
+}
+
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct ClockDividerParams {
     /// division factor (e.g. 2 = output fires every other tick)
     pub division: u32,
@@ -16,7 +20,7 @@ struct ClockDividerParams {
     pub input: PolySignal,
     /// trigger to reset the counter to 0
     #[signal(type = trig, range = (0.0, 5.0))]
-    pub reset: PolySignal,
+    pub reset: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -34,6 +38,12 @@ struct ChannelState {
     trigger_gate: TempGate,
 }
 
+/// State for the ClockDivider module.
+#[derive(Default)]
+struct ClockDividerState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
 /// Divides an incoming clock signal so it fires less often.
 ///
 /// Feed it a clock and set **division** to an integer — the output will
@@ -45,11 +55,10 @@ struct ChannelState {
 /// $clockDivider($clock.barTrigger, 2)
 /// ```
 #[module(name = "$clockDivider", args(input, division))]
-#[derive(Default)]
 pub struct ClockDivider {
     params: ClockDividerParams,
     outputs: ClockDividerOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: ClockDividerState,
 }
 
 message_handlers!(impl ClockDivider {
@@ -61,7 +70,7 @@ impl ClockDivider {
         match m {
             ClockMessages::Start => {
                 // Reset all channel counters on start
-                for state in self.channels.iter_mut() {
+                for state in self.state.channels.iter_mut() {
                     state.counter = 0;
                 }
             }
@@ -78,10 +87,13 @@ impl ClockDivider {
         let hold = min_gate_samples(sample_rate);
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
             // Reset counter on rising edge of reset trigger
-            if state.reset_schmitt.process(self.params.reset.get_value(ch)) {
+            if state
+                .reset_schmitt
+                .process(self.params.reset.value_or_zero(ch))
+            {
                 state.counter = 0;
             }
 

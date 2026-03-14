@@ -16,14 +16,27 @@ const DEFAULT_PORT: &str = "output";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/// Create a named module from the constructor registry.
+/// Create a named module from the constructor registry with default params.
 fn make_module(module_type: &str, id: &str) -> Arc<Box<dyn Sampleable>> {
     let constructors = get_constructors();
+    let deserializers = get_params_deserializers();
+    let deserializer = deserializers
+        .get(module_type)
+        .unwrap_or_else(|| panic!("no params deserializer for '{module_type}'"));
+    let cached = deserializer(json!({})).unwrap_or_else(|e| {
+        panic!("default params deserialization for '{module_type}' failed: {e}")
+    });
+    let deserialized = DeserializedParams {
+        params: cached.params,
+        argument_spans: Default::default(),
+        channel_count: cached.channel_count,
+    };
     constructors
         .get(module_type)
         .unwrap_or_else(|| panic!("no constructor for '{module_type}'"))(
         &id.to_string(),
         SAMPLE_RATE,
+        deserialized,
     )
     .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
 }
@@ -269,8 +282,19 @@ fn scale_and_shift_applies() {
 #[test]
 fn all_constructors_produce_valid_modules() {
     let constructors = get_constructors();
+    let deserializers = get_params_deserializers();
     for (name, constructor) in &constructors {
-        let module = constructor(&format!("test-{name}"), SAMPLE_RATE);
+        let deserializer = deserializers
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("no params deserializer for '{name}'"));
+        let cached = deserializer(json!({}))
+            .unwrap_or_else(|e| panic!("default params deserialization for '{name}' failed: {e}"));
+        let deserialized = DeserializedParams {
+            params: cached.params,
+            argument_spans: Default::default(),
+            channel_count: cached.channel_count,
+        };
+        let module = constructor(&format!("test-{name}"), SAMPLE_RATE, deserialized);
         assert!(
             module.is_ok(),
             "constructor for '{name}' should succeed, got: {:?}",
@@ -284,8 +308,19 @@ fn all_constructors_produce_valid_modules() {
 #[test]
 fn all_constructors_can_tick() {
     let constructors = get_constructors();
+    let deserializers = get_params_deserializers();
     for (name, constructor) in &constructors {
-        let module = constructor(&format!("test-{name}"), SAMPLE_RATE).unwrap();
+        let deserializer = deserializers
+            .get(name.as_str())
+            .unwrap_or_else(|| panic!("no params deserializer for '{name}'"));
+        let cached = deserializer(json!({}))
+            .unwrap_or_else(|e| panic!("default params deserialization for '{name}' failed: {e}"));
+        let deserialized = DeserializedParams {
+            params: cached.params,
+            argument_spans: Default::default(),
+            channel_count: cached.channel_count,
+        };
+        let module = constructor(&format!("test-{name}"), SAMPLE_RATE, deserialized).unwrap();
         // Should not panic with default (zero) params
         module.tick();
         module.update();

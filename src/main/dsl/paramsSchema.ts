@@ -164,7 +164,7 @@ function extractTypeTag(schema: JsonSchema): string | null {
 /**
  * Detects if a schema is a Signal type.
  * Signal schema is: anyOf [number, string, SignalTaggedSchema]
- * where SignalTaggedSchema is oneOf [cable, disconnected]
+ * where SignalTaggedSchema is oneOf [cable]
  */
 function isSignalParamSchema(root: JsonSchema, schema: JsonSchema): boolean {
     const resolved = resolveAndMerge(root, schema);
@@ -199,7 +199,7 @@ function isSignalParamSchema(root: JsonSchema, schema: JsonSchema): boolean {
             continue;
         }
 
-        // Check for SignalTaggedSchema (oneOf with cable/disconnected variants)
+        // Check for SignalTaggedSchema (oneOf with cable variant)
         const taggedUnion = b.oneOf ?? b.anyOf;
         if (taggedUnion && Array.isArray(taggedUnion)) {
             const tags = new Set<string>();
@@ -212,8 +212,8 @@ function isSignalParamSchema(root: JsonSchema, schema: JsonSchema): boolean {
                     if (tag) tags.add(tag);
                 }
             }
-            // SignalTaggedSchema has "cable" and "disconnected" variants
-            if (tags.has('cable') && tags.has('disconnected')) {
+            // SignalTaggedSchema has a "cable" variant
+            if (tags.has('cable')) {
                 hasTaggedSchema = true;
             }
         }

@@ -3,20 +3,20 @@ use serde::Deserialize;
 
 use crate::{
     dsp::utils::wrap,
-    poly::{PolyOutput, PolySignal},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct WrapParams {
     /// signal to wrap
     input: PolySignal,
     /// lower bound of the wrap range
     #[signal(default = 0.0)]
-    min: PolySignal,
+    min: Option<PolySignal>,
     /// upper bound of the wrap range
     #[signal(default = 5.0)]
-    max: PolySignal,
+    max: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -37,7 +37,6 @@ struct WrapOutputs {
 /// $wrap(ramp, 0, 5)
 /// ```
 #[module(name = "$wrap", args(input, min, max))]
-#[derive(Default)]
 pub struct Wrap {
     outputs: WrapOutputs,
     params: WrapParams,
@@ -49,8 +48,8 @@ impl Wrap {
 
         for i in 0..channels as usize {
             let val = self.params.input.get_value(i);
-            let a = self.params.min.get_value_or(i, 0.0);
-            let b = self.params.max.get_value_or(i, 5.0);
+            let a = self.params.min.value_or(i, 0.0);
+            let b = self.params.max.value_or(i, 5.0);
             let (min, max) = if b < a { (b, a) } else { (a, b) };
 
             let output = if (max - min).abs() < f32::EPSILON {
@@ -72,11 +71,15 @@ mod tests {
     use crate::{poly::PolySignal, types::Signal};
 
     fn run_wrap(input: f32, min: f32, max: f32) -> f32 {
-        let mut module = Wrap::default();
-        module.params.input = PolySignal::mono(Signal::Volts(input));
-        module.params.min = PolySignal::mono(Signal::Volts(min));
-        module.params.max = PolySignal::mono(Signal::Volts(max));
-        module._channel_count = 1;
+        let mut module = Wrap {
+            outputs: WrapOutputs::default(),
+            params: WrapParams {
+                input: PolySignal::mono(Signal::Volts(input)),
+                min: Some(PolySignal::mono(Signal::Volts(min))),
+                max: Some(PolySignal::mono(Signal::Volts(max))),
+            },
+            _channel_count: 1,
+        };
         module.outputs.sample.set_channels(1);
         module.update(44100.0);
         module.outputs.sample.get(0)

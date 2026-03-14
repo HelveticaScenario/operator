@@ -1,17 +1,17 @@
 use crate::dsp::utils::SchmittTrigger;
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct PercussionEnvelopeParams {
     /// trigger input (rising edge triggers envelope)
     #[signal(type = trig, range = (0.0, 5.0))]
     trigger: PolySignal,
     /// decay time in seconds
     #[signal(default = 0.1, range = (0.0, 10.0))]
-    decay: PolySignal,
+    decay: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -29,6 +29,12 @@ struct ChannelState {
     in_attack: bool,
 }
 
+/// State for the PercussionEnvelope module.
+#[derive(Default)]
+struct PercussionEnvelopeState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
 /// Simple envelope for percussive sounds.
 ///
 /// A rising edge on **trigger** starts the envelope at 5 V, which then
@@ -42,11 +48,10 @@ struct ChannelState {
 /// $noise("white").mul($perc($clock.gate, { decay: 0.1 }))
 /// ```
 #[module(name = "$perc", args(trigger))]
-#[derive(Default)]
 pub struct PercussionEnvelope {
     outputs: PercussionEnvelopeOutputs,
     params: PercussionEnvelopeParams,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: PercussionEnvelopeState,
 }
 
 impl PercussionEnvelope {
@@ -54,9 +59,9 @@ impl PercussionEnvelope {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
-            let decay_time = self.params.decay.get_value_or(ch, 0.1).max(0.001);
+            let decay_time = self.params.decay.value_or(ch, 0.1).max(0.001);
 
             // Detect rising edge of trigger using Schmitt trigger for noise immunity
             let trigger = self.params.trigger.get_value(ch);

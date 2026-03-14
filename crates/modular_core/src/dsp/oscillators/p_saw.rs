@@ -1,20 +1,20 @@
 use crate::{
     dsp::utils::wrap,
-    poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS},
+    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
     types::Clickless,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct PSawOscillatorParams {
     /// phasor input (0–1, wraps at boundaries)
     #[signal(range = (0.0, 1.0))]
     phase: PolySignal,
     /// waveform shape: 0=saw, 2.5=triangle, 5=ramp
     #[signal(range = (0.0, 5.0))]
-    shape: PolySignal,
+    shape: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -31,6 +31,12 @@ struct ChannelState {
     prev_phase: f32,
 }
 
+/// State for the PSawOscillator module.
+#[derive(Default)]
+struct PSawOscillatorState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
 /// Phase-driven variable-symmetry triangle oscillator.
 ///
 /// Instead of a frequency input, this oscillator is driven by an external
@@ -45,10 +51,9 @@ struct ChannelState {
 ///
 /// Output range is **±5V**.
 #[module(name = "$pSaw", args(phase))]
-#[derive(Default)]
 pub struct PSawOscillator {
     outputs: PSawOscillatorOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: PSawOscillatorState,
     params: PSawOscillatorParams,
 }
 
@@ -57,10 +62,10 @@ impl PSawOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
             // Update shape with smoothing - clamp to valid range
-            let shape_val = self.params.shape.get_value_or(ch, 0.0).clamp(0.0, 5.0);
+            let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
             state.shape.update(shape_val);
 
             let phase = wrap(0.0..1.0, self.params.phase.get_value(ch));

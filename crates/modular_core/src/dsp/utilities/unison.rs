@@ -1,15 +1,15 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
 use crate::types::PolySignalFields;
 
 fn default_count() -> usize {
     1
 }
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct UnisonParams {
     /// input signal to expand (typically V/Oct pitch)
     input: PolySignal,
@@ -17,7 +17,7 @@ struct UnisonParams {
     #[serde(default = "default_count")]
     count: usize,
     /// detune spread amount (0–10V, exponential: 0V = none, 10V = 1 octave)
-    spread: PolySignal,
+    spread: Option<PolySignal>,
 }
 
 /// Custom channel count: max(all PolySignal channels) * count, clamped to 16.
@@ -57,8 +57,7 @@ struct UnisonOutputs {
 /// // With modulated spread
 /// $saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()
 /// ```
-#[module(name = "$unison", channels_derive = unison_derive_channel_count, args(input, count?, spread?))]
-#[derive(Default)]
+#[module(name = "$unison", channels_derive = unison_derive_channel_count, args(input, count, spread))]
 pub struct Unison {
     outputs: UnisonOutputs,
     params: UnisonParams,
@@ -70,19 +69,15 @@ impl Unison {
         let input = &self.params.input;
         let spread = &self.params.spread;
 
-        // Determine input channel count (at least 1 if connected)
-        let input_channels = if input.is_disconnected() {
-            1
-        } else {
-            input.channels()
-        };
+        // Determine input channel count (at least 1)
+        let input_channels = input.channels().max(1);
 
         let output_channels = self.channel_count();
 
         for input_ch in 0..input_channels {
-            let input_val = input.get_value_or(input_ch, 0.0);
+            let input_val = input.get_value(input_ch);
             // Spread cycles across input channels
-            let spread_v = spread.get_value_or(input_ch, 0.0).clamp(0.0, 10.0);
+            let spread_v = spread.value_or(input_ch, 0.0).clamp(0.0, 10.0);
             // Exponential mapping: (spread_v / 10)^2 gives 0–1 V/Oct (0–1 octave)
             let normalized = spread_v / 10.0;
             let max_detune_voct = normalized * normalized;
@@ -130,7 +125,7 @@ mod tests {
         let mut u = make_unison(UnisonParams {
             input: PolySignal::mono(Signal::Volts(1.0)),
             count: 1,
-            spread: PolySignal::mono(Signal::Volts(5.0)),
+            spread: Some(PolySignal::mono(Signal::Volts(5.0))),
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 1);
@@ -143,7 +138,7 @@ mod tests {
         let mut u = make_unison(UnisonParams {
             input: PolySignal::mono(Signal::Volts(2.0)),
             count: 3,
-            spread: PolySignal::default(),
+            spread: None,
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 3);
@@ -159,7 +154,7 @@ mod tests {
         let mut u = make_unison(UnisonParams {
             input: PolySignal::mono(Signal::Volts(0.0)),
             count: 3,
-            spread: PolySignal::mono(Signal::Volts(10.0)),
+            spread: Some(PolySignal::mono(Signal::Volts(10.0))),
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 3);
@@ -174,7 +169,7 @@ mod tests {
         let mut u = make_unison(UnisonParams {
             input: PolySignal::mono(Signal::Volts(0.0)),
             count: 3,
-            spread: PolySignal::mono(Signal::Volts(5.0)),
+            spread: Some(PolySignal::mono(Signal::Volts(5.0))),
         });
         u.update(48000.0);
         assert!((u.outputs.sample.get(0) - (-0.25)).abs() < 1e-6);
@@ -188,7 +183,7 @@ mod tests {
         let mut u = make_unison(UnisonParams {
             input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(1.0)]),
             count: 3,
-            spread: PolySignal::mono(Signal::Volts(10.0)),
+            spread: Some(PolySignal::mono(Signal::Volts(10.0))),
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 6);
@@ -213,7 +208,7 @@ mod tests {
                 Signal::Volts(3.0),
             ]),
             count: 5,
-            spread: PolySignal::default(),
+            spread: None,
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 16);
@@ -225,7 +220,7 @@ mod tests {
         let params = UnisonParams {
             input: PolySignal::mono(Signal::Volts(0.0)),
             count: 7,
-            spread: PolySignal::default(),
+            spread: None,
         };
         assert_eq!(unison_derive_channel_count(&params), 7);
 
@@ -233,7 +228,7 @@ mod tests {
         let params = UnisonParams {
             input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(0.0), Signal::Volts(0.0)]),
             count: 5,
-            spread: PolySignal::default(),
+            spread: None,
         };
         assert_eq!(unison_derive_channel_count(&params), 15);
 
@@ -241,7 +236,7 @@ mod tests {
         let params = UnisonParams {
             input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(0.0), Signal::Volts(0.0)]),
             count: 6,
-            spread: PolySignal::default(),
+            spread: None,
         };
         assert_eq!(unison_derive_channel_count(&params), 16);
     }
@@ -252,10 +247,10 @@ mod tests {
         let mut u = make_unison(UnisonParams {
             input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(0.0)]),
             count: 2,
-            spread: PolySignal::poly(&[
+            spread: Some(PolySignal::poly(&[
                 Signal::Volts(10.0), // ch 0: 1.0 V/Oct detune
                 Signal::Volts(0.0),  // ch 1: 0.0 V/Oct detune
-            ]),
+            ])),
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 4);

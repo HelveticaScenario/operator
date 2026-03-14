@@ -283,13 +283,34 @@ export class DSLContext {
             // Derive channel count from params using Rust-side derivation (backed by LRU cache)
             // This handles modules with custom derivation logic (like mix, seq)
             // as well as standard inference from PolySignal inputs
-            const derivedChannels = deriveChannelCount(
+            const deriveResult = deriveChannelCount(
                 schema.name,
                 node.getParamsSnapshot(),
             );
 
-            if (derivedChannels !== null) {
-                node._setDerivedChannelCount(derivedChannels);
+            // Check for missing required params
+            if (deriveResult.errors) {
+                const missingParams = deriveResult.errors.flatMap(
+                    (e) => e.params,
+                );
+                if (missingParams.length > 0) {
+                    const paramList = missingParams
+                        .map((p) => `"${p}"`)
+                        .join(', ');
+                    const loc = sourceLocation
+                        ? ` (line ${sourceLocation.line})`
+                        : '';
+                    throw new Error(
+                        `${schema.name}${loc}: missing required parameter ${paramList}`,
+                    );
+                }
+            }
+
+            if (
+                deriveResult.channelCount !== null &&
+                deriveResult.channelCount !== undefined
+            ) {
+                node._setDerivedChannelCount(deriveResult.channelCount);
             }
 
             // Return based on output configuration

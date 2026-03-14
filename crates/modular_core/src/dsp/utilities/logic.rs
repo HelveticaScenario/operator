@@ -6,15 +6,15 @@ use crate::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct RisingEdgeDetectorParams {
     /// signal to detect rising edges in
     input: PolySignal,
 }
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct FallingEdgeDetectorParams {
     /// signal to detect falling edges in
     input: PolySignal,
@@ -31,10 +31,25 @@ struct EdgeDetectorOutputs {
     output: PolyOutput,
 }
 
-#[derive(Clone, Default, Copy)]
+#[derive(Clone, Copy)]
 struct EdgeChannelState {
     last_input: f32,
     trigger_gate: TempGate,
+}
+
+impl Default for EdgeChannelState {
+    fn default() -> Self {
+        Self {
+            last_input: 0.0,
+            trigger_gate: TempGate::new_gate(TempGateState::Low),
+        }
+    }
+}
+
+/// State for the RisingEdgeDetector module.
+#[derive(Default)]
+struct RisingEdgeDetectorState {
+    channels: [EdgeChannelState; PORT_MAX_CHANNELS],
 }
 
 /// Detects rising edges in a signal and emits a short pulse.
@@ -48,11 +63,10 @@ struct EdgeChannelState {
 /// $perc($rising($sine('4hz')))
 /// ```
 #[module(name = "$rising", args(input))]
-#[derive(Default)]
 pub struct RisingEdgeDetector {
     outputs: EdgeDetectorOutputs,
     params: RisingEdgeDetectorParams,
-    channels: [EdgeChannelState; PORT_MAX_CHANNELS],
+    state: RisingEdgeDetectorState,
 }
 
 impl RisingEdgeDetector {
@@ -61,8 +75,8 @@ impl RisingEdgeDetector {
         let hold = min_gate_samples(sample_rate);
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
-            let input = self.params.input.get_value_or(ch, 0.0);
+            let state = &mut self.state.channels[ch];
+            let input = self.params.input.get_value(ch);
 
             if input > state.last_input {
                 state
@@ -78,6 +92,12 @@ impl RisingEdgeDetector {
 
 message_handlers!(impl RisingEdgeDetector {});
 
+/// State for the FallingEdgeDetector module.
+#[derive(Default)]
+struct FallingEdgeDetectorState {
+    channels: [EdgeChannelState; PORT_MAX_CHANNELS],
+}
+
 /// Detects falling edges in a signal and emits a short pulse.
 ///
 /// Outputs 5 V for a single sample whenever the input decreases.
@@ -89,11 +109,10 @@ message_handlers!(impl RisingEdgeDetector {});
 /// $perc($falling(gate))
 /// ```
 #[module(name = "$falling", args(input))]
-#[derive(Default)]
 pub struct FallingEdgeDetector {
     outputs: EdgeDetectorOutputs,
     params: FallingEdgeDetectorParams,
-    channels: [EdgeChannelState; PORT_MAX_CHANNELS],
+    state: FallingEdgeDetectorState,
 }
 
 impl FallingEdgeDetector {
@@ -102,8 +121,8 @@ impl FallingEdgeDetector {
         let hold = min_gate_samples(sample_rate);
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
-            let input = self.params.input.get_value_or(ch, 0.0);
+            let state = &mut self.state.channels[ch];
+            let input = self.params.input.get_value(ch);
 
             if input < state.last_input {
                 state

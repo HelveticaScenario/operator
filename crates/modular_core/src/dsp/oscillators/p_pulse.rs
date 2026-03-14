@@ -1,22 +1,22 @@
 use crate::{
     dsp::utils::wrap,
-    poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS},
+    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
     types::Clickless,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct PPulseOscillatorParams {
     /// phasor input (0–1, wraps at boundaries)
     #[signal(range = (0.0, 1.0))]
     phase: PolySignal,
     /// pulse width (0-5, 2.5 is square)
     #[signal(default = 2.5, range = (0.0, 5.0))]
-    width: PolySignal,
+    width: Option<PolySignal>,
     /// pulse width modulation CV — added to the width parameter
-    pwm: PolySignal,
+    pwm: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -33,6 +33,12 @@ struct ChannelState {
     prev_phase: f32,
 }
 
+/// State for the PPulseOscillator module.
+#[derive(Default)]
+struct PPulseOscillatorState {
+    channels: [ChannelState; PORT_MAX_CHANNELS],
+}
+
 /// Phase-driven pulse/square oscillator with pulse width modulation.
 ///
 /// Instead of a frequency input, this oscillator is driven by an external
@@ -45,10 +51,9 @@ struct ChannelState {
 ///
 /// Output range is **±5V**.
 #[module(name = "$pPulse", args(phase))]
-#[derive(Default)]
 pub struct PPulseOscillator {
     outputs: PPulseOscillatorOutputs,
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    state: PPulseOscillatorState,
     params: PPulseOscillatorParams,
 }
 
@@ -57,10 +62,10 @@ impl PPulseOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.channels[ch];
+            let state = &mut self.state.channels[ch];
 
-            let base_width = self.params.width.get_value_or(ch, 2.5);
-            let pwm = self.params.pwm.get_value_or(ch, 0.0);
+            let base_width = self.params.width.value_or(ch, 2.5);
+            let pwm = self.params.pwm.value_or(ch, 0.0);
             state.width.update((base_width + pwm).clamp(0.0, 5.0));
 
             let phase = wrap(0.0..1.0, self.params.phase.get_value(ch));

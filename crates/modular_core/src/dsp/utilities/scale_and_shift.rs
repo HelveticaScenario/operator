@@ -1,18 +1,18 @@
 use schemars::JsonSchema;
 use serde::Deserialize;
 
-use crate::poly::{PolyOutput, PolySignal, PORT_MAX_CHANNELS};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
-#[derive(Clone, Deserialize, Default, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(default, rename_all = "camelCase")]
+#[derive(Clone, Deserialize, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
 struct ScaleAndShiftParams {
     /// signal to scale and shift
     input: PolySignal,
     /// scale factor (0–10V range; 5V = unity gain, 0V = silence, -5V = inverted, 10V = 2x)
     #[signal(default = 5.0, range = (0.0, 10.0))]
-    scale: PolySignal,
+    scale: Option<PolySignal>,
     /// DC offset added to the scaled signal (in volts)
-    shift: PolySignal,
+    shift: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -32,12 +32,9 @@ struct ScaleAndShiftOutputs {
 /// // invert a slow sine and shift it into 0–5 V range
 /// $scaleAndShift($sine('1hz'), -5, 2.5)
 /// ```
-#[module(name = "$scaleAndShift", args(input, scale?, shift?))]
-#[derive(Default)]
+#[module(name = "$scaleAndShift", args(input, scale, shift))]
 pub struct ScaleAndShift {
     outputs: ScaleAndShiftOutputs,
-    scale: [f32; PORT_MAX_CHANNELS],
-    shift: [f32; PORT_MAX_CHANNELS],
     params: ScaleAndShiftParams,
 }
 
@@ -47,15 +44,12 @@ impl ScaleAndShift {
 
         for i in 0..channels as usize {
             let input_val = self.params.input.get_value(i);
-            let scale_val = self.params.scale.get_value_or(i, 5.0);
-            let shift_val = self.params.shift.get_value_or(i, 0.0);
-
-            self.scale[i] = scale_val;
-            self.shift[i] = shift_val;
+            let scale_val = self.params.scale.value_or(i, 5.0);
+            let shift_val = self.params.shift.value_or(i, 0.0);
 
             self.outputs
                 .sample
-                .set(i, input_val * (self.scale[i] / 5.0) + self.shift[i]);
+                .set(i, input_val * (scale_val / 5.0) + shift_val);
         }
     }
 }

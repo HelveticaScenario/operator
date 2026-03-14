@@ -2,9 +2,12 @@ use proc_macro::TokenStream;
 use proc_macro2::{Ident, TokenStream as TokenStream2};
 use quote::{quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Attribute, Data, DeriveInput, Fields, LitStr, Token, punctuated::Punctuated};
+use syn::{punctuated::Punctuated, Attribute, Data, DeriveInput, Fields, LitStr, Token};
 
-use crate::utils::{is_mono_signal_type, is_poly_signal_type};
+use crate::utils::{
+    is_mono_signal_type, is_option_mono_signal_type, is_option_poly_signal_type,
+    is_option_signal_type, is_poly_signal_type,
+};
 
 /// Parsed `#[default_connection(...)]` attribute data
 struct DefaultConnectionAttr {
@@ -91,9 +94,12 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
                                     let port = &dc.port;
                                     let is_poly = is_poly_signal_type(&field.ty);
                                     let is_mono = is_mono_signal_type(&field.ty);
+                                    let is_option_poly = is_option_poly_signal_type(&field.ty);
+                                    let is_option_mono = is_option_mono_signal_type(&field.ty);
+                                    let is_option_signal = is_option_signal_type(&field.ty);
 
-                                    if is_poly || is_mono {
-                                        // Generate PolySignal default
+                                    if is_poly || is_mono || is_option_poly || is_option_mono {
+                                        // Generate PolySignal/MonoSignal default
                                         let cable_exprs: Vec<TokenStream2> = dc
                                             .channels
                                             .iter()
@@ -103,31 +109,53 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
                                                 }
                                             })
                                             .collect();
-                                        if is_poly {
+
+                                        if is_option_poly {
                                             default_stmts.extend(quote_spanned! {field.span()=>
-                                                if self.#field_ident.is_disconnected() {
-                                                    self.#field_ident = crate::poly::PolySignal::poly(&[
-                                                        #(#cable_exprs),*
-                                                    ]);
-                                                }
-                                            });
-                                        } else {
-                                            default_stmts.extend(quote_spanned! {field.span()=>
-                                                if self.#field_ident.is_disconnected() {
-                                                    self.#field_ident = crate::poly::MonoSignal::from_poly(crate::poly::PolySignal::poly(&[
+                                                if self.#field_ident.is_none() {
+                                                    self.#field_ident = Some(crate::poly::PolySignal::poly(&[
                                                         #(#cable_exprs),*
                                                     ]));
                                                 }
                                             });
+                                        } else if is_option_mono {
+                                            default_stmts.extend(quote_spanned! {field.span()=>
+                                                if self.#field_ident.is_none() {
+                                                    self.#field_ident = Some(crate::poly::MonoSignal::from_poly(crate::poly::PolySignal::poly(&[
+                                                        #(#cable_exprs),*
+                                                    ])));
+                                                }
+                                            });
+                                        } else {
+                                            // Bare PolySignal/MonoSignal fields are required — they
+                                            // should not have #[default_connection] since the user
+                                            // must always provide them.
+                                            return syn::Error::new(
+                                                field.span(),
+                                                "#[default_connection] is not supported on bare (required) signal fields. \
+                                                 Use Option<PolySignal> or Option<MonoSignal> instead.",
+                                            )
+                                            .to_compile_error()
+                                            .into();
                                         }
-                                    } else {
-                                        // Generate Signal default (single channel)
+                                    } else if is_option_signal {
+                                        // Option<Signal> default (single channel)
                                         let ch = dc.channels.first().copied().unwrap_or(0);
                                         default_stmts.extend(quote_spanned! {field.span()=>
-                                            if self.#field_ident.is_disconnected() {
-                                                self.#field_ident = crate::types::WellKnownModule::#module.to_cable(#ch, #port);
+                                            if self.#field_ident.is_none() {
+                                                self.#field_ident = Some(crate::types::WellKnownModule::#module.to_cable(#ch, #port));
                                             }
                                         });
+                                    } else {
+                                        // Bare Signal fields are required — they should not have
+                                        // #[default_connection].
+                                        return syn::Error::new(
+                                            field.span(),
+                                            "#[default_connection] is not supported on bare (required) signal fields. \
+                                             Use Option<Signal> instead.",
+                                        )
+                                        .to_compile_error()
+                                        .into();
                                     }
                                 }
                                 Err(e) => return e.to_compile_error().into(),
