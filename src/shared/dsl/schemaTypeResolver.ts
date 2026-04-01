@@ -151,6 +151,7 @@ export function getEnumVariants(
         return null;
     }
 
+
     // Follow $ref
     if (schema.$ref) {
         const resolved = resolveRef(schema.$ref, rootSchema);
