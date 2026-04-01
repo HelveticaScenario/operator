@@ -23,7 +23,7 @@ import { TYPE_DOCS, GLOBAL_DOCS } from '../../../shared/dsl/typeDocs';
  */
 function extractJsCodeBlocks(documentation: string): string[] {
     const blocks: string[] = [];
-    const regex = /```js\n([\s\S]*?)```/g;
+    const regex = /```js\r?\n([\s\S]*?)```/g;
     let match: RegExpExecArray | null;
     while ((match = regex.exec(documentation)) !== null) {
         const code = match[1].trim();
@@ -42,11 +42,14 @@ function extractJsCodeBlocks(documentation: string): string[] {
 function isExecutableDSL(example: string): boolean {
     const trimmed = example.trim();
     // Skip pure string/number literals used as type illustrations
-    if (/^['"].*['"]$/.test(trimmed)) return false;
-    // Skip comment-only lines
-    if (trimmed.startsWith('//')) return false;
-    // Must contain a DSL function call or assignment
-    return /(\$\w+|const |let |var )/.test(trimmed);
+    if (/^(['"].*['"]|[\d.]+)$/.test(trimmed)) return false;
+    // Skip comment-only examples (all non-empty lines are comments)
+    const lines = trimmed.split('\n').filter((l) => l.trim());
+    if (lines.length > 0 && lines.every((l) => l.trim().startsWith('//'))) {
+        return false;
+    }
+    // Must contain a DSL function call, assignment, or method chain
+    return /(\$\w+|^\s*(const|let|var)\s+|\.\w+\()/.test(trimmed);
 }
 
 /**
