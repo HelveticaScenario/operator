@@ -137,16 +137,16 @@ struct CompressorOutputs {
 ///
 /// ```js
 /// // simple bus compressor
-/// $comp(input, { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })
+/// $comp($saw('C3'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 }).out()
 /// ```
 ///
 /// ```js
 /// // multiband compression using $xover + $comp
-/// let bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })
+/// let bands = $xover($saw('C3'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })
 /// let low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })
 /// let mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })
 /// let high = $comp(bands.high, { threshold: 2,   ratio: 6 })
-/// $mix(low, mid, high).out()
+/// $mix([low, mid, high]).out()
 /// ```
 #[module(name = "$comp", args(input))]
 pub struct Compressor {

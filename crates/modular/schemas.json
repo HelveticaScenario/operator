@@ -488,7 +488,7 @@
   },
   {
     "name": "$comp",
-    "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward compressor with peak envelope follower.\n\nApplies feed-forward compression in the log domain with configurable\nthreshold, ratio, attack/release ballistics, and makeup gain. Input and\noutput gain staging allow driving signal into the compressor and trimming\nthe output level independently. A dry/wet mix control enables parallel\ncompression.\n\n**Signal flow:** input → input gain → compressor → output gain → dry/wet mix → output\n\n- **threshold** — compression threshold in volts (0–5, default 2.5).\n- **ratio** — compression ratio (1–20, default 4.0).\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain (linear multiplier, 0–5).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp(input, { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix(low, mid, high).out()\n```",
+    "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward compressor with peak envelope follower.\n\nApplies feed-forward compression in the log domain with configurable\nthreshold, ratio, attack/release ballistics, and makeup gain. Input and\noutput gain staging allow driving signal into the compressor and trimming\nthe output level independently. A dry/wet mix control enables parallel\ncompression.\n\n**Signal flow:** input → input gain → compressor → output gain → dry/wet mix → output\n\n- **threshold** — compression threshold in volts (0–5, default 2.5).\n- **ratio** — compression ratio (1–20, default 4.0).\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain (linear multiplier, 0–5).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp($saw('C3'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 }).out()\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover($saw('C3'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CompressorParams",
@@ -740,7 +740,7 @@
   },
   {
     "name": "$xover",
-    "documentation": "EXPERIMENTAL\n\nThree-band crossover / band splitter.\n\nSplits an input signal into three frequency bands (low, mid, high).\nThe default `sample` output passes the input through unchanged,\nso the module is a no-op unless you explicitly tap the\n`.low`, `.mid`, or `.high` outputs.\n\nTwo crossover frequencies define the band boundaries:\n- **lowMidFreq** — boundary between the low and mid bands (V/Oct, default ~200 Hz).\n- **midHighFreq** — boundary between the mid and high bands (V/Oct, default ~2000 Hz).\n\n```js\n// Split into 3 bands and process each independently\nlet bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
+    "documentation": "EXPERIMENTAL\n\nThree-band crossover / band splitter.\n\nSplits an input signal into three frequency bands (low, mid, high).\nThe default `sample` output passes the input through unchanged,\nso the module is a no-op unless you explicitly tap the\n`.low`, `.mid`, or `.high` outputs.\n\nTwo crossover frequencies define the band boundaries:\n- **lowMidFreq** — boundary between the low and mid bands (V/Oct, default ~200 Hz).\n- **midHighFreq** — boundary between the mid and high bands (V/Oct, default ~2000 Hz).\n\n```js\n// Split into 3 bands and process each independently\nlet bands = $xover($saw('C3'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CrossoverParams",
@@ -5089,7 +5089,7 @@
   },
   {
     "name": "$clamp",
-    "documentation": "Constrains a signal between a minimum and maximum value.\n\nBounds are independently optional — omit **min** or **max** to leave\nthat side unclamped.\n\n```js\n// clamp a sine into the 0–5 V range\n$clamp($sine('440hz'), 0, 5)\n\n// one-sided: floor at 0 V, no ceiling\n$clamp(signal, { min: 0 })\n```",
+    "documentation": "Constrains a signal between a minimum and maximum value.\n\nBounds are independently optional — omit **min** or **max** to leave\nthat side unclamped.\n\n```js\n// clamp a sine into the 0–5 V range\n$clamp($sine('440hz'), 0, 5).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "ClampParams",
@@ -5356,7 +5356,7 @@
   },
   {
     "name": "$curve",
-    "documentation": "Applies a power curve to a signal, normalised at ±5 V.\n\nFormula: `sign(x) × 5 × (|x| / 5) ^ exp`\n\n- **exp = 1** — linear pass-through\n- **exp > 1** — pushes midrange toward zero (audio taper)\n- **0 < exp < 1** — pushes midrange toward ±5 V\n- **exp = 0** — step function (any nonzero → ±5 V)\n\n```js\n$curve(lfo, 2)       // quadratic curve\n$curve(signal, 3)    // cubic curve (audio taper)\n```",
+    "documentation": "Applies a power curve to a signal, normalised at ±5 V.\n\nFormula: `sign(x) × 5 × (|x| / 5) ^ exp`\n\n- **exp = 1** — linear pass-through\n- **exp > 1** — pushes midrange toward zero (audio taper)\n- **0 < exp < 1** — pushes midrange toward ±5 V\n- **exp = 0** — step function (any nonzero → ±5 V)\n\n```js\n$curve($sine('1hz'), 2).out()       // quadratic curve\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CurveParams",
@@ -5605,7 +5605,7 @@
   },
   {
     "name": "$slew",
-    "documentation": "Slew limiter that smooths abrupt voltage changes.\n\nSeparate **rise** and **fall** times control how quickly the output can\nincrease or decrease. Times are specified in **seconds per volt** — the\ntime the output takes to slew by 1 V. For example, a rise time of `0.1`\nmeans the output climbs 1 V in 0.1 s; a 5 V gate signal would therefore\ntake 0.5 s to reach full height.\n\nUse `$slew` to add portamento to pitch signals, smooth noisy control\nvoltages, or create envelope-like shapes from gate signals.\n\n```js\n// portamento: glide between notes (0.1 s per volt of pitch change)\n$sine($slew(sequencer.pitch, { rise: 0.1, fall: 0.1 }))\n```",
+    "documentation": "Slew limiter that smooths abrupt voltage changes.\n\nSeparate **rise** and **fall** times control how quickly the output can\nincrease or decrease. Times are specified in **seconds per volt** — the\ntime the output takes to slew by 1 V. For example, a rise time of `0.1`\nmeans the output climbs 1 V in 0.1 s; a 5 V gate signal would therefore\ntake 0.5 s to reach full height.\n\nUse `$slew` to add portamento to pitch signals, smooth noisy control\nvoltages, or create envelope-like shapes from gate signals.\n\n```js\n// portamento: glide between notes (0.1 s per volt of pitch change)\n$sine($slew($cycle(\"C3 E3 G3 B3\"), { rise: 0.1, fall: 0.1 })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "LagProcessorParams",
@@ -5843,7 +5843,7 @@
   },
   {
     "name": "$falling",
-    "documentation": "Detects falling edges in a signal and emits a short pulse.\n\nOutputs 5 V for a single sample whenever the input decreases.\nUseful for triggering events on the \"off\" transition of a gate or\non the downward slope of an LFO.\n\n```js\n// trigger on every falling edge of a gate\n$perc($falling(gate))\n```",
+    "documentation": "Detects falling edges in a signal and emits a short pulse.\n\nOutputs 5 V for a single sample whenever the input decreases.\nUseful for triggering events on the \"off\" transition of a gate or\non the downward slope of an LFO.\n\n```js\n// trigger on every falling edge of a clock gate\n$perc($falling($clock.beatTrigger)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "FallingEdgeDetectorParams",
@@ -6092,7 +6092,7 @@
   },
   {
     "name": "$remap",
-    "documentation": "Linearly rescales a signal from one voltage range to another.\n\nMaps **input** from \\[inMin, inMax\\] to \\[outMin, outMax\\]. Useful for\nconverting between different voltage standards or reshaping control\nsignals.\n\n```js\n// convert a 0–5 V envelope to a -5–5 V bipolar signal\n$remap(env, -5, 5, 0, 5)\n\n// convert a -5–5 V signal to 0–1 V\n$remap(signal, 0, 1, -5, 5)\n```",
+    "documentation": "Linearly rescales a signal from one voltage range to another.\n\nMaps **input** from \\[inMin, inMax\\] to \\[outMin, outMax\\]. Useful for\nconverting between different voltage standards or reshaping control\nsignals.\n\n```js\n// convert a 0–5 V envelope to a -5–5 V bipolar signal\n$remap($adsr($clock.beatTrigger), -5, 5, 0, 5).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "RemapParams",
@@ -6256,7 +6256,7 @@
   },
   {
     "name": "$sah",
-    "documentation": "Captures and holds a voltage on each trigger.\n\nWhen **trigger** receives a rising edge, the current value of **input**\nis sampled and held at the output until the next trigger. Classic\nuse: sample random noise to generate stepped random melodies.\n\n```js\n// stepped random melody\n$sine(\n $quantizer(\n   $sah($noise('white').range(0, 1), $pulse('2hz')),\n   0,\n   'c(maj)',\n ),\n)\n```",
+    "documentation": "Captures and holds a voltage on each trigger.\n\nWhen **trigger** receives a rising edge, the current value of **input**\nis sampled and held at the output until the next trigger. Classic\nuse: sample random noise to generate stepped random melodies.\n\n```js\n// stepped random melody\n$sine(\n  $quantizer(\n    $sah($noise('white'), $pulse('2hz')),\n    'c(maj)',\n  ),\n).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SampleAndHoldParams",
@@ -6372,7 +6372,7 @@
   },
   {
     "name": "$tah",
-    "documentation": "Follows the input while the gate is low, and holds the value when the\ngate goes high.\n\nThe complement of Sample and Hold: the output continuously tracks\n**input** until **gate** rises, then freezes until the gate falls again.\n\n```js\n// hold a slow sine value while the gate is high\n$tah($sine('2hz'), gate)\n```",
+    "documentation": "Follows the input while the gate is low, and holds the value when the\ngate goes high.\n\nThe complement of Sample and Hold: the output continuously tracks\n**input** until **gate** rises, then freezes until the gate falls again.\n\n```js\n// hold a slow sine value while the gate is high\n$tah($sine('2hz'), $clock.beatTrigger).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "TrackAndHoldParams",
@@ -6488,7 +6488,7 @@
   },
   {
     "name": "$perc",
-    "documentation": "Simple envelope for percussive sounds.\n\nA rising edge on **trigger** starts the envelope at 5 V, which then\ndecays exponentially to 0 V over the **decay** time. Perfect for\nhi-hats, kicks, and other transient sounds.\n\nOutput range is **0–5 V**.\n\n```js\n// short percussive hit\n$noise(\"white\").mul($perc($clock.gate, { decay: 0.1 }))\n```",
+    "documentation": "Simple envelope for percussive sounds.\n\nA rising edge on **trigger** starts the envelope at 5 V, which then\ndecays exponentially to 0 V over the **decay** time. Perfect for\nhi-hats, kicks, and other transient sounds.\n\nOutput range is **0–5 V**.\n\n```js\n// short percussive hit\n$noise(\"white\").amplitude($perc($clock.beatTrigger, { decay: 0.1 })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "PercussionEnvelopeParams",
@@ -7036,7 +7036,7 @@
   },
   {
     "name": "$unison",
-    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–16)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 16.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()\n```",
+    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–16)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 16.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "UnisonParams",
@@ -7168,7 +7168,7 @@
   },
   {
     "name": "$wrap",
-    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n```",
+    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap($sine('1hz'), 0, 5).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "WrapParams",
@@ -7440,7 +7440,7 @@
   },
   {
     "name": "$track",
-    "documentation": "Automation track that interpolates between keyframed values.\n\nPlace keyframes at positions within a cycle (0–1) and the track\nsmoothly interpolates between them at the current playhead position according to the chosen\n**interpolationType** (linear, ease-in, ease-out, etc.).\n\n```js\n// automate filter cutoff over one cycle\n$lpf(osc, $track([['c2', 0], ['c5', 0.5], ['c3', 1]]))\n```",
+    "documentation": "Automation track that interpolates between keyframed values.\n\nPlace keyframes at positions within a cycle (0–1) and the track\nsmoothly interpolates between them at the current playhead position according to the chosen\n**interpolationType** (linear, ease-in, ease-out, etc.).\n\n```js\n// automate filter cutoff over one cycle\n$lpf($saw('C3'), $track([['c2', 0], ['c5', 0.5], ['c3', 1]])).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "TrackParams",
@@ -7916,7 +7916,7 @@
   },
   {
     "name": "$midiCV",
-    "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 16 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// 4-voice polyphonic MIDI synth\nconst midi = $midiCV({ channels: 4 });\n$sine(midi.pitch).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n\n// Mono lead with pitch bend\nconst lead = $midiCV({ channels: 1, pitchBendRange: 12 });\n$saw(lead.pitch).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n```",
+    "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 16 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// Mono lead synth with MIDI input\n$midiCV({ channels: 1, monoMode: 'last' });\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "MidiCvParams",

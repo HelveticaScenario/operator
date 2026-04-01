@@ -54,7 +54,7 @@ struct LagProcessorState {
 ///
 /// ```js
 /// // portamento: glide between notes (0.1 s per volt of pitch change)
-/// $sine($slew(sequencer.pitch, { rise: 0.1, fall: 0.1 }))
+/// $sine($slew($cycle("C3 E3 G3 B3"), { rise: 0.1, fall: 0.1 })).out()
 /// ```
 #[module(name = "$slew", args(input))]
 pub struct LagProcessor {

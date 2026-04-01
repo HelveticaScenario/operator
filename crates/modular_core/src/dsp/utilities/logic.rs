@@ -107,8 +107,8 @@ struct FallingEdgeDetectorState {
 /// on the downward slope of an LFO.
 ///
 /// ```js
-/// // trigger on every falling edge of a gate
-/// $perc($falling(gate))
+/// // trigger on every falling edge of a clock gate
+/// $perc($falling($clock.beatTrigger)).out()
 /// ```
 #[module(name = "$falling", args(input))]
 pub struct FallingEdgeDetector {
