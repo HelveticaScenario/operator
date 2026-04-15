@@ -1276,8 +1276,7 @@ impl Signal {
                 ..
             } => match module_ptr.upgrade() {
                 Some(module_ptr) => module_ptr
-                    .get_poly_sample(port)
-                    .map(|p| p.get_cycling(*channel))
+                    .get_sample(port, *channel)
                     .unwrap_or(0.0),
                 None => 0.0,
             },
