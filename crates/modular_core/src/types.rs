@@ -1453,7 +1453,7 @@ pub struct OutputSchema {
     pub max_value: Option<f64>,
     /// Whether this output provides dynamic per-channel range metadata at runtime.
     /// When true, virtual `.rangeMin`/`.rangeMax` ports are available.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub dynamic_range: bool,
 }
 

@@ -317,6 +317,11 @@ export interface OutputSchema {
   minValue?: number
   /** The maximum value of the raw output range (before any remapping) */
   maxValue?: number
+  /**
+   * Whether this output provides dynamic per-channel range metadata at runtime.
+   * When true, virtual `.rangeMin`/`.rangeMax` ports are available.
+   */
+  dynamicRange: boolean
 }
 
 export interface PatchGraph {
