@@ -1321,3 +1321,62 @@ fn pulse_output_stays_within_dynamic_range() {
         );
     }
 }
+
+// ─── End-to-end .range() test with dynamic bounds ────────────────────────────
+
+#[test]
+fn pulse_remap_via_virtual_range_ports() {
+    // Simulate what .range(0, 1) does with dynamic range:
+    // $pulse(width=1.25) → $remap(input, outMin=0, outMax=1,
+    //                              inMin=<virtual rangeMin>, inMax=<virtual rangeMax>)
+    //
+    // At 25% duty (width=1.25): rangeMin ≈ -2.5, rangeMax ≈ 7.5
+    // So remap maps [-2.5, 7.5] → [0, 1]
+    // Expected output: all samples in approximately [0, 1]
+
+    let graph = make_graph(vec![
+        ("pulse-e2e", "$pulse", json!({ "freq": 0.0, "width": 1.25 })),
+        (
+            "remap-e2e",
+            "$remap",
+            json!({
+                "input":  { "type": "cable", "module": "pulse-e2e", "port": "output", "channel": 0 },
+                "outMin": 0.0,
+                "outMax": 1.0,
+                "inMin":  { "type": "cable", "module": "pulse-e2e", "port": "output.rangeMin", "channel": 0 },
+                "inMax":  { "type": "cable", "module": "pulse-e2e", "port": "output.rangeMax", "channel": 0 }
+            }),
+        ),
+    ]);
+
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("patch construction failed");
+
+    // Let Clickless smoothing and params converge
+    for _ in 0..2000 {
+        process_frame(&patch);
+    }
+
+    // Collect samples from the remap module's output
+    let remap_module = patch.sampleables.get("remap-e2e").unwrap();
+    let mut samples = Vec::new();
+    for _ in 0..5000 {
+        process_frame(&patch);
+        samples.push(remap_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+    }
+
+    let (mn, mx) = min_max(&samples);
+
+    // All samples should be in [0, 1] (with small tolerance for smoothing)
+    assert!(mn >= -0.05, "remap output min should be >= 0, got {mn}");
+    assert!(mx <= 1.05, "remap output max should be <= 1, got {mx}");
+
+    // Verify the output actually spans most of [0, 1] — not stuck at a single value
+    assert!(
+        mn < 0.15,
+        "remap output should reach near 0, but min was {mn}"
+    );
+    assert!(
+        mx > 0.85,
+        "remap output should reach near 1, but max was {mx}"
+    );
+}
