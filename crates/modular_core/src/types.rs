@@ -156,6 +156,9 @@ pub trait Sampleable: MessageHandler + Send + Sync {
     fn update(&self) -> ();
     /// Get polyphonic sample output for a port.
     fn get_poly_sample(&self, port: &str) -> Result<PolyOutput>;
+    /// Get a single sample value for a specific port and channel.
+    /// Fast path that avoids copying the full PolyOutput.
+    fn get_sample(&self, port: &str, channel: usize) -> Result<f32>;
     fn get_module_type(&self) -> &str;
     fn connect(&self, patch: &Patch);
     /// Called after the patch is updated and all modules are connected.
@@ -1455,6 +1458,9 @@ pub trait OutputStruct: Default + Send + Sync + 'static {
     fn copy_from(&mut self, other: &Self);
     /// Get polyphonic sample output for a port.
     fn get_poly_sample(&self, port: &str) -> Option<PolyOutput>;
+    /// Get a single sample value for a specific port and channel.
+    /// This avoids copying the full PolyOutput — used by Signal::Cable::get_value().
+    fn get_sample(&self, port: &str, channel: usize) -> Option<f32>;
     /// Set the channel count on all PolyOutput fields.
     fn set_all_channels(&mut self, channels: usize);
     fn schemas() -> Vec<OutputSchema>

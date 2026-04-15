@@ -44,8 +44,8 @@ struct OutputField {
 /// - #[output("name", "description", range = (-1.0, 1.0))]
 /// - #[output("name", "description", default, range = (-1.0, 1.0))]
 fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
-    use syn::Result as SynResult;
     use syn::parse::{Parse, ParseStream};
+    use syn::Result as SynResult;
 
     struct OutputAttrParser {
         name: LitStr,
@@ -316,6 +316,23 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    // Generate get_sample match arms (returns single f32, no PolyOutput copy)
+    let sample_match_arms: Vec<_> = outputs
+        .iter()
+        .map(|o| {
+            let output_name = &o.output_name;
+            let field_name = &o.field_name;
+            match o.precision {
+                OutputPrecision::F32 => quote! {
+                    #output_name => Some(self.#field_name),
+                },
+                OutputPrecision::PolySignal => quote! {
+                    #output_name => Some(self.#field_name.get_cycling(channel)),
+                },
+            }
+        })
+        .collect();
+
     let schema_exprs: Vec<_> = outputs
         .iter()
         .map(|o| {
@@ -382,6 +399,13 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
             fn get_poly_sample(&self, port: &str) -> Option<crate::poly::PolyOutput> {
                 match port {
                     #(#poly_sample_match_arms)*
+                    _ => None,
+                }
+            }
+
+            fn get_sample(&self, port: &str, channel: usize) -> Option<f32> {
+                match port {
+                    #(#sample_match_arms)*
                     _ => None,
                 }
             }

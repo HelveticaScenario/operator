@@ -662,6 +662,21 @@ fn impl_module_macro_attr(
                 })
             }
 
+            fn get_sample(&self, port: &str, channel: usize) -> napi::Result<f32> {
+                self.update();
+                let outputs = unsafe { &*self.outputs.get() };
+                crate::types::OutputStruct::get_sample(outputs, port, channel).ok_or_else(|| {
+                    napi::Error::from_reason(
+                        format!(
+                            "{} with id {} does not have port {}",
+                            #module_name,
+                            &self.id,
+                            port
+                        )
+                    )
+                })
+            }
+
             fn get_module_type(&self) -> &str {
                 #module_name
             }

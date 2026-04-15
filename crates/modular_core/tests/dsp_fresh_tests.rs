@@ -1084,3 +1084,145 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
          (0.0 means inner outputs were not preserved across state transfer)"
     );
 }
+
+// ─── DC Offset tests ─────────────────────────────────────────────────────────
+
+/// Helper: compute the mean (DC component) of a sample buffer.
+fn dc_offset(samples: &[f32]) -> f32 {
+    samples.iter().sum::<f32>() / samples.len() as f32
+}
+
+#[test]
+fn pulse_square_wave_has_zero_dc() {
+    // Width 2.5 = 50% duty cycle = square wave => DC should be ~0
+    let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 2.5 }));
+    // Run for many cycles to get a good average (C4 ~261Hz, 48kHz SR => ~184 samples/cycle)
+    // 10000 samples = ~54 full cycles
+    let samples = collect_samples(&**osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.1,
+        "square wave (width=2.5) should have near-zero DC, got {dc}V"
+    );
+}
+
+#[test]
+fn pulse_narrow_width_has_zero_dc() {
+    // Width 1.25 = 25% duty cycle => after DC subtraction, should be ~0
+    let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 1.25 }));
+    let samples = collect_samples(&**osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.2,
+        "pulse at 25% width should have near-zero DC after compensation, got {dc}V"
+    );
+}
+
+#[test]
+fn pulse_wide_width_has_zero_dc() {
+    // Width 3.75 = 75% duty cycle => after DC subtraction, should be ~0
+    let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 3.75 }));
+    let samples = collect_samples(&**osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.2,
+        "pulse at 75% width should have near-zero DC after compensation, got {dc}V"
+    );
+}
+
+#[test]
+fn pulse_extreme_widths_have_zero_dc() {
+    // Test near-extreme duty cycles (5% and 95%)
+    for width in [0.25, 4.75] {
+        let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": width }));
+        let samples = collect_samples(&**osc, 10000);
+        let dc = dc_offset(&samples);
+        assert!(
+            dc.abs() < 0.3,
+            "pulse at width={width} should have near-zero DC, got {dc}V"
+        );
+    }
+}
+
+#[test]
+fn pulse_preserves_amplitude_after_dc_fix() {
+    // The peak-to-peak amplitude should still be 10V (±5V from center),
+    // but now the center is always 0V regardless of width.
+    for width in [1.25, 2.5, 3.75] {
+        let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": width }));
+        let samples = collect_samples(&**osc, 10000);
+        let (mn, mx) = min_max(&samples);
+        let pp = mx - mn;
+        assert!(
+            pp > 9.0,
+            "pulse at width={width} should have ~10V peak-to-peak, got {pp}V (min={mn}, max={mx})"
+        );
+    }
+}
+
+#[test]
+fn saw_has_zero_dc() {
+    // DPW saw should be DC-free by construction
+    let osc = make_module("$saw", "saw-1", json!({ "freq": 0.0 }));
+    let samples = collect_samples(&**osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.1,
+        "saw wave should have near-zero DC, got {dc}V"
+    );
+}
+
+#[test]
+fn sine_has_zero_dc() {
+    let osc = make_module("$sine", "sine-1", json!({ "freq": 0.0 }));
+    let samples = collect_samples(&**osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.1,
+        "sine wave should have near-zero DC, got {dc}V"
+    );
+}
+
+// ─── get_sample tests ────────────────────────────────────────────────────────
+
+#[test]
+fn get_sample_matches_get_poly_sample_for_pulse() {
+    let osc = make_module("$pulse", "pulse-gs", json!({ "freq": 0.0, "width": 2.5 }));
+    for _ in 0..100 {
+        step(&**osc);
+        let poly = osc.get_poly_sample(DEFAULT_PORT).unwrap();
+        let via_get_sample = osc.get_sample(DEFAULT_PORT, 0).unwrap();
+        assert_eq!(
+            poly.get_cycling(0),
+            via_get_sample,
+            "get_sample should match get_poly_sample().get_cycling()"
+        );
+    }
+}
+
+#[test]
+fn get_sample_matches_get_poly_sample_for_clock() {
+    // Noise has f32 outputs — tests that path too
+    let noise = make_module("$noise", "noise-gs", json!({}));
+    for _ in 0..100 {
+        step(&**noise);
+        let poly = noise.get_poly_sample(DEFAULT_PORT).unwrap();
+        let via_get_sample = noise.get_sample(DEFAULT_PORT, 0).unwrap();
+        assert_eq!(
+            poly.get_cycling(0),
+            via_get_sample,
+            "get_sample on f32 output should match get_poly_sample"
+        );
+    }
+}
+
+#[test]
+fn get_sample_returns_error_for_invalid_port() {
+    let osc = make_module("$sine", "sine-gs", json!({ "freq": 0.0 }));
+    step(&**osc);
+    let result = osc.get_sample("nonexistent", 0);
+    assert!(
+        result.is_err(),
+        "get_sample on invalid port should return Err"
+    );
+}

@@ -244,6 +244,10 @@ mod tests {
             Ok(crate::poly::PolyOutput::default())
         }
 
+        fn get_sample(&self, _port: &str, channel: usize) -> Result<f32> {
+            Ok(crate::poly::PolyOutput::default().get_cycling(channel))
+        }
+
         fn get_module_type(&self) -> &str {
             "dummy"
         }
