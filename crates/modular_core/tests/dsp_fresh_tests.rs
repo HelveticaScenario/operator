@@ -1227,6 +1227,27 @@ fn get_sample_returns_error_for_invalid_port() {
     );
 }
 
+// ─── Schema tests ────────────────────────────────────────────────────────────
+
+#[test]
+fn pulse_output_schema_has_dynamic_range() {
+    use modular_core::dsp::schema;
+    let schemas = schema();
+    let pulse_schema = schemas
+        .iter()
+        .find(|s| s.name == "$pulse")
+        .expect("$pulse schema not found");
+    let output_schema = pulse_schema
+        .outputs
+        .iter()
+        .find(|o| o.name == "output")
+        .expect("output not found in $pulse schema");
+    assert!(
+        output_schema.dynamic_range,
+        "$pulse output should have dynamic_range = true"
+    );
+}
+
 // ─── Virtual range port tests ────────────────────────────────────────────────
 
 #[test]
