@@ -81,6 +81,7 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
             default: true,
             min_value: None,
             max_value: None,
+            dynamic_range: false,
         }]
     }
 

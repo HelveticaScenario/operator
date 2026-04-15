@@ -205,7 +205,15 @@ fn validate_signal_reference(
         return;
       };
 
-      if !src_schema.outputs.iter().any(|o| o.name == *src_port) {
+      // Check if the port is a real output or a virtual range port for a dynamic_range output
+      let is_valid_port = src_schema.outputs.iter().any(|o| o.name == *src_port)
+        || src_schema.outputs.iter().any(|o| {
+          o.dynamic_range
+            && (src_port == &format!("{}.rangeMin", o.name)
+              || src_port == &format!("{}.rangeMax", o.name))
+        });
+
+      if !is_valid_port {
         errors.push(ValidationError {
           field: field.to_string(),
           message: format!(
@@ -433,8 +441,14 @@ pub fn validate_patch(
                 continue;
             };
 
-            // Output port must exist in module schema
-            if !schema.outputs.iter().any(|o| o.name == *channel.port_name) {
+            // Output port must exist in module schema (including virtual range ports)
+            let is_valid_scope_port = schema.outputs.iter().any(|o| o.name == *channel.port_name)
+                || schema.outputs.iter().any(|o| {
+                    o.dynamic_range
+                        && (channel.port_name == format!("{}.rangeMin", o.name)
+                            || channel.port_name == format!("{}.rangeMax", o.name))
+                });
+            if !is_valid_scope_port {
                 errors.push(ValidationError {
                     field: "scopes".to_string(),
                     message: format!(

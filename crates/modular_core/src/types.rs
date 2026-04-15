@@ -1451,6 +1451,10 @@ pub struct OutputSchema {
     /// The maximum value of the raw output range (before any remapping)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_value: Option<f64>,
+    /// Whether this output provides dynamic per-channel range metadata at runtime.
+    /// When true, virtual `.rangeMin`/`.rangeMax` ports are available.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic_range: bool,
 }
 
 pub trait OutputStruct: Default + Send + Sync + 'static {

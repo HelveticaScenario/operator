@@ -2163,6 +2163,9 @@ mod tests {
     fn get_poly_sample(&self, _port: &str) -> napi::Result<modular_core::poly::PolyOutput> {
       Ok(modular_core::poly::PolyOutput::default())
     }
+    fn get_sample(&self, _port: &str, _channel: usize) -> napi::Result<f32> {
+      Ok(0.0)
+    }
     fn get_module_type(&self) -> &str {
       &self.label
     }
