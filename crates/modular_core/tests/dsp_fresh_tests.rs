@@ -1380,3 +1380,96 @@ fn pulse_remap_via_virtual_range_ports() {
         "remap output should reach near 1, but max was {mx}"
     );
 }
+
+#[test]
+fn pulse_remap_width1_range_0_5() {
+    // Regression test: $pulse(width=1).range(0, 5) must produce output in [0, 5].
+    //
+    // width=1 → pulse_width = 1/5 = 0.2
+    // DC = (2*0.2 - 1)*5 = -3.0
+    // Signal range after DC subtraction: [-2.0, 8.0]
+    // Virtual range ports should report: rangeMin=-2.0, rangeMax=8.0
+    // Remap: map [-2.0, 8.0] → [0, 5]
+
+    let graph = make_graph(vec![
+        ("pulse", "$pulse", json!({ "freq": 0.0, "width": 1.0 })),
+        (
+            "remap",
+            "$remap",
+            json!({
+                "input":  { "type": "cable", "module": "pulse", "port": "output", "channel": 0 },
+                "outMin": 0.0,
+                "outMax": 5.0,
+                "inMin":  { "type": "cable", "module": "pulse", "port": "output.rangeMin", "channel": 0 },
+                "inMax":  { "type": "cable", "module": "pulse", "port": "output.rangeMax", "channel": 0 }
+            }),
+        ),
+    ]);
+
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("patch construction failed");
+    let pulse_module = patch.sampleables.get("pulse").unwrap();
+    let remap_module = patch.sampleables.get("remap").unwrap();
+
+    // Let Clickless smoothing converge
+    for _ in 0..2000 {
+        process_frame(&patch);
+    }
+
+    // Verify virtual range ports report the correct DC-adjusted bounds
+    let range_min = pulse_module
+        .get_poly_sample("output.rangeMin")
+        .unwrap()
+        .get(0);
+    let range_max = pulse_module
+        .get_poly_sample("output.rangeMax")
+        .unwrap()
+        .get(0);
+    assert!(
+        (range_min - (-2.0)).abs() < 0.01,
+        "virtual rangeMin should be -2.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 8.0).abs() < 0.01,
+        "virtual rangeMax should be 8.0, got {range_max}"
+    );
+
+    // Collect pulse and remap output samples
+    let mut pulse_samples = Vec::new();
+    let mut remap_samples = Vec::new();
+    for _ in 0..5000 {
+        process_frame(&patch);
+        pulse_samples.push(pulse_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        remap_samples.push(remap_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+    }
+
+    let (pulse_min, pulse_max) = min_max(&pulse_samples);
+    let (remap_min, remap_max) = min_max(&remap_samples);
+
+    // Pulse output should span [-2.0, 8.0] after DC subtraction
+    assert!(
+        pulse_min < -1.5,
+        "pulse min should be near -2.0, got {pulse_min}"
+    );
+    assert!(
+        pulse_max > 7.5,
+        "pulse max should be near 8.0, got {pulse_max}"
+    );
+
+    // Remap output should be within [0, 5]
+    assert!(
+        remap_min >= -0.1,
+        "remap output min should be >= 0, got {remap_min}"
+    );
+    assert!(
+        remap_max <= 5.1,
+        "remap output max should be <= 5, got {remap_max}"
+    );
+    assert!(
+        remap_min < 0.25,
+        "remap output should reach near 0, but min was {remap_min}"
+    );
+    assert!(
+        remap_max > 4.75,
+        "remap output should reach near 5, but max was {remap_max}"
+    );
+}

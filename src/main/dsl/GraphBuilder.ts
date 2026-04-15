@@ -417,7 +417,9 @@ export class Collection extends BaseCollection<ModuleOutput> {
  */
 export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
     /**
-     * Remap outputs from their known range to a new output range
+     * Remap outputs from their known range to a new output range.
+     * For dynamic range outputs, uses runtime per-channel bounds via virtual range ports.
+     * For static range outputs, uses the stored minValue/maxValue.
      */
     range(outMin: PolySignal, outMax: PolySignal): Collection {
         if (this.items.length === 0) {
@@ -431,8 +433,26 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
             this.items,
             outMin,
             outMax,
-            this.items.map((o) => o.minValue),
-            this.items.map((o) => o.maxValue),
+            this.items.map((o) =>
+                o.dynamicRange
+                    ? new ModuleOutput(
+                          o.builder,
+                          o.moduleId,
+                          `${o.portName}.rangeMin`,
+                          o.channel,
+                      )
+                    : o.minValue,
+            ),
+            this.items.map((o) =>
+                o.dynamicRange
+                    ? new ModuleOutput(
+                          o.builder,
+                          o.moduleId,
+                          `${o.portName}.rangeMax`,
+                          o.channel,
+                      )
+                    : o.maxValue,
+            ),
         ) as Collection;
     }
 }
