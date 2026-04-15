@@ -1226,3 +1226,77 @@ fn get_sample_returns_error_for_invalid_port() {
         "get_sample on invalid port should return Err"
     );
 }
+
+// ─── Virtual range port tests ────────────────────────────────────────────────
+
+#[test]
+fn pulse_virtual_range_ports_at_50_percent() {
+    let osc = make_module("$pulse", "pulse-rp", json!({ "freq": 0.0, "width": 2.5 }));
+    // Run a few samples to let Clickless settle
+    for _ in 0..1000 {
+        step(&**osc);
+    }
+    let range_min = osc.get_poly_sample("output.rangeMin").unwrap();
+    let range_max = osc.get_poly_sample("output.rangeMax").unwrap();
+    assert!(
+        (range_min.get(0) - (-5.0)).abs() < 0.01,
+        "rangeMin at 50% width should be -5.0, got {}",
+        range_min.get(0)
+    );
+    assert!(
+        (range_max.get(0) - 5.0).abs() < 0.01,
+        "rangeMax at 50% width should be 5.0, got {}",
+        range_max.get(0)
+    );
+}
+
+#[test]
+fn pulse_virtual_range_ports_at_25_percent() {
+    // Width 1.25 = 25% duty cycle => min = -10*0.25 = -2.5, max = 10*0.75 = 7.5
+    let osc = make_module("$pulse", "pulse-rp2", json!({ "freq": 0.0, "width": 1.25 }));
+    for _ in 0..1000 {
+        step(&**osc);
+    }
+    let range_min = osc.get_poly_sample("output.rangeMin").unwrap();
+    let range_max = osc.get_poly_sample("output.rangeMax").unwrap();
+    assert!(
+        (range_min.get(0) - (-2.5)).abs() < 0.1,
+        "rangeMin at 25% width should be ~-2.5, got {}",
+        range_min.get(0)
+    );
+    assert!(
+        (range_max.get(0) - 7.5).abs() < 0.1,
+        "rangeMax at 25% width should be ~7.5, got {}",
+        range_max.get(0)
+    );
+}
+
+#[test]
+fn pulse_output_stays_within_dynamic_range() {
+    // Verify the actual signal stays within the declared range bounds
+    for width in [1.25, 2.5, 3.75] {
+        let osc = make_module(
+            "$pulse",
+            "pulse-rng",
+            json!({ "freq": 0.0, "width": width }),
+        );
+        // Let Clickless settle
+        for _ in 0..1000 {
+            step(&**osc);
+        }
+        let range_min = osc.get_poly_sample("output.rangeMin").unwrap().get(0);
+        let range_max = osc.get_poly_sample("output.rangeMax").unwrap().get(0);
+
+        // Collect samples and verify bounds
+        let samples = collect_samples(&**osc, 5000);
+        let (mn, mx) = min_max(&samples);
+        assert!(
+            mn >= range_min - 0.1,
+            "width={width}: sample min {mn} below rangeMin {range_min}"
+        );
+        assert!(
+            mx <= range_max + 0.1,
+            "width={width}: sample max {mx} above rangeMax {range_max}"
+        );
+    }
+}
