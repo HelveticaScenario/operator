@@ -523,6 +523,32 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    // Generate get_range match arms — zero-allocation range reads
+    let get_range_arms: Vec<_> = outputs
+        .iter()
+        .filter(|o| o.precision == OutputPrecision::PolySignal)
+        .filter_map(|o| {
+            let field_name = &o.field_name;
+            let output_name = &o.output_name;
+            if o.dynamic_range {
+                Some(quote! {
+                    #output_name => Some((
+                        self.#field_name.range_min_value(channel),
+                        self.#field_name.range_max_value(channel),
+                    )),
+                })
+            } else if let Some((min_val, max_val)) = o.range {
+                let min_f32 = min_val as f32;
+                let max_f32 = max_val as f32;
+                Some(quote! {
+                    #output_name => Some((#min_f32, #max_f32)),
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let generated = quote! {
         impl Default for #name {
             fn default() -> Self {
@@ -563,6 +589,13 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 vec![
                     #(#schema_exprs,)*
                 ]
+            }
+
+            fn get_range(&self, port: &str, channel: usize) -> Option<(f32, f32)> {
+                match port {
+                    #(#get_range_arms)*
+                    _ => None,
+                }
             }
         }
     };

@@ -1514,3 +1514,85 @@ fn static_range_output_exposes_virtual_range_ports() {
         "poly rangeMax ch0 should be 5.0"
     );
 }
+
+// ─── get_range() zero-allocation API tests ───────────────────────────────────
+
+#[test]
+fn signal_get_range_returns_none_for_volts() {
+    use modular_core::types::Signal;
+    let signal = Signal::Volts(3.0);
+    assert!(
+        signal.get_range().is_none(),
+        "Volts should return None for get_range()"
+    );
+}
+
+#[test]
+fn signal_get_range_reads_dynamic_range_from_cable() {
+    use modular_core::types::Signal;
+    // $pulse with width=1.25 (25% duty): rangeMin ≈ -2.5, rangeMax ≈ 7.5
+    let osc = make_module("$pulse", "pulse", json!({ "freq": 0.0, "width": 1.25 }));
+    step(&**osc);
+
+    let signal = Signal::Cable {
+        module: "pulse".into(),
+        module_ptr: Arc::downgrade(&osc),
+        port: "output".into(),
+        channel: 0,
+    };
+
+    let range = signal.get_range();
+    assert!(
+        range.is_some(),
+        "Cable to dynamic_range output should return Some"
+    );
+    let (min, max) = range.unwrap();
+    assert!((min - (-2.5)).abs() < 0.1, "expected min ~-2.5, got {min}");
+    assert!((max - 7.5).abs() < 0.1, "expected max ~7.5, got {max}");
+}
+
+#[test]
+fn signal_get_range_reads_static_range_from_cable() {
+    use modular_core::types::Signal;
+    // $sine has range = (-5.0, 5.0) (static, not dynamic)
+    let osc = make_module("$sine", "osc", json!({ "freq": 0.0 }));
+    step(&**osc);
+
+    let signal = Signal::Cable {
+        module: "osc".into(),
+        module_ptr: Arc::downgrade(&osc),
+        port: "output".into(),
+        channel: 0,
+    };
+
+    let range = signal.get_range();
+    assert!(
+        range.is_some(),
+        "Cable to static-range output should return Some"
+    );
+    let (min, max) = range.unwrap();
+    assert!((min - (-5.0)).abs() < 0.01, "expected min -5.0, got {min}");
+    assert!((max - 5.0).abs() < 0.01, "expected max 5.0, got {max}");
+}
+
+#[test]
+fn poly_signal_get_range_per_channel() {
+    use modular_core::poly::PolySignal;
+    use modular_core::types::Signal;
+    // $pulse with width=1.25 (25% duty): rangeMin ≈ -2.5, rangeMax ≈ 7.5
+    let osc = make_module("$pulse", "pulse", json!({ "freq": 0.0, "width": 1.25 }));
+    step(&**osc);
+
+    let poly = PolySignal::mono(Signal::Cable {
+        module: "pulse".into(),
+        module_ptr: Arc::downgrade(&osc),
+        port: "output".into(),
+        channel: 0,
+    });
+
+    let range = poly.get_range(0);
+    assert!(range.is_some(), "PolySignal cable should return range");
+    let (min, max) = range.unwrap();
+    assert!((min - (-2.5)).abs() < 0.1, "expected min ~-2.5, got {min}");
+    assert!((max - 7.5).abs() < 0.1, "expected max ~7.5, got {max}");
+}

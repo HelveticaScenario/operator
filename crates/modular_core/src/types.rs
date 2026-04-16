@@ -179,6 +179,11 @@ pub trait Sampleable: MessageHandler + Send + Sync {
     fn get_buffer_output(&self, _port: &str) -> Option<&Arc<BufferData>> {
         None
     }
+    /// Get the range of a specific output port and channel, if available.
+    /// Zero-allocation: returns `Some((min, max))` directly.
+    fn get_range(&self, _port: &str, _channel: usize) -> Option<(f32, f32)> {
+        None
+    }
     /// Downcast to concrete type for state transfer.
     fn as_any(&self) -> &dyn std::any::Any;
     /// Transfer runtime state from an old module to this newly-constructed module.
@@ -1282,6 +1287,24 @@ impl Signal {
             },
         }
     }
+
+    /// Get the range of this signal, if available.
+    /// - Volts: returns None (a constant has no meaningful range)
+    /// - Cable: calls get_range() on the connected module — zero allocation
+    pub fn get_range(&self) -> Option<(f32, f32)> {
+        match self {
+            Signal::Volts(_) => None,
+            Signal::Cable {
+                module_ptr,
+                port,
+                channel,
+                ..
+            } => {
+                let module = module_ptr.upgrade()?;
+                module.get_range(port, *channel)
+            }
+        }
+    }
 }
 
 /// Extension trait for normalling pattern on optional signals.
@@ -1474,6 +1497,11 @@ pub trait OutputStruct: Default + Send + Sync + 'static {
     fn transfer_buffers_from(&mut self, _old: &mut Self) {}
     /// Get a buffer output by port name. Default: no buffer outputs.
     fn get_buffer_output(&self, _port: &str) -> Option<&Arc<BufferData>> {
+        None
+    }
+    /// Get the range of a specific output port and channel, if available.
+    /// Returns `Some((min, max))` for outputs with `range` or `dynamic_range` annotations.
+    fn get_range(&self, _port: &str, _channel: usize) -> Option<(f32, f32)> {
         None
     }
 }

@@ -304,6 +304,11 @@ impl PolySignal {
         self.channels[channel % self.channels.len()].get_value()
     }
 
+    /// Get the range of a specific channel's signal, if available.
+    pub fn get_range(&self, channel: usize) -> Option<(f32, f32)> {
+        self.channels[channel % self.channels.len()].get_range()
+    }
+
     /// Calculate the maximum channel count across multiple PolySignals
     pub fn max_channels(poly_signals: &[&PolySignal]) -> usize {
         poly_signals

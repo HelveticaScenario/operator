@@ -705,6 +705,12 @@ fn impl_module_macro_attr(
                 crate::types::OutputStruct::get_buffer_output(&module.outputs, port)
             }
 
+            fn get_range(&self, port: &str, channel: usize) -> Option<(f32, f32)> {
+                self.update();
+                let outputs = unsafe { &*self.outputs.get() };
+                crate::types::OutputStruct::get_range(outputs, port, channel)
+            }
+
             fn transfer_state_from(&self, old: &dyn crate::types::Sampleable) {
                 if let Some(old_typed) = old.as_any().downcast_ref::<Self>() {
                     // Guard against self-aliasing: if old and new are the same Arc,
