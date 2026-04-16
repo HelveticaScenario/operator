@@ -1596,3 +1596,29 @@ fn poly_signal_get_range_per_channel() {
     assert!((min - (-2.5)).abs() < 0.1, "expected min ~-2.5, got {min}");
     assert!((max - 7.5).abs() < 0.1, "expected max ~7.5, got {max}");
 }
+
+#[test]
+fn remap_has_dynamic_range() {
+    let osc = make_module(
+        "$remap",
+        "remap",
+        json!({ "input": 0.0, "inMin": -5.0, "inMax": 5.0, "outMin": -3.0, "outMax": 7.0 }),
+    );
+
+    // Let Clickless smoothing converge
+    for _ in 0..1000 {
+        step(&**osc);
+    }
+
+    let range_min = osc.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = osc.get_poly_sample("output.rangeMax").unwrap().get(0);
+
+    assert!(
+        (range_min - (-3.0)).abs() < 0.1,
+        "rangeMin should be ~-3.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 7.0).abs() < 0.1,
+        "rangeMax should be ~7.0, got {range_max}"
+    );
+}
