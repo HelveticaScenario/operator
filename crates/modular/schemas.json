@@ -4487,7 +4487,7 @@
         "description": "clamped signal output",
         "polyphonic": true,
         "default": true,
-        "dynamicRange": false
+        "dynamicRange": true
       }
     ],
     "signalParams": [
@@ -5496,7 +5496,9 @@
         "description": "remapped signal output",
         "polyphonic": true,
         "default": true,
-        "dynamicRange": false
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "dynamicRange": true
       }
     ],
     "signalParams": [
@@ -6158,7 +6160,7 @@
         "description": "signal output",
         "polyphonic": true,
         "default": true,
-        "dynamicRange": false
+        "dynamicRange": true
       }
     ],
     "signalParams": [
@@ -6304,7 +6306,7 @@
         "description": "spread signal output",
         "polyphonic": true,
         "default": true,
-        "dynamicRange": false
+        "dynamicRange": true
       }
     ],
     "signalParams": [
@@ -6571,7 +6573,9 @@
         "description": "wrapped signal output",
         "polyphonic": true,
         "default": true,
-        "dynamicRange": false
+        "minValue": 0.0,
+        "maxValue": 5.0,
+        "dynamicRange": true
       }
     ],
     "signalParams": [

@@ -23,7 +23,7 @@ struct WrapParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct WrapOutputs {
-    #[output("output", "wrapped signal output", default)]
+    #[output("output", "wrapped signal output", default, range = (0.0, 5.0), dynamic_range)]
     sample: PolyOutput,
 }
 
@@ -60,6 +60,7 @@ impl Wrap {
             };
 
             self.outputs.sample.set(i, output);
+            self.outputs.sample.set_range(i, min, max);
         }
     }
 }

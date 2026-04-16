@@ -1622,3 +1622,204 @@ fn remap_has_dynamic_range() {
         "rangeMax should be ~7.0, got {range_max}"
     );
 }
+
+#[test]
+fn wrap_has_dynamic_range() {
+    let m = make_module(
+        "$wrap",
+        "wrap",
+        json!({ "input": 6.0, "min": 1.0, "max": 4.0 }),
+    );
+    for _ in 0..100 {
+        step(&**m);
+    }
+    let range_min = m.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = m.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - 1.0).abs() < 0.01,
+        "wrap rangeMin should be 1.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 4.0).abs() < 0.01,
+        "wrap rangeMax should be 4.0, got {range_max}"
+    );
+}
+
+#[test]
+fn wrap_dynamic_range_swaps_when_max_lt_min() {
+    // When max < min, $wrap swaps them internally
+    let m = make_module(
+        "$wrap",
+        "wrap",
+        json!({ "input": 0.0, "min": 5.0, "max": 0.0 }),
+    );
+    for _ in 0..100 {
+        step(&**m);
+    }
+    let range_min = m.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = m.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - 0.0).abs() < 0.01,
+        "wrap rangeMin should be 0.0 (swapped), got {range_min}"
+    );
+    assert!(
+        (range_max - 5.0).abs() < 0.01,
+        "wrap rangeMax should be 5.0 (swapped), got {range_max}"
+    );
+}
+
+#[test]
+fn spread_has_dynamic_range() {
+    let m = make_module(
+        "$spread",
+        "spread",
+        json!({ "min": 2.0, "max": 8.0, "count": 4 }),
+    );
+    for _ in 0..100 {
+        step(&**m);
+    }
+    let range_min = m.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = m.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - 2.0).abs() < 0.01,
+        "spread rangeMin should be 2.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 8.0).abs() < 0.01,
+        "spread rangeMax should be 8.0, got {range_max}"
+    );
+}
+
+#[test]
+fn scale_and_shift_has_dynamic_range_from_input() {
+    // Chain: $sine → $scaleAndShift(scale=5, shift=1)
+    // $sine range = (-5, 5), scale=5 means gain=1.0, shift=1
+    // Output range should be (-5*1+1, 5*1+1) = (-4, 6)
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "scale": 5.0,
+                "shift": 1.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let sas = patch.sampleables.get("sas").unwrap();
+    let range_min = sas.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = sas.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - (-4.0)).abs() < 0.1,
+        "scaleAndShift rangeMin should be ~-4.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 6.0).abs() < 0.1,
+        "scaleAndShift rangeMax should be ~6.0, got {range_max}"
+    );
+}
+
+#[test]
+fn scale_and_shift_inverted_scale_swaps_range() {
+    // scale=0 means gain=-1 (inverted). Input range (-5,5) → (5*-1+0, -5*-1+0) = (-5,5) swapped → (-5,5)
+    // Actually scale=0 → gain = 0/5 = 0, output = 0. Let's use scale=-5 → no that's clamped.
+    // scale param range is 0..10, where 5=unity. scale=0 → gain=0/5=0.
+    // Let's test scale=2.5 → gain=0.5, shift=2. Input (-5,5) → (-5*0.5+2, 5*0.5+2) = (-0.5, 4.5)
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "scale": 2.5,
+                "shift": 2.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let sas = patch.sampleables.get("sas").unwrap();
+    let range_min = sas.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = sas.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - (-0.5)).abs() < 0.1,
+        "scaleAndShift rangeMin should be ~-0.5, got {range_min}"
+    );
+    assert!(
+        (range_max - 4.5).abs() < 0.1,
+        "scaleAndShift rangeMax should be ~4.5, got {range_max}"
+    );
+}
+
+#[test]
+fn clamp_has_dynamic_range_from_input() {
+    // Chain: $sine(-5,5) → $clamp(min=-2, max=3)
+    // Output range should be intersection: (-2, 3)
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": -2.0,
+                "max": 3.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let range_min = cl.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = cl.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - (-2.0)).abs() < 0.1,
+        "clamp rangeMin should be ~-2.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 3.0).abs() < 0.1,
+        "clamp rangeMax should be ~3.0, got {range_max}"
+    );
+}
+
+#[test]
+fn clamp_one_sided_preserves_input_range_on_open_side() {
+    // $sine(-5,5) → $clamp(min=0) — no max
+    // Output range should be (0, 5) — clamped below, open above uses input max
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let range_min = cl.get_poly_sample("output.rangeMin").unwrap().get(0);
+    let range_max = cl.get_poly_sample("output.rangeMax").unwrap().get(0);
+    assert!(
+        (range_min - 0.0).abs() < 0.1,
+        "one-sided clamp rangeMin should be ~0.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 5.0).abs() < 0.1,
+        "one-sided clamp rangeMax should be ~5.0, got {range_max}"
+    );
+}

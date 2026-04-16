@@ -20,7 +20,7 @@ struct ClampParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ClampOutputs {
-    #[output("output", "clamped signal output", default)]
+    #[output("output", "clamped signal output", default, dynamic_range)]
     sample: PolyOutput,
 }
 
@@ -74,6 +74,25 @@ impl Clamp {
             }
 
             self.outputs.sample.set(i, val);
+
+            // Compose output range: intersect input range with clamp bounds
+            if let Some((in_min, in_max)) = self.params.input.get_range(i) {
+                let out_min = if has_min {
+                    let a = self.params.min.value_or_zero(i);
+                    in_min.max(a)
+                } else {
+                    in_min
+                };
+                let out_max = if has_max {
+                    let b = self.params.max.value_or_zero(i);
+                    in_max.min(b)
+                } else {
+                    in_max
+                };
+                if out_min <= out_max {
+                    self.outputs.sample.set_range(i, out_min, out_max);
+                }
+            }
         }
     }
 }
