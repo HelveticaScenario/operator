@@ -389,6 +389,45 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    // Generate virtual range port match arms for static-range (non-dynamic) outputs
+    let static_range_arms: Vec<_> = outputs
+        .iter()
+        .filter(|o| {
+            o.range.is_some() && !o.dynamic_range && o.precision == OutputPrecision::PolySignal
+        })
+        .flat_map(|o| {
+            let field_name = &o.field_name;
+            let output_name_str = o.output_name.value();
+            let range_min_name = format!("{}.rangeMin", output_name_str);
+            let range_max_name = format!("{}.rangeMax", output_name_str);
+            let (min_val, max_val) = o.range.unwrap();
+            let min_val = min_val as f32;
+            let max_val = max_val as f32;
+            vec![
+                quote! {
+                    #range_min_name => {
+                        let mut po = crate::poly::PolyOutput::default();
+                        po.set_channels(self.#field_name.channels());
+                        for ch in 0..self.#field_name.channels() {
+                            po.set(ch, #min_val);
+                        }
+                        Some(po)
+                    },
+                },
+                quote! {
+                    #range_max_name => {
+                        let mut po = crate::poly::PolyOutput::default();
+                        po.set_channels(self.#field_name.channels());
+                        for ch in 0..self.#field_name.channels() {
+                            po.set(ch, #max_val);
+                        }
+                        Some(po)
+                    },
+                },
+            ]
+        })
+        .collect();
+
     // Generate virtual range port get_sample arms (single f32, no PolyOutput copy)
     let virtual_range_sample_arms: Vec<_> = outputs
         .iter()
@@ -404,6 +443,30 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 },
                 quote! {
                     #range_max_name => Some(self.#field_name.range_max_value(channel)),
+                },
+            ]
+        })
+        .collect();
+
+    // Generate static range get_sample arms
+    let static_range_sample_arms: Vec<_> = outputs
+        .iter()
+        .filter(|o| {
+            o.range.is_some() && !o.dynamic_range && o.precision == OutputPrecision::PolySignal
+        })
+        .flat_map(|o| {
+            let output_name_str = o.output_name.value();
+            let range_min_name = format!("{}.rangeMin", output_name_str);
+            let range_max_name = format!("{}.rangeMax", output_name_str);
+            let (min_val, max_val) = o.range.unwrap();
+            let min_val = min_val as f32;
+            let max_val = max_val as f32;
+            vec![
+                quote! {
+                    #range_min_name => Some(#min_val),
+                },
+                quote! {
+                    #range_max_name => Some(#max_val),
                 },
             ]
         })
@@ -478,6 +541,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 match port {
                     #(#poly_sample_match_arms)*
                     #(#virtual_range_arms)*
+                    #(#static_range_arms)*
                     _ => None,
                 }
             }
@@ -486,6 +550,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 match port {
                     #(#sample_match_arms)*
                     #(#virtual_range_sample_arms)*
+                    #(#static_range_sample_arms)*
                     _ => None,
                 }
             }

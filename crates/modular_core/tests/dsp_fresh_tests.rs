@@ -1473,3 +1473,44 @@ fn pulse_remap_width1_range_0_5() {
         "remap output should reach near 5, but max was {remap_max}"
     );
 }
+
+#[test]
+fn static_range_output_exposes_virtual_range_ports() {
+    // $sine has range = (-5.0, 5.0) but no dynamic_range
+    // It should still expose output.rangeMin / output.rangeMax returning static values
+    let osc = make_module("$sine", "osc", json!({ "freq": 440.0 }));
+    step(&**osc);
+
+    // get_sample should work for virtual range ports
+    let range_min = osc
+        .get_sample("output.rangeMin", 0)
+        .expect("static-range output should expose output.rangeMin virtual port");
+    let range_max = osc
+        .get_sample("output.rangeMax", 0)
+        .expect("static-range output should expose output.rangeMax virtual port");
+
+    assert!(
+        (range_min - (-5.0)).abs() < 0.01,
+        "rangeMin should be -5.0, got {range_min}"
+    );
+    assert!(
+        (range_max - 5.0).abs() < 0.01,
+        "rangeMax should be 5.0, got {range_max}"
+    );
+
+    // get_poly_sample should also work
+    let poly_min = osc
+        .get_poly_sample("output.rangeMin")
+        .expect("get_poly_sample should work for static rangeMin");
+    let poly_max = osc
+        .get_poly_sample("output.rangeMax")
+        .expect("get_poly_sample should work for static rangeMax");
+    assert!(
+        (poly_min.get(0) - (-5.0)).abs() < 0.01,
+        "poly rangeMin ch0 should be -5.0"
+    );
+    assert!(
+        (poly_max.get(0) - 5.0).abs() < 0.01,
+        "poly rangeMax ch0 should be 5.0"
+    );
+}
