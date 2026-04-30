@@ -32,7 +32,7 @@
         "build-native": "cd crates/modular && yarn build",
         "build-native-debug": "cd crates/modular && yarn build:debug",
         "build-native-profile": "cd crates/modular && yarn build --features=tracy",
-        "generate-lib": "yarn build-native && tsx scripts/generateLib.ts",
+        "generate-lib": "yarn build-native && cargo run -q -p modular_core --bin generate-dsl --release && tsx scripts/generateLib.ts",
         "postinstall": "node scripts/patch-electron-plist.mjs",
         "prepare": "husky"
     },
