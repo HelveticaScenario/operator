@@ -1346,7 +1346,7 @@ impl AudioProcessor {
         } => {
           // State transfer + replace, then reconnect
           if let Some(old_module) = self.patch.sampleables.remove(&module_id) {
-            new_module.transfer_state_from(old_module.as_ref().as_ref());
+            new_module.transfer_state_from(old_module.as_ref());
             self.patch.remove_message_listeners_for_module(&module_id);
             if self
               .garbage_tx
@@ -1354,17 +1354,16 @@ impl AudioProcessor {
               .is_err()
             {}
           }
-          self
-            .patch
-            .sampleables
-            .insert(module_id.clone(), new_module.clone());
+          self.patch.sampleables.insert(module_id.clone(), new_module);
           // Re-register message listeners for the replaced module
-          self
-            .patch
-            .add_message_listeners_for_module(&module_id, &new_module);
+          self.patch.add_message_listeners_for_module(&module_id);
           // Reconnect all modules so the new module picks up its connections
           for module in self.patch.sampleables.values() {
             module.connect(&self.patch);
+          }
+          // Refresh any module-local caches rebuilt from params after reconnect.
+          for module in self.patch.sampleables.values() {
+            module.on_patch_update();
           }
         }
         GraphCommand::DispatchMessage(msg) => {
@@ -1507,7 +1506,7 @@ impl AudioProcessor {
     let mut newly_inserted_ids: Vec<String> = Vec::new();
     for (id, new_module) in inserts {
       if let Some(old_module) = self.patch.sampleables.remove(&id) {
-        new_module.transfer_state_from(old_module.as_ref().as_ref());
+        new_module.transfer_state_from(old_module.as_ref());
         self.patch.remove_message_listeners_for_module(&id);
         if self
           .garbage_tx
@@ -1539,9 +1538,7 @@ impl AudioProcessor {
     // Incrementally update message listeners for changed modules only.
     // Stale entries were already removed above; now add entries for new and remapped modules.
     for id in newly_inserted_ids.iter().chain(remapped_ids.iter()) {
-      if let Some(sampleable) = self.patch.sampleables.get(id).cloned() {
-        self.patch.add_message_listeners_for_module(id, &sampleable);
-      }
+      self.patch.add_message_listeners_for_module(id);
     }
 
     // Swap wav_data into the patch (cheap — just moving Arc clones).
@@ -2388,21 +2385,14 @@ pub struct TransportSnapshot {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use modular_core::Signal;
+  use modular_core::poly::PolyOutput;
   use modular_core::types::ModuleIdRemap;
+  use modular_core::types::{Message, MessageHandler, MessageTag, MidiNoteOn};
+  use std::sync::atomic::AtomicUsize;
 
   // ============================================================================
-  // Legacy tests - commented out after Phase 2 architecture change
-  // ============================================================================
-  // These tests used the old AudioState::new() and direct apply_patch() method
-  // which have been replaced by the command queue architecture.
-  //
-  // TODO: Rewrite tests to use the new architecture:
-  // - Create AudioProcessor directly for unit tests
-  // - Or create integration tests that use the full command queue flow
-  //
-  // The functionality being tested (module ID remaps, stopped state, etc.)
-  // is now handled in AudioProcessor::apply_patch_update() and the command
-  // queue dispatch logic.
+  // AudioProcessor + command queue tests
   // ============================================================================
 
   #[test]
@@ -2466,11 +2456,11 @@ mod tests {
   }
 
   impl MockModule {
-    fn new(label: &str) -> Arc<Box<dyn modular_core::types::Sampleable>> {
-      Arc::new(Box::new(Self {
+    fn new(label: &str) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
         label: label.to_string(),
         current_id: label.to_string(),
-      }))
+      })
     }
   }
 
@@ -2494,9 +2484,130 @@ mod tests {
     }
   }
 
-  fn create_test_processor() -> AudioProcessor {
+  struct CountingMessageModule {
+    current_id: String,
+    label: String,
+    hits: Arc<AtomicUsize>,
+  }
+
+  impl CountingMessageModule {
+    fn new(label: &str, hits: Arc<AtomicUsize>) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: label.to_string(),
+        label: label.to_string(),
+        hits,
+      })
+    }
+  }
+
+  impl MessageHandler for CountingMessageModule {
+    fn handled_message_tags(&self) -> &'static [MessageTag] {
+      &[MessageTag::MidiNoteOn]
+    }
+
+    fn handle_message(&self, _message: &Message) -> napi::Result<()> {
+      self.hits.fetch_add(1, Ordering::SeqCst);
+      Ok(())
+    }
+  }
+
+  impl modular_core::types::Sampleable for CountingMessageModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn tick(&self) {}
+    fn update(&self) {}
+    fn get_poly_sample(&self, _port: &str) -> napi::Result<modular_core::poly::PolyOutput> {
+      Ok(modular_core::poly::PolyOutput::default())
+    }
+    fn get_module_type(&self) -> &str {
+      &self.label
+    }
+    fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
+  struct ConstantOutputModule {
+    current_id: String,
+    value: f32,
+  }
+
+  impl ConstantOutputModule {
+    fn new(id: &str, value: f32) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: id.to_string(),
+        value,
+      })
+    }
+  }
+
+  impl MessageHandler for ConstantOutputModule {}
+
+  impl modular_core::types::Sampleable for ConstantOutputModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn tick(&self) {}
+    fn update(&self) {}
+    fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
+      Ok(PolyOutput::mono(self.value))
+    }
+    fn get_module_type(&self) -> &str {
+      "constant-output"
+    }
+    fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
+  struct PatchUpdateSensitiveModule {
+    current_id: String,
+    params_signal: Mutex<Signal>,
+    cached_signal: Mutex<Signal>,
+  }
+
+  impl PatchUpdateSensitiveModule {
+    fn new(id: &str, signal: Signal) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: id.to_string(),
+        params_signal: Mutex::new(signal),
+        cached_signal: Mutex::new(Signal::Volts(0.0)),
+      })
+    }
+  }
+
+  impl MessageHandler for PatchUpdateSensitiveModule {}
+
+  impl modular_core::types::Sampleable for PatchUpdateSensitiveModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn tick(&self) {}
+    fn update(&self) {}
+    fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
+      Ok(PolyOutput::mono(self.cached_signal.lock().get_value()))
+    }
+    fn get_module_type(&self) -> &str {
+      "patch-update-sensitive"
+    }
+    fn connect(&self, patch: &modular_core::patch::Patch) {
+      modular_core::types::Connect::connect(&mut *self.params_signal.lock(), patch);
+    }
+    fn on_patch_update(&self) {
+      let signal = self.params_signal.lock().clone();
+      *self.cached_signal.lock() = signal;
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
+  fn create_test_processor() -> (CommandProducer, AudioProcessor) {
     let (
-      _cmd_producer,
+      cmd_producer,
       cmd_consumer,
       err_producer,
       _err_consumer,
@@ -2514,13 +2625,15 @@ mod tests {
       transport_meter: Arc::new(TransportMeter::default()),
     };
 
-    AudioProcessor::new(
+    let processor = AudioProcessor::new(
       cmd_consumer,
       err_producer,
       garbage_producer,
       shared,
       44100.0,
-    )
+    );
+
+    (cmd_producer, processor)
   }
 
   #[test]
@@ -2528,7 +2641,7 @@ mod tests {
     // Regression test: when remaps form a chain (A→B, B→C), all modules
     // must survive. Before the fix, applying A→B first would overwrite B
     // (destroying it) before B→C could move it to C.
-    let mut processor = create_test_processor();
+    let (_cmd_producer, mut processor) = create_test_processor();
 
     // Set up initial state: cycle-2 (shift), cycle-3 (thirds)
     processor
@@ -2597,7 +2710,7 @@ mod tests {
   #[test]
   fn test_remap_swap_preserves_both_modules() {
     // Test swap: A→B and B→A simultaneously
-    let mut processor = create_test_processor();
+    let (_cmd_producer, mut processor) = create_test_processor();
 
     processor
       .patch
@@ -2649,7 +2762,7 @@ mod tests {
   #[test]
   fn test_remap_simple_rename() {
     // Simple case: single remap, no chain
-    let mut processor = create_test_processor();
+    let (_cmd_producer, mut processor) = create_test_processor();
 
     processor
       .patch
@@ -2679,6 +2792,133 @@ mod tests {
       "my-vca",
       "module should be at new ID"
     );
+  }
+
+  #[test]
+  fn test_single_module_update_re_registers_message_listeners() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let old_hits = Arc::new(AtomicUsize::new(0));
+    let new_hits = Arc::new(AtomicUsize::new(0));
+    processor.patch.sampleables.insert(
+      "m1".into(),
+      CountingMessageModule::new("old", Arc::clone(&old_hits)),
+    );
+    processor.patch.rebuild_message_listeners();
+
+    cmd_producer
+      .push(GraphCommand::SingleModuleUpdate {
+        module_id: "m1".into(),
+        module: CountingMessageModule::new("new", Arc::clone(&new_hits)),
+      })
+      .unwrap();
+    cmd_producer
+      .push(GraphCommand::DispatchMessage(Message::MidiNoteOn(
+        MidiNoteOn {
+          device: None,
+          channel: 0,
+          note: 60,
+          velocity: 100,
+        },
+      )))
+      .unwrap();
+
+    processor.process_commands();
+
+    assert_eq!(old_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(new_hits.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn test_single_module_update_refreshes_patch_update_caches() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    processor
+      .patch
+      .sampleables
+      .insert("src".into(), ConstantOutputModule::new("src", 3.5));
+    processor.patch.sampleables.insert(
+      "dep".into(),
+      PatchUpdateSensitiveModule::new(
+        "dep",
+        Signal::Cable {
+          module: "src".into(),
+          resolved: None,
+          port: "out".into(),
+          channel: 0,
+        },
+      ),
+    );
+
+    for module in processor.patch.sampleables.values() {
+      module.connect(&processor.patch);
+    }
+    for module in processor.patch.sampleables.values() {
+      module.on_patch_update();
+    }
+
+    let initial = processor
+      .patch
+      .sampleables
+      .get("dep")
+      .unwrap()
+      .get_poly_sample("out")
+      .unwrap()
+      .get(0);
+    assert_eq!(initial, 3.5);
+
+    cmd_producer
+      .push(GraphCommand::SingleModuleUpdate {
+        module_id: "src".into(),
+        module: ConstantOutputModule::new("src", 7.25),
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    let updated = processor
+      .patch
+      .sampleables
+      .get("dep")
+      .unwrap()
+      .get_poly_sample("out")
+      .unwrap()
+      .get(0);
+    assert_eq!(updated, 7.25);
+  }
+
+  #[test]
+  fn test_patch_update_remap_re_registers_message_listeners() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    processor.patch.sampleables.insert(
+      "old-id".into(),
+      CountingMessageModule::new("old-id", Arc::clone(&hits)),
+    );
+    processor.patch.rebuild_message_listeners();
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.remaps = vec![ModuleIdRemap {
+      from: "old-id".into(),
+      to: "new-id".into(),
+    }];
+    update.desired_ids.insert("new-id".into());
+
+    processor.apply_patch_update(update);
+
+    let message = Message::MidiNoteOn(MidiNoteOn {
+      device: None,
+      channel: 0,
+      note: 60,
+      velocity: 100,
+    });
+
+    processor.patch.dispatch_message(&message).unwrap();
+
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert!(!processor.patch.sampleables.contains_key("old-id"));
+    assert!(processor.patch.sampleables.contains_key("new-id"));
   }
 
   // ============================================================================

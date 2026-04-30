@@ -7,20 +7,21 @@
 //!
 //! ## Why This Is Safe
 //!
-//! 1. **Exclusive Audio Thread Ownership**: After construction, all modules live in
-//!    `AudioProcessor::patch` which is owned exclusively by the audio thread closure.
-//!    See `crates/modular/src/audio.rs` `make_stream()`.
+//! 1. **Single-owner handoff**: Modules are constructed on the main thread, prepared,
+//!    then moved into the runtime as owned `Box<dyn Sampleable + Send>` values. After
+//!    that transfer, they are owned exclusively by the audio thread runtime.
 //!
 //! 2. **Command Queue Isolation**: The main thread communicates via `PatchUpdate`
 //!    commands through an `rtrb` SPSC queue. It never directly accesses module state.
 //!
-//! 3. **No Escaping References**: Module `Arc`s are stored in `Patch::sampleables` and
-//!    are never cloned or sent to other threads after being added to the patch.
+//! 3. **No shared module access**: Runtime module state is not shared across threads.
+//!    `Sampleable` is send-only; once transferred, module trait methods are called only
+//!    by the audio thread owner.
 //!
 //! ## Invariants (DO NOT VIOLATE - will cause undefined behavior)
 //!
 //! - **NEVER** call `Sampleable` trait methods from the main thread
-//! - **NEVER** clone module `Arc`s and send them across threads
+//! - **NEVER** share a module instance across threads after handoff
 //! - **NEVER** access `Patch::sampleables` from outside `AudioProcessor`
 //! - **ALWAYS** use the command queue for main→audio communication
 //!
@@ -45,11 +46,9 @@ use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::fmt::Debug;
 use std::ops::{Add, Deref, Div, Mul, Sub};
+use std::ptr::NonNull;
 use std::result::Result as StdResult;
-use std::{
-    collections::HashMap,
-    sync::{self, Arc},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use crate::dsp::tables::warp;
 use crate::dsp::utils::{hz_to_voct, midi_to_voct};
@@ -99,7 +98,7 @@ impl WellKnownModule {
     pub fn to_cable(&self, channel: usize, port: &str) -> Signal {
         Signal::Cable {
             module: self.id().into(),
-            module_ptr: std::sync::Weak::new(),
+            resolved: None,
             port: port.into(),
             channel,
         }
@@ -227,7 +226,10 @@ pub struct Config {
     pub params: Value,
 }
 
-pub type SampleableMap = HashMap<String, Arc<Box<dyn Sampleable>>>;
+pub type SampleableMap = HashMap<String, Box<dyn Sampleable>>;
+/// Cached during the patch `connect()` phase and only dereferenced later during
+/// audio-thread reads; callers must not hold or use it across another reconnect.
+pub type SampleablePtr = NonNull<dyn Sampleable>;
 
 /// One-pole lowpass filter for parameter smoothing to prevent clicking
 /// Coefficient of 0.99 gives roughly 5ms smoothing time at 48kHz
@@ -1017,15 +1019,15 @@ impl JsonSchema for Wav {
 /// 2. The owning module's `update()` writes; readers on the same thread read.
 ///    Demand-driven ordering (`ensure_source_updated`) guarantees the writer
 ///    finishes before any reader accesses the data within the same tick.
-/// 3. `Send + Sync` is implemented manually — cross-thread transfer happens only
-///    via the command queue (construction → audio thread), never concurrent access.
+/// 3. Only `Sync` is implemented manually. `BufferData` is naturally `Send`, and the
+///    shared `Arc<BufferData>` handle may be observed from multiple owners while actual
+///    mutation still follows the runtime's phase-separated audio-thread contract.
 #[derive(Debug)]
 pub struct BufferData {
     inner: UnsafeCell<SampleBuffer>,
     write_index: UnsafeCell<usize>,
 }
 
-unsafe impl Send for BufferData {}
 unsafe impl Sync for BufferData {}
 
 impl BufferData {
@@ -1206,18 +1208,35 @@ struct BufferSerde {
     channels: usize,
 }
 
-#[derive(Clone)]
 pub struct Buffer {
     /// Source module ID
     source_module: String,
     /// Source port name
     source_port: String,
-    /// Cached strong reference to the source module, populated during `connect()`.
-    cached_source_module: Option<Arc<Box<dyn Sampleable>>>,
+    /// Cached raw pointer to the source module, populated during `connect()`.
+    cached_source_ptr: Option<SampleablePtr>,
     /// Cached strong reference to the buffer data, populated during `connect()`.
     cached_buffer: Option<Arc<BufferData>>,
     /// Channel count (used for channel derivation at deserialization time)
     channels: usize,
+}
+
+// SAFETY: `cached_source_ptr` is populated during `connect()` and later dereferenced only from
+// the audio thread after connection has finished. `Buffer` values may move to that thread as
+// params, but they must not be shared concurrently because the cached pointer is thread-affine.
+unsafe impl Send for Buffer {}
+
+impl Clone for Buffer {
+    fn clone(&self) -> Self {
+        Self {
+            source_module: self.source_module.clone(),
+            source_port: self.source_port.clone(),
+            // Runtime caches are patch-lifetime-specific and must be reconnected.
+            cached_source_ptr: None,
+            cached_buffer: None,
+            channels: self.channels,
+        }
+    }
 }
 
 impl Buffer {
@@ -1226,7 +1245,7 @@ impl Buffer {
         Self {
             source_module,
             source_port,
-            cached_source_module: None,
+            cached_source_ptr: None,
             cached_buffer: None,
             channels,
         }
@@ -1259,8 +1278,8 @@ impl Buffer {
     /// This triggers the $buffer module's `update()` which writes the current sample
     /// and increments write_index. Must be called before reading the buffer.
     pub fn ensure_source_updated(&self) {
-        if let Some(module) = &self.cached_source_module {
-            module.update();
+        if let Some(module_ptr) = self.cached_source_ptr {
+            unsafe { module_ptr.as_ref().update() };
         }
     }
 
@@ -1428,7 +1447,7 @@ impl Connect for Buffer {
     fn connect(&mut self, patch: &Patch) {
         // Resolve source module and get its buffer output
         if let Some(module) = patch.sampleables.get(&self.source_module) {
-            self.cached_source_module = Some(Arc::clone(module));
+            self.cached_source_ptr = Some(NonNull::from(module.as_ref()));
             if let Some(buffer_data) = module.get_buffer_output(&self.source_port) {
                 self.cached_buffer = Some(Arc::clone(buffer_data));
             } else {
@@ -1436,6 +1455,7 @@ impl Connect for Buffer {
                     "[Buffer] module '{}' has no buffer output on port '{}'",
                     self.source_module, self.source_port
                 );
+                self.cached_source_ptr = None;
                 self.cached_buffer = None;
             }
         } else {
@@ -1443,7 +1463,7 @@ impl Connect for Buffer {
                 "[Buffer] source module '{}' not found in patch",
                 self.source_module
             );
-            self.cached_source_module = None;
+            self.cached_source_ptr = None;
             self.cached_buffer = None;
         }
     }
@@ -1819,12 +1839,17 @@ pub enum Signal {
     /// Cable connection to another module's output at a specific channel
     Cable {
         module: String,
-        module_ptr: std::sync::Weak<Box<dyn Sampleable>>,
+        resolved: Option<SampleablePtr>,
         port: String,
         /// Which channel of the output to read (0-indexed)
         channel: usize,
     },
 }
+
+// SAFETY: cable variants cache a `NonNull<dyn Sampleable>` during `connect()`. That cached pointer
+// is only dereferenced from the audio thread after connection finishes, but `Signal` values still
+// need to cross from main-thread deserialization into audio-thread-owned params.
+unsafe impl Send for Signal {}
 
 // Custom serde deserialization to allow a bare number as shorthand for volts.
 //
@@ -1874,7 +1899,7 @@ impl<'de> Deserialize<'de> for Signal {
                     channel,
                 } => Signal::Cable {
                     module,
-                    module_ptr: sync::Weak::new(),
+                    resolved: None,
                     port,
                     channel,
                 },
@@ -1972,7 +1997,7 @@ impl<E: DeserializeError> deserr::Deserr<E> for Signal {
                         })?;
                         Ok(Signal::Cable {
                             module,
-                            module_ptr: sync::Weak::new(),
+                            resolved: None,
                             port,
                             channel,
                         })
@@ -2045,12 +2070,12 @@ impl Signal {
         match self {
             Signal::Volts(v) => *v,
             Signal::Cable {
-                module_ptr,
+                resolved,
                 port,
                 channel,
                 ..
-            } => match module_ptr.upgrade() {
-                Some(module_ptr) => module_ptr
+            } => match resolved {
+                Some(ptr) => unsafe { ptr.as_ref() }
                     .get_poly_sample(port)
                     .map(|p| p.get_cycling(*channel))
                     .unwrap_or(0.0),
@@ -2098,11 +2123,13 @@ impl SignalExt for Option<Signal> {
 impl Connect for Signal {
     fn connect(&mut self, patch: &Patch) {
         if let Signal::Cable {
-            module, module_ptr, ..
+            module, resolved, ..
         } = self
-            && let Some(sampleable) = patch.sampleables.get(module)
         {
-            *module_ptr = Arc::downgrade(sampleable);
+            *resolved = patch
+                .sampleables
+                .get(module)
+                .map(|sampleable| NonNull::from(sampleable.as_ref()));
         }
     }
 }
@@ -2120,22 +2147,17 @@ impl PartialEq for Signal {
             (
                 Signal::Cable {
                     module: module_1,
-                    module_ptr: module_ptr_1,
                     port: port_1,
                     channel: channel_1,
+                    ..
                 },
                 Signal::Cable {
                     module: module_2,
-                    module_ptr: module_ptr_2,
                     port: port_2,
                     channel: channel_2,
+                    ..
                 },
-            ) => {
-                module_ptr_1.upgrade() == module_ptr_2.upgrade()
-                    && port_1 == port_2
-                    && module_1 == module_2
-                    && channel_1 == channel_2
-            }
+            ) => port_1 == port_2 && module_1 == module_2 && channel_1 == channel_2,
             _ => false,
         }
     }
@@ -2397,9 +2419,8 @@ pub struct ModuleIdRemap {
     pub to: String,
 }
 
-pub type SampleableConstructor = Box<
-    dyn Fn(&String, f32, crate::params::DeserializedParams) -> Result<Arc<Box<dyn Sampleable>>>,
->;
+pub type SampleableConstructor =
+    Box<dyn Fn(&String, f32, crate::params::DeserializedParams) -> Result<Box<dyn Sampleable>>>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2511,6 +2532,63 @@ pub enum Message {
 mod tests {
     use super::*;
     use serde_json::from_str;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct BufferSourceTestSampleable {
+        id: String,
+        update_count: Arc<AtomicUsize>,
+        buffer: Arc<BufferData>,
+    }
+
+    impl Sampleable for BufferSourceTestSampleable {
+        fn get_id(&self) -> &str {
+            &self.id
+        }
+
+        fn tick(&self) {}
+
+        fn update(&self) {
+            self.update_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn get_poly_sample(&self, _port: &str) -> Result<PolyOutput> {
+            Ok(PolyOutput::mono(0.0))
+        }
+
+        fn get_module_type(&self) -> &str {
+            "buffer_source_test"
+        }
+
+        fn connect(&self, _patch: &Patch) {}
+
+        fn get_buffer_output(&self, port: &str) -> Option<&Arc<BufferData>> {
+            (port == "buffer").then_some(&self.buffer)
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl MessageHandler for BufferSourceTestSampleable {}
+
+    fn patch_with_buffer_source(
+        id: &str,
+        samples: Vec<Vec<f32>>,
+    ) -> (Patch, Arc<AtomicUsize>, SampleablePtr, Arc<BufferData>) {
+        let update_count = Arc::new(AtomicUsize::new(0));
+        let buffer = Arc::new(BufferData::from_samples(samples));
+        let module: Box<dyn Sampleable> = Box::new(BufferSourceTestSampleable {
+            id: id.to_string(),
+            update_count: Arc::clone(&update_count),
+            buffer: Arc::clone(&buffer),
+        });
+        let source_ptr = NonNull::from(module.as_ref());
+        let mut patch = Patch::new();
+        patch.sampleables.insert(id.to_string(), module);
+        (patch, update_count, source_ptr, buffer)
+    }
 
     #[test]
     fn test_signal_deserialization_volts() {
@@ -2931,6 +3009,85 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn raw_pointer_buffer_connect_populates_cached_source_ptr_and_buffer() {
+        let (patch, update_count, source_ptr, source_buffer) =
+            patch_with_buffer_source("buf", vec![vec![1.0, 2.0, 3.0]]);
+        let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
+
+        assert!(buffer.cached_source_ptr.is_none());
+        assert!(buffer.cached_buffer.is_none());
+
+        buffer.connect(&patch);
+
+        assert_eq!(buffer.cached_source_ptr, Some(source_ptr));
+        assert!(
+            buffer
+                .cached_buffer
+                .as_ref()
+                .is_some_and(|cached| Arc::ptr_eq(cached, &source_buffer))
+        );
+        assert_eq!(update_count.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn raw_pointer_buffer_ensure_source_updated_calls_update_through_cached_pointer() {
+        let (patch, update_count, _, _) = patch_with_buffer_source("buf", vec![vec![0.5]]);
+        let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
+
+        buffer.connect(&patch);
+        buffer.ensure_source_updated();
+
+        assert_eq!(update_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn raw_pointer_buffer_clone_clears_runtime_caches() {
+        let (patch, _, _, _) = patch_with_buffer_source("buf", vec![vec![0.5]]);
+        let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
+
+        buffer.connect(&patch);
+        let cloned = buffer.clone();
+
+        assert!(cloned.cached_source_ptr.is_none());
+        assert!(cloned.cached_buffer.is_none());
+        assert_eq!(cloned.frame_count(), 0);
+        assert_eq!(cloned.read(0, 0), 0.0);
+    }
+
+    #[test]
+    fn raw_pointer_buffer_connect_missing_source_clears_pointer_and_buffer() {
+        let (patch, update_count, _, _) = patch_with_buffer_source("buf", vec![vec![4.0, 5.0]]);
+        let empty_patch = Patch::new();
+        let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
+
+        buffer.connect(&patch);
+        buffer.ensure_source_updated();
+        assert_eq!(update_count.load(Ordering::SeqCst), 1);
+
+        buffer.connect(&empty_patch);
+        buffer.ensure_source_updated();
+
+        assert!(buffer.cached_source_ptr.is_none());
+        assert!(buffer.cached_buffer.is_none());
+        assert_eq!(update_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn raw_pointer_buffer_connect_missing_port_clears_pointer_and_buffer() {
+        let (patch, update_count, _, _) = patch_with_buffer_source("buf", vec![vec![6.0, 7.0]]);
+        let mut buffer = Buffer::new("buf".to_string(), "missing".to_string(), 1);
+
+        buffer.connect(&patch);
+        buffer.ensure_source_updated();
+
+        assert!(buffer.cached_source_ptr.is_none());
+        assert!(buffer.cached_buffer.is_none());
+        assert_eq!(buffer.frame_count(), 0);
+        assert_eq!(buffer.read(0, 0), 0.0);
+        assert_eq!(update_count.load(Ordering::SeqCst), 0);
     }
 }
 

@@ -14,20 +14,14 @@ use crate::types::{
 };
 
 use std::collections::HashMap;
-use std::sync::{Arc, Weak};
-
-#[derive(Clone)]
-struct MessageListenerRef {
-    id: String,
-    weak: Weak<Box<dyn Sampleable>>,
-}
+use std::sync::Arc;
 
 /// The core patch structure containing the DSP graph
 pub struct Patch {
     pub audio_in: Arc<Mutex<PolyOutput>>,
     pub sampleables: SampleableMap,
     pub wav_data: HashMap<String, Arc<WavData>>,
-    message_listeners: HashMap<MessageTag, Vec<MessageListenerRef>>,
+    message_listeners: HashMap<MessageTag, Vec<String>>,
 }
 
 impl Patch {
@@ -39,7 +33,7 @@ impl Patch {
 
         sampleables.insert(
             audio_in_sampleable.get_id().to_string(),
-            Arc::new(Box::new(audio_in_sampleable)),
+            Box::new(audio_in_sampleable),
         );
         println!("sampleables {:?}", sampleables.keys());
         let mut patch = Patch {
@@ -59,78 +53,49 @@ impl Patch {
             input: self.audio_in.clone(),
         };
         let id = WellKnownModule::HiddenAudioIn.id().to_string();
-        self.sampleables
-            .insert(id, Arc::new(Box::new(audio_in_sampleable)));
+        self.sampleables.insert(id, Box::new(audio_in_sampleable));
     }
 
     pub fn rebuild_message_listeners(&mut self) {
         self.message_listeners.clear();
-        for (id, sampleable) in &self.sampleables {
-            for tag in sampleable.handled_message_tags() {
-                self.message_listeners
-                    .entry(*tag)
-                    .or_default()
-                    .push(MessageListenerRef {
-                        id: id.clone(),
-                        weak: Arc::downgrade(sampleable),
-                    });
-            }
+        let ids: Vec<String> = self.sampleables.keys().cloned().collect();
+        for id in ids {
+            self.add_message_listeners_for_module(&id);
         }
     }
 
     /// Add message listener entries for a single module (incremental update).
-    pub fn add_message_listeners_for_module(
-        &mut self,
-        id: &str,
-        sampleable: &Arc<Box<dyn Sampleable>>,
-    ) {
+    pub fn add_message_listeners_for_module(&mut self, id: &str) {
+        let Some(sampleable) = self.sampleables.get(id) else {
+            return;
+        };
+
         for tag in sampleable.handled_message_tags() {
             self.message_listeners
                 .entry(*tag)
                 .or_default()
-                .push(MessageListenerRef {
-                    id: id.to_string(),
-                    weak: Arc::downgrade(sampleable),
-                });
+                .push(id.to_string());
         }
     }
 
     /// Remove all message listener entries for a given module id.
     pub fn remove_message_listeners_for_module(&mut self, module_id: &str) {
         for listeners in self.message_listeners.values_mut() {
-            listeners.retain(|r| r.id != module_id);
+            listeners.retain(|id| id != module_id);
         }
-    }
-
-    /// Collect strong references to all modules currently in this patch that
-    /// have registered to handle the given message tag.
-    ///
-    /// This method prunes stale entries. In particular, it will never return a
-    /// module that is no longer present in `self.sampleables`, even if some
-    /// other subsystem still holds a strong `Arc` to that module.
-    pub fn message_listeners_for(&mut self, tag: MessageTag) -> Vec<Arc<Box<dyn Sampleable>>> {
-        let Some(list) = self.message_listeners.get_mut(&tag) else {
-            return Vec::new();
-        };
-
-        list.retain(|r| {
-            if !self.sampleables.contains_key(&r.id) {
-                return false;
-            }
-            r.weak.upgrade().is_some()
-        });
-
-        list.iter()
-            .filter(|r| self.sampleables.contains_key(&r.id))
-            .filter_map(|r| r.weak.upgrade())
-            .collect()
     }
 
     pub fn dispatch_message(&mut self, message: &Message) -> napi::Result<()> {
-        let listeners = self.message_listeners_for(message.tag());
-        for s in listeners {
-            s.handle_message(message)?;
+        let Some(listener_ids) = self.message_listeners.get(&message.tag()) else {
+            return Ok(());
+        };
+
+        for id in listener_ids {
+            if let Some(sampleable) = self.sampleables.get(id) {
+                sampleable.handle_message(message)?;
+            }
         }
+
         Ok(())
     }
 
@@ -209,6 +174,64 @@ mod tests {
 
     use crate::types::MessageHandler;
     use napi::Result;
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::process::Command;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Mutex as StdMutex, OnceLock};
+
+    struct CountingAllocator;
+
+    static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+    static TRACKING_ENABLED: AtomicUsize = AtomicUsize::new(0);
+    static TRACKING_LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
+
+    #[global_allocator]
+    static GLOBAL_ALLOCATOR: CountingAllocator = CountingAllocator;
+
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            if TRACKING_ENABLED.load(Ordering::Relaxed) != 0 {
+                ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            }
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    fn allocation_tracking_lock() -> &'static StdMutex<()> {
+        TRACKING_LOCK.get_or_init(|| StdMutex::new(()))
+    }
+
+    fn assert_message_listener_dispatch_does_not_allocate() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let s: Box<dyn Sampleable> = Box::new(CountingMessageSampleable {
+            id: "m1".to_string(),
+            hits: Arc::clone(&hits),
+        });
+
+        let mut patch = Patch::new();
+        patch.sampleables.insert("m1".to_string(), s);
+        patch.rebuild_message_listeners();
+
+        let message = Message::MidiNoteOn(crate::types::MidiNoteOn {
+            device: None,
+            note: 60,
+            velocity: 100,
+            channel: 0,
+        });
+
+        let _guard = allocation_tracking_lock().lock().unwrap();
+        ALLOCATIONS.store(0, Ordering::SeqCst);
+        TRACKING_ENABLED.store(1, Ordering::SeqCst);
+        patch.dispatch_message(&message).unwrap();
+        TRACKING_ENABLED.store(0, Ordering::SeqCst);
+
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(ALLOCATIONS.load(Ordering::SeqCst), 0);
+    }
 
     #[test]
     fn test_patch_new_has_hidden_audio_in() {
@@ -271,22 +294,126 @@ mod tests {
     }
 
     #[test]
-    fn message_listeners_never_return_removed_modules() {
-        let s: Arc<Box<dyn Sampleable>> = Arc::new(Box::new(DummyMessageSampleable {
+    fn message_listener_index_stores_ids_only() {
+        let s: Box<dyn Sampleable> = Box::new(DummyMessageSampleable {
             id: "m1".to_string(),
-        }));
+        });
 
         let mut patch = Patch::new();
-        patch.sampleables.insert("m1".to_string(), Arc::clone(&s));
+        patch.sampleables.insert("m1".to_string(), s);
         patch.rebuild_message_listeners();
 
-        // Index should include it.
-        assert_eq!(patch.message_listeners_for(MessageTag::MidiNoteOn).len(), 1);
+        assert_eq!(
+            patch
+                .message_listeners
+                .get(&MessageTag::MidiNoteOn)
+                .cloned(),
+            Some(vec!["m1".to_string()])
+        );
+    }
 
-        // Remove from patch but keep an external strong ref (`s`).
+    struct CountingMessageSampleable {
+        id: String,
+        hits: Arc<AtomicUsize>,
+    }
+
+    impl Sampleable for CountingMessageSampleable {
+        fn get_id(&self) -> &str {
+            &self.id
+        }
+
+        fn tick(&self) {}
+
+        fn update(&self) {}
+
+        fn get_poly_sample(&self, _port: &str) -> Result<crate::poly::PolyOutput> {
+            Ok(crate::poly::PolyOutput::default())
+        }
+
+        fn get_module_type(&self) -> &str {
+            "counting"
+        }
+
+        fn connect(&self, _patch: &Patch) {}
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl MessageHandler for CountingMessageSampleable {
+        fn handled_message_tags(&self) -> &'static [MessageTag] {
+            &[MessageTag::MidiNoteOn]
+        }
+
+        fn handle_message(&self, _message: &Message) -> Result<()> {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn message_listener_removed_module_is_not_dispatched() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let s: Box<dyn Sampleable> = Box::new(CountingMessageSampleable {
+            id: "m1".to_string(),
+            hits: Arc::clone(&hits),
+        });
+
+        let mut patch = Patch::new();
+        patch.sampleables.insert("m1".to_string(), s);
+        patch.rebuild_message_listeners();
+
+        let message = Message::MidiNoteOn(crate::types::MidiNoteOn {
+            device: None,
+            note: 60,
+            velocity: 100,
+            channel: 0,
+        });
+
+        patch.dispatch_message(&message).unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+
         patch.sampleables.remove("m1");
+        patch.remove_message_listeners_for_module("m1");
 
-        // Rebuild/prune and ensure it is not returned.
-        assert_eq!(patch.message_listeners_for(MessageTag::MidiNoteOn).len(), 0);
+        patch.dispatch_message(&message).unwrap();
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            patch
+                .message_listeners
+                .get(&MessageTag::MidiNoteOn)
+                .map(Vec::len),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn message_listener_dispatch_does_not_allocate() {
+        const ISOLATED_ALLOC_TEST_ENV: &str = "MODULAR_CORE_ISOLATED_ALLOC_TEST";
+
+        if std::env::var_os(ISOLATED_ALLOC_TEST_ENV).is_some() {
+            assert_message_listener_dispatch_does_not_allocate();
+            return;
+        }
+
+        // The allocator counter is process-global, so run the actual assertion in
+        // a child test process to avoid unrelated allocations from concurrently
+        // executing tests in the parent harness.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .env(ISOLATED_ALLOC_TEST_ENV, "1")
+            .arg("--exact")
+            .arg("patch::tests::message_listener_dispatch_does_not_allocate")
+            .arg("--nocapture")
+            .arg("--test-threads=1")
+            .output()
+            .expect("failed to spawn isolated allocation test");
+
+        assert!(
+            output.status.success(),
+            "isolated allocation test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

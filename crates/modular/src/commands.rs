@@ -3,11 +3,10 @@
 //! This module defines the commands sent from the main thread to the audio thread,
 //! and the errors reported back from the audio thread.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey, WavData};
 use napi_derive::napi;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::audio::ScopeBuffer;
 
@@ -30,8 +29,8 @@ pub struct PatchUpdate {
   /// Unique ID for this update, used to track apply/discard on the audio thread.
   pub update_id: u64,
 
-  /// Modules to insert (pre-constructed and Arc-wrapped on main thread).
-  pub inserts: Vec<(String, Arc<Box<dyn modular_core::types::Sampleable>>)>,
+  /// Modules to insert (pre-constructed on main thread).
+  pub inserts: Vec<(String, Box<dyn modular_core::types::Sampleable>)>,
 
   /// Set of desired module IDs, pre-computed on the main thread.
   /// Any existing module not in this set (and not reserved) is stale.
@@ -98,7 +97,7 @@ pub enum GraphCommand {
   /// does state transfer + replacement, then reconnects.
   SingleModuleUpdate {
     module_id: String,
-    module: Arc<Box<dyn Sampleable>>,
+    module: Box<dyn Sampleable>,
   },
 
   /// MIDI/control messages (can be sent individually)
@@ -166,7 +165,7 @@ pub const ERROR_QUEUE_CAPACITY: usize = 256;
 #[allow(dead_code)]
 pub enum GarbageItem {
   /// A module removed from the patch
-  Module(Arc<Box<dyn Sampleable>>),
+  Module(Box<dyn Sampleable>),
   /// A scope buffer removed from the collection
   Scope(ScopeBuffer),
   /// A queued patch update that was superseded by a newer update before it fired

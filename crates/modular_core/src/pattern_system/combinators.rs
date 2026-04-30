@@ -403,10 +403,8 @@ fn gcd(a: &Fraction, b: &Fraction) -> Fraction {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
     use super::*;
-    use crate::{pattern_system::constructors::pure, types::Signal};
+    use crate::pattern_system::constructors::pure;
 
     #[test]
     fn test_stack() {
@@ -491,35 +489,19 @@ mod tests {
     }
 
     #[test]
-    fn foo() {
-        let sig1 = Signal::Cable {
-            module: "sine".into(),
-            module_ptr: Weak::new(),
-            port: "output".into(),
-            channel: 0,
-        };
+    fn slowcat_alternates_non_numeric_values() {
+        let first = "sig1".to_string();
+        let second = "sig2".to_string();
 
-        let sig2 = Signal::Cable {
-            module: "sine".into(),
-            module_ptr: Weak::new(),
-            port: "output".into(),
-            channel: 0,
-        };
-
-        let pat = slowcat(
-            vec![sig1.clone(), sig2.clone()]
-                .into_iter()
-                .map(|sig| pure(sig))
-                .collect(),
-        );
+        let pat = slowcat(vec![pure(first.clone()), pure(second.clone())]);
         // Each cycle should have only one value
         for i in 0..6 {
             let haps = pat.query_arc(Fraction::from_integer(i), Fraction::from_integer(i + 1));
             assert_eq!(haps.len(), 1);
             if i % 2 == 0 {
-                assert_eq!(haps[0].value, sig1);
+                assert_eq!(haps[0].value, first);
             } else {
-                assert_eq!(haps[0].value, sig2);
+                assert_eq!(haps[0].value, second);
             }
         }
     }

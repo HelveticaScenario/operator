@@ -650,13 +650,13 @@ fn impl_module_macro_attr(
         /// 2. **Command Queue Isolation**: The main thread communicates via `PatchUpdate`
         ///    commands through an `rtrb` SPSC queue. It never directly accesses module state.
         ///
-        /// 3. **No Escaping References**: Module `Arc`s are stored in `Patch::sampleables` and
-        ///    are never cloned or sent to other threads after being added to the patch.
+        /// 3. **No Escaping References**: Owned modules are stored in `Patch::sampleables` and
+        ///    are never aliased across threads after being added to the patch.
         ///
         /// ## Invariants (DO NOT VIOLATE)
         ///
         /// - **NEVER** call Sampleable trait methods from the main thread
-        /// - **NEVER** clone module Arcs and send them across threads
+        /// - **NEVER** share module ownership across threads
         /// - **NEVER** access Patch::sampleables from outside AudioProcessor
         /// - **ALWAYS** use the command queue for main→audio communication
         ///
@@ -744,7 +744,7 @@ fn impl_module_macro_attr(
 
             fn transfer_state_from(&self, old: &dyn crate::types::Sampleable) {
                 if let Some(old_typed) = old.as_any().downcast_ref::<Self>() {
-                    // Guard against self-aliasing: if old and new are the same Arc,
+                    // Guard against self-aliasing: if old and new are the same box,
                     // creating two &mut refs to the same UnsafeCell contents is UB.
                     if std::ptr::eq(self as *const Self, old_typed as *const Self) {
                         return;
@@ -771,7 +771,7 @@ fn impl_module_macro_attr(
             }
         }
 
-        fn #constructor_name(id: &String, sample_rate: f32, deserialized: crate::params::DeserializedParams) -> napi::Result<std::sync::Arc<Box<dyn crate::types::Sampleable>>> {
+        fn #constructor_name(id: &String, sample_rate: f32, deserialized: crate::params::DeserializedParams) -> napi::Result<Box<dyn crate::types::Sampleable>> {
             let concrete_params = deserialized.params.into_any()
                 .downcast::<#params_struct_name>()
                 .map_err(|_| napi::Error::from_reason(
@@ -796,7 +796,7 @@ fn impl_module_macro_attr(
             };
 
             #has_init_call
-            Ok(std::sync::Arc::new(Box::new(sampleable)))
+            Ok(Box::new(sampleable))
         }
 
         impl #impl_generics crate::types::Module for #name #ty_generics #where_clause {

@@ -438,7 +438,7 @@ mod tests {
     const SAMPLE_RATE: f32 = 48000.0;
     const DEFAULT_PORT: &str = "output";
 
-    fn make_dattorro(params: serde_json::Value) -> Arc<Box<dyn Sampleable>> {
+    fn make_dattorro(params: serde_json::Value) -> Box<dyn Sampleable> {
         let constructors = get_constructors();
         let deserializers = get_params_deserializers();
         let deserializer = deserializers.get("$dattorro").unwrap();
@@ -488,7 +488,7 @@ mod tests {
     fn works_with_only_input() {
         // All non-input params should be optional — construct with just input
         let dattorro = make_dattorro(json!({ "input": 1.0 }));
-        let (left, right) = collect_stereo(&**dattorro, 5000);
+        let (left, right) = collect_stereo(dattorro.as_ref(), 5000);
         let left_energy: f32 = left.iter().map(|s| s * s).sum();
         let right_energy: f32 = right.iter().map(|s| s * s).sum();
         assert!(
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn silence_in_silence_out() {
         let dattorro = make_dattorro(dattorro_params(json!({})));
-        let (left, right) = collect_stereo(&**dattorro, 1000);
+        let (left, right) = collect_stereo(dattorro.as_ref(), 1000);
         assert!(left.iter().all(|&s| s == 0.0), "left should be silent");
         assert!(right.iter().all(|&s| s == 0.0), "right should be silent");
     }
@@ -513,7 +513,7 @@ mod tests {
     fn impulse_produces_output() {
         let dattorro = make_dattorro(dattorro_params(json!({ "input": 1.0, "decay": 3.0 })));
         // Collect enough samples for the reverb tail to develop
-        let (left, right) = collect_stereo(&**dattorro, 10000);
+        let (left, right) = collect_stereo(dattorro.as_ref(), 10000);
 
         // After the initial transient, there should be non-zero output
         let left_energy: f32 = left.iter().map(|s| s * s).sum();
@@ -534,7 +534,7 @@ mod tests {
         let dattorro = make_dattorro(dattorro_params(
             json!({ "input": 1.0, "decay": 3.0, "size": 2.0 }),
         ));
-        let (left, right) = collect_stereo(&**dattorro, 5000);
+        let (left, right) = collect_stereo(dattorro.as_ref(), 5000);
 
         // L and R should not be identical (stereo decorrelation)
         let identical = left
@@ -548,7 +548,7 @@ mod tests {
     fn no_dc_offset_accumulation() {
         // Feed constant DC and check that output doesn't grow unbounded
         let dattorro = make_dattorro(dattorro_params(json!({ "input": 1.0, "decay": 2.0 })));
-        let (left, right) = collect_stereo(&**dattorro, 48000); // 1 second
+        let (left, right) = collect_stereo(dattorro.as_ref(), 48000); // 1 second
 
         // Check the last 1000 samples for DC offset stability
         let last_left = &left[47000..];
@@ -574,8 +574,8 @@ mod tests {
         let dattorro_high = make_dattorro(dattorro_params(json!({ "input": 1.0, "decay": 3.0 })));
 
         let n = 20000;
-        let (left_low, _) = collect_stereo(&**dattorro_low, n);
-        let (left_high, _) = collect_stereo(&**dattorro_high, n);
+        let (left_low, _) = collect_stereo(dattorro_low.as_ref(), n);
+        let (left_high, _) = collect_stereo(dattorro_high.as_ref(), n);
 
         // Measure energy in the tail (last quarter)
         let tail_start = n * 3 / 4;
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn output_is_two_channels() {
         let dattorro = make_dattorro(dattorro_params(json!({})));
-        step(&**dattorro);
+        step(dattorro.as_ref());
         let poly = dattorro.get_poly_sample(DEFAULT_PORT).unwrap();
         assert_eq!(poly.channels(), 2, "output should be stereo (2 channels)");
     }
@@ -603,12 +603,12 @@ mod tests {
         let n = 10000;
 
         let dattorro_no_mod = make_dattorro(dattorro_params(json!({ "input": 1.0, "decay": 3.0 })));
-        let (left_no_mod, _) = collect_stereo(&**dattorro_no_mod, n);
+        let (left_no_mod, _) = collect_stereo(dattorro_no_mod.as_ref(), n);
 
         let dattorro_with_mod = make_dattorro(dattorro_params(
             json!({ "input": 1.0, "decay": 3.0, "modulation": 2.5 }),
         ));
-        let (left_with_mod, _) = collect_stereo(&**dattorro_with_mod, n);
+        let (left_with_mod, _) = collect_stereo(dattorro_with_mod.as_ref(), n);
 
         // Outputs should differ due to modulated delay lengths
         let differs = left_no_mod

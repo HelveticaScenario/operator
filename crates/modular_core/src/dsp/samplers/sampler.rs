@@ -121,11 +121,7 @@ mod tests {
 
     const SAMPLE_RATE: f32 = 48000.0;
 
-    fn make_module(
-        module_type: &str,
-        id: &str,
-        params: serde_json::Value,
-    ) -> Arc<Box<dyn Sampleable>> {
+    fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dyn Sampleable> {
         let constructors = get_constructors();
         let deserializers = get_params_deserializers();
         let deserializer = deserializers
@@ -180,7 +176,7 @@ mod tests {
 
         // Run a few samples — no trigger, should output silence
         for _ in 0..4 {
-            step(&**module);
+            step(module.as_ref());
         }
 
         let output = module.get_poly_sample("output").unwrap();
@@ -206,7 +202,7 @@ mod tests {
         module.connect(&patch);
 
         // First tick: gate is high, Schmitt trigger detects rising edge, position resets to 0
-        step(&**module);
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 1.0).abs() < 1e-6,
@@ -233,9 +229,9 @@ mod tests {
         module.connect(&patch);
 
         // Play through the 2-frame sample
-        step(&**module); // frame 0 -> output 1.0
-        step(&**module); // frame 1 -> output 2.0
-        step(&**module); // frame 2 -> past end -> silence
+        step(module.as_ref()); // frame 0 -> output 1.0
+        step(module.as_ref()); // frame 1 -> output 2.0
+        step(module.as_ref()); // frame 2 -> past end -> silence
 
         let out = module.get_poly_sample("output").unwrap();
         assert_eq!(out.get(0), 0.0, "should be silent after sample ends");
@@ -261,7 +257,7 @@ mod tests {
 
         // With negative speed, gate trigger should start from end of sample.
         // Frame 3 = 4.0, frame 2 = 3.0, frame 1 = 2.0, frame 0 = 1.0
-        step(&**module); // trigger + play from end: frame 3
+        step(module.as_ref()); // trigger + play from end: frame 3
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 4.0).abs() < 1e-6,
@@ -269,7 +265,7 @@ mod tests {
             out.get(0)
         );
 
-        step(&**module); // frame 2
+        step(module.as_ref()); // frame 2
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 3.0).abs() < 1e-6,
@@ -277,7 +273,7 @@ mod tests {
             out.get(0)
         );
 
-        step(&**module); // frame 1
+        step(module.as_ref()); // frame 1
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 2.0).abs() < 1e-6,
@@ -285,7 +281,7 @@ mod tests {
             out.get(0)
         );
 
-        step(&**module); // frame 0
+        step(module.as_ref()); // frame 0
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 1.0).abs() < 1e-6,
@@ -294,7 +290,7 @@ mod tests {
         );
 
         // After passing frame 0, should be silent
-        step(&**module);
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert_eq!(
             out.get(0),
@@ -322,7 +318,7 @@ mod tests {
         module.connect(&patch);
 
         // First tick: gate rises, plays frame 0
-        step(&**module);
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 1.0).abs() < 1e-6,
@@ -336,7 +332,7 @@ mod tests {
         );
 
         // Second tick: frame 1
-        step(&**module);
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 2.0).abs() < 1e-6,
