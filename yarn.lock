@@ -1934,7 +1934,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@modular/core@workspace:crates/modular":
+"@modular/core@workspace:*, @modular/core@workspace:crates/modular":
   version: 0.0.0-use.local
   resolution: "@modular/core@workspace:crates/modular"
   dependencies:
@@ -1951,6 +1951,14 @@ __metadata:
     oxlint: "npm:^1.14.0"
     tinybench: "npm:^6.0.0"
     typescript: "npm:^5.9.2"
+  languageName: unknown
+  linkType: soft
+
+"@modular/dsl@workspace:crates/modular/dsl":
+  version: 0.0.0-use.local
+  resolution: "@modular/dsl@workspace:crates/modular/dsl"
+  dependencies:
+    "@modular/core": "workspace:*"
   languageName: unknown
   linkType: soft
 
