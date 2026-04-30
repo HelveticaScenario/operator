@@ -1,4 +1,4 @@
-import type { SliderDefinition } from '../../../shared/dsl/sliderTypes';
+import type { SliderDefinition } from '../../../../../../src/shared/dsl/sliderTypes';
 
 type SignalFactory = (...args: unknown[]) => unknown;
 

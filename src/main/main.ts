@@ -23,7 +23,8 @@ import type {
 } from '../shared/ipcTypes';
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
-import { executePatchScript } from './dsl/executor';
+import { executePatchScript } from '@modular/dsl';
+import { analyzeSourceSpans } from './dsl/analyzeSource';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
@@ -818,6 +819,7 @@ registerIPCHandler(
                     }
                     return synth.loadWav(wavPath);
                 },
+                analyzer: analyzeSourceSpans,
             });
             patch.moduleIdRemaps = [];
 

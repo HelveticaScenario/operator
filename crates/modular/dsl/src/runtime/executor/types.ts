@@ -1,7 +1,10 @@
 import type { PatchGraph } from '@modular/core';
-import type { CallSiteSpanRegistry } from '../analyzeSource';
-import type { InterpolationResolutionMap } from '../../../shared/dsl/spanTypes';
-import type { SliderDefinition } from '../../../shared/dsl/sliderTypes';
+import type {
+    CallSiteSpanRegistry,
+    InterpolationResolutionMap,
+    SpanAnalyzer,
+} from '../types/analysis';
+import type { SliderDefinition } from '../../../../../../src/shared/dsl/sliderTypes';
 import type { SourceLocation } from '../graph';
 
 /** Result of executing a DSL script. */
@@ -38,4 +41,10 @@ export interface DSLExecutionOptions {
         cuePoints: Array<{ position: number; label: string }>;
         mtime: number;
     };
+    /**
+     * Optional source span analyzer (e.g. ts-morph based). The runtime calls this
+     * before executing user code and threads the result through to factories.
+     * If unset, no spans are captured.
+     */
+    analyzer?: SpanAnalyzer;
 }
