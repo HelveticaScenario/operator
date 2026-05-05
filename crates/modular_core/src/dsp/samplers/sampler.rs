@@ -93,7 +93,8 @@ impl Sampler {
         // Read with Hermite interpolation
         let pos = self.state.position as f32;
         for ch in 0..channels {
-            let value = self.params.wav.read_hermite_clamped(ch, pos);
+            // Expected range of wav is -1.0 to 1.0, multiply by 5 to get to oscillator level
+            let value = self.params.wav.read_hermite_clamped(ch, pos) * 5.0;
             self.outputs.sample.set(ch, value);
         }
 
