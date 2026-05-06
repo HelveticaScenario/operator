@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './FileExplorer.css';
 import type { FileTreeEntry } from '../../shared/ipcTypes';
 import type { EditorBuffer } from '../types/editor';
@@ -34,6 +34,8 @@ function TreeNode({
     renamingPath,
     onRenameCommit,
     onRenameCancel,
+    expandedPaths,
+    onToggleFolder,
 }: {
     entry: FileTreeEntry;
     onOpenFile: (relPath: string, options?: { preview?: boolean }) => void;
@@ -41,8 +43,10 @@ function TreeNode({
     renamingPath: string | null;
     onRenameCommit: (path: string, newName: string) => void;
     onRenameCancel: () => void;
+    expandedPaths: Set<string>;
+    onToggleFolder: (path: string) => void;
 }) {
-    const [expanded, setExpanded] = useState(true);
+    const expanded = expandedPaths.has(entry.path);
     const inputRef = useRef<HTMLInputElement>(null);
 
     const isRenaming = renamingPath === entry.path;
@@ -113,7 +117,7 @@ function TreeNode({
         <li className="tree-folder">
             <div
                 className="folder-header"
-                onClick={() => !isRenaming && setExpanded(!expanded)}
+                onClick={() => !isRenaming && onToggleFolder(entry.path)}
                 onContextMenu={(e) => onContextMenu(e, entry)}
             >
                 <span className="folder-icon">{expanded ? '📂' : '📁'}</span>
@@ -130,6 +134,8 @@ function TreeNode({
                             renamingPath={renamingPath}
                             onRenameCommit={onRenameCommit}
                             onRenameCancel={onRenameCancel}
+                            expandedPaths={expandedPaths}
+                            onToggleFolder={onToggleFolder}
                         />
                     ))}
                 </ul>
@@ -271,6 +277,55 @@ export function FileExplorer({
         (b) => getBufferId(b) === activeBufferId,
     );
 
+    const EXPANDED_STORAGE_KEY = 'modular_expanded_folders';
+
+    const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => {
+        try {
+            const raw = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
+            if (raw) return new Set(JSON.parse(raw) as string[]);
+        } catch {}
+        return new Set();
+    });
+
+    const dirPaths = useMemo(() => {
+        const set = new Set<string>();
+        const walk = (entries: FileTreeEntry[]) => {
+            for (const e of entries) {
+                if (e.type === 'directory') {
+                    set.add(e.path);
+                    if (e.children) walk(e.children);
+                }
+            }
+        };
+        walk(fileTree);
+        return set;
+    }, [fileTree]);
+
+    const effectiveExpanded = useMemo(() => {
+        if (dirPaths.size === 0) return expandedPaths;
+        const pruned = new Set<string>();
+        for (const p of expandedPaths) if (dirPaths.has(p)) pruned.add(p);
+        return pruned;
+    }, [expandedPaths, dirPaths]);
+
+    useEffect(() => {
+        try {
+            window.localStorage.setItem(
+                EXPANDED_STORAGE_KEY,
+                JSON.stringify([...effectiveExpanded]),
+            );
+        } catch {}
+    }, [effectiveExpanded]);
+
+    const toggleFolder = useCallback((path: string) => {
+        setExpandedPaths((prev) => {
+            const next = new Set(prev);
+            if (next.has(path)) next.delete(path);
+            else next.add(path);
+            return next;
+        });
+    }, []);
+
     const handleBufferContextMenu = (e: React.MouseEvent, bufferId: string) => {
         e.preventDefault();
         const buffer = buffers.find((b) => getBufferId(b) === bufferId);
@@ -396,6 +451,8 @@ export function FileExplorer({
                                             renamingPath={renamingPath}
                                             onRenameCommit={onRenameCommit}
                                             onRenameCancel={onRenameCancel}
+                                            expandedPaths={effectiveExpanded}
+                                            onToggleFolder={toggleFolder}
                                         />
                                     ))}
                                 </ul>
