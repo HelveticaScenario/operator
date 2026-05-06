@@ -29,6 +29,7 @@ import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
 import {
     drawOscilloscope,
+    readScopeColors,
     scopeBufferKeyFromChannel,
     scopeBufferKeyToString,
 } from './app/oscilloscope';
@@ -471,6 +472,8 @@ function App() {
                         bufferMap.set(key, { data, stats });
                     }
 
+                    const scopeColors = readScopeColors();
+
                     // For each scope canvas, collect its channels' data and draw
                     for (const [
                         ,
@@ -511,6 +514,7 @@ function App() {
 
                         if (channels.length > 0) {
                             drawOscilloscope(channels, canvas, {
+                                colors: scopeColors,
                                 range: [rangeMin, rangeMax],
                                 stats: {
                                     max: globalMax,

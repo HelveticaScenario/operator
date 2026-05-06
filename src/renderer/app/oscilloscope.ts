@@ -18,8 +18,26 @@ export const scopeBufferKeyFromChannel = (
     return `:module:${channel.moduleId}:${channel.portName}:${channel.channel}:${msPerFrame}:${trigger}`;
 };
 
+export interface ScopeColors {
+    bg: string;
+    border: string;
+    muted: string;
+    accent: string;
+}
+
+export function readScopeColors(): ScopeColors {
+    const styles = getComputedStyle(document.documentElement);
+    return {
+        bg: styles.getPropertyValue('--bg-primary').trim() || '#0a0a0a',
+        border: styles.getPropertyValue('--border-subtle').trim() || '#222222',
+        muted: styles.getPropertyValue('--text-muted').trim() || '#555555',
+        accent: styles.getPropertyValue('--accent-primary').trim() || '#4ec9b0',
+    };
+}
+
 export interface ScopeDrawOptions {
     range: [number, number];
+    colors: ScopeColors;
     stats: {
         min: number;
         max: number;
@@ -38,20 +56,15 @@ export const drawOscilloscope = (
         return;
     }
 
-    const { range = [-5, 5], stats } = options;
+    const { range = [-5, 5], stats, colors } = options;
     const [minVoltage, maxVoltage] = range;
     const w = canvas.width;
     const h = canvas.height;
 
-    // Get theme colors from CSS variables
-    const styles = getComputedStyle(document.documentElement);
-    const bgColor = styles.getPropertyValue('--bg-primary').trim() || '#0a0a0a';
-    const borderColor =
-        styles.getPropertyValue('--border-subtle').trim() || '#222222';
-    const mutedColor =
-        styles.getPropertyValue('--text-muted').trim() || '#555555';
-    const accentColor =
-        styles.getPropertyValue('--accent-primary').trim() || '#4ec9b0';
+    const bgColor = colors.bg;
+    const borderColor = colors.border;
+    const mutedColor = colors.muted;
+    const accentColor = colors.accent;
 
     ctx.fillStyle = bgColor;
     ctx.fillRect(0, 0, w, h);
