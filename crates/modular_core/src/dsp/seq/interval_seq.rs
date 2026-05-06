@@ -710,6 +710,8 @@ struct IntervalSeqState {
     base_midi: i32,
     /// Last CV voltage per channel — holds through rest periods and state transfers
     last_cv: [f32; PORT_MAX_CHANNELS],
+    /// Scratch buffer for onset events — reused each frame to avoid heap alloc
+    events_to_process: ArrayVec<(usize, i32), PORT_MAX_CHANNELS>,
 }
 
 impl Default for IntervalSeqState {
@@ -723,6 +725,7 @@ impl Default for IntervalSeqState {
             scale_intervals: [0, 2, 4, 5, 7, 9, 11].into_iter().collect(), // Default major scale
             base_midi: 60,                                                 // C4
             last_cv: [0.0; PORT_MAX_CHANNELS],
+            events_to_process: ArrayVec::new(),
         }
     }
 }
@@ -883,45 +886,39 @@ impl IntervalSeq {
         // Collect events to process (avoids borrow conflicts)
         // Store (hap_index, degree) tuples — we'll create CachedIntervalHap from the Arc later
         let cycle_haps_arc = self.state.current_cycle_haps.clone();
-        let events_to_process: Vec<(usize, i32)> = if let Some(ref cycle_haps) = cycle_haps_arc {
-            cycle_haps
-                .iter()
-                .enumerate()
-                .filter_map(|(hap_index, combined)| {
-                    if !combined.has_onset {
-                        return None;
+        self.state.events_to_process.clear();
+        if let Some(ref cycle_haps) = cycle_haps_arc {
+            for (hap_index, combined) in cycle_haps.iter().enumerate() {
+                if !combined.has_onset {
+                    continue;
+                }
+                if playhead < combined.part_begin || playhead >= combined.part_end {
+                    continue;
+                }
+                let Some(degree) = combined.degree else {
+                    continue;
+                };
+                let already_assigned = (0..num_channels).any(|i| {
+                    if let Some(ref existing) = self.state.voices[i].cached_hap {
+                        existing.hap_index == hap_index && existing.cached_cycle == current_cycle
+                    } else {
+                        false
                     }
-
-                    if playhead < combined.part_begin || playhead >= combined.part_end {
-                        return None;
-                    }
-
-                    let degree = combined.degree?;
-
-                    // Check if already assigned
-                    let already_assigned = (0..num_channels).any(|i| {
-                        if let Some(ref existing) = self.state.voices[i].cached_hap {
-                            existing.hap_index == hap_index
-                                && existing.cached_cycle == current_cycle
-                        } else {
-                            false
-                        }
-                    });
-
-                    if already_assigned {
-                        return None;
-                    }
-
-                    Some((hap_index, degree))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+                });
+                if already_assigned {
+                    continue;
+                }
+                // Cap at buffer capacity — extra events are skipped (no free voices anyway)
+                if self.state.events_to_process.remaining_capacity() > 0 {
+                    self.state.events_to_process.push((hap_index, degree));
+                }
+            }
+        }
 
         // Process collected events
         if let Some(cycle_haps) = cycle_haps_arc {
-            for (hap_index, degree) in events_to_process {
+            for idx in 0..self.state.events_to_process.len() {
+                let (hap_index, degree) = self.state.events_to_process[idx];
                 let Some(voice_idx) = self.allocate_voice(playhead, num_channels) else {
                     continue; // No free voice — skip this event
                 };

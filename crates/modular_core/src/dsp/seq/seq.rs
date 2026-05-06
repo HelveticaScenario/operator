@@ -14,6 +14,8 @@ use std::sync::Arc;
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use arrayvec::ArrayVec;
+
 use crate::{
     MonoSignal,
     dsp::utils::{TempGate, TempGateState, min_gate_samples},
@@ -324,6 +326,8 @@ struct SeqState {
     module_cache: Vec<Option<Arc<Vec<DspHap<SeqValue>>>>>,
     /// Last CV voltage per channel — holds through rest periods and state transfers
     last_cv: [f32; PORT_MAX_CHANNELS],
+    /// Scratch buffer for voice release — reused each frame to avoid heap alloc
+    voices_to_release: ArrayVec<usize, PORT_MAX_CHANNELS>,
 }
 
 impl Default for SeqState {
@@ -335,6 +339,7 @@ impl Default for SeqState {
             current_cycle_haps: None,
             module_cache: Vec::new(),
             last_cv: [0.0; PORT_MAX_CHANNELS],
+            voices_to_release: ArrayVec::new(),
         }
     }
 }
@@ -405,15 +410,14 @@ impl Seq {
 
         // Release voices whose haps have ended - also needs to happen before state borrow
         // since it modifies voice state
-        let voices_to_release: Vec<usize> = (0..num_channels)
-            .filter(|i| {
-                if let Some(ref cached) = self.state.voices[*i].cached_hap {
-                    !cached.contains(playhead)
-                } else {
-                    false
+        self.state.voices_to_release.clear();
+        for i in 0..num_channels {
+            if let Some(ref cached) = self.state.voices[i].cached_hap {
+                if !cached.contains(playhead) {
+                    self.state.voices_to_release.push(i);
                 }
-            })
-            .collect();
+            }
+        }
 
         // Now take mutable borrow of state
         let state = &mut self.state;
@@ -425,7 +429,7 @@ impl Seq {
         }
 
         // Apply voice releases
-        for i in voices_to_release {
+        for i in state.voices_to_release.iter().copied() {
             state.voices[i].active = false;
             state.voices[i].cached_hap = None;
             state.voices[i]
