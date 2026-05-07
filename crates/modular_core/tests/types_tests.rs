@@ -307,3 +307,121 @@ fn connect_noop_for_non_cable_and_non_track_signals() {
     s.connect(&patch);
     approx_eq(s.get_value(), 1.0, 1e-6);
 }
+
+#[test]
+fn collect_cables_volts_emits_nothing() {
+    use modular_core::types::Connect;
+    let s = Signal::Volts(1.5);
+    let mut sink = Vec::new();
+    s.collect_cables(&mut sink);
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn collect_cables_cable_emits_module_id() {
+    use modular_core::types::Connect;
+    let s = Signal::Cable {
+        module: "OSC1".to_string(),
+        resolved: None,
+        port: "out".to_string(),
+        channel: 0,
+    };
+    let mut sink = Vec::new();
+    s.collect_cables(&mut sink);
+    assert_eq!(sink, vec!["OSC1".to_string()]);
+}
+
+#[test]
+fn collect_cables_container_forwarding() {
+    use modular_core::types::Connect;
+    let signals: Vec<Signal> = vec![
+        Signal::Volts(0.0),
+        Signal::Cable {
+            module: "A".into(),
+            resolved: None,
+            port: "out".into(),
+            channel: 0,
+        },
+        Signal::Cable {
+            module: "B".into(),
+            resolved: None,
+            port: "trig".into(),
+            channel: 1,
+        },
+    ];
+    let mut sink = Vec::new();
+    signals.collect_cables(&mut sink);
+    assert_eq!(sink, vec!["A".to_string(), "B".to_string()]);
+}
+
+#[test]
+fn collect_cables_primitive_noop() {
+    use modular_core::types::Connect;
+    let mut sink = Vec::new();
+    1.5f32.collect_cables(&mut sink);
+    42usize.collect_cables(&mut sink);
+    "foo".to_string().collect_cables(&mut sink);
+    assert!(sink.is_empty());
+}
+
+#[test]
+fn collect_cables_buffer_emits_source_module() {
+    use modular_core::types::{Buffer, Connect};
+    let buf = Buffer::new("RECORDER".into(), "out".into(), 2);
+    let mut sink = Vec::new();
+    buf.collect_cables(&mut sink);
+    assert_eq!(sink, vec!["RECORDER".to_string()]);
+}
+
+#[test]
+fn collect_cables_table_with_signal_cable() {
+    use modular_core::poly::PolySignal;
+    use modular_core::types::{Connect, Table};
+    let table = Table::Bend {
+        amount: PolySignal::mono(Signal::Cable {
+            module: "LFO".into(),
+            resolved: None,
+            port: "out".into(),
+            channel: 0,
+        }),
+    };
+    let mut sink = Vec::new();
+    table.collect_cables(&mut sink);
+    assert_eq!(sink, vec!["LFO".to_string()]);
+}
+
+#[test]
+fn collect_cables_table_pipe_recurses() {
+    use modular_core::poly::PolySignal;
+    use modular_core::types::{Connect, Table};
+    // Pipe(Bend{amount: cable→A}, Sync{ratio: cable→B})
+    let table = Table::Pipe {
+        first: Box::new(Table::Bend {
+            amount: PolySignal::mono(Signal::Cable {
+                module: "A".into(),
+                resolved: None,
+                port: "out".into(),
+                channel: 0,
+            }),
+        }),
+        second: Box::new(Table::Sync {
+            ratio: PolySignal::mono(Signal::Cable {
+                module: "B".into(),
+                resolved: None,
+                port: "out".into(),
+                channel: 0,
+            }),
+        }),
+    };
+    let mut sink = Vec::new();
+    table.collect_cables(&mut sink);
+    assert_eq!(sink, vec!["A".to_string(), "B".to_string()]);
+}
+
+#[test]
+fn collect_cables_table_identity_emits_nothing() {
+    use modular_core::types::{Connect, Table};
+    let mut sink = Vec::new();
+    Table::Identity.collect_cables(&mut sink);
+    assert!(sink.is_empty());
+}

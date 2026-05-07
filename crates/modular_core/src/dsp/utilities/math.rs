@@ -25,7 +25,7 @@ impl Default for MathCompiled {
     }
 }
 
-#[derive(Clone, Default, JsonSchema)]
+#[derive(Clone, Default, JsonSchema, Connect)]
 #[serde(transparent)]
 #[schemars(transparent)]
 struct MathExpressionParam {
@@ -35,6 +35,11 @@ struct MathExpressionParam {
     #[serde(skip)]
     #[schemars(skip)]
     compiled: Arc<MathCompiled>,
+}
+
+impl Connect for Arc<MathCompiled> {
+    fn connect(&mut self, _patch: &crate::Patch) {}
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
 }
 
 impl MathExpressionParam {
@@ -54,10 +59,6 @@ impl MathExpressionParam {
             compiled: Arc::new(MathCompiled { slab, instruction }),
         })
     }
-}
-
-impl Connect for MathExpressionParam {
-    fn connect(&mut self, _patch: &crate::Patch) {}
 }
 
 // deserr implementation for MathExpressionParam - transparent string wrapper that parses.

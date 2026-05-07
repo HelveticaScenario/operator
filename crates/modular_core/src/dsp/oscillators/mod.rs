@@ -10,7 +10,7 @@ use crate::patch::Patch;
 use crate::types::{Connect, Module, ModuleSchema, SampleableConstructor};
 
 /// FM synthesis mode for oscillators.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 pub enum FmMode {
@@ -21,10 +21,6 @@ pub enum FmMode {
     Lin,
     /// Exponential FM: modulator added to pitch in V/Oct space
     Exp,
-}
-
-impl Connect for FmMode {
-    fn connect(&mut self, _patch: &Patch) {}
 }
 
 /// Calculate frequency with FM modulation applied.

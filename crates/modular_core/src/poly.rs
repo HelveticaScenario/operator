@@ -265,6 +265,11 @@ impl crate::types::Connect for PolySignal {
             signal.connect(patch);
         }
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for signal in self.channels.iter() {
+            signal.collect_cables(sink);
+        }
+    }
 }
 
 // === Serialization for PolySignal ===
@@ -427,6 +432,9 @@ impl From<PolySignal> for MonoSignal {
 impl crate::types::Connect for MonoSignal {
     fn connect(&mut self, patch: &crate::Patch) {
         self.inner.connect(patch);
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.inner.collect_cables(sink);
     }
 }
 

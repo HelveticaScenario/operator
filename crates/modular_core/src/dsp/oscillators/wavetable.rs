@@ -56,12 +56,6 @@ pub(crate) struct WavetableOscParams {
     pub(crate) prepared: Option<PreparedWavetable>,
 }
 
-/// `Connect` for `PreparedWavetable` is a no-op — the prepared data is
-/// populated via `prepare_resources`, not through the patch graph.
-impl Connect for PreparedWavetable {
-    fn connect(&mut self, _patch: &crate::Patch) {}
-}
-
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct WavetableOscOutputs {

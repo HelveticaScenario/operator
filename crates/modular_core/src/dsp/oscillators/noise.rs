@@ -12,7 +12,7 @@ struct NoiseParams {
     color: NoiseKind,
 }
 
-#[derive(Clone, Copy, Deserr, JsonSchema, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Deserr, JsonSchema, Debug, PartialEq, Eq, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 #[derive(Default)]
@@ -24,10 +24,6 @@ enum NoiseKind {
     Pink,
     /// deep rumble (−6 dB/octave)
     Brown,
-}
-
-impl crate::types::Connect for NoiseKind {
-    fn connect(&mut self, _patch: &crate::Patch) {}
 }
 
 #[derive(Default)]

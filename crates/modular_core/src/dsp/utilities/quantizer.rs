@@ -46,6 +46,7 @@ impl Connect for ScaleParam {
     fn connect(&mut self, _patch: &Patch) {
         // ScaleParam has no signals to connect
     }
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
 }
 
 impl Default for ScaleParam {

@@ -7,7 +7,7 @@ use crate::{
 };
 
 /// Mixing mode for combining input signals.
-#[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq, Connect)]
 #[serde(rename_all = "snake_case")]
 #[deserr(rename_all = lowercase)]
 pub enum MixMode {
@@ -20,10 +20,6 @@ pub enum MixMode {
     Max,
     /// Keep the weakest non-zero input.
     Min,
-}
-
-impl crate::types::Connect for MixMode {
-    fn connect(&mut self, _patch: &crate::Patch) {}
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -158,13 +154,21 @@ impl Mix {
                 }
                 MixMode::Max => values
                     .iter()
-                    .max_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap_or(std::cmp::Ordering::Equal))
+                    .max_by(|a, b| {
+                        a.abs()
+                            .partial_cmp(&b.abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .copied()
                     .unwrap_or(0.0),
                 MixMode::Min => values
                     .iter()
                     .filter(|&&v| v != 0.0) // Exclude zero-contributors for min
-                    .min_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap_or(std::cmp::Ordering::Equal))
+                    .min_by(|a, b| {
+                        a.abs()
+                            .partial_cmp(&b.abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .copied()
                     .unwrap_or(0.0),
             };
