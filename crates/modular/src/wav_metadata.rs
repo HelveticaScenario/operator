@@ -1,4 +1,7 @@
 use std::io::{Read, Seek};
+use std::path::Path;
+
+use crate::wav_bpm::{compute_bar_count, estimate_bpm_from_audio, parse_bpm_from_filename};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlaybackMode {
@@ -36,6 +39,7 @@ pub struct WavMetadata {
   pub bpm: Option<f64>,
   pub beats: Option<u32>,
   pub time_signature: Option<(u16, u16)>,
+  pub bar_count: Option<f64>,
   pub loops: Vec<LoopInfo>,
   pub cue_points: Vec<CuePoint>,
 }
@@ -65,6 +69,8 @@ fn read_f32_le(data: &[u8], offset: usize) -> f32 {
 pub fn extract<T: Read + Seek>(
   stream: &mut T,
   total_data_frames: u64,
+  path: Option<&Path>,
+  mono_samples: Option<&[f32]>,
 ) -> Result<WavMetadata, String> {
   let root = riff::Chunk::read(stream, 0).map_err(|e| format!("Failed to read RIFF: {}", e))?;
 
@@ -249,15 +255,27 @@ pub fn extract<T: Read + Seek>(
   // smpl pitch overrides acid pitch
   let pitch = smpl_pitch.or(acid_pitch);
 
+  // BPM fallback chain: ACID → filename → audio analysis.
+  let bpm = acid_bpm
+    .or_else(|| path.and_then(parse_bpm_from_filename))
+    .or_else(|| mono_samples.and_then(|s| estimate_bpm_from_audio(s, sr)));
+
+  let bar_count = bpm.map(|b| {
+    let ts = acid_time_sig.unwrap_or((4, 4));
+    let duration_seconds = total_data_frames as f64 / sr as f64;
+    compute_bar_count(duration_seconds, b, ts)
+  });
+
   Ok(WavMetadata {
     sample_rate: sr,
     frame_count: total_data_frames,
     bit_depth: bd,
     pitch,
     playback: acid_playback,
-    bpm: acid_bpm,
+    bpm,
     beats: acid_beats,
     time_signature: acid_time_sig,
+    bar_count,
     loops,
     cue_points,
   })
@@ -436,7 +454,7 @@ mod tests {
   fn test_fmt_only_wav() {
     let wav = minimal_wav(44100, 2, 16, 1000);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 1000).unwrap();
+    let meta = extract(&mut cursor, 1000, None, None).unwrap();
 
     assert_eq!(meta.sample_rate, 44100);
     assert_eq!(meta.frame_count, 1000);
@@ -456,7 +474,7 @@ mod tests {
     // MIDI 60 = C4 = 0V, two loops: forward (0-22050), pingpong (22050-44100)
     append_smpl_chunk(&mut wav, 60, 0, &[(0, 0, 22050), (1, 22050, 44100)]);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 44100).unwrap();
+    let meta = extract(&mut cursor, 44100, None, None).unwrap();
 
     assert!((meta.pitch.unwrap() - 0.0).abs() < 1e-10);
     assert_eq!(meta.loops.len(), 2);
@@ -473,7 +491,7 @@ mod tests {
     let mut wav = minimal_wav(44100, 1, 16, 100);
     append_smpl_chunk(&mut wav, 72, 0, &[]);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 100).unwrap();
+    let meta = extract(&mut cursor, 100, None, None).unwrap();
     assert!((meta.pitch.unwrap() - 1.0).abs() < 1e-10);
   }
 
@@ -486,7 +504,7 @@ mod tests {
     let fraction = 2147483648u32;
     append_smpl_chunk(&mut wav, 69, fraction, &[]);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 100).unwrap();
+    let meta = extract(&mut cursor, 100, None, None).unwrap();
 
     // pitch = (69 - 60 + 50/100) / 12 = 9.5 / 12
     let expected = 9.5 / 12.0;
@@ -502,7 +520,7 @@ mod tests {
     append_adtl_chunk(&mut wav, &[(1, "intro"), (2, "verse")]);
 
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 96000).unwrap();
+    let meta = extract(&mut cursor, 96000, None, None).unwrap();
 
     assert_eq!(meta.cue_points.len(), 3);
     assert!((meta.cue_points[0].position_seconds - 0.0).abs() < 1e-10);
@@ -519,7 +537,7 @@ mod tests {
     // flags=2 (root note valid, loop mode), root=60, beats=8, 4/4, 120bpm
     append_acid_chunk(&mut wav, 2, 60, 8, 4, 4, 120.0);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 100).unwrap();
+    let meta = extract(&mut cursor, 100, None, None).unwrap();
 
     assert!((meta.bpm.unwrap() - 120.0).abs() < 1e-6);
     assert_eq!(meta.beats.unwrap(), 8);
@@ -533,7 +551,7 @@ mod tests {
     // flags=1 (one-shot)
     append_acid_chunk(&mut wav, 1, 0, 0, 4, 4, 0.0);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 100).unwrap();
+    let meta = extract(&mut cursor, 100, None, None).unwrap();
     assert_eq!(meta.playback.unwrap(), PlaybackMode::OneShot);
     assert!(meta.bpm.is_none()); // zero tempo filtered out
   }
@@ -544,7 +562,7 @@ mod tests {
     // flags=2 (root note valid), root=72 => pitch = (72-60)/12 = 1.0V
     append_acid_chunk(&mut wav, 2, 72, 4, 4, 4, 140.0);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 100).unwrap();
+    let meta = extract(&mut cursor, 100, None, None).unwrap();
     assert!((meta.pitch.unwrap() - 1.0).abs() < 1e-10);
   }
 
@@ -556,7 +574,7 @@ mod tests {
     // acid: root 72 = 1V (should be ignored)
     append_acid_chunk(&mut wav, 2, 72, 4, 4, 4, 120.0);
     let mut cursor = Cursor::new(wav);
-    let meta = extract(&mut cursor, 100).unwrap();
+    let meta = extract(&mut cursor, 100, None, None).unwrap();
     assert!((meta.pitch.unwrap() - 0.0).abs() < 1e-10);
   }
 }

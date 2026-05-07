@@ -1058,6 +1058,7 @@ describe('$wavs() and $sampler', () => {
             bpm: 120.0,
             beats: 4,
             timeSignature: { num: 4, den: 4 },
+            barCount: 2.0,
             loops: [
                 { loopType: 'forward', start: 0.0, end: 0.5 },
                 { loopType: 'pingpong', start: 0.25, end: 0.75 },

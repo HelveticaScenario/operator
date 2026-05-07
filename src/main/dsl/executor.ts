@@ -74,6 +74,7 @@ export interface DSLExecutionOptions {
         bpm?: number | null;
         beats?: number | null;
         timeSignature?: { num: number; den: number } | null;
+        barCount?: number | null;
         loops: Array<{ loopType: string; start: number; end: number }>;
         cuePoints: Array<{ position: number; label: string }>;
         mtime: number;
@@ -382,6 +383,7 @@ export function executePatchScript(
                             den: info.timeSignature.den,
                         },
                     }),
+                    ...(info.barCount != null && { barCount: info.barCount }),
                     loops: info.loops.map(
                         (l: {
                             loopType: string;

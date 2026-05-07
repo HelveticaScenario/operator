@@ -6,6 +6,7 @@ mod link;
 mod midi;
 mod params_cache;
 mod validation;
+mod wav_bpm;
 mod wav_metadata;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -219,6 +220,7 @@ fn build_wav_load_info(
       num: num as u32,
       den: den as u32,
     }),
+    bar_count: meta.bar_count,
     loops: meta
       .loops
       .iter()
@@ -347,6 +349,16 @@ impl WavCache {
 
     let frame_count = channels.first().map_or(0, Vec::len);
 
+    // Build a mono mixdown for BPM analysis (cheap — runs once, only on cache miss).
+    let mono_for_analysis: Vec<f32> = if num_channels <= 1 {
+      channels.first().cloned().unwrap_or_default()
+    } else {
+      let scale = 1.0 / num_channels as f32;
+      (0..frame_count)
+        .map(|i| channels.iter().map(|c| c[i]).sum::<f32>() * scale)
+        .collect()
+    };
+
     // Detect wavetable frame size from vendor-specific RIFF chunks (pre-decode probe).
     let detected_frame_size = detect_wavetable_frame_size(&full_path);
 
@@ -363,7 +375,13 @@ impl WavCache {
         e
       ))
     })?;
-    let metadata = wav_metadata::extract(&mut riff_file, total_frames as u64).map_err(|e| {
+    let metadata = wav_metadata::extract(
+      &mut riff_file,
+      total_frames as u64,
+      Some(&full_path),
+      Some(&mono_for_analysis),
+    )
+    .map_err(|e| {
       napi::Error::from_reason(format!(
         "Failed to extract WAV metadata from {}: {}",
         full_path.display(),
@@ -424,6 +442,10 @@ pub struct WavLoadInfo {
   pub bpm: Option<f64>,
   pub beats: Option<u32>,
   pub time_signature: Option<WavTimeSignature>,
+  /// Number of bars the sample spans, computed from BPM and time signature.
+  /// E.g. an exact 2-bar loop is `2.0`; a 2.64-bar buffer is `2.64`. `None`
+  /// when no BPM could be derived from any source.
+  pub bar_count: Option<f64>,
   pub loops: Vec<WavLoopInfo>,
   pub cue_points: Vec<WavCuePointInfo>,
   /// File modification time, epoch milliseconds. Used as a cache-key hint so the

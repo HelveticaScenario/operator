@@ -310,6 +310,12 @@ export interface WavLoadInfo {
   bpm?: number
   beats?: number
   timeSignature?: WavTimeSignature
+  /**
+   * Number of bars the sample spans, computed from BPM and time signature.
+   * E.g. an exact 2-bar loop is `2.0`; a 2.64-bar buffer is `2.64`. `None`
+   * when no BPM could be derived from any source.
+   */
+  barCount?: number
   loops: Array<WavLoopInfo>
   cuePoints: Array<WavCuePointInfo>
   /**
