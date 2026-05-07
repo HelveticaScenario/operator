@@ -47,6 +47,7 @@ impl Connect for ScaleParam {
         // ScaleParam has no signals to connect
     }
     fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 impl Default for ScaleParam {

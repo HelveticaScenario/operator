@@ -2748,12 +2748,7 @@ mod tests {
       "dep".into(),
       PatchUpdateSensitiveModule::new(
         "dep",
-        Signal::Cable {
-          module: "src".into(),
-          resolved: None,
-          port: "out".into(),
-          channel: 0,
-        },
+        Signal::cable("src", "out", 0),
       ),
     );
 

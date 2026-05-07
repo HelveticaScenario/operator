@@ -101,6 +101,7 @@ impl WellKnownModule {
             resolved: None,
             port: port.into(),
             channel,
+            index_ptr: std::ptr::null(),
         }
     }
 
@@ -382,8 +383,18 @@ pub trait Connect {
     /// (cables, buffer sources, table-internal signals) into `sink`.
     ///
     /// Used by graph_analysis to build SCC adjacency before module
-    /// construction
+    /// construction.
     fn collect_cables(&self, sink: &mut Vec<String>);
+
+    /// Walk this value and inject `ptr` as the back-pointer that every
+    /// `Signal::Cable` reads at sample-time to know which sample slot of
+    /// the upstream's `BlockPort` to fetch.
+    ///
+    /// `ptr` points to the consumer wrapper's per-block index `Cell<usize>`.
+    /// Containers forward; primitives and signal-free types are no-op via
+    /// their explicit impl. Every `Connect` impl must declare its behaviour
+    /// — same contract as `collect_cables`.
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>);
 }
 
 // ============================================================================
@@ -395,6 +406,7 @@ macro_rules! impl_connect_noop {
         $(impl Connect for $t {
             fn connect(&mut self, _patch: &Patch) {}
             fn collect_cables(&self, _sink: &mut Vec<String>) {}
+            fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
         })*
     };
 }
@@ -418,6 +430,11 @@ impl<T: Connect> Connect for Vec<T> {
             item.collect_cables(sink);
         }
     }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        for item in self {
+            item.inject_index_ptr(ptr);
+        }
+    }
 }
 
 impl<T: Connect> Connect for Option<T> {
@@ -431,6 +448,11 @@ impl<T: Connect> Connect for Option<T> {
             inner.collect_cables(sink);
         }
     }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        if let Some(inner) = self {
+            inner.inject_index_ptr(ptr);
+        }
+    }
 }
 
 impl<T: Connect> Connect for Box<T> {
@@ -439,6 +461,9 @@ impl<T: Connect> Connect for Box<T> {
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {
         (**self).collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        (**self).inject_index_ptr(ptr);
     }
 }
 
@@ -451,6 +476,11 @@ impl<T: Connect, const N: usize> Connect for [T; N] {
     fn collect_cables(&self, sink: &mut Vec<String>) {
         for item in self {
             item.collect_cables(sink);
+        }
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        for item in self {
+            item.inject_index_ptr(ptr);
         }
     }
 }
@@ -466,6 +496,11 @@ impl<V: Connect> Connect for std::collections::HashMap<String, V> {
             v.collect_cables(sink);
         }
     }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        for v in self.values_mut() {
+            v.inject_index_ptr(ptr);
+        }
+    }
 }
 
 impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
@@ -479,6 +514,11 @@ impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
             v.collect_cables(sink);
         }
     }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        for v in self.values_mut() {
+            v.inject_index_ptr(ptr);
+        }
+    }
 }
 
 // Tuples (arity 1-5)
@@ -488,6 +528,9 @@ impl<T1: Connect> Connect for (T1,) {
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {
         self.0.collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        self.0.inject_index_ptr(ptr);
     }
 }
 
@@ -499,6 +542,10 @@ impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
     fn collect_cables(&self, sink: &mut Vec<String>) {
         self.0.collect_cables(sink);
         self.1.collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        self.0.inject_index_ptr(ptr);
+        self.1.inject_index_ptr(ptr);
     }
 }
 
@@ -512,6 +559,11 @@ impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
         self.0.collect_cables(sink);
         self.1.collect_cables(sink);
         self.2.collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        self.0.inject_index_ptr(ptr);
+        self.1.inject_index_ptr(ptr);
+        self.2.inject_index_ptr(ptr);
     }
 }
 
@@ -527,6 +579,12 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3
         self.1.collect_cables(sink);
         self.2.collect_cables(sink);
         self.3.collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        self.0.inject_index_ptr(ptr);
+        self.1.inject_index_ptr(ptr);
+        self.2.inject_index_ptr(ptr);
+        self.3.inject_index_ptr(ptr);
     }
 }
 
@@ -546,6 +604,13 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect, T5: Connect> Connect
         self.2.collect_cables(sink);
         self.3.collect_cables(sink);
         self.4.collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        self.0.inject_index_ptr(ptr);
+        self.1.inject_index_ptr(ptr);
+        self.2.inject_index_ptr(ptr);
+        self.3.inject_index_ptr(ptr);
+        self.4.inject_index_ptr(ptr);
     }
 }
 
@@ -979,6 +1044,9 @@ impl Connect for Wav {
     }
     fn collect_cables(&self, _sink: &mut Vec<String>) {
         // Wav references a file path, not a module — no graph edge.
+    }
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {
+        // No cables — nothing to back-point.
     }
 }
 
@@ -1570,6 +1638,10 @@ impl Connect for Buffer {
         // `source_module` is a producer dependency, equivalent to a cable.
         sink.push(self.source_module.clone());
     }
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {
+        // Buffer reads `BufferData` directly via cached pointer, not via a
+        // sample-indexed cable. No back-pointer needed.
+    }
 }
 
 impl std::fmt::Debug for Buffer {
@@ -1929,6 +2001,19 @@ pub enum Signal {
         port: String,
         /// Which channel of the output to read (0-indexed)
         channel: usize,
+        /// Back-pointer to the consumer wrapper's per-block sample-index
+        /// counter, populated during `connect()`. Read at sample-time to
+        /// know which slot of the upstream's `BlockPort` to fetch.
+        ///
+        /// Null when not yet connected (or after a disconnect). Reading
+        /// through a null pointer is UB, so consumers must check for the
+        /// null case before deref. Held as raw pointer because:
+        ///   1. The pointee is owned by the consumer wrapper, never the
+        ///      cable, so a borrow would be unsound across the audio
+        ///      thread boundary.
+        ///   2. The cable is `Clone` and `Send`; raw pointers satisfy both
+        ///      without further unsafe machinery.
+        index_ptr: *const std::cell::Cell<usize>,
     },
 }
 
@@ -1936,6 +2021,21 @@ pub enum Signal {
 // is only dereferenced from the audio thread after connection finishes, but `Signal` values still
 // need to cross from main-thread deserialization into audio-thread-owned params.
 unsafe impl Send for Signal {}
+
+impl Signal {
+    /// Build an unresolved `Signal::Cable`. The `resolved` and `index_ptr`
+    /// fields are populated later by `Connect::connect` and
+    /// `Connect::inject_index_ptr`.
+    pub fn cable(module: impl Into<String>, port: impl Into<String>, channel: usize) -> Self {
+        Signal::Cable {
+            module: module.into(),
+            resolved: None,
+            port: port.into(),
+            channel,
+            index_ptr: std::ptr::null(),
+        }
+    }
+}
 
 // Custom serde deserialization to allow a bare number as shorthand for volts.
 //
@@ -1988,6 +2088,7 @@ impl<'de> Deserialize<'de> for Signal {
                     resolved: None,
                     port,
                     channel,
+                    index_ptr: std::ptr::null(),
                 },
             }),
         }
@@ -2086,6 +2187,7 @@ impl<E: DeserializeError> deserr::Deserr<E> for Signal {
                             resolved: None,
                             port,
                             channel,
+                            index_ptr: std::ptr::null(),
                         })
                     }
                     Some(other) => Err(deserr::take_cf_content(E::error::<V>(
@@ -2221,6 +2323,13 @@ impl Connect for Signal {
     fn collect_cables(&self, sink: &mut Vec<String>) {
         if let Signal::Cable { module, .. } = self {
             sink.push(module.clone());
+        }
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        // Cable reads from upstream's BlockPort at sample index *ptr — store
+        // the back-pointer so `get_value(ch)` knows which slot to fetch.
+        if let Signal::Cable { index_ptr, .. } = self {
+            *index_ptr = ptr;
         }
     }
 }
