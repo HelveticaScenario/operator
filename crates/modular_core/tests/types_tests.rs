@@ -133,6 +133,7 @@ fn signal_deserialize_tagged_variants_still_work() {
             port,
             resolved,
             channel,
+            ..
         } => {
             assert_eq!(module, "m1");
             assert_eq!(port, "out");
@@ -149,12 +150,7 @@ fn signal_cable_connect_and_read() {
         Box::new(DummySampleable::new("m1", "dummy", [("out", 3.5)]));
     let patch = make_patch_with_sampleable(sampleable);
 
-    let mut s = Signal::Cable {
-        module: "m1".to_string(),
-        resolved: None,
-        port: "out".to_string(),
-        channel: 0,
-    };
+    let mut s = Signal::cable("m1", "out", 0);
 
     // Before connect, cable reads 0.0 because the cache is unresolved.
     approx_eq(s.get_value(), 0.0, 1e-6);
@@ -176,12 +172,7 @@ fn signal_cable_reconnect_to_missing_source_clears_resolved_and_reads_zero() {
     let patch = make_patch_with_sampleable(sampleable);
     let empty_patch = make_empty_patch();
 
-    let mut s = Signal::Cable {
-        module: "m1".to_string(),
-        resolved: None,
-        port: "out".to_string(),
-        channel: 0,
-    };
+    let mut s = Signal::cable("m1", "out", 0);
 
     s.connect(&patch);
     approx_eq(s.get_value(), 3.5, 1e-6);
@@ -204,12 +195,7 @@ fn signal_cable_reconnect_to_replacement_source_rebinds_resolved_and_reads_new_v
     let first_patch = make_patch_with_sampleable(first);
     let second_patch = make_patch_with_sampleable(second);
 
-    let mut s = Signal::Cable {
-        module: "m1".to_string(),
-        resolved: None,
-        port: "out".to_string(),
-        channel: 0,
-    };
+    let mut s = Signal::cable("m1", "out", 0);
 
     s.connect(&first_patch);
     let first_resolved = match &s {
@@ -320,12 +306,7 @@ fn collect_cables_volts_emits_nothing() {
 #[test]
 fn collect_cables_cable_emits_module_id() {
     use modular_core::types::Connect;
-    let s = Signal::Cable {
-        module: "OSC1".to_string(),
-        resolved: None,
-        port: "out".to_string(),
-        channel: 0,
-    };
+    let s = Signal::cable("OSC1", "out", 0);
     let mut sink = Vec::new();
     s.collect_cables(&mut sink);
     assert_eq!(sink, vec!["OSC1".to_string()]);
@@ -336,18 +317,8 @@ fn collect_cables_container_forwarding() {
     use modular_core::types::Connect;
     let signals: Vec<Signal> = vec![
         Signal::Volts(0.0),
-        Signal::Cable {
-            module: "A".into(),
-            resolved: None,
-            port: "out".into(),
-            channel: 0,
-        },
-        Signal::Cable {
-            module: "B".into(),
-            resolved: None,
-            port: "trig".into(),
-            channel: 1,
-        },
+        Signal::cable("A", "out", 0),
+        Signal::cable("B", "trig", 1),
     ];
     let mut sink = Vec::new();
     signals.collect_cables(&mut sink);
@@ -378,12 +349,7 @@ fn collect_cables_table_with_signal_cable() {
     use modular_core::poly::PolySignal;
     use modular_core::types::{Connect, Table};
     let table = Table::Bend {
-        amount: PolySignal::mono(Signal::Cable {
-            module: "LFO".into(),
-            resolved: None,
-            port: "out".into(),
-            channel: 0,
-        }),
+        amount: PolySignal::mono(Signal::cable("LFO", "out", 0)),
     };
     let mut sink = Vec::new();
     table.collect_cables(&mut sink);
@@ -397,20 +363,10 @@ fn collect_cables_table_pipe_recurses() {
     // Pipe(Bend{amount: cable→A}, Sync{ratio: cable→B})
     let table = Table::Pipe {
         first: Box::new(Table::Bend {
-            amount: PolySignal::mono(Signal::Cable {
-                module: "A".into(),
-                resolved: None,
-                port: "out".into(),
-                channel: 0,
-            }),
+            amount: PolySignal::mono(Signal::cable("A", "out", 0)),
         }),
         second: Box::new(Table::Sync {
-            ratio: PolySignal::mono(Signal::Cable {
-                module: "B".into(),
-                resolved: None,
-                port: "out".into(),
-                channel: 0,
-            }),
+            ratio: PolySignal::mono(Signal::cable("B", "out", 0)),
         }),
     };
     let mut sink = Vec::new();
@@ -424,4 +380,104 @@ fn collect_cables_table_identity_emits_nothing() {
     let mut sink = Vec::new();
     Table::Identity.collect_cables(&mut sink);
     assert!(sink.is_empty());
+}
+
+#[test]
+fn inject_index_ptr_sets_field_on_cable() {
+    use modular_core::types::Connect;
+    use std::cell::Cell;
+
+    let cell = Cell::new(7usize);
+    let ptr: *const Cell<usize> = &cell;
+
+    let mut s = Signal::cable("m1", "out", 0);
+    s.inject_index_ptr(ptr);
+
+    match &s {
+        Signal::Cable { index_ptr, .. } => {
+            assert!(!index_ptr.is_null());
+            // Round-trip through the pointer to confirm it points at our cell.
+            let read = unsafe { (*(*index_ptr)).get() };
+            assert_eq!(read, 7);
+        }
+        _ => panic!("expected Signal::Cable"),
+    }
+}
+
+#[test]
+fn inject_index_ptr_noop_on_volts() {
+    use modular_core::types::Connect;
+    use std::cell::Cell;
+
+    let cell = Cell::new(0usize);
+    let mut s = Signal::Volts(2.5);
+    s.inject_index_ptr(&cell);
+    // Volts has no `index_ptr` field — call must be a no-op (just verify it
+    // doesn't panic, and that the value is preserved).
+    match s {
+        Signal::Volts(v) => assert_eq!(v, 2.5),
+        _ => panic!("expected Signal::Volts"),
+    }
+}
+
+#[test]
+fn inject_index_ptr_through_polysignal_reaches_inner_cables() {
+    use modular_core::poly::PolySignal;
+    use modular_core::types::Connect;
+    use std::cell::Cell;
+
+    let cell = Cell::new(42usize);
+    let ptr: *const Cell<usize> = &cell;
+
+    let mut poly = PolySignal::poly(&[
+        Signal::cable("A", "out", 0),
+        Signal::Volts(1.0),
+        Signal::cable("B", "trig", 1),
+    ]);
+    poly.inject_index_ptr(ptr);
+
+    // Both cable channels should now point at our cell.
+    for ch in 0..poly.channels() {
+        if let Some(Signal::Cable { index_ptr, .. }) = poly.get(ch) {
+            assert!(!index_ptr.is_null());
+            assert_eq!(unsafe { (*(*index_ptr)).get() }, 42);
+        }
+    }
+}
+
+#[test]
+fn inject_index_ptr_through_table_pipe_reaches_nested_cables() {
+    use modular_core::poly::PolySignal;
+    use modular_core::types::{Connect, Table};
+    use std::cell::Cell;
+
+    let cell = Cell::new(99usize);
+    let ptr: *const Cell<usize> = &cell;
+
+    let mut table = Table::Pipe {
+        first: Box::new(Table::Bend {
+            amount: PolySignal::mono(Signal::cable("A", "out", 0)),
+        }),
+        second: Box::new(Table::Sync {
+            ratio: PolySignal::mono(Signal::cable("B", "out", 0)),
+        }),
+    };
+    table.inject_index_ptr(ptr);
+
+    // Reach into nested cables and verify both got the pointer.
+    if let Table::Pipe { first, second } = &table {
+        for inner in [first.as_ref(), second.as_ref()] {
+            let cable = match inner {
+                Table::Bend { amount } => amount.get(0),
+                Table::Sync { ratio } => ratio.get(0),
+                _ => panic!("unexpected inner variant"),
+            };
+            if let Some(Signal::Cable { index_ptr, .. }) = cable {
+                assert!(!index_ptr.is_null());
+                assert_eq!(unsafe { (*(*index_ptr)).get() }, 99);
+            } else {
+                panic!("expected Cable inside table");
+            }
+        }
+    }
 }

@@ -199,6 +199,11 @@ impl<const CAP: usize> crate::types::Connect for ArrayVec<Signal, CAP> {
             signal.collect_cables(sink);
         }
     }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        for signal in self.iter_mut() {
+            signal.inject_index_ptr(ptr);
+        }
+    }
 }
 
 impl PolySignal {

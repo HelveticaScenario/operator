@@ -73,6 +73,7 @@ impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalScaleParam {
 impl Connect for IntervalScaleParam {
     fn connect(&mut self, _patch: &Patch) {}
     fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 impl std::ops::Deref for IntervalScaleParam {
@@ -363,6 +364,7 @@ impl Connect for IntervalPatternParam {
         // IntervalPatternParam has no signals to connect
     }
     fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalPatternSource {
