@@ -985,6 +985,58 @@ function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: numbe
 function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): ReturnType<typeof $mix> & { buffer: BufferOutputRef };
 
 /**
+ * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
+ *
+ * Splits the input into low / mid / high via \`$xover\`, then runs each band
+ * through \`$comp\` with both upward and downward compression engaged at fast
+ * attack/release ballistics. Bands are summed and crossfaded against the
+ * original input via \`depth\`.
+ *
+ * Per-band trim (\`lowGain\` / \`midGain\` / \`highGain\`) follows the
+ * \`$scaleAndShift\` convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
+ *
+ * \`\`\`js
+ * $ott(drums).out()
+ * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
+ * \`\`\`
+ */
+function $ott(input: Collection | ModuleOutput, config?: {
+    /**
+     * Optional side-chain detector signal. The same crossover network splits
+     * the sidechain into low/mid/high and each band's compressor keys off the
+     * matching band — the gain is still applied to \`input\`.
+     */
+    sidechain?: Collection | ModuleOutput;
+    /** wet/dry blend, 0–5 (default 5 = fully wet) */
+    depth?: Poly<Signal>;
+    /** low/mid crossover (V/Oct, default ~120 Hz) */
+    lowMidFreq?: Poly<Signal>;
+    /** mid/high crossover (V/Oct, default ~2500 Hz) */
+    midHighFreq?: Poly<Signal>;
+    /** downward stage threshold in volts (default 1.0) */
+    threshold?: Poly<Signal>;
+    /** downward stage ratio: > 1 compresses, < 1 expands (boosts loud), 1 = passthrough. Default 4 */
+    ratio?: Poly<Signal>;
+    /** upward stage threshold in volts (default 0.5) */
+    upwardThreshold?: Poly<Signal>;
+    /** upward stage ratio: > 1 boosts quiet, < 1 gates quiet, 1 = passthrough. Default 4 */
+    upwardRatio?: Poly<Signal>;
+    /** envelope attack in seconds (default 0.003) */
+    attack?: Poly<Signal>;
+    /** envelope release in seconds (default 0.05) */
+    release?: Poly<Signal>;
+    /** per-band makeup gain (linear, default 1.5) */
+    makeup?: Poly<Signal>;
+    /** low-band trim — 5 = unity (default 5) */
+    lowGain?: Poly<Signal>;
+    /** mid-band trim — 5 = unity (default 5) */
+    midGain?: Poly<Signal>;
+    /** high-band trim — 5 = unity (default 5) */
+    highGain?: Poly<Signal>;
+    id?: string;
+}): Collection;
+
+/**
  * Compute the Cartesian product of the given arrays.
  *
  * Returns every possible combination of one element from each array,
