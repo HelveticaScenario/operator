@@ -1025,7 +1025,7 @@ function $ott(input: Collection | ModuleOutput, config?: {
     attack?: Poly<Signal>;
     /** envelope release in seconds (default 0.05) */
     release?: Poly<Signal>;
-    /** per-band makeup gain (linear, default 1.5) */
+    /** per-band makeup gain as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
     makeup?: Poly<Signal>;
     /** low-band trim — 5 = unity (default 5) */
     lowGain?: Poly<Signal>;
