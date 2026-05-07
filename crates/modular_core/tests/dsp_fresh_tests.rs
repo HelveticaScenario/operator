@@ -9,7 +9,6 @@ use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
 use modular_core::types::{ModuleState, PatchGraph, Sampleable};
 use serde_json::json;
-use std::sync::Arc;
 
 const SAMPLE_RATE: f32 = 48000.0;
 const DEFAULT_PORT: &str = "output";
@@ -17,7 +16,7 @@ const DEFAULT_PORT: &str = "output";
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /// Create a named module from the constructor registry with given params.
-fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Arc<Box<dyn Sampleable>> {
+fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dyn Sampleable> {
     let constructors = get_constructors();
     let deserializers = get_params_deserializers();
     let deserializer = deserializers
@@ -92,7 +91,7 @@ fn sine_produces_bipolar_output() {
     let osc = make_module("$sine", "sine-1", json!({ "freq": 0.0 }));
     // 0 V/oct ≈ C4 (261.63 Hz)
 
-    let samples = collect_samples(&**osc, 1000);
+    let samples = collect_samples(osc.as_ref(), 1000);
     let (mn, mx) = min_max(&samples);
 
     // Sine output should swing ±5 V
@@ -105,7 +104,7 @@ fn sine_zero_frequency_is_dc() {
     let osc = make_module("$sine", "sine-1", json!({ "freq": -10.0 }));
     // Very low frequency → nearly DC over 100 samples
 
-    let samples = collect_samples(&**osc, 100);
+    let samples = collect_samples(osc.as_ref(), 100);
     let (mn, mx) = min_max(&samples);
 
     // At such a low frequency the output barely moves
@@ -120,7 +119,7 @@ fn sine_zero_frequency_is_dc() {
 fn sine_polyphonic() {
     let osc = make_module("$sine", "sine-1", json!({ "freq": [0.0, 1.0] }));
 
-    let _ch0 = collect_channel(&**osc, 0, 500);
+    let _ch0 = collect_channel(osc.as_ref(), 0, 500);
     // Reset for channel 1 read — we already stepped, so just read accumulated data
     // Actually the module already computed both channels per tick.
     // We need to re-check: collect_channel steps the module, so ch1 will be
@@ -132,7 +131,7 @@ fn sine_polyphonic() {
     let mut ch0_samples = Vec::new();
     let mut ch1_samples = Vec::new();
     for _ in 0..500 {
-        step(&**osc2);
+        step(osc2.as_ref());
         let poly = osc2.get_poly_sample(DEFAULT_PORT).unwrap();
         ch0_samples.push(poly.get(0));
         ch1_samples.push(poly.get(1));
@@ -163,7 +162,7 @@ fn sine_polyphonic() {
 fn saw_produces_bipolar_output() {
     let osc = make_module("$saw", "saw-1", json!({ "freq": 0.0 }));
 
-    let samples = collect_samples(&**osc, 1000);
+    let samples = collect_samples(osc.as_ref(), 1000);
     let (mn, mx) = min_max(&samples);
 
     assert!(mx > 4.0, "saw peak should be near +5V, got {mx}");
@@ -176,7 +175,7 @@ fn saw_produces_bipolar_output() {
 fn pulse_produces_bipolar_output() {
     let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0 }));
 
-    let samples = collect_samples(&**osc, 1000);
+    let samples = collect_samples(osc.as_ref(), 1000);
     let (mn, mx) = min_max(&samples);
 
     assert!(mx > 4.0, "pulse peak should be near +5V, got {mx}");
@@ -191,10 +190,10 @@ fn pulse_width_affects_duty_cycle() {
         "pulse-narrow",
         json!({ "freq": 0.0, "width": 4.0 }),
     );
-    let samples_narrow = collect_samples(&**osc_narrow, 1000);
+    let samples_narrow = collect_samples(osc_narrow.as_ref(), 1000);
 
     let osc_wide = make_module("$pulse", "pulse-wide", json!({ "freq": 0.0, "width": 0.0 }));
-    let samples_wide = collect_samples(&**osc_wide, 1000);
+    let samples_wide = collect_samples(osc_wide.as_ref(), 1000);
 
     // Count positive samples
     let pos_narrow = samples_narrow.iter().filter(|&&s| s > 0.0).count();
@@ -213,7 +212,7 @@ fn pulse_width_affects_duty_cycle() {
 fn noise_produces_output() {
     let n = make_module("$noise", "noise-1", json!({ "color": "white" }));
 
-    let samples = collect_samples(&**n, 1000);
+    let samples = collect_samples(n.as_ref(), 1000);
     let (mn, mx) = min_max(&samples);
 
     assert!(mx > 0.5, "noise should have some positive values");
@@ -243,7 +242,7 @@ fn scale_and_shift_applies() {
 
     // Step enough times for param smoothing to converge
     for _ in 0..500 {
-        step(&**sas);
+        step(sas.as_ref());
     }
     let sample = sas.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
 
@@ -654,6 +653,7 @@ fn step_rejects_empty_steps() {
     }
 }
 
+
 // ─── Curve ───────────────────────────────────────────────────────────────────
 
 #[test]
@@ -661,7 +661,7 @@ fn curve_linear_passthrough() {
     // exp=1 should be linear: output ≈ input
     let m = make_module("$curve", "curve-1", json!({ "input": 3.0, "exp": 1.0 }));
     for _ in 0..500 {
-        step(&**m);
+        step(m.as_ref());
     }
     let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
     assert!(
@@ -675,7 +675,7 @@ fn curve_unity_at_5v() {
     // At 5V input, output should be 5V regardless of exponent
     let m = make_module("$curve", "curve-2", json!({ "input": 5.0, "exp": 3.0 }));
     for _ in 0..500 {
-        step(&**m);
+        step(m.as_ref());
     }
     let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
     assert!(
@@ -689,7 +689,7 @@ fn curve_cubic_midpoint() {
     // exp=3, input=2.5: output = 5 * (2.5/5)^3 = 5 * 0.125 = 0.625
     let m = make_module("$curve", "curve-3", json!({ "input": 2.5, "exp": 3.0 }));
     for _ in 0..500 {
-        step(&**m);
+        step(m.as_ref());
     }
     let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
     assert!(
@@ -703,7 +703,7 @@ fn curve_preserves_sign() {
     // Negative input should produce negative output
     let m = make_module("$curve", "curve-4", json!({ "input": -2.5, "exp": 2.0 }));
     for _ in 0..500 {
-        step(&**m);
+        step(m.as_ref());
     }
     let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
     // sign(-2.5) * 5 * (2.5/5)^2 = -1 * 5 * 0.25 = -1.25
@@ -718,7 +718,7 @@ fn curve_zero_input() {
     // Zero input should produce zero output
     let m = make_module("$curve", "curve-5", json!({ "input": 0.0, "exp": 3.0 }));
     for _ in 0..500 {
-        step(&**m);
+        step(m.as_ref());
     }
     let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
     assert!(
@@ -732,7 +732,7 @@ fn curve_exp_zero_step_function() {
     // exp=0: any nonzero input → ±5V
     let m = make_module("$curve", "curve-6", json!({ "input": 1.0, "exp": 0.0 }));
     for _ in 0..500 {
-        step(&**m);
+        step(m.as_ref());
     }
     let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
     assert!(
@@ -945,7 +945,7 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     // Transfer state from old modules to new modules
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref().as_ref());
+            new_module.transfer_state_from(old_module.as_ref());
         }
     }
 
@@ -1061,7 +1061,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
 
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref().as_ref());
+            new_module.transfer_state_from(old_module.as_ref());
         }
     }
 

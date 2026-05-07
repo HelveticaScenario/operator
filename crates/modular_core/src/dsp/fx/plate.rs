@@ -474,7 +474,7 @@ mod tests {
     const SAMPLE_RATE: f32 = 48000.0;
     const DEFAULT_PORT: &str = "output";
 
-    fn make_plate(params: serde_json::Value) -> Arc<Box<dyn Sampleable>> {
+    fn make_plate(params: serde_json::Value) -> Box<dyn Sampleable> {
         let constructors = get_constructors();
         let deserializers = get_params_deserializers();
         let deserializer = deserializers.get("$plate").unwrap();
@@ -518,7 +518,7 @@ mod tests {
     #[test]
     fn works_with_only_input() {
         let plate = make_plate(json!({ "input": 1.0 }));
-        let (left, right) = collect_stereo(&**plate, 10000);
+        let (left, right) = collect_stereo(plate.as_ref(), 10000);
         let left_energy: f32 = left.iter().map(|s| s * s).sum();
         let right_energy: f32 = right.iter().map(|s| s * s).sum();
         assert!(
@@ -534,7 +534,7 @@ mod tests {
     #[test]
     fn silence_in_silence_out() {
         let plate = make_plate(plate_params(json!({})));
-        let (left, right) = collect_stereo(&**plate, 1000);
+        let (left, right) = collect_stereo(plate.as_ref(), 1000);
         assert!(left.iter().all(|&s| s == 0.0), "left should be silent");
         assert!(right.iter().all(|&s| s == 0.0), "right should be silent");
     }
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn impulse_produces_output() {
         let plate = make_plate(plate_params(json!({ "input": 1.0, "decay": 3.0 })));
-        let (left, right) = collect_stereo(&**plate, 20000);
+        let (left, right) = collect_stereo(plate.as_ref(), 20000);
         let left_energy: f32 = left.iter().map(|s| s * s).sum();
         let right_energy: f32 = right.iter().map(|s| s * s).sum();
         assert!(
@@ -558,7 +558,7 @@ mod tests {
     #[test]
     fn stereo_channels_differ() {
         let plate = make_plate(plate_params(json!({ "input": 1.0, "decay": 3.0 })));
-        let (left, right) = collect_stereo(&**plate, 10000);
+        let (left, right) = collect_stereo(plate.as_ref(), 10000);
         let identical = left
             .iter()
             .zip(right.iter())
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn no_dc_offset_accumulation() {
         let plate = make_plate(plate_params(json!({ "input": 1.0, "decay": 2.0 })));
-        let (left, right) = collect_stereo(&**plate, 48000);
+        let (left, right) = collect_stereo(plate.as_ref(), 48000);
         let last_left = &left[47000..];
         let last_right = &right[47000..];
         let left_mean: f32 = last_left.iter().sum::<f32>() / last_left.len() as f32;
@@ -589,8 +589,8 @@ mod tests {
         let plate_low = make_plate(plate_params(json!({ "input": 1.0, "decay": -3.0 })));
         let plate_high = make_plate(plate_params(json!({ "input": 1.0, "decay": 3.0 })));
         let n = 20000;
-        let (left_low, _) = collect_stereo(&**plate_low, n);
-        let (left_high, _) = collect_stereo(&**plate_high, n);
+        let (left_low, _) = collect_stereo(plate_low.as_ref(), n);
+        let (left_high, _) = collect_stereo(plate_high.as_ref(), n);
         let tail_start = n * 3 / 4;
         let low_tail_energy: f32 = left_low[tail_start..].iter().map(|s| s * s).sum();
         let high_tail_energy: f32 = left_high[tail_start..].iter().map(|s| s * s).sum();
@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn output_is_two_channels() {
         let plate = make_plate(plate_params(json!({})));
-        step(&**plate);
+        step(plate.as_ref());
         let poly = plate.get_poly_sample(DEFAULT_PORT).unwrap();
         assert_eq!(poly.channels(), 2, "output should be stereo (2 channels)");
     }
@@ -612,11 +612,11 @@ mod tests {
     fn modulation_changes_output() {
         let n = 20000;
         let plate_no_mod = make_plate(plate_params(json!({ "input": 1.0, "decay": 3.0 })));
-        let (left_no_mod, _) = collect_stereo(&**plate_no_mod, n);
+        let (left_no_mod, _) = collect_stereo(plate_no_mod.as_ref(), n);
         let plate_with_mod = make_plate(plate_params(
             json!({ "input": 1.0, "decay": 3.0, "modulation": 2.5 }),
         ));
-        let (left_with_mod, _) = collect_stereo(&**plate_with_mod, n);
+        let (left_with_mod, _) = collect_stereo(plate_with_mod.as_ref(), n);
         let differs = left_no_mod
             .iter()
             .zip(left_with_mod.iter())
@@ -633,8 +633,8 @@ mod tests {
         let n = 10000;
         let plate_bright = make_plate(plate_params(json!({ "input": 1.0, "bandwidth": 5.0 })));
         let plate_dark = make_plate(plate_params(json!({ "input": 1.0, "bandwidth": -5.0 })));
-        let (left_bright, _) = collect_stereo(&**plate_bright, n);
-        let (left_dark, _) = collect_stereo(&**plate_dark, n);
+        let (left_bright, _) = collect_stereo(plate_bright.as_ref(), n);
+        let (left_dark, _) = collect_stereo(plate_dark.as_ref(), n);
         // Different bandwidth should produce different output
         let differs = left_bright
             .iter()

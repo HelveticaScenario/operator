@@ -1,13 +1,12 @@
 use crate::dsp::utils::{hz_to_voct_f64, voct_to_hz_f64};
 use crate::poly::{MonoSignal, MonoSignalExt};
-use crate::types::{ClockMessages, Connect, Signal};
+use crate::types::{ClockMessages, Connect};
 use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, ValuePointerRef};
 use fasteval::{Compiler, Evaler, Instruction};
 use napi::Result;
-use regex::Regex;
 use schemars::JsonSchema;
 use std::collections::BTreeMap;
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 
 /// Compiled fasteval expression data. Wrapped in `Arc` so that
 /// `MathExpressionParam` can derive `Clone` cheaply (Arc clone)
@@ -35,36 +34,15 @@ struct MathExpressionParam {
 
     #[serde(skip)]
     #[schemars(skip)]
-    signals: Vec<Signal>,
-
-    #[serde(skip)]
-    #[schemars(skip)]
     compiled: Arc<MathCompiled>,
 }
 
 impl MathExpressionParam {
     /// Parse a math expression string into a MathExpressionParam.
     fn parse(source: String) -> std::result::Result<Self, String> {
-        let re = Regex::new(r"module\(([a-zA-Z0-9\-_$]+):([a-zA-Z0-9\-_$]+):(\d+)\)")
-            .map_err(|e| e.to_string())?;
-        let mut signals = Vec::new();
-
-        let result = re.replace_all(&source, |caps: &regex::Captures| {
-            let module = caps[1].to_string();
-            let port = caps[2].to_string();
-            let channel: usize = caps[3].parse().unwrap_or(0);
-            signals.push(Signal::Cable {
-                module,
-                module_ptr: Weak::default(),
-                port,
-                channel,
-            });
-            format!("module{}", signals.len() - 1)
-        });
-
         let mut slab = fasteval::Slab::new();
         let parser = fasteval::Parser::new();
-        let instruction = match parser.parse(&result, &mut slab.ps) {
+        let instruction = match parser.parse(&source, &mut slab.ps) {
             Err(e) => {
                 return Err(format!("Failed to parse expression: {}", e));
             }
@@ -73,10 +51,13 @@ impl MathExpressionParam {
 
         Ok(MathExpressionParam {
             source,
-            signals,
             compiled: Arc::new(MathCompiled { slab, instruction }),
         })
     }
+}
+
+impl Connect for MathExpressionParam {
+    fn connect(&mut self, _patch: &crate::Patch) {}
 }
 
 // deserr implementation for MathExpressionParam - transparent string wrapper that parses.
@@ -96,15 +77,7 @@ impl<E: DeserializeError> deserr::Deserr<E> for MathExpressionParam {
     }
 }
 
-impl Connect for MathExpressionParam {
-    fn connect(&mut self, patch: &crate::Patch) {
-        for signal in &mut self.signals {
-            signal.connect(patch);
-        }
-    }
-}
-
-#[derive(Clone, Deserr, JsonSchema, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, ChannelCount, SignalParams, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct MathParams {
@@ -119,21 +92,6 @@ struct MathParams {
     /// third input variable, referenced as `z` in the expression
     #[deserr(default)]
     z: Option<MonoSignal>,
-}
-
-impl Connect for MathParams {
-    fn connect(&mut self, patch: &crate::Patch) {
-        Connect::connect(&mut self.expression, patch);
-        if let Some(ref mut x) = self.x {
-            Connect::connect(x, patch);
-        }
-        if let Some(ref mut y) = self.y {
-            Connect::connect(y, patch);
-        }
-        if let Some(ref mut z) = self.z {
-            Connect::connect(z, patch);
-        }
-    }
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -211,22 +169,12 @@ impl Math {
         let y = self.params.y.value_or(0.0) as f64;
         let z = self.params.z.value_or(0.0) as f64;
         let t = self.state.phase as f64 + self.state.loop_index as f64;
-        let signals = self
-            .params
-            .expression
-            .signals
-            .iter()
-            .map(|s| s.get_value() as f64)
-            .collect::<Vec<_>>();
 
         let mut btree = BTreeMap::new();
         btree.insert("x".to_string(), x);
         btree.insert("y".to_string(), y);
         btree.insert("z".to_string(), z);
         btree.insert("t".to_string(), t);
-        for (i, val) in signals.iter().enumerate() {
-            btree.insert(format!("module{}", i).to_string(), *val);
-        }
 
         let mut cb = move |name: &str, args: Vec<f64>| -> Option<f64> {
             if let Some(val) = btree.get(name) {
