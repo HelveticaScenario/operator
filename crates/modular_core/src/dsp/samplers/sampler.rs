@@ -186,8 +186,8 @@ mod tests {
 
     #[test]
     fn sampler_plays_on_gate_rising_edge() {
-        // 4-frame mono WAV: [1.0, 2.0, 3.0, 4.0]
-        let wav_data = make_test_wav(vec![vec![1.0, 2.0, 3.0, 4.0]]);
+        // 4-frame mono WAV with values in -1..1 range (output is scaled by 5.0)
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
         let module = make_module(
             "$sampler",
             "s2",
@@ -203,6 +203,7 @@ mod tests {
         module.connect(&patch);
 
         // First tick: gate is high, Schmitt trigger detects rising edge, position resets to 0
+        // 0.2 * 5.0 = 1.0
         step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
@@ -240,8 +241,8 @@ mod tests {
 
     #[test]
     fn sampler_plays_reverse_with_negative_speed() {
-        // 4-frame mono WAV: [1.0, 2.0, 3.0, 4.0]
-        let wav_data = make_test_wav(vec![vec![1.0, 2.0, 3.0, 4.0]]);
+        // 4-frame mono WAV in -1..1 range (output scaled by 5.0)
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
         let module = make_module(
             "$sampler",
             "s_rev",
@@ -257,8 +258,8 @@ mod tests {
         module.connect(&patch);
 
         // With negative speed, gate trigger should start from end of sample.
-        // Frame 3 = 4.0, frame 2 = 3.0, frame 1 = 2.0, frame 0 = 1.0
-        step(module.as_ref()); // trigger + play from end: frame 3
+        // Frame 3 = 0.8*5=4.0, frame 2 = 0.6*5=3.0, frame 1 = 0.4*5=2.0, frame 0 = 0.2*5=1.0
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 4.0).abs() < 1e-6,
@@ -266,7 +267,7 @@ mod tests {
             out.get(0)
         );
 
-        step(module.as_ref()); // frame 2
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 3.0).abs() < 1e-6,
@@ -274,7 +275,7 @@ mod tests {
             out.get(0)
         );
 
-        step(module.as_ref()); // frame 1
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 2.0).abs() < 1e-6,
@@ -282,7 +283,7 @@ mod tests {
             out.get(0)
         );
 
-        step(module.as_ref()); // frame 0
+        step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
             (out.get(0) - 1.0).abs() < 1e-6,
@@ -290,7 +291,6 @@ mod tests {
             out.get(0)
         );
 
-        // After passing frame 0, should be silent
         step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert_eq!(
@@ -302,8 +302,9 @@ mod tests {
 
     #[test]
     fn sampler_plays_stereo_wav() {
-        // 3-frame stereo WAV: L=[1.0, 2.0, 3.0], R=[4.0, 5.0, 6.0]
-        let wav_data = make_test_wav(vec![vec![1.0, 2.0, 3.0], vec![4.0, 5.0, 6.0]]);
+        // 3-frame stereo WAV in -1..1 range (output scaled by 5.0)
+        // L=[0.2, 0.4, 0.6], R=[0.8, 1.0, -0.4]
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6], vec![0.8, 1.0, -0.4]]);
         let module = make_module(
             "$sampler",
             "s4",
@@ -319,6 +320,7 @@ mod tests {
         module.connect(&patch);
 
         // First tick: gate rises, plays frame 0
+        // L: 0.2*5=1.0, R: 0.8*5=4.0
         step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
@@ -333,6 +335,7 @@ mod tests {
         );
 
         // Second tick: frame 1
+        // L: 0.4*5=2.0, R: 1.0*5=5.0
         step(module.as_ref());
         let out = module.get_poly_sample("output").unwrap();
         assert!(
