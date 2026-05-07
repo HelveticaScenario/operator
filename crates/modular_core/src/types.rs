@@ -150,6 +150,37 @@ pub trait PatchUpdateHandler {
     fn on_patch_update(&mut self);
 }
 
+// ============================================================================
+// Block processing types
+
+/// Determines how a module wrapper processes samples.
+///
+/// - `Block`: compute all `block_size` samples in one `ensure_processed()` call.
+/// - `Sample`: compute exactly one sample per `ensure_processed()` call (used for
+///   modules inside feedback cycles and ROOT_CLOCK/HiddenAudioIn which have
+///   external per-sample data injection).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProcessingMode {
+    #[default]
+    Block,
+    Sample,
+}
+
+/// Per-sample external clock state injected into ROOT_CLOCK by the audio callback.
+///
+/// The callback pre-computes one entry per sample in the block by querying the
+/// Link timeline. The ROOT_CLOCK wrapper injects the appropriate entry before
+/// calling inner `Clock::update()` for each sample position.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExternalClockState {
+    /// Bar phase in [0, 1).
+    pub bar_phase: f64,
+    /// Tempo in BPM.
+    pub bpm: f64,
+    /// Whether the Link session is playing.
+    pub playing: bool,
+}
+
 pub trait Sampleable: MessageHandler + Send {
     fn get_id(&self) -> &str;
     fn tick(&self) -> ();
@@ -344,7 +375,15 @@ impl Div for Clickless {
 }
 
 pub trait Connect {
+    /// Resolve cable references to live module pointers.
     fn connect(&mut self, patch: &Patch);
+
+    /// Walk this value and push every producer module ID it references
+    /// (cables, buffer sources, table-internal signals) into `sink`.
+    ///
+    /// Used by graph_analysis to build SCC adjacency before module
+    /// construction
+    fn collect_cables(&self, sink: &mut Vec<String>);
 }
 
 // ============================================================================
@@ -355,6 +394,7 @@ macro_rules! impl_connect_noop {
     ($($t:ty),*) => {
         $(impl Connect for $t {
             fn connect(&mut self, _patch: &Patch) {}
+            fn collect_cables(&self, _sink: &mut Vec<String>) {}
         })*
     };
 }
@@ -373,6 +413,11 @@ impl<T: Connect> Connect for Vec<T> {
             item.connect(patch);
         }
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for item in self {
+            item.collect_cables(sink);
+        }
+    }
 }
 
 impl<T: Connect> Connect for Option<T> {
@@ -381,11 +426,19 @@ impl<T: Connect> Connect for Option<T> {
             inner.connect(patch);
         }
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        if let Some(inner) = self {
+            inner.collect_cables(sink);
+        }
+    }
 }
 
 impl<T: Connect> Connect for Box<T> {
     fn connect(&mut self, patch: &Patch) {
         (**self).connect(patch);
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        (**self).collect_cables(sink);
     }
 }
 
@@ -393,6 +446,11 @@ impl<T: Connect, const N: usize> Connect for [T; N] {
     fn connect(&mut self, patch: &Patch) {
         for item in self {
             item.connect(patch);
+        }
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for item in self {
+            item.collect_cables(sink);
         }
     }
 }
@@ -403,12 +461,22 @@ impl<V: Connect> Connect for std::collections::HashMap<String, V> {
             v.connect(patch);
         }
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for v in self.values() {
+            v.collect_cables(sink);
+        }
+    }
 }
 
 impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
     fn connect(&mut self, patch: &Patch) {
         for v in self.values_mut() {
             v.connect(patch);
+        }
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for v in self.values() {
+            v.collect_cables(sink);
         }
     }
 }
@@ -418,12 +486,19 @@ impl<T1: Connect> Connect for (T1,) {
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.0.collect_cables(sink);
+    }
 }
 
 impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.0.collect_cables(sink);
+        self.1.collect_cables(sink);
     }
 }
 
@@ -433,6 +508,11 @@ impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
         self.1.connect(patch);
         self.2.connect(patch);
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.0.collect_cables(sink);
+        self.1.collect_cables(sink);
+        self.2.collect_cables(sink);
+    }
 }
 
 impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3, T4) {
@@ -441,6 +521,12 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3
         self.1.connect(patch);
         self.2.connect(patch);
         self.3.connect(patch);
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.0.collect_cables(sink);
+        self.1.collect_cables(sink);
+        self.2.collect_cables(sink);
+        self.3.collect_cables(sink);
     }
 }
 
@@ -453,6 +539,13 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect, T5: Connect> Connect
         self.2.connect(patch);
         self.3.connect(patch);
         self.4.connect(patch);
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.0.collect_cables(sink);
+        self.1.collect_cables(sink);
+        self.2.collect_cables(sink);
+        self.3.collect_cables(sink);
+        self.4.collect_cables(sink);
     }
 }
 
@@ -883,6 +976,9 @@ impl Connect for Wav {
         } else {
             self.cached_data = None;
         }
+    }
+    fn collect_cables(&self, _sink: &mut Vec<String>) {
+        // Wav references a file path, not a module — no graph edge.
     }
 }
 
@@ -1470,6 +1566,10 @@ impl Connect for Buffer {
             self.cached_buffer = None;
         }
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        // `source_module` is a producer dependency, equivalent to a cable.
+        sink.push(self.source_module.clone());
+    }
 }
 
 impl std::fmt::Debug for Buffer {
@@ -1515,7 +1615,7 @@ impl PartialEq for Buffer {
 /// { "type": "pwm",    "width":  <signal> }
 /// { "type": "pipe",   "first":  <table>, "second": <table> }
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Connect)]
 pub enum Table {
     Identity,
     Mirror {
@@ -1566,23 +1666,6 @@ impl Table {
             Table::Fold { amount } => amount.channels(),
             Table::Pwm { width } => width.channels(),
             Table::Pipe { first, second } => first.channels().max(second.channels()),
-        }
-    }
-}
-
-impl Connect for Table {
-    fn connect(&mut self, patch: &Patch) {
-        match self {
-            Table::Identity => {}
-            Table::Mirror { amount } => amount.connect(patch),
-            Table::Bend { amount } => amount.connect(patch),
-            Table::Sync { ratio } => ratio.connect(patch),
-            Table::Fold { amount } => amount.connect(patch),
-            Table::Pwm { width } => width.connect(patch),
-            Table::Pipe { first, second } => {
-                first.connect(patch);
-                second.connect(patch);
-            }
         }
     }
 }
@@ -2135,6 +2218,11 @@ impl Connect for Signal {
                 .map(|sampleable| NonNull::from(sampleable.as_ref()));
         }
     }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        if let Signal::Cable { module, .. } = self {
+            sink.push(module.clone());
+        }
+    }
 }
 
 impl PartialEq for Box<dyn Sampleable> {
@@ -2180,6 +2268,7 @@ impl PartialEq for Signal {
     Deserialize,
     JsonSchema,
     Deserr,
+    Connect
 )]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
@@ -2211,10 +2300,6 @@ pub enum InterpolationType {
     BounceIn,
     BounceOut,
     BounceInOut,
-}
-
-impl Connect for InterpolationType {
-    fn connect(&mut self, _patch: &Patch) {}
 }
 
 pub enum Seq {

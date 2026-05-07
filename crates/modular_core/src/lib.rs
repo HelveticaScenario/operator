@@ -16,6 +16,7 @@ extern crate serde;
 extern crate serde_json;
 extern crate simple_easing;
 
+pub mod block_port;
 pub mod dsp;
 pub mod param_errors;
 pub mod params;
@@ -25,6 +26,7 @@ pub mod poly;
 pub mod types;
 
 // Re-export commonly used items
+pub use block_port::BlockPort;
 pub use patch::Patch;
 
 pub use poly::{
@@ -37,7 +39,7 @@ pub use params::{
 };
 
 pub use types::{
-    Buffer, BufferData, Module, ModuleSchema, ModuleState, PatchGraph, ROOT_ID, ROOT_OUTPUT_PORT,
-    SampleBuffer, Sampleable, SampleableConstructor, SampleableMap, Signal, SignalExt,
-    SignalParamSchema, Wav, WavData,
+    Buffer, BufferData, ExternalClockState, Module, ModuleSchema, ModuleState, PatchGraph,
+    ProcessingMode, ROOT_ID, ROOT_OUTPUT_PORT, SampleBuffer, Sampleable, SampleableConstructor,
+    SampleableMap, Signal, SignalExt, SignalParamSchema, Wav, WavData,
 };

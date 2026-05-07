@@ -2,6 +2,7 @@
 
 mod audio;
 mod commands;
+mod graph_analysis;
 mod link;
 mod midi;
 mod params_cache;

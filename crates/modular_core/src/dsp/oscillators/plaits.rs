@@ -27,7 +27,7 @@ const BLOCK_SIZE: usize = 12;
 const ENGINE_SAMPLE_RATE: f32 = 48000.0;
 
 /// Synthesis engine selection for Plaits
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 pub enum PlaitsEngine {
@@ -112,10 +112,6 @@ impl PlaitsEngine {
             PlaitsEngine::HiHat => 23,
         }
     }
-}
-
-impl Connect for PlaitsEngine {
-    fn connect(&mut self, _patch: &ModularPatch) {}
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]

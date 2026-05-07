@@ -22,6 +22,7 @@ lru               = "0.16.3"
 midir             = "0.10"
 napi-derive       = "3.4.1"
 parking_lot       = "0.12.5"
+petgraph          = { version = "0.8", default-features = false, features = ["graphmap", "std"] }
 profiling         = { workspace = true }
 regex             = "1.12.2"
 riff              = "2"

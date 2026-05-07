@@ -182,10 +182,23 @@ use crate::types::Signal;
 /// - 2-16 = polyphonic (multiple signals)
 ///
 /// Disconnected inputs are represented as `Option<PolySignal>` at the param level.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Connect)]
 pub struct PolySignal {
     /// Active signal channels (always at least 1, up to PORT_MAX_CHANNELS)
     channels: ArrayVec<Signal, PORT_MAX_CHANNELS>,
+}
+
+impl<const CAP: usize> crate::types::Connect for ArrayVec<Signal, CAP> {
+    fn connect(&mut self, patch: &crate::Patch) {
+        for signal in self.iter_mut() {
+            signal.connect(patch);
+        }
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for signal in self.iter() {
+            signal.collect_cables(sink);
+        }
+    }
 }
 
 impl PolySignal {
@@ -254,16 +267,6 @@ impl PolySignal {
 impl From<MonoSignal> for PolySignal {
     fn from(mono: MonoSignal) -> PolySignal {
         mono.inner
-    }
-}
-
-// === Connect implementation for PolySignal ===
-
-impl crate::types::Connect for PolySignal {
-    fn connect(&mut self, patch: &crate::Patch) {
-        for signal in self.channels.iter_mut() {
-            signal.connect(patch);
-        }
     }
 }
 
@@ -390,7 +393,7 @@ impl JsonSchema for PolySignal {
 /// Disconnected inputs are represented as `Option<MonoSignal>` at the param level.
 ///
 /// For polyphony propagation, MonoSignal is treated as a single channel.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Connect)]
 pub struct MonoSignal {
     inner: PolySignal,
 }
@@ -419,14 +422,6 @@ impl MonoSignal {
 impl From<PolySignal> for MonoSignal {
     fn from(poly: PolySignal) -> MonoSignal {
         MonoSignal { inner: poly }
-    }
-}
-
-// === Connect implementation for MonoSignal ===
-
-impl crate::types::Connect for MonoSignal {
-    fn connect(&mut self, patch: &crate::Patch) {
-        self.inner.connect(patch);
     }
 }
 

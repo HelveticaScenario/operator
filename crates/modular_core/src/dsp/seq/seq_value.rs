@@ -273,6 +273,7 @@ impl<E: DeserializeError> deserr::Deserr<E> for SeqPatternParam {
 
 impl Connect for SeqPatternParam {
     fn connect(&mut self, _patch: &Patch) {}
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
 }
 
 #[cfg(test)]

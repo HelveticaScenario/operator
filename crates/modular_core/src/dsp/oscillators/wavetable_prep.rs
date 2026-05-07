@@ -33,7 +33,7 @@ const OVERSAMPLE: usize = 8;
 /// halving. All levels share the same frame count and table size; within a
 /// level, frames are concatenated so indexing is
 /// `levels[level][frame_idx * table_size + sample_idx]`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Connect)]
 pub struct PreparedWavetable {
     /// Mipmap levels. Each level is `frame_count * table_size` samples,
     /// frames stored back-to-back.

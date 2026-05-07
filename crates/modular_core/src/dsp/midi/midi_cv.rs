@@ -19,7 +19,7 @@ use crate::types::{
 };
 
 /// Voice allocation mode for polyphonic operation
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]
 #[serde(rename_all = "lowercase")]
 #[deserr(rename_all = lowercase)]
 pub enum PolyMode {
@@ -34,12 +34,8 @@ pub enum PolyMode {
     Mpe,
 }
 
-impl Connect for PolyMode {
-    fn connect(&mut self, _patch: &Patch) {}
-}
-
 /// Note priority for monophonic operation
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]
 #[serde(rename_all = "lowercase")]
 #[deserr(rename_all = lowercase)]
 pub enum MonoMode {
@@ -52,10 +48,6 @@ pub enum MonoMode {
     Lowest,
     /// Highest pitch note wins
     Highest,
-}
-
-impl Connect for MonoMode {
-    fn connect(&mut self, _patch: &Patch) {}
 }
 
 /// State for a single voice
