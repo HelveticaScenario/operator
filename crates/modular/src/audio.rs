@@ -1543,9 +1543,9 @@ impl AudioProcessor {
     }
 
     // 1. Sync Link state to ROOT_CLOCK, then update ROOT_CLOCK
-    let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID).cloned();
+    let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
     self.link.sync_frame(|bar_phase, tempo| {
-      if let Some(ref clock) = root_clock {
+      if let Some(clock) = root_clock {
         clock.sync_external_clock(bar_phase, tempo);
       }
     });
