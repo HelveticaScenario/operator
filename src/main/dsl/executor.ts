@@ -299,7 +299,7 @@ export function executePatchScript(
         attack?: PolySignal;
         /** envelope release (seconds, default 0.05) */
         release?: PolySignal;
-        /** per-band makeup (linear, default 1.5) */
+        /** per-band makeup as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
         makeup?: PolySignal;
         /** per-band trim (V, 5 = unity, default 5) */
         lowGain?: PolySignal;
@@ -343,7 +343,7 @@ export function executePatchScript(
     ): Collection => {
         const compConf = {
             attack: config.attack ?? 0.003,
-            makeup: config.makeup ?? 1.5,
+            makeup: config.makeup ?? 1.0,
             ratio: config.ratio ?? 4,
             release: config.release ?? 0.05,
             threshold: config.threshold ?? 1.0,

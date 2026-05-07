@@ -153,7 +153,8 @@ struct CompressorParams {
     /// release time in seconds (default 0.1)
     #[deserr(default)]
     release: Option<PolySignal>,
-    /// makeup gain multiplier (0-5, default 1.0)
+    /// makeup gain as a dB-domain voltage (-5V = -24dB, 0V = unity, +5V = +24dB,
+    /// default 0 = unity) — matches the inputGain / outputGain convention.
     #[deserr(default)]
     makeup: Option<PolySignal>,
     /// input gain control (-5V = -24dB, 0V = unity, 5V = +24dB) — drives signal into the compressor
@@ -210,7 +211,8 @@ struct CompressorOutputs {
 ///   `ratio`. Default 1 (passthrough).
 /// - **sidechain** — optional external detector signal.
 /// - **attack** / **release** — envelope follower time constants in seconds.
-/// - **makeup** — post-compression makeup gain (linear multiplier, 0–5).
+/// - **makeup** — post-compression makeup gain as a dB-domain voltage
+///   (-5V = -24dB, 0V = unity, +5V = +24dB, default 0).
 /// - **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,
 ///   5V = +24dB). Raising input gain drives more signal into the compressor.
 /// - **outputGain** — gain after compression (-5V = -24dB, 0V = unity,
@@ -273,10 +275,11 @@ impl Compressor {
             let upward_ratio = self.params.upward_ratio.value_or(ch, 1.0);
             let attack = self.params.attack.value_or(ch, 0.01);
             let release = self.params.release.value_or(ch, 0.1);
-            // makeup is documented as a 0–5 linear multiplier; clamp here so
-            // the runtime matches the schema docs and so a stray modulation
-            // can't swing it negative or to +∞.
-            let makeup = self.params.makeup.value_or(ch, 1.0).clamp(0.0, 5.0);
+            // makeup is a dB-domain voltage matching inputGain / outputGain
+            // (-5 V = -24 dB, 0 V = unity, +5 V = +24 dB). voltage_to_gain
+            // clamps the voltage internally.
+            let makeup_voltage = self.params.makeup.value_or(ch, 0.0);
+            let makeup = voltage_to_gain(makeup_voltage);
 
             // Compress
             let compressed = compress(
