@@ -150,7 +150,7 @@ pub trait PatchUpdateHandler {
     fn on_patch_update(&mut self);
 }
 
-pub trait Sampleable: MessageHandler + Send + Sync {
+pub trait Sampleable: MessageHandler + Send {
     fn get_id(&self) -> &str;
     fn tick(&self) -> ();
     fn update(&self) -> ();

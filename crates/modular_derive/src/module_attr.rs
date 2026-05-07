@@ -669,11 +669,6 @@ fn impl_module_macro_attr(
             sample_rate: f32,
             argument_spans: std::cell::UnsafeCell<std::collections::HashMap<String, crate::params::ArgumentSpan>>,
         }
-
-        // SAFETY: This type is only accessed from the audio thread after construction.
-        unsafe impl Send for #struct_name {}
-        unsafe impl Sync for #struct_name {}
-
         impl crate::types::Sampleable for #struct_name {
             fn tick(&self) {
                 self.processed.store(false, core::sync::atomic::Ordering::Release);
