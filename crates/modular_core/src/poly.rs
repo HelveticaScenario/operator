@@ -6,6 +6,7 @@
 //! - `PolyOutput`: A fixed-capacity output buffer with channel count metadata (for module outputs)
 //! - `PolySignal`: A fixed-capacity input buffer containing Signal values (for polyphonic module inputs)
 
+use crate::{dsp::utils::sanitize, types::Signal};
 use arrayvec::ArrayVec;
 use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
 use schemars::JsonSchema;
@@ -77,7 +78,7 @@ impl PolyOutput {
     /// Set voltage for a specific channel
     pub fn set(&mut self, channel: usize, value: f32) {
         if channel < PORT_MAX_CHANNELS {
-            self.voltages[channel] = value;
+            self.voltages[channel] = sanitize(value);
         }
     }
 
@@ -170,8 +171,6 @@ impl JsonSchema for PolyOutput {
 // =============================================================================
 // PolySignal - Polyphonic input containing multiple Signal values
 // =============================================================================
-
-use crate::types::Signal;
 
 /// A polyphonic input buffer containing multiple Signal values.
 ///
