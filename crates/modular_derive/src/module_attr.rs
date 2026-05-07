@@ -732,7 +732,7 @@ fn impl_module_macro_attr(
                 self
             }
 
-            fn get_buffer_output(&self, port: &str) -> Option<&std::sync::Arc<crate::BufferData>> {
+            fn get_buffer_output(&self, port: &str) -> Option<&crate::BufferData> {
                 let module = unsafe { &*self.module.get() };
                 crate::types::OutputStruct::get_buffer_output(&module.outputs, port)
             }

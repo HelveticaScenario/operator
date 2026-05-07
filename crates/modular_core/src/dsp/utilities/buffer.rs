@@ -1,6 +1,5 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
-use std::sync::Arc;
 
 use crate::{
     Buffer, BufferData, MonoSignal,
@@ -26,7 +25,7 @@ fn default_buffer_length() -> f64 {
 }
 
 /// Outputs for the $buffer module.
-/// Manually implements OutputStruct because the buffer field is `Arc<BufferData>`,
+/// Manually implements OutputStruct because the buffer field is `BufferData`,
 /// not the usual `PolyOutput` / `f32` that `#[derive(Outputs)]` handles.
 #[derive(JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -36,15 +35,14 @@ struct BufferWriteOutputs {
     /// The circular audio buffer — not a sample output, accessed via get_buffer_output
     #[serde(skip)]
     #[schemars(skip)]
-    buffer: Arc<BufferData>,
+    buffer: BufferData,
 }
 
 impl Default for BufferWriteOutputs {
     fn default() -> Self {
         Self {
             sample: PolyOutput::default(),
-            // Minimal placeholder — will be replaced by init()
-            buffer: Arc::new(BufferData::new_zeroed(1, 1)),
+            buffer: BufferData::new_zeroed(1, 1),
         }
     }
 }
@@ -52,7 +50,6 @@ impl Default for BufferWriteOutputs {
 impl crate::types::OutputStruct for BufferWriteOutputs {
     fn copy_from(&mut self, other: &Self) {
         self.sample = other.sample;
-        // buffer is not copied via copy_from — it's transferred via transfer_buffers_from
     }
 
     fn get_poly_sample(&self, port: &str) -> Option<PolyOutput> {
@@ -81,7 +78,7 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
         self.buffer.copy_overlap_from(&old.buffer);
     }
 
-    fn get_buffer_output(&self, port: &str) -> Option<&Arc<BufferData>> {
+    fn get_buffer_output(&self, port: &str) -> Option<&BufferData> {
         match port {
             "buffer" => Some(&self.buffer),
             _ => None,
@@ -106,7 +103,7 @@ impl BufferWrite {
     fn init(&mut self, sample_rate: f32) {
         let frame_count = (self.params.length * sample_rate as f64).ceil() as usize;
         let channel_count = self._channel_count.max(1);
-        self.outputs.buffer = Arc::new(BufferData::new_zeroed(channel_count, frame_count));
+        self.outputs.buffer = BufferData::new_zeroed(channel_count, frame_count);
     }
 
     fn update(&mut self, _sample_rate: f32) {
@@ -225,7 +222,6 @@ message_handlers!(impl BufRead {});
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     use crate::{
         BufferData, Patch,
@@ -236,11 +232,9 @@ mod tests {
         MonoSignal::from_poly(PolySignal::mono(Signal::Volts(value)))
     }
 
-    /// A minimal mock module that owns a buffer and exposes it via get_buffer_output.
-    /// Used in BufRead tests to provide buffer data without the old patch.buffers path.
     struct MockBufferOwner {
         id: String,
-        buffer: Arc<BufferData>,
+        buffer: BufferData,
     }
 
     impl crate::types::MessageHandler for MockBufferOwner {}
@@ -261,7 +255,7 @@ mod tests {
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
-        fn get_buffer_output(&self, port: &str) -> Option<&Arc<BufferData>> {
+        fn get_buffer_output(&self, port: &str) -> Option<&BufferData> {
             match port {
                 "buffer" => Some(&self.buffer),
                 _ => None,
@@ -278,7 +272,7 @@ mod tests {
 
         let owner = MockBufferOwner {
             id: MOCK_BUFFER_MODULE_ID.to_string(),
-            buffer: Arc::new(BufferData::from_samples(samples)),
+            buffer: BufferData::from_samples(samples),
         };
         patch
             .sampleables

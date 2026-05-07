@@ -176,9 +176,9 @@ pub trait Sampleable: MessageHandler + Send {
     ///
     /// Returns a reference into `UnsafeCell` internals. Safe only because callers
     /// respect phase separation: `connect()` phase (resolves pointers) and `process`
-    /// phase (reads samples) never overlap. The returned `&Arc<BufferData>` must not
+    /// phase (reads samples) never overlap. The returned `&BufferData` must not
     /// be held across a `connect()` or `transfer_state_from()` call.
-    fn get_buffer_output(&self, _port: &str) -> Option<&Arc<BufferData>> {
+    fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
     /// Called on the main thread after construction and before the module
@@ -1015,20 +1015,23 @@ impl JsonSchema for Wav {
 /// Uses `UnsafeCell` for the inner `SampleBuffer` and `write_index` to allow
 /// mutation through `&self` on the audio thread. This is safe because:
 ///
-/// 1. After construction (main thread), all access is from the audio thread only.
+/// 1. After construction (main thread), ownership transfers to the audio thread.
 /// 2. The owning module's `update()` writes; readers on the same thread read.
 ///    Demand-driven ordering (`ensure_source_updated`) guarantees the writer
 ///    finishes before any reader accesses the data within the same tick.
-/// 3. Only `Sync` is implemented manually. `BufferData` is naturally `Send`, and the
-///    shared `Arc<BufferData>` handle may be observed from multiple owners while actual
-///    mutation still follows the runtime's phase-separated audio-thread contract.
+/// 3. Shared access within the audio thread uses `NonNull<BufferData>` pointers
+///    (same pattern as signal cables), not `Arc`. No `Sync` needed.
 #[derive(Debug)]
 pub struct BufferData {
     inner: UnsafeCell<SampleBuffer>,
     write_index: UnsafeCell<usize>,
 }
 
-unsafe impl Sync for BufferData {}
+// SAFETY: BufferData contains UnsafeCell but is Send because after construction
+// (main thread), ownership transfers to the audio thread exclusively.
+// Sync is intentionally NOT implemented — BufferData is never shared across threads.
+// Within the audio thread, shared access uses NonNull pointers with phase-separated
+// read/write ordering enforced by the demand-driven update system.
 
 impl BufferData {
     pub fn new_zeroed(channels: usize, frame_count: usize) -> Self {
@@ -1215,8 +1218,8 @@ pub struct Buffer {
     source_port: String,
     /// Cached raw pointer to the source module, populated during `connect()`.
     cached_source_ptr: Option<SampleablePtr>,
-    /// Cached strong reference to the buffer data, populated during `connect()`.
-    cached_buffer: Option<Arc<BufferData>>,
+    /// Cached raw pointer to the buffer data, populated during `connect()`.
+    cached_buffer: Option<NonNull<BufferData>>,
     /// Channel count (used for channel derivation at deserialization time)
     channels: usize,
 }
@@ -1264,14 +1267,20 @@ impl Buffer {
     }
 
     pub fn frame_count(&self) -> usize {
-        self.cached_buffer
-            .as_ref()
+        self.buffer_ref()
             .map(|b| b.frame_count())
             .unwrap_or(0)
     }
 
     pub fn is_connected(&self) -> bool {
         self.cached_buffer.is_some()
+    }
+
+    /// SAFETY: cached_buffer is set during `connect()` and only dereferenced on the
+    /// audio thread. The pointed-to BufferData is owned by the source module's outputs
+    /// within the same Patch, so it outlives this cable.
+    fn buffer_ref(&self) -> Option<&BufferData> {
+        self.cached_buffer.map(|ptr| unsafe { ptr.as_ref() })
     }
 
     /// Ensure the source module has been updated this tick (demand-driven ordering).
@@ -1283,16 +1292,14 @@ impl Buffer {
         }
     }
 
-    /// Read the current write_index from the buffer.
     pub fn read_write_index(&self) -> usize {
-        self.cached_buffer
-            .as_ref()
+        self.buffer_ref()
             .map(|b| b.read_write_index())
             .unwrap_or(0)
     }
 
     pub fn fill(&self, value: f32) {
-        if let Some(buffer) = &self.cached_buffer {
+        if let Some(buffer) = self.buffer_ref() {
             buffer.fill(value);
         }
     }
@@ -1302,33 +1309,29 @@ impl Buffer {
     }
 
     pub fn read(&self, channel: usize, frame: usize) -> f32 {
-        self.cached_buffer
-            .as_ref()
+        self.buffer_ref()
             .map(|buffer| buffer.read(channel, frame))
             .unwrap_or(0.0)
     }
 
     pub fn write(&self, channel: usize, frame: usize, value: f32) {
-        if let Some(buffer) = &self.cached_buffer {
+        if let Some(buffer) = self.buffer_ref() {
             buffer.write(channel, frame, value);
         }
     }
 
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> Option<R> {
-        self.cached_buffer
-            .as_ref()
+        self.buffer_ref()
             .map(|buffer| buffer.with_data(f))
     }
 
     pub fn with_data_mut<R>(&self, f: impl FnOnce(&mut Vec<Vec<f32>>) -> R) -> Option<R> {
-        self.cached_buffer
-            .as_ref()
+        self.buffer_ref()
             .map(|buffer| buffer.with_data_mut(f))
     }
 
     pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
-        self.cached_buffer
-            .as_ref()
+        self.buffer_ref()
             .map(|buffer| buffer.read_hermite_wrapped(channel, frame))
             .unwrap_or(0.0)
     }
@@ -1449,7 +1452,7 @@ impl Connect for Buffer {
         if let Some(module) = patch.sampleables.get(&self.source_module) {
             self.cached_source_ptr = Some(NonNull::from(module.as_ref()));
             if let Some(buffer_data) = module.get_buffer_output(&self.source_port) {
-                self.cached_buffer = Some(Arc::clone(buffer_data));
+                self.cached_buffer = Some(NonNull::from(buffer_data));
             } else {
                 eprintln!(
                     "[Buffer] module '{}' has no buffer output on port '{}'",
@@ -1485,8 +1488,8 @@ impl PartialEq for Buffer {
         self.source_module == other.source_module
             && self.source_port == other.source_port
             && self.channels == other.channels
-            && match (&self.cached_buffer, &other.cached_buffer) {
-                (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+            && match (self.cached_buffer, other.cached_buffer) {
+                (Some(left), Some(right)) => left == right,
                 (None, None) => true,
                 _ => false,
             }
@@ -2251,7 +2254,7 @@ pub struct OutputSchema {
     pub max_value: Option<f64>,
 }
 
-pub trait OutputStruct: Default + Send + Sync + 'static {
+pub trait OutputStruct: Default + Send + 'static {
     fn copy_from(&mut self, other: &Self);
     /// Get polyphonic sample output for a port.
     fn get_poly_sample(&self, port: &str) -> Option<PolyOutput>;
@@ -2264,7 +2267,7 @@ pub trait OutputStruct: Default + Send + Sync + 'static {
     /// Default: no-op. Modules with buffer outputs override this.
     fn transfer_buffers_from(&mut self, _old: &mut Self) {}
     /// Get a buffer output by port name. Default: no buffer outputs.
-    fn get_buffer_output(&self, _port: &str) -> Option<&Arc<BufferData>> {
+    fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
 }
@@ -2538,7 +2541,7 @@ mod tests {
     struct BufferSourceTestSampleable {
         id: String,
         update_count: Arc<AtomicUsize>,
-        buffer: Arc<BufferData>,
+        buffer: BufferData,
     }
 
     impl Sampleable for BufferSourceTestSampleable {
@@ -2562,7 +2565,7 @@ mod tests {
 
         fn connect(&self, _patch: &Patch) {}
 
-        fn get_buffer_output(&self, port: &str) -> Option<&Arc<BufferData>> {
+        fn get_buffer_output(&self, port: &str) -> Option<&BufferData> {
             (port == "buffer").then_some(&self.buffer)
         }
 
@@ -2576,18 +2579,18 @@ mod tests {
     fn patch_with_buffer_source(
         id: &str,
         samples: Vec<Vec<f32>>,
-    ) -> (Patch, Arc<AtomicUsize>, SampleablePtr, Arc<BufferData>) {
+    ) -> (Patch, Arc<AtomicUsize>, SampleablePtr) {
         let update_count = Arc::new(AtomicUsize::new(0));
-        let buffer = Arc::new(BufferData::from_samples(samples));
+        let buffer = BufferData::from_samples(samples);
         let module: Box<dyn Sampleable> = Box::new(BufferSourceTestSampleable {
             id: id.to_string(),
             update_count: Arc::clone(&update_count),
-            buffer: Arc::clone(&buffer),
+            buffer,
         });
         let source_ptr = NonNull::from(module.as_ref());
         let mut patch = Patch::new();
         patch.sampleables.insert(id.to_string(), module);
-        (patch, update_count, source_ptr, buffer)
+        (patch, update_count, source_ptr)
     }
 
     #[test]
@@ -3013,7 +3016,7 @@ mod tests {
 
     #[test]
     fn raw_pointer_buffer_connect_populates_cached_source_ptr_and_buffer() {
-        let (patch, update_count, source_ptr, source_buffer) =
+        let (patch, update_count, source_ptr) =
             patch_with_buffer_source("buf", vec![vec![1.0, 2.0, 3.0]]);
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
@@ -3023,18 +3026,19 @@ mod tests {
         buffer.connect(&patch);
 
         assert_eq!(buffer.cached_source_ptr, Some(source_ptr));
-        assert!(
-            buffer
-                .cached_buffer
-                .as_ref()
-                .is_some_and(|cached| Arc::ptr_eq(cached, &source_buffer))
-        );
+        let source_buffer_ptr = patch
+            .sampleables
+            .get("buf")
+            .unwrap()
+            .get_buffer_output("buffer")
+            .map(|b| NonNull::from(b));
+        assert_eq!(buffer.cached_buffer, source_buffer_ptr);
         assert_eq!(update_count.load(Ordering::SeqCst), 0);
     }
 
     #[test]
     fn raw_pointer_buffer_ensure_source_updated_calls_update_through_cached_pointer() {
-        let (patch, update_count, _, _) = patch_with_buffer_source("buf", vec![vec![0.5]]);
+        let (patch, update_count, _) = patch_with_buffer_source("buf", vec![vec![0.5]]);
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
         buffer.connect(&patch);
@@ -3045,7 +3049,7 @@ mod tests {
 
     #[test]
     fn raw_pointer_buffer_clone_clears_runtime_caches() {
-        let (patch, _, _, _) = patch_with_buffer_source("buf", vec![vec![0.5]]);
+        let (patch, _, _) = patch_with_buffer_source("buf", vec![vec![0.5]]);
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
         buffer.connect(&patch);
@@ -3059,7 +3063,7 @@ mod tests {
 
     #[test]
     fn raw_pointer_buffer_connect_missing_source_clears_pointer_and_buffer() {
-        let (patch, update_count, _, _) = patch_with_buffer_source("buf", vec![vec![4.0, 5.0]]);
+        let (patch, update_count, _) = patch_with_buffer_source("buf", vec![vec![4.0, 5.0]]);
         let empty_patch = Patch::new();
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
@@ -3077,7 +3081,7 @@ mod tests {
 
     #[test]
     fn raw_pointer_buffer_connect_missing_port_clears_pointer_and_buffer() {
-        let (patch, update_count, _, _) = patch_with_buffer_source("buf", vec![vec![6.0, 7.0]]);
+        let (patch, update_count, _) = patch_with_buffer_source("buf", vec![vec![6.0, 7.0]]);
         let mut buffer = Buffer::new("buf".to_string(), "missing".to_string(), 1);
 
         buffer.connect(&patch);
