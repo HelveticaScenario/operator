@@ -1,4 +1,5 @@
 mod audio;
+mod dsl_runtime;
 
 use std::path::PathBuf;
 
@@ -34,19 +35,34 @@ fn run_emit_graph(path: Option<&std::path::Path>) {
         eprintln!("--emit-graph requires a path argument");
         std::process::exit(2);
     };
-    let _source = match std::fs::read_to_string(path) {
+    let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(err) => {
             eprintln!("read {}: {err}", path.display());
             std::process::exit(1);
         }
     };
-    // TODO: drive the DSL through deno_core, emit the resulting PatchGraph as JSON.
-    // Until then, emit a structured stub so harness scripts can detect the path is wired.
-    println!(
-        r#"{{"status":"unimplemented","reason":"deno_core runtime not yet wired","source_path":{}}}"#,
-        serde_json::Value::String(path.display().to_string())
-    );
+
+    // Stage-1: V8 boots and evaluates the source as raw JS, returning whatever
+    // the last expression produced. Once the DSL bundle (executor.ts +
+    // GraphBuilder.ts) is wired into the runtime, this should instead invoke
+    // `executeDSL(source)` and serialize the resulting `PatchGraph`.
+    let mut runtime = dsl_runtime::DslRuntime::new();
+    let probe = runtime
+        .eval(
+            "modz_runtime_probe",
+            "({ runtime: 'deno_core', version: 1 })".to_string(),
+        )
+        .unwrap_or_else(|e| serde_json::json!({"probe_error": e}));
+
+    let report = serde_json::json!({
+        "status": "stage1",
+        "reason": "V8 boots; DSL bundle not yet linked",
+        "source_path": path.display().to_string(),
+        "source_bytes": source.len(),
+        "probe": probe,
+    });
+    println!("{report}");
     std::process::exit(2);
 }
 
@@ -66,7 +82,18 @@ impl EditorView {
             },
             None => eprintln!("[modz] cmd-s pressed (no source file)"),
         }
-        eprintln!("[modz] DSL exec stub — buffer length {} bytes", text.len());
+        // Stage-1: prove the V8 boot path works on every save. Cheap probe.
+        // Once the DSL bundle is in, replace this with a call into
+        // executeDSL(text) and route the resulting PatchGraph to audio.
+        let mut runtime = dsl_runtime::DslRuntime::new();
+        match runtime.eval("modz_save_probe", format!("({}, 'ok')", text.len())) {
+            Ok(value) => eprintln!(
+                "[modz] V8 probe ok — {} bytes -> {}",
+                text.len(),
+                value
+            ),
+            Err(err) => eprintln!("[modz] V8 probe failed: {err}"),
+        }
     }
 }
 
