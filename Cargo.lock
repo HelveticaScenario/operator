@@ -7158,6 +7158,7 @@ dependencies = [
  "modular_core",
  "multi_buffer",
  "parking_lot",
+ "regex",
  "serde",
  "serde_json",
  "settings",

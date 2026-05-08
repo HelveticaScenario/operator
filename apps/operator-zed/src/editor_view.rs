@@ -98,6 +98,46 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Rewrite the literal value at the matching `$slider('LABEL', value, ...)`
+    /// call site so the new slider value is preserved across cmd-S. Called
+    /// by the controls panel after every drag step.
+    ///
+    /// The DSL stub doesn't currently produce argument spans, so we use a
+    /// regex over the buffer text. Matches both single- and double-quoted
+    /// labels and handles ASCII labels safely; pathological labels (regex
+    /// metacharacters, multi-line, etc.) get escaped.
+    pub fn rewrite_slider_call(
+        &mut self,
+        label: &str,
+        new_value: f64,
+        cx: &mut Context<Self>,
+    ) {
+        let escaped_label = regex::escape(label);
+        let pattern = format!(
+            r#"(\$slider\(\s*['"]{escaped_label}['"]\s*,\s*)([+-]?\d+(?:\.\d+)?)"#
+        );
+        let Ok(re) = regex::Regex::new(&pattern) else {
+            return;
+        };
+        let formatted = format_slider_value(new_value);
+        let original = self.editor.read(cx).text(cx);
+        let updated = re.replace(&original, |caps: &regex::Captures| {
+            format!("{}{}", &caps[1], formatted)
+        });
+        if updated == original {
+            return;
+        }
+        let new_text = updated.into_owned();
+        let multi = self.editor.read(cx).buffer().clone();
+        multi.update(cx, |multi, cx| {
+            if let Some(handle) = multi.all_buffers().into_iter().next() {
+                handle.update(cx, |buffer, cx| {
+                    buffer.set_text(new_text.clone(), cx);
+                });
+            }
+        });
+    }
+
     /// Externally trigger the same path the cmd-S action uses. Used by the
     /// toolbar's "Update Patch" button.
     pub fn trigger_run_dsl(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -155,6 +195,21 @@ impl EditorView {
             }
             Err(err) => eprintln!("[modz] {err}"),
         }
+    }
+}
+
+/// Format a slider value so it round-trips through the parser (always at
+/// least one fractional digit so it's clearly a `number` literal, but no
+/// trailing zeros for whole values either).
+fn format_slider_value(v: f64) -> String {
+    if v.fract().abs() < 1e-9 {
+        format!("{v:.0}")
+    } else {
+        // Trim trailing zeros while keeping at least one fractional digit.
+        let s = format!("{v:.4}");
+        let trimmed = s.trim_end_matches('0');
+        let trimmed = trimmed.trim_end_matches('.');
+        trimmed.to_string()
     }
 }
 

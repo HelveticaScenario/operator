@@ -33,6 +33,10 @@ pub struct EngineState {
     pub frequency: f32,
     pub amplitude: f32,
     pub muted: bool,
+    /// Most recent playhead value read from the patch's ROOT_CLOCK module.
+    /// `bar_phase` is in [0, 1); `bar_count` is the cumulative bar number.
+    pub bar_phase: f64,
+    pub bar_count: u64,
 }
 
 impl AudioEngine {
@@ -55,6 +59,8 @@ impl AudioEngine {
             frequency: 440.0,
             amplitude: 0.15,
             muted: muted_by_default,
+            bar_phase: 0.0,
+            bar_count: 0,
         }));
 
         let (patch_tx, patch_rx) = bounded::<Patch>(4);
@@ -145,6 +151,9 @@ impl Driver {
                 // Snapshot current scope targets so we don't hold the lock
                 // across the entire fill (UI thread might be reading too).
                 let scopes = self.scope_targets.lock().clone();
+                let mut latest_bar_phase: f64 = 0.0;
+                let mut latest_bar_count: u64 = 0;
+                let mut saw_clock = false;
                 for frame in buf.chunks_mut(channels) {
                     for module in patch.sampleables.values() {
                         module.update();
@@ -169,6 +178,27 @@ impl Driver {
                         }
                         ring.push_back(v);
                     }
+                    // Sample ROOT_CLOCK playhead once per frame; we'll write
+                    // the *last* value we saw out to EngineState below.
+                    if let Some(clock) = patch.sampleables.get("ROOT_OUTPUT").or_else(|| {
+                        patch.sampleables.get(modular_core::types::WellKnownModule::RootClock.id())
+                    }) {
+                        let _ = clock; // borrow to silence unused
+                    }
+                    if let Some(clock) =
+                        patch.sampleables.get(modular_core::types::WellKnownModule::RootClock.id())
+                    {
+                        if let Ok(poly) = clock.get_poly_sample("playhead") {
+                            latest_bar_phase = poly.get(0) as f64;
+                            latest_bar_count = poly.get(1) as u64;
+                            saw_clock = true;
+                        }
+                    }
+                }
+                if saw_clock {
+                    let mut s = state.lock();
+                    s.bar_phase = latest_bar_phase;
+                    s.bar_count = latest_bar_count;
                 }
             }
             None => {

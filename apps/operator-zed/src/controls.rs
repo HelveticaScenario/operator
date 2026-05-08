@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use crate::dsl_state::{DslState, SliderDef};
+use crate::editor_view::EditorView;
 
 /// Width of the slider rail in pixels.
 const RAIL_WIDTH: f32 = 220.0;
@@ -25,13 +26,19 @@ struct DragState {
 
 pub struct ControlsView {
     state: Entity<DslState>,
+    editor_view: Entity<EditorView>,
     drag: DragState,
 }
 
 impl ControlsView {
-    pub fn new(state: Entity<DslState>, _cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        state: Entity<DslState>,
+        editor_view: Entity<EditorView>,
+        _cx: &mut Context<Self>,
+    ) -> Self {
         Self {
             state,
+            editor_view,
             drag: DragState::default(),
         }
     }
@@ -82,9 +89,17 @@ impl ControlsView {
             return;
         }
         let label = slider.label.clone();
-        self.state.update(cx, |state, cx| {
-            state.bump_slider(&label, delta, _window, cx);
+        let new_value = self.state.update(cx, |state, cx| {
+            state.bump_slider(&label, delta, _window, cx)
         });
+        if let Some(value) = new_value {
+            // Mirror the change into the source code so cmd-S preserves it.
+            let editor_view = self.editor_view.clone();
+            let label_for_edit = label.clone();
+            editor_view.update(cx, |view, cx| {
+                view.rewrite_slider_call(&label_for_edit, value, cx);
+            });
+        }
     }
 
     fn handle_up(

@@ -193,8 +193,9 @@ fn main() {
                         let explorer = cx.new(|cx| {
                             FileExplorer::new(&workspace_root, editor_view.clone(), cx)
                         });
-                        let controls =
-                            cx.new(|cx| ControlsView::new(state.clone(), cx));
+                        let controls = cx.new(|cx| {
+                            ControlsView::new(state.clone(), editor_view.clone(), cx)
+                        });
                         let toolbar = cx.new(|cx| {
                             Toolbar::new(
                                 state.clone(),

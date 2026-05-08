@@ -22,8 +22,20 @@ impl Toolbar {
         state: Entity<DslState>,
         editor_view: Entity<EditorView>,
         engine_state: Arc<Mutex<EngineState>>,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> Self {
+        // Repaint at ~30 Hz so the playhead readout updates while audio
+        // pushes new samples through ROOT_CLOCK.
+        let interval = std::time::Duration::from_millis(33);
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(interval).await;
+                if this.update(cx, |_this, cx| cx.notify()).is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
         Self {
             state,
             editor_view,
@@ -36,7 +48,12 @@ impl Render for Toolbar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dsl = self.state.read(cx);
         let (tempo, num, den) = dsl.clock_info();
-        let muted = self.engine_state.lock().muted;
+        let (muted, bar_count, bar_phase) = {
+            let s = self.engine_state.lock();
+            (s.muted, s.bar_count, s.bar_phase)
+        };
+        let beat_in_bar = ((bar_phase * num as f64).floor() as u64) + 1;
+        let playhead = format!("{bar_count}.{beat_in_bar}");
 
         let editor_view = self.editor_view.clone();
         let engine_state = self.engine_state.clone();
@@ -65,6 +82,12 @@ impl Render for Toolbar {
                     .text_color(rgb(0x70737a))
                     .min_w(px(40.))
                     .child(format!("{num}/{den}")),
+            )
+            .child(
+                div()
+                    .text_color(rgb(0xa0a2a4))
+                    .min_w(px(64.))
+                    .child(playhead),
             )
             .child(div().flex_grow())
             .child(

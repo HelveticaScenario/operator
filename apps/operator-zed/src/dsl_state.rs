@@ -153,21 +153,20 @@ impl DslState {
 
     /// Bump a slider's value by `delta`, clamp to its range, mutate the
     /// stored graph JSON, rebuild a `Patch`, and push it to the audio
-    /// thread. No JS involved.
+    /// thread. No JS involved. Returns `Some(new_value)` if the value
+    /// changed, `None` otherwise.
     pub fn bump_slider(
         &mut self,
         label: &str,
         delta: f64,
         _window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let Some(idx) = self.sliders.iter().position(|s| s.label == label) else {
-            return;
-        };
+    ) -> Option<f64> {
+        let idx = self.sliders.iter().position(|s| s.label == label)?;
         let slider = &mut self.sliders[idx];
         let new_value = (slider.value + delta).clamp(slider.min, slider.max);
         if (new_value - slider.value).abs() < f64::EPSILON {
-            return;
+            return None;
         }
         slider.value = new_value;
         let module_id = slider.module_id.clone();
@@ -175,7 +174,7 @@ impl DslState {
 
         let Some(graph) = self.graph_value.as_mut() else {
             cx.notify();
-            return;
+            return Some(new_value);
         };
 
         let mut applied = false;
@@ -198,7 +197,7 @@ impl DslState {
 
         if !applied {
             cx.notify();
-            return;
+            return Some(new_value);
         }
 
         match build_patch(graph, self.sample_rate) {
@@ -212,6 +211,7 @@ impl DslState {
             Err(err) => eprintln!("[modz] slider rebuild Patch: {err}"),
         }
         cx.notify();
+        Some(new_value)
     }
 }
 
