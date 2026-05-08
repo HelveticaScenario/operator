@@ -6,31 +6,36 @@ use gpui::{Context, Entity, Render, Window, div, prelude::*};
 use crate::controls::ControlsView;
 use crate::editor_view::EditorView;
 use crate::file_explorer::FileExplorer;
-use crate::scopes::ScopesView;
+use crate::toolbar::Toolbar;
 
 pub struct RootView {
+    pub toolbar: Entity<Toolbar>,
     pub explorer: Entity<FileExplorer>,
     pub editor_view: Entity<EditorView>,
     pub controls: Entity<ControlsView>,
-    pub scopes: Entity<ScopesView>,
 }
 
 impl Render for RootView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
-            .flex_row()
+            .flex_col()
             .size_full()
-            .child(self.explorer.clone())
+            .child(self.toolbar.clone())
             .child(
                 div()
                     .flex()
-                    .flex_col()
+                    .flex_row()
                     .flex_grow()
-                    .size_full()
-                    .child(self.editor_view.clone())
-                    .child(self.scopes.clone())
-                    .child(self.controls.clone()),
+                    .child(self.explorer.clone())
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_grow()
+                            .child(self.editor_view.clone())
+                            .child(self.controls.clone()),
+                    ),
             )
     }
 }

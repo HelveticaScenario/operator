@@ -98,6 +98,38 @@ impl DslState {
         self.graph_value = Some(graph);
     }
 
+    /// Read tempo + time signature from the cached graph's ROOT_CLOCK module.
+    /// Returns (tempo BPM, numerator, denominator). Falls back to (120, 4, 4)
+    /// if the graph isn't populated yet.
+    pub fn clock_info(&self) -> (f64, u32, u32) {
+        let Some(graph) = self.graph_value.as_ref() else {
+            return (120.0, 4, 4);
+        };
+        let modules = graph.get("modules").and_then(|m| m.as_array());
+        let Some(modules) = modules else {
+            return (120.0, 4, 4);
+        };
+        for module in modules.iter() {
+            if module.get("id").and_then(|i| i.as_str()) == Some("ROOT_CLOCK") {
+                let params = module.get("params");
+                let tempo = params
+                    .and_then(|p| p.get("tempo"))
+                    .and_then(|t| t.as_f64())
+                    .unwrap_or(120.0);
+                let numerator = params
+                    .and_then(|p| p.get("numerator"))
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(4) as u32;
+                let denominator = params
+                    .and_then(|p| p.get("denominator"))
+                    .and_then(|n| n.as_u64())
+                    .unwrap_or(4) as u32;
+                return (tempo, numerator, denominator);
+            }
+        }
+        (120.0, 4, 4)
+    }
+
     pub fn patch_tx(&self) -> Option<&Sender<Patch>> {
         self.patch_tx.as_ref()
     }

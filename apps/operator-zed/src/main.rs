@@ -8,6 +8,7 @@ mod file_explorer;
 mod root_view;
 mod scope_blocks;
 mod scopes;
+mod toolbar;
 
 use std::path::PathBuf;
 
@@ -23,7 +24,7 @@ use crate::dsl_state::DslState;
 use crate::editor_view::{EditorView, RunDsl};
 use crate::file_explorer::FileExplorer;
 use crate::root_view::RootView;
-use crate::scopes::ScopesView;
+use crate::toolbar::Toolbar;
 
 fn print_help() {
     println!(
@@ -124,6 +125,12 @@ fn main() {
         .as_ref()
         .map(|e| e.scope_targets.clone())
         .unwrap_or_else(|| std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())));
+    let engine_state = engine
+        .as_ref()
+        .map(|e| e.state.clone())
+        .unwrap_or_else(|| {
+            std::sync::Arc::new(parking_lot::Mutex::new(audio::EngineState::default()))
+        });
     // EditorView::new runs the DSL on construction, so we don't pre-execute
     // here. That keeps the inline scope-block insertion on the same path as
     // every subsequent cmd-S.
@@ -169,6 +176,7 @@ fn main() {
                     let patch_tx = patch_tx.clone();
                     let workspace_root = workspace_root.clone();
                     let scope_targets = scope_targets.clone();
+                    let engine_state = engine_state.clone();
                     cx.new(|cx| {
                         let state = cx.new(|_cx| {
                             DslState::new(sample_rate, patch_tx, scope_targets)
@@ -187,13 +195,19 @@ fn main() {
                         });
                         let controls =
                             cx.new(|cx| ControlsView::new(state.clone(), cx));
-                        let scopes_view =
-                            cx.new(|cx| ScopesView::new(state.clone(), cx));
+                        let toolbar = cx.new(|cx| {
+                            Toolbar::new(
+                                state.clone(),
+                                editor_view.clone(),
+                                engine_state.clone(),
+                                cx,
+                            )
+                        });
                         RootView {
+                            toolbar,
                             explorer,
                             editor_view,
                             controls,
-                            scopes: scopes_view,
                         }
                     })
                 },

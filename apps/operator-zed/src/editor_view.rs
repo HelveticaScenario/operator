@@ -98,6 +98,20 @@ impl EditorView {
         cx.notify();
     }
 
+    /// Externally trigger the same path the cmd-S action uses. Used by the
+    /// toolbar's "Update Patch" button.
+    pub fn trigger_run_dsl(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let text = self.editor.read(cx).text(cx);
+        match &self.source_path {
+            Some(path) => match std::fs::write(path, &text) {
+                Ok(_) => eprintln!("[modz] saved {}", path.display()),
+                Err(err) => eprintln!("[modz] save failed: {err}"),
+            },
+            None => eprintln!("[modz] toolbar pressed (no source file)"),
+        }
+        self.execute(&text, cx);
+    }
+
     fn run_dsl(&mut self, _: &RunDsl, _window: &mut Window, cx: &mut Context<Self>) {
         let text = self.editor.read(cx).text(cx);
         match &self.source_path {
