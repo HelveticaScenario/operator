@@ -6832,6 +6832,7 @@ dependencies = [
  "modular_core",
  "multi_buffer",
  "parking_lot",
+ "serde_json",
  "settings",
  "theme",
  "ui",

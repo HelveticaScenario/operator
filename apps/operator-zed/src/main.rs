@@ -15,6 +15,41 @@ use crate::audio::AudioEngine;
 
 actions!(modz, [RunDsl]);
 
+fn print_help() {
+    println!(
+        "modz {} — operator-zed prototype\n\n\
+         USAGE:\n    \
+             modz [OPTIONS] [FILE]\n\n\
+         ARGS:\n    \
+             FILE    Path to a .modular DSL script\n\n\
+         OPTIONS:\n    \
+             --emit-graph    Run the DSL on FILE and print PatchGraph JSON to stdout\n    \
+             -h, --help      Show this help",
+        env!("CARGO_PKG_VERSION"),
+    );
+}
+
+fn run_emit_graph(path: Option<&std::path::Path>) {
+    let Some(path) = path else {
+        eprintln!("--emit-graph requires a path argument");
+        std::process::exit(2);
+    };
+    let _source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("read {}: {err}", path.display());
+            std::process::exit(1);
+        }
+    };
+    // TODO: drive the DSL through deno_core, emit the resulting PatchGraph as JSON.
+    // Until then, emit a structured stub so harness scripts can detect the path is wired.
+    println!(
+        r#"{{"status":"unimplemented","reason":"deno_core runtime not yet wired","source_path":{}}}"#,
+        serde_json::Value::String(path.display().to_string())
+    );
+    std::process::exit(2);
+}
+
 struct EditorView {
     editor: Entity<Editor>,
     focus_handle: FocusHandle,
@@ -55,7 +90,26 @@ impl gpui::Render for EditorView {
 }
 
 fn main() {
-    let cli_path: Option<PathBuf> = std::env::args().nth(1).map(PathBuf::from);
+    let mut args = std::env::args().skip(1);
+    let mut emit_graph = false;
+    let mut positional: Vec<String> = Vec::new();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--emit-graph" => emit_graph = true,
+            "-h" | "--help" => {
+                print_help();
+                return;
+            }
+            _ => positional.push(arg),
+        }
+    }
+    let cli_path: Option<PathBuf> = positional.into_iter().next().map(PathBuf::from);
+
+    if emit_graph {
+        run_emit_graph(cli_path.as_deref());
+        return;
+    }
+
     let initial = cli_path
         .as_ref()
         .and_then(|p| std::fs::read_to_string(p).ok())
