@@ -1,17 +1,17 @@
 //! The editor pane: holds a Zed `Editor`, listens for cmd-S, runs the DSL,
-//! and pushes the resulting Patch to the audio thread.
+//! pushes the resulting `Patch` to the audio thread, and updates the shared
+//! `DslState` (graph + sliders) so the controls panel re-renders.
 
 use std::path::{Path, PathBuf};
 
-use crossbeam_channel::Sender;
 use editor::Editor;
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Window, actions, div, prelude::*, rgb,
 };
 use language::Buffer;
-use modular_core::patch::Patch;
 
-use crate::dsl::run_and_send_patch;
+use crate::dsl;
+use crate::dsl_state::DslState;
 
 actions!(modz, [RunDsl]);
 
@@ -19,16 +19,14 @@ pub struct EditorView {
     editor: Entity<Editor>,
     focus_handle: FocusHandle,
     source_path: Option<PathBuf>,
-    patch_tx: Option<Sender<Patch>>,
-    sample_rate: f32,
+    state: Entity<DslState>,
 }
 
 impl EditorView {
     pub fn new(
         initial_text: String,
         source_path: Option<PathBuf>,
-        patch_tx: Option<Sender<Patch>>,
-        sample_rate: f32,
+        state: Entity<DslState>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -41,13 +39,12 @@ impl EditorView {
             editor,
             focus_handle,
             source_path,
-            patch_tx,
-            sample_rate,
+            state,
         }
     }
 
     /// Replace the editor buffer with the contents of `path`, update the save
-    /// target, and re-run the DSL so the audio thread reflects the new file.
+    /// target, and re-run the DSL so audio + sliders track the new file.
     pub fn open_file(&mut self, path: &Path, _window: &mut Window, cx: &mut Context<Self>) {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
@@ -58,8 +55,6 @@ impl EditorView {
         };
         let multi = self.editor.read(cx).buffer().clone();
         multi.update(cx, |multi, cx| {
-            // The Editor wraps a single Buffer in a multi-buffer; replace the
-            // text on that underlying buffer.
             if let Some(handle) = multi.all_buffers().into_iter().next() {
                 handle.update(cx, |buffer, cx| {
                     buffer.set_text(text.clone(), cx);
@@ -67,11 +62,7 @@ impl EditorView {
             }
         });
         self.source_path = Some(path.to_path_buf());
-
-        if let Err(err) = run_and_send_patch(&text, self.sample_rate, self.patch_tx.as_ref())
-        {
-            eprintln!("[modz] open-file DSL run: {err}");
-        }
+        self.execute(&text, cx);
         cx.notify();
     }
 
@@ -84,9 +75,28 @@ impl EditorView {
             },
             None => eprintln!("[modz] cmd-s pressed (no source file)"),
         }
-        if let Err(err) = run_and_send_patch(&text, self.sample_rate, self.patch_tx.as_ref())
-        {
-            eprintln!("[modz] {err}");
+        self.execute(&text, cx);
+    }
+
+    fn execute(&mut self, source: &str, cx: &mut Context<Self>) {
+        let sample_rate = self.state.read(cx).sample_rate();
+        match dsl::run(source, sample_rate) {
+            Ok(execution) => {
+                if let Some(tx) = self.state.read(cx).patch_tx().cloned() {
+                    if let Err(err) = tx.try_send(execution.patch) {
+                        eprintln!("[modz] audio channel send: {err}");
+                    }
+                }
+                let module_count = execution.module_count;
+                let slider_count = execution.sliders.len();
+                self.state.update(cx, |state, cx| {
+                    state.update_after_exec(execution.graph_value, execution.sliders, cx);
+                });
+                eprintln!(
+                    "[modz] DSL ok — {module_count} modules, {slider_count} sliders"
+                );
+            }
+            Err(err) => eprintln!("[modz] {err}"),
         }
     }
 }

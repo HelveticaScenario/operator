@@ -1,13 +1,16 @@
-//! Top-level window content: file explorer on the left, editor on the right.
+//! Top-level window content: file explorer | editor stack with the controls
+//! panel underneath the editor.
 
 use gpui::{Context, Entity, Render, Window, div, prelude::*};
 
+use crate::controls::ControlsView;
 use crate::editor_view::EditorView;
 use crate::file_explorer::FileExplorer;
 
 pub struct RootView {
     pub explorer: Entity<FileExplorer>,
     pub editor_view: Entity<EditorView>,
+    pub controls: Entity<ControlsView>,
 }
 
 impl Render for RootView {
@@ -17,6 +20,14 @@ impl Render for RootView {
             .flex_row()
             .size_full()
             .child(self.explorer.clone())
-            .child(self.editor_view.clone())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_grow()
+                    .size_full()
+                    .child(self.editor_view.clone())
+                    .child(self.controls.clone()),
+            )
     }
 }

@@ -1,6 +1,8 @@
 mod audio;
+mod controls;
 mod dsl;
 mod dsl_runtime;
+mod dsl_state;
 mod editor_view;
 mod file_explorer;
 mod root_view;
@@ -14,7 +16,8 @@ use gpui::{
 use settings::{DEFAULT_KEYMAP_PATH, KeybindSource, KeymapFile};
 
 use crate::audio::AudioEngine;
-use crate::dsl::run_and_send_patch;
+use crate::controls::ControlsView;
+use crate::dsl_state::DslState;
 use crate::editor_view::{EditorView, RunDsl};
 use crate::file_explorer::FileExplorer;
 use crate::root_view::RootView;
@@ -115,11 +118,35 @@ fn main() {
     let patch_tx = engine.as_ref().map(|e| e.patch_tx.clone());
     let sample_rate = engine.as_ref().map(|e| e.sample_rate).unwrap_or(48_000.0);
 
-    if !initial.trim().is_empty() {
-        if let Err(err) = run_and_send_patch(&initial, sample_rate, patch_tx.as_ref()) {
-            eprintln!("[modz] startup DSL run: {err}");
+    // Run the startup DSL once, but stash the result for the gpui side to
+    // copy into DslState. This way the controls panel comes up populated.
+    let startup_execution = if !initial.trim().is_empty() {
+        match dsl::run(&initial, sample_rate) {
+            Ok(execution) => {
+                if let Some(tx) = patch_tx.as_ref() {
+                    if let Err(err) = tx.try_send(execution.patch) {
+                        eprintln!("[modz] startup audio send: {err}");
+                        None
+                    } else {
+                        eprintln!(
+                            "[modz] DSL ok — {} modules, {} sliders (startup)",
+                            execution.module_count,
+                            execution.sliders.len()
+                        );
+                        Some((execution.graph_value, execution.sliders))
+                    }
+                } else {
+                    Some((execution.graph_value, execution.sliders))
+                }
+            }
+            Err(err) => {
+                eprintln!("[modz] startup DSL run: {err}");
+                None
+            }
         }
-    }
+    } else {
+        None
+    };
 
     Application::new()
         .with_assets(Assets)
@@ -161,13 +188,21 @@ fn main() {
                     let source_path = cli_path.clone();
                     let patch_tx = patch_tx.clone();
                     let workspace_root = workspace_root.clone();
+                    let startup_execution = startup_execution.clone();
                     cx.new(|cx| {
+                        let state = cx.new(|_cx| {
+                            let mut state = DslState::new(sample_rate, patch_tx);
+                            if let Some((graph_value, sliders)) = startup_execution {
+                                state.sliders = sliders;
+                                state.set_graph_value(graph_value);
+                            }
+                            state
+                        });
                         let editor_view = cx.new(|cx| {
                             EditorView::new(
                                 initial_text,
                                 source_path,
-                                patch_tx,
-                                sample_rate,
+                                state.clone(),
                                 window,
                                 cx,
                             )
@@ -175,9 +210,12 @@ fn main() {
                         let explorer = cx.new(|cx| {
                             FileExplorer::new(&workspace_root, editor_view.clone(), cx)
                         });
+                        let controls =
+                            cx.new(|cx| ControlsView::new(state.clone(), cx));
                         RootView {
                             explorer,
                             editor_view,
+                            controls,
                         }
                     })
                 },
