@@ -1,0 +1,5 @@
+// hello.modular — placeholder sample
+const mod = $sine('220hz');
+const carrier = $sine('440hz').amp(mod.amplitude(0.5));
+const shape = $slider('Shape', 0, 0, 5);
+$saw('a3', { shape }).out();

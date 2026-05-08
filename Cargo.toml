@@ -6,12 +6,14 @@ members = [
     "crates/mi-plaits-dsp-rs",
     "crates/rust-music-theory",
     "crates/modular",
+    "apps/operator-zed",
 ]
 default-members = [
     "crates/modular_core",
     "crates/modular_derive",
     "crates/modular",
 ]
+exclude = ["vendor/zed"]
 
 [workspace.dependencies]
 profiling = "1.0"

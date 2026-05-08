@@ -1,0 +1,24 @@
+[package]
+name = "operator-zed"
+version = "0.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[[bin]]
+name = "operator-zed"
+path = "src/main.rs"
+
+[dependencies]
+gpui = { path = "../../vendor/zed/crates/gpui" }
+editor = { path = "../../vendor/zed/crates/editor" }
+multi_buffer = { path = "../../vendor/zed/crates/multi_buffer" }
+language = { path = "../../vendor/zed/crates/language" }
+theme = { path = "../../vendor/zed/crates/theme" }
+settings = { path = "../../vendor/zed/crates/settings" }
+assets = { path = "../../vendor/zed/crates/assets" }
+ui = { path = "../../vendor/zed/crates/ui" }
+modular_core = { path = "../../crates/modular_core" }
+cpal = "0.17"
+crossbeam-channel = "0.5"
+parking_lot = "0.12"

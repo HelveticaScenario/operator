@@ -4,3 +4,6 @@
 [submodule "crates/rust-music-theory"]
 	path = crates/rust-music-theory
 	url = https://github.com/HelveticaScenario/rust-music-theory
+[submodule "vendor/zed"]
+	path = vendor/zed
+	url = https://github.com/zed-industries/zed.git
