@@ -43,27 +43,28 @@ fn run_emit_graph(path: Option<&std::path::Path>) {
         }
     };
 
-    // Stage-1: V8 boots and evaluates the source as raw JS, returning whatever
-    // the last expression produced. Once the DSL bundle (executor.ts +
-    // GraphBuilder.ts) is wired into the runtime, this should instead invoke
-    // `executeDSL(source)` and serialize the resulting `PatchGraph`.
-    let mut runtime = dsl_runtime::DslRuntime::new();
-    let probe = runtime
-        .eval(
-            "modz_runtime_probe",
-            "({ runtime: 'deno_core', version: 1 })".to_string(),
-        )
-        .unwrap_or_else(|e| serde_json::json!({"probe_error": e}));
-
-    let report = serde_json::json!({
-        "status": "stage1",
-        "reason": "V8 boots; DSL bundle not yet linked",
-        "source_path": path.display().to_string(),
-        "source_bytes": source.len(),
-        "probe": probe,
-    });
-    println!("{report}");
-    std::process::exit(2);
+    let mut runtime = match dsl_runtime::DslRuntime::new() {
+        Ok(rt) => rt,
+        Err(err) => {
+            eprintln!("DslRuntime init failed: {err}");
+            std::process::exit(1);
+        }
+    };
+    match runtime.execute(&source) {
+        Ok(value) => {
+            println!("{value}");
+            let exit = if value.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                0
+            } else {
+                1
+            };
+            std::process::exit(exit);
+        }
+        Err(err) => {
+            eprintln!("DSL execute failed: {err}");
+            std::process::exit(1);
+        }
+    }
 }
 
 struct EditorView {
@@ -82,17 +83,34 @@ impl EditorView {
             },
             None => eprintln!("[modz] cmd-s pressed (no source file)"),
         }
-        // Stage-1: prove the V8 boot path works on every save. Cheap probe.
-        // Once the DSL bundle is in, replace this with a call into
-        // executeDSL(text) and route the resulting PatchGraph to audio.
-        let mut runtime = dsl_runtime::DslRuntime::new();
-        match runtime.eval("modz_save_probe", format!("({}, 'ok')", text.len())) {
-            Ok(value) => eprintln!(
-                "[modz] V8 probe ok — {} bytes -> {}",
-                text.len(),
-                value
-            ),
-            Err(err) => eprintln!("[modz] V8 probe failed: {err}"),
+
+        let mut runtime = match dsl_runtime::DslRuntime::new() {
+            Ok(rt) => rt,
+            Err(err) => {
+                eprintln!("[modz] DslRuntime init failed: {err}");
+                return;
+            }
+        };
+        match runtime.execute(&text) {
+            Ok(value) => match value.get("ok").and_then(|v| v.as_bool()) {
+                Some(true) => eprintln!(
+                    "[modz] DSL ok — {} bytes -> {} modules",
+                    text.len(),
+                    value
+                        .pointer("/value/patch/modules")
+                        .and_then(|m| m.as_array())
+                        .map(|m| m.len())
+                        .unwrap_or(0),
+                ),
+                _ => eprintln!(
+                    "[modz] DSL error: {}",
+                    value
+                        .get("error")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("(unknown)"),
+                ),
+            },
+            Err(err) => eprintln!("[modz] DSL execute failed: {err}"),
         }
     }
 }
