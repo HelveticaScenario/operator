@@ -22,5 +22,6 @@ modular_core = { path = "../../crates/modular_core" }
 cpal = "0.17"
 crossbeam-channel = "0.5"
 parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 deno_core = "0.400"

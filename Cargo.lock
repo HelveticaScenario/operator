@@ -7157,6 +7157,7 @@ dependencies = [
  "modular_core",
  "multi_buffer",
  "parking_lot",
+ "serde",
  "serde_json",
  "settings",
  "theme",

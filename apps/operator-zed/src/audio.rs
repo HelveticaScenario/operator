@@ -1,29 +1,26 @@
 //! Audio driver.
 //!
-//! Two paths:
+//! Build a single cpal output stream up front. Inside the audio callback,
+//! poll a `crossbeam_channel::Receiver<Patch>` and hot-swap to whichever
+//! `Patch` arrives last. Until the first `Patch` shows up the callback
+//! falls back to a hardcoded 440 Hz sine so the binary is never silent.
 //!
-//! 1. **Hardcoded sine** (default): plays a 440 Hz sine through the default
-//!    output. This is the original Step-3 validation that the cpal stream
-//!    works inside the gpui binary.
-//!
-//! 2. **Patch-driven** (`OPERATOR_ZED_PATCH_TEST=1`): builds a tiny
-//!    hand-crafted `PatchGraph` (single `$sine` -> `$signal`/ROOT_OUTPUT),
-//!    materializes it via `modular_core::patch::Patch::from_graph`, and
-//!    drives it from the cpal callback. Validates the audio loop integration
-//!    (next-session shopping-list item 4) end-to-end without needing the JS
-//!    runtime. Once deno_core is wired and emits real graphs, this branch
-//!    becomes the production path and the sine fallback can be deleted.
+//! The sender is exposed back to `main.rs` so the cmd-S handler (and the
+//! one-shot startup run if a file was passed on argv) can push freshly
+//! built `Patch::from_graph(...)` values into the audio thread.
 
 use std::sync::Arc;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use modular_core::patch::Patch;
-use modular_core::types::{ModuleState, PatchGraph, ROOT_ID, ROOT_OUTPUT_PORT};
 use parking_lot::Mutex;
 
 pub struct AudioEngine {
     _stream: cpal::Stream,
     pub state: Arc<Mutex<EngineState>>,
+    pub patch_tx: Sender<Patch>,
+    pub sample_rate: f32,
 }
 
 #[derive(Default)]
@@ -55,24 +52,8 @@ impl AudioEngine {
             muted: muted_by_default,
         }));
 
-        let use_patch = std::env::var("OPERATOR_ZED_PATCH_TEST")
-            .map(|v| v != "0")
-            .unwrap_or(false);
-
-        let mut driver: Driver = if use_patch {
-            match build_test_patch(sample_rate) {
-                Ok(patch) => {
-                    eprintln!("[modz] audio: driving hand-crafted Patch (sine -> ROOT_OUTPUT)");
-                    Driver::Patch(Box::new(patch))
-                }
-                Err(err) => {
-                    eprintln!("[modz] audio: patch build failed ({err}); falling back to sine");
-                    Driver::Sine { phase: 0.0 }
-                }
-            }
-        } else {
-            Driver::Sine { phase: 0.0 }
-        };
+        let (patch_tx, patch_rx) = bounded::<Patch>(4);
+        let mut driver = Driver::new(patch_rx);
 
         let stream_state = state.clone();
         let stream = match config.sample_format() {
@@ -96,6 +77,8 @@ impl AudioEngine {
         Ok(Self {
             _stream: stream,
             state,
+            patch_tx,
+            sample_rate,
         })
     }
 
@@ -104,12 +87,21 @@ impl AudioEngine {
     }
 }
 
-enum Driver {
-    Sine { phase: f32 },
-    Patch(Box<Patch>),
+struct Driver {
+    patch_rx: Receiver<Patch>,
+    patch: Option<Patch>,
+    sine_phase: f32,
 }
 
 impl Driver {
+    fn new(patch_rx: Receiver<Patch>) -> Self {
+        Self {
+            patch_rx,
+            patch: None,
+            sine_phase: 0.0,
+        }
+    }
+
     fn fill(
         &mut self,
         buf: &mut [f32],
@@ -117,6 +109,14 @@ impl Driver {
         sample_rate: f32,
         state: &Arc<Mutex<EngineState>>,
     ) {
+        // Drain pending patch updates; keep the most recent one.
+        loop {
+            match self.patch_rx.try_recv() {
+                Ok(patch) => self.patch = Some(patch),
+                Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => break,
+            }
+        }
+
         let s = state.lock();
         if s.muted {
             for sample in buf.iter_mut() {
@@ -128,21 +128,8 @@ impl Driver {
         let amp = s.amplitude;
         drop(s);
 
-        match self {
-            Driver::Sine { phase } => {
-                let phase_increment = freq * std::f32::consts::TAU / sample_rate;
-                for frame in buf.chunks_mut(channels) {
-                    let value = phase.sin() * amp;
-                    for sample in frame.iter_mut() {
-                        *sample = value;
-                    }
-                    *phase += phase_increment;
-                    if *phase > std::f32::consts::TAU {
-                        *phase -= std::f32::consts::TAU;
-                    }
-                }
-            }
-            Driver::Patch(patch) => {
+        match &self.patch {
+            Some(patch) => {
                 for frame in buf.chunks_mut(channels) {
                     for module in patch.sampleables.values() {
                         module.update();
@@ -153,40 +140,19 @@ impl Driver {
                     }
                 }
             }
+            None => {
+                let phase_increment = freq * std::f32::consts::TAU / sample_rate;
+                for frame in buf.chunks_mut(channels) {
+                    let value = self.sine_phase.sin() * amp;
+                    for sample in frame.iter_mut() {
+                        *sample = value;
+                    }
+                    self.sine_phase += phase_increment;
+                    if self.sine_phase > std::f32::consts::TAU {
+                        self.sine_phase -= std::f32::consts::TAU;
+                    }
+                }
+            }
         }
     }
-}
-
-/// Hand-crafted PatchGraph used by `OPERATOR_ZED_PATCH_TEST=1`.
-///
-/// One `$sine` oscillator at C4 (0 V/Oct -> ~261.6 Hz) wired into the
-/// well-known `ROOT_OUTPUT` `$signal` module. Mirrors the shape produced by
-/// `factories.ts` -> `signalFactory(..., { id: 'ROOT_OUTPUT' })`.
-fn build_test_patch(sample_rate: f32) -> Result<Patch, String> {
-    let graph = PatchGraph {
-        modules: vec![
-            ModuleState {
-                id: "osc1".to_string(),
-                module_type: "$sine".to_string(),
-                id_is_explicit: Some(true),
-                params: serde_json::json!({ "freq": 0.0 }),
-            },
-            ModuleState {
-                id: ROOT_ID.clone(),
-                module_type: "$signal".to_string(),
-                id_is_explicit: Some(true),
-                params: serde_json::json!({
-                    "source": {
-                        "type": "cable",
-                        "module": "osc1",
-                        "port": *ROOT_OUTPUT_PORT,
-                        "channel": 0,
-                    }
-                }),
-            },
-        ],
-        module_id_remaps: None,
-        scopes: Vec::new(),
-    };
-    Patch::from_graph(&graph, sample_rate)
 }
