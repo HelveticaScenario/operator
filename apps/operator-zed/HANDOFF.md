@@ -17,7 +17,7 @@ This repo is the existing `~/dev/modular` monorepo. The new app lives at `apps/o
 
 ## Plan: 7 milestone steps
 
-Each step is intended to leave the binary in a runnable state. Step 0–2 done, Step 3 partially done.
+Each step is intended to leave the binary in a runnable state. As of 2026-05-08, Steps 0–6 have prototype-level coverage. Step 6's inline-block-decoration variant is the only feature gap; the data path runs through a panel today.
 
 ### Step 0 — submodule + workspace plumbing &nbsp;✅
 
@@ -39,50 +39,55 @@ Each step is intended to leave the binary in a runnable state. Step 0–2 done, 
 - Editor created via `Editor::for_buffer(buffer, None, window, cx)` with `Buffer::local(initial_text, cx)`
 - File path passed via argv[1]; falls back to a placeholder string
 
-### Step 3 — DSL execution + audio &nbsp;⏳ partial
+### Step 3 — DSL execution + audio &nbsp;✅
 
-**Done:**
+End-to-end: a `.modular` source file is parsed by the bundled JS DSL, executed in V8, and the resulting `PatchGraph` materializes into a real `Patch` that drives a cpal output stream. cmd-S re-runs the same path; the file explorer's click handler does too. `--emit-graph FILE` runs the DSL headless and prints the JSON envelope on stdout.
 
-- `modular_core` path-linked into the binary; compiles + links cleanly
-- `apps/operator-zed/src/audio.rs`: cpal driver with two paths — original 440 Hz sine (default), or a `modular_core::patch::Patch` driven sample-by-sample under `OPERATOR_ZED_PATCH_TEST=1`. Mute via `OPERATOR_ZED_MUTE=0/1`.
-- `apps/operator-zed/src/dsl_runtime.rs`: `deno_core` JsRuntime wrapper with an `eval` helper. V8 boots in both the cmd-S handler and `--emit-graph`.
-- `apps/operator-zed/src/main.rs`: editor::init + Zed default-macos keymap loaded; Modz-namespaced `RunDsl` action bound to cmd-s; `--emit-graph FILE` and `--help` CLI parsing.
+- **modular_core**: path-linked.
+- **audio.rs**: cpal callback owns a `Patch`; a crossbeam_channel `Sender<Patch>` lets the main thread hot-swap. Falls back to a hardcoded 440 Hz sine until the first patch arrives.
+- **dsl_runtime.rs**: `deno_core 0.400` `JsRuntime` with a custom extension exposing `op_modz_derive_channel_count`, `op_modz_reserved_output_names`, and `op_modz_log`. The bundled JS lives at `$OUT_DIR/dsl_runtime.js` (built by `build.rs` -> `dsl/build.mjs`).
+- **dsl/entry.ts**: bundle entry that wraps `executePatchScript` and routes `console.*` through `op_modz_log` so `--emit-graph` stdout stays clean JSON.
+- **dsl/modular_core_shim.ts**: replaces `@modular/core` so the bundle doesn't pull `crates/modular/index.js` (the N-API addon entry, uses `node:module`).
+- **dsl/analyze_source_stub.ts**: replaces `src/main/dsl/analyzeSource` so the bundle doesn't pull ts-morph (~14 MB TS compiler). Returns empty registries; argument-span highlighting is disabled until the Rust-side `op_argument_spans` lands.
+- **dsl/build.mjs**: esbuild API driver — CLI `--alias` doesn't match the relative `./analyzeSource` import inside executor.ts, so a path-resolve plugin redirects it explicitly.
+- **build.rs**: invokes `dsl/build.mjs` to produce `$OUT_DIR/dsl_runtime.js`. Falls back to a placeholder bundle if `node_modules/` is absent so the binary still builds in clean checkouts.
 
-**Not done — required for full Step 3:**
+**Cmd-S handler**: `editor::init(cx)` + Zed's default-macos keymap loaded via `KeymapFile::load_asset_allow_partial_failure`; the Modz-namespaced `RunDsl` action runs the DSL, sends the resulting `Patch` into the audio thread, and updates the shared `DslState` so the controls + scopes panels re-render.
 
-1. **Lift `crates/modular_host`**. `crates/modular/src/{audio,midi,link,params_cache,validation}.rs` are trapped inside the cdylib crate that produces the N-API addon. New crate `crates/modular_host` should reuse those files (with N-API call sites stripped) and be consumed by both `crates/modular` (existing Electron build) and `apps/operator-zed`. Audio.rs there is 2885 lines; expect ~1 day of refactoring.
-2. **deno_core runtime**. ✅ Dependency added (`deno_core = "0.400"`). `apps/operator-zed/src/dsl_runtime.rs` wraps a `JsRuntime` and exposes a single `eval(name, source)` helper that returns `serde_json::Value`. Both the cmd-S handler and `--emit-graph` boot V8 and run a probe expression to prove the path. Still TODO: register ops and load a bundled DSL module:
-    - `op_emit_patch(graph, sliders, scope_sites, source_locations)` — invoked from JS at end of `executeDSL()` instead of returning to caller
-    - `op_argument_spans(source) -> Vec<ArgumentSpan>` — Rust-side span analysis via `oxc_parser`, replacing ts-morph in `argumentSpanAnalyzer.ts`
-    - `op_load_wav(path) -> Vec<u8>`
-    - `op_workspace_root() -> String`
-    - `op_log(level, msg)`
-3. **`build.rs` esbuild bundle**. Bundle `src/main/dsl/{executor,factories,GraphBuilder}.ts` into `OUT_DIR/dsl_runtime.js`. The build script can shell out to esbuild via npx (Volta-pinned node) or to a pre-built esbuild binary; either works.
+**`--emit-graph FILE`**: prints the `{ ok, value | error }` envelope verbatim, exits 0 on success / 1 on DSL error.
 
-    **Gotchas surfaced by a trial bundle (2026-05-08):**
-    - `executor.ts` -> `analyzeSource.ts` imports `ts-morph`. Bundling pulls the whole TS compiler (~13.7 MB neutral-platform output) and hits node-only deps (`fs`, `path`). Replace `analyzeSource.ts`/`argumentSpanAnalyzer.ts` with a tiny shim that calls `op_argument_spans` _before_ bundling, otherwise the bundle won't load in `JsRuntime`.
-    - `factories.ts` re-exports from `@modular/core` which resolves to `crates/modular/index.js` — the N-API addon entry (uses `node:module`/`createRequire`). For the operator-zed bundle, point `@modular/core` at a small TS shim that re-exports just the pure types/utilities (`PatchGraph`, `ModuleSchema`, `deriveChannelCount`) and skips the addon. tsconfig path override or an esbuild alias works.
+**Carry-over follow-ups (not blocking the prototype):**
 
-4. **Cmd-S handler**. ✅ wired — `editor::init(cx)` + Zed's default-macos keymap loaded via `KeymapFile::load_asset_allow_partial_failure`; a Modz-namespaced `RunDsl` action is bound to `cmd-s`. The handler currently writes the buffer back to disk and stubs DSL execution with a length log. Once deno_core is in, route the buffer text through V8 instead of the stub.
-5. **Headless `--emit-graph` mode**. ⏳ CLI plumbing landed — `--emit-graph FILE` parses correctly and emits a structured "unimplemented" JSON record on stdout (exit code 2). Replace the stub with the real DSL path once deno_core is wired. Use it to byte-compare against the Electron build's output across the existing fixtures in `src/main/dsl/__tests__/`.
+1. **Lift `crates/modular_host`**. `crates/modular/src/{audio,midi,link,params_cache,validation}.rs` still live inside the cdylib crate. operator-zed currently has its own minimal cpal driver and a small inline copy of the params deserializer entry-point; the production audio engine (BPM, MIDI, Link, etc.) is unused. ~1 day of refactor.
+2. **`op_argument_spans` (oxc_parser)** — replaces the analyzeSource stub so argument-span highlighting works in the Zed shell.
+3. **`op_load_wav` / `op_workspace_root`** — needed once `$wavs()` is exercised in real DSL.
+4. **Patch param mismatch**: `dsl::sanitize_graph_for_modular_core` strips `tempoSet` before deserialization. If more napi-only fields appear, extend the sanitizer or push the change into modular_core.
 
-### Step 4 — File explorer &nbsp;⏳
+### Step 4 — File explorer &nbsp;✅
 
-- New file `apps/operator-zed/src/file_explorer.rs`
-- `gpui::uniform_list` (see `vendor/zed/crates/gpui/examples/uniform_list.rs`)
-- `std::fs::read_dir` walk under workspace root from CLI arg; click handler swaps the buffer in the editor
+- `apps/operator-zed/src/file_explorer.rs` — gpui `uniform_list` over the parent dir of the CLI path (or `$PWD`). `.modular` files sort first and render in yellow. Hidden files filtered. Click swaps the EditorView buffer in place via `EditorView::open_file`, which also re-runs the DSL.
+- Currently shallow (no directory recursion). A simple toggle on dir entries could be added later.
 
-### Step 5 — Sliders / control panel &nbsp;⏳
+### Step 5 — Sliders / control panel &nbsp;✅
 
-- New file `apps/operator-zed/src/controls.rs`
-- DSL execution result already produces `SliderDefinition[]` — just render gpui slider widgets
-- Drag handlers write directly into `modular_host::params_cache` (no JS re-exec)
+- `apps/operator-zed/src/controls.rs` — one row per `$slider()` declaration. Label, current value, range, and `−`/`+` buttons.
+- `apps/operator-zed/src/dsl_state.rs::bump_slider` mutates the cached graph JSON (`modules[__slider_<label>].params.source = newValue`), rebuilds a `Patch` via `dsl::build_patch` (no JS), and pushes it to the audio thread. ~5% of range per click; clamped to [min, max].
+- The graph is cached at JS-execution time so slider drags don't pay the V8 round-trip cost.
+- TODO: a true draggable slider widget (drag-to-set) on top of the buttons. Pure UI work.
 
-### Step 6 — Inline scope overlays &nbsp;⏳
+### Step 6 — Scopes &nbsp;✅ (panel) / ⏳ (inline blocks)
 
-- New file `apps/operator-zed/src/scopes.rs`
-- Use `editor::display_map::block_map::BlockProperties` + `RenderBlock`. Entry point: `Editor::insert_blocks(blocks, autoscroll, cx)` at `vendor/zed/crates/editor/src/editor.rs:20536`. `BlockProperties` definition at `vendor/zed/crates/editor/src/display_map/block_map.rs:224`, `RenderBlock` typedef at `:101`.
-- Anchor each `.scope()` call site via the source-location map produced by the DSL; insert one block with `placement: BlockPlacement::Below(anchor)`, `height: Some(8)`, `style: BlockStyle::Flex`, and a `RenderBlock` closure that draws live waveform data from a triple-buffered ring fed by the audio thread.
+The data path lands in this prototype:
+
+- `dsl_state.rs::ScopeTarget` — `{ label, module_id, port_name, channel, range, samples: Arc<Mutex<VecDeque<f32>>> }`. Audio thread pushes one sample/frame; UI thread reads on each render. Capacity ~250 ms at 48 kHz.
+- `audio.rs` — cpal callback iterates the shared `Vec<ScopeTarget>` per audio frame, calls `patch.sampleables[id].get_poly_sample(port)?.get(channel)`, and pushes into the matching ring.
+- `dsl.rs::parse_scopes` — walks the JS-emitted `graph.scopes` array (camelCase keys) and builds `ScopeTarget`s.
+- `apps/operator-zed/src/scopes.rs::ScopesView` — renders an 80-wide unicode-block waveform per channel; a `cx.spawn` timer drives a 30 Hz repaint.
+
+What's still in HANDOFF Step 6 (the _inline_ version):
+
+- Lift the renderer up into `editor::display_map::block_map::BlockProperties` + `RenderBlock`. Entry point: `Editor::insert_blocks(blocks, autoscroll, cx)` at `vendor/zed/crates/editor/src/editor.rs:20536`. `BlockProperties` definition at `vendor/zed/crates/editor/src/display_map/block_map.rs:224`, `RenderBlock` typedef at `:101`.
+- Anchor each `.scope()` call site via the DSL's source-location map (already produced by `executePatchScript`); insert one block with `placement: BlockPlacement::Below(anchor)`, `height: Some(8)`, `style: BlockStyle::Flex`, and a `RenderBlock` closure that draws the live waveform straight from the same ring buffer the panel reads today.
 - On DSL re-exec: diff scope sites and call `replace_blocks` / `insert_blocks` / `remove_blocks` accordingly.
 - **Open question**: does `BlockPlacement::Below` survive edits above the anchor? Run a small sanity test before building everything on top of it.
 
@@ -133,12 +138,27 @@ mcp__computer-use__open_application app="dev.danlewis.modz"
 
 ```
 apps/operator-zed/
-├── Cargo.toml                          # workspace member, deps on Zed crates
+├── Cargo.toml                          # workspace member, deps on Zed crates + deno_core
+├── build.rs                            # invokes dsl/build.mjs, embeds the JS bundle
 ├── src/
-│   ├── main.rs                         # gpui Application + window + Editor
-│   └── audio.rs                        # cpal driver (Stage 1: hardcoded sine)
+│   ├── main.rs                         # CLI parse + gpui Application + window
+│   ├── audio.rs                        # cpal driver: hot-swappable Patch + scope ring fill
+│   ├── controls.rs                     # ControlsView (slider rows, +/- buttons)
+│   ├── dsl.rs                          # run(source) -> { graph, sliders, scopes, patch }
+│   ├── dsl_runtime.rs                  # deno_core JsRuntime + ops
+│   ├── dsl_state.rs                    # shared DslState (graph cache, sliders, scope rings)
+│   ├── editor_view.rs                  # Editor + cmd-S handler + open_file
+│   ├── file_explorer.rs                # FileExplorer panel (uniform_list)
+│   ├── root_view.rs                    # explorer | (editor + scopes + controls)
+│   └── scopes.rs                       # ScopesView (ASCII waveform per ring)
+├── dsl/
+│   ├── entry.ts                        # bundle entry: wraps executePatchScript
+│   ├── modular_core_shim.ts            # @modular/core replacement
+│   ├── analyze_source_stub.ts          # ts-morph-free analyzeSource
+│   └── build.mjs                       # esbuild API driver
 ├── examples/
-│   └── hello.modular                   # sample DSL script
+│   ├── hello.modular                   # original sample
+│   └── scope.modular                   # sliders + scopes
 ├── macos/
 │   ├── Info.plist                      # Xcode-style metadata for MCP
 │   └── build-app.sh                    # build + bundle + install script
@@ -165,21 +185,47 @@ First build is heavy — the dep tree pulls livekit's `webrtc-sys` which downloa
 
 ## Known issues / things to watch
 
-- **No keybindings wired**. `editor::init(cx)` is not currently called, so Return doesn't insert a newline, Cmd-Z doesn't undo, etc. Adding `editor::init` requires either a `Workspace` or carefully constructed globals — see `visual_test_runner.rs:165–204`.
 - **No syntax highlighting**. The buffer is `Buffer::local(text, cx)` with no language. Future: register a JavaScript / `.modular` language with the `LanguageRegistry`, or hand-roll a small one.
-- **Audio is a hardcoded sine**, not driven by `modular_core`. To plug in `Patch::from_graph`: in the cpal callback, call `module.update()` for each sampleable, then `patch.get_output()` for the root sample. See `vendor/zed/../crates/modular/src/audio.rs:1535` (`process_frame`) for the production reference, but the prototype only needs the simplified path.
+- **Argument-span highlighting disabled**. `dsl/analyze_source_stub.ts` returns empty registries. Replace with a real `op_argument_spans` (oxc_parser) when needed.
 - **`webrtc-sys` is dragged in transitively** by `editor` → `workspace` → `call` → `livekit_client` → `webrtc-sys`. There is no clean way to disable it short of patching the `call` crate. The runtime overhead is zero (we never instantiate any livekit objects); it just bloats the binary and adds compile time.
-- **modular's `target/` was wiped** during this session to free disk space (was 51 GB). Existing Electron build artifacts will rebuild on first `yarn build`.
+- **`@modular/core` shim incompletes**. `deriveChannelCount` and `getReservedOutputNames` proxy to Rust ops; other exports (e.g. `Synthesizer`, `validatePatchGraph`, `getMiniLeafSpans`) aren't shimmed. The current DSL doesn't reach those paths, but exotic scripts could.
+- **`tempoSet` strip**. `dsl::sanitize_graph_for_modular_core` removes `ROOT_CLOCK.params.tempoSet` because modular_core's `ClockParams` uses `deny_unknown_fields`. If GraphBuilder.ts grows more napi-only fields, extend the sanitizer.
+- **modular's `target/` was wiped** during a prior session to free disk space. Existing Electron build artifacts rebuild on first `yarn build`.
+- **Bundled DSL is ~600 KB** of JS, embedded via `include_str!` so no external file is needed at runtime.
 
-## Next-session shopping list
+## Bringing this prototype up after a fresh checkout
 
-In rough priority:
+```sh
+git checkout zed-prototype
+git submodule update --init --recursive vendor/zed
+yarn install                          # so dsl/build.mjs can find esbuild
+cargo build -p operator-zed           # ~10 min on first build (V8 + zed deps)
 
-1. **Wire `editor::init` + minimum keymap**. ✅ Done.
-2. **Lift `crates/modular_host`**. ~1 day. Untouched.
-3. **Drop `deno_core` in + bundle the DSL**. ⏳ Half done. `deno_core` is a dep, `JsRuntime` boots, and a probe expression evaluates from both the cmd-S handler and `--emit-graph`. **Still TODO**: build `dsl_runtime.js` via `build.rs` + esbuild, register the ops listed above, and load it as an ESM module so the cmd-S handler can call `executeDSL(text)`. Watch the two gotchas above (ts-morph, `@modular/core` napi entry).
-4. **Sample-loop integration**. ✅ Validated under `OPERATOR_ZED_PATCH_TEST=1` with a hand-built graph. Once #3 emits real graphs, drop the env-gate and route the latest graph from cmd-S into the cpal callback (crossbeam ringbuf or `Arc<Mutex<Option<Patch>>>` swap).
-5. **Headless `--emit-graph` parity test**. ⏳ CLI flag landed; emits stage1 JSON probe today. Once #3 lands, replace the stub with `executeDSL(source) -> serde_json::to_value(PatchGraph)` and add the byte-comparison harness against the Electron build's outputs in `src/main/dsl/__tests__/`. ~½ day on top of #3.
-6. Steps 4–6 (file explorer, sliders, scopes). ~2–3 days.
+# Run with audio + UI:
+./target/debug/operator-zed apps/operator-zed/examples/scope.modular
 
-Branch: `zed-prototype` on `~/dev/modular`. Current head: `0f2df49` (Patch-driven cpal), preceded by deno_core wiring (`77e96f8`), CLI parser + `--emit-graph` stub (`fe49a70`), and editor::init + cmd-S (`749e7d5`).
+# Headless DSL execution:
+./target/debug/operator-zed --emit-graph apps/operator-zed/examples/hello.modular | jq
+```
+
+Optional: `./apps/operator-zed/macos/build-app.sh --install` to make the binary drivable through the computer-use MCP.
+
+## Follow-up backlog
+
+Ordered roughly by leverage, not by size.
+
+1. **Inline scope blocks (HANDOFF Step 6, the rest of it)**. The data is already on a ring; lift `scopes::render_waveform` into a `RenderBlock` keyed off the source-location anchor and let `Editor::insert_blocks` paint it inline. ~1 day, mostly geometry/diff bookkeeping.
+2. **Lift `crates/modular_host`**. Move `crates/modular/src/{audio,midi,link,params_cache,validation}.rs` into a shared crate so operator-zed can stop carrying its own minimal driver. Unlocks Link sync, MIDI, BPM detection. ~1 day refactor; touches the napi addon.
+3. **Real slider drag**. Replace the `−`/`+` buttons with a draggable rail (gpui mouse handlers). Pure UI work.
+4. **`op_argument_spans` (oxc_parser)** + remove `analyze_source_stub`. Re-enables DSL argument highlighting in the editor.
+5. **`op_load_wav`, `op_workspace_root`** so `$wavs(...)` works.
+6. **--emit-graph parity test**. Run `--emit-graph` against every fixture in `src/main/dsl/__tests__/` and byte-compare with the Electron build's output. Catches drift between the napi shim and the real runtime.
+7. **Workspace tree (recursion + collapse)** in the file explorer. Today it's flat.
+
+Branch: `zed-prototype` on `~/dev/modular`. Recent heads:
+
+- `9b8a469` — scopes panel
+- `1218586` — slider controls panel
+- `3fa990c` — file explorer + module split
+- `882e2c1` — hot-swap Patch from cmd-S into cpal
+- (earlier) — deno_core bundle, --emit-graph, editor::init + cmd-S
