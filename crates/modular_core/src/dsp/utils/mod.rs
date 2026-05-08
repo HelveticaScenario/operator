@@ -1,4 +1,5 @@
 pub mod delay_line;
+pub mod halfband;
 pub mod one_pole;
 
 use crate::dsp::consts::{LUT_PITCH_RATIO_HIGH, LUT_PITCH_RATIO_LOW};

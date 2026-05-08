@@ -1454,6 +1454,172 @@
     "channels": 2
   },
   {
+    "name": "$overdrive",
+    "documentation": "Multi-mode overdrive saturator. Drive boosts the input into a soft, hard,\nor asymmetric shaper, with a tone control applying pre-emphasis before\ndistortion and matching de-emphasis after. Internally oversampled 2× to\nreduce aliasing.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "OverdriveParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "input signal to overdrive (bipolar, typically -5 to 5)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "saturation mode (defaults to soft)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverdriveMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into\nthe shaper at positive values and de-emphasises them after, and vice versa.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "drive"
+      ],
+      "$defs": {
+        "OverdriveMode": {
+          "description": "Saturation algorithm.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh-style saturation.",
+              "type": "string",
+              "const": "soft"
+            },
+            {
+              "description": "Hard clipping at ±1.",
+              "type": "string",
+              "const": "hard"
+            },
+            {
+              "description": "Asymmetric tube-style saturation with even harmonics.",
+              "type": "string",
+              "const": "asym"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "overdriven signal output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to overdrive (bipolar, typically -5 to 5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into\nthe shaper at positive values and de-emphasises them after, and vice versa.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
     "name": "$plate",
     "documentation": "Stereo plate reverb with a dense Glicol-inspired feedback network.\n\nUses a longer feedback path with distributed damping and more allpass\nstages than the standard Dattorro algorithm, producing a thicker,\nwarmer reverb tail. Always 100% wet — use `.send()` or `$mix` for\ndry/wet blending.\n\n```js\n$plate($saw('c3')).out()\n$plate($saw('c3'), { decay: 2, bandwidth: 3 }).out()\n$plate($saw('c3'), { modulation: $sine('0.1hz') }).out()\n```",
     "paramsSchema": {
