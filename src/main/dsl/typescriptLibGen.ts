@@ -361,6 +361,8 @@ type WavHandle = {
     readonly num: number;
     readonly den: number;
   };
+  /** Number of bars the sample spans, computed from BPM and time signature. E.g. an exact 2-bar loop is \`2.0\`; a 2.64-bar buffer is \`2.64\`. Absent when no BPM could be derived. */
+  readonly barCount?: number;
   readonly loops: ReadonlyArray<{
     readonly type: 'forward' | 'pingpong' | 'backward';
     readonly start: number;
