@@ -125,6 +125,10 @@ fn parse_scopes(value: &serde_json::Value) -> Vec<ScopeTarget> {
             .and_then(|r| r.as_array())
             .and_then(|arr| Some((arr.first()?.as_f64()?, arr.get(1)?.as_f64()?)))
             .unwrap_or((-5.0, 5.0));
+        let source_line = scope
+            .pointer("/sourceLocation/line")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
         for ch in channels.iter() {
             let Some(module_id) = ch.get("moduleId").and_then(|v| v.as_str()) else {
                 continue;
@@ -138,6 +142,7 @@ fn parse_scopes(value: &serde_json::Value) -> Vec<ScopeTarget> {
                 port_name.to_string(),
                 channel,
                 range,
+                source_line,
                 SCOPE_RING_CAPACITY,
             ));
         }

@@ -7148,6 +7148,7 @@ name = "operator-zed"
 version = "0.0.0"
 dependencies = [
  "assets",
+ "collections",
  "cpal 0.17.0",
  "crossbeam-channel",
  "deno_core",

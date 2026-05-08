@@ -21,6 +21,9 @@ pub struct ScopeTarget {
     pub port_name: String,
     pub channel: u32,
     pub range: (f64, f64),
+    /// 1-based source line of the originating `.scope()` call. Used by the
+    /// inline-block renderer to anchor the waveform under that line.
+    pub source_line: Option<u32>,
     pub samples: Arc<Mutex<VecDeque<f32>>>,
 }
 
@@ -30,6 +33,7 @@ impl ScopeTarget {
         port_name: String,
         channel: u32,
         range: (f64, f64),
+        source_line: Option<u32>,
         capacity: usize,
     ) -> Self {
         Self {
@@ -38,6 +42,7 @@ impl ScopeTarget {
             port_name,
             channel,
             range,
+            source_line,
             samples: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
         }
     }

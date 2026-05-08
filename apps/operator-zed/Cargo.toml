@@ -18,6 +18,7 @@ theme = { path = "../../vendor/zed/crates/theme" }
 settings = { path = "../../vendor/zed/crates/settings" }
 assets = { path = "../../vendor/zed/crates/assets" }
 ui = { path = "../../vendor/zed/crates/ui" }
+collections = { path = "../../vendor/zed/crates/collections" }
 modular_core = { path = "../../crates/modular_core" }
 cpal = "0.17"
 crossbeam-channel = "0.5"

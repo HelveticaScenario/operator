@@ -5,6 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use editor::Editor;
+use editor::display_map::CustomBlockId;
 use gpui::{
     App, Context, Entity, FocusHandle, Focusable, Window, actions, div, prelude::*, rgb,
 };
@@ -12,6 +13,7 @@ use language::Buffer;
 
 use crate::dsl;
 use crate::dsl_state::DslState;
+use crate::scope_blocks;
 
 actions!(modz, [RunDsl]);
 
@@ -20,6 +22,9 @@ pub struct EditorView {
     focus_handle: FocusHandle,
     source_path: Option<PathBuf>,
     state: Entity<DslState>,
+    /// Inline scope-block decorations currently in the editor. Tracked so we
+    /// can tear them down before inserting fresh ones on each DSL run.
+    scope_blocks: Vec<CustomBlockId>,
 }
 
 impl EditorView {
@@ -35,12 +40,39 @@ impl EditorView {
         let focus_handle = cx.focus_handle();
         let editor_focus = editor.read(cx).focus_handle(cx);
         window.focus(&editor_focus, cx);
-        Self {
+
+        // Drive a 30 Hz repaint of the editor so the inline scope blocks
+        // re-run their render closures and pick up fresh waveform data
+        // from the audio thread.
+        let editor_weak = editor.downgrade();
+        cx.spawn(async move |_this, cx| {
+            let interval = std::time::Duration::from_millis(33);
+            loop {
+                cx.background_executor().timer(interval).await;
+                if editor_weak
+                    .update(cx, |_editor, cx| cx.notify())
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
+
+        let mut this = Self {
             editor,
             focus_handle,
             source_path,
             state,
+            scope_blocks: Vec::new(),
+        };
+        // Run the DSL once on startup so audio + sliders + inline scope
+        // blocks come up reflecting the file the user opened.
+        let initial_text = this.editor.read(cx).text(cx);
+        if !initial_text.trim().is_empty() {
+            this.execute(&initial_text, cx);
         }
+        this
     }
 
     /// Replace the editor buffer with the contents of `path`, update the save
@@ -90,6 +122,7 @@ impl EditorView {
                 let module_count = execution.module_count;
                 let slider_count = execution.sliders.len();
                 let scope_count = execution.scopes.len();
+                let scopes_for_blocks = execution.scopes.clone();
                 self.state.update(cx, |state, cx| {
                     state.update_after_exec(
                         execution.graph_value,
@@ -98,6 +131,10 @@ impl EditorView {
                         cx,
                     );
                 });
+                // Replace inline scope-block decorations.
+                let previous = std::mem::take(&mut self.scope_blocks);
+                self.scope_blocks =
+                    scope_blocks::apply(&self.editor, &scopes_for_blocks, previous, cx);
                 eprintln!(
                     "[modz] DSL ok — {module_count} modules, {slider_count} sliders, {scope_count} scope channels"
                 );
