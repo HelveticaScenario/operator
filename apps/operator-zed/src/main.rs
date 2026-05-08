@@ -1,25 +1,23 @@
 mod audio;
+mod dsl;
 mod dsl_runtime;
+mod editor_view;
+mod file_explorer;
+mod root_view;
 
 use std::path::PathBuf;
 
 use assets::Assets;
-use editor::Editor;
 use gpui::{
-    App, Application, Bounds, Context, Entity, FocusHandle, Focusable, Window, WindowBounds,
-    WindowOptions, actions, div, prelude::*, px, rgb, size,
+    App, Application, Bounds, Window, WindowBounds, WindowOptions, prelude::*, px, size,
 };
-use language::Buffer;
 use settings::{DEFAULT_KEYMAP_PATH, KeybindSource, KeymapFile};
 
-use crossbeam_channel::Sender;
-use modular_core::patch::Patch;
-use modular_core::types::{ModuleIdRemap, ModuleState, PatchGraph, Scope};
-use serde::Deserialize;
-
 use crate::audio::AudioEngine;
-
-actions!(modz, [RunDsl]);
+use crate::dsl::run_and_send_patch;
+use crate::editor_view::{EditorView, RunDsl};
+use crate::file_explorer::FileExplorer;
+use crate::root_view::RootView;
 
 fn print_help() {
     println!(
@@ -33,88 +31,6 @@ fn print_help() {
              -h, --help      Show this help",
         env!("CARGO_PKG_VERSION"),
     );
-}
-
-/// Execute DSL source through `DslRuntime`, build a `Patch` from the resulting
-/// graph, and (optionally) push it to the audio thread. Returns a human-readable
-/// success summary that the caller logs via eprintln.
-fn run_and_send_patch(
-    source: &str,
-    sample_rate: f32,
-    patch_tx: Option<&Sender<Patch>>,
-) -> Result<(), String> {
-    let mut runtime = dsl_runtime::DslRuntime::new()
-        .map_err(|err| format!("DslRuntime init failed: {err}"))?;
-    let envelope = runtime
-        .execute(source)
-        .map_err(|err| format!("DSL execute failed: {err}"))?;
-
-    if envelope.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-        return Err(format!(
-            "DSL error: {}",
-            envelope
-                .get("error")
-                .and_then(|v| v.as_str())
-                .unwrap_or("(unknown)"),
-        ));
-    }
-
-    let mut graph_value = envelope
-        .pointer("/value/patch")
-        .ok_or_else(|| "DSL result missing /value/patch".to_string())?
-        .clone();
-
-    // Strip params the DSL emits that the Rust-side deserializer doesn't
-    // recognize. Until the napi addon and operator-zed share the same
-    // deserializer surface, drop the known extras here.
-    if let Some(modules) = graph_value
-        .get_mut("modules")
-        .and_then(|m| m.as_array_mut())
-    {
-        for module in modules.iter_mut() {
-            if let Some(params) = module.get_mut("params").and_then(|p| p.as_object_mut())
-            {
-                // ROOT_CLOCK: GraphBuilder.ts:786 stamps `tempoSet` on the
-                // params for the napi `apply_patch` path, but ClockParams in
-                // modular_core has `deny_unknown_fields`.
-                params.remove("tempoSet");
-            }
-        }
-    }
-
-    // `PatchGraph` itself doesn't derive Deserialize (napi-derive owns the
-    // shape on the JS boundary), so deserialize through a mirror struct
-    // and copy across. Field names match the camelCase emitted by JS.
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct DeserPatchGraph {
-        modules: Vec<ModuleState>,
-        #[serde(default)]
-        module_id_remaps: Option<Vec<ModuleIdRemap>>,
-        #[serde(default)]
-        scopes: Vec<Scope>,
-    }
-    let mirror: DeserPatchGraph = serde_json::from_value(graph_value)
-        .map_err(|err| format!("PatchGraph deserialize: {err}"))?;
-    let graph = PatchGraph {
-        modules: mirror.modules,
-        module_id_remaps: mirror.module_id_remaps,
-        scopes: mirror.scopes,
-    };
-    let module_count = graph.modules.len();
-
-    let patch = Patch::from_graph(&graph, sample_rate)
-        .map_err(|err| format!("Patch::from_graph: {err}"))?;
-
-    if let Some(tx) = patch_tx {
-        if let Err(err) = tx.try_send(patch) {
-            return Err(format!("audio channel send: {err}"));
-        }
-        eprintln!("[modz] DSL ok — {module_count} modules; patch sent to audio");
-    } else {
-        eprintln!("[modz] DSL ok — {module_count} modules; no audio channel");
-    }
-    Ok(())
 }
 
 fn run_emit_graph(path: Option<&std::path::Path>) {
@@ -139,9 +55,6 @@ fn run_emit_graph(path: Option<&std::path::Path>) {
     };
     match runtime.execute(&source) {
         Ok(value) => {
-            // Print the JS-side envelope (already JSON) verbatim so callers can
-            // pipe it through `jq`. We re-emit through serde_json so output is
-            // stable / pretty-printable on demand.
             println!("{value}");
             let exit = if value.get("ok").and_then(|v| v.as_bool()) == Some(true) {
                 0
@@ -154,50 +67,6 @@ fn run_emit_graph(path: Option<&std::path::Path>) {
             eprintln!("DSL execute failed: {err}");
             std::process::exit(1);
         }
-    }
-}
-
-struct EditorView {
-    editor: Entity<Editor>,
-    focus_handle: FocusHandle,
-    source_path: Option<PathBuf>,
-    patch_tx: Option<Sender<Patch>>,
-    sample_rate: f32,
-}
-
-impl EditorView {
-    fn run_dsl(&mut self, _: &RunDsl, _window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.editor.read(cx).text(cx);
-        match &self.source_path {
-            Some(path) => match std::fs::write(path, &text) {
-                Ok(_) => eprintln!("[modz] saved {}", path.display()),
-                Err(err) => eprintln!("[modz] save failed: {err}"),
-            },
-            None => eprintln!("[modz] cmd-s pressed (no source file)"),
-        }
-        let patch_tx = self.patch_tx.clone();
-        if let Err(err) = run_and_send_patch(&text, self.sample_rate, patch_tx.as_ref()) {
-            eprintln!("[modz] {err}");
-        }
-    }
-}
-
-impl Focusable for EditorView {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl gpui::Render for EditorView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .track_focus(&self.focus_handle)
-            .key_context("Modz")
-            .on_action(cx.listener(Self::run_dsl))
-            .flex()
-            .size_full()
-            .bg(rgb(0x1d1f21))
-            .child(self.editor.clone())
     }
 }
 
@@ -227,6 +96,14 @@ fn main() {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .unwrap_or_else(|| "// pass a file path as argv[1]\n".to_string());
 
+    // Pick a workspace root for the file explorer: the parent dir of the cli
+    // path if there is one, otherwise the current working directory.
+    let workspace_root: PathBuf = cli_path
+        .as_ref()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .or_else(|| std::env::current_dir().ok())
+        .unwrap_or_else(|| PathBuf::from("."));
+
     let engine = match AudioEngine::start() {
         Ok(engine) => Some(engine),
         Err(err) => {
@@ -238,12 +115,9 @@ fn main() {
     let patch_tx = engine.as_ref().map(|e| e.patch_tx.clone());
     let sample_rate = engine.as_ref().map(|e| e.sample_rate).unwrap_or(48_000.0);
 
-    // If a source path was provided, run it once on startup so the editor
-    // boots with audio already producing the patch the user just opened.
     if !initial.trim().is_empty() {
-        match run_and_send_patch(&initial, sample_rate, patch_tx.as_ref()) {
-            Ok(()) => {}
-            Err(err) => eprintln!("[modz] startup DSL run: {err}"),
+        if let Err(err) = run_and_send_patch(&initial, sample_rate, patch_tx.as_ref()) {
+            eprintln!("[modz] startup DSL run: {err}");
         }
     }
 
@@ -268,39 +142,42 @@ fn main() {
                 Err(err) => eprintln!("[modz] failed to load default keymap: {err}"),
             }
 
-            // Custom Modz bindings.
             cx.bind_keys([gpui::KeyBinding::new(
                 "cmd-s",
                 RunDsl,
                 Some("Modz"),
             )]);
 
-            let _engine = engine; // keep stream alive for window lifetime
+            let _engine = engine;
 
-            let bounds = Bounds::centered(None, size(px(900.), px(640.)), cx);
+            let bounds = Bounds::centered(None, size(px(1100.), px(700.)), cx);
             cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     ..Default::default()
                 },
-                move |window, cx| {
+                move |window: &mut Window, cx| {
                     let initial_text = initial.clone();
                     let source_path = cli_path.clone();
                     let patch_tx = patch_tx.clone();
+                    let workspace_root = workspace_root.clone();
                     cx.new(|cx| {
-                        let buffer = cx.new(|cx| Buffer::local(initial_text, cx));
-                        let editor =
-                            cx.new(|cx| Editor::for_buffer(buffer, None, window, cx));
-                        let focus_handle = cx.focus_handle();
-                        // Focus the editor so it receives keystrokes.
-                        let editor_focus = editor.read(cx).focus_handle(cx);
-                        window.focus(&editor_focus, cx);
-                        EditorView {
-                            editor,
-                            focus_handle,
-                            source_path,
-                            patch_tx,
-                            sample_rate,
+                        let editor_view = cx.new(|cx| {
+                            EditorView::new(
+                                initial_text,
+                                source_path,
+                                patch_tx,
+                                sample_rate,
+                                window,
+                                cx,
+                            )
+                        });
+                        let explorer = cx.new(|cx| {
+                            FileExplorer::new(&workspace_root, editor_view.clone(), cx)
+                        });
+                        RootView {
+                            explorer,
+                            editor_view,
                         }
                     })
                 },
