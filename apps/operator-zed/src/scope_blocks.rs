@@ -96,31 +96,101 @@ fn render_scope_block(targets: &[ScopeTarget], bcx: &mut BlockContext) -> AnyEle
         .gap(px(2.));
 
     for target in targets {
+        let stats = compute_stats(target);
         let waveform = render_waveform(target);
-        let label = format!(
-            "{}  range [{}, {}]",
-            target.label, target.range.0, target.range.1
+        let header = format!("{}", target.label);
+        let voltage_high = format!("{:.1}v", target.range.1);
+        let voltage_zero = "0v".to_string();
+        let voltage_low = format!("{:.1}v", target.range.0);
+        let stats_block = format!(
+            "min: {:>6.2}v\nmax: {:>6.2}v\np-p: {:>6.2}v",
+            stats.min, stats.max, stats.peak_to_peak,
         );
+
         container = container.child(
             div()
                 .flex()
-                .flex_col()
+                .flex_row()
+                .items_center()
                 .h(line_height * 4)
                 .child(
+                    // Voltage labels column
                     div()
-                        .text_color(rgb(0x6b8aa6))
-                        .text_size(em_width * 0.75)
-                        .child(label),
+                        .flex()
+                        .flex_col()
+                        .justify_between()
+                        .h_full()
+                        .min_w(px(48.))
+                        .text_color(rgb(0x4a4c4e))
+                        .text_size(em_width * 0.7)
+                        .child(div().child(voltage_high))
+                        .child(div().child(voltage_zero))
+                        .child(div().child(voltage_low)),
                 )
                 .child(
                     div()
-                        .text_color(rgb(0x88c4f8))
+                        .flex()
+                        .flex_col()
+                        .flex_grow()
+                        .child(
+                            div()
+                                .text_color(rgb(0x6b8aa6))
+                                .text_size(em_width * 0.75)
+                                .child(header),
+                        )
+                        .child(
+                            div()
+                                .text_color(rgb(0x88c4f8))
+                                .font_family("Menlo")
+                                .child(waveform),
+                        ),
+                )
+                .child(
+                    // Stats column (right edge)
+                    div()
+                        .min_w(px(110.))
+                        .pl(px(8.))
+                        .text_color(rgb(0x4a4c4e))
+                        .text_size(em_width * 0.7)
                         .font_family("Menlo")
-                        .child(waveform),
+                        .whitespace_nowrap()
+                        .child(stats_block),
                 ),
         );
     }
     container.into_any_element()
+}
+
+struct WaveformStats {
+    min: f32,
+    max: f32,
+    peak_to_peak: f32,
+}
+
+fn compute_stats(target: &ScopeTarget) -> WaveformStats {
+    let ring = target.samples.lock();
+    if ring.is_empty() {
+        return WaveformStats {
+            min: 0.0,
+            max: 0.0,
+            peak_to_peak: 0.0,
+        };
+    }
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for v in ring.iter() {
+        if *v < min {
+            min = *v;
+        }
+        if *v > max {
+            max = *v;
+        }
+    }
+    WaveformStats {
+        min,
+        max,
+        peak_to_peak: max - min,
+    }
 }
 
 /// 80-wide unicode-block waveform of the most recent samples.
