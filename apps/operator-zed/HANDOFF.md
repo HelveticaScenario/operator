@@ -56,8 +56,8 @@ Each step is intended to leave the binary in a runnable state. Step 0–2 done, 
     - `op_workspace_root() -> String`
     - `op_log(level, msg)`
 3. **`build.rs` esbuild bundle**. Bundle `src/main/dsl/{executor,factories,GraphBuilder}.ts` into `OUT_DIR/dsl_runtime.js`. The build script can shell out to esbuild via npx (Volta-pinned node) or to a pre-built esbuild binary; either works.
-4. **Cmd-S handler**. Register `editor::actions` keybindings, observe save action, read buffer text, run DSL through V8, push resulting `PatchGraph` to the audio thread via crossbeam ringbuf. Note: we currently call `settings::init` + `theme::init` only. To wire keybindings properly you'll need `editor::init(cx)` plus possibly `workspace::init(app_state, cx)` — see `vendor/zed/crates/zed/src/visual_test_runner.rs:165–204` for the minimum boot recipe.
-5. **Headless `--emit-graph` mode**. CLI flag that runs DSL on a file and prints the JSON `PatchGraph` to stdout. Use it to byte-compare against the Electron build's output across the existing fixtures in `src/main/dsl/__tests__/`.
+4. **Cmd-S handler**. ✅ wired — `editor::init(cx)` + Zed's default-macos keymap loaded via `KeymapFile::load_asset_allow_partial_failure`; a Modz-namespaced `RunDsl` action is bound to `cmd-s`. The handler currently writes the buffer back to disk and stubs DSL execution with a length log. Once deno_core is in, route the buffer text through V8 instead of the stub.
+5. **Headless `--emit-graph` mode**. ⏳ CLI plumbing landed — `--emit-graph FILE` parses correctly and emits a structured "unimplemented" JSON record on stdout (exit code 2). Replace the stub with the real DSL path once deno_core is wired. Use it to byte-compare against the Electron build's output across the existing fixtures in `src/main/dsl/__tests__/`.
 
 ### Step 4 — File explorer &nbsp;⏳
 
@@ -168,11 +168,11 @@ First build is heavy — the dep tree pulls livekit's `webrtc-sys` which downloa
 
 In rough priority:
 
-1. **Wire `editor::init` + minimum keymap**. Needed before Cmd-S can trigger DSL exec. ~1–2 hr.
+1. **Wire `editor::init` + minimum keymap**. ✅ Done. `editor::init(cx)` plus default-macos keymap via `KeymapFile::load_asset_allow_partial_failure`. Cmd-S bound to `Modz::RunDsl` action; current handler writes buffer to disk + length-stubs DSL exec.
 2. **Lift `crates/modular_host`**. ~1 day.
-3. **Drop `deno_core` in**. Bundle `dsl_runtime.js`, register `op_emit_patch`. ~1 day.
+3. **Drop `deno_core` in**. Bundle `dsl_runtime.js`, register `op_emit_patch`. ~1 day. Replaces the length-stub in the cmd-S handler and the JSON stub in `--emit-graph`.
 4. **Sample-loop integration**. Replace `audio.rs::fill_sine` body with `Patch::from_graph` evaluation. ~½ day.
-5. **Headless `--emit-graph` parity test**. ~½ day.
+5. **Headless `--emit-graph` parity test**. ⏳ CLI flag landed (prints structured "unimplemented" JSON until deno_core wired). Once the runtime exists, swap the stub for a real DSL run + JSON serialization of `PatchGraph`. ~½ day to flesh out + parity.
 6. Steps 4–6 (file explorer, sliders, scopes). ~2–3 days.
 
-Branch: `zed-prototype` on `~/dev/modular`. Commits squashed into a single feature commit so far. Current head: `fe6e741` plus this commit.
+Branch: `zed-prototype` on `~/dev/modular`. Current head includes the editor::init + keymap + cmd-s wiring and the `--emit-graph` CLI plumbing.
