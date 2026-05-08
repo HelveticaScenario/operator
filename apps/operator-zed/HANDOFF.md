@@ -11,7 +11,7 @@ This repo is the existing `~/dev/modular` monorepo. The new app lives at `apps/o
 - **JS runtime**: `deno_core` (V8). Replaces `new Function()` from `src/main/dsl/executor.ts`.
 - **DSL bridge**: keep existing JS factories/`GraphBuilder`, esbuild-bundle them, run in V8, return graph through one Rust op.
 - **Span analysis**: Rust-side `oxc_parser` replaces ts-morph (`src/main/dsl/argumentSpanAnalyzer.ts`).
-- **Audio reuse**: lift cpal/midir/link/params_cache/validation out of the cdylib `crates/modular` into a new `crates/modular_host` consumed by both Electron and operator-zed. **Not done yet** — the prototype currently has its own minimal cpal driver.
+- **Audio reuse**: lift cpal/midir/link/params_cache/validation out of the cdylib `crates/modular` into a new `crates/modular_host` consumed by both Electron and operator-zed. **Not done yet** — the prototype currently has its own minimal cpal driver. As of 2026-05-08, that driver can either play the original 440 Hz sine or, with `OPERATOR_ZED_PATCH_TEST=1`, drive a hand-crafted `Patch::from_graph(...)` (one `$sine` -> `ROOT_OUTPUT` `$signal`) sample-by-sample. The audio loop integration shape is therefore validated against `modular_core` independently of the JS path.
 - **modular_core**: linked as a regular path dep with `napi-derive` left in. The `#[napi]` attributes expand into static items that are inert when the binary isn't loaded by Node. Feature-gating napi was attempted and reverted — `modular_derive` proc macros emit unqualified `napi::` paths that don't resolve through a stub module.
 - **Zed pinned at**: `7ce845210d3af82a57a7518e0abe8c167d60cc6a` (master at the time of this handoff).
 
@@ -44,18 +44,25 @@ Each step is intended to leave the binary in a runnable state. Step 0–2 done, 
 **Done:**
 
 - `modular_core` path-linked into the binary; compiles + links cleanly
-- `apps/operator-zed/src/audio.rs`: minimal cpal driver. Opens default output device, plays a 440 Hz sine. Mute via `OPERATOR_ZED_MUTE=0/1` env var. Validates the cpal path inside the binary.
+- `apps/operator-zed/src/audio.rs`: cpal driver with two paths — original 440 Hz sine (default), or a `modular_core::patch::Patch` driven sample-by-sample under `OPERATOR_ZED_PATCH_TEST=1`. Mute via `OPERATOR_ZED_MUTE=0/1`.
+- `apps/operator-zed/src/dsl_runtime.rs`: `deno_core` JsRuntime wrapper with an `eval` helper. V8 boots in both the cmd-S handler and `--emit-graph`.
+- `apps/operator-zed/src/main.rs`: editor::init + Zed default-macos keymap loaded; Modz-namespaced `RunDsl` action bound to cmd-s; `--emit-graph FILE` and `--help` CLI parsing.
 
 **Not done — required for full Step 3:**
 
 1. **Lift `crates/modular_host`**. `crates/modular/src/{audio,midi,link,params_cache,validation}.rs` are trapped inside the cdylib crate that produces the N-API addon. New crate `crates/modular_host` should reuse those files (with N-API call sites stripped) and be consumed by both `crates/modular` (existing Electron build) and `apps/operator-zed`. Audio.rs there is 2885 lines; expect ~1 day of refactoring.
-2. **deno_core runtime**. Add `deno_core` dep, instantiate a single `JsRuntime` at startup, expose ops:
+2. **deno_core runtime**. ✅ Dependency added (`deno_core = "0.400"`). `apps/operator-zed/src/dsl_runtime.rs` wraps a `JsRuntime` and exposes a single `eval(name, source)` helper that returns `serde_json::Value`. Both the cmd-S handler and `--emit-graph` boot V8 and run a probe expression to prove the path. Still TODO: register ops and load a bundled DSL module:
     - `op_emit_patch(graph, sliders, scope_sites, source_locations)` — invoked from JS at end of `executeDSL()` instead of returning to caller
     - `op_argument_spans(source) -> Vec<ArgumentSpan>` — Rust-side span analysis via `oxc_parser`, replacing ts-morph in `argumentSpanAnalyzer.ts`
     - `op_load_wav(path) -> Vec<u8>`
     - `op_workspace_root() -> String`
     - `op_log(level, msg)`
 3. **`build.rs` esbuild bundle**. Bundle `src/main/dsl/{executor,factories,GraphBuilder}.ts` into `OUT_DIR/dsl_runtime.js`. The build script can shell out to esbuild via npx (Volta-pinned node) or to a pre-built esbuild binary; either works.
+
+    **Gotchas surfaced by a trial bundle (2026-05-08):**
+    - `executor.ts` -> `analyzeSource.ts` imports `ts-morph`. Bundling pulls the whole TS compiler (~13.7 MB neutral-platform output) and hits node-only deps (`fs`, `path`). Replace `analyzeSource.ts`/`argumentSpanAnalyzer.ts` with a tiny shim that calls `op_argument_spans` _before_ bundling, otherwise the bundle won't load in `JsRuntime`.
+    - `factories.ts` re-exports from `@modular/core` which resolves to `crates/modular/index.js` — the N-API addon entry (uses `node:module`/`createRequire`). For the operator-zed bundle, point `@modular/core` at a small TS shim that re-exports just the pure types/utilities (`PatchGraph`, `ModuleSchema`, `deriveChannelCount`) and skips the addon. tsconfig path override or an esbuild alias works.
+
 4. **Cmd-S handler**. ✅ wired — `editor::init(cx)` + Zed's default-macos keymap loaded via `KeymapFile::load_asset_allow_partial_failure`; a Modz-namespaced `RunDsl` action is bound to `cmd-s`. The handler currently writes the buffer back to disk and stubs DSL execution with a length log. Once deno_core is in, route the buffer text through V8 instead of the stub.
 5. **Headless `--emit-graph` mode**. ⏳ CLI plumbing landed — `--emit-graph FILE` parses correctly and emits a structured "unimplemented" JSON record on stdout (exit code 2). Replace the stub with the real DSL path once deno_core is wired. Use it to byte-compare against the Electron build's output across the existing fixtures in `src/main/dsl/__tests__/`.
 
@@ -168,11 +175,11 @@ First build is heavy — the dep tree pulls livekit's `webrtc-sys` which downloa
 
 In rough priority:
 
-1. **Wire `editor::init` + minimum keymap**. ✅ Done. `editor::init(cx)` plus default-macos keymap via `KeymapFile::load_asset_allow_partial_failure`. Cmd-S bound to `Modz::RunDsl` action; current handler writes buffer to disk + length-stubs DSL exec.
-2. **Lift `crates/modular_host`**. ~1 day.
-3. **Drop `deno_core` in**. Bundle `dsl_runtime.js`, register `op_emit_patch`. ~1 day. Replaces the length-stub in the cmd-S handler and the JSON stub in `--emit-graph`.
-4. **Sample-loop integration**. Replace `audio.rs::fill_sine` body with `Patch::from_graph` evaluation. ~½ day.
-5. **Headless `--emit-graph` parity test**. ⏳ CLI flag landed (prints structured "unimplemented" JSON until deno_core wired). Once the runtime exists, swap the stub for a real DSL run + JSON serialization of `PatchGraph`. ~½ day to flesh out + parity.
+1. **Wire `editor::init` + minimum keymap**. ✅ Done.
+2. **Lift `crates/modular_host`**. ~1 day. Untouched.
+3. **Drop `deno_core` in + bundle the DSL**. ⏳ Half done. `deno_core` is a dep, `JsRuntime` boots, and a probe expression evaluates from both the cmd-S handler and `--emit-graph`. **Still TODO**: build `dsl_runtime.js` via `build.rs` + esbuild, register the ops listed above, and load it as an ESM module so the cmd-S handler can call `executeDSL(text)`. Watch the two gotchas above (ts-morph, `@modular/core` napi entry).
+4. **Sample-loop integration**. ✅ Validated under `OPERATOR_ZED_PATCH_TEST=1` with a hand-built graph. Once #3 emits real graphs, drop the env-gate and route the latest graph from cmd-S into the cpal callback (crossbeam ringbuf or `Arc<Mutex<Option<Patch>>>` swap).
+5. **Headless `--emit-graph` parity test**. ⏳ CLI flag landed; emits stage1 JSON probe today. Once #3 lands, replace the stub with `executeDSL(source) -> serde_json::to_value(PatchGraph)` and add the byte-comparison harness against the Electron build's outputs in `src/main/dsl/__tests__/`. ~½ day on top of #3.
 6. Steps 4–6 (file explorer, sliders, scopes). ~2–3 days.
 
-Branch: `zed-prototype` on `~/dev/modular`. Current head includes the editor::init + keymap + cmd-s wiring and the `--emit-graph` CLI plumbing.
+Branch: `zed-prototype` on `~/dev/modular`. Current head: `0f2df49` (Patch-driven cpal), preceded by deno_core wiring (`77e96f8`), CLI parser + `--emit-graph` stub (`fe49a70`), and editor::init + cmd-S (`749e7d5`).
