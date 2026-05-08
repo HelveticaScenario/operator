@@ -16,11 +16,16 @@ use crossbeam_channel::{Receiver, Sender, TryRecvError, bounded};
 use modular_core::patch::Patch;
 use parking_lot::Mutex;
 
+use crate::dsl_state::{SCOPE_RING_CAPACITY, ScopeTarget};
+
 pub struct AudioEngine {
     _stream: cpal::Stream,
     pub state: Arc<Mutex<EngineState>>,
     pub patch_tx: Sender<Patch>,
     pub sample_rate: f32,
+    /// Scope targets shared between the cpal callback (push samples) and
+    /// the UI thread (read samples). Updated by `DslState::update_after_exec`.
+    pub scope_targets: Arc<Mutex<Vec<ScopeTarget>>>,
 }
 
 #[derive(Default)]
@@ -53,7 +58,8 @@ impl AudioEngine {
         }));
 
         let (patch_tx, patch_rx) = bounded::<Patch>(4);
-        let mut driver = Driver::new(patch_rx);
+        let scope_targets: Arc<Mutex<Vec<ScopeTarget>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut driver = Driver::new(patch_rx, scope_targets.clone());
 
         let stream_state = state.clone();
         let stream = match config.sample_format() {
@@ -79,6 +85,7 @@ impl AudioEngine {
             state,
             patch_tx,
             sample_rate,
+            scope_targets,
         })
     }
 
@@ -91,14 +98,19 @@ struct Driver {
     patch_rx: Receiver<Patch>,
     patch: Option<Patch>,
     sine_phase: f32,
+    scope_targets: Arc<Mutex<Vec<ScopeTarget>>>,
 }
 
 impl Driver {
-    fn new(patch_rx: Receiver<Patch>) -> Self {
+    fn new(
+        patch_rx: Receiver<Patch>,
+        scope_targets: Arc<Mutex<Vec<ScopeTarget>>>,
+    ) -> Self {
         Self {
             patch_rx,
             patch: None,
             sine_phase: 0.0,
+            scope_targets,
         }
     }
 
@@ -130,6 +142,9 @@ impl Driver {
 
         match &self.patch {
             Some(patch) => {
+                // Snapshot current scope targets so we don't hold the lock
+                // across the entire fill (UI thread might be reading too).
+                let scopes = self.scope_targets.lock().clone();
                 for frame in buf.chunks_mut(channels) {
                     for module in patch.sampleables.values() {
                         module.update();
@@ -137,6 +152,22 @@ impl Driver {
                     let value = patch.get_output() * amp;
                     for sample in frame.iter_mut() {
                         *sample = value;
+                    }
+                    // Sample each configured scope channel for this audio
+                    // frame and push into its ring buffer.
+                    for target in &scopes {
+                        let Some(module) = patch.sampleables.get(&target.module_id) else {
+                            continue;
+                        };
+                        let Ok(poly) = module.get_poly_sample(&target.port_name) else {
+                            continue;
+                        };
+                        let v = poly.get(target.channel as usize);
+                        let mut ring = target.samples.lock();
+                        if ring.len() == SCOPE_RING_CAPACITY {
+                            ring.pop_front();
+                        }
+                        ring.push_back(v);
                     }
                 }
             }

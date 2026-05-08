@@ -6,6 +6,7 @@ mod dsl_state;
 mod editor_view;
 mod file_explorer;
 mod root_view;
+mod scopes;
 
 use std::path::PathBuf;
 
@@ -21,6 +22,7 @@ use crate::dsl_state::DslState;
 use crate::editor_view::{EditorView, RunDsl};
 use crate::file_explorer::FileExplorer;
 use crate::root_view::RootView;
+use crate::scopes::ScopesView;
 
 fn print_help() {
     println!(
@@ -117,9 +119,13 @@ fn main() {
 
     let patch_tx = engine.as_ref().map(|e| e.patch_tx.clone());
     let sample_rate = engine.as_ref().map(|e| e.sample_rate).unwrap_or(48_000.0);
+    let scope_targets = engine
+        .as_ref()
+        .map(|e| e.scope_targets.clone())
+        .unwrap_or_else(|| std::sync::Arc::new(parking_lot::Mutex::new(Vec::new())));
 
     // Run the startup DSL once, but stash the result for the gpui side to
-    // copy into DslState. This way the controls panel comes up populated.
+    // copy into DslState. This way the panels come up populated.
     let startup_execution = if !initial.trim().is_empty() {
         match dsl::run(&initial, sample_rate) {
             Ok(execution) => {
@@ -129,14 +135,22 @@ fn main() {
                         None
                     } else {
                         eprintln!(
-                            "[modz] DSL ok — {} modules, {} sliders (startup)",
+                            "[modz] DSL ok — {} modules, {} sliders, {} scopes (startup)",
                             execution.module_count,
-                            execution.sliders.len()
+                            execution.sliders.len(),
+                            execution.scopes.len(),
                         );
-                        Some((execution.graph_value, execution.sliders))
+                        // Seed audio's scope targets immediately so the cpal
+                        // callback starts pushing samples on the next frame.
+                        *scope_targets.lock() = execution.scopes.clone();
+                        Some((
+                            execution.graph_value,
+                            execution.sliders,
+                            execution.scopes,
+                        ))
                     }
                 } else {
-                    Some((execution.graph_value, execution.sliders))
+                    Some((execution.graph_value, execution.sliders, execution.scopes))
                 }
             }
             Err(err) => {
@@ -191,8 +205,14 @@ fn main() {
                     let startup_execution = startup_execution.clone();
                     cx.new(|cx| {
                         let state = cx.new(|_cx| {
-                            let mut state = DslState::new(sample_rate, patch_tx);
-                            if let Some((graph_value, sliders)) = startup_execution {
+                            let mut state = DslState::new(
+                                sample_rate,
+                                patch_tx,
+                                scope_targets.clone(),
+                            );
+                            if let Some((graph_value, sliders, _scopes)) =
+                                startup_execution
+                            {
                                 state.sliders = sliders;
                                 state.set_graph_value(graph_value);
                             }
@@ -212,10 +232,13 @@ fn main() {
                         });
                         let controls =
                             cx.new(|cx| ControlsView::new(state.clone(), cx));
+                        let scopes_view =
+                            cx.new(|cx| ScopesView::new(state.clone(), cx));
                         RootView {
                             explorer,
                             editor_view,
                             controls,
+                            scopes: scopes_view,
                         }
                     })
                 },

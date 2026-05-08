@@ -2,11 +2,49 @@
 //! declared, the audio channel they push through, etc. Owned as a gpui
 //! `Entity<DslState>` so the editor and the controls panel can both see it.
 
+use std::collections::VecDeque;
+use std::sync::Arc;
+
 use crossbeam_channel::Sender;
 use gpui::{Context, Window};
 use modular_core::patch::Patch;
+use parking_lot::Mutex;
 
 use crate::dsl::build_patch;
+
+/// Per-scope-channel ring buffer. Audio thread pushes one sample per audio
+/// frame into `samples`; UI thread reads it on each render.
+#[derive(Clone)]
+pub struct ScopeTarget {
+    pub label: String,
+    pub module_id: String,
+    pub port_name: String,
+    pub channel: u32,
+    pub range: (f64, f64),
+    pub samples: Arc<Mutex<VecDeque<f32>>>,
+}
+
+impl ScopeTarget {
+    pub fn new(
+        module_id: String,
+        port_name: String,
+        channel: u32,
+        range: (f64, f64),
+        capacity: usize,
+    ) -> Self {
+        Self {
+            label: format!("{module_id}.{port_name}[{channel}]"),
+            module_id,
+            port_name,
+            channel,
+            range,
+            samples: Arc::new(Mutex::new(VecDeque::with_capacity(capacity))),
+        }
+    }
+}
+
+/// Capacity (samples) for each scope ring. ~250ms at 48 kHz.
+pub const SCOPE_RING_CAPACITY: usize = 12_288;
 
 #[derive(Clone, Debug)]
 pub struct SliderDef {
@@ -25,15 +63,23 @@ pub struct DslState {
     graph_value: Option<serde_json::Value>,
     sample_rate: f32,
     patch_tx: Option<Sender<Patch>>,
+    /// Live scope targets, shared with the audio thread. Mutated on each DSL
+    /// run; both the cpal callback and the ScopesView read it.
+    pub scope_targets: Arc<Mutex<Vec<ScopeTarget>>>,
 }
 
 impl DslState {
-    pub fn new(sample_rate: f32, patch_tx: Option<Sender<Patch>>) -> Self {
+    pub fn new(
+        sample_rate: f32,
+        patch_tx: Option<Sender<Patch>>,
+        scope_targets: Arc<Mutex<Vec<ScopeTarget>>>,
+    ) -> Self {
         Self {
             sliders: Vec::new(),
             graph_value: None,
             sample_rate,
             patch_tx,
+            scope_targets,
         }
     }
 
@@ -51,15 +97,20 @@ impl DslState {
         self.patch_tx.as_ref()
     }
 
-    /// Replace the cached graph + sliders after a successful DSL run.
+    /// Replace the cached graph + sliders + scope targets after a successful
+    /// DSL run. Existing scope ring buffers are dropped along with the old
+    /// targets — callers run this on the main thread, audio holds the Arc<Mutex>
+    /// so the swap is atomic from its perspective.
     pub fn update_after_exec(
         &mut self,
         graph: serde_json::Value,
         sliders: Vec<SliderDef>,
+        scopes: Vec<ScopeTarget>,
         cx: &mut Context<Self>,
     ) {
         self.graph_value = Some(graph);
         self.sliders = sliders;
+        *self.scope_targets.lock() = scopes;
         cx.notify();
     }
 

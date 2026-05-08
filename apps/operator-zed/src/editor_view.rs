@@ -89,11 +89,17 @@ impl EditorView {
                 }
                 let module_count = execution.module_count;
                 let slider_count = execution.sliders.len();
+                let scope_count = execution.scopes.len();
                 self.state.update(cx, |state, cx| {
-                    state.update_after_exec(execution.graph_value, execution.sliders, cx);
+                    state.update_after_exec(
+                        execution.graph_value,
+                        execution.sliders,
+                        execution.scopes,
+                        cx,
+                    );
                 });
                 eprintln!(
-                    "[modz] DSL ok — {module_count} modules, {slider_count} sliders"
+                    "[modz] DSL ok — {module_count} modules, {slider_count} sliders, {scope_count} scope channels"
                 );
             }
             Err(err) => eprintln!("[modz] {err}"),

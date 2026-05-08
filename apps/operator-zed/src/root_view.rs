@@ -6,11 +6,13 @@ use gpui::{Context, Entity, Render, Window, div, prelude::*};
 use crate::controls::ControlsView;
 use crate::editor_view::EditorView;
 use crate::file_explorer::FileExplorer;
+use crate::scopes::ScopesView;
 
 pub struct RootView {
     pub explorer: Entity<FileExplorer>,
     pub editor_view: Entity<EditorView>,
     pub controls: Entity<ControlsView>,
+    pub scopes: Entity<ScopesView>,
 }
 
 impl Render for RootView {
@@ -27,6 +29,7 @@ impl Render for RootView {
                     .flex_grow()
                     .size_full()
                     .child(self.editor_view.clone())
+                    .child(self.scopes.clone())
                     .child(self.controls.clone()),
             )
     }

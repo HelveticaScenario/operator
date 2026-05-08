@@ -1,0 +1,8 @@
+// scope.modular — exercises $slider + .scope() so the operator-zed UI
+// has data to drive both the controls panel and the scopes panel.
+const shape = $slider('Shape', 0, 0, 5);
+const lfo = $sine('1hz').amp(2.5);
+const carrier = $sine('a4');
+carrier.scope({ msPerFrame: 8 });
+lfo.scope({ msPerFrame: 32 });
+$saw('a3', { shape }).amp(lfo).out();

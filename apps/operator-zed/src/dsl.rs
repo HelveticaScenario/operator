@@ -2,15 +2,16 @@
 //! `Patch` from the resulting graph, and pushes it to the audio thread.
 
 use modular_core::patch::Patch;
-use modular_core::types::{ModuleIdRemap, ModuleState, PatchGraph, Scope};
+use modular_core::types::{ModuleIdRemap, ModuleState, PatchGraph};
 use serde::Deserialize;
 
 use crate::dsl_runtime::DslRuntime;
-use crate::dsl_state::SliderDef;
+use crate::dsl_state::{SCOPE_RING_CAPACITY, ScopeTarget, SliderDef};
 
 pub struct DslExecution {
     pub graph_value: serde_json::Value,
     pub sliders: Vec<SliderDef>,
+    pub scopes: Vec<ScopeTarget>,
     pub patch: Patch,
     pub module_count: usize,
 }
@@ -48,6 +49,12 @@ pub fn run(source: &str, sample_rate: f32) -> Result<DslExecution, String> {
         .unwrap_or(serde_json::Value::Array(Vec::new()));
     let sliders = parse_sliders(&sliders_value);
 
+    let scopes_value = graph_value
+        .get("scopes")
+        .cloned()
+        .unwrap_or(serde_json::Value::Array(Vec::new()));
+    let scopes = parse_scopes(&scopes_value);
+
     let patch = build_patch(&graph_value, sample_rate)?;
     let module_count = graph_value
         .get("modules")
@@ -58,6 +65,7 @@ pub fn run(source: &str, sample_rate: f32) -> Result<DslExecution, String> {
     Ok(DslExecution {
         graph_value,
         sliders,
+        scopes,
         patch,
         module_count,
     })
@@ -71,25 +79,70 @@ pub fn build_patch(
     sample_rate: f32,
 ) -> Result<Patch, String> {
     // `PatchGraph` doesn't derive Deserialize itself (napi-derive owns the
-    // shape on the JS boundary), so go through a mirror.
+    // shape on the JS boundary), so go through a mirror. We don't deserialize
+    // Scope into modular_core's struct because Patch::from_graph ignores
+    // graph.scopes anyway and the field uses snake_case keys instead of the
+    // JS-emitted camelCase. We keep the scopes empty here and parse them
+    // separately for the UI in `parse_scopes`.
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct DeserPatchGraph {
         modules: Vec<ModuleState>,
         #[serde(default)]
         module_id_remaps: Option<Vec<ModuleIdRemap>>,
-        #[serde(default)]
-        scopes: Vec<Scope>,
     }
-    let mirror: DeserPatchGraph = serde_json::from_value(graph_value.clone())
+    let mirror: DeserPatchGraph = serde_json::from_value(strip_scopes(graph_value.clone()))
         .map_err(|err| format!("PatchGraph deserialize: {err}"))?;
     let graph = PatchGraph {
         modules: mirror.modules,
         module_id_remaps: mirror.module_id_remaps,
-        scopes: mirror.scopes,
+        scopes: Vec::new(),
     };
     Patch::from_graph(&graph, sample_rate)
         .map_err(|err| format!("Patch::from_graph: {err}"))
+}
+
+fn strip_scopes(mut graph: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = graph.as_object_mut() {
+        obj.remove("scopes");
+    }
+    graph
+}
+
+fn parse_scopes(value: &serde_json::Value) -> Vec<ScopeTarget> {
+    let Some(arr) = value.as_array() else {
+        return Vec::new();
+    };
+    let mut targets = Vec::new();
+    for scope in arr.iter() {
+        let channels = scope
+            .get("channels")
+            .and_then(|c| c.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let range = scope
+            .get("range")
+            .and_then(|r| r.as_array())
+            .and_then(|arr| Some((arr.first()?.as_f64()?, arr.get(1)?.as_f64()?)))
+            .unwrap_or((-5.0, 5.0));
+        for ch in channels.iter() {
+            let Some(module_id) = ch.get("moduleId").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(port_name) = ch.get("portName").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let channel = ch.get("channel").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            targets.push(ScopeTarget::new(
+                module_id.to_string(),
+                port_name.to_string(),
+                channel,
+                range,
+                SCOPE_RING_CAPACITY,
+            ));
+        }
+    }
+    targets
 }
 
 fn parse_sliders(value: &serde_json::Value) -> Vec<SliderDef> {
