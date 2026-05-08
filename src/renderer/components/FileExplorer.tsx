@@ -174,10 +174,15 @@ function BufferItem({
     const isRenaming =
         buffer.kind === 'file' && renamingPath === buffer.filePath;
 
+    const formatLabelRef = useRef(formatLabel);
+    formatLabelRef.current = formatLabel;
+    const bufferRef = useRef(buffer);
+    bufferRef.current = buffer;
+
     useEffect(() => {
         if (isRenaming && inputRef.current) {
             inputRef.current.focus();
-            const name = formatLabel(buffer);
+            const name = formatLabelRef.current(bufferRef.current);
             const lastDotIndex = name.lastIndexOf('.');
             if (lastDotIndex !== -1) {
                 inputRef.current.setSelectionRange(0, lastDotIndex);
@@ -185,7 +190,8 @@ function BufferItem({
                 inputRef.current.select();
             }
         }
-    }, [isRenaming, buffer, formatLabel]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isRenaming]);
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {

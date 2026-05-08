@@ -24,6 +24,7 @@ import type {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
+import type { EditorBuffer } from './types/editor';
 import { findSliderValueSpan } from './dsl/sliderSourceEdit';
 import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
@@ -310,6 +311,15 @@ function App() {
             }
         },
         [deleteFile],
+    );
+
+    const formatLabel = useCallback(
+        (buffer: EditorBuffer) => {
+            const path = formatFileLabel(buffer);
+            const parts = path.split(/[/\\]/);
+            return parts[parts.length - 1];
+        },
+        [formatFileLabel],
     );
 
     const handleRenameCommitSafe = useCallback(
@@ -996,11 +1006,7 @@ function App() {
                                     activeBufferId={activeBufferId}
                                     runningBufferId={runningBufferId}
                                     renamingPath={renamingPath}
-                                    formatLabel={(buffer) => {
-                                        const path = formatFileLabel(buffer);
-                                        const parts = path.split(/[/\\]/);
-                                        return parts[parts.length - 1];
-                                    }}
+                                    formatLabel={formatLabel}
                                     onSelectBuffer={setActiveBufferId}
                                     onOpenFile={handleOpenFile}
                                     onCreateFile={createUntitledFile}
