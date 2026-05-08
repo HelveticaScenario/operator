@@ -1823,3 +1823,24 @@ fn clamp_one_sided_preserves_input_range_on_open_side() {
         "one-sided clamp rangeMax should be ~5.0, got {range_max}"
     );
 }
+
+#[test]
+fn utility_modules_have_dynamic_range_in_schema() {
+    use modular_core::dsp::schema;
+    let schemas = schema();
+    for module_name in ["$remap", "$wrap", "$spread", "$scaleAndShift", "$clamp"] {
+        let s = schemas
+            .iter()
+            .find(|s| s.name == module_name)
+            .unwrap_or_else(|| panic!("missing schema for {module_name}"));
+        let output = s
+            .outputs
+            .iter()
+            .find(|o| o.default)
+            .unwrap_or_else(|| panic!("{module_name} has no default output"));
+        assert!(
+            output.dynamic_range,
+            "{module_name} default output should have dynamic_range = true"
+        );
+    }
+}
