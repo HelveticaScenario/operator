@@ -2938,6 +2938,17 @@
             }
           ]
         },
+        "mix": {
+          "description": "Main/Aux Mix (0-5v) - Crossfade mix between main and aux outputs at the primary output.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "morph": {
           "description": "Morph parameter (-5V to +5V, bipolar, default 0V) - function varies per engine",
           "anyOf": [
@@ -3185,10 +3196,18 @@
     },
     "outputs": [
       {
-        "name": "output",
-        "description": "main synthesis output",
+        "name": "mix",
+        "description": "mixed synthesis output",
         "polyphonic": true,
         "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "main",
+        "description": "main synthesis output",
+        "polyphonic": true,
+        "default": false,
         "minValue": -5.0,
         "maxValue": 5.0
       },
@@ -3295,6 +3314,14 @@
         "description": "LPG decay (0-5V) - lowpass gate envelope decay time",
         "signalType": "control",
         "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mix",
+        "description": "Main/Aux Mix (0-5v) - Crossfade mix between main and aux outputs at the primary output.",
+        "signalType": "control",
+        "defaultValue": 0.0,
         "minValue": 0.0,
         "maxValue": 5.0
       }
