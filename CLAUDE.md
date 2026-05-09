@@ -8,12 +8,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+### Setup
+
+Repo uses git submodules for vendored Rust DSP crates. Required after clone:
+
+```bash
+git submodule update --init --recursive
+```
+
+Skipping this produces `failed to load manifest for workspace member` on the first cargo/yarn build.
+
 ```bash
 yarn install               # Install dependencies
 yarn start                 # Build native Rust module + launch Electron app (watches Rust changes)
 yarn build-native          # Build native Rust module only
 yarn generate-lib          # Regenerate DSL TypeScript types after Rust N-API type changes
 yarn typecheck             # TypeScript type checking
+yarn lint                  # oxlint on src (also runs on pre-commit via husky)
+yarn lint:fix              # oxlint --fix
 ```
 
 ### Testing
@@ -44,7 +56,8 @@ E2E tests require the webpack build to exist — run `yarn start` once first.
 - **`crates/modular_core/`** — Pure Rust DSP library: module trait (`Sampleable`), types (`types.rs`), patch graph (`patch.rs`), all DSP modules (`dsp/`), pattern system.
 - **`crates/modular/`** — N-API bindings (`lib.rs`), audio callback (`audio.rs`), validation (`validation.rs`), MIDI input (`midi.rs`), command queue (`commands.rs`).
 - **`crates/modular_derive/`** — Proc macros for the module output system.
-- **`crates/mi-plaits-dsp-rs/`** — Mutable Instruments Plaits DSP port.
+- **`crates/mi-plaits-dsp-rs/`** — Mutable Instruments Plaits DSP port (git submodule, third-party).
+- **`crates/rust-music-theory/`** — Vendored fork (git submodule) for note/scale theory helpers. Treat as third-party.
 
 ### Frontend Structure
 
@@ -74,7 +87,7 @@ E2E tests require the webpack build to exist — run `yarn start` once first.
 ### Voltage Standards
 
 - **V/Oct pitch**: 1V/oct, 0V = C4 (~261.63 Hz).
-- **Gates/triggers**: `GATE_HIGH_VOLTAGE` (5V) high, `GATE_LOW_VOLTAGE` (0V) low. Constants in `crates/modular_core/src/dsp/utils.rs`.
+- **Gates/triggers**: `GATE_HIGH_VOLTAGE` (5V) high, `GATE_LOW_VOLTAGE` (0V) low. Constants in `crates/modular_core/src/dsp/utils/` (module directory).
 - **Gate detection**: Schmitt trigger with hysteresis — high threshold 1.0V, low threshold 0.1V. Use `SchmittTrigger::default()`.
 - **Output attenuation**: `AUDIO_OUTPUT_ATTENUATION` in `crates/modular/src/audio.rs`.
 
