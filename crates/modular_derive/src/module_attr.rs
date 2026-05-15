@@ -295,6 +295,36 @@ fn impl_module_macro_attr(
 
     // The module struct must contain a field named `outputs`.
     // Also collect all fields for per-field initialization in the constructor.
+    // Mirror outputs.rs's BlockOutputs naming: "{Foo}Outputs" -> "{Foo}BlockOutputs".
+    fn block_outputs_type_from(outputs_ty: &Type) -> syn::Result<Type> {
+        match outputs_ty {
+            Type::Path(tp) if tp.qself.is_none() => {
+                let mut path = tp.path.clone();
+                let last = path.segments.last_mut().ok_or_else(|| {
+                    syn::Error::new(
+                        Span::call_site(),
+                        "outputs type must have at least one path segment",
+                    )
+                })?;
+                let name = last.ident.to_string();
+                let new_name = if let Some(stripped) = name.strip_suffix("Outputs") {
+                    format!("{stripped}BlockOutputs")
+                } else {
+                    format!("{name}BlockOutputs")
+                };
+                last.ident = Ident::new(&new_name, last.ident.span());
+                Ok(Type::Path(syn::TypePath {
+                    qself: None,
+                    path,
+                }))
+            }
+            _ => Err(syn::Error::new(
+                Span::call_site(),
+                "outputs field type must be a simple path, e.g. `SineOscOutputs`",
+            )),
+        }
+    }
+
     let (outputs_ty, module_field_inits, has_state_field): (Type, Vec<TokenStream2>, bool) =
         match ast.data {
             Data::Struct(ref data) => match data.fields {
@@ -379,6 +409,7 @@ fn impl_module_macro_attr(
                 ));
             }
         };
+    let block_outputs_ty = block_outputs_type_from(&outputs_ty)?;
 
     let struct_name = format_ident!("{}Sampleable", name);
     let constructor_name = format_ident!("{}Constructor", name)
@@ -668,10 +699,44 @@ fn impl_module_macro_attr(
             processed: core::sync::atomic::AtomicBool,
             sample_rate: f32,
             argument_spans: std::cell::UnsafeCell<std::collections::HashMap<String, crate::params::ArgumentSpan>>,
+            /// Per-block sample-index counter. Stored on the wrapper so
+            /// embedded `Signal::Cable`s in this module's params can hold a
+            /// raw back-pointer to it (set during `connect()`) and read it
+            /// inline when fetching upstream block samples.
+            ///
+            /// In the per-sample pull adapter (block_size=1) this stays at 0;
+            /// the block-buffered audio loop will mutate it during processing.
+            index: std::cell::Cell<usize>,
+            /// Block-sized output buffer. One `BlockPort` per output port,
+            /// each pre-allocated to `block_size` samples. The wrapper writes
+            /// the inner module's per-sample outputs into slot `index` after
+            /// each `update()` call, and downstream cables read from it via
+            /// `get_value_at(port_idx, ch, index)`.
+            ///
+            /// Allocated once at construction; never resized on the audio
+            /// thread.
+            block_outputs: std::cell::UnsafeCell<#block_outputs_ty>,
+            /// Block size pinned at construction. Mirrors the BlockPort length.
+            block_size: usize,
+            /// Block vs. Sample mode, assigned by graph_analysis cycle
+            /// detection. Block-mode wrappers compute the entire block on
+            /// first request; Sample-mode wrappers compute one sample per
+            /// request (used for modules inside feedback cycles).
+            mode: crate::types::ProcessingMode,
+            /// Reentrancy guard for block-mode `get_value_at`. When a cycle
+            /// reads back into a module that is mid-computation, the cable
+            /// returns the previous block's last sample instead of looping
+            /// forever.
+            computing: std::cell::Cell<bool>,
         }
         impl crate::types::Sampleable for #struct_name {
             fn tick(&self) {
                 self.processed.store(false, core::sync::atomic::Ordering::Release);
+                // Reset the per-block sample cursor so the next call cycle
+                // writes back into slot 0 of the BlockPort. Required for the
+                // per-sample adapter (block_size=1) where every CPAL sample is
+                // its own "block".
+                self.index.set(0);
             }
 
             fn update(&self) {
@@ -686,8 +751,78 @@ fn impl_module_macro_attr(
                         module.update(self.sample_rate);
                         let outputs = &mut *self.outputs.get();
                         crate::types::OutputStruct::copy_from(outputs, &module.outputs);
+                        // Mirror the per-sample write into the block buffer so
+                        // downstream `get_value_at` callers see the same data.
+                        //
+                        // Bound check: in cycle/feedback resolution, a nested
+                        // `ensure_processed_to` from a downstream cable read
+                        // may have already advanced `self.index` past the slot
+                        // we'd write here. Skip rather than overwrite (the
+                        // nested write is the correct cycle resolution) and
+                        // avoid the out-of-bounds panic.
+                        let idx = self.index.get();
+                        if idx < self.block_size {
+                            let block_outputs = &mut *self.block_outputs.get();
+                            block_outputs.copy_from_inner(&module.outputs, idx);
+                        }
                     }
                 }
+            }
+
+            fn start_block(&self) {
+                self.index.set(0);
+                self.processed.store(false, core::sync::atomic::Ordering::Release);
+            }
+
+            fn ensure_processed_to(&self, target: usize) {
+                let target = target.min(self.block_size);
+                while self.index.get() < target {
+                    self.update();
+                    self.index.set(self.index.get() + 1);
+                }
+            }
+
+            fn ensure_processed(&self) {
+                self.ensure_processed_to(self.block_size);
+            }
+
+            fn set_initial_index(&self, idx: usize) {
+                self.index.set(idx.min(self.block_size));
+            }
+
+            fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32 {
+                // Reentrancy: block-mode module is mid-computation and a cycle
+                // has read back into it. Return the previous slot's value so
+                // feedback delay stays exactly 1 sample regardless of block size.
+                if self.computing.get() && index >= self.index.get() {
+                    let cur = self.index.get();
+                    let prev = if cur == 0 { self.block_size.saturating_sub(1).max(0) } else { cur - 1 };
+                    let outputs = unsafe { &*self.block_outputs.get() };
+                    let port_idx = match <#block_outputs_ty>::port_index(port) {
+                        Some(i) => i,
+                        None => return 0.0,
+                    };
+                    return outputs.get_at(port_idx, ch, prev);
+                }
+                match self.mode {
+                    crate::types::ProcessingMode::Block => {
+                        self.computing.set(true);
+                        self.ensure_processed();
+                        self.computing.set(false);
+                    }
+                    crate::types::ProcessingMode::Sample => {
+                        self.computing.set(true);
+                        // Inclusive — process up through the requested slot.
+                        self.ensure_processed_to(index + 1);
+                        self.computing.set(false);
+                    }
+                }
+                let outputs = unsafe { &*self.block_outputs.get() };
+                let port_idx = match <#block_outputs_ty>::port_index(port) {
+                    Some(i) => i,
+                    None => return 0.0,
+                };
+                outputs.get_at(port_idx, ch, index)
             }
 
             fn get_poly_sample(&self, port: &str) -> napi::Result<crate::poly::PolyOutput> {
@@ -716,6 +851,11 @@ fn impl_module_macro_attr(
             fn connect(&self, patch: &crate::Patch) {
                 let module = unsafe { &mut *self.module.get() };
                 crate::types::Connect::connect(&mut module.params, patch);
+                // After resolving cables, hand each cable a back-pointer to
+                // this wrapper's per-block index so it knows which sample
+                // slot to read from upstream at sample-time.
+                let index_ptr = &self.index as *const std::cell::Cell<usize>;
+                crate::types::Connect::inject_index_ptr(&mut module.params, index_ptr);
             }
 
             #on_patch_update_impl
@@ -766,7 +906,13 @@ fn impl_module_macro_attr(
             }
         }
 
-        fn #constructor_name(id: &String, sample_rate: f32, deserialized: crate::params::DeserializedParams) -> napi::Result<Box<dyn crate::types::Sampleable>> {
+        fn #constructor_name(
+            id: &String,
+            sample_rate: f32,
+            deserialized: crate::params::DeserializedParams,
+            _block_size: usize,
+            _mode: crate::types::ProcessingMode,
+        ) -> napi::Result<Box<dyn crate::types::Sampleable>> {
             let concrete_params = deserialized.params.into_any()
                 .downcast::<#params_struct_name>()
                 .map_err(|_| napi::Error::from_reason(
@@ -788,6 +934,11 @@ fn impl_module_macro_attr(
                 module: std::cell::UnsafeCell::new(inner),
                 processed: core::sync::atomic::AtomicBool::new(false),
                 argument_spans: std::cell::UnsafeCell::new(deserialized.argument_spans),
+                index: std::cell::Cell::new(0),
+                block_outputs: std::cell::UnsafeCell::new(<#block_outputs_ty>::new(_block_size)),
+                block_size: _block_size,
+                mode: _mode,
+                computing: std::cell::Cell::new(false),
             };
 
             #has_init_call

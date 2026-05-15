@@ -484,8 +484,14 @@ mod tests {
             argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
-        constructors.get("$plate").unwrap()(&"test-plate".to_string(), SAMPLE_RATE, deserialized)
-            .unwrap()
+        constructors.get("$plate").unwrap()(
+            &"test-plate".to_string(),
+            SAMPLE_RATE,
+            deserialized,
+            1,
+            crate::types::ProcessingMode::Block,
+        )
+        .unwrap()
     }
 
     fn step(module: &dyn Sampleable) {

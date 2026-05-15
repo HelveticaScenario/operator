@@ -1121,7 +1121,14 @@ impl Synthesizer {
     let constructor = constructors
       .get(&module_type)
       .ok_or_else(|| napi::Error::from_reason(format!("Unknown module type: {}", module_type)))?;
-    let module = constructor(&module_id, self.sample_rate, deserialized).map_err(|e| {
+    let module = constructor(
+      &module_id,
+      self.sample_rate,
+      deserialized,
+      1,
+      modular_core::types::ProcessingMode::Block,
+    )
+    .map_err(|e| {
       napi::Error::from_reason(format!("Failed to create module {}: {}", module_id, e))
     })?;
 
