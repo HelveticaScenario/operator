@@ -4,6 +4,7 @@ import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
+import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -969,6 +970,8 @@ function App() {
                 isOpen={isEngineHealthOpen}
                 onClose={() => setIsEngineHealthOpen(false)}
             />
+
+            <AudioPanicDialog />
 
             <main className="app-main">
                 {!workspaceRoot ? (

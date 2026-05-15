@@ -27,6 +27,7 @@ import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
+import { promises as fsPromises } from 'fs';
 import * as path from 'path';
 import electronSquirrelStartup from 'electron-squirrel-startup';
 import { z } from 'zod';
@@ -1037,6 +1038,28 @@ registerIPCHandler('SYNTH_GET_TRANSPORT_STATE', () =>
 
 registerIPCHandler('SYNTH_ENABLE_LINK', (enabled: boolean) => {
     synth.enableLink(enabled);
+});
+
+registerIPCHandler('SYNTH_IS_AUDIO_THREAD_PANICKED', () =>
+    synth.isAudioThreadPanicked(),
+);
+
+registerIPCHandler('SYNTH_RESTART_AUDIO', () => {
+    synth.restartAudio();
+});
+
+registerIPCHandler('SYNTH_PANIC_LOG_DIR', () => synth.panicLogDir());
+
+registerIPCHandler('SHELL_OPEN_PATH', async (targetPath: string) => {
+    // Ensure the directory exists before opening — the panic log dir is
+    // created lazily by the panic hook, so it may not exist before a crash.
+    try {
+        await fsPromises.mkdir(targetPath, { recursive: true });
+    } catch {
+        /* mkdir is best-effort — fall through to openPath which surfaces a
+           readable error string if the path is still unreachable */
+    }
+    return shell.openPath(targetPath);
 });
 
 // Audio device operations - new API
