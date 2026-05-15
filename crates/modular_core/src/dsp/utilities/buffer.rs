@@ -86,6 +86,47 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
     }
 }
 
+/// Manual `{Name}BlockOutputs` companion for `BufferWriteOutputs`. Mirrors
+/// what `#[derive(Outputs)]` auto-generates, but only covers the `sample`
+/// port — the `buffer` field on `BufferWriteOutputs` is a `BufferData`
+/// circular buffer surfaced via `get_buffer_output`, not a sample-indexed
+/// output port.
+struct BufferWriteBlockOutputs {
+    sample: crate::block_port::BlockPort,
+}
+
+impl BufferWriteBlockOutputs {
+    pub fn new(block_size: usize) -> Self {
+        Self {
+            sample: crate::block_port::BlockPort::new(block_size),
+        }
+    }
+
+    #[inline]
+    pub fn port_index(name: &str) -> Option<usize> {
+        match name {
+            "output" => Some(0),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn get_at(&self, port_idx: usize, ch: usize, index: usize) -> f32 {
+        match port_idx {
+            0 => self.sample.get(index, ch),
+            _ => 0.0,
+        }
+    }
+
+    pub fn copy_from_inner(&mut self, inner: &BufferWriteOutputs, slot: usize) {
+        for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+            self.sample.set(slot, ch, inner.sample.get_cycling(ch));
+        }
+    }
+
+    pub fn tick_buffers(&mut self, _block_size: usize) {}
+}
+
 #[derive(Default)]
 struct BufferWriteState {}
 
@@ -367,6 +408,8 @@ mod tests {
             &id.to_string(),
             SAMPLE_RATE,
             deserialized,
+            1,
+            crate::types::ProcessingMode::Block,
         )
         .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
     }

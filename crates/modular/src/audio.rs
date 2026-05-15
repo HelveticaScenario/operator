@@ -1110,7 +1110,13 @@ impl AudioState {
         )?;
 
       if let Some(constructor) = constructors.get(&module_state.module_type) {
-        match constructor(&id, sample_rate, deserialized) {
+        match constructor(
+          &id,
+          sample_rate,
+          deserialized,
+          1,
+          modular_core::types::ProcessingMode::Block,
+        ) {
           Ok(module) => {
             update.inserts.push((id.clone(), module));
           }
@@ -2500,6 +2506,9 @@ mod tests {
     fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
       Ok(PolyOutput::mono(self.value))
     }
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      self.value
+    }
     fn get_module_type(&self) -> &str {
       "constant-output"
     }
@@ -2535,6 +2544,9 @@ mod tests {
     fn update(&self) {}
     fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
       Ok(PolyOutput::mono(self.cached_signal.lock().get_value()))
+    }
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      self.cached_signal.lock().get_value()
     }
     fn get_module_type(&self) -> &str {
       "patch-update-sensitive"

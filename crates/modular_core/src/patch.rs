@@ -148,8 +148,17 @@ impl Patch {
                 argument_spans,
                 channel_count: cached.channel_count,
             };
-            let module = constructor(&module_state.id, sample_rate, deserialized)
-                .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
+            let module = constructor(
+                &module_state.id,
+                sample_rate,
+                deserialized,
+                // Block-buffered runtime not yet wired through patch construction;
+                // default to per-sample (block_size=1, Block mode). Real values flow
+                // in once the audio callback is rewritten.
+                1,
+                crate::types::ProcessingMode::Block,
+            )
+            .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
             patch.sampleables.insert(module_state.id.clone(), module);
         }
 
