@@ -20,6 +20,7 @@ export function executePatchScript(
         source,
         schemas,
         dslGlobals,
+        options.analyzer,
     );
 
     const resultBuilder = context.getBuilder();
