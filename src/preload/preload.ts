@@ -84,6 +84,18 @@ export interface ElectronAPI {
         getTransportState: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_TRANSPORT_STATE]
         >;
+        enableLink: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_ENABLE_LINK]
+        >;
+        isAudioThreadPanicked: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_IS_AUDIO_THREAD_PANICKED]
+        >;
+        restartAudio: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_RESTART_AUDIO]
+        >;
+        panicLogDir: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_PANIC_LOG_DIR]
+        >;
     };
     // Audio device operations
     audio: {
@@ -175,6 +187,7 @@ export interface ElectronAPI {
     onMenuCloseBuffer: (callback: () => void) => () => void;
     onMenuToggleRecording: (callback: () => void) => () => void;
     onMenuOpenSettings: (callback: () => void) => () => void;
+    onMenuOpenEngineHealth: (callback: () => void) => () => void;
     /**
      * Trigger a menu action programmatically (e.g., from Monaco keybindings).
      * This emits the same IPC event that the Electron menu would send.
@@ -208,8 +221,16 @@ export interface ElectronAPI {
         onChange: (callback: (config: AppConfig) => void) => () => void;
     };
 
+    // Wavs folder change notification
+    onWavsChange: (callback: () => void) => () => void;
+
     // Main process log forwarding
     onMainLog: (callback: (entry: MainLogEntry) => void) => () => void;
+
+    // OS shell operations
+    shell: {
+        openPath: Promisify<IPCHandlers[typeof IPC_CHANNELS.SHELL_OPEN_PATH]>;
+    };
 
     // Update operations
     update: {
@@ -276,6 +297,15 @@ const electronAPI: ElectronAPI = {
 
         getTransportState: (...args) =>
             invokeIPC('SYNTH_GET_TRANSPORT_STATE', ...args),
+
+        enableLink: (...args) => invokeIPC('SYNTH_ENABLE_LINK', ...args),
+
+        isAudioThreadPanicked: (...args) =>
+            invokeIPC('SYNTH_IS_AUDIO_THREAD_PANICKED', ...args),
+
+        restartAudio: (...args) => invokeIPC('SYNTH_RESTART_AUDIO', ...args),
+
+        panicLogDir: (...args) => invokeIPC('SYNTH_PANIC_LOG_DIR', ...args),
 
         isRecording: (...args) => invokeIPC('SYNTH_IS_RECORDING', ...args),
 
@@ -390,6 +420,7 @@ const electronAPI: ElectronAPI = {
     onMenuCloseBuffer: menuEventHandler(MENU_CHANNELS.CLOSE_BUFFER),
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
+    onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
     // Programmatically trigger a menu action (for Monaco keybindings on Windows)
     triggerMenuAction: (action: keyof typeof MENU_CHANNELS) => {
         const channel = MENU_CHANNELS[action];
@@ -417,6 +448,14 @@ const electronAPI: ElectronAPI = {
 
     // Main process log forwarding
     onMainLog: menuEventHandler(IPC_CHANNELS.MAIN_LOG),
+
+    // Wavs folder change notification
+    onWavsChange: menuEventHandler(IPC_CHANNELS.WAVS_ON_CHANGE),
+
+    // OS shell operations
+    shell: {
+        openPath: (...args) => invokeIPC('SHELL_OPEN_PATH', ...args),
+    },
 
     // Update operations
     update: {

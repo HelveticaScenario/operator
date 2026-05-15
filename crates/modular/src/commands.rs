@@ -3,12 +3,13 @@
 //! This module defines the commands sent from the main thread to the audio thread,
 //! and the errors reported back from the audio thread.
 
+use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey, WavData};
+use napi_derive::napi;
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey};
-use napi_derive::napi;
-
 use crate::audio::ScopeBuffer;
+use crate::link::LinkResources;
 
 /// When a queued patch update should be applied.
 #[napi(string_enum)]
@@ -29,8 +30,8 @@ pub struct PatchUpdate {
   /// Unique ID for this update, used to track apply/discard on the audio thread.
   pub update_id: u64,
 
-  /// Modules to insert (pre-constructed and Arc-wrapped on main thread).
-  pub inserts: Vec<(String, Arc<Box<dyn modular_core::types::Sampleable>>)>,
+  /// Modules to insert (pre-constructed on main thread).
+  pub inserts: Vec<(String, Box<dyn modular_core::types::Sampleable>)>,
 
   /// Set of desired module IDs, pre-computed on the main thread.
   /// Any existing module not in this set (and not reserved) is stale.
@@ -45,8 +46,15 @@ pub struct PatchUpdate {
   /// Scopes to remove
   pub scope_removes: Vec<ScopeBufferKey>,
 
+  /// WAV data cache — cloned Arc<WavData> entries from the main-thread WavCache.
+  /// Swapped into the Patch on the audio thread so Wav params can resolve during connect().
+  pub wav_data: HashMap<String, Arc<WavData>>,
+
   /// Sample rate for new modules
   pub sample_rate: f32,
+
+  /// Whether the DSL explicitly called $setTempo (don't push default 120 to Link)
+  pub tempo_override: Option<f64>,
 }
 
 impl PatchUpdate {
@@ -59,7 +67,9 @@ impl PatchUpdate {
       remaps: Vec::new(),
       scope_adds: Vec::new(),
       scope_removes: Vec::new(),
+      wav_data: HashMap::new(),
       sample_rate,
+      tempo_override: None,
     }
   }
 
@@ -88,7 +98,7 @@ pub enum GraphCommand {
   /// does state transfer + replacement, then reconnects.
   SingleModuleUpdate {
     module_id: String,
-    module: Arc<Box<dyn Sampleable>>,
+    module: Box<dyn Sampleable>,
   },
 
   /// MIDI/control messages (can be sent individually)
@@ -102,6 +112,19 @@ pub enum GraphCommand {
 
   /// Clear the entire patch (used when stopped to reset state)
   ClearPatch,
+
+  /// Install or remove the live Ableton Link session.
+  ///
+  /// `Some(resources)` hands a fully constructed and enabled `AblLink`
+  /// (alongside its `HostTimeFilter` and `SessionState`) to the audio thread.
+  /// `None` tells the audio thread to relinquish its current resources.
+  ///
+  /// Construction, `enable()`, and drop of `AblLink` are documented as
+  /// realtime-unsafe by Ableton and must run on the main thread. The audio
+  /// thread only ever uses the RT-safe capture/commit/clock_micros API on
+  /// the resources it holds. Old resources removed by this command are
+  /// pushed to the garbage queue so the main thread can drop them safely.
+  SetLink(Option<Box<LinkResources>>),
 }
 
 /// Error types that can be reported from the audio thread back to the main thread.
@@ -153,11 +176,14 @@ pub const ERROR_QUEUE_CAPACITY: usize = 256;
 #[allow(dead_code)]
 pub enum GarbageItem {
   /// A module removed from the patch
-  Module(Arc<Box<dyn Sampleable>>),
+  Module(Box<dyn Sampleable>),
   /// A scope buffer removed from the collection
   Scope(ScopeBuffer),
   /// A queued patch update that was superseded by a newer update before it fired
   PatchUpdate(PatchUpdate),
+  /// Live Link resources removed from the audio thread. Drop tears down
+  /// internal networking threads and sockets — must happen on the main thread.
+  Link(Box<LinkResources>),
 }
 
 /// Capacity for the garbage queue (audio → main).

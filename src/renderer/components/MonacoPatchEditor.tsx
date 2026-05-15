@@ -8,7 +8,10 @@ import { formatPath } from './monaco/monacoHelpers';
 import type { ScopeView } from '../types/editor';
 import { setupMonacoJavascript } from './monaco/monacoLanguage';
 import { buildSymbolSets } from './monaco/definitionProvider';
-import { registerDslFormattingProvider } from './monaco/formattingProvider';
+import {
+    DEFAULT_PRETTIER_OPTIONS,
+    registerDslFormattingProvider,
+} from './monaco/formattingProvider';
 import { applyMonacoTheme } from './monaco/theme';
 import {
     registerConfigSchema,
@@ -54,6 +57,17 @@ export function MonacoPatchEditor({
     useEffect(() => {
         electronAPI.getDslLibSource().then(setLibSource).catch(console.error);
         electronAPI.getSchemas().then(setSchemas).catch(console.error);
+    }, []);
+
+    // Re-fetch DSL lib source when wavs folder changes so Monaco picks up new $wavs() types
+    useEffect(() => {
+        const unsubscribe = electronAPI.onWavsChange(() => {
+            electronAPI
+                .getDslLibSource()
+                .then(setLibSource)
+                .catch(console.error);
+        });
+        return unsubscribe;
     }, []);
 
     const monaco = useCustomMonaco();
@@ -134,11 +148,6 @@ export function MonacoPatchEditor({
     const handleMount: OnMount = (ed, _monacoInstance) => {
         setEditor(ed);
         editorRef.current = ed;
-
-        const model = ed.getModel();
-        if (model) {
-            model.updateOptions({ insertSpaces: true, tabSize: 2 });
-        }
 
         // On Windows/Linux, use Ctrl; on macOS, use WinCtrl (physical Ctrl)
         // This ensures all shortcuts use the Control key on all platforms.
@@ -246,6 +255,26 @@ export function MonacoPatchEditor({
         );
         return () => disposable.dispose();
     }, [monaco, prettierConfig]);
+
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        const apply = () => {
+            const model = editor.getModel();
+            if (model) {
+                model.updateOptions({
+                    insertSpaces: true,
+                    tabSize:
+                        prettierConfig.tabWidth ??
+                        DEFAULT_PRETTIER_OPTIONS.tabWidth,
+                });
+            }
+        };
+        apply();
+        const disposable = editor.onDidChangeModel(apply);
+        return () => disposable.dispose();
+    }, [editor, prettierConfig.tabWidth]);
 
     // Register MIDI device autocomplete provider
     useEffect(() => {

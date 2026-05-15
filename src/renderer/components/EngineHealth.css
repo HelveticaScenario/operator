@@ -1,0 +1,123 @@
+.engine-health-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.engine-health-panel {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    width: 360px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+}
+
+.engine-health-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-default);
+}
+
+.engine-health-header h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.engine-health-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 4px;
+}
+
+.engine-health-close-btn:hover {
+    color: var(--text-primary);
+}
+
+.engine-health-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.engine-health-section {
+    margin-bottom: 8px;
+}
+
+.engine-health-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    margin: 0 0 12px 0;
+}
+
+.engine-health-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 4px 0;
+}
+
+.engine-health-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    min-width: 70px;
+}
+
+.engine-health-values {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.engine-health-usage {
+    font-size: 14px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    min-width: 52px;
+    text-align: right;
+    color: var(--text-primary);
+}
+
+.engine-health-usage.warning {
+    color: #d97706;
+}
+
+.engine-health-usage.danger {
+    color: #dc2626;
+}
+
+.engine-health-ns {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 90px;
+    text-align: right;
+}
+
+.engine-health-loading {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 20px 0;
+}

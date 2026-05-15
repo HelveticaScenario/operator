@@ -34,13 +34,13 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use modular_core::patch::Patch;
 use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey};
 use std::time::Instant;
-
 
 use crate::commands::{
   AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
@@ -630,6 +630,27 @@ const AUDIO_OUTPUT_ATTENUATION: f32 = 0.2;
 /// the [-5, 5] volt range used by DSP modules (inverse of AUDIO_OUTPUT_ATTENUATION).
 const AUDIO_INPUT_GAIN: f32 = 1.0 / AUDIO_OUTPUT_ATTENUATION;
 
+/// Safety soft clipper: linear below the knee, tanh saturation above.
+/// Prevents output from ever reaching ±1.0 to protect speakers and hearing.
+const SAFETY_CLIP_KNEE: f32 = 0.9;
+const SAFETY_CLIP_HEADROOM: f32 = 1.0 - SAFETY_CLIP_KNEE;
+
+#[inline(always)]
+fn safety_soft_clip(x: f32) -> f32 {
+  if !x.is_finite() {
+    return 0.0;
+  }
+  if x.abs() <= SAFETY_CLIP_KNEE {
+    x
+  } else {
+    let sign = x.signum();
+    let excess = x.abs() - SAFETY_CLIP_KNEE;
+    let clipped = SAFETY_CLIP_KNEE + SAFETY_CLIP_HEADROOM * (excess / SAFETY_CLIP_HEADROOM).tanh();
+    // tanh asymptotically approaches 1.0 but f32 can round to exactly 1.0 for large inputs
+    sign * clipped.min(SAFETY_CLIP_KNEE + SAFETY_CLIP_HEADROOM * 0.9999)
+  }
+}
+
 const SCOPE_CAPACITY: u32 = 1024;
 
 use modular_core::types::ScopeStats;
@@ -833,6 +854,10 @@ pub struct AudioState {
   midi_manager: Arc<MidiInputManager>,
   /// Transport state meter - written by audio thread, read by main thread
   pub transport_meter: Arc<TransportMeter>,
+  /// Set true if the audio callback caught an unwinding panic. Once set the
+  /// callback writes silence forever; the stream must be torn down and the
+  /// Synthesizer recreated to recover.
+  pub audio_thread_panicked: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -870,7 +895,14 @@ impl AudioState {
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager,
       transport_meter: Arc::new(TransportMeter::default()),
+      audio_thread_panicked: Arc::new(AtomicBool::new(false)),
     }
+  }
+
+  /// True if the audio callback has caught a panic and is now emitting silence.
+  /// Recovery requires recreating the Synthesizer.
+  pub fn is_audio_thread_panicked(&self) -> bool {
+    self.audio_thread_panicked.load(Ordering::SeqCst)
   }
 
   /// Send a command to the audio thread
@@ -906,15 +938,21 @@ impl AudioState {
       .take_snapshot(self.sample_rate as f64, self.channels as f64)
   }
 
-  pub fn set_stopped(&self, stopped: bool) {
-    self.stopped.store(stopped, Ordering::SeqCst);
-    // Also send command so audio thread sees it immediately
-    let cmd = if stopped {
-      GraphCommand::Stop
-    } else {
-      GraphCommand::Start
-    };
-    let _ = self.send_command(cmd);
+  /// Stop transport. Flips the atomic immediately (stop is synchronous by
+  /// design — no quantize) and notifies the audio thread so it can tear down
+  /// pending_start and propagate to Link.
+  pub fn request_stop(&self) {
+    self.stopped.store(true, Ordering::SeqCst);
+    let _ = self.send_command(GraphCommand::Stop);
+  }
+
+  /// Request transport start. Does NOT flip the atomic — the audio thread's
+  /// Start handler owns that, immediately in free-run and at the next bar
+  /// boundary when Link is enabled. This avoids a one-buffer leak window
+  /// where the main thread's flip could be observed before the Start handler
+  /// re-armed the quantize.
+  pub fn request_start(&self) {
+    let _ = self.send_command(GraphCommand::Start);
   }
 
   pub fn is_stopped(&self) -> bool {
@@ -936,6 +974,7 @@ impl AudioState {
       module_states: self.module_states.clone(),
       midi_manager: self.midi_manager.clone(),
       transport_meter: self.transport_meter.clone(),
+      audio_thread_panicked: self.audio_thread_panicked.clone(),
     }
   }
 
@@ -1007,6 +1046,8 @@ impl AudioState {
     sample_rate: f32,
     trigger: QueuedTrigger,
     update_id: u64,
+    wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
+    tempo_override: Option<f64>,
   ) -> Result<()> {
     let PatchGraph {
       modules,
@@ -1023,7 +1064,8 @@ impl AudioState {
     update.remaps = module_id_remaps.unwrap_or_default();
 
     // Build maps for efficient lookup
-    let desired_modules: HashMap<String, _> = modules.into_iter().map(|m| (m.id.clone(), m)).collect();
+    let desired_modules: HashMap<String, _> =
+      modules.into_iter().map(|m| (m.id.clone(), m)).collect();
 
     // Compute scopes to add/remove (no updates — key includes config)
     {
@@ -1045,10 +1087,7 @@ impl AudioState {
         .collect();
 
       // Scopes to remove
-      update.scope_removes = current_keys
-        .difference(&desired_keys)
-        .cloned()
-        .collect();
+      update.scope_removes = current_keys.difference(&desired_keys).cloned().collect();
 
       // Scopes to add (pre-build ScopeBuffers on main thread)
       update.scope_adds = desired_keys
@@ -1066,13 +1105,9 @@ impl AudioState {
     for (id, module_state) in desired_modules {
       // Deserialize params FIRST (before construction)
       let deserialized =
-        crate::deserialize_params(&module_state.module_type, module_state.params, true)
-          .map_err(|e| {
-            napi::Error::from_reason(format!(
-              "Failed to deserialize params for {}: {}",
-              id, e
-            ))
-          })?;
+        crate::deserialize_params(&module_state.module_type, module_state.params, true).map_err(
+          |e| napi::Error::from_reason(format!("Failed to deserialize params for {}: {}", id, e)),
+        )?;
 
       if let Some(constructor) = constructors.get(&module_state.module_type) {
         match constructor(&id, sample_rate, deserialized) {
@@ -1097,6 +1132,19 @@ impl AudioState {
     // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread
     update.desired_ids = update.inserts.iter().map(|(id, _)| id.clone()).collect();
 
+    // Run main-thread resource preparation (e.g. FFT-based mipmap generation for
+    // wavetable oscillators). Called here because allocation and file-backed
+    // data access must not happen on the audio thread.
+    for (_id, module) in update.inserts.iter() {
+      module.prepare_resources(&wav_data);
+    }
+
+    // Populate wav_data from the cache snapshot
+    update.wav_data = wav_data;
+
+    // Pass through tempo override for Link integration
+    update.tempo_override = tempo_override;
+
     // Send the update to audio thread
     self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
   }
@@ -1107,6 +1155,8 @@ impl AudioState {
     sample_rate: f32,
     trigger: QueuedTrigger,
     update_id: u64,
+    wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
+    tempo_override: Option<f64>,
   ) -> Vec<ApplyPatchError> {
     // Validate patch
     let schemas = schema();
@@ -1117,17 +1167,25 @@ impl AudioState {
       }];
     }
 
-    // If stopped, send clear command first to reset state
+    // If stopped, clear audio-thread state and request a start. The audio
+    // thread's Start handler flips `stopped`: immediately when free-running,
+    // at the next bar boundary when Link is enabled (the quantize also
+    // surfaces in the UI via `link_pending_start`).
     if self.is_stopped() {
       let _ = self.send_command(GraphCommand::ClearPatch);
-      let mut scope_collection = self.scope_collection.lock();
-      scope_collection.clear();
-      // Auto-unmute on SetPatch to match prior imperative flow
-      self.set_stopped(false);
+      self.scope_collection.lock().clear();
+      self.request_start();
     }
 
     // Apply patch
-    if let Err(e) = self.apply_patch(patch_graph, sample_rate, trigger, update_id) {
+    if let Err(e) = self.apply_patch(
+      patch_graph,
+      sample_rate,
+      trigger,
+      update_id,
+      wav_data,
+      tempo_override,
+    ) {
       return vec![ApplyPatchError {
         message: format!("Failed to apply patch: {}", e),
         errors: None,
@@ -1151,6 +1209,9 @@ pub struct AudioSharedState {
   pub midi_manager: Arc<MidiInputManager>,
   /// Transport state meter - written by audio thread, read by main thread
   pub transport_meter: Arc<TransportMeter>,
+  /// Set by the audio callback after catching a panic. The callback then
+  /// writes silence forever; the stream must be torn down to recover.
+  pub audio_thread_panicked: Arc<AtomicBool>,
 }
 
 fn chrono_simple_timestamp() -> String {
@@ -1162,6 +1223,10 @@ fn chrono_simple_timestamp() -> String {
 // ============================================================================
 // AudioProcessor - Audio thread side
 // ============================================================================
+//
+// Ableton Link integration lives in `crate::link`. The audio thread holds a
+// `LinkState` that owns the live `rusty_link` resources and exposes only
+// realtime-safe operations.
 
 /// Audio processor that runs on the audio thread.
 /// Owns the Patch directly and processes commands from the main thread.
@@ -1186,6 +1251,11 @@ struct AudioProcessor {
   queued_update: Option<(PatchUpdate, QueuedTrigger)>,
   /// Transport state meter - written each frame, read by main thread
   transport_meter: Arc<TransportMeter>,
+  /// Sample rate of the audio stream
+  sample_rate: f32,
+  /// Ableton Link integration (audio-thread side). Owns the live
+  /// `rusty_link` resources when active and exposes only RT-safe operations.
+  link: crate::link::LinkState,
 }
 
 impl AudioProcessor {
@@ -1194,6 +1264,7 @@ impl AudioProcessor {
     error_tx: ErrorProducer,
     garbage_tx: GarbageProducer,
     shared: AudioSharedState,
+    sample_rate: f32,
   ) -> Self {
     Self {
       patch: Patch::new(),
@@ -1206,6 +1277,8 @@ impl AudioProcessor {
       midi_manager: shared.midi_manager,
       queued_update: None,
       transport_meter: shared.transport_meter,
+      sample_rate,
+      link: crate::link::LinkState::new(),
     }
   }
 
@@ -1226,6 +1299,13 @@ impl AudioProcessor {
     while let Ok(cmd) = self.command_rx.pop() {
       match cmd {
         GraphCommand::QueuedPatchUpdate { update, trigger } => {
+          // Push tempo to Link if explicitly set via $setTempo. The
+          // capture/commit call inside `set_tempo_now` is the realtime-safe
+          // way to mutate session state per Ableton's docs.
+          if let Some(tempo) = update.tempo_override {
+            self.link.set_tempo_now(tempo);
+          }
+
           // If there's already a queued update, discard it and apply the new one
           // immediately. This is intentional: when the user triggers a second
           // update before the first one fires (e.g. pressing Ctrl+Enter twice),
@@ -1249,22 +1329,24 @@ impl AudioProcessor {
         } => {
           // State transfer + replace, then reconnect
           if let Some(old_module) = self.patch.sampleables.remove(&module_id) {
-            new_module.transfer_state_from(old_module.as_ref().as_ref());
+            new_module.transfer_state_from(old_module.as_ref());
             self.patch.remove_message_listeners_for_module(&module_id);
-            if self.garbage_tx.push(GarbageItem::Module(old_module)).is_err() {
-            }
+            if self
+              .garbage_tx
+              .push(GarbageItem::Module(old_module))
+              .is_err()
+            {}
           }
-          self
-            .patch
-            .sampleables
-            .insert(module_id.clone(), new_module.clone());
+          self.patch.sampleables.insert(module_id.clone(), new_module);
           // Re-register message listeners for the replaced module
-          self
-            .patch
-            .add_message_listeners_for_module(&module_id, &new_module);
+          self.patch.add_message_listeners_for_module(&module_id);
           // Reconnect all modules so the new module picks up its connections
           for module in self.patch.sampleables.values() {
             module.connect(&self.patch);
+          }
+          // Refresh any module-local caches rebuilt from params after reconnect.
+          for module in self.patch.sampleables.values() {
+            module.on_patch_update();
           }
         }
         GraphCommand::DispatchMessage(msg) => {
@@ -1275,11 +1357,30 @@ impl AudioProcessor {
           }
         }
         GraphCommand::Start => {
-          let msg = Message::Clock(ClockMessages::Start);
-          let _ = self.patch.dispatch_message(&msg);
+          if self.link.is_active() {
+            // With Link: keep `stopped=true` and arm a pending start.
+            // The buffer-level phase check releases `stopped` when the
+            // shared Link timeline reaches a bar boundary.
+            self
+              .stopped
+              .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.link.request_quantized_start();
+          } else {
+            // Free-run: flip immediately and reset the clock.
+            self
+              .stopped
+              .store(false, std::sync::atomic::Ordering::SeqCst);
+            let _ = self
+              .patch
+              .dispatch_message(&Message::Clock(ClockMessages::Start));
+          }
         }
         GraphCommand::Stop => {
-          // Stop is handled via the stopped flag
+          // Stop is handled via the stopped flag.
+          // Also clear any pending start so a later peer-start does not
+          // resurrect a cancelled patch, and propagate stop to peers.
+          self.link.clear_pending_start();
+          self.link.signal_stop();
         }
         GraphCommand::ClearPatch => {
           // Discard any pending queued update
@@ -1292,12 +1393,7 @@ impl AudioProcessor {
             } // If queue is full, old update will be dropped here as fallback (not ideal but safe)
           }
           // Defer deallocation of all non-reserved modules to main thread
-          let ids_to_remove: Vec<String> = self
-            .patch
-            .sampleables
-            .keys()
-            .cloned()
-            .collect();
+          let ids_to_remove: Vec<String> = self.patch.sampleables.keys().cloned().collect();
           for id in ids_to_remove {
             if let Some(module) = self.patch.sampleables.remove(&id) {
               let _ = self.garbage_tx.push(GarbageItem::Module(module));
@@ -1305,6 +1401,29 @@ impl AudioProcessor {
           }
           self.patch.insert_audio_in();
           self.patch.rebuild_message_listeners();
+        }
+        GraphCommand::SetLink(new_resources) => {
+          // Construction/destruction of `AblLink` (and `enable()`) are
+          // realtime-unsafe per Ableton's documentation. They run on the
+          // main thread; the audio thread only swaps the prepared resources
+          // in/out and ships any old set off to the garbage queue for
+          // main-thread drop.
+          let was_active = self.link.is_active();
+          if let Some(old) = self.link.install(new_resources) {
+            // If the queue is full, the Box drops here on the audio thread
+            // as a fallback — not ideal RT-wise but bounded and strictly
+            // better than leaking the live networking resources.
+            let _ = self.garbage_tx.push(GarbageItem::Link(old));
+          }
+
+          // When the live instance changes, clear any external clock sync
+          // on ROOT_CLOCK so the patch's own clock takes over.
+          if was_active {
+            use modular_core::types::ROOT_CLOCK_ID;
+            if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+              root_clock.clear_external_sync();
+            }
+          }
         }
       }
     }
@@ -1318,6 +1437,7 @@ impl AudioProcessor {
       desired_ids,
       scope_adds,
       scope_removes,
+      wav_data,
       ..
     } = update;
 
@@ -1355,10 +1475,13 @@ impl AudioProcessor {
     let mut newly_inserted_ids: Vec<String> = Vec::new();
     for (id, new_module) in inserts {
       if let Some(old_module) = self.patch.sampleables.remove(&id) {
-        new_module.transfer_state_from(old_module.as_ref().as_ref());
+        new_module.transfer_state_from(old_module.as_ref());
         self.patch.remove_message_listeners_for_module(&id);
-        if self.garbage_tx.push(GarbageItem::Module(old_module)).is_err() {
-        }
+        if self
+          .garbage_tx
+          .push(GarbageItem::Module(old_module))
+          .is_err()
+        {}
       }
       newly_inserted_ids.push(id.clone());
       self.patch.sampleables.insert(id, new_module);
@@ -1377,17 +1500,22 @@ impl AudioProcessor {
     for id in stale_ids {
       if let Some(module) = self.patch.sampleables.remove(&id) {
         self.patch.remove_message_listeners_for_module(&id);
-        if self.garbage_tx.push(GarbageItem::Module(module)).is_err() {
-        }
+        if self.garbage_tx.push(GarbageItem::Module(module)).is_err() {}
       }
     }
 
     // Incrementally update message listeners for changed modules only.
     // Stale entries were already removed above; now add entries for new and remapped modules.
     for id in newly_inserted_ids.iter().chain(remapped_ids.iter()) {
-      if let Some(sampleable) = self.patch.sampleables.get(id).cloned() {
-        self.patch.add_message_listeners_for_module(id, &sampleable);
-      }
+      self.patch.add_message_listeners_for_module(id);
+    }
+
+    // Swap wav_data into the patch (cheap — just moving Arc clones).
+    // Old Arc<WavData> refs just decrement refcount — no audio data freed
+    // because the main-thread WavCache still holds references.
+    if !wav_data.is_empty() || !self.patch.wav_data.is_empty() {
+      let old_wav_data = std::mem::replace(&mut self.patch.wav_data, wav_data);
+      drop(old_wav_data);
     }
 
     // Connect all modules
@@ -1429,7 +1557,15 @@ impl AudioProcessor {
       return output; // Skip processing when stopped
     }
 
-    // 1. Update ROOT_CLOCK first so its trigger outputs are available this frame
+    // 1. Sync Link state to ROOT_CLOCK, then update ROOT_CLOCK
+    let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
+    self.link.sync_frame(|bar_phase, tempo| {
+      if let Some(clock) = root_clock {
+        clock.sync_external_clock(bar_phase, tempo);
+      }
+    });
+
+    // 2. Update ROOT_CLOCK so its trigger outputs are available this frame
     if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
       root_clock.update();
     }
@@ -1496,11 +1632,12 @@ impl AudioProcessor {
           .get_poly_sample("beatInBar")
           .map(|p| p.get(0) as u32)
           .unwrap_or(0);
+        let is_playing = !self.is_stopped();
         self.transport_meter.write_from_audio(
           bar_phase,
           bar_count,
           beat_in_bar,
-          !self.is_stopped(),
+          is_playing,
           has_queued,
         );
       } else {
@@ -1605,9 +1742,12 @@ where
   // Clone shared state for the closure
   let recording_writer = shared.recording_writer.clone();
   let audio_budget_meter = shared.audio_budget_meter.clone();
+  let panicked_flag = shared.audio_thread_panicked.clone();
 
   // Create the audio processor that owns the patch
-  let mut audio_processor = AudioProcessor::new(command_rx, error_tx, garbage_tx, shared);
+  let sample_rate = config.sample_rate as f32;
+  let mut audio_processor =
+    AudioProcessor::new(command_rx, error_tx, garbage_tx, shared, sample_rate);
 
   let mut final_state_processor = FinalStateProcessor::new(num_channels);
 
@@ -1615,64 +1755,113 @@ where
     .build_output_stream(
       config,
       move |output: &mut [T], _info: &cpal::OutputCallbackInfo| {
-        profiling::scope!("audio_callback");
-
-        let callback_start = Instant::now();
-
-        // Process any pending commands from the main thread
-        {
-          profiling::scope!("process_commands");
-          audio_processor.process_commands();
+        // If a previous callback panicked, never touch the captured state
+        // again — it may be in an inconsistent state. Emit silence until the
+        // stream is torn down and the Synthesizer recreated.
+        if panicked_flag.load(std::sync::atomic::Ordering::Relaxed) {
+          for s in output.iter_mut() {
+            *s = T::from_sample(0.0);
+          }
+          return;
         }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          profiling::scope!("audio_callback");
 
-        {
-          profiling::scope!("process_frames");
-          for frame in output.chunks_mut(num_channels) {
-            // Read from the input buffer and update audio_in
-            {
-              let mut audio_in = audio_processor.patch.audio_in.lock();
-              let input_samples = input_reader.read_frame();
+          let callback_start = Instant::now();
 
-              // Set channel count so that get() returns values instead of 0.0
-              audio_in.set_channels(PORT_MAX_CHANNELS);
-              for i in 0..PORT_MAX_CHANNELS {
-                // Apply gain to bring input from [-1, 1] to [-5, 5] volt range
-                audio_in.set(i, input_samples[i] * AUDIO_INPUT_GAIN);
+          // Process any pending commands from the main thread
+          {
+            profiling::scope!("process_commands");
+            audio_processor.process_commands();
+          }
+
+          // Capture Link session state once per buffer (before frame loop).
+          audio_processor
+            .link
+            .capture_buffer_state(audio_processor.sample_rate);
+
+          // Operator transport is decoupled from Link peer transport:
+          // peers never start or stop Operator. The only Link-driven transport
+          // action is releasing a locally-initiated quantized start when the
+          // shared timeline reaches a bar boundary.
+          if audio_processor.link.check_pending_start_release() {
+            audio_processor
+              .stopped
+              .store(false, std::sync::atomic::Ordering::SeqCst);
+            let msg = modular_core::types::Message::Clock(ClockMessages::Start);
+            let _ = audio_processor.patch.dispatch_message(&msg);
+          }
+
+          // Write Link state to transport meter for UI visibility. Done
+          // BEFORE the is_stopped() guard so the UI always shows the
+          // free-running Link phase, even when Operator is stopped.
+          audio_processor
+            .link
+            .write_meter(&audio_processor.transport_meter);
+
+          let num_frames = output.len() / num_channels;
+
+          {
+            profiling::scope!("process_frames");
+            for frame in output.chunks_mut(num_channels) {
+              // Read from the input buffer and update audio_in
+              {
+                let mut audio_in = audio_processor.patch.audio_in.lock();
+                let input_samples = input_reader.read_frame();
+
+                // Set channel count so that get() returns values instead of 0.0
+                audio_in.set_channels(PORT_MAX_CHANNELS);
+                for i in 0..PORT_MAX_CHANNELS {
+                  // Apply gain to bring input from [-1, 1] to [-5, 5] volt range
+                  audio_in.set(i, input_samples[i] * AUDIO_INPUT_GAIN);
+                }
               }
-            }
 
-            // Process frame and get multi-channel output
-            let samples = final_state_processor
-              .process_frame_with_processor(&mut audio_processor, num_channels);
+              // Process frame and get multi-channel output
+              let samples = final_state_processor
+                .process_frame_with_processor(&mut audio_processor, num_channels);
 
-            for (ch, s) in frame.iter_mut().enumerate() {
-              if ch < samples.len() {
-                *s = T::from_sample(samples[ch]);
-              } else {
-                *s = T::from_sample(0.0);
+              for (ch, s) in frame.iter_mut().enumerate() {
+                if ch < samples.len() {
+                  *s = T::from_sample(samples[ch]);
+                } else {
+                  *s = T::from_sample(0.0);
+                }
               }
-            }
 
-            // Record if enabled (use try_lock to avoid blocking audio)
-            // For multi-channel, record first channel (mono mix could be added later)
-            if let Some(mut writer_guard) = recording_writer.try_lock()
-              && let Some(ref mut writer) = *writer_guard
-            {
-              let _ = writer.write_sample(T::from_sample(samples[0]));
+              // Record if enabled (use try_lock to avoid blocking audio)
+              // For multi-channel, record first channel (mono mix could be added later)
+              if let Some(mut writer_guard) = recording_writer.try_lock()
+                && let Some(ref mut writer) = *writer_guard
+              {
+                let _ = writer.write_sample(T::from_sample(samples[0]));
+              }
             }
           }
+
+          // Increment Link sample count for HostTimeFilter
+          audio_processor.link.add_samples(num_frames as u64);
+
+          // Collect module states for UI (e.g., seq step highlighting)
+          // Done once per buffer, not per frame, to minimize overhead
+          {
+            profiling::scope!("collect_module_states");
+            audio_processor.collect_module_states();
+          }
+
+          let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
+
+          audio_budget_meter.record_chunk(output.len() as u64, elapsed_ns);
+        }));
+        if result.is_err() {
+          // Panic hook (panic_log::install_panic_hook) has already written
+          // a log file with payload + backtrace. Mark the audio thread as
+          // poisoned and emit silence for this and every future buffer.
+          panicked_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+          for s in output.iter_mut() {
+            *s = T::from_sample(0.0);
+          }
         }
-
-        // Collect module states for UI (e.g., seq step highlighting)
-        // Done once per buffer, not per frame, to minimize overhead
-        {
-          profiling::scope!("collect_module_states");
-          audio_processor.collect_module_states();
-        }
-
-        let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
-
-        audio_budget_meter.record_chunk(output.len() as u64, elapsed_ns);
       },
       err_fn,
       None,
@@ -1831,7 +2020,7 @@ impl FinalStateProcessor {
     let mut any_audible = false;
     for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
       let sample = raw_output[ch] * self.attenuation_factor;
-      output[ch] = sample;
+      output[ch] = safety_soft_clip(sample);
       if sample.abs() >= 0.0005 {
         any_audible = true;
       }
@@ -1967,6 +2156,15 @@ pub struct TransportMeter {
   has_queued_update: AtomicBool,
   /// The update_id of the most recently applied patch update
   last_applied_update_id: AtomicU64,
+  /// Whether Ableton Link is currently enabled
+  link_enabled: AtomicBool,
+  /// Number of Link peers in the session
+  link_peers: AtomicU32,
+  /// Free-running Link bar phase (0..1), always updated when Link is enabled
+  link_phase_bits: AtomicU64,
+  /// Armed for a quantized start — waiting for a Link bar boundary before
+  /// playback actually begins. While true, `is_playing` is still false.
+  link_pending_start: AtomicBool,
 }
 
 impl Default for TransportMeter {
@@ -1981,6 +2179,10 @@ impl Default for TransportMeter {
       is_playing: AtomicBool::new(false),
       has_queued_update: AtomicBool::new(false),
       last_applied_update_id: AtomicU64::new(0),
+      link_enabled: AtomicBool::new(false),
+      link_peers: AtomicU32::new(0),
+      link_phase_bits: AtomicU64::new(0f64.to_bits()),
+      link_pending_start: AtomicBool::new(false),
     }
   }
 }
@@ -2030,6 +2232,48 @@ impl TransportMeter {
       .store(update_id, Ordering::Relaxed);
   }
 
+  /// Write just the BPM (e.g. when Link tempo changes externally).
+  #[inline]
+  pub fn write_bpm(&self, bpm: f64) {
+    self.bpm_bits.store(bpm.to_bits(), Ordering::Relaxed);
+  }
+
+  /// Write Link enabled state and peer count (called from audio thread or main thread).
+  #[inline]
+  pub fn write_link_state(&self, enabled: bool, peers: u32) {
+    self.link_enabled.store(enabled, Ordering::Relaxed);
+    self.link_peers.store(peers, Ordering::Relaxed);
+  }
+
+  /// Write the free-running Link bar phase (0..1), always updated when Link is enabled.
+  #[inline]
+  pub fn write_link_phase(&self, phase: f64) {
+    self
+      .link_phase_bits
+      .store(phase.to_bits(), Ordering::Relaxed);
+  }
+
+  /// Write the pending-start flag (armed, waiting for bar boundary).
+  #[inline]
+  pub fn write_link_pending_start(&self, armed: bool) {
+    self.link_pending_start.store(armed, Ordering::Relaxed);
+  }
+
+  /// Read the current Link enabled flag (used by the main thread for
+  /// idempotency checks before constructing/destroying Link resources).
+  #[inline]
+  pub fn read_link_enabled(&self) -> bool {
+    self.link_enabled.load(Ordering::Relaxed)
+  }
+
+  /// Read the current BPM (used by the main thread when constructing a new
+  /// `AblLink` so we initialise the session at the user's last known tempo
+  /// rather than always 120).
+  #[inline]
+  pub fn read_bpm(&self) -> f64 {
+    f64::from_bits(self.bpm_bits.load(Ordering::Relaxed))
+  }
+
   /// Read transport snapshot from the main thread.
   pub fn snapshot(&self) -> TransportSnapshot {
     TransportSnapshot {
@@ -2042,6 +2286,10 @@ impl TransportMeter {
       is_playing: self.is_playing.load(Ordering::Relaxed),
       has_queued_update: self.has_queued_update.load(Ordering::Relaxed),
       last_applied_update_id: self.last_applied_update_id.load(Ordering::Relaxed) as f64,
+      link_enabled: self.link_enabled.load(Ordering::Relaxed),
+      link_peers: self.link_peers.load(Ordering::Relaxed),
+      link_phase: f64::from_bits(self.link_phase_bits.load(Ordering::Relaxed)),
+      link_pending_start: self.link_pending_start.load(Ordering::Relaxed),
     }
   }
 }
@@ -2067,26 +2315,29 @@ pub struct TransportSnapshot {
   pub has_queued_update: bool,
   /// The update_id of the most recently applied patch update (as f64 for N-API compatibility)
   pub last_applied_update_id: f64,
+  /// Whether Ableton Link is currently enabled
+  pub link_enabled: bool,
+  /// Number of Link peers in the session
+  pub link_peers: u32,
+  /// Free-running Link bar phase (0..1), always updated when Link is enabled
+  pub link_phase: f64,
+  /// Armed for a quantized start — a start has been requested and the audio
+  /// thread is waiting for the next Link bar boundary before actually
+  /// flipping `is_playing`. Only meaningful when `link_enabled` is true.
+  pub link_pending_start: bool,
 }
 
 #[cfg(test)]
 mod tests {
   use super::*;
+  use modular_core::Signal;
+  use modular_core::poly::PolyOutput;
   use modular_core::types::ModuleIdRemap;
+  use modular_core::types::{Message, MessageHandler, MessageTag, MidiNoteOn};
+  use std::sync::atomic::AtomicUsize;
 
   // ============================================================================
-  // Legacy tests - commented out after Phase 2 architecture change
-  // ============================================================================
-  // These tests used the old AudioState::new() and direct apply_patch() method
-  // which have been replaced by the command queue architecture.
-  //
-  // TODO: Rewrite tests to use the new architecture:
-  // - Create AudioProcessor directly for unit tests
-  // - Or create integration tests that use the full command queue flow
-  //
-  // The functionality being tested (module ID remaps, stopped state, etc.)
-  // is now handled in AudioProcessor::apply_patch_update() and the command
-  // queue dispatch logic.
+  // AudioProcessor + command queue tests
   // ============================================================================
 
   #[test]
@@ -2125,9 +2376,16 @@ mod tests {
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
+      audio_thread_panicked: Arc::new(AtomicBool::new(false)),
     };
 
-    let processor = AudioProcessor::new(cmd_consumer, err_producer, garbage_producer, shared);
+    let processor = AudioProcessor::new(
+      cmd_consumer,
+      err_producer,
+      garbage_producer,
+      shared,
+      44100.0,
+    );
 
     // Processor starts with empty patch (may have hidden audio_in)
     assert!(processor.patch.sampleables.is_empty() || processor.patch.sampleables.len() == 1);
@@ -2144,11 +2402,11 @@ mod tests {
   }
 
   impl MockModule {
-    fn new(label: &str) -> Arc<Box<dyn modular_core::types::Sampleable>> {
-      Arc::new(Box::new(Self {
+    fn new(label: &str) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
         label: label.to_string(),
         current_id: label.to_string(),
-      }))
+      })
     }
   }
 
@@ -2175,9 +2433,139 @@ mod tests {
     }
   }
 
-  fn create_test_processor() -> AudioProcessor {
+  struct CountingMessageModule {
+    current_id: String,
+    label: String,
+    hits: Arc<AtomicUsize>,
+  }
+
+  impl CountingMessageModule {
+    fn new(label: &str, hits: Arc<AtomicUsize>) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: label.to_string(),
+        label: label.to_string(),
+        hits,
+      })
+    }
+  }
+
+  impl MessageHandler for CountingMessageModule {
+    fn handled_message_tags(&self) -> &'static [MessageTag] {
+      &[MessageTag::MidiNoteOn]
+    }
+
+    fn handle_message(&self, _message: &Message) -> napi::Result<()> {
+      self.hits.fetch_add(1, Ordering::SeqCst);
+      Ok(())
+    }
+  }
+
+  impl modular_core::types::Sampleable for CountingMessageModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn tick(&self) {}
+    fn update(&self) {}
+    fn get_poly_sample(&self, _port: &str) -> napi::Result<modular_core::poly::PolyOutput> {
+      Ok(modular_core::poly::PolyOutput::default())
+    }
+    fn get_sample(&self, _port: &str, _channel: usize) -> napi::Result<f32> {
+      Ok(0.0)
+    }
+    fn get_module_type(&self) -> &str {
+      &self.label
+    }
+    fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
+  struct ConstantOutputModule {
+    current_id: String,
+    value: f32,
+  }
+
+  impl ConstantOutputModule {
+    fn new(id: &str, value: f32) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: id.to_string(),
+        value,
+      })
+    }
+  }
+
+  impl MessageHandler for ConstantOutputModule {}
+
+  impl modular_core::types::Sampleable for ConstantOutputModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn tick(&self) {}
+    fn update(&self) {}
+    fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
+      Ok(PolyOutput::mono(self.value))
+    }
+    fn get_sample(&self, _port: &str, _channel: usize) -> napi::Result<f32> {
+      Ok(self.value)
+    }
+    fn get_module_type(&self) -> &str {
+      "constant-output"
+    }
+    fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
+  struct PatchUpdateSensitiveModule {
+    current_id: String,
+    params_signal: Mutex<Signal>,
+    cached_signal: Mutex<Signal>,
+  }
+
+  impl PatchUpdateSensitiveModule {
+    fn new(id: &str, signal: Signal) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: id.to_string(),
+        params_signal: Mutex::new(signal),
+        cached_signal: Mutex::new(Signal::Volts(0.0)),
+      })
+    }
+  }
+
+  impl MessageHandler for PatchUpdateSensitiveModule {}
+
+  impl modular_core::types::Sampleable for PatchUpdateSensitiveModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn tick(&self) {}
+    fn update(&self) {}
+    fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
+      Ok(PolyOutput::mono(self.cached_signal.lock().get_value()))
+    }
+    fn get_sample(&self, _port: &str, _channel: usize) -> napi::Result<f32> {
+      Ok(self.cached_signal.lock().get_value())
+    }
+    fn get_module_type(&self) -> &str {
+      "patch-update-sensitive"
+    }
+    fn connect(&self, patch: &modular_core::patch::Patch) {
+      modular_core::types::Connect::connect(&mut *self.params_signal.lock(), patch);
+    }
+    fn on_patch_update(&self) {
+      let signal = self.params_signal.lock().clone();
+      *self.cached_signal.lock() = signal;
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
+  fn create_test_processor() -> (CommandProducer, AudioProcessor) {
     let (
-      _cmd_producer,
+      cmd_producer,
       cmd_consumer,
       err_producer,
       _err_consumer,
@@ -2193,9 +2581,18 @@ mod tests {
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
+      audio_thread_panicked: Arc::new(AtomicBool::new(false)),
     };
 
-    AudioProcessor::new(cmd_consumer, err_producer, garbage_producer, shared)
+    let processor = AudioProcessor::new(
+      cmd_consumer,
+      err_producer,
+      garbage_producer,
+      shared,
+      44100.0,
+    );
+
+    (cmd_producer, processor)
   }
 
   #[test]
@@ -2203,17 +2600,29 @@ mod tests {
     // Regression test: when remaps form a chain (A→B, B→C), all modules
     // must survive. Before the fix, applying A→B first would overwrite B
     // (destroying it) before B→C could move it to C.
-    let mut processor = create_test_processor();
+    let (_cmd_producer, mut processor) = create_test_processor();
 
     // Set up initial state: cycle-2 (shift), cycle-3 (thirds)
-    processor.patch.sampleables.insert("cycle-2".into(), MockModule::new("shift"));
-    processor.patch.sampleables.insert("cycle-3".into(), MockModule::new("thirds"));
+    processor
+      .patch
+      .sampleables
+      .insert("cycle-2".into(), MockModule::new("shift"));
+    processor
+      .patch
+      .sampleables
+      .insert("cycle-3".into(), MockModule::new("thirds"));
 
     // Remap chain: cycle-2→cycle-3, cycle-3→cycle-4
     let mut update = PatchUpdate::new(48000.0);
     update.remaps = vec![
-      ModuleIdRemap { from: "cycle-2".into(), to: "cycle-3".into() },
-      ModuleIdRemap { from: "cycle-3".into(), to: "cycle-4".into() },
+      ModuleIdRemap {
+        from: "cycle-2".into(),
+        to: "cycle-3".into(),
+      },
+      ModuleIdRemap {
+        from: "cycle-3".into(),
+        to: "cycle-4".into(),
+      },
     ];
     // Both new IDs are desired (won't be garbage-collected)
     update.desired_ids.insert("cycle-3".into());
@@ -2231,12 +2640,22 @@ mod tests {
       "cycle-4 should exist after remap"
     );
     assert_eq!(
-      processor.patch.sampleables.get("cycle-3").unwrap().get_module_type(),
+      processor
+        .patch
+        .sampleables
+        .get("cycle-3")
+        .unwrap()
+        .get_module_type(),
       "shift",
       "cycle-3 should contain the shift module"
     );
     assert_eq!(
-      processor.patch.sampleables.get("cycle-4").unwrap().get_module_type(),
+      processor
+        .patch
+        .sampleables
+        .get("cycle-4")
+        .unwrap()
+        .get_module_type(),
       "thirds",
       "cycle-4 should contain the thirds module"
     );
@@ -2250,15 +2669,27 @@ mod tests {
   #[test]
   fn test_remap_swap_preserves_both_modules() {
     // Test swap: A→B and B→A simultaneously
-    let mut processor = create_test_processor();
+    let (_cmd_producer, mut processor) = create_test_processor();
 
-    processor.patch.sampleables.insert("osc-1".into(), MockModule::new("alpha"));
-    processor.patch.sampleables.insert("osc-2".into(), MockModule::new("beta"));
+    processor
+      .patch
+      .sampleables
+      .insert("osc-1".into(), MockModule::new("alpha"));
+    processor
+      .patch
+      .sampleables
+      .insert("osc-2".into(), MockModule::new("beta"));
 
     let mut update = PatchUpdate::new(48000.0);
     update.remaps = vec![
-      ModuleIdRemap { from: "osc-1".into(), to: "osc-2".into() },
-      ModuleIdRemap { from: "osc-2".into(), to: "osc-1".into() },
+      ModuleIdRemap {
+        from: "osc-1".into(),
+        to: "osc-2".into(),
+      },
+      ModuleIdRemap {
+        from: "osc-2".into(),
+        to: "osc-1".into(),
+      },
     ];
     update.desired_ids.insert("osc-1".into());
     update.desired_ids.insert("osc-2".into());
@@ -2266,12 +2697,22 @@ mod tests {
     processor.apply_patch_update(update);
 
     assert_eq!(
-      processor.patch.sampleables.get("osc-1").unwrap().get_module_type(),
+      processor
+        .patch
+        .sampleables
+        .get("osc-1")
+        .unwrap()
+        .get_module_type(),
       "beta",
       "osc-1 should now contain beta (swapped)"
     );
     assert_eq!(
-      processor.patch.sampleables.get("osc-2").unwrap().get_module_type(),
+      processor
+        .patch
+        .sampleables
+        .get("osc-2")
+        .unwrap()
+        .get_module_type(),
       "alpha",
       "osc-2 should now contain alpha (swapped)"
     );
@@ -2280,14 +2721,18 @@ mod tests {
   #[test]
   fn test_remap_simple_rename() {
     // Simple case: single remap, no chain
-    let mut processor = create_test_processor();
+    let (_cmd_producer, mut processor) = create_test_processor();
 
-    processor.patch.sampleables.insert("vca-1".into(), MockModule::new("my-vca"));
+    processor
+      .patch
+      .sampleables
+      .insert("vca-1".into(), MockModule::new("my-vca"));
 
     let mut update = PatchUpdate::new(48000.0);
-    update.remaps = vec![
-      ModuleIdRemap { from: "vca-1".into(), to: "vca-2".into() },
-    ];
+    update.remaps = vec![ModuleIdRemap {
+      from: "vca-1".into(),
+      to: "vca-2".into(),
+    }];
     update.desired_ids.insert("vca-2".into());
 
     processor.apply_patch_update(update);
@@ -2297,9 +2742,193 @@ mod tests {
       "old ID should be gone"
     );
     assert_eq!(
-      processor.patch.sampleables.get("vca-2").unwrap().get_module_type(),
+      processor
+        .patch
+        .sampleables
+        .get("vca-2")
+        .unwrap()
+        .get_module_type(),
       "my-vca",
       "module should be at new ID"
     );
+  }
+
+  #[test]
+  fn test_single_module_update_re_registers_message_listeners() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let old_hits = Arc::new(AtomicUsize::new(0));
+    let new_hits = Arc::new(AtomicUsize::new(0));
+    processor.patch.sampleables.insert(
+      "m1".into(),
+      CountingMessageModule::new("old", Arc::clone(&old_hits)),
+    );
+    processor.patch.rebuild_message_listeners();
+
+    cmd_producer
+      .push(GraphCommand::SingleModuleUpdate {
+        module_id: "m1".into(),
+        module: CountingMessageModule::new("new", Arc::clone(&new_hits)),
+      })
+      .unwrap();
+    cmd_producer
+      .push(GraphCommand::DispatchMessage(Message::MidiNoteOn(
+        MidiNoteOn {
+          device: None,
+          channel: 0,
+          note: 60,
+          velocity: 100,
+        },
+      )))
+      .unwrap();
+
+    processor.process_commands();
+
+    assert_eq!(old_hits.load(Ordering::SeqCst), 0);
+    assert_eq!(new_hits.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn test_single_module_update_refreshes_patch_update_caches() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    processor
+      .patch
+      .sampleables
+      .insert("src".into(), ConstantOutputModule::new("src", 3.5));
+    processor.patch.sampleables.insert(
+      "dep".into(),
+      PatchUpdateSensitiveModule::new("dep", Signal::cable("src", "out", 0)),
+    );
+
+    for module in processor.patch.sampleables.values() {
+      module.connect(&processor.patch);
+    }
+    for module in processor.patch.sampleables.values() {
+      module.on_patch_update();
+    }
+
+    let initial = processor
+      .patch
+      .sampleables
+      .get("dep")
+      .unwrap()
+      .get_poly_sample("out")
+      .unwrap()
+      .get(0);
+    assert_eq!(initial, 3.5);
+
+    cmd_producer
+      .push(GraphCommand::SingleModuleUpdate {
+        module_id: "src".into(),
+        module: ConstantOutputModule::new("src", 7.25),
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    let updated = processor
+      .patch
+      .sampleables
+      .get("dep")
+      .unwrap()
+      .get_poly_sample("out")
+      .unwrap()
+      .get(0);
+    assert_eq!(updated, 7.25);
+  }
+
+  #[test]
+  fn test_patch_update_remap_re_registers_message_listeners() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+
+    let hits = Arc::new(AtomicUsize::new(0));
+    processor.patch.sampleables.insert(
+      "old-id".into(),
+      CountingMessageModule::new("old-id", Arc::clone(&hits)),
+    );
+    processor.patch.rebuild_message_listeners();
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.remaps = vec![ModuleIdRemap {
+      from: "old-id".into(),
+      to: "new-id".into(),
+    }];
+    update.desired_ids.insert("new-id".into());
+
+    processor.apply_patch_update(update);
+
+    let message = Message::MidiNoteOn(MidiNoteOn {
+      device: None,
+      channel: 0,
+      note: 60,
+      velocity: 100,
+    });
+
+    processor.patch.dispatch_message(&message).unwrap();
+
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert!(!processor.patch.sampleables.contains_key("old-id"));
+    assert!(processor.patch.sampleables.contains_key("new-id"));
+  }
+
+  // ============================================================================
+  // Safety soft clip tests
+  // ============================================================================
+
+  #[test]
+  fn test_safety_soft_clip_linear_below_knee() {
+    for &val in &[0.0, 0.1, -0.1, 0.5, -0.5, 0.89, -0.89, 0.9, -0.9] {
+      assert_eq!(
+        safety_soft_clip(val),
+        val,
+        "expected linear passthrough for {val}"
+      );
+    }
+  }
+
+  #[test]
+  fn test_safety_soft_clip_saturates_above_knee() {
+    for &val in &[1.0, 2.0, 5.0, 10.0, 100.0] {
+      let out = safety_soft_clip(val);
+      assert!(
+        out > SAFETY_CLIP_KNEE,
+        "output {out} should be above knee for input {val}"
+      );
+      assert!(
+        out < 1.0,
+        "output {out} should be below 1.0 for input {val}"
+      );
+    }
+    for &val in &[-1.0, -2.0, -5.0, -10.0, -100.0] {
+      let out = safety_soft_clip(val);
+      assert!(
+        out < -SAFETY_CLIP_KNEE,
+        "output {out} should be below -knee for input {val}"
+      );
+      assert!(
+        out > -1.0,
+        "output {out} should be above -1.0 for input {val}"
+      );
+    }
+  }
+
+  #[test]
+  fn test_safety_soft_clip_monotonic() {
+    let mut prev = safety_soft_clip(-100.0);
+    let mut x = -100.0;
+    while x <= 100.0 {
+      let out = safety_soft_clip(x);
+      assert!(out >= prev, "not monotonic at {x}: {prev} -> {out}");
+      prev = out;
+      x += 0.1;
+    }
+  }
+
+  #[test]
+  fn test_safety_soft_clip_nan_inf() {
+    assert_eq!(safety_soft_clip(f32::NAN), 0.0);
+    assert_eq!(safety_soft_clip(f32::INFINITY), 0.0);
+    assert_eq!(safety_soft_clip(f32::NEG_INFINITY), 0.0);
   }
 }

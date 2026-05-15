@@ -8,6 +8,8 @@ import {
     schemaToTypeExpr,
     getEnumVariants,
 } from '../../shared/dsl/schemaTypeResolver';
+import type { WavsFolderNode } from './executor';
+export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
 /** The **\`console\`** object provides access to the debugging console (e.g., the Web console in Firefox). */
@@ -299,6 +301,34 @@ type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
 type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
 
 /**
+ * A phase-warp table descriptor produced by the \`$table.*\` helpers.
+ *
+ * Passed to modules that accept a \`Table\`-typed param (e.g. the
+ * \`phase\` config field on \`$wavetable\`) to reshape a raw phase signal
+ * before it is used to read a wavetable.
+ *
+ * Create one with \`$table.mirror\`, \`$table.bend\`, \`$table.sync\`,
+ * \`$table.fold\`, or \`$table.pwm\` — do not construct directly.
+ *
+ * Tables are composable: \`table.pipe(next)\` feeds this table's output
+ * phase into \`next\` as its input phase. Equivalent to passing \`next\`
+ * as the optional second argument to any \`$table.*\` helper.
+ */
+type TableDescriptor =
+  | { readonly type: "mirror"; readonly amount: Signal }
+  | { readonly type: "bend"; readonly amount: Signal }
+  | { readonly type: "sync"; readonly ratio: Signal }
+  | { readonly type: "fold"; readonly amount: Signal }
+  | { readonly type: "pwm"; readonly width: Signal }
+  | { readonly type: "identity" }
+  | { readonly type: "pipe"; readonly first: Table; readonly second: Table };
+
+type Table = TableDescriptor & {
+  /** Pass this table to \`pipeFn\` and return the result. Mirrors \`Collection.pipe\`. */
+  pipe<T>(pipeFn: (self: Table) => T): T;
+};
+
+/**
  * A buffer output reference — returned by \`$buffer()\`, passed to readers
  * (like \`$bufRead\`, \`$delayRead\`) as their \`buffer\` param.
  */
@@ -308,6 +338,40 @@ type BufferOutputRef = {
   readonly port: string;
   readonly channels: number;
   readonly frameCount: number;
+};
+
+/**
+ * A loaded WAV sample handle — returned by \`$wavs()\`, passed to \`$sampler()\` as the \`wav\` param.
+ */
+type WavHandle = {
+  readonly type: 'wav_ref';
+  readonly path: string;
+  readonly channels: number;
+  readonly sampleRate: number;
+  readonly frameCount: number;
+  readonly duration: number;
+  readonly bitDepth: number;
+  /** File modification time (epoch ms). Cache-key hint — changes when the WAV is edited on disk. */
+  readonly mtime: number;
+  readonly pitch?: number;
+  readonly playback?: 'one-shot' | 'loop';
+  readonly bpm?: number;
+  readonly beats?: number;
+  readonly timeSignature?: {
+    readonly num: number;
+    readonly den: number;
+  };
+  /** Number of bars the sample spans, computed from BPM and time signature. E.g. an exact 2-bar loop is \`2.0\`; a 2.64-bar buffer is \`2.64\`. Absent when no BPM could be derived. */
+  readonly barCount?: number;
+  readonly loops: ReadonlyArray<{
+    readonly type: 'forward' | 'pingpong' | 'backward';
+    readonly start: number;
+    readonly end: number;
+  }>;
+  readonly cuePoints: ReadonlyArray<{
+    readonly position: number;
+    readonly label: string;
+  }>;
 };
 
 /**
@@ -895,6 +959,88 @@ function $bus(cb: (mixed: Collection) => unknown): Bus;
  */
 function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection | CollectionWithRange): void;
 
+/** Create a buffer module that captures an input signal into a circular audio buffer. */
+function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;
+
+/**
+ * Delay with feedback. Mixes \`input\` with a deferred feedback signal,
+ * captures the mix into a buffer of \`length\` seconds, and routes the
+ * buffer through \`feedbackCb\` to produce the feedback signal.
+ *
+ * Returns the wet+dry \\$mix output (same shape as \\$mix) augmented with a
+ * \`buffer\` property referencing the captured buffer for further reads.
+ *
+ * @param input - Dry signal collection. Channel count of the feedback path
+ *                matches \`input.length\` or 1 if input is a ModuleOutput.
+ * @param feedbackCb - Receives the captured buffer ref and returns the
+ *                     feedback signal mixed back into the input.
+ * @param length - Buffer length in seconds.
+ *
+ * \`\`\`
+ *   // simple feedback delay
+ *   $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()
+ * \`\`\`
+ *
+ * \`\`\`ts
+ *   // tap the buffer for an additional read
+ *   const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)
+ *   $delayRead(d.buffer, 0.75).out()
+ * \`\`\`
+ */
+function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): ReturnType<typeof $mix> & { buffer: BufferOutputRef };
+
+/**
+ * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
+ *
+ * Splits the input into low / mid / high via \`$xover\`, then runs each band
+ * through \`$comp\` with both upward and downward compression engaged at fast
+ * attack/release ballistics. Bands are summed and crossfaded against the
+ * original input via \`depth\`.
+ *
+ * Per-band trim (\`lowGain\` / \`midGain\` / \`highGain\`) follows the
+ * \`$scaleAndShift\` convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
+ *
+ * \`\`\`js
+ * $ott(drums).out()
+ * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
+ * \`\`\`
+ */
+function $ott(input: Collection | ModuleOutput, config?: {
+    /**
+     * Optional side-chain detector signal. The same crossover network splits
+     * the sidechain into low/mid/high and each band's compressor keys off the
+     * matching band — the gain is still applied to \`input\`.
+     */
+    sidechain?: Collection | ModuleOutput;
+    /** wet/dry blend, 0–5 (default 5 = fully wet) */
+    depth?: Poly<Signal>;
+    /** low/mid crossover (V/Oct, default ~120 Hz) */
+    lowMidFreq?: Poly<Signal>;
+    /** mid/high crossover (V/Oct, default ~2500 Hz) */
+    midHighFreq?: Poly<Signal>;
+    /** downward stage threshold in volts (default 1.0) */
+    threshold?: Poly<Signal>;
+    /** downward stage ratio: > 1 compresses, < 1 expands (boosts loud), 1 = passthrough. Default 4 */
+    ratio?: Poly<Signal>;
+    /** upward stage threshold in volts (default 0.5) */
+    upwardThreshold?: Poly<Signal>;
+    /** upward stage ratio: > 1 boosts quiet, < 1 gates quiet, 1 = passthrough. Default 4 */
+    upwardRatio?: Poly<Signal>;
+    /** envelope attack in seconds (default 0.003) */
+    attack?: Poly<Signal>;
+    /** envelope release in seconds (default 0.05) */
+    release?: Poly<Signal>;
+    /** per-band makeup gain as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
+    makeup?: Poly<Signal>;
+    /** low-band trim — 5 = unity (default 5) */
+    lowGain?: Poly<Signal>;
+    /** mid-band trim — 5 = unity (default 5) */
+    midGain?: Poly<Signal>;
+    /** high-band trim — 5 = unity (default 5) */
+    highGain?: Poly<Signal>;
+    id?: string;
+}): Collection;
+
 /**
  * Compute the Cartesian product of the given arrays.
  *
@@ -915,12 +1061,87 @@ function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection |
  * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
+
+/**
+ * Phase-warp table descriptors for modules that accept a {@link Table}
+ * (e.g. the \`phase\` config field on \`$wavetable\`).
+ *
+ * Each helper returns a {@link Table} whose inner signal-valued field
+ * accepts a constant, a module output, or any other {@link Signal}.
+ *
+ * Tables compose via the optional second argument. \`.pipe(fn)\` passes
+ * the table to \`fn\` and returns the result — same API as \`Collection.pipe\`.
+ *
+ * @example
+ * // Compose two tables (mirror feeds into bend):
+ * $table.mirror(0.5, $table.bend(0.3))
+ *
+ * // Compose three tables left-to-right:
+ * $table.mirror(0.5, $table.bend(0.3, $table.fold(0.2)))
+ *
+ * // Generic function application via .pipe:
+ * const addBend = (t) => $table.bend(0.3, t)
+ * $table.mirror(0.5).pipe(addBend)
+ */
+declare const $table: {
+    /** Reflect the phase around its midpoint by \`amount\` (0..1). */
+    mirror(amount: Poly<Signal>, next?: Table): Table;
+    /** Bend the phase curve by \`amount\` (0..1 = linear..extreme). */
+    bend(amount: Poly<Signal>, next?: Table): Table;
+    /** Hard-sync: restart the phase every \`ratio\` of a cycle. */
+    sync(ratio: Poly<Signal>, next?: Table): Table;
+    /** Fold the phase back on itself by \`amount\`. */
+    fold(amount: Poly<Signal>, next?: Table): Table;
+    /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
+    pwm(width: Poly<Signal>, next?: Table): Table;
+};
 `;
 
-export function buildLibSource(schemas: Schemas): string {
-    // console.log('buildLibSource schemas:', schemas);
+function generateWavsTypeDeclaration(tree: WavsFolderNode | null): string {
+    if (!tree || Object.keys(tree).length === 0) {
+        return '/** Load WAV samples from the wavs/ folder. */\nexport function $wavs(): Record<string, never>;\n';
+    }
+
+    function renderNode(node: WavsFolderNode, indent: string): string {
+        const sorted = Object.entries(node).sort(([a], [b]) =>
+            a.localeCompare(b),
+        );
+        const hasFiles = sorted.some(([, v]) => v === 'file');
+        const lines: string[] = ['{'];
+        // Numeric index signature (wraps modulo file count) when this folder
+        // has at least one direct file. Out-of-range integers are valid at
+        // runtime since access wraps; folders with zero files omit the
+        // signature so `$wavs().emptyDir[0]` is a static type error.
+        if (hasFiles) {
+            lines.push(`${indent}  readonly [index: number]: WavHandle;`);
+        }
+        for (const [key, value] of sorted) {
+            const safeName = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/.test(key)
+                ? key
+                : `'${key.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
+            if (value === 'file') {
+                lines.push(`${indent}  readonly ${safeName}: WavHandle;`);
+            } else {
+                lines.push(
+                    `${indent}  readonly ${safeName}: ${renderNode(value, indent + '  ')}`,
+                );
+            }
+        }
+        lines.push(`${indent}}`);
+        return lines.join('\n');
+    }
+
+    const treeType = renderNode(tree, '');
+    return `/** Load WAV samples from the wavs/ folder. */\nexport function $wavs(): ${treeType};\n`;
+}
+
+export function buildLibSource(
+    schemas: Schemas,
+    wavsFolderTree?: WavsFolderNode | null,
+): string {
     const schemaLib = generateDSL(schemas);
-    return `declare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib} \n}\n\n export {};\n`;
+    const wavsDecl = generateWavsTypeDeclaration(wavsFolderTree ?? null);
+    return `declare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
 }
 
 interface NamespaceNode {
@@ -1303,7 +1524,8 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
+    // Filter out _clock (internal only) and $buffer (declared in BASE_LIB_SOURCE
+    // with a custom BufferOutputRef return type)
     const userFacingSchemas = schemas.filter(
         (s) => s.name !== '_clock' && s.name !== '$buffer',
     );
@@ -1334,14 +1556,6 @@ export function generateDSL(schemas: Schemas): string {
         const signalReturnType = getFactoryReturnType(signalSchema);
         lines.push(`export const $input: Readonly<${signalReturnType}>;`);
     }
-
-    lines.push('');
-    lines.push(
-        '/** Create a buffer module that captures an input signal into a circular audio buffer. */',
-    );
-    lines.push(
-        'export function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;',
-    );
 
     return lines.join('\n') + '\n';
 }

@@ -12,7 +12,7 @@ use lru::LruCache;
 use parking_lot::Mutex;
 
 use modular_core::params::{
-  extract_argument_spans, CachedParams, DeserializedParams, ParamsDeserializer,
+  CachedParams, DeserializedParams, ParamsDeserializer, extract_argument_spans,
 };
 
 // ---------------------------------------------------------------------------

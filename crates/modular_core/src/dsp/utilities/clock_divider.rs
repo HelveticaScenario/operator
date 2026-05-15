@@ -2,8 +2,8 @@ use deserr::Deserr;
 use napi::Result;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::{min_gate_samples, SchmittTrigger, TempGate, TempGateState};
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS};
+use crate::dsp::utils::{SchmittTrigger, TempGate, TempGateState, min_gate_samples};
+use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
 use crate::types::ClockMessages;
 
 fn default_division() -> u32 {

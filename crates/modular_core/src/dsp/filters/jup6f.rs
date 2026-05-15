@@ -2,10 +2,10 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
+    PORT_MAX_CHANNELS,
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
-    PORT_MAX_CHANNELS,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -101,8 +101,8 @@ impl Default for Jup6fState {
             channels: [LadderState::default(); PORT_MAX_CHANNELS],
             mono_g: 0.0,
             mono_k: 0.0,
-            last_cutoff_mono: f32::NAN, // Indicate that coefficients have never been calculated 
-            last_resonance_mono: f32::NAN, // Indicate that coefficients have never been calculated 
+            last_cutoff_mono: f32::NAN, // Indicate that coefficients have never been calculated
+            last_resonance_mono: f32::NAN, // Indicate that coefficients have never been calculated
             smooth_cutoff_mono: Clickless::default(),
             smooth_resonance_mono: Clickless::default(),
         }

@@ -497,7 +497,7 @@
   },
   {
     "name": "$comp",
-    "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward compressor with peak envelope follower.\n\nApplies feed-forward compression in the log domain with configurable\nthreshold, ratio, attack/release ballistics, and makeup gain. Input and\noutput gain staging allow driving signal into the compressor and trimming\nthe output level independently. A dry/wet mix control enables parallel\ncompression.\n\n**Signal flow:** input → input gain → compressor → output gain → dry/wet mix → output\n\n- **threshold** — compression threshold in volts (0–5, default 2.5).\n- **ratio** — compression ratio (1–20, default 4.0).\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain (linear multiplier, 0–5).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp(input, { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix(low, mid, high).out()\n```",
+    "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward dynamics processor with peak envelope follower.\n\nTwo stages run in parallel:\n\n- **downward stage** acts on signal above `threshold`. `ratio > 1` =\n  compression, `ratio < 1` = upward expansion (boost loud), `ratio = 1` =\n  passthrough.\n- **upward stage** acts on signal below `upwardThreshold`. `upwardRatio > 1`\n  = upward compression (boost quiet), `upwardRatio < 1` = downward\n  expansion / gate-like attenuation of quiet signal, `upwardRatio = 1` =\n  passthrough.\n\nBoth ratios use textbook `X:1` notation (X = Δinput dB / Δoutput dB) and\nare lower-bounded at 1e-3 (≈ Ableton's 1:1000 display). The detected\nlevel is clamped to ±60 dB so expansion stays bounded at signal extremes.\n\nAn optional **side-chain** input lets the envelope follower track an\nexternal signal while the gain is applied to `input` — useful for\nducking, kick-triggered pumping, or building multiband effects like OTT.\n\n**Signal flow:** input → input gain → (detector: side-chain or input)\n  → up + down compression → output gain → dry/wet mix → output\n\n- **threshold** — downward stage threshold in volts (0–5, default 2.5).\n- **ratio** — downward stage ratio in textbook X:1 form. > 1 compresses,\n  < 1 expands (boosts loud signal), 1 = passthrough. Lower-bounded at\n  1e-3 (≈ 1:1000 expansion); upper bound is `f32::INFINITY` =\n  brick-wall limiter. Default 4.0 (= Ableton display 1:0.25).\n- **upwardThreshold** — upward stage threshold in volts (0–5, default 0).\n- **upwardRatio** — upward stage ratio in textbook X:1 form. > 1 boosts\n  quiet signal, < 1 gates quiet signal, 1 = passthrough. Same bounds as\n  `ratio`. Default 1 (passthrough).\n- **sidechain** — optional external detector signal.\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain as a dB-domain voltage\n  (-5V = -24dB, 0V = unity, +5V = +24dB, default 0).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp(input, { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// side-chain ducking — kick triggers gain reduction on pad\n$comp(pad, {\n  sidechain: kick,\n  threshold: 1.0, ratio: 8, attack: 0.005, release: 0.2,\n})\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix(low, mid, high).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CompressorParams",
@@ -530,7 +530,7 @@
           ]
         },
         "makeup": {
-          "description": "makeup gain multiplier (0-5, default 1.0)",
+          "description": "makeup gain as a dB-domain voltage (-5V = -24dB, 0V = unity, +5V = +24dB,\ndefault 0 = unity) — matches the inputGain / outputGain convention.",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -563,7 +563,7 @@
           ]
         },
         "ratio": {
-          "description": "compression ratio (1-20, default 4.0)",
+          "description": "downward stage ratio in textbook X:1 form (= Δinput dB / Δoutput dB above\nthreshold). > 1 compresses, < 1 expands (boost loud), 1 = passthrough.\n`f32::INFINITY` acts as a brick-wall limiter (output clamps to\nthreshold). Equivalent to Ableton's 1:Y display via `ratio = 1/Y`.\nLower-bounded at 1e-3. Default 4.0 (= Ableton 1:0.25).",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -584,8 +584,41 @@
             }
           ]
         },
+        "sidechain": {
+          "description": "optional side-chain detector input — when connected, the envelope follower\nreads from this signal instead of `input`, but the gain is still applied\nto `input`. Use for ducking, kick-triggered pumping, etc.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "threshold": {
-          "description": "compression threshold (0-5V, default 2.5)",
+          "description": "downward stage threshold (0-5V, default 2.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upwardRatio": {
+          "description": "upward stage ratio in textbook X:1 form. > 1 compresses below threshold\n(boosts quiet signal), < 1 expands below threshold (gates quiet signal),\n1 = passthrough. Equivalent to Ableton's 1:Y display via `ratio = 1/Y`.\nLower-bounded at 1e-3. Default 1.0.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "upwardThreshold": {
+          "description": "upward stage threshold — signal *below* this gets pushed toward the\nthreshold (0-5V, default 0 = bypassed; no real signal sits below the\nresulting ~-200 dB floor)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -678,8 +711,16 @@
         "maxValue": 5.0
       },
       {
+        "name": "sidechain",
+        "description": "optional side-chain detector input — when connected, the envelope follower\nreads from this signal instead of `input`, but the gain is still applied\nto `input`. Use for ducking, kick-triggered pumping, etc.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
         "name": "threshold",
-        "description": "compression threshold (0-5V, default 2.5)",
+        "description": "downward stage threshold (0-5V, default 2.5)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -687,7 +728,23 @@
       },
       {
         "name": "ratio",
-        "description": "compression ratio (1-20, default 4.0)",
+        "description": "downward stage ratio in textbook X:1 form (= Δinput dB / Δoutput dB above\nthreshold). > 1 compresses, < 1 expands (boost loud), 1 = passthrough.\n`f32::INFINITY` acts as a brick-wall limiter (output clamps to\nthreshold). Equivalent to Ableton's 1:Y display via `ratio = 1/Y`.\nLower-bounded at 1e-3. Default 4.0 (= Ableton 1:0.25).",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "upwardThreshold",
+        "description": "upward stage threshold — signal *below* this gets pushed toward the\nthreshold (0-5V, default 0 = bypassed; no real signal sits below the\nresulting ~-200 dB floor)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "upwardRatio",
+        "description": "upward stage ratio in textbook X:1 form. > 1 compresses below threshold\n(boosts quiet signal), < 1 expands below threshold (gates quiet signal),\n1 = passthrough. Equivalent to Ableton's 1:Y display via `ratio = 1/Y`.\nLower-bounded at 1e-3. Default 1.0.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -711,7 +768,7 @@
       },
       {
         "name": "makeup",
-        "description": "makeup gain multiplier (0-5, default 1.0)",
+        "description": "makeup gain as a dB-domain voltage (-5V = -24dB, 0V = unity, +5V = +24dB,\ndefault 0 = unity) — matches the inputGain / outputGain convention.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -1183,6 +1240,593 @@
         "name": "amount"
       }
     ]
+  },
+  {
+    "name": "$dattorro",
+    "documentation": "Stereo plate reverb based on the Dattorro algorithm.\n\nImplements Jon Dattorro's plate reverberator with input diffusion,\na cross-coupled stereo tank, and multi-tap output. Even input\nchannels are summed to the left input, odd channels to the right.\nOutput is always 100% wet.\n\n```js\n$dattorro($saw('c3'), { decay: 3, damping: 1, size: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DattorroParams",
+      "type": "object",
+      "properties": {
+        "damping": {
+          "description": "high-frequency damping in the reverb tank (-5 to 5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "reverb decay time (-5 to 5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "diffusion": {
+          "description": "input diffusion amount (0 to 5, default 3.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio input (even channels → left, odd channels → right)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "modulation": {
+          "description": "external tank modulation signal (-5 to 5, default 0, not clamped)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "predelay": {
+          "description": "predelay time in seconds (0 to 0.5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "room size — scales all delay line lengths (-5 to 5, default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo reverb output (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input (even channels → left, odd channels → right)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "reverb decay time (-5 to 5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "damping",
+        "description": "high-frequency damping in the reverb tank (-5 to 5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "room size — scales all delay line lengths (-5 to 5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "predelay",
+        "description": "predelay time in seconds (0 to 0.5, default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 0.5
+      },
+      {
+        "name": "diffusion",
+        "description": "input diffusion amount (0 to 5, default 3.5)",
+        "signalType": "control",
+        "defaultValue": 3.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "modulation",
+        "description": "external tank modulation signal (-5 to 5, default 0, not clamped)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ],
+    "channels": 2
+  },
+  {
+    "name": "$overdrive",
+    "documentation": "Multi-mode overdrive saturator. Drive boosts the input into a soft, hard,\nor asymmetric shaper, with a tone control applying pre-emphasis before\ndistortion and matching de-emphasis after. Internally oversampled 2× to\nreduce aliasing.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "OverdriveParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "input signal to overdrive (bipolar, typically -5 to 5)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "saturation mode (defaults to soft)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OverdriveMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into\nthe shaper at positive values and de-emphasises them after, and vice versa.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "drive"
+      ],
+      "$defs": {
+        "OverdriveMode": {
+          "description": "Saturation algorithm.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh-style saturation.",
+              "type": "string",
+              "const": "soft"
+            },
+            {
+              "description": "Hard clipping at ±1.",
+              "type": "string",
+              "const": "hard"
+            },
+            {
+              "description": "Asymmetric tube-style saturation with even harmonics.",
+              "type": "string",
+              "const": "asym"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "overdriven signal output",
+        "polyphonic": true,
+        "default": true,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to overdrive (bipolar, typically -5 to 5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into\nthe shaper at positive values and de-emphasises them after, and vice versa.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$plate",
+    "documentation": "Stereo plate reverb with a dense Glicol-inspired feedback network.\n\nUses a longer feedback path with distributed damping and more allpass\nstages than the standard Dattorro algorithm, producing a thicker,\nwarmer reverb tail. Always 100% wet — use `.send()` or `$mix` for\ndry/wet blending.\n\n```js\n$plate($saw('c3')).out()\n$plate($saw('c3'), { decay: 2, bandwidth: 3 }).out()\n$plate($saw('c3'), { modulation: $sine('0.1hz') }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "PlateParams",
+      "type": "object",
+      "properties": {
+        "bandwidth": {
+          "description": "input bandwidth — controls high-frequency content entering the tank.\ndefault 2.02V → coeff 0.7 (maps -5V..5V to 0.005..0.9999, clamped)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "damping": {
+          "description": "tank damping — higher values absorb more high frequencies per recirculation.\ndefault 4.09V → coeff 0.1 (maps -5V..5V to 0.9999..0.005, inverted, clamped)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "feedback decay — controls how long the reverb tail sustains.\ndefault -2.0V → coeff 0.3 (maps -5V..5V to 0.0..0.9999, clamped)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio input (even channels → left, odd channels → right)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "modulation": {
+          "description": "external tank modulation signal.\ndefault 0.0V → no modulation (±5V maps to ±5.5 samples excursion at 48kHz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo reverb output (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input (even channels → left, odd channels → right)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bandwidth",
+        "description": "input bandwidth — controls high-frequency content entering the tank.\ndefault 2.02V → coeff 0.7 (maps -5V..5V to 0.005..0.9999, clamped)",
+        "signalType": "control",
+        "defaultValue": 2.02,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "damping",
+        "description": "tank damping — higher values absorb more high frequencies per recirculation.\ndefault 4.09V → coeff 0.1 (maps -5V..5V to 0.9999..0.005, inverted, clamped)",
+        "signalType": "control",
+        "defaultValue": 4.09,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "feedback decay — controls how long the reverb tail sustains.\ndefault -2.0V → coeff 0.3 (maps -5V..5V to 0.0..0.9999, clamped)",
+        "signalType": "control",
+        "defaultValue": -2.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "modulation",
+        "description": "external tank modulation signal.\ndefault 0.0V → no modulation (±5V maps to ±5.5 samples excursion at 48kHz)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ],
+    "channels": 2
   },
   {
     "name": "$segment",
@@ -2321,6 +2965,17 @@
             }
           ]
         },
+        "mix": {
+          "description": "Main/Aux Mix (0-5v) - Crossfade mix between main and aux outputs at the primary output.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "morph": {
           "description": "Morph parameter (-5V to +5V, bipolar, default 0V) - function varies per engine",
           "anyOf": [
@@ -2568,10 +3223,19 @@
     },
     "outputs": [
       {
-        "name": "output",
-        "description": "main synthesis output",
+        "name": "mix",
+        "description": "mixed synthesis output",
         "polyphonic": true,
         "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "dynamicRange": false
+      },
+      {
+        "name": "main",
+        "description": "main synthesis output",
+        "polyphonic": true,
+        "default": false,
         "minValue": -5.0,
         "maxValue": 5.0,
         "dynamicRange": false
@@ -2680,6 +3344,14 @@
         "description": "LPG decay (0-5V) - lowpass gate envelope decay time",
         "signalType": "control",
         "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mix",
+        "description": "Main/Aux Mix (0-5v) - Crossfade mix between main and aux outputs at the primary output.",
+        "signalType": "control",
+        "defaultValue": 0.0,
         "minValue": 0.0,
         "maxValue": 5.0
       }
@@ -2863,6 +3535,334 @@
     "positionalArgs": [
       {
         "name": "freq"
+      }
+    ]
+  },
+  {
+    "name": "$wavetable",
+    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional phase-warp `Table`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable($wavs().tables.pad, 'c4').out()\n$wavetable(wav, 'c2', { position: lfo }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "WavetableOscParams",
+      "type": "object",
+      "properties": {
+        "fm": {
+          "description": "FM input signal (pre-scaled by user).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fmMode": {
+          "description": "FM mode: throughZero (default), lin, or exp.",
+          "$ref": "#/$defs/FmMode",
+          "default": "throughZero"
+        },
+        "phase": {
+          "description": "Optional phase-warp table applied before sampling.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Table"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pitch": {
+          "description": "Pitch in V/Oct (0V = C4).",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "position": {
+          "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "description": "Loaded WAV reference containing the wavetable data.",
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "wav",
+        "pitch"
+      ],
+      "$defs": {
+        "FmMode": {
+          "description": "FM synthesis mode for oscillators.",
+          "oneOf": [
+            {
+              "description": "Through-zero FM: frequency can go negative (phase runs backward)",
+              "type": "string",
+              "const": "throughZero"
+            },
+            {
+              "description": "Linear FM: like through-zero but frequency clamped to >= 0",
+              "type": "string",
+              "const": "lin"
+            },
+            {
+              "description": "Exponential FM: modulator added to pitch in V/Oct space",
+              "type": "string",
+              "const": "exp"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "Table": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "identity"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "mirror"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "bend"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "ratio": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "sync"
+                }
+              },
+              "required": [
+                "type",
+                "ratio"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "amount": {
+                  "$ref": "#/$defs/PolySignal"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "fold"
+                }
+              },
+              "required": [
+                "type",
+                "amount"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "pwm"
+                },
+                "width": {
+                  "$ref": "#/$defs/PolySignal"
+                }
+              },
+              "required": [
+                "type",
+                "width"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "first": {
+                  "$ref": "#/$defs/Table"
+                },
+                "second": {
+                  "$ref": "#/$defs/Table"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "pipe"
+                }
+              },
+              "required": [
+                "type",
+                "first",
+                "second"
+              ]
+            }
+          ]
+        },
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "pitch",
+        "description": "Pitch in V/Oct (0V = C4).",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "position",
+        "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fm",
+        "description": "FM input signal (pre-scaled by user).",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "wav"
+      },
+      {
+        "name": "pitch"
+      },
+      {
+        "name": "position"
       }
     ]
   },
@@ -4782,7 +5782,7 @@
         },
         "time": {
           "description": "Delay time in seconds (e.g. 0.5 for 500ms)",
-          "$ref": "#/$defs/MonoSignal"
+          "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
@@ -4816,7 +5816,7 @@
             "channels"
           ]
         },
-        "MonoSignal": {
+        "PolySignal": {
           "anyOf": [
             {
               "$ref": "#/$defs/Signal"
@@ -6667,7 +7667,7 @@
           ]
         },
         "SeqPatternParam": {
-          "description": "A pattern parameter that wraps a pattern string and its parsed components.\n\nThis struct is serialized as a simple string but contains the parsed pattern\nand collected signal pointers for connection.\n\n# Safety\n\nThe `signals` field contains raw pointers to Signal fields within the Pattern.\nThese pointers remain valid as long as the Pattern is not dropped or reallocated.\nSince SeqPatternParam owns both the pattern and signals, and patterns are\nimmutable after parsing, this is safe.",
+          "description": "A pattern parameter that wraps a pattern string and its parsed components.\n\nThis struct is serialized as a simple string but contains the parsed pattern\nand cached query results.",
           "type": "string"
         },
         "Signal": {
@@ -7472,5 +8472,156 @@
     ],
     "signalParams": [],
     "positionalArgs": []
+  },
+  {
+    "name": "$sampler",
+    "documentation": "One-shot sample player. Plays a loaded WAV file from the beginning on each\ngate rising edge. Speed control allows pitch-shifting and reverse playback.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().tables.pad, $clock.beat, { speed: 0.5 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SamplerParams",
+      "type": "object",
+      "properties": {
+        "gate": {
+          "description": "Gate input — rising edge starts playback from the beginning.",
+          "$ref": "#/$defs/MonoSignal"
+        },
+        "speed": {
+          "description": "Playback speed. 1.0 = normal, 2.0 = double speed, negative = reverse.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "wav",
+        "gate"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "sample playback output",
+        "polyphonic": true,
+        "default": true,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "gate",
+        "description": "Gate input — rising edge starts playback from the beginning.",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "speed",
+        "description": "Playback speed. 1.0 = normal, 2.0 = double speed, negative = reverse.",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": -4.0,
+        "maxValue": 4.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "wav"
+      },
+      {
+        "name": "gate"
+      }
+    ]
   }
 ]

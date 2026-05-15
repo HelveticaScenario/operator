@@ -4,7 +4,7 @@ import * as prettierEstree from 'prettier/plugins/estree';
 import type { Monaco } from '../../hooks/useCustomMonaco';
 import type { PrettierConfig } from '../../../shared/ipcTypes';
 
-const DEFAULT_PRETTIER_OPTIONS = {
+export const DEFAULT_PRETTIER_OPTIONS = {
     printWidth: 60,
     semi: false,
     singleQuote: true,

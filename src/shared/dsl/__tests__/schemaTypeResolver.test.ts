@@ -183,4 +183,15 @@ describe('getEnumVariants', () => {
             'BufferOutputRef',
         );
     });
+
+    test('schemaToTypeExpr resolves Table refs to Table', () => {
+        const rootSchema = {
+            $defs: {
+                Table: { title: 'Table' },
+            },
+        };
+        expect(schemaToTypeExpr({ $ref: '#/$defs/Table' }, rootSchema)).toBe(
+            'Table',
+        );
+    });
 });

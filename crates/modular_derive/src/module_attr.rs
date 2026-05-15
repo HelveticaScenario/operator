@@ -2,7 +2,7 @@ use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use syn::{punctuated::Punctuated, Data, DeriveInput, Fields, LitStr, Token, Type};
+use syn::{Data, DeriveInput, Fields, LitStr, Token, Type, punctuated::Punctuated};
 
 use crate::utils::{extract_doc_comments, unwrap_attr};
 
@@ -53,6 +53,8 @@ pub struct ModuleAttrArgs {
     stateful: bool,
     patch_update: bool,
     has_init: bool,
+    has_prepare_resources: bool,
+    clock_sync: bool,
 }
 
 impl syn::parse::Parse for ModuleAttrArgs {
@@ -67,6 +69,8 @@ impl syn::parse::Parse for ModuleAttrArgs {
         let mut stateful = false;
         let mut patch_update = false;
         let mut has_init = false;
+        let mut has_prepare_resources = false;
+        let mut clock_sync = false;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -119,6 +123,12 @@ impl syn::parse::Parse for ModuleAttrArgs {
                 "has_init" => {
                     has_init = true;
                 }
+                "has_prepare_resources" => {
+                    has_prepare_resources = true;
+                }
+                "clock_sync" => {
+                    clock_sync = true;
+                }
                 other => {
                     return Err(syn::Error::new(
                         ident.span(),
@@ -126,7 +136,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
                             "Unknown module attribute '{other}'. Expected one of: \
                              name, channels, channels_param, \
                              channels_param_default, channels_derive, args, \
-                             stateful, patch_update, has_init"
+                             stateful, patch_update, has_init, has_prepare_resources, clock_sync"
                         ),
                     ));
                 }
@@ -156,6 +166,8 @@ impl syn::parse::Parse for ModuleAttrArgs {
             stateful,
             patch_update,
             has_init,
+            has_prepare_resources,
+            clock_sync,
         })
     }
 }
@@ -204,6 +216,7 @@ pub fn module_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
             && !a.path().is_ident("stateful")
             && !a.path().is_ident("patch_update")
             && !a.path().is_ident("has_init")
+            && !a.path().is_ident("has_prepare_resources")
     });
 
     // Inject `_channel_count: usize` field into the struct so that
@@ -293,9 +306,9 @@ fn impl_module_macro_attr(
                         .any(|f| unwrap_attr(&f.attrs, "output").is_some())
                     {
                         return Err(syn::Error::new(
-                        Span::call_site(),
-                        "#[module] expects an `outputs` field (a struct that derives Outputs); do not annotate module fields with #[output(...)]",
-                    ));
+                            Span::call_site(),
+                            "#[module] expects an `outputs` field (a struct that derives Outputs); do not annotate module fields with #[output(...)]",
+                        ));
                     }
 
                     let outputs_field = fields
@@ -307,9 +320,9 @@ fn impl_module_macro_attr(
                         Some(f) => f.ty.clone(),
                         None => {
                             return Err(syn::Error::new(
-                            Span::call_site(),
-                            "#[module] requires a field named `outputs` whose type derives Outputs",
-                        ));
+                                Span::call_site(),
+                                "#[module] requires a field named `outputs` whose type derives Outputs",
+                            ));
                         }
                     };
 
@@ -478,6 +491,24 @@ fn impl_module_macro_attr(
         quote! {}
     };
 
+    // Check for has_prepare_resources flag
+    let prepare_resources_impl = if attr_args.has_prepare_resources {
+        quote! {
+            fn prepare_resources(
+                &self,
+                wav_data: &std::collections::HashMap<String, std::sync::Arc<crate::types::WavData>>,
+            ) {
+                // SAFETY: Called on the main thread between construction and
+                // queueing the module for the audio thread. No other
+                // references to `self.module` exist at this point.
+                let module = unsafe { &mut *self.module.get() };
+                module.prepare_resources_impl(wav_data, self.sample_rate);
+            }
+        }
+    } else {
+        quote! {}
+    };
+
     // Check for patch_update flag
     let on_patch_update_impl = if attr_args.patch_update {
         quote! {
@@ -492,6 +523,23 @@ fn impl_module_macro_attr(
         quote! {
             fn on_patch_update(&self) {}
         }
+    };
+
+    // Check for clock_sync flag
+    let clock_sync_impl = if attr_args.clock_sync {
+        quote! {
+            fn sync_external_clock(&self, bar_phase: f64, bpm: f64) {
+                let module = unsafe { &mut *self.module.get() };
+                module.sync_external_clock(bar_phase, bpm);
+            }
+
+            fn clear_external_sync(&self) {
+                let module = unsafe { &mut *self.module.get() };
+                module.clear_external_sync();
+            }
+        }
+    } else {
+        quote! {}
     };
 
     // Generate transfer_state_from body - only swap state if the module has a `state` field
@@ -602,13 +650,13 @@ fn impl_module_macro_attr(
         /// 2. **Command Queue Isolation**: The main thread communicates via `PatchUpdate`
         ///    commands through an `rtrb` SPSC queue. It never directly accesses module state.
         ///
-        /// 3. **No Escaping References**: Module `Arc`s are stored in `Patch::sampleables` and
-        ///    are never cloned or sent to other threads after being added to the patch.
+        /// 3. **No Escaping References**: Owned modules are stored in `Patch::sampleables` and
+        ///    are never aliased across threads after being added to the patch.
         ///
         /// ## Invariants (DO NOT VIOLATE)
         ///
         /// - **NEVER** call Sampleable trait methods from the main thread
-        /// - **NEVER** clone module Arcs and send them across threads
+        /// - **NEVER** share module ownership across threads
         /// - **NEVER** access Patch::sampleables from outside AudioProcessor
         /// - **ALWAYS** use the command queue for main→audio communication
         ///
@@ -621,11 +669,6 @@ fn impl_module_macro_attr(
             sample_rate: f32,
             argument_spans: std::cell::UnsafeCell<std::collections::HashMap<String, crate::params::ArgumentSpan>>,
         }
-
-        // SAFETY: This type is only accessed from the audio thread after construction.
-        unsafe impl Send for #struct_name {}
-        unsafe impl Sync for #struct_name {}
-
         impl crate::types::Sampleable for #struct_name {
             fn tick(&self) {
                 self.processed.store(false, core::sync::atomic::Ordering::Release);
@@ -692,6 +735,10 @@ fn impl_module_macro_attr(
 
             #on_patch_update_impl
 
+            #prepare_resources_impl
+
+            #clock_sync_impl
+
             fn get_state(&self) -> Option<serde_json::Value> {
                 #get_state_impl
             }
@@ -700,7 +747,7 @@ fn impl_module_macro_attr(
                 self
             }
 
-            fn get_buffer_output(&self, port: &str) -> Option<&std::sync::Arc<crate::BufferData>> {
+            fn get_buffer_output(&self, port: &str) -> Option<&crate::BufferData> {
                 let module = unsafe { &*self.module.get() };
                 crate::types::OutputStruct::get_buffer_output(&module.outputs, port)
             }
@@ -713,7 +760,7 @@ fn impl_module_macro_attr(
 
             fn transfer_state_from(&self, old: &dyn crate::types::Sampleable) {
                 if let Some(old_typed) = old.as_any().downcast_ref::<Self>() {
-                    // Guard against self-aliasing: if old and new are the same Arc,
+                    // Guard against self-aliasing: if old and new are the same box,
                     // creating two &mut refs to the same UnsafeCell contents is UB.
                     if std::ptr::eq(self as *const Self, old_typed as *const Self) {
                         return;
@@ -740,7 +787,7 @@ fn impl_module_macro_attr(
             }
         }
 
-        fn #constructor_name(id: &String, sample_rate: f32, deserialized: crate::params::DeserializedParams) -> napi::Result<std::sync::Arc<Box<dyn crate::types::Sampleable>>> {
+        fn #constructor_name(id: &String, sample_rate: f32, deserialized: crate::params::DeserializedParams) -> napi::Result<Box<dyn crate::types::Sampleable>> {
             let concrete_params = deserialized.params.into_any()
                 .downcast::<#params_struct_name>()
                 .map_err(|_| napi::Error::from_reason(
@@ -765,7 +812,7 @@ fn impl_module_macro_attr(
             };
 
             #has_init_call
-            Ok(std::sync::Arc::new(Box::new(sampleable)))
+            Ok(Box::new(sampleable))
         }
 
         impl #impl_generics crate::types::Module for #name #ty_generics #where_clause {
@@ -796,16 +843,7 @@ fn impl_module_macro_attr(
                     .unwrap_or_default();
 
                 let outputs = <#outputs_ty as crate::types::OutputStruct>::schemas();
-                let output_names: std::collections::HashSet<String> = outputs.iter().map(|o| o.name.clone()).collect();
-                let overlap: Vec<&String> = param_names.intersection(&output_names).collect();
-                if !overlap.is_empty() {
-                    panic!(
-                        "Parameters and outputs must have unique names for module '{}'. Overlapping: {:?}",
-                        #module_name,
-                        overlap,
-                    );
-                }
-
+           
                 crate::types::ModuleSchema {
                     name: #module_name.to_string(),
                     documentation: #module_documentation_token,

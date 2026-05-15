@@ -1,6 +1,6 @@
 use crate::{
     dsp::utils::wrap,
-    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 use deserr::Deserr;

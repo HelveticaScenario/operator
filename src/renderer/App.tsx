@@ -4,6 +4,8 @@ import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
 import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
+import { AudioPanicDialog } from './components/AudioPanicDialog';
+import { EngineHealth } from './components/EngineHealth';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
 import './App.css';
@@ -23,11 +25,13 @@ import type {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
+import type { EditorBuffer } from './types/editor';
 import { findSliderValueSpan } from './dsl/sliderSourceEdit';
 import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
 import {
     drawOscilloscope,
+    readScopeColors,
     scopeBufferKeyFromChannel,
     scopeBufferKeyToString,
 } from './app/oscilloscope';
@@ -119,6 +123,7 @@ function App() {
     const [isClockRunning, setIsClockRunning] = useState(true);
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
         ValidationError[] | null
@@ -228,6 +233,14 @@ function App() {
             });
     }, [refreshFileTree]);
 
+    // Refresh file tree when wavs/ folder changes
+    useEffect(() => {
+        const unsubscribe = electronAPI.onWavsChange(() => {
+            void refreshFileTree();
+        });
+        return unsubscribe;
+    }, [refreshFileTree]);
+
     const selectWorkspaceFolder = useCallback(async () => {
         // Check for dirty file-backed buffers before switching
         const dirtyFileBuffers = buffers.filter(
@@ -299,6 +312,15 @@ function App() {
             }
         },
         [deleteFile],
+    );
+
+    const formatLabel = useCallback(
+        (buffer: EditorBuffer) => {
+            const path = formatFileLabel(buffer);
+            const parts = path.split(/[/\\]/);
+            return parts[parts.length - 1];
+        },
+        [formatFileLabel],
     );
 
     const handleRenameCommitSafe = useCallback(
@@ -430,119 +452,152 @@ function App() {
     }, [isClockRunning]);
 
     useEffect(() => {
-        if (isClockRunningRef.current) {
-            const tick = () => {
-                Promise.all([
-                    electronAPI.synthesizer.getScopes(),
-                    electronAPI.synthesizer.getTransportState(),
-                ])
-                    .then(([scopeData, transport]) => {
-                        // Build a map of buffer key → (Float32Array, ScopeStats)
-                        const bufferMap = new Map<
-                            string,
-                            {
-                                data: Float32Array;
-                                stats: {
-                                    min: number;
-                                    max: number;
-                                    peakToPeak: number;
-                                    readOffset: number;
-                                };
-                            }
-                        >();
-                        for (const [bufferKey, data, stats] of scopeData) {
-                            const key = scopeBufferKeyToString(bufferKey);
-                            bufferMap.set(key, { data, stats });
+        if (!isClockRunningRef.current) {
+            return;
+        }
+
+        let cancelled = false;
+        const tick = () => {
+            if (cancelled) return;
+            Promise.all([
+                electronAPI.synthesizer.getScopes(),
+                electronAPI.synthesizer.getTransportState(),
+            ])
+                .then(([scopeData, transport]) => {
+                    if (cancelled) return;
+                    // Build a map of buffer key → (Float32Array, ScopeStats)
+                    const bufferMap = new Map<
+                        string,
+                        {
+                            data: Float32Array;
+                            stats: {
+                                min: number;
+                                max: number;
+                                peakToPeak: number;
+                                readOffset: number;
+                            };
+                        }
+                    >();
+                    for (const [bufferKey, data, stats] of scopeData) {
+                        const key = scopeBufferKeyToString(bufferKey);
+                        bufferMap.set(key, { data, stats });
+                    }
+
+                    const scopeColors = readScopeColors();
+
+                    // For each scope canvas, collect its channels' data and draw
+                    for (const [
+                        ,
+                        canvas,
+                    ] of scopeCanvasMapRef.current.entries()) {
+                        const rangeMin = parseFloat(
+                            canvas.dataset.scopeRangeMin || '-5',
+                        );
+                        const rangeMax = parseFloat(
+                            canvas.dataset.scopeRangeMax || '5',
+                        );
+                        const channelKeysStr = canvas.dataset.scopeChannelKeys;
+                        if (!channelKeysStr) {
+                            continue;
                         }
 
-                        // For each scope canvas, collect its channels' data and draw
-                        for (const [
-                            ,
-                            canvas,
-                        ] of scopeCanvasMapRef.current.entries()) {
-                            const rangeMin = parseFloat(
-                                canvas.dataset.scopeRangeMin || '-5',
-                            );
-                            const rangeMax = parseFloat(
-                                canvas.dataset.scopeRangeMax || '5',
-                            );
-                            const channelKeysStr =
-                                canvas.dataset.scopeChannelKeys;
-                            if (!channelKeysStr) {
-                                continue;
-                            }
+                        const channelKeys = JSON.parse(
+                            channelKeysStr,
+                        ) as string[];
+                        const channels: Float32Array[] = [];
+                        const readOffsets: number[] = [];
+                        let globalMin = Infinity;
+                        let globalMax = -Infinity;
 
-                            const channelKeys = JSON.parse(
-                                channelKeysStr,
-                            ) as string[];
-                            const channels: Float32Array[] = [];
-                            const readOffsets: number[] = [];
-                            let globalMin = Infinity;
-                            let globalMax = -Infinity;
-
-                            for (const chKey of channelKeys) {
-                                const entry = bufferMap.get(chKey);
-                                if (entry) {
-                                    channels.push(entry.data);
-                                    readOffsets.push(entry.stats.readOffset);
-                                    if (entry.stats.min < globalMin) {
-                                        globalMin = entry.stats.min;
-                                    }
-                                    if (entry.stats.max > globalMax) {
-                                        globalMax = entry.stats.max;
-                                    }
+                        for (const chKey of channelKeys) {
+                            const entry = bufferMap.get(chKey);
+                            if (entry) {
+                                channels.push(entry.data);
+                                readOffsets.push(entry.stats.readOffset);
+                                if (entry.stats.min < globalMin) {
+                                    globalMin = entry.stats.min;
+                                }
+                                if (entry.stats.max > globalMax) {
+                                    globalMax = entry.stats.max;
                                 }
                             }
-
-                            if (channels.length > 0) {
-                                drawOscilloscope(channels, canvas, {
-                                    range: [rangeMin, rangeMax],
-                                    stats: {
-                                        max: globalMax,
-                                        min: globalMin,
-                                        peakToPeak: globalMax - globalMin,
-                                        readOffset: readOffsets,
-                                    },
-                                });
-                            }
                         }
 
-                        setTransportState(transport);
+                        if (channels.length > 0) {
+                            drawOscilloscope(channels, canvas, {
+                                colors: scopeColors,
+                                range: [rangeMin, rangeMax],
+                                stats: {
+                                    max: globalMax,
+                                    min: globalMin,
+                                    peakToPeak: globalMax - globalMin,
+                                    readOffset: readOffsets,
+                                },
+                            });
+                        }
+                    }
 
-                        // Check if a pending UI state should be committed
-                        const pending = pendingUIStateRef.current;
-                        if (
-                            pending &&
-                            transport.lastAppliedUpdateId >= pending.updateId
-                        ) {
-                            pendingUIStateRef.current = null;
-                            // Swap decoration collections: dispose old, activate pending
-                            scopeDecorationsRef.current?.clear();
-                            scopeDecorationsRef.current =
-                                pending.scopeDecorations;
-                            setScopeViews(pending.scopeViews);
-                            setSliderDefs(pending.sliderDefs);
-                            if (pending.interpolationResolutions) {
-                                setActiveInterpolationResolutions(
-                                    pending.interpolationResolutions,
-                                );
-                            }
-                        }
+                    setTransportState(transport);
 
-                        if (isClockRunningRef.current) {
-                            requestAnimationFrame(tick);
+                    // Check if a pending UI state should be committed
+                    const pending = pendingUIStateRef.current;
+                    if (
+                        pending &&
+                        transport.lastAppliedUpdateId >= pending.updateId
+                    ) {
+                        pendingUIStateRef.current = null;
+                        // Swap decoration collections: dispose old, activate pending
+                        scopeDecorationsRef.current?.clear();
+                        scopeDecorationsRef.current = pending.scopeDecorations;
+                        setScopeViews(pending.scopeViews);
+                        setSliderDefs(pending.sliderDefs);
+                        if (pending.interpolationResolutions) {
+                            setActiveInterpolationResolutions(
+                                pending.interpolationResolutions,
+                            );
                         }
-                    })
-                    .catch((err) => {
-                        console.error('Failed to get scopes:', err);
-                        if (isClockRunningRef.current) {
-                            requestAnimationFrame(tick);
-                        }
-                    });
-            };
-            requestAnimationFrame(tick);
-        }
+                    }
+
+                    if (isClockRunningRef.current && !cancelled) {
+                        requestAnimationFrame(tick);
+                    }
+                })
+                .catch((err) => {
+                    console.error('Failed to get scopes:', err);
+                    if (isClockRunningRef.current && !cancelled) {
+                        requestAnimationFrame(tick);
+                    }
+                });
+        };
+        requestAnimationFrame(tick);
+
+        return () => {
+            cancelled = true;
+        };
     }, [isClockRunning]);
+
+    // Keep Link phase indicator live while Link is enabled but Operator is stopped.
+    // The main tick loop only runs when isClockRunning; this fills the gap so
+    // the phase indicator stays animated even before the user presses play.
+    useEffect(() => {
+        const linkEnabled = transportState?.linkEnabled ?? false;
+        if (!linkEnabled || isClockRunning) return;
+        let cancelled = false;
+        let rafId = 0;
+        const tick = () => {
+            if (cancelled) return;
+            void electronAPI.synthesizer.getTransportState().then((t) => {
+                if (cancelled) return;
+                setTransportState(t);
+                rafId = requestAnimationFrame(tick);
+            });
+        };
+        rafId = requestAnimationFrame(tick);
+        return () => {
+            cancelled = true;
+            cancelAnimationFrame(rafId);
+        };
+    }, [transportState?.linkEnabled, isClockRunning]);
 
     const handleSaveFile = useCallback(
         async (id?: string) => {
@@ -747,6 +802,7 @@ function App() {
             getLastPatchResult: () => lastPatchResultRef.current,
             getScopeData: () => electronAPI.synthesizer.getScopes(),
             isClockRunning: () => isClockRunningRef.current,
+            openEngineHealth: () => setIsEngineHealthOpen(true),
             setEditorValue: (code: string) => editorRef.current?.setValue(code),
         };
         return () => {
@@ -759,6 +815,7 @@ function App() {
         handleStopRef.current = async () => {
             await electronAPI.synthesizer.stop();
             setIsClockRunning(false);
+            setRunningBufferId(null);
         };
     }, []);
     const handleStop = useCallback(() => handleStopRef.current(), []);
@@ -767,6 +824,13 @@ function App() {
         setError(null);
         setValidationErrors(null);
     }, []);
+
+    const handleCloseBuffer = useCallback(
+        async (id: string) => {
+            await closeBuffer(id);
+        },
+        [closeBuffer],
+    );
 
     useEffect(() => {
         const cleanupNewFile = electronAPI.onMenuNewFile(() => {
@@ -791,7 +855,7 @@ function App() {
         });
         const cleanupCloseBuffer = electronAPI.onMenuCloseBuffer(() => {
             if (activeBufferId) {
-                void closeBuffer(activeBufferId);
+                void handleCloseBuffer(activeBufferId);
             }
         });
         const cleanupToggleRecording = electronAPI.onMenuToggleRecording(() => {
@@ -808,6 +872,11 @@ function App() {
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
             setIsSettingsOpen(true);
         });
+        const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
+            () => {
+                setIsEngineHealthOpen(true);
+            },
+        );
 
         return () => {
             cleanupNewFile();
@@ -819,13 +888,57 @@ function App() {
             cleanupCloseBuffer();
             cleanupToggleRecording();
             cleanupOpenSettings();
+            cleanupOpenEngineHealth();
         };
-    }, [activeBufferId, closeBuffer, isRecording, buffers, createUntitledFile]);
+    }, [
+        activeBufferId,
+        handleCloseBuffer,
+        isRecording,
+        buffers,
+        createUntitledFile,
+    ]);
+
+    // Ctrl+Enter (and Ctrl+Shift+Enter) are reserved for patch updates.
+    // Browsers activate a focused <button> on Enter regardless of modifier
+    // state, which would spuriously toggle e.g. the Link button after it had
+    // been clicked. Suppress the default activation when a button is focused.
+    useEffect(() => {
+        const onKeyDownCapture = (e: KeyboardEvent) => {
+            if (
+                e.ctrlKey &&
+                e.key === 'Enter' &&
+                e.target instanceof HTMLButtonElement
+            ) {
+                e.preventDefault();
+                e.stopPropagation();
+            }
+        };
+        window.addEventListener('keydown', onKeyDownCapture, { capture: true });
+        return () =>
+            window.removeEventListener('keydown', onKeyDownCapture, {
+                capture: true,
+            });
+    }, []);
 
     return (
         <div className="app">
             <header className="app-header">
-                <TransportDisplay transport={transportState} />
+                <TransportDisplay
+                    transport={transportState}
+                    onToggleLink={(enabled) => {
+                        void electronAPI.synthesizer.enableLink(enabled);
+                        // Optimistically update UI — polling only runs while playing
+                        setTransportState((prev) =>
+                            prev
+                                ? {
+                                      ...prev,
+                                      linkEnabled: enabled,
+                                      linkPeers: enabled ? prev.linkPeers : 0,
+                                  }
+                                : prev,
+                        );
+                    }}
+                />
                 <AudioControls
                     isRunning={isClockRunning}
                     isRecording={isRecording}
@@ -852,6 +965,13 @@ function App() {
                 isOpen={isSettingsOpen}
                 onClose={() => setIsSettingsOpen(false)}
             />
+
+            <EngineHealth
+                isOpen={isEngineHealthOpen}
+                onClose={() => setIsEngineHealthOpen(false)}
+            />
+
+            <AudioPanicDialog />
 
             <main className="app-main">
                 {!workspaceRoot ? (
@@ -889,18 +1009,14 @@ function App() {
                                     activeBufferId={activeBufferId}
                                     runningBufferId={runningBufferId}
                                     renamingPath={renamingPath}
-                                    formatLabel={(buffer) => {
-                                        const path = formatFileLabel(buffer);
-                                        const parts = path.split(/[/\\]/);
-                                        return parts[parts.length - 1];
-                                    }}
+                                    formatLabel={formatLabel}
                                     onSelectBuffer={setActiveBufferId}
                                     onOpenFile={handleOpenFile}
                                     onCreateFile={createUntitledFile}
                                     onSaveFile={handleSaveFileStable}
                                     onRenameFile={renameFile}
                                     onDeleteFile={handleDeleteFile}
-                                    onCloseBuffer={closeBuffer}
+                                    onCloseBuffer={handleCloseBuffer}
                                     onSelectWorkspace={selectWorkspaceFolder}
                                     onRefreshTree={refreshFileTree}
                                     onRenameCommit={handleRenameCommitSafe}

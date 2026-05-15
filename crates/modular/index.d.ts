@@ -12,8 +12,29 @@ export declare class Synthesizer {
   sampleRate(): number
   channels(): number
   inputChannels(): number
+  /**
+   * True if the audio callback caught a panic and is now emitting silence.
+   * Recovery requires destroying this Synthesizer and creating a new one,
+   * or calling `restart_audio()`. The panic payload + backtrace is written
+   * to the path returned by `panic_log_dir()`.
+   */
+  isAudioThreadPanicked(): boolean
+  /**
+   * Absolute path to the directory where panic logs are written. Matches
+   * Electron's `app.getPath('logs')` convention per OS:
+   * - macOS:   `~/Library/Logs/Operator/`
+   * - Linux:   `~/.config/Operator/logs/`
+   * - Windows: `%APPDATA%\Operator\logs\`
+   */
+  panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
+  /** Load a WAV file into the cache, returning metadata about the loaded sample. */
+  loadWav(path: string): WavLoadInfo
+  /** Set the workspace root directory for WAV file loading. */
+  setWavWorkspace(workspacePath: string): void
+  /** Get the list of currently cached WAV file paths. */
+  getWavCacheSnapshot(): Array<string>
   /**
    * Lightweight single-module param update. Constructs a new module on the main
    * thread and sends it to the audio thread for state-transfer + replacement.
@@ -23,8 +44,15 @@ export declare class Synthesizer {
   stopRecording(): string | null
   isRecording(): boolean
   getHealth(): AudioBudgetSnapshot
+  /**
+   * Drain deferred deallocations from the audio thread. The RT audio thread
+   * cannot free memory itself, so it pushes old resources onto a lock-free
+   * garbage queue. Call this periodically from the main thread to drop them.
+   */
+  drainGarbage(): void
   getModuleStates(): Record<string, any>
   getTransportState(): TransportSnapshot
+  enableLink(enabled: boolean): void
   /** Refresh the device cache (re-enumerates all hosts and devices) */
   refreshDeviceCache(): void
   /** Get the full device cache snapshot */
@@ -48,6 +76,16 @@ export declare class Synthesizer {
   getOutputDeviceId(): string | null
   /** Get the current input device ID */
   getInputDeviceId(): string | null
+  /**
+   * Restart the audio streams using the current device/sample-rate/buffer-size
+   * settings. `recreate_streams` replaces `self.state` with a fresh
+   * `AudioState`, so the new stream's callback captures a fresh
+   * `audio_thread_panicked` flag (initially false). The old (poisoned) flag
+   * stays set on the old `AudioState` so the old callback continues to emit
+   * silence until cpal drops the old stream. Call this after
+   * `is_audio_thread_panicked()` returns true to recover.
+   */
+  restartAudio(): void
   /**
    * Set the audio output device (legacy - use recreate_streams instead)
    * This uses device default sample rate and buffer size
@@ -247,6 +285,18 @@ export interface TransportSnapshot {
   hasQueuedUpdate: boolean
   /** The update_id of the most recently applied patch update (as f64 for N-API compatibility) */
   lastAppliedUpdateId: number
+  /** Whether Ableton Link is currently enabled */
+  linkEnabled: boolean
+  /** Number of Link peers in the session */
+  linkPeers: number
+  /** Free-running Link bar phase (0..1), always updated when Link is enabled */
+  linkPhase: number
+  /**
+   * Armed for a quantized start — a start has been requested and the audio
+   * thread is waiting for the next Link bar boundary before actually
+   * flipping `is_playing`. Only meaningful when `link_enabled` is true.
+   */
+  linkPendingStart: boolean
 }
 
 /**
@@ -266,6 +316,50 @@ export interface ValidationError {
   expectedType?: string
   /** JSON snippet of the actual value that failed */
   actualValue?: string
+}
+
+export interface WavCuePointInfo {
+  position: number
+  label: string
+}
+
+export interface WavLoadInfo {
+  channels: number
+  frameCount: number
+  path: string
+  sampleRate: number
+  duration: number
+  bitDepth: number
+  pitch?: number
+  playback?: string
+  bpm?: number
+  beats?: number
+  timeSignature?: WavTimeSignature
+  /**
+   * Number of bars the sample spans, computed from BPM and time signature.
+   * E.g. an exact 2-bar loop is `2.0`; a 2.64-bar buffer is `2.64`. `None`
+   * when no BPM could be derived from any source.
+   */
+  barCount?: number
+  loops: Array<WavLoopInfo>
+  cuePoints: Array<WavCuePointInfo>
+  /**
+   * File modification time, epoch milliseconds. Used as a cache-key hint so the
+   * DSL executor can invalidate params caches when the underlying WAV changes
+   * on disk. Falls back to 0.0 when the mtime can't be read.
+   */
+  mtime: number
+}
+
+export interface WavLoopInfo {
+  loopType: string
+  start: number
+  end: number
+}
+
+export interface WavTimeSignature {
+  num: number
+  den: number
 }
 /**
  * Represents a character span in source code, used for argument highlighting.

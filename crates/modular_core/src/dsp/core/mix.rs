@@ -2,12 +2,12 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 
 /// Mixing mode for combining input signals.
-#[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq, Connect)]
 #[serde(rename_all = "snake_case")]
 #[deserr(rename_all = lowercase)]
 pub enum MixMode {
@@ -20,10 +20,6 @@ pub enum MixMode {
     Max,
     /// Keep the weakest non-zero input.
     Min,
-}
-
-impl crate::types::Connect for MixMode {
-    fn connect(&mut self, _patch: &crate::Patch) {}
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -158,13 +154,21 @@ impl Mix {
                 }
                 MixMode::Max => values
                     .iter()
-                    .max_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap())
+                    .max_by(|a, b| {
+                        a.abs()
+                            .partial_cmp(&b.abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .copied()
                     .unwrap_or(0.0),
                 MixMode::Min => values
                     .iter()
                     .filter(|&&v| v != 0.0) // Exclude zero-contributors for min
-                    .min_by(|a, b| a.abs().partial_cmp(&b.abs()).unwrap())
+                    .min_by(|a, b| {
+                        a.abs()
+                            .partial_cmp(&b.abs())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
                     .copied()
                     .unwrap_or(0.0),
             };
@@ -341,5 +345,22 @@ mod tests {
         assert_eq!(mixer.outputs.sample.get(0), -3.0);
         // Channel 1: max by abs(-5, 2) = -5
         assert_eq!(mixer.outputs.sample.get(1), -5.0);
+    }
+
+    #[test]
+    fn test_mix_nan_input_does_not_panic() {
+        for mode in [MixMode::Max, MixMode::Min] {
+            let mut mixer = make_mix(MixParams {
+                inputs: vec![
+                    PolySignal::poly(&[Signal::Volts(f32::NAN)]),
+                    PolySignal::poly(&[Signal::Volts(1.0)]),
+                ],
+                mode,
+                gain: None,
+            });
+            mixer.update(48000.0);
+            // Must not panic; output may be NaN or a finite value — either is acceptable
+            let _ = mixer.outputs.sample.get(0);
+        }
     }
 }

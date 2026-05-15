@@ -522,6 +522,8 @@ export class GraphBuilder {
     private deferredOutputs = new Map<string, DeferredModuleOutput>();
     /** Global tempo for ROOT_CLOCK in BPM (default: 120) */
     private tempo: number = 120;
+    /** Whether $setTempo was explicitly called in the DSL */
+    private tempoExplicitlySet: boolean = false;
     /** Global output gain signal (default: 2.5) */
     private outputGain: Signal = 2.5;
     /** Time signature numerator (beats per bar) for ROOT_CLOCK */
@@ -634,6 +636,7 @@ export class GraphBuilder {
      */
     setTempo(tempo: number): void {
         this.tempo = tempo;
+        this.tempoExplicitlySet = true;
     }
 
     /**
@@ -801,6 +804,7 @@ export class GraphBuilder {
             rootClock.params.tempo = this.tempo;
             rootClock.params.numerator = this.timeSignatureNumerator;
             rootClock.params.denominator = this.timeSignatureDenominator;
+            rootClock.params.tempoSet = this.tempoExplicitlySet;
         }
 
         // Build a map of deferred output strings to their resolved output strings
@@ -1289,7 +1293,7 @@ export class ModuleOutput {
     }
 
     toString(): string {
-        return `module(${this.moduleId}:${this.portName}:${this.channel})`;
+        return `<ModuleOutput ${this.moduleId}:${this.portName}:${this.channel}>`;
     }
 }
 

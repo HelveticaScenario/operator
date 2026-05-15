@@ -2,8 +2,8 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::oscillators::{apply_fm, FmMode},
-    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
+    dsp::oscillators::{FmMode, apply_fm},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 

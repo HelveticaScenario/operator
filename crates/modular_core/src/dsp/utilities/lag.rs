@@ -1,7 +1,7 @@
 use crate::{
+    PORT_MAX_CHANNELS,
     dsp::utils::sanitize,
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    PORT_MAX_CHANNELS,
 };
 use deserr::Deserr;
 use schemars::JsonSchema;

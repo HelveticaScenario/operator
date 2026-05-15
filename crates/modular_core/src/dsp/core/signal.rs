@@ -3,18 +3,12 @@ use schemars::JsonSchema;
 
 use crate::poly::{PolyOutput, PolySignal};
 
-#[derive(Clone, Deserr, JsonSchema, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, ChannelCount, SignalParams, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct SignalParams {
     /// Input signal to forward.
     source: PolySignal,
-}
-
-impl crate::types::Connect for SignalParams {
-    fn connect(&mut self, patch: &crate::Patch) {
-        self.source.connect(patch);
-    }
 }
 
 #[derive(Outputs, JsonSchema)]

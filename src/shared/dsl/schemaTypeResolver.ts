@@ -57,12 +57,21 @@ function renderPropertyKey(name: string): string {
 export function resolveRef(
     ref: string,
     rootSchema: JSONSchema,
-): JSONSchema | 'Signal' | 'Poly<Signal>' | 'Mono<Signal>' | 'Buffer' {
+):
+    | JSONSchema
+    | 'Signal'
+    | 'Poly<Signal>'
+    | 'Mono<Signal>'
+    | 'Buffer'
+    | 'Table' {
     if (ref === 'Signal') {
         return 'Signal';
     }
     if (ref === 'Buffer') {
         return 'Buffer';
+    }
+    if (ref === 'Table') {
+        return 'Table';
     }
 
     const defsPrefix = '#/$defs/';
@@ -82,6 +91,9 @@ export function resolveRef(
     }
     if (defName === 'Buffer') {
         return 'Buffer';
+    }
+    if (defName === 'Table') {
+        return 'Table';
     }
 
     const defs = rootSchema?.$defs;
@@ -105,6 +117,9 @@ export function resolveRef(
     }
     if (resolved?.title === 'Buffer') {
         return 'Buffer';
+    }
+    if (resolved?.title === 'Table') {
+        return 'Table';
     }
     return resolved;
 }
@@ -278,6 +293,9 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'Buffer') {
             return 'BufferOutputRef';
+        }
+        if (resolved === 'Table') {
+            return 'Table';
         }
         return schemaToTypeExpr(resolved, rootSchema);
     }

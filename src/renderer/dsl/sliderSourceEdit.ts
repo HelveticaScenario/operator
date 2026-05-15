@@ -43,15 +43,21 @@ export function findSliderValueSpan(
 
         // Skip whitespace after the comma
         let start = afterComma;
-        while (start < source.length && /\s/.test(source[start])) {start++;}
+        while (start < source.length && /\s/.test(source[start])) {
+            start++;
+        }
 
-        if (start >= source.length) {continue;}
+        if (start >= source.length) {
+            continue;
+        }
 
         // Parse the numeric literal: optional minus, digits, optional decimal + digits
         const numMatch = source
             .slice(start)
             .match(/^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/);
-        if (!numMatch) {continue;}
+        if (!numMatch) {
+            continue;
+        }
 
         return {
             end: start + numMatch[0].length,

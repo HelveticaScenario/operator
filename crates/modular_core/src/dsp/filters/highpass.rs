@@ -2,10 +2,10 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
+    PORT_MAX_CHANNELS,
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
-    PORT_MAX_CHANNELS,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]

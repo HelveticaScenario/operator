@@ -8,9 +8,9 @@ use napi::Result;
 use parking_lot::Mutex;
 
 use crate::{
+    Sampleable,
     poly::PolyOutput,
     types::{MessageHandler, WellKnownModule},
-    Sampleable,
 };
 
 #[derive(Default)]

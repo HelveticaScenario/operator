@@ -9,13 +9,13 @@ use schemars::JsonSchema;
 use std::sync::Arc;
 
 use crate::{
-    dsp::utils::{min_gate_samples, TempGate, TempGateState},
-    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
-    types::Connect,
     Patch,
+    dsp::utils::{TempGate, TempGateState, min_gate_samples},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    types::Connect,
 };
 
-use super::scale::{validate_scale_type, FixedRoot, ScaleSnapper};
+use super::scale::{FixedRoot, ScaleSnapper, validate_scale_type};
 
 /// Hysteresis amount in V/Oct (~10 cents).
 /// Once a note is selected, the input must overshoot the snap boundary by this
@@ -46,6 +46,8 @@ impl Connect for ScaleParam {
     fn connect(&mut self, _patch: &Patch) {
         // ScaleParam has no signals to connect
     }
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 impl Default for ScaleParam {
@@ -479,7 +481,7 @@ mod tests {
         let snapper = scale.snapper().unwrap();
 
         let c4_voct = 0.0; // C4
-                           // Sweep from C4 to ~C4 + 49 cents — all should snap to exactly C4
+        // Sweep from C4 to ~C4 + 49 cents — all should snap to exactly C4
         for i in 0..50 {
             let input = c4_voct + (i as f64 * 0.01) / 12.0; // fractional semitone in V/Oct
             let snapped = snapper.snap_voct(input);

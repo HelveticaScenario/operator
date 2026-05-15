@@ -24,7 +24,7 @@ pub mod wrap;
 
 // Re-export useful types
 pub use crate::dsp::utils::SchmittTrigger;
-pub use scale::{validate_scale_type, FixedRoot, ScaleSnapper};
+pub use scale::{FixedRoot, ScaleSnapper, validate_scale_type};
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     adsr::Adsr::install_constructor(map);

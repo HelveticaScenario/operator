@@ -6,6 +6,7 @@
 //! - `PolyOutput`: A fixed-capacity output buffer with channel count metadata (for module outputs)
 //! - `PolySignal`: A fixed-capacity input buffer containing Signal values (for polyphonic module inputs)
 
+use crate::{dsp::utils::sanitize, types::Signal};
 use arrayvec::ArrayVec;
 use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
 use schemars::JsonSchema;
@@ -86,7 +87,7 @@ impl PolyOutput {
     /// Set voltage for a specific channel
     pub fn set(&mut self, channel: usize, value: f32) {
         if channel < PORT_MAX_CHANNELS {
-            self.voltages[channel] = value;
+            self.voltages[channel] = sanitize(value);
         }
     }
 
@@ -234,8 +235,6 @@ impl JsonSchema for PolyOutput {
 // PolySignal - Polyphonic input containing multiple Signal values
 // =============================================================================
 
-use crate::types::Signal;
-
 /// A polyphonic input buffer containing multiple Signal values.
 ///
 /// This is used for module inputs that need to accept polyphonic connections.
@@ -245,10 +244,28 @@ use crate::types::Signal;
 /// - 2-16 = polyphonic (multiple signals)
 ///
 /// Disconnected inputs are represented as `Option<PolySignal>` at the param level.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Connect)]
 pub struct PolySignal {
     /// Active signal channels (always at least 1, up to PORT_MAX_CHANNELS)
     channels: ArrayVec<Signal, PORT_MAX_CHANNELS>,
+}
+
+impl<const CAP: usize> crate::types::Connect for ArrayVec<Signal, CAP> {
+    fn connect(&mut self, patch: &crate::Patch) {
+        for signal in self.iter_mut() {
+            signal.connect(patch);
+        }
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        for signal in self.iter() {
+            signal.collect_cables(sink);
+        }
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        for signal in self.iter_mut() {
+            signal.inject_index_ptr(ptr);
+        }
+    }
 }
 
 impl PolySignal {
@@ -322,16 +339,6 @@ impl PolySignal {
 impl From<MonoSignal> for PolySignal {
     fn from(mono: MonoSignal) -> PolySignal {
         mono.inner
-    }
-}
-
-// === Connect implementation for PolySignal ===
-
-impl crate::types::Connect for PolySignal {
-    fn connect(&mut self, patch: &crate::Patch) {
-        for signal in self.channels.iter_mut() {
-            signal.connect(patch);
-        }
     }
 }
 
@@ -458,7 +465,7 @@ impl JsonSchema for PolySignal {
 /// Disconnected inputs are represented as `Option<MonoSignal>` at the param level.
 ///
 /// For polyphony propagation, MonoSignal is treated as a single channel.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Connect)]
 pub struct MonoSignal {
     inner: PolySignal,
 }
@@ -487,14 +494,6 @@ impl MonoSignal {
 impl From<PolySignal> for MonoSignal {
     fn from(poly: PolySignal) -> MonoSignal {
         MonoSignal { inner: poly }
-    }
-}
-
-// === Connect implementation for MonoSignal ===
-
-impl crate::types::Connect for MonoSignal {
-    fn connect(&mut self, patch: &crate::Patch) {
-        self.inner.connect(patch);
     }
 }
 

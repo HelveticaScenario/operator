@@ -193,6 +193,7 @@ export interface FileTreeEntry {
     name: string;
     path: string; // Relative to workspace root
     type: 'file' | 'directory';
+    fileType?: 'js' | 'wav';
     children?: FileTreeEntry[];
 }
 
@@ -249,6 +250,11 @@ export const IPC_CHANNELS = {
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',
     SYNTH_SET_MODULE_PARAM: 'modular:synth:set-module-param',
     SYNTH_GET_TRANSPORT_STATE: 'modular:synth:get-transport-state',
+    SYNTH_ENABLE_LINK: 'modular:synth:enable-link',
+    SYNTH_IS_AUDIO_THREAD_PANICKED: 'modular:synth:is-audio-thread-panicked',
+    SYNTH_RESTART_AUDIO: 'modular:synth:restart-audio',
+    SYNTH_PANIC_LOG_DIR: 'modular:synth:panic-log-dir',
+    SHELL_OPEN_PATH: 'modular:shell:open-path',
 
     // Audio device operations
     AUDIO_REFRESH_DEVICE_CACHE: 'modular:audio:refresh-device-cache',
@@ -305,6 +311,9 @@ export const IPC_CHANNELS = {
     // Main process logging
     MAIN_LOG: 'modular:main:log',
 
+    // WAV operations
+    WAVS_ON_CHANGE: 'modular:wavs:on-change',
+
     // Update operations
     UPDATE_CHECK: 'modular:update:check',
     UPDATE_DOWNLOAD: 'modular:update:download',
@@ -318,6 +327,7 @@ export const IPC_CHANNELS = {
 export const MENU_CHANNELS = {
     CLOSE_BUFFER: 'modular:menu:close-buffer',
     NEW_FILE: 'modular:menu:new-file',
+    OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
     OPEN_SETTINGS: 'modular:menu:open-settings',
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
@@ -378,6 +388,16 @@ export interface IPCHandlers {
     ) => void;
 
     [IPC_CHANNELS.SYNTH_GET_TRANSPORT_STATE]: typeof Synthesizer.prototype.getTransportState;
+
+    [IPC_CHANNELS.SYNTH_ENABLE_LINK]: typeof Synthesizer.prototype.enableLink;
+
+    [IPC_CHANNELS.SYNTH_IS_AUDIO_THREAD_PANICKED]: typeof Synthesizer.prototype.isAudioThreadPanicked;
+
+    [IPC_CHANNELS.SYNTH_RESTART_AUDIO]: typeof Synthesizer.prototype.restartAudio;
+
+    [IPC_CHANNELS.SYNTH_PANIC_LOG_DIR]: typeof Synthesizer.prototype.panicLogDir;
+
+    [IPC_CHANNELS.SHELL_OPEN_PATH]: (path: string) => Promise<string>;
 
     // Audio device operations
     [IPC_CHANNELS.AUDIO_REFRESH_DEVICE_CACHE]: typeof Synthesizer.prototype.refreshDeviceCache;
@@ -451,6 +471,9 @@ export interface IPCHandlers {
 
     // Main process logging
     [IPC_CHANNELS.MAIN_LOG]: (entry: MainLogEntry) => void;
+
+    // WAV operations
+    [IPC_CHANNELS.WAVS_ON_CHANGE]: () => void;
 
     // Update operations (invokable)
     [IPC_CHANNELS.UPDATE_CHECK]: () => void;

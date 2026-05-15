@@ -33,8 +33,11 @@ function extractInterpolationRegions(
         let endIdx = startIdx + 2;
 
         while (endIdx < sourcePattern.length && depth > 0) {
-            if (sourcePattern[endIdx] === '{') {depth++;}
-            else if (sourcePattern[endIdx] === '}') {depth--;}
+            if (sourcePattern[endIdx] === '{') {
+                depth++;
+            } else if (sourcePattern[endIdx] === '}') {
+                depth--;
+            }
             endIdx++;
         }
 
@@ -49,7 +52,9 @@ function extractInterpolationRegions(
         }
     }
 
-    if (regions.length === 0) {return null;}
+    if (regions.length === 0) {
+        return null;
+    }
 
     const literalPieces: {
         text: string;

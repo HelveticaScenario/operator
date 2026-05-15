@@ -35,6 +35,7 @@ fasteval = "0.2.4"
 rust-music-theory = { version = "*", path = "../rust-music-theory" }
 paste = "1.0"
 profiling = { workspace = true }
+rustfft = "6.2"
 
 [dependencies.napi]
 version = "3.7.1"

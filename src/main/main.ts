@@ -25,7 +25,9 @@ import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
+import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
+import { promises as fsPromises } from 'fs';
 import * as path from 'path';
 import electronSquirrelStartup from 'electron-squirrel-startup';
 import { z } from 'zod';
@@ -509,8 +511,10 @@ function saveAudioConfig() {
 }
 
 setInterval(() => {
-    // Keep the audio thread alive
-    console.log('health:', synth.getHealth());
+    // Drain deferred deallocations from the audio thread. The RT audio thread
+    // cannot free memory itself, so it pushes old resources onto a lock-free
+    // garbage queue. Call periodically from the main thread to drop them.
+    synth.drainGarbage();
 }, 10000);
 
 // Workspace root state
@@ -553,6 +557,105 @@ function startConfigWatcher() {
     });
 }
 
+// WAV folder scanner and watcher
+let currentWavsFolderTree: WavsFolderNode | null = null;
+let wavsWatcher: fs.FSWatcher | null = null;
+
+function scanWavsFolder(workspaceRoot: string): WavsFolderNode | null {
+    const wavsDir = path.join(workspaceRoot, 'wavs');
+    if (!fs.existsSync(wavsDir)) {
+        return null;
+    }
+
+    function scanDir(dirPath: string): WavsFolderNode {
+        const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+        const node: WavsFolderNode = {};
+
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) continue;
+
+            if (entry.isDirectory()) {
+                const child = scanDir(path.join(dirPath, entry.name));
+                if (Object.keys(child).length > 0) {
+                    node[entry.name] = child;
+                }
+            } else if (
+                entry.isFile() &&
+                entry.name.toLowerCase().endsWith('.wav')
+            ) {
+                // Strip .wav extension for the key
+                const name = entry.name.slice(0, -4);
+                node[name] = 'file';
+            }
+        }
+
+        return node;
+    }
+
+    return scanDir(wavsDir);
+}
+
+function startWavsWatcher(workspaceRoot: string) {
+    if (wavsWatcher) {
+        wavsWatcher.close();
+        wavsWatcher = null;
+    }
+
+    const wavsDir = path.join(workspaceRoot, 'wavs');
+    if (!fs.existsSync(wavsDir)) {
+        currentWavsFolderTree = null;
+        return;
+    }
+
+    currentWavsFolderTree = scanWavsFolder(workspaceRoot);
+
+    // Tell the Rust side where to find WAVs
+    synth.setWavWorkspace(workspaceRoot);
+
+    // Debounce watcher events — fs.watch fires multiple rapid events for a
+    // single rename/move operation.  Coalescing with a short delay avoids
+    // race conditions where we scan mid-rename (directory exists under old
+    // name, files already moved) and either throw ENOENT or capture a
+    // transient snapshot that masks the real change.
+    const DEBOUNCE_MS = 150;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function handleWavsChange() {
+        let newTree: WavsFolderNode | null;
+        try {
+            newTree = scanWavsFolder(workspaceRoot);
+        } catch {
+            // Scan can fail if the directory is mid-rename — schedule a
+            // retry after the filesystem has settled.
+            setTimeout(handleWavsChange, DEBOUNCE_MS);
+            return;
+        }
+        const treeChanged =
+            JSON.stringify(newTree) !== JSON.stringify(currentWavsFolderTree);
+        if (treeChanged) {
+            currentWavsFolderTree = newTree;
+            cachedLibSource = null; // Invalidate cached lib source
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(IPC_CHANNELS.WAVS_ON_CHANGE);
+            }
+        }
+    }
+
+    try {
+        wavsWatcher = fs.watch(
+            wavsDir,
+            { recursive: true },
+            (_eventType, _filename) => {
+                if (debounceTimer) clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(handleWavsChange, DEBOUNCE_MS);
+            },
+        );
+    } catch {
+        // Watcher may fail on some platforms — not critical
+        console.warn('Failed to watch wavs/ directory');
+    }
+}
+
 // Patch reconciliation state (reset when a different file/buffer is evaluated)
 let lastAppliedPatchGraph: PatchGraph | null = null;
 let lastAppliedSourceId: string | null = null;
@@ -586,10 +689,18 @@ function validatePathInWorkspace(filePath: string): string | null {
 }
 
 /**
- * Check if a file should be included (only .js and .mjs files)
+ * Check if a file should be included (JS/MJS patches or WAV samples)
  */
 function isJavaScriptFile(filename: string): boolean {
     return filename.endsWith('.js') || filename.endsWith('.mjs');
+}
+
+function isWavFile(filename: string): boolean {
+    return filename.toLowerCase().endsWith('.wav');
+}
+
+function isSupportedFile(filename: string): boolean {
+    return isJavaScriptFile(filename) || isWavFile(filename);
 }
 
 /**
@@ -628,8 +739,9 @@ function buildFileTree(
                         type: 'directory',
                     });
                 }
-            } else if (item.isFile() && isJavaScriptFile(item.name)) {
+            } else if (item.isFile() && isSupportedFile(item.name)) {
                 entries.push({
+                    fileType: isWavFile(item.name) ? 'wav' : 'js',
                     name: item.name,
                     path: itemRelativePath,
                     type: 'file',
@@ -680,7 +792,7 @@ registerIPCHandler('GET_SCHEMAS', () => schemas);
 let cachedLibSource: string | null = null;
 registerIPCHandler('GET_DSL_LIB_SOURCE', () => {
     if (!cachedLibSource) {
-        cachedLibSource = buildLibSource(schemas);
+        cachedLibSource = buildLibSource(schemas, currentWavsFolderTree);
     }
     return cachedLibSource;
 });
@@ -699,6 +811,13 @@ registerIPCHandler(
             } = executePatchScript(source, schemas, {
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
+                wavsFolderTree: currentWavsFolderTree,
+                loadWav: (wavPath: string) => {
+                    if (currentWorkspaceRoot) {
+                        synth.setWavWorkspace(currentWorkspaceRoot);
+                    }
+                    return synth.loadWav(wavPath);
+                },
             });
             patch.moduleIdRemaps = [];
 
@@ -917,6 +1036,32 @@ registerIPCHandler('SYNTH_GET_TRANSPORT_STATE', () =>
     synth.getTransportState(),
 );
 
+registerIPCHandler('SYNTH_ENABLE_LINK', (enabled: boolean) => {
+    synth.enableLink(enabled);
+});
+
+registerIPCHandler('SYNTH_IS_AUDIO_THREAD_PANICKED', () =>
+    synth.isAudioThreadPanicked(),
+);
+
+registerIPCHandler('SYNTH_RESTART_AUDIO', () => {
+    synth.restartAudio();
+});
+
+registerIPCHandler('SYNTH_PANIC_LOG_DIR', () => synth.panicLogDir());
+
+registerIPCHandler('SHELL_OPEN_PATH', async (targetPath: string) => {
+    // Ensure the directory exists before opening — the panic log dir is
+    // created lazily by the panic hook, so it may not exist before a crash.
+    try {
+        await fsPromises.mkdir(targetPath, { recursive: true });
+    } catch {
+        /* mkdir is best-effort — fall through to openPath which surfaces a
+           readable error string if the path is still unreachable */
+    }
+    return shell.openPath(targetPath);
+});
+
 // Audio device operations - new API
 registerIPCHandler('AUDIO_REFRESH_DEVICE_CACHE', () => {
     synth.refreshDeviceCache();
@@ -1096,6 +1241,9 @@ registerIPCHandler('FS_SELECT_WORKSPACE', async () => {
 
     currentWorkspaceRoot = result.filePaths[0];
     console.log('Workspace selected:', currentWorkspaceRoot);
+
+    // Start watching wavs/ folder for the new workspace
+    startWavsWatcher(currentWorkspaceRoot);
 
     // Save to config (load-merge-save to preserve other settings)
     const config = loadConfig();
@@ -1611,7 +1759,29 @@ const createMenu = (): void => {
         },
         // View menu
         {
-            role: 'viewMenu',
+            label: 'View',
+            submenu: [
+                { role: 'reload' },
+                { role: 'forceReload' },
+                { role: 'toggleDevTools' },
+                { type: 'separator' },
+                { role: 'resetZoom' },
+                { role: 'zoomIn' },
+                { role: 'zoomOut' },
+                { type: 'separator' },
+                { role: 'togglefullscreen' },
+                { type: 'separator' },
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.OPEN_ENGINE_HEALTH,
+                            );
+                        }
+                    },
+                    label: 'Engine Health...',
+                },
+            ],
         },
         // Run menu
         {
@@ -1707,6 +1877,11 @@ app.on('ready', () => {
             currentWorkspaceRoot = config.lastOpenedFolder;
             console.log('Restored last opened folder:', currentWorkspaceRoot);
         }
+    }
+
+    // Scan wavs/ folder if workspace is set
+    if (currentWorkspaceRoot) {
+        startWavsWatcher(currentWorkspaceRoot);
     }
 
     // Audio configuration is already restored during Synthesizer initialization

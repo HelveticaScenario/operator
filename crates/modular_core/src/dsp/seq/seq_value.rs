@@ -2,7 +2,6 @@
 //!
 //! SeqValue represents the different value types that can appear in a sequence:
 //! - Voltage values (V/Oct, pre-converted at parse time)
-//! - Signals from other modules (with optional sample-and-hold)
 //! - Rests
 
 use std::sync::Arc;
@@ -21,14 +20,13 @@ use crate::{
             convert::{ConvertError, HasRest},
         },
     },
-    types::{Connect, Signal},
+    types::Connect,
 };
 
 /// A value in a sequence pattern.
 ///
 /// Represents the different types of values that can be sequenced:
 /// - Voltage (V/Oct, pre-converted from MIDI/note at parse time)
-/// - Signals from other modules, optionally sample-and-held
 /// - Rests (silence/no output)
 #[derive(Clone, Debug)]
 pub enum SeqValue {
@@ -36,28 +34,16 @@ pub enum SeqValue {
     /// This replaces both Midi and Note variants - conversion happens at parse time.
     Voltage(f64),
 
-    /// Signal from another module, with optional sample-and-hold.
-    /// When `sample_and_hold` is true, the signal is sampled once at hap onset.
-    /// When false, the signal is read continuously.
-    ///
-    /// The signal field contains a raw pointer that is set during parsing
-    /// and connected during the Connect phase.
-    Signal {
-        signal: Signal,
-        sample_and_hold: bool,
-    },
-
     /// Rest - no value output, gate goes low
     Rest,
 }
 
 impl SeqValue {
     /// Get the voltage (V/Oct) value.
-    /// Returns None for Rest and Signal variants.
+    /// Returns None for Rest.
     pub fn to_voltage(&self) -> Option<f64> {
         match self {
             SeqValue::Voltage(v) => Some(*v),
-            SeqValue::Signal { .. } => None,
             SeqValue::Rest => None,
         }
     }
@@ -65,22 +51,6 @@ impl SeqValue {
     /// Check if this is a rest value.
     pub fn is_rest(&self) -> bool {
         matches!(self, SeqValue::Rest)
-    }
-
-    /// Check if this is a signal value.
-    pub fn is_signal(&self) -> bool {
-        matches!(self, SeqValue::Signal { .. })
-    }
-
-    /// Check if this is a sample-and-hold signal.
-    pub fn is_sample_and_hold(&self) -> bool {
-        matches!(
-            self,
-            SeqValue::Signal {
-                sample_and_hold: true,
-                ..
-            }
-        )
     }
 }
 
@@ -148,25 +118,7 @@ impl FromMiniAtom for SeqValue {
                     )))
                 }
             }
-            AtomValue::ModuleRef {
-                module_id,
-                port,
-                channel,
-                sample_and_hold,
-            } => Ok(SeqValue::Signal {
-                signal: Signal::Cable {
-                    module: module_id.clone(),
-                    module_ptr: std::sync::Weak::new(),
-                    port: port.clone(),
-                    channel: *channel,
-                },
-                sample_and_hold: *sample_and_hold,
-            }),
             AtomValue::Identifier(s) => {
-                // Check for module reference syntax: module(id:port:channel) or module(id:port:channel)=
-                if let Some(parsed) = parse_module_ref(s) {
-                    return Ok(parsed);
-                }
                 // Otherwise treat as note without octave if single letter
                 if s.len() == 1 {
                     let c = s.chars().next().unwrap().to_ascii_lowercase();
@@ -181,16 +133,10 @@ impl FromMiniAtom for SeqValue {
                     s
                 )))
             }
-            AtomValue::String(s) => {
-                // Check for module reference in string
-                if let Some(parsed) = parse_module_ref(s) {
-                    return Ok(parsed);
-                }
-                Err(ConvertError::InvalidAtom(format!(
-                    "Cannot convert string '{}' to SeqValue",
-                    s
-                )))
-            }
+            AtomValue::String(s) => Err(ConvertError::InvalidAtom(format!(
+                "Cannot convert string '{}' to SeqValue",
+                s
+            ))),
         }
     }
 
@@ -224,55 +170,10 @@ impl HasRest for SeqValue {
     }
 }
 
-/// Parse a module reference string like "module(id:port:channel)" or "module(id:port:channel)=".
-/// The `=` suffix indicates sample-and-hold mode.
-fn parse_module_ref(s: &str) -> Option<SeqValue> {
-    // Check for module( prefix
-    if !s.starts_with("module(") {
-        return None;
-    }
-
-    let sample_and_hold = s.ends_with("=");
-    let trimmed = if sample_and_hold {
-        &s[7..s.len() - 2] // Remove "module(" and ")="
-    } else if s.ends_with(')') {
-        &s[7..s.len() - 1] // Remove "module(" and ")"
-    } else {
-        return None;
-    };
-
-    // Parse id:port:channel
-    let parts: Vec<&str> = trimmed.splitn(3, ':').collect();
-    if parts.len() != 3 {
-        return None;
-    }
-
-    let module_id = parts[0].to_string();
-    let port = parts[1].to_string();
-    let channel: usize = parts[2].parse().unwrap_or(0);
-
-    Some(SeqValue::Signal {
-        signal: Signal::Cable {
-            module: module_id,
-            module_ptr: std::sync::Weak::new(),
-            port,
-            channel,
-        },
-        sample_and_hold,
-    })
-}
-
 /// A pattern parameter that wraps a pattern string and its parsed components.
 ///
 /// This struct is serialized as a simple string but contains the parsed pattern
-/// and collected signal pointers for connection.
-///
-/// # Safety
-///
-/// The `signals` field contains raw pointers to Signal fields within the Pattern.
-/// These pointers remain valid as long as the Pattern is not dropped or reallocated.
-/// Since SeqPatternParam owns both the pattern and signals, and patterns are
-/// immutable after parsing, this is safe.
+/// and cached query results.
 #[derive(Clone, Default, JsonSchema, Debug)]
 #[serde(transparent)]
 #[schemars(transparent)]
@@ -285,12 +186,6 @@ pub struct SeqPatternParam {
     #[serde(skip, default)]
     #[schemars(skip)]
     pub(crate) pattern: Option<Pattern<SeqValue>>,
-
-    /// Pointers to Signal fields within the pattern for connection.
-    /// SAFETY: These are valid as long as the pattern is not dropped.
-    #[serde(skip, default)]
-    #[schemars(skip)]
-    pub(crate) signals: Vec<*mut Signal>,
 
     /// All leaf spans in the pattern (character offsets within the pattern string).
     /// Computed once at parse time for creating Monaco tracked decorations.
@@ -309,15 +204,8 @@ pub struct SeqPatternParam {
     pub(crate) cached_haps: Vec<Arc<Vec<DspHap<SeqValue>>>>,
 }
 
-// SAFETY: SeqPatternParam contains `Vec<*mut Signal>` which is `!Send`, but this
-// field is always empty after deserialization (`#[serde(skip, default)]`). The raw
-// pointers are only populated during `connect()` on the audio thread. When used as
-// pre-deserialized params (boxed as `dyn CloneableParams`), the struct is freshly
-// deserialized so `signals` is guaranteed empty.
-unsafe impl Send for SeqPatternParam {}
-
 impl SeqPatternParam {
-    /// Parse a pattern string and collect signals.
+    /// Parse a pattern string.
     fn parse(source: &str) -> Result<Self, String> {
         // Parse mini notation AST first (for span collection)
         let ast = crate::pattern_system::mini::parse_ast(source).map_err(|e| e.to_string())?;
@@ -334,13 +222,9 @@ impl SeqPatternParam {
             .map(|cycle| Arc::new(pattern.query_cycle_all(cycle)))
             .collect();
 
-        // TODO: Collect signals from pattern - this requires walking the pattern
-        // For now, signals will be connected via the Connect trait on individual values
-
         Ok(Self {
             source: source.to_string(),
             pattern: Some(pattern),
-            signals: Vec::new(),
             all_spans,
             cached_haps,
         })
@@ -388,15 +272,9 @@ impl<E: DeserializeError> deserr::Deserr<E> for SeqPatternParam {
 }
 
 impl Connect for SeqPatternParam {
-    fn connect(&mut self, patch: &Patch) {
-        // Connect all collected signals
-        for signal_ptr in &mut self.signals {
-            // SAFETY: Pointers are valid as long as pattern exists
-            unsafe {
-                (**signal_ptr).connect(patch);
-            }
-        }
-    }
+    fn connect(&mut self, _patch: &Patch) {}
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 #[cfg(test)]
@@ -435,43 +313,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_module_ref() {
-        let sig = parse_module_ref("module(osc1:output:0)").unwrap();
-        assert!(matches!(
-            sig,
-            SeqValue::Signal {
-                sample_and_hold: false,
-                ..
-            }
-        ));
-
-        let sh_sig = parse_module_ref("module(osc1:output:0)=").unwrap();
-        assert!(matches!(
-            sh_sig,
-            SeqValue::Signal {
-                sample_and_hold: true,
-                ..
-            }
-        ));
-
-        // Test with channel > 0
-        let sig_ch1 = parse_module_ref("module(osc1:output:1)").unwrap();
-        if let SeqValue::Signal {
-            signal: Signal::Cable { channel, .. },
-            ..
-        } = sig_ch1
-        {
-            assert_eq!(channel, 1);
-        } else {
-            panic!("Expected Signal::Cable");
-        }
-
-        assert!(parse_module_ref("not_a_module").is_none());
-        // Old format without channel should now fail
-        assert!(parse_module_ref("module(osc1:output)").is_none());
-    }
-
-    #[test]
     fn test_from_atom() {
         // Number is treated as MIDI and converted to voltage
         let n = SeqValue::from_atom(&AtomValue::Number(60.0)).unwrap();
@@ -487,6 +328,14 @@ mod tests {
         .unwrap();
         let expected_a4_voltage = midi_to_voct_f64(69.0); // A4 = MIDI 69
         assert!(matches!(note, SeqValue::Voltage(v) if (v - expected_a4_voltage).abs() < 0.001));
+
+        assert!(
+            SeqValue::from_atom(&AtomValue::Identifier("module(src:output:0)".to_string()))
+                .is_err()
+        );
+        assert!(
+            SeqValue::from_atom(&AtomValue::String("module(src:output:0)".to_string())).is_err()
+        );
     }
 
     #[test]

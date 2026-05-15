@@ -333,6 +333,16 @@
     color: var(--text-primary);
 }
 
+.tree-file-wav {
+    cursor: default;
+    color: var(--text-muted);
+}
+
+.tree-file-wav:hover {
+    background: transparent;
+    color: var(--text-muted);
+}
+
 .folder-header {
     padding: 0 var(--sp-1);
     line-height: var(--line-height);

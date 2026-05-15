@@ -10,7 +10,7 @@ use crate::patch::Patch;
 use crate::types::{Connect, Module, ModuleSchema, SampleableConstructor};
 
 /// FM synthesis mode for oscillators.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 pub enum FmMode {
@@ -21,10 +21,6 @@ pub enum FmMode {
     Lin,
     /// Exponential FM: modulator added to pitch in V/Oct space
     Exp,
-}
-
-impl Connect for FmMode {
-    fn connect(&mut self, _patch: &Patch) {}
 }
 
 /// Calculate frequency with FM modulation applied.
@@ -49,6 +45,8 @@ pub mod pulse;
 pub mod saw;
 pub mod sine;
 pub mod supersaw;
+pub mod wavetable;
+pub mod wavetable_prep;
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     sine::SineOscillator::install_constructor(map);
@@ -60,6 +58,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     noise::Noise::install_constructor(map);
     plaits::Plaits::install_constructor(map);
     supersaw::Supersaw::install_constructor(map);
+    wavetable::WavetableOsc::install_constructor(map);
 }
 
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
@@ -72,6 +71,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     noise::Noise::install_params_deserializer(map);
     plaits::Plaits::install_params_deserializer(map);
     supersaw::Supersaw::install_params_deserializer(map);
+    wavetable::WavetableOsc::install_params_deserializer(map);
 }
 
 pub fn schemas() -> Vec<ModuleSchema> {
@@ -85,5 +85,6 @@ pub fn schemas() -> Vec<ModuleSchema> {
         noise::Noise::get_schema(),
         plaits::Plaits::get_schema(),
         supersaw::Supersaw::get_schema(),
+        wavetable::WavetableOsc::get_schema(),
     ]
 }

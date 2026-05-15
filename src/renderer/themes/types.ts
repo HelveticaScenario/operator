@@ -200,7 +200,9 @@ export function mapVSCodeTheme(vscodeTheme: VSCodeTheme): AppTheme {
 // Helper to adjust alpha of a hex color
 function adjustAlpha(hex: string, alpha: number): string {
     // Handle already-rgba colors
-    if (hex.startsWith('rgba')) {return hex;}
+    if (hex.startsWith('rgba')) {
+        return hex;
+    }
     if (hex.startsWith('rgb')) {
         const match = hex.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
         if (match) {

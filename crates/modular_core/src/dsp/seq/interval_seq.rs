@@ -18,14 +18,14 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
+    MonoSignal, Patch,
     dsp::{
         utilities::quantizer::ScaleParam,
-        utils::{midi_to_voct_f64, min_gate_samples, TempGate, TempGateState},
+        utils::{TempGate, TempGateState, midi_to_voct_f64, min_gate_samples},
     },
     pattern_system::Pattern,
-    poly::{MonoSignalExt, PolyOutput, PORT_MAX_CHANNELS},
+    poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
     types::Connect,
-    MonoSignal, Patch,
 };
 
 /// Scale parameter for IntervalSeq that supports an optional octave in the root.
@@ -72,6 +72,8 @@ impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalScaleParam {
 
 impl Connect for IntervalScaleParam {
     fn connect(&mut self, _patch: &Patch) {}
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 impl std::ops::Deref for IntervalScaleParam {
@@ -361,6 +363,8 @@ impl Connect for IntervalPatternParam {
     fn connect(&mut self, _patch: &Patch) {
         // IntervalPatternParam has no signals to connect
     }
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
 }
 
 impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalPatternSource {
@@ -710,6 +714,8 @@ struct IntervalSeqState {
     base_midi: i32,
     /// Last CV voltage per channel — holds through rest periods and state transfers
     last_cv: [f32; PORT_MAX_CHANNELS],
+    /// Scratch buffer for onset events — reused each frame to avoid heap alloc
+    events_to_process: ArrayVec<(usize, i32), PORT_MAX_CHANNELS>,
 }
 
 impl Default for IntervalSeqState {
@@ -723,6 +729,7 @@ impl Default for IntervalSeqState {
             scale_intervals: [0, 2, 4, 5, 7, 9, 11].into_iter().collect(), // Default major scale
             base_midi: 60,                                                 // C4
             last_cv: [0.0; PORT_MAX_CHANNELS],
+            events_to_process: ArrayVec::new(),
         }
     }
 }
@@ -883,45 +890,39 @@ impl IntervalSeq {
         // Collect events to process (avoids borrow conflicts)
         // Store (hap_index, degree) tuples — we'll create CachedIntervalHap from the Arc later
         let cycle_haps_arc = self.state.current_cycle_haps.clone();
-        let events_to_process: Vec<(usize, i32)> = if let Some(ref cycle_haps) = cycle_haps_arc {
-            cycle_haps
-                .iter()
-                .enumerate()
-                .filter_map(|(hap_index, combined)| {
-                    if !combined.has_onset {
-                        return None;
+        self.state.events_to_process.clear();
+        if let Some(ref cycle_haps) = cycle_haps_arc {
+            for (hap_index, combined) in cycle_haps.iter().enumerate() {
+                if !combined.has_onset {
+                    continue;
+                }
+                if playhead < combined.part_begin || playhead >= combined.part_end {
+                    continue;
+                }
+                let Some(degree) = combined.degree else {
+                    continue;
+                };
+                let already_assigned = (0..num_channels).any(|i| {
+                    if let Some(ref existing) = self.state.voices[i].cached_hap {
+                        existing.hap_index == hap_index && existing.cached_cycle == current_cycle
+                    } else {
+                        false
                     }
-
-                    if playhead < combined.part_begin || playhead >= combined.part_end {
-                        return None;
-                    }
-
-                    let degree = combined.degree?;
-
-                    // Check if already assigned
-                    let already_assigned = (0..num_channels).any(|i| {
-                        if let Some(ref existing) = self.state.voices[i].cached_hap {
-                            existing.hap_index == hap_index
-                                && existing.cached_cycle == current_cycle
-                        } else {
-                            false
-                        }
-                    });
-
-                    if already_assigned {
-                        return None;
-                    }
-
-                    Some((hap_index, degree))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+                });
+                if already_assigned {
+                    continue;
+                }
+                // Cap at buffer capacity — extra events are skipped (no free voices anyway)
+                if self.state.events_to_process.remaining_capacity() > 0 {
+                    self.state.events_to_process.push((hap_index, degree));
+                }
+            }
+        }
 
         // Process collected events
         if let Some(cycle_haps) = cycle_haps_arc {
-            for (hap_index, degree) in events_to_process {
+            for idx in 0..self.state.events_to_process.len() {
+                let (hap_index, degree) = self.state.events_to_process[idx];
                 let Some(voice_idx) = self.allocate_voice(playhead, num_channels) else {
                     continue; // No free voice — skip this event
                 };
@@ -1222,7 +1223,7 @@ mod tests {
 
         // D3 root
         seq.state.base_midi = 50; // D3
-                                  // Degree 0 = D3 = MIDI 50 = -10/12 V
+        // Degree 0 = D3 = MIDI 50 = -10/12 V
         let v0 = seq.degree_to_voltage(0);
         assert!((v0 - (-10.0 / 12.0)).abs() < 0.001);
     }

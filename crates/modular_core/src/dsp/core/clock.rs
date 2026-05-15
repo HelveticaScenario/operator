@@ -2,9 +2,9 @@ use deserr::Deserr;
 use napi::Result;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::{min_gate_samples, SchmittTrigger, TempGate, TempGateState};
-use crate::types::ClockMessages;
 use crate::PolyOutput;
+use crate::dsp::utils::{SchmittTrigger, TempGate, TempGateState, min_gate_samples};
+use crate::types::ClockMessages;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,12 @@ struct ClockParams {
     numerator: u32,
     /// Time signature denominator (beat value). Must be a positive integer.
     denominator: u32,
+}
+
+#[derive(Clone, Copy)]
+struct ExternalClockSync {
+    bar_phase: f64,
+    bpm: f64,
 }
 
 struct ClockState {
@@ -36,6 +42,7 @@ struct ClockState {
     beat_gate: TempGate,
     running: bool,
     loop_index: u64,
+    external_sync: Option<ExternalClockSync>,
 }
 
 impl Default for ClockState {
@@ -52,12 +59,18 @@ impl Default for ClockState {
             beat_gate: TempGate::new_gate(TempGateState::Low),
             running: true,
             loop_index: 0,
+            external_sync: None,
         }
     }
 }
 
 /// Tempo-synced transport clock for driving sequencers, envelopes, and synced modulation.
-#[module(name = "_clock", channels = 2, args(tempo, numerator, denominator))]
+#[module(
+    name = "_clock",
+    channels = 2,
+    args(tempo, numerator, denominator),
+    clock_sync
+)]
 pub struct Clock {
     outputs: ClockOutputs,
     state: ClockState,
@@ -90,7 +103,83 @@ message_handlers!(impl Clock {
 });
 
 impl Clock {
+    pub fn sync_external_clock(&mut self, bar_phase: f64, bpm: f64) {
+        self.state.external_sync = Some(ExternalClockSync { bar_phase, bpm });
+    }
+
+    pub fn clear_external_sync(&mut self) {
+        self.state.external_sync = None;
+    }
+
     fn update(&mut self, sample_rate: f32) {
+        // External clock sync: override free-running clock with Link data.
+        // Whether the clock produces output is gated by the enclosing
+        // Operator `stopped` flag, not by the peer's playing state.
+        if let Some(sync) = self.state.external_sync.take() {
+            self.state.running = true;
+            self.params.tempo = sync.bpm;
+
+            let numerator = self.params.numerator.max(1) as f64;
+            let denominator = self.params.denominator.max(1) as f64;
+
+            let old_phase = self.state.phase;
+            self.state.phase = sync.bar_phase;
+            self.state.loop_index = if sync.bar_phase < old_phase && old_phase > 0.5 {
+                self.state.loop_index + 1
+            } else {
+                self.state.loop_index
+            };
+
+            // Derive beat and PPQ phases from bar phase
+            let beat_period = 1.0 / numerator;
+            self.state.beat_phase = sync.bar_phase % beat_period;
+
+            let quarter_notes_per_bar = numerator * 4.0 / denominator;
+            let ppq_period = 1.0 / (12.0 * quarter_notes_per_bar);
+            self.state.ppq_phase = sync.bar_phase % ppq_period;
+
+            // Detect bar boundary crossing
+            let hold = min_gate_samples(sample_rate);
+            if sync.bar_phase < old_phase && old_phase > 0.5 {
+                self.state
+                    .bar_gate
+                    .set_state(TempGateState::High, TempGateState::Low, hold);
+            }
+            self.outputs.bar_trigger = self.state.bar_gate.process();
+
+            // Detect beat boundary crossing
+            let old_beat = (old_phase / beat_period).floor();
+            let new_beat = (sync.bar_phase / beat_period).floor();
+            let first_sync_frame = old_phase == 0.0 && self.state.loop_index == 0;
+            if new_beat != old_beat
+                || (sync.bar_phase < old_phase && old_phase > 0.5)
+                || first_sync_frame
+            {
+                self.state
+                    .beat_gate
+                    .set_state(TempGateState::High, TempGateState::Low, hold);
+            }
+            self.outputs.beat_trigger = self.state.beat_gate.process();
+
+            // Detect PPQ boundary crossing
+            let old_ppq = (old_phase / ppq_period).floor();
+            let new_ppq = (sync.bar_phase / ppq_period).floor();
+            if new_ppq != old_ppq || (sync.bar_phase < old_phase && old_phase > 0.5) {
+                self.state
+                    .ppq_gate
+                    .set_state(TempGateState::High, TempGateState::Low, hold);
+            }
+            self.outputs.ppq_trigger = self.state.ppq_gate.process();
+
+            // Update remaining outputs
+            self.outputs.beat_in_bar = (sync.bar_phase * numerator).floor() as f32;
+            self.outputs.playhead.set(0, sync.bar_phase as f32);
+            self.outputs.playhead.set(1, self.state.loop_index as f32);
+            self.outputs.ramp = sync.bar_phase as f32 * 5.0;
+
+            return;
+        }
+
         if !self.state.running {
             return; // If not running, skip the rest of the update to keep outputs where they are until clock starts
         }
@@ -499,6 +588,81 @@ mod tests {
         assert_eq!(
             c.outputs.beat_in_bar, 3.0,
             "Should be on beat 3 at 84000 samples"
+        );
+    }
+
+    #[test]
+    fn clock_external_sync_overrides_phase() {
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        // Advance clock to some non-zero phase
+        for _ in 0..12_000 {
+            c.update(sr);
+        }
+        let free_phase = c.state.phase;
+        assert!(free_phase > 0.0);
+
+        // Now sync to a specific phase externally
+        c.sync_external_clock(0.75, 140.0);
+        c.update(sr);
+
+        // Phase should be near 0.75 (the externally-set value), not free-running
+        assert!(
+            (c.state.phase - 0.75).abs() < 0.01,
+            "Phase should be near 0.75 after external sync, got {}",
+            c.state.phase
+        );
+    }
+
+    #[test]
+    fn clock_external_sync_generates_beat_triggers() {
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        // Simulate Link driving the clock through one full bar
+        // 120 BPM, 4/4 time = 96000 samples per bar
+        let samples_per_bar = 96_000;
+        let mut beat_triggers = 0;
+        let mut was_high = false;
+
+        for i in 0..samples_per_bar {
+            let bar_phase = i as f64 / samples_per_bar as f64;
+            c.sync_external_clock(bar_phase, 120.0);
+            c.update(sr);
+
+            let is_high = c.outputs.beat_trigger == 5.0;
+            if is_high && !was_high {
+                beat_triggers += 1;
+            }
+            was_high = is_high;
+        }
+
+        assert_eq!(
+            beat_triggers, 4,
+            "External sync should generate 4 beat triggers per bar in 4/4, got {}",
+            beat_triggers
+        );
+    }
+
+    #[test]
+    fn clock_external_sync_clears_on_none() {
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        // Sync externally
+        c.sync_external_clock(0.5, 120.0);
+        c.update(sr);
+
+        // Clear external sync
+        c.clear_external_sync();
+        let phase_before = c.state.phase;
+        c.update(sr);
+
+        // Should advance freely from where it was
+        assert!(
+            c.state.phase > phase_before,
+            "Clock should free-run after clearing external sync"
         );
     }
 }

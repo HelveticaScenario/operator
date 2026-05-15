@@ -2,7 +2,7 @@
 [package]
 authors = ["Dan Lewis"]
 edition = "2024"
-name = "modular"
+name    = "modular"
 version = "0.1.0"
 
 [lib]
@@ -10,51 +10,57 @@ crate-type = ["cdylib"]
 
 [features]
 default = []
-tracy = ["modular_core/tracy", "tracy-client", "profiling/profile-with-tracy"]
+tracy   = ["modular_core/tracy", "tracy-client", "profiling/profile-with-tracy"]
 
 [dependencies]
-napi-derive = "3.4.1"
-hound = "3.5"
-profiling = { workspace = true }
-parking_lot = "0.12.5"
-schemars = "1.1.0"
-serde_json = "1.0.147"
+aubio = { version = "0.2", features = ["builtin", "bindgen"] }
 bytemuck = "1.24.0"
-midir = "0.10"
 crossbeam-channel = "0.5"
+dirs = "5"
+hound = "3.5"
 lru = "0.16.3"
+midir = "0.10"
+napi-derive = "3.4.1"
+parking_lot = "0.12.5"
+petgraph = { version = "0.8", default-features = false, features = [
+  "graphmap",
+  "std",
+] }
+profiling = { workspace = true }
+regex = "1.12.2"
+riff = "2"
 ringbuf = "0.4"
 rtrb = "0.3"
-dirs = "5"
+schemars = "1.1.0"
+serde_json = "1.0.147"
 tracy-client = { workspace = true, optional = true }
 
-[dependencies.napi]
-version = "3.7.1"
-features = ["serde", "serde-json", "napi10"]
+  [dependencies.napi]
+  features = ["serde", "serde-json", "napi10"]
+  version  = "3.7.1"
 
-[dependencies.chrono]
-version = "0.4"
-default-features = true
+  [dependencies.chrono]
+  default-features = true
+  version          = "0.4"
 
-[dependencies.cpal]
-version = "0.17.0"
-features = ["jack"]
+  [dependencies.cpal]
+  features = ["jack"]
+  version  = "0.17.0"
 
-[dependencies.modular_core]
-version = "*"
-path = "../modular_core"
+  [dependencies.modular_core]
+  path    = "../modular_core"
+  version = "*"
 
-[dependencies.serde]
-version = "1.0"
-features = ["derive"]
+  [dependencies.rusty_link]
+  version = "0.4"
+
+  [dependencies.serde]
+  features = ["derive"]
+  version  = "1.0"
 
 [build-dependencies]
 napi-build = "2"
 
-[profile.release]
-lto = true
-strip = "symbols"
-
 [profile.dev]
+debug     = true
 opt-level = 0
-debug = true

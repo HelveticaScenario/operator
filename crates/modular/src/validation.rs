@@ -1,7 +1,5 @@
 use modular_core::params::ARGUMENT_SPANS_KEY;
-use modular_core::types::{
-  ModuleSchema, ModuleState, PatchGraph, Signal, WellKnownModule,
-};
+use modular_core::types::{ModuleSchema, ModuleState, PatchGraph, Signal, WellKnownModule};
 use napi_derive::napi;
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
@@ -400,68 +398,68 @@ pub fn validate_patch(
     }
   }
 
-    // === Scope validation ===
-    for scope in &patch.scopes {
-        if scope.channels.is_empty() {
-            errors.push(ValidationError {
-                field: "scopes".to_string(),
-                message: "Scope has no channels".to_string(),
-                location: None,
-                expected_type: None,
-                actual_value: None,
-            });
-            continue;
-        }
-
-        for channel in &scope.channels {
-            // Scope target module must exist
-            let Some(module) = module_by_id.get(channel.module_id.as_str()).copied() else {
-                errors.push(ValidationError {
-                    field: "scopes".to_string(),
-                    message: format!("Scope references missing module '{}'", channel.module_id),
-                    location: None,
-                    expected_type: None,
-                    actual_value: None,
-                });
-                continue;
-            };
-
-            // Target module type must be known
-            let Some(schema) = schema_map.get(module.module_type.as_str()).copied() else {
-                errors.push(ValidationError {
-                    field: "scopes".to_string(),
-                    message: format!(
-                        "Scope references module '{}' with unknown type '{}'",
-                        channel.module_id, module.module_type
-                    ),
-                    location: None,
-                    expected_type: None,
-                    actual_value: None,
-                });
-                continue;
-            };
-
-            // Output port must exist in module schema (including virtual range ports)
-            let is_valid_scope_port = schema.outputs.iter().any(|o| o.name == *channel.port_name)
-                || schema.outputs.iter().any(|o| {
-                    o.dynamic_range
-                        && (channel.port_name == format!("{}.rangeMin", o.name)
-                            || channel.port_name == format!("{}.rangeMax", o.name))
-                });
-            if !is_valid_scope_port {
-                errors.push(ValidationError {
-                    field: "scopes".to_string(),
-                    message: format!(
-                        "Scope references missing output port '{}' on module '{}'",
-                        channel.port_name, channel.module_id
-                    ),
-                    location: None,
-                    expected_type: None,
-                    actual_value: None,
-                });
-            }
-        }
+  // === Scope validation ===
+  for scope in &patch.scopes {
+    if scope.channels.is_empty() {
+      errors.push(ValidationError {
+        field: "scopes".to_string(),
+        message: "Scope has no channels".to_string(),
+        location: None,
+        expected_type: None,
+        actual_value: None,
+      });
+      continue;
     }
+
+    for channel in &scope.channels {
+      // Scope target module must exist
+      let Some(module) = module_by_id.get(channel.module_id.as_str()).copied() else {
+        errors.push(ValidationError {
+          field: "scopes".to_string(),
+          message: format!("Scope references missing module '{}'", channel.module_id),
+          location: None,
+          expected_type: None,
+          actual_value: None,
+        });
+        continue;
+      };
+
+      // Target module type must be known
+      let Some(schema) = schema_map.get(module.module_type.as_str()).copied() else {
+        errors.push(ValidationError {
+          field: "scopes".to_string(),
+          message: format!(
+            "Scope references module '{}' with unknown type '{}'",
+            channel.module_id, module.module_type
+          ),
+          location: None,
+          expected_type: None,
+          actual_value: None,
+        });
+        continue;
+      };
+
+      // Output port must exist in module schema (including virtual range ports)
+      let is_valid_scope_port = schema.outputs.iter().any(|o| o.name == *channel.port_name)
+        || schema.outputs.iter().any(|o| {
+          o.dynamic_range
+            && (channel.port_name == format!("{}.rangeMin", o.name)
+              || channel.port_name == format!("{}.rangeMax", o.name))
+        });
+      if !is_valid_scope_port {
+        errors.push(ValidationError {
+          field: "scopes".to_string(),
+          message: format!(
+            "Scope references missing output port '{}' on module '{}'",
+            channel.port_name, channel.module_id
+          ),
+          location: None,
+          expected_type: None,
+          actual_value: None,
+        });
+      }
+    }
+  }
 
   // === Result ===
   // Return Ok for a clean patch; otherwise return all collected errors.
@@ -743,5 +741,4 @@ mod tests {
 
     assert!(validate_patch(&patch, &schemas).is_ok());
   }
-
 }

@@ -170,10 +170,6 @@ pub fn time() -> Pattern<Fraction> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Weak;
-
-    use crate::types::Signal;
-
     use super::*;
 
     #[test]

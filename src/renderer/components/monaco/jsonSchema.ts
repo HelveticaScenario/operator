@@ -1,7 +1,7 @@
 import type { Monaco } from '../../hooks/useCustomMonaco';
 
 export function registerConfigSchema(monaco: Monaco, schema: object) {
-    const {jsonDefaults} = monaco.json;
+    const { jsonDefaults } = monaco.json;
     jsonDefaults.setDiagnosticsOptions({
         allowComments: true,
         schemas: [
@@ -25,7 +25,7 @@ export function registerConfigSchemaForFile(
     schema: object,
     currentFile: string,
 ) {
-    const {jsonDefaults} = monaco.json;
+    const { jsonDefaults } = monaco.json;
     const fileUri = `file://${currentFile}`;
     jsonDefaults.setDiagnosticsOptions({
         allowComments: true,

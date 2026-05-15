@@ -11,6 +11,7 @@ import {
 import type {
     BufferOutputRef,
     Signal,
+    PolySignal,
     SourceLocation,
     Collection,
     ModuleOutput,
@@ -54,9 +55,31 @@ export interface DSLExecutionResult {
     callSiteSpans: CallSiteSpanRegistry;
 }
 
+export interface WavsFolderNode {
+    [name: string]: WavsFolderNode | 'file';
+}
+
 export interface DSLExecutionOptions {
     sampleRate?: number;
     workspaceRoot?: string | null;
+    wavsFolderTree?: WavsFolderNode | null;
+    loadWav?: (path: string) => {
+        channels: number;
+        frameCount: number;
+        path: string;
+        sampleRate: number;
+        duration: number;
+        bitDepth: number;
+        pitch?: number | null;
+        playback?: string | null;
+        bpm?: number | null;
+        beats?: number | null;
+        timeSignature?: { num: number; den: number } | null;
+        barCount?: number | null;
+        loops: Array<{ loopType: string; start: number; end: number }>;
+        cuePoints: Array<{ position: number; label: string }>;
+        mtime: number;
+    };
 }
 
 // Install pipe() on Array.prototype so arrays in the DSL can use it.
@@ -230,6 +253,157 @@ export function executePatchScript(
         };
     };
 
+    const $mix = userNamespaceTree['$mix'];
+    if (typeof $mix !== 'function') {
+        throw new Error(
+            'DSL execution error: "$mix" module not found in schemas',
+        );
+    }
+
+    const $delay = (
+        input: Collection | ModuleOutput,
+        feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
+        length: number,
+    ): Collection & { buffer: BufferOutputRef } => {
+        const def = $deferred('length' in input ? input.length : 1);
+        const mixed = $mix([input, def]) as Collection;
+        const buf = $buffer(mixed, length);
+        def.set(feedbackCb(buf));
+        return Object.assign(mixed, { buffer: buf });
+    };
+
+    interface OttConfig {
+        /**
+         * Optional side-chain detector signal. When connected, the same
+         * crossover network splits the sidechain into low/mid/high and each
+         * band's compressor keys off the matching sidechain band — the gain is
+         * still applied to `input`. Enables band-aware ducking (e.g. only
+         * sidechain the low band against a kick).
+         */
+        sidechain?: PolySignal;
+        /** wet/dry blend, 0–5 (default 5 = fully wet) */
+        depth?: PolySignal;
+        /** low/mid crossover (V/Oct, default ~120 Hz) */
+        lowMidFreq?: PolySignal;
+        /** mid/high crossover (V/Oct, default ~2500 Hz) */
+        midHighFreq?: PolySignal;
+        /** downward threshold in volts (default 1.0) */
+        threshold?: PolySignal;
+        /** downward ratio (default 4) */
+        ratio?: PolySignal;
+        /** upward threshold in volts (default 0.5) */
+        upwardThreshold?: PolySignal;
+        /** upward ratio (default 4) */
+        upwardRatio?: PolySignal;
+        /** envelope attack (seconds, default 0.003) */
+        attack?: PolySignal;
+        /** envelope release (seconds, default 0.05) */
+        release?: PolySignal;
+        /** per-band makeup as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
+        makeup?: PolySignal;
+        /** per-band trim (V, 5 = unity, default 5) */
+        lowGain?: PolySignal;
+        midGain?: PolySignal;
+        highGain?: PolySignal;
+        id?: string;
+    }
+
+    const $xover = userNamespaceTree['$xover'];
+    const $comp = userNamespaceTree['$comp'];
+    const $scaleAndShift = userNamespaceTree['$scaleAndShift'];
+    if (
+        typeof $xover !== 'function' ||
+        typeof $comp !== 'function' ||
+        typeof $scaleAndShift !== 'function'
+    ) {
+        throw new Error(
+            'DSL execution error: "$ott" requires "$xover", "$comp", and "$scaleAndShift" modules',
+        );
+    }
+
+    /**
+     * `$ott` — three-band upward + downward compressor in the style of Xfer's
+     * OTT. Splits the input into low/mid/high via `$xover`, applies aggressive
+     * upward + downward compression to each band with `$comp`, sums the bands,
+     * and crossfades against the original input via `depth`.
+     *
+     * Per-band trim (`lowGain` / `midGain` / `highGain`) uses `$scaleAndShift`
+     * convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
+     *
+     * @example
+     * $ott(drums).out()
+     *
+     * @example
+     * // tame highs, push lows
+     * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
+     */
+    const $ott = (
+        input: PolySignal,
+        config: OttConfig = {},
+    ): Collection => {
+        const compConf = {
+            attack: config.attack ?? 0.003,
+            makeup: config.makeup ?? 1.0,
+            ratio: config.ratio ?? 4,
+            release: config.release ?? 0.05,
+            threshold: config.threshold ?? 1.0,
+            upwardRatio: config.upwardRatio ?? 4,
+            upwardThreshold: config.upwardThreshold ?? 0.5,
+        };
+
+        const lowMidFreq = config.lowMidFreq ?? hz(120);
+        const midHighFreq = config.midHighFreq ?? hz(2500);
+        const xoverConf = { lowMidFreq, midHighFreq };
+
+        const bands = $xover(input, xoverConf) as Collection & {
+            low: Collection;
+            mid: Collection;
+            high: Collection;
+        };
+
+        // Split the side-chain through an identical crossover so each band's
+        // compressor keys off the matching frequency range of the sidechain.
+        const scBands =
+            config.sidechain !== undefined
+                ? ($xover(config.sidechain, xoverConf) as Collection & {
+                      low: Collection;
+                      mid: Collection;
+                      high: Collection;
+                  })
+                : null;
+
+        const lowComp = $comp(bands.low, {
+            ...compConf,
+            ...(scBands !== null && { sidechain: scBands.low }),
+        });
+        const midComp = $comp(bands.mid, {
+            ...compConf,
+            ...(scBands !== null && { sidechain: scBands.mid }),
+        });
+        const highComp = $comp(bands.high, {
+            ...compConf,
+            ...(scBands !== null && { sidechain: scBands.high }),
+        });
+
+        // Per-band trim — $scaleAndShift convention: scale=5 → unity gain.
+        const low = $scaleAndShift(lowComp, config.lowGain ?? 5, 0);
+        const mid = $scaleAndShift(midComp, config.midGain ?? 5, 0);
+        const high = $scaleAndShift(highComp, config.highGain ?? 5, 0);
+
+        const wet = $mix([low, mid, high]) as Collection;
+
+        // Crossfade dry vs wet using `depth` (0–5 V):
+        //   dryWeight = 5 − depth → unity when depth=0, silence when depth=5
+        //   wetWeight = depth      → silence when depth=0, unity when depth=5
+        const depth = config.depth ?? 5;
+        const dryWeight = $scaleAndShift(depth, -5, 5);
+
+        return $mix([
+            $scaleAndShift(input, dryWeight as Signal, 0),
+            $scaleAndShift(wet, depth, 0),
+        ]) as Collection;
+    };
+
     // Slider collector — populated by $slider() calls during execution
     const sliders: SliderDefinition[] = [];
 
@@ -278,12 +452,240 @@ export function executePatchScript(
         return result;
     };
 
+    /**
+     * Load WAV samples from the wavs/ folder.
+     * Returns a proxy tree matching the folder structure; leaf nodes trigger
+     * loadWav() and return `{ type: 'wav_ref', path, channels }` objects.
+     */
+    const $wavs = (): unknown => {
+        const tree = options.wavsFolderTree;
+        if (!tree) {
+            return new Proxy(
+                {},
+                {
+                    get(_target, prop) {
+                        throw new Error(
+                            `$wavs().${String(prop)}: no wavs/ folder found in workspace`,
+                        );
+                    },
+                },
+            );
+        }
+
+        // Memoize the lexicographically-sorted list of direct file basenames
+        // per folder node, so numeric-index resolution sorts at most once
+        // per node regardless of how many `$wavs()[i]` calls happen.
+        const sortedFilesCache = new WeakMap<WavsFolderNode, string[]>();
+        function sortedFileList(node: WavsFolderNode): string[] {
+            const cached = sortedFilesCache.get(node);
+            if (cached) return cached;
+            const files = Object.entries(node)
+                .filter(([, v]) => v === 'file')
+                .map(([k]) => k)
+                .sort((a, b) => a.localeCompare(b));
+            sortedFilesCache.set(node, files);
+            return files;
+        }
+
+        function makeProxy(node: WavsFolderNode, pathParts: string[]): unknown {
+            // Resolve a known file leaf (basename `fileName` exists in `node`
+            // as a `'file'`) into a `WavHandle`. Single source of truth
+            // shared by named-key access and numeric-index access.
+            function loadFile(fileName: string): unknown {
+                const relPath = [...pathParts, fileName].join('/');
+                if (!options.loadWav) {
+                    throw new Error('$wavs(): loadWav function not provided');
+                }
+                const info = options.loadWav(relPath);
+                return {
+                    type: 'wav_ref' as const,
+                    path: relPath,
+                    channels: info.channels,
+                    sampleRate: info.sampleRate,
+                    frameCount: info.frameCount,
+                    duration: info.duration,
+                    bitDepth: info.bitDepth,
+                    mtime: info.mtime,
+                    ...(info.pitch != null && { pitch: info.pitch }),
+                    ...(info.playback != null && { playback: info.playback }),
+                    ...(info.bpm != null && { bpm: info.bpm }),
+                    ...(info.beats != null && { beats: info.beats }),
+                    ...(info.timeSignature != null && {
+                        timeSignature: {
+                            num: info.timeSignature.num,
+                            den: info.timeSignature.den,
+                        },
+                    }),
+                    ...(info.barCount != null && { barCount: info.barCount }),
+                    loops: info.loops.map(
+                        (l: {
+                            loopType: string;
+                            start: number;
+                            end: number;
+                        }) => ({
+                            type: l.loopType as
+                                | 'forward'
+                                | 'pingpong'
+                                | 'backward',
+                            start: l.start,
+                            end: l.end,
+                        }),
+                    ),
+                    cuePoints: info.cuePoints.map(
+                        (c: { position: number; label: string }) => ({
+                            position: c.position,
+                            label: c.label,
+                        }),
+                    ),
+                };
+            }
+
+            return new Proxy(
+                {},
+                {
+                    get(_target, prop) {
+                        if (typeof prop !== 'string') return undefined;
+
+                        // Numeric index access wraps modulo the file count of
+                        // this folder. Only direct files participate
+                        // (subfolders excluded — they get their own index).
+                        if (/^-?(0|[1-9][0-9]*)$/.test(prop)) {
+                            const files = sortedFileList(node);
+                            if (files.length === 0) {
+                                const fullPath = [
+                                    ...pathParts,
+                                    `[${prop}]`,
+                                ].join('/');
+                                throw new Error(
+                                    `$wavs(): "${fullPath}" — no wav files in this folder to index into`,
+                                );
+                            }
+                            const i = parseInt(prop, 10);
+                            const wrapped =
+                                ((i % files.length) + files.length) %
+                                files.length;
+                            return loadFile(files[wrapped]);
+                        }
+
+                        const child = node[prop];
+                        if (child === undefined) {
+                            const fullPath = [...pathParts, prop].join('/');
+                            throw new Error(
+                                `$wavs(): "${fullPath}" not found. Available: ${Object.keys(node).join(', ') || '(empty)'}`,
+                            );
+                        }
+
+                        if (child === 'file') {
+                            return loadFile(prop);
+                        }
+
+                        // Directory node — return nested proxy
+                        return makeProxy(child, [...pathParts, prop]);
+                    },
+                    ownKeys() {
+                        return Object.keys(node);
+                    },
+                    getOwnPropertyDescriptor(_target, prop) {
+                        if (typeof prop === 'string' && prop in node) {
+                            return {
+                                configurable: true,
+                                enumerable: true,
+                                writable: false,
+                            };
+                        }
+                        return undefined;
+                    },
+                },
+            );
+        }
+
+        return makeProxy(tree, []);
+    };
+
+    /**
+     * $table.* DSL helpers produce phase-warp table descriptors for the
+     * `$wavetable` oscillator (and any future modules that accept a `Table`).
+     *
+     * Each helper returns a plain JSON object whose shape matches the Rust
+     * `Table` enum deserializer (`#[serde(tag = "type", rename_all = "camelCase")]`).
+     *
+     * Inner signal-valued fields are passed through `replaceSignals` so that
+     * ModuleOutputs / Collections are converted to the same wire format used
+     * for module-factory params. This matches the existing mechanism used by
+     * `_setParam` in GraphBuilder.
+     *
+     * Tables are composable: each returned descriptor has a `.pipe(next)` method
+     * that feeds this table's output phase into `next`. The optional second
+     * argument to each helper is a shorthand for `.pipe(next)`.
+     */
+    function wrapTable(descriptor: Record<string, unknown>): Record<
+        string,
+        unknown
+    > & {
+        pipe: <T>(fn: (self: Record<string, unknown>) => T) => T;
+    } {
+        const t = { ...descriptor } as Record<string, unknown> & {
+            pipe: <T>(fn: (self: Record<string, unknown>) => T) => T;
+        };
+        Object.defineProperty(t, 'pipe', {
+            value: <T>(fn: (self: typeof t) => T): T => fn(t),
+            enumerable: false,
+            writable: false,
+            configurable: false,
+        });
+        return t;
+    }
+
+    const $table = {
+        mirror: (amount: unknown, next?: unknown) => {
+            const t = wrapTable({
+                type: 'mirror',
+                amount: replaceSignals(amount),
+            });
+            return next !== undefined
+                ? wrapTable({ type: 'pipe', first: t, second: next })
+                : t;
+        },
+        bend: (amount: unknown, next?: unknown) => {
+            const t = wrapTable({
+                type: 'bend',
+                amount: replaceSignals(amount),
+            });
+            return next !== undefined
+                ? wrapTable({ type: 'pipe', first: t, second: next })
+                : t;
+        },
+        sync: (ratio: unknown, next?: unknown) => {
+            const t = wrapTable({ type: 'sync', ratio: replaceSignals(ratio) });
+            return next !== undefined
+                ? wrapTable({ type: 'pipe', first: t, second: next })
+                : t;
+        },
+        fold: (amount: unknown, next?: unknown) => {
+            const t = wrapTable({
+                type: 'fold',
+                amount: replaceSignals(amount),
+            });
+            return next !== undefined
+                ? wrapTable({ type: 'pipe', first: t, second: next })
+                : t;
+        },
+        pwm: (width: unknown, next?: unknown) => {
+            const t = wrapTable({ type: 'pwm', width: replaceSignals(width) });
+            return next !== undefined
+                ? wrapTable({ type: 'pipe', first: t, second: next })
+                : t;
+        },
+    };
+
     const dslGlobals = {
         // Prefixed namespace tree (modules and namespaces, minus _clock)
         ...userNamespaceTree,
         // Helper functions with $ prefix
         $hz: hz,
         $note: note,
+        // Phase-warp table descriptors for $wavetable
+        $table,
         // Collection helpers
         $c,
         $r,
@@ -300,6 +702,10 @@ export function executePatchScript(
         $setTimeSignature,
         $setEndOfChainCb,
         $buffer,
+        $delay,
+        $ott,
+        // WAV sample loading
+        $wavs,
         // Built-in modules
         $clock,
         $input: rootInput,

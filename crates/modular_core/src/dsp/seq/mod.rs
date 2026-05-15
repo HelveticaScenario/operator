@@ -7,16 +7,14 @@
 use std::collections::HashMap;
 
 use crate::params::ParamsDeserializer;
-use crate::types::{
-    Module, ModuleSchema, SampleableConstructor,
-};
+use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub mod interval_seq;
 pub mod scale;
 pub mod seq;
 pub mod seq_value;
-pub mod track;
 pub mod step;
+pub mod track;
 
 pub use interval_seq::{IntervalPatternParam, IntervalSeq, IntervalValue};
 pub use scale::{FixedRoot, ScaleRoot, ScaleSnapper};

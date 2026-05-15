@@ -38,7 +38,9 @@ export function analyzeCallSiteSpans(
     const callSiteSpans: CallSiteSpanRegistry = new Map();
 
     sourceFile.forEachDescendant((node: Node) => {
-        if (!Node.isCallExpression(node)) {return;}
+        if (!Node.isCallExpression(node)) {
+            return;
+        }
 
         const call = node;
         const expression = call.getExpression();
@@ -48,12 +50,16 @@ export function analyzeCallSiteSpans(
         if (Node.isPropertyAccessExpression(expression)) {
             // Method call like .scope() — V8 reports position of the method name
             const methodName = expression.getName();
-            if (!DSL_METHODS_TO_TRACK.has(methodName)) {return;}
+            if (!DSL_METHODS_TO_TRACK.has(methodName)) {
+                return;
+            }
             callStartPos = expression.getNameNode().getStart();
         } else if (Node.isIdentifier(expression)) {
             // Standalone call like $slider()
             const funcName = expression.getText();
-            if (!DSL_FUNCTIONS_TO_TRACK.has(funcName)) {return;}
+            if (!DSL_FUNCTIONS_TO_TRACK.has(funcName)) {
+                return;
+            }
             callStartPos = call.getStart();
         } else {
             return;

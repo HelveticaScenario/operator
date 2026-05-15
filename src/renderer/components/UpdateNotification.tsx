@@ -27,7 +27,9 @@ export function UpdateNotification({
     onSkip,
     onDismiss,
 }: Props) {
-    if (state.status === 'idle') {return null;}
+    if (state.status === 'idle') {
+        return null;
+    }
 
     let message: string;
     let primaryAction: { label: string; onClick: () => void } | null = null;

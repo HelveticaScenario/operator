@@ -617,10 +617,6 @@ export function reconcilePatchBySimilarity(
     currentGraph: PatchGraph | null,
     options: ReconcileOptions = {},
 ): ReconcileResult {
-    performance.clearMeasures('patch-similarity');
-    performance.clearMarks('patch-similarity-start');
-    performance.mark('patch-similarity-start');
-
     if (!currentGraph) {
         return {
             appliedPatch: desiredGraph,
@@ -859,25 +855,5 @@ export function reconcilePatchBySimilarity(
         }
     }
 
-    if (debugLog) {
-        const remapCount = Object.keys(moduleIdRemap).length;
-        debugLog(`[patch-remap] done remapped=${remapCount}`);
-        if (remapCount > 0) {
-            const pairs = Object.entries(moduleIdRemap)
-                .map(([from, to]) => `${from}->${to}`)
-                .join(', ');
-            debugLog(`[patch-remap] remaps ${pairs}`);
-        }
-    }
-    performance.mark('patch-similarity-end');
-    console.log(
-        'patch similarity',
-        performance.measure(
-            'patch-similarity',
-            'patch-similarity-start',
-            'patch-similarity-end',
-        ),
-    );
-    // Performance.
     return { appliedPatch, moduleIdRemap };
 }

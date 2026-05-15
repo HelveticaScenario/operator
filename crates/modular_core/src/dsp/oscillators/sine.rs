@@ -1,7 +1,7 @@
 use crate::{
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
-        oscillators::{apply_fm, FmMode},
+        oscillators::{FmMode, apply_fm},
         utils::interpolate,
     },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},

@@ -1,7 +1,7 @@
 {
     "name": "@modular/app",
     "productName": "Operator",
-    "version": "0.0.36",
+    "version": "0.0.59",
     "description": "Operator - a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches",
     "main": ".vite/build/main.js",
     "repository": {
@@ -33,6 +33,7 @@
         "build-native-debug": "cd crates/modular && yarn build:debug",
         "build-native-profile": "cd crates/modular && yarn build --features=tracy",
         "generate-lib": "yarn build-native && tsx scripts/generateLib.ts",
+        "postinstall": "node scripts/patch-electron-plist.mjs",
         "prepare": "husky"
     },
     "keywords": [],
@@ -58,7 +59,7 @@
         "@playwright/test": "^1.58.2",
         "@stylistic/eslint-plugin": "^5.10.0",
         "@types/electron-squirrel-startup": "^1.0.2",
-        "@types/react": "^19.2.7",
+        "@types/react": "^19.2.14",
         "@types/react-dom": "^19.2.3",
         "concurrently": "^9.2.1",
         "electron": "39.2.7",
@@ -97,8 +98,8 @@
         "electron-squirrel-startup": "^1.0.1",
         "monaco-editor": "^0.55.1",
         "prettier": "^3.4.2",
-        "react": "^19.2.3",
-        "react-dom": "^19.2.3",
+        "react": "^19.2.6",
+        "react-dom": "^19.2.6",
         "react-markdown": "^10.1.0",
         "ts-morph": "^27.0.2",
         "typescript": "~5.9.3",
@@ -114,15 +115,15 @@
             "prettier --write"
         ],
         "crates/modular/*.rs": [
-            "cargo fmt -- --check --manifest-path crates/modular/Cargo.toml",
+            "cargo fmt --check --manifest-path crates/modular/Cargo.toml",
             "cargo fmt --allow-staged --manifest-path crates/modular/Cargo.toml"
         ],
         "crates/modular_core/*.rs": [
-            "cargo fmt -- --check --manifest-path crates/modular_core/Cargo.toml",
+            "cargo fmt --check --manifest-path crates/modular_core/Cargo.toml",
             "cargo fmt --allow-staged --manifest-path crates/modular_core/Cargo.toml"
         ],
         "crates/modular_derive/*.rs": [
-            "cargo fmt -- --check --manifest-path crates/modular_derive/Cargo.toml",
+            "cargo fmt --check --manifest-path crates/modular_derive/Cargo.toml",
             "cargo fmt --allow-staged --manifest-path crates/modular_derive/Cargo.toml"
         ]
     },

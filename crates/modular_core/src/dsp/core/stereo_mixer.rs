@@ -1,7 +1,7 @@
 use crate::{
+    PORT_MAX_CHANNELS,
     poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
-    PORT_MAX_CHANNELS,
 };
 use deserr::Deserr;
 use schemars::JsonSchema;

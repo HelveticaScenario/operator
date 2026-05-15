@@ -13,7 +13,9 @@ export const readUnsavedBuffers = (): EditorBuffer[] => {
 
     try {
         const raw = window.localStorage.getItem(UNSAVED_STORAGE_KEY);
-        if (!raw) {return [];}
+        if (!raw) {
+            return [];
+        }
 
         const parsed = JSON.parse(raw) as UnsavedBufferSnapshot[];
         return parsed.map((snapshot): EditorBuffer => {
@@ -40,7 +42,9 @@ export const readUnsavedBuffers = (): EditorBuffer[] => {
 };
 
 export const saveUnsavedBuffers = (buffers: EditorBuffer[]) => {
-    if (typeof window === 'undefined') {return;}
+    if (typeof window === 'undefined') {
+        return;
+    }
 
     try {
         const dirtyBuffers = buffers.filter((b) => b.dirty);
@@ -71,7 +75,8 @@ export const saveUnsavedBuffers = (buffers: EditorBuffer[]) => {
     }
 };
 
-export const getBufferId = (buffer: EditorBuffer): string => buffer.kind === 'file' ? buffer.filePath : buffer.id;
+export const getBufferId = (buffer: EditorBuffer): string =>
+    buffer.kind === 'file' ? buffer.filePath : buffer.id;
 
 export const formatBufferLabel = (buffer: EditorBuffer) => {
     if (buffer.kind === 'untitled') {

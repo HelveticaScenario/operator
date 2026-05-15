@@ -2,7 +2,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::oscillators::{apply_fm, FmMode},
+    dsp::oscillators::{FmMode, apply_fm},
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
 };
 

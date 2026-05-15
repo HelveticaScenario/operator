@@ -6,7 +6,7 @@ export function applyMonacoTheme(
     appTheme: AppTheme,
     monacoThemeId: string,
 ) {
-    const {raw} = appTheme;
+    const { raw } = appTheme;
 
     const rules = raw.tokenColors
         .map((tc) => {

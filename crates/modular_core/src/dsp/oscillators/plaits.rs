@@ -14,9 +14,9 @@ use mi_plaits_dsp::voice::{Modulations, Patch, Voice};
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::utils::{voct_to_midi, SchmittTrigger},
+    dsp::utils::{SchmittTrigger, voct_to_midi},
     patch::Patch as ModularPatch,
-    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::{Clickless, Connect},
 };
 
@@ -27,7 +27,7 @@ const BLOCK_SIZE: usize = 12;
 const ENGINE_SAMPLE_RATE: f32 = 48000.0;
 
 /// Synthesis engine selection for Plaits
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 pub enum PlaitsEngine {
@@ -114,10 +114,6 @@ impl PlaitsEngine {
     }
 }
 
-impl Connect for PlaitsEngine {
-    fn connect(&mut self, _patch: &ModularPatch) {}
-}
-
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
@@ -177,13 +173,21 @@ struct PlaitsParams {
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
     lpg_decay: Option<PolySignal>,
+
+    /// Main/Aux Mix (0-5v) - Crossfade mix between main and aux outputs at the primary output.
+    #[signal(default = 0.0, range = (0.0, 5.0))]
+    #[deserr(default)]
+    mix: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PlaitsOutputs {
-    #[output("output", "main synthesis output", default, range = (-5.0, 5.0))]
-    out: PolyOutput,
+    #[output("mix", "mixed synthesis output", default, range = (-5.0, 5.0))]
+    mix: PolyOutput,
+
+    #[output("main", "main synthesis output", range = (-5.0, 5.0))]
+    main: PolyOutput,
 
     #[output("aux", "auxiliary output — varies per engine", range = (-5.0, 5.0))]
     aux: PolyOutput,
@@ -192,7 +196,7 @@ struct PlaitsOutputs {
 /// Per-channel voice state
 struct PlaitsChannelState {
     voice: Voice<'static>,
-    out_buffer: [f32; BLOCK_SIZE],
+    main_buffer: [f32; BLOCK_SIZE],
     aux_buffer: [f32; BLOCK_SIZE],
     // Smoothed parameters
     harmonics: Clickless,
@@ -200,6 +204,7 @@ struct PlaitsChannelState {
     morph: Clickless,
     lpg_color: Clickless,
     lpg_decay: Clickless,
+    mix: Clickless,
     // Trigger state tracking
     /// Schmitt trigger for edge detection with hysteresis
     trigger_schmitt: SchmittTrigger,
@@ -214,13 +219,14 @@ impl Default for PlaitsChannelState {
         voice.init();
         Self {
             voice,
-            out_buffer: [0.0; BLOCK_SIZE],
+            main_buffer: [0.0; BLOCK_SIZE],
             aux_buffer: [0.0; BLOCK_SIZE],
             harmonics: Clickless::default(),
             timbre: Clickless::default(),
             morph: Clickless::default(),
             lpg_color: Clickless::default(),
             lpg_decay: Clickless::default(),
+            mix: Clickless::default(),
             trigger_schmitt: SchmittTrigger::default(),
             trigger_latch: false,
         }
@@ -321,14 +327,23 @@ impl Plaits {
         }
 
         for ch in 0..num_channels {
-            let state = &self.state.channels[ch];
+            let state = &mut self.state.channels[ch];
             // Output scaling: Plaits outputs ±1.0, scale to ±5V (inverted to match hardware)
+            let main = -state.main_buffer[self.state.buffer_pos] * 5.0;
+            let aux = -state.aux_buffer[self.state.buffer_pos] * 5.0;
+
+            self.outputs.main.set(ch, main);
+            self.outputs.aux.set(ch, aux);
+
+            state
+                .mix
+                .update(self.params.mix.value_or(ch, 0.0).clamp(0.0, 5.0));
+
+            let mix = state.mix / 5.0;
+
             self.outputs
-                .out
-                .set(ch, -state.out_buffer[self.state.buffer_pos] * 5.0);
-            self.outputs
-                .aux
-                .set(ch, -state.aux_buffer[self.state.buffer_pos] * 5.0);
+                .mix
+                .set(ch, (main * (mix - 1.0).abs()) + (aux * mix))
         }
 
         self.state.buffer_pos += 1;
@@ -432,7 +447,7 @@ impl Plaits {
             state.voice.render(
                 &patch,
                 &modulations,
-                &mut state.out_buffer,
+                &mut state.main_buffer,
                 &mut state.aux_buffer,
             );
 

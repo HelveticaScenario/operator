@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 
 use crate::{
     dsp::utils::{changed, sanitize, voct_to_hz},
-    poly::{PolyOutput, PolySignal, PolySignalExt, PORT_MAX_CHANNELS},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 
