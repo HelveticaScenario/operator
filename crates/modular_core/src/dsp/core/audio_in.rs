@@ -31,6 +31,10 @@ impl Sampleable for AudioIn {
         Ok(*self.input.lock())
     }
 
+    fn get_sample(&self, _port: &str, channel: usize) -> Result<f32> {
+        Ok(self.input.lock().get_cycling(channel))
+    }
+
     fn get_module_type(&self) -> &str {
         WellKnownModule::HiddenAudioIn.id()
     }

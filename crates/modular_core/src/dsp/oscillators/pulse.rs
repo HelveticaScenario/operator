@@ -35,7 +35,7 @@ struct PulseOscillatorParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PulseOscillatorOutputs {
-    #[output("output", "signal output", default, range = (-5.0, 5.0))]
+    #[output("output", "signal output", default, range = (-5.0, 5.0), dynamic_range)]
     sample: PolyOutput,
 }
 
@@ -113,7 +113,15 @@ impl PulseOscillator {
                 abs_phase_inc,
             );
 
-            self.outputs.sample.set(ch, naive_pulse * 5.0);
+            // DC offset for this pulse width: (2w - 1) * 5V
+            let dc = (2.0 * pulse_width - 1.0) * 5.0;
+            self.outputs.sample.set(ch, naive_pulse * 5.0 - dc);
+
+            // Per-channel range after DC subtraction:
+            // min = -10 * pulse_width, max = 10 * (1 - pulse_width)
+            self.outputs
+                .sample
+                .set_range(ch, -10.0 * pulse_width, 10.0 * (1.0 - pulse_width));
         }
     }
 }

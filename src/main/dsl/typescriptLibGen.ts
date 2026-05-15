@@ -591,10 +591,13 @@ interface ModuleOutputWithRange extends ModuleOutput {
   readonly minValue: number;
   /** The maximum value this output produces */
   readonly maxValue: number;
+  /** Whether this output provides dynamic per-channel range at runtime */
+  readonly dynamicRange: boolean;
   
   /**
    * Remap the output from its native range to a new range.
-   * Uses the stored minValue/maxValue automatically.
+   * For dynamic range outputs, uses runtime per-channel bounds.
+   * For static range outputs, uses the stored minValue/maxValue.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @returns A {@link ModuleOutput} with the remapped signal

@@ -21,7 +21,7 @@ struct ScaleAndShiftParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct ScaleAndShiftOutputs {
-    #[output("output", "signal output", default)]
+    #[output("output", "signal output", default, dynamic_range)]
     sample: PolyOutput,
 }
 
@@ -50,9 +50,18 @@ impl ScaleAndShift {
             let scale_val = self.params.scale.value_or(i, 5.0);
             let shift_val = self.params.shift.value_or(i, 0.0);
 
+            let normalized_scale = scale_val / 5.0;
             self.outputs
                 .sample
-                .set(i, input_val * (scale_val / 5.0) + shift_val);
+                .set(i, input_val * normalized_scale + shift_val);
+
+            // Compose output range from input range and scale+shift
+            if let Some((in_min, in_max)) = self.params.input.get_range(i) {
+                let a = in_min * normalized_scale + shift_val;
+                let b = in_max * normalized_scale + shift_val;
+                let (out_min, out_max) = if a <= b { (a, b) } else { (b, a) };
+                self.outputs.sample.set_range(i, out_min, out_max);
+            }
         }
     }
 }

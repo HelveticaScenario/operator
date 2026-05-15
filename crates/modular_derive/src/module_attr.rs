@@ -705,6 +705,21 @@ fn impl_module_macro_attr(
                 })
             }
 
+            fn get_sample(&self, port: &str, channel: usize) -> napi::Result<f32> {
+                self.update();
+                let outputs = unsafe { &*self.outputs.get() };
+                crate::types::OutputStruct::get_sample(outputs, port, channel).ok_or_else(|| {
+                    napi::Error::from_reason(
+                        format!(
+                            "{} with id {} does not have port {}",
+                            #module_name,
+                            &self.id,
+                            port
+                        )
+                    )
+                })
+            }
+
             fn get_module_type(&self) -> &str {
                 #module_name
             }
@@ -735,6 +750,12 @@ fn impl_module_macro_attr(
             fn get_buffer_output(&self, port: &str) -> Option<&crate::BufferData> {
                 let module = unsafe { &*self.module.get() };
                 crate::types::OutputStruct::get_buffer_output(&module.outputs, port)
+            }
+
+            fn get_range(&self, port: &str, channel: usize) -> Option<(f32, f32)> {
+                self.update();
+                let outputs = unsafe { &*self.outputs.get() };
+                crate::types::OutputStruct::get_range(outputs, port, channel)
             }
 
             fn transfer_state_from(&self, old: &dyn crate::types::Sampleable) {

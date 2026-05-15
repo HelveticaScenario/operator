@@ -346,6 +346,37 @@ describe('chaining methods', () => {
         expect(findModules(patch, '$sine').length).toBe(1);
         expect(findModules(patch, '$remap').length).toBeGreaterThan(0);
     });
+
+    test('CollectionWithRange.range() uses dynamic range virtual ports for $pulse', () => {
+        // $pulse has dynamic_range=true, so .range() should use virtual range ports
+        // (output.rangeMin / output.rangeMax) not static [-5, 5]
+        const patch = execPatch('$pulse("C4", { width: 1 }).range(0, 5).out()');
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBeGreaterThan(0);
+
+        // Find the remap module that has inMin/inMax from virtual range ports
+        const remap = remaps[0];
+        const params = remap.params as Record<string, unknown>;
+
+        // inMin should be a cable to output.rangeMin, not a static number
+        // It may be a single cable object or a poly array with one cable
+        const inMin = params.inMin;
+        const inMinObj = Array.isArray(inMin) ? inMin[0] : inMin;
+        expect(inMinObj).toBeDefined();
+        expect((inMinObj as Record<string, unknown>).type).toBe('cable');
+        expect((inMinObj as Record<string, unknown>).port).toBe(
+            'output.rangeMin',
+        );
+
+        // inMax should be a cable to output.rangeMax, not a static number
+        const inMax = params.inMax;
+        const inMaxObj = Array.isArray(inMax) ? inMax[0] : inMax;
+        expect(inMaxObj).toBeDefined();
+        expect((inMaxObj as Record<string, unknown>).type).toBe('cable');
+        expect((inMaxObj as Record<string, unknown>).port).toBe(
+            'output.rangeMax',
+        );
+    });
 });
 
 // ─── Modulation routing ──────────────────────────────────────────────────────

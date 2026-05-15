@@ -188,6 +188,9 @@ pub trait Sampleable: MessageHandler + Send {
     fn update(&self) -> ();
     /// Get polyphonic sample output for a port.
     fn get_poly_sample(&self, port: &str) -> Result<PolyOutput>;
+    /// Get a single sample value for a specific port and channel.
+    /// Fast path that avoids copying the full PolyOutput.
+    fn get_sample(&self, port: &str, channel: usize) -> Result<f32>;
     fn get_module_type(&self) -> &str;
     fn connect(&self, patch: &Patch);
     /// Called after the patch is updated and all modules are connected.
@@ -211,6 +214,11 @@ pub trait Sampleable: MessageHandler + Send {
     /// phase (reads samples) never overlap. The returned `&BufferData` must not
     /// be held across a `connect()` or `transfer_state_from()` call.
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
+        None
+    }
+    /// Get the range of a specific output port and channel, if available.
+    /// Zero-allocation: returns `Some((min, max))` directly.
+    fn get_range(&self, _port: &str, _channel: usize) -> Option<(f32, f32)> {
         None
     }
     /// Called on the main thread after construction and before the module
@@ -2264,11 +2272,28 @@ impl Signal {
                 ..
             } => match resolved {
                 Some(ptr) => unsafe { ptr.as_ref() }
-                    .get_poly_sample(port)
-                    .map(|p| p.get_cycling(*channel))
+                    .get_sample(port, *channel)
                     .unwrap_or(0.0),
                 None => 0.0,
             },
+        }
+    }
+
+    /// Get the range of this signal, if available.
+    /// - Volts: returns None (a constant has no meaningful range)
+    /// - Cable: calls get_range() on the connected module — zero allocation
+    pub fn get_range(&self) -> Option<(f32, f32)> {
+        match self {
+            Signal::Volts(_) => None,
+            Signal::Cable {
+                resolved,
+                port,
+                channel,
+                ..
+            } => {
+                let ptr = resolved.as_ref()?;
+                unsafe { ptr.as_ref() }.get_range(port, *channel)
+            }
         }
     }
 }
@@ -2446,12 +2471,19 @@ pub struct OutputSchema {
     /// The maximum value of the raw output range (before any remapping)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_value: Option<f64>,
+    /// Whether this output provides dynamic per-channel range metadata at runtime.
+    /// When true, virtual `.rangeMin`/`.rangeMax` ports are available.
+    #[serde(default)]
+    pub dynamic_range: bool,
 }
 
 pub trait OutputStruct: Default + Send + 'static {
     fn copy_from(&mut self, other: &Self);
     /// Get polyphonic sample output for a port.
     fn get_poly_sample(&self, port: &str) -> Option<PolyOutput>;
+    /// Get a single sample value for a specific port and channel.
+    /// This avoids copying the full PolyOutput — used by Signal::Cable::get_value().
+    fn get_sample(&self, port: &str, channel: usize) -> Option<f32>;
     /// Set the channel count on all PolyOutput fields.
     fn set_all_channels(&mut self, channels: usize);
     fn schemas() -> Vec<OutputSchema>
@@ -2462,6 +2494,11 @@ pub trait OutputStruct: Default + Send + 'static {
     fn transfer_buffers_from(&mut self, _old: &mut Self) {}
     /// Get a buffer output by port name. Default: no buffer outputs.
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
+        None
+    }
+    /// Get the range of a specific output port and channel, if available.
+    /// Returns `Some((min, max))` for outputs with `range` or `dynamic_range` annotations.
+    fn get_range(&self, _port: &str, _channel: usize) -> Option<(f32, f32)> {
         None
     }
 }
@@ -2751,6 +2788,10 @@ mod tests {
 
         fn get_poly_sample(&self, _port: &str) -> Result<PolyOutput> {
             Ok(PolyOutput::mono(0.0))
+        }
+
+        fn get_sample(&self, _port: &str, _channel: usize) -> Result<f32> {
+            Ok(0.0)
         }
 
         fn get_module_type(&self) -> &str {

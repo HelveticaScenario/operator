@@ -29,6 +29,10 @@ pub struct PolyOutput {
     voltages: [f32; PORT_MAX_CHANNELS],
     /// Number of active channels: 0 = disconnected, 1 = mono, 2-16 = poly
     channels: usize,
+    /// Per-channel minimum output range. NaN = unknown (no range metadata).
+    range_min: [f32; PORT_MAX_CHANNELS],
+    /// Per-channel maximum output range. NaN = unknown (no range metadata).
+    range_max: [f32; PORT_MAX_CHANNELS],
 }
 
 impl Default for PolyOutput {
@@ -36,10 +40,15 @@ impl Default for PolyOutput {
         Self {
             voltages: [0.0; PORT_MAX_CHANNELS],
             channels: 0, // Disconnected
+            range_min: [f32::NAN; PORT_MAX_CHANNELS],
+            range_max: [f32::NAN; PORT_MAX_CHANNELS],
         }
     }
 }
 
+/// Range metadata (`range_min`, `range_max`) is intentionally excluded from equality.
+/// Range is ephemeral runtime metadata describing the output signal's bounds — it is not
+/// part of the signal value itself and should not affect patch-graph diffing or comparisons.
 impl PartialEq for PolyOutput {
     fn eq(&self, other: &Self) -> bool {
         if self.channels != other.channels {
@@ -93,12 +102,14 @@ impl PolyOutput {
         }
     }
 
-    /// Set the number of active channels (clears higher channels to 0)
+    /// Set the number of active channels (clears higher channels to 0 and resets their range)
     pub fn set_channels(&mut self, channels: usize) {
         let channels = channels.clamp(0, PORT_MAX_CHANNELS);
         // Clear channels beyond the new count
         for c in channels..self.channels {
             self.voltages[c] = 0.0;
+            self.range_min[c] = f32::NAN;
+            self.range_max[c] = f32::NAN;
         }
         self.channels = channels;
     }
@@ -110,9 +121,61 @@ impl PolyOutput {
     pub fn set_all(&mut self, voltages: &[f32; PORT_MAX_CHANNELS]) {
         self.voltages = *voltages;
     }
+
+    // === Range metadata ===
+
+    /// Set the output range for a specific channel.
+    pub fn set_range(&mut self, channel: usize, min: f32, max: f32) {
+        if channel < PORT_MAX_CHANNELS {
+            self.range_min[channel] = min;
+            self.range_max[channel] = max;
+        }
+    }
+
+    /// Get the output range for a specific channel.
+    /// Returns None if the range is unknown (NaN sentinel).
+    pub fn channel_range(&self, channel: usize) -> Option<(f32, f32)> {
+        if channel < PORT_MAX_CHANNELS {
+            let min = self.range_min[channel];
+            let max = self.range_max[channel];
+            if min.is_nan() || max.is_nan() {
+                None
+            } else {
+                Some((min, max))
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Check if any channel has range metadata set.
+    pub fn has_range(&self) -> bool {
+        self.range_min.iter().any(|v| !v.is_nan())
+    }
+
+    /// Raw range_min value for a channel (may be NaN). Used by virtual range ports.
+    pub fn range_min_value(&self, channel: usize) -> f32 {
+        if channel < PORT_MAX_CHANNELS {
+            self.range_min[channel]
+        } else {
+            f32::NAN
+        }
+    }
+
+    /// Raw range_max value for a channel (may be NaN). Used by virtual range ports.
+    pub fn range_max_value(&self, channel: usize) -> f32 {
+        if channel < PORT_MAX_CHANNELS {
+            self.range_max[channel]
+        } else {
+            f32::NAN
+        }
+    }
 }
 
 // === Serialization ===
+// Note: Range metadata (range_min, range_max) is runtime-only and intentionally
+// not serialized. It is ephemeral per-sample metadata used by the audio thread,
+// not part of the persisted patch state.
 
 impl Serialize for PolyOutput {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -256,6 +319,11 @@ impl PolySignal {
     /// Get the f32 value at a channel with cycling
     pub fn get_value(&self, channel: usize) -> f32 {
         self.channels[channel % self.channels.len()].get_value()
+    }
+
+    /// Get the range of a specific channel's signal, if available.
+    pub fn get_range(&self, channel: usize) -> Option<(f32, f32)> {
+        self.channels[channel % self.channels.len()].get_range()
     }
 
     /// Calculate the maximum channel count across multiple PolySignals
@@ -725,5 +793,79 @@ mod tests {
         assert!(!opt.is_disconnected());
         assert_eq!(opt.value_or(5.0), 2.0);
         assert_eq!(opt.value_or_zero(), 2.0);
+    }
+
+    #[test]
+    fn test_poly_output_range_defaults_to_nan() {
+        let po = PolyOutput::default();
+        // All range values should be NaN by default (unknown)
+        assert!(po.range_min_value(0).is_nan());
+        assert!(po.range_max_value(0).is_nan());
+        assert!(!po.has_range());
+        assert!(po.channel_range(0).is_none());
+    }
+
+    #[test]
+    fn test_poly_output_set_range() {
+        let mut po = PolyOutput::default();
+        po.set_channels(2);
+        po.set(0, 1.0);
+        po.set(1, 2.0);
+        po.set_range(0, -2.5, 7.5);
+        po.set_range(1, -7.5, 2.5);
+
+        assert!(po.has_range());
+        assert_eq!(po.channel_range(0), Some((-2.5, 7.5)));
+        assert_eq!(po.channel_range(1), Some((-7.5, 2.5)));
+        // Channel without range set should still be NaN
+        assert!(po.channel_range(2).is_none());
+    }
+
+    #[test]
+    fn test_poly_output_range_survives_copy() {
+        let mut po = PolyOutput::default();
+        po.set_channels(1);
+        po.set(0, 3.0);
+        po.set_range(0, -2.5, 7.5);
+
+        let copy = po;
+        assert_eq!(copy.channel_range(0), Some((-2.5, 7.5)));
+        assert_eq!(copy.get(0), 3.0);
+    }
+
+    #[test]
+    fn test_poly_output_mono_has_no_range() {
+        let po = PolyOutput::mono(5.0);
+        assert!(!po.has_range());
+        assert!(po.channel_range(0).is_none());
+    }
+
+    #[test]
+    fn test_poly_output_range_oob_access() {
+        let mut po = PolyOutput::default();
+        // set_range on OOB channel should be a no-op (no panic)
+        po.set_range(PORT_MAX_CHANNELS, -1.0, 1.0);
+        // channel_range on OOB returns None
+        assert!(po.channel_range(PORT_MAX_CHANNELS).is_none());
+        // raw accessors on OOB return NaN
+        assert!(po.range_min_value(PORT_MAX_CHANNELS).is_nan());
+        assert!(po.range_max_value(PORT_MAX_CHANNELS).is_nan());
+        // No range should have been set
+        assert!(!po.has_range());
+    }
+
+    #[test]
+    fn test_poly_output_set_channels_clears_range() {
+        let mut po = PolyOutput::default();
+        po.set_channels(3);
+        po.set_range(0, -1.0, 1.0);
+        po.set_range(1, -2.0, 2.0);
+        po.set_range(2, -3.0, 3.0);
+
+        // Shrink to 1 channel — channels 1 and 2 should have range cleared
+        po.set_channels(1);
+        assert_eq!(po.channel_range(0), Some((-1.0, 1.0)));
+        assert!(po.channel_range(1).is_none());
+        assert!(po.channel_range(2).is_none());
     }
 }

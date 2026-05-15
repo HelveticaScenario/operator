@@ -59,6 +59,13 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
         }
     }
 
+    fn get_sample(&self, port: &str, channel: usize) -> Option<f32> {
+        match port {
+            "output" => Some(self.sample.get_cycling(channel)),
+            _ => None,
+        }
+    }
+
     fn set_all_channels(&mut self, channels: usize) {
         self.sample.set_channels(channels);
     }
@@ -71,6 +78,7 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
             default: true,
             min_value: None,
             max_value: None,
+            dynamic_range: false,
         }]
     }
 
@@ -247,6 +255,9 @@ mod tests {
         fn update(&self) {}
         fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
             Ok(PolyOutput::default())
+        }
+        fn get_sample(&self, _port: &str, channel: usize) -> napi::Result<f32> {
+            Ok(PolyOutput::default().get_cycling(channel))
         }
         fn get_module_type(&self) -> &str {
             "$buffer"

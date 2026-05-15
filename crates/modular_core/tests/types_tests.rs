@@ -52,6 +52,10 @@ impl Sampleable for DummySampleable {
         ))
     }
 
+    fn get_sample(&self, port: &str, channel: usize) -> Result<f32> {
+        self.get_poly_sample(port).map(|p| p.get_cycling(channel))
+    }
+
     fn get_module_type(&self) -> &str {
         &self.module_type
     }
