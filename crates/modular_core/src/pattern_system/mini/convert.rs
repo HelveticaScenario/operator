@@ -778,10 +778,7 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::Sequence(elements) | MiniAST::FastCat(elements) => {
-            // Expand Replicate nodes within Sequence/FastCat the same way SlowCat does.
-            // In Strudel/Tidal, `a b!2 c` is `a b b c` (4 sibling elements), not
-            // `a [b b] c` (3 elements with a sub-fastcat). The replicate flattens
-            // syntactically into the parent sequence.
+            // Replicate flattens syntactically into the parent sequence.
             let expanded: Vec<(&MiniAST, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
