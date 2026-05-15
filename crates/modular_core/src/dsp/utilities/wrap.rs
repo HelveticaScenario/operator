@@ -35,7 +35,7 @@ struct WrapOutputs {
 ///
 /// ```js
 /// // wrap a ramp into 0–5 V
-/// $wrap(ramp, 0, 5)
+/// $wrap($sine('1hz'), 0, 5).out()
 /// ```
 #[module(name = "$wrap", args(input, min, max))]
 pub struct Wrap {
