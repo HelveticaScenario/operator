@@ -108,6 +108,7 @@ typings/
 out/
 
 generated/
+!crates/modular/dsl/src/generated/
 /dist
 playwright-report
 test-results
