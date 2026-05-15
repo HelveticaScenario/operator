@@ -7,7 +7,7 @@
 ///
 /// The coefficient controls the cutoff: values near 1.0 pass almost
 /// everything, values near 0.0 heavily lowpass the signal.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct OnePole {
     coeff: f32,
     state: f32,

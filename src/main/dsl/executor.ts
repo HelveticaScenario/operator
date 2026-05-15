@@ -11,6 +11,7 @@ import {
 import type {
     BufferOutputRef,
     Signal,
+    PolySignal,
     SourceLocation,
     Collection,
     ModuleOutput,
@@ -269,6 +270,138 @@ export function executePatchScript(
         const buf = $buffer(mixed, length);
         def.set(feedbackCb(buf));
         return Object.assign(mixed, { buffer: buf });
+    };
+
+    interface OttConfig {
+        /**
+         * Optional side-chain detector signal. When connected, the same
+         * crossover network splits the sidechain into low/mid/high and each
+         * band's compressor keys off the matching sidechain band — the gain is
+         * still applied to `input`. Enables band-aware ducking (e.g. only
+         * sidechain the low band against a kick).
+         */
+        sidechain?: PolySignal;
+        /** wet/dry blend, 0–5 (default 5 = fully wet) */
+        depth?: PolySignal;
+        /** low/mid crossover (V/Oct, default ~120 Hz) */
+        lowMidFreq?: PolySignal;
+        /** mid/high crossover (V/Oct, default ~2500 Hz) */
+        midHighFreq?: PolySignal;
+        /** downward threshold in volts (default 1.0) */
+        threshold?: PolySignal;
+        /** downward ratio (default 4) */
+        ratio?: PolySignal;
+        /** upward threshold in volts (default 0.5) */
+        upwardThreshold?: PolySignal;
+        /** upward ratio (default 4) */
+        upwardRatio?: PolySignal;
+        /** envelope attack (seconds, default 0.003) */
+        attack?: PolySignal;
+        /** envelope release (seconds, default 0.05) */
+        release?: PolySignal;
+        /** per-band makeup as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
+        makeup?: PolySignal;
+        /** per-band trim (V, 5 = unity, default 5) */
+        lowGain?: PolySignal;
+        midGain?: PolySignal;
+        highGain?: PolySignal;
+        id?: string;
+    }
+
+    const $xover = userNamespaceTree['$xover'];
+    const $comp = userNamespaceTree['$comp'];
+    const $scaleAndShift = userNamespaceTree['$scaleAndShift'];
+    if (
+        typeof $xover !== 'function' ||
+        typeof $comp !== 'function' ||
+        typeof $scaleAndShift !== 'function'
+    ) {
+        throw new Error(
+            'DSL execution error: "$ott" requires "$xover", "$comp", and "$scaleAndShift" modules',
+        );
+    }
+
+    /**
+     * `$ott` — three-band upward + downward compressor in the style of Xfer's
+     * OTT. Splits the input into low/mid/high via `$xover`, applies aggressive
+     * upward + downward compression to each band with `$comp`, sums the bands,
+     * and crossfades against the original input via `depth`.
+     *
+     * Per-band trim (`lowGain` / `midGain` / `highGain`) uses `$scaleAndShift`
+     * convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
+     *
+     * @example
+     * $ott(drums).out()
+     *
+     * @example
+     * // tame highs, push lows
+     * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
+     */
+    const $ott = (
+        input: PolySignal,
+        config: OttConfig = {},
+    ): Collection => {
+        const compConf = {
+            attack: config.attack ?? 0.003,
+            makeup: config.makeup ?? 1.0,
+            ratio: config.ratio ?? 4,
+            release: config.release ?? 0.05,
+            threshold: config.threshold ?? 1.0,
+            upwardRatio: config.upwardRatio ?? 4,
+            upwardThreshold: config.upwardThreshold ?? 0.5,
+        };
+
+        const lowMidFreq = config.lowMidFreq ?? hz(120);
+        const midHighFreq = config.midHighFreq ?? hz(2500);
+        const xoverConf = { lowMidFreq, midHighFreq };
+
+        const bands = $xover(input, xoverConf) as Collection & {
+            low: Collection;
+            mid: Collection;
+            high: Collection;
+        };
+
+        // Split the side-chain through an identical crossover so each band's
+        // compressor keys off the matching frequency range of the sidechain.
+        const scBands =
+            config.sidechain !== undefined
+                ? ($xover(config.sidechain, xoverConf) as Collection & {
+                      low: Collection;
+                      mid: Collection;
+                      high: Collection;
+                  })
+                : null;
+
+        const lowComp = $comp(bands.low, {
+            ...compConf,
+            ...(scBands !== null && { sidechain: scBands.low }),
+        });
+        const midComp = $comp(bands.mid, {
+            ...compConf,
+            ...(scBands !== null && { sidechain: scBands.mid }),
+        });
+        const highComp = $comp(bands.high, {
+            ...compConf,
+            ...(scBands !== null && { sidechain: scBands.high }),
+        });
+
+        // Per-band trim — $scaleAndShift convention: scale=5 → unity gain.
+        const low = $scaleAndShift(lowComp, config.lowGain ?? 5, 0);
+        const mid = $scaleAndShift(midComp, config.midGain ?? 5, 0);
+        const high = $scaleAndShift(highComp, config.highGain ?? 5, 0);
+
+        const wet = $mix([low, mid, high]) as Collection;
+
+        // Crossfade dry vs wet using `depth` (0–5 V):
+        //   dryWeight = 5 − depth → unity when depth=0, silence when depth=5
+        //   wetWeight = depth      → silence when depth=0, unity when depth=5
+        const depth = config.depth ?? 5;
+        const dryWeight = $scaleAndShift(depth, -5, 5);
+
+        return $mix([
+            $scaleAndShift(input, dryWeight as Signal, 0),
+            $scaleAndShift(wet, depth, 0),
+        ]) as Collection;
     };
 
     // Slider collector — populated by $slider() calls during execution
@@ -570,6 +703,7 @@ export function executePatchScript(
         $setEndOfChainCb,
         $buffer,
         $delay,
+        $ott,
         // WAV sample loading
         $wavs,
         // Built-in modules

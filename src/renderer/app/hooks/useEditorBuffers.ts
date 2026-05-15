@@ -309,22 +309,15 @@ export function useEditorBuffers({
             );
 
             if (result.success) {
-                // Use functional setState to avoid stale closure issues
-                let wasActive = false;
-                setBuffers((prev) => {
-                    // Check if the renamed file was active using current state
-                    wasActive = prev.some(
-                        (b) =>
-                            getBufferId(b) === activeBufferId &&
-                            b.kind === 'file' &&
-                            b.filePath === oldPath,
-                    );
-                    return prev.map((b) =>
+                const wasActive = activeBufferId === oldPath;
+
+                setBuffers((prev) =>
+                    prev.map((b) =>
                         b.kind === 'file' && b.filePath === oldPath
                             ? { ...b, filePath: newPath }
                             : b,
-                    );
-                });
+                    ),
+                );
 
                 if (wasActive) {
                     setActiveBufferId(newPath);

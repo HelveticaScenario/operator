@@ -87,6 +87,15 @@ export interface ElectronAPI {
         enableLink: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_ENABLE_LINK]
         >;
+        isAudioThreadPanicked: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_IS_AUDIO_THREAD_PANICKED]
+        >;
+        restartAudio: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_RESTART_AUDIO]
+        >;
+        panicLogDir: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_PANIC_LOG_DIR]
+        >;
     };
     // Audio device operations
     audio: {
@@ -218,6 +227,11 @@ export interface ElectronAPI {
     // Main process log forwarding
     onMainLog: (callback: (entry: MainLogEntry) => void) => () => void;
 
+    // OS shell operations
+    shell: {
+        openPath: Promisify<IPCHandlers[typeof IPC_CHANNELS.SHELL_OPEN_PATH]>;
+    };
+
     // Update operations
     update: {
         check: () => Promise<void>;
@@ -285,6 +299,13 @@ const electronAPI: ElectronAPI = {
             invokeIPC('SYNTH_GET_TRANSPORT_STATE', ...args),
 
         enableLink: (...args) => invokeIPC('SYNTH_ENABLE_LINK', ...args),
+
+        isAudioThreadPanicked: (...args) =>
+            invokeIPC('SYNTH_IS_AUDIO_THREAD_PANICKED', ...args),
+
+        restartAudio: (...args) => invokeIPC('SYNTH_RESTART_AUDIO', ...args),
+
+        panicLogDir: (...args) => invokeIPC('SYNTH_PANIC_LOG_DIR', ...args),
 
         isRecording: (...args) => invokeIPC('SYNTH_IS_RECORDING', ...args),
 
@@ -430,6 +451,11 @@ const electronAPI: ElectronAPI = {
 
     // Wavs folder change notification
     onWavsChange: menuEventHandler(IPC_CHANNELS.WAVS_ON_CHANGE),
+
+    // OS shell operations
+    shell: {
+        openPath: (...args) => invokeIPC('SHELL_OPEN_PATH', ...args),
+    },
 
     // Update operations
     update: {

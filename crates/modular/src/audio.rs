@@ -854,6 +854,10 @@ pub struct AudioState {
   midi_manager: Arc<MidiInputManager>,
   /// Transport state meter - written by audio thread, read by main thread
   pub transport_meter: Arc<TransportMeter>,
+  /// Set true if the audio callback caught an unwinding panic. Once set the
+  /// callback writes silence forever; the stream must be torn down and the
+  /// Synthesizer recreated to recover.
+  pub audio_thread_panicked: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -891,7 +895,14 @@ impl AudioState {
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager,
       transport_meter: Arc::new(TransportMeter::default()),
+      audio_thread_panicked: Arc::new(AtomicBool::new(false)),
     }
+  }
+
+  /// True if the audio callback has caught a panic and is now emitting silence.
+  /// Recovery requires recreating the Synthesizer.
+  pub fn is_audio_thread_panicked(&self) -> bool {
+    self.audio_thread_panicked.load(Ordering::SeqCst)
   }
 
   /// Send a command to the audio thread
@@ -963,6 +974,7 @@ impl AudioState {
       module_states: self.module_states.clone(),
       midi_manager: self.midi_manager.clone(),
       transport_meter: self.transport_meter.clone(),
+      audio_thread_panicked: self.audio_thread_panicked.clone(),
     }
   }
 
@@ -1203,6 +1215,9 @@ pub struct AudioSharedState {
   pub midi_manager: Arc<MidiInputManager>,
   /// Transport state meter - written by audio thread, read by main thread
   pub transport_meter: Arc<TransportMeter>,
+  /// Set by the audio callback after catching a panic. The callback then
+  /// writes silence forever; the stream must be torn down to recover.
+  pub audio_thread_panicked: Arc<AtomicBool>,
 }
 
 fn chrono_simple_timestamp() -> String {
@@ -1733,6 +1748,7 @@ where
   // Clone shared state for the closure
   let recording_writer = shared.recording_writer.clone();
   let audio_budget_meter = shared.audio_budget_meter.clone();
+  let panicked_flag = shared.audio_thread_panicked.clone();
 
   // Create the audio processor that owns the patch
   let sample_rate = config.sample_rate as f32;
@@ -1745,91 +1761,113 @@ where
     .build_output_stream(
       config,
       move |output: &mut [T], _info: &cpal::OutputCallbackInfo| {
-        profiling::scope!("audio_callback");
-
-        let callback_start = Instant::now();
-
-        // Process any pending commands from the main thread
-        {
-          profiling::scope!("process_commands");
-          audio_processor.process_commands();
+        // If a previous callback panicked, never touch the captured state
+        // again — it may be in an inconsistent state. Emit silence until the
+        // stream is torn down and the Synthesizer recreated.
+        if panicked_flag.load(std::sync::atomic::Ordering::Relaxed) {
+          for s in output.iter_mut() {
+            *s = T::from_sample(0.0);
+          }
+          return;
         }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+          profiling::scope!("audio_callback");
 
-        // Capture Link session state once per buffer (before frame loop).
-        audio_processor
-          .link
-          .capture_buffer_state(audio_processor.sample_rate);
+          let callback_start = Instant::now();
 
-        // Operator transport is decoupled from Link peer transport:
-        // peers never start or stop Operator. The only Link-driven transport
-        // action is releasing a locally-initiated quantized start when the
-        // shared timeline reaches a bar boundary.
-        if audio_processor.link.check_pending_start_release() {
+          // Process any pending commands from the main thread
+          {
+            profiling::scope!("process_commands");
+            audio_processor.process_commands();
+          }
+
+          // Capture Link session state once per buffer (before frame loop).
           audio_processor
-            .stopped
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-          let msg = modular_core::types::Message::Clock(ClockMessages::Start);
-          let _ = audio_processor.patch.dispatch_message(&msg);
-        }
+            .link
+            .capture_buffer_state(audio_processor.sample_rate);
 
-        // Write Link state to transport meter for UI visibility. Done
-        // BEFORE the is_stopped() guard so the UI always shows the
-        // free-running Link phase, even when Operator is stopped.
-        audio_processor.link.write_meter(&audio_processor.transport_meter);
+          // Operator transport is decoupled from Link peer transport:
+          // peers never start or stop Operator. The only Link-driven transport
+          // action is releasing a locally-initiated quantized start when the
+          // shared timeline reaches a bar boundary.
+          if audio_processor.link.check_pending_start_release() {
+            audio_processor
+              .stopped
+              .store(false, std::sync::atomic::Ordering::SeqCst);
+            let msg = modular_core::types::Message::Clock(ClockMessages::Start);
+            let _ = audio_processor.patch.dispatch_message(&msg);
+          }
 
-        let num_frames = output.len() / num_channels;
+          // Write Link state to transport meter for UI visibility. Done
+          // BEFORE the is_stopped() guard so the UI always shows the
+          // free-running Link phase, even when Operator is stopped.
+          audio_processor
+            .link
+            .write_meter(&audio_processor.transport_meter);
 
-        {
-          profiling::scope!("process_frames");
-          for frame in output.chunks_mut(num_channels) {
-            // Read from the input buffer and update audio_in
-            {
-              let mut audio_in = audio_processor.patch.audio_in.lock();
-              let input_samples = input_reader.read_frame();
+          let num_frames = output.len() / num_channels;
 
-              // Set channel count so that get() returns values instead of 0.0
-              audio_in.set_channels(PORT_MAX_CHANNELS);
-              for i in 0..PORT_MAX_CHANNELS {
-                // Apply gain to bring input from [-1, 1] to [-5, 5] volt range
-                audio_in.set(i, input_samples[i] * AUDIO_INPUT_GAIN);
+          {
+            profiling::scope!("process_frames");
+            for frame in output.chunks_mut(num_channels) {
+              // Read from the input buffer and update audio_in
+              {
+                let mut audio_in = audio_processor.patch.audio_in.lock();
+                let input_samples = input_reader.read_frame();
+
+                // Set channel count so that get() returns values instead of 0.0
+                audio_in.set_channels(PORT_MAX_CHANNELS);
+                for i in 0..PORT_MAX_CHANNELS {
+                  // Apply gain to bring input from [-1, 1] to [-5, 5] volt range
+                  audio_in.set(i, input_samples[i] * AUDIO_INPUT_GAIN);
+                }
               }
-            }
 
-            // Process frame and get multi-channel output
-            let samples = final_state_processor
-              .process_frame_with_processor(&mut audio_processor, num_channels);
+              // Process frame and get multi-channel output
+              let samples = final_state_processor
+                .process_frame_with_processor(&mut audio_processor, num_channels);
 
-            for (ch, s) in frame.iter_mut().enumerate() {
-              if ch < samples.len() {
-                *s = T::from_sample(samples[ch]);
-              } else {
-                *s = T::from_sample(0.0);
+              for (ch, s) in frame.iter_mut().enumerate() {
+                if ch < samples.len() {
+                  *s = T::from_sample(samples[ch]);
+                } else {
+                  *s = T::from_sample(0.0);
+                }
               }
-            }
 
-            // Record if enabled (use try_lock to avoid blocking audio)
-            // For multi-channel, record first channel (mono mix could be added later)
-            if let Some(mut writer_guard) = recording_writer.try_lock()
-              && let Some(ref mut writer) = *writer_guard
-            {
-              let _ = writer.write_sample(T::from_sample(samples[0]));
+              // Record if enabled (use try_lock to avoid blocking audio)
+              // For multi-channel, record first channel (mono mix could be added later)
+              if let Some(mut writer_guard) = recording_writer.try_lock()
+                && let Some(ref mut writer) = *writer_guard
+              {
+                let _ = writer.write_sample(T::from_sample(samples[0]));
+              }
             }
           }
+
+          // Increment Link sample count for HostTimeFilter
+          audio_processor.link.add_samples(num_frames as u64);
+
+          // Collect module states for UI (e.g., seq step highlighting)
+          // Done once per buffer, not per frame, to minimize overhead
+          {
+            profiling::scope!("collect_module_states");
+            audio_processor.collect_module_states();
+          }
+
+          let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
+
+          audio_budget_meter.record_chunk(output.len() as u64, elapsed_ns);
+        }));
+        if result.is_err() {
+          // Panic hook (panic_log::install_panic_hook) has already written
+          // a log file with payload + backtrace. Mark the audio thread as
+          // poisoned and emit silence for this and every future buffer.
+          panicked_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+          for s in output.iter_mut() {
+            *s = T::from_sample(0.0);
+          }
         }
-
-        // Increment Link sample count for HostTimeFilter
-        audio_processor.link.add_samples(num_frames as u64);
-
-        // Collect module states for UI (e.g., seq step highlighting)
-        // Done once per buffer, not per frame, to minimize overhead
-        {
-          profiling::scope!("collect_module_states");
-          audio_processor.collect_module_states();
-        }
-
-        let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
-
-        audio_budget_meter.record_chunk(output.len() as u64, elapsed_ns);
       },
       err_fn,
       None,
@@ -2344,6 +2382,7 @@ mod tests {
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
+      audio_thread_panicked: Arc::new(AtomicBool::new(false)),
     };
 
     let processor = AudioProcessor::new(
@@ -2542,6 +2581,7 @@ mod tests {
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
+      audio_thread_panicked: Arc::new(AtomicBool::new(false)),
     };
 
     let processor = AudioProcessor::new(
@@ -2758,10 +2798,7 @@ mod tests {
       .insert("src".into(), ConstantOutputModule::new("src", 3.5));
     processor.patch.sampleables.insert(
       "dep".into(),
-      PatchUpdateSensitiveModule::new(
-        "dep",
-        Signal::cable("src", "out", 0),
-      ),
+      PatchUpdateSensitiveModule::new("dep", Signal::cable("src", "out", 0)),
     );
 
     for module in processor.patch.sampleables.values() {

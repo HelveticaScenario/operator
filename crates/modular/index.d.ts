@@ -12,6 +12,21 @@ export declare class Synthesizer {
   sampleRate(): number
   channels(): number
   inputChannels(): number
+  /**
+   * True if the audio callback caught a panic and is now emitting silence.
+   * Recovery requires destroying this Synthesizer and creating a new one,
+   * or calling `restart_audio()`. The panic payload + backtrace is written
+   * to the path returned by `panic_log_dir()`.
+   */
+  isAudioThreadPanicked(): boolean
+  /**
+   * Absolute path to the directory where panic logs are written. Matches
+   * Electron's `app.getPath('logs')` convention per OS:
+   * - macOS:   `~/Library/Logs/Operator/`
+   * - Linux:   `~/.config/Operator/logs/`
+   * - Windows: `%APPDATA%\Operator\logs\`
+   */
+  panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
@@ -61,6 +76,16 @@ export declare class Synthesizer {
   getOutputDeviceId(): string | null
   /** Get the current input device ID */
   getInputDeviceId(): string | null
+  /**
+   * Restart the audio streams using the current device/sample-rate/buffer-size
+   * settings. `recreate_streams` replaces `self.state` with a fresh
+   * `AudioState`, so the new stream's callback captures a fresh
+   * `audio_thread_panicked` flag (initially false). The old (poisoned) flag
+   * stays set on the old `AudioState` so the old callback continues to emit
+   * silence until cpal drops the old stream. Call this after
+   * `is_audio_thread_panicked()` returns true to recover.
+   */
+  restartAudio(): void
   /**
    * Set the audio output device (legacy - use recreate_streams instead)
    * This uses device default sample rate and buffer size

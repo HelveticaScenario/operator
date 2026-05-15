@@ -973,16 +973,7 @@ fn impl_module_macro_attr(
                     .unwrap_or_default();
 
                 let outputs = <#outputs_ty as crate::types::OutputStruct>::schemas();
-                let output_names: std::collections::HashSet<String> = outputs.iter().map(|o| o.name.clone()).collect();
-                let overlap: Vec<&String> = param_names.intersection(&output_names).collect();
-                if !overlap.is_empty() {
-                    panic!(
-                        "Parameters and outputs must have unique names for module '{}'. Overlapping: {:?}",
-                        #module_name,
-                        overlap,
-                    );
-                }
-
+           
                 crate::types::ModuleSchema {
                     name: #module_name.to_string(),
                     documentation: #module_documentation_token,

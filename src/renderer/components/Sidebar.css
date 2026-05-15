@@ -8,8 +8,7 @@
     height: 100%;
     background: var(--bg-secondary);
     border-left: 1px solid var(--border-subtle);
-    min-width: 20ch;
-    max-width: 32ch;
+    width: 32ch;
     font-size: var(--font-size);
 }
 

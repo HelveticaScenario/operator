@@ -5,6 +5,7 @@ mod commands;
 mod graph_analysis;
 mod link;
 mod midi;
+mod panic_log;
 mod params_cache;
 mod validation;
 mod wav_bpm;
@@ -865,6 +866,7 @@ impl Synthesizer {
   /// falls back to OS-preferred host and default devices.
   #[napi(constructor)]
   pub fn new(config: Option<AudioConfigOptions>) -> Result<Self> {
+    panic_log::install_panic_hook();
     let config = config.unwrap_or_default();
 
     // Build device cache first
@@ -1001,6 +1003,27 @@ impl Synthesizer {
   #[napi]
   pub fn input_channels(&self) -> u16 {
     self.input_channels
+  }
+
+  /// True if the audio callback caught a panic and is now emitting silence.
+  /// Recovery requires destroying this Synthesizer and creating a new one,
+  /// or calling `restart_audio()`. The panic payload + backtrace is written
+  /// to the path returned by `panic_log_dir()`.
+  #[napi]
+  pub fn is_audio_thread_panicked(&self) -> bool {
+    self.state.is_audio_thread_panicked()
+  }
+
+  /// Absolute path to the directory where panic logs are written. Matches
+  /// Electron's `app.getPath('logs')` convention per OS:
+  /// - macOS:   `~/Library/Logs/Operator/`
+  /// - Linux:   `~/.config/Operator/logs/`
+  /// - Windows: `%APPDATA%\Operator\logs\`
+  #[napi]
+  pub fn panic_log_dir(&self) -> String {
+    panic_log::panic_log_dir()
+      .to_string_lossy()
+      .into_owned()
   }
 
   #[napi]
@@ -1484,6 +1507,27 @@ impl Synthesizer {
   #[napi]
   pub fn get_input_device_id(&self) -> Option<String> {
     self.input_device_id.clone()
+  }
+
+  /// Restart the audio streams using the current device/sample-rate/buffer-size
+  /// settings. `recreate_streams` replaces `self.state` with a fresh
+  /// `AudioState`, so the new stream's callback captures a fresh
+  /// `audio_thread_panicked` flag (initially false). The old (poisoned) flag
+  /// stays set on the old `AudioState` so the old callback continues to emit
+  /// silence until cpal drops the old stream. Call this after
+  /// `is_audio_thread_panicked()` returns true to recover.
+  #[napi]
+  pub fn restart_audio(&mut self) -> Result<()> {
+    let output_device_id = self
+      .output_device_id
+      .clone()
+      .ok_or_else(|| napi::Error::from_reason("No output device configured"))?;
+    self.recreate_streams(
+      output_device_id,
+      self.sample_rate as u32,
+      self.buffer_size,
+      self.input_device_id.clone(),
+    )
   }
 
   /// Set the audio output device (legacy - use recreate_streams instead)

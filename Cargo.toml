@@ -17,8 +17,25 @@ default-members = [
 profiling = "1.0"
 tracy-client = { version = "0.17", default-features = false }
 
+[profile.release]
+lto = true
+# Keep the symbol table in the shipped binary so panic backtraces in
+# production resolve function names (Rust-mangled, auto-demangled by
+# std::backtrace). Without this, `Backtrace::force_capture` writes only raw
+# addresses to the panic log.
+strip = "none"
+# `line-tables-only` emits `.debug_line` (address → file:line). Cargo's
+# per-platform default for `split-debuginfo` is used:
+#   - macOS:   `packed` → a `.dSYM` bundle next to the binary (bundle via
+#              forge `packageAfterCopy` + `scripts/copy-debuginfo.mjs` so
+#              std::backtrace can co-locate it at runtime).
+#   - Linux:   `off`    → DWARF embedded in the `.so` (no extra packaging).
+#   - Windows: `packed` → a `.pdb` next to the binary (not auto-bundled
+#              yet; ship the `.pdb` with the `.node` for file:line).
+debug = "line-tables-only"
+
 # Profile for Tracy profiling - keeps debug symbols for stack traces
 [profile.profiling]
 inherits = "release"
-strip = false
+strip = "none"
 debug = 1
