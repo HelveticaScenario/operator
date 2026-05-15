@@ -1,7 +1,7 @@
 {
     "name": "@modular/app",
     "productName": "Operator",
-    "version": "0.0.58",
+    "version": "0.0.59",
     "description": "Operator - a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches",
     "main": ".vite/build/main.js",
     "repository": {
