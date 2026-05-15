@@ -1,0 +1,15 @@
+{
+    "name": "@modular/dsl",
+    "version": "0.0.1-0",
+    "description": "Operator DSL runtime + generated factories",
+    "license": "AGPL",
+    "private": true,
+    "main": "src/index.ts",
+    "types": "src/index.ts",
+    "scripts": {
+        "typecheck": "tsc -b"
+    },
+    "dependencies": {
+        "@modular/core": "workspace:*"
+    }
+}
