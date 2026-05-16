@@ -807,21 +807,20 @@ fn buffer_and_delay_read_pipeline() {
 }
 
 #[test]
-fn delay_feedback_loop_produces_echoes() {
-    // Buffer-mediated feedback loop:
+fn buffer_feedback_cycle_propagates_through_delay_read() {
+    // Verify that a cable cycle routed through a Buffer (delayRead's output
+    // fed back into the buffer's input via mix) actually moves data around
+    // the loop. If the cycle drops samples, delayRead never sees its own
+    // output and the loop output stays pinned at the input value.
     //
-    //   imp ────┐
+    //   src ────┐
     //           ▼
     //          mix ──► buf ──► delayRead ──► feedback ──┐
     //           ▲                                       │
     //           └───────────────────────────────────────┘
-    //
-    // 10 ms delay, constant 1 V input, feedback attenuator below 1.0.
-    // The geometric series converges; the test asserts the loop output
-    // settles well above the bare input value.
     let graph = make_graph(vec![
         (
-            "imp",
+            "src",
             "$scaleAndShift",
             json!({ "input": 1.0, "scale": 5.0, "shift": 0.0 }),
         ),
@@ -839,7 +838,7 @@ fn delay_feedback_loop_produces_echoes() {
             "$mix",
             json!({
                 "inputs": [
-                    { "type": "cable", "module": "imp", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
                     { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
                 ],
             }),
@@ -875,10 +874,11 @@ fn delay_feedback_loop_produces_echoes() {
         .unwrap()
         .get(0);
 
-    // A loop without feedback stays pinned near the 1 V input.
+    // With the feedback path live, delayRead diverges from the 1 V input.
+    // A dropped cycle would pin it at ~1 V.
     assert!(
         dr_value.abs() > 3.0,
-        "expected feedback to accumulate; got dr={dr_value}"
+        "feedback cycle did not propagate; got dr={dr_value}"
     );
 }
 
