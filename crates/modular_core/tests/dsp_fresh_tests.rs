@@ -808,32 +808,19 @@ fn buffer_and_delay_read_pipeline() {
 
 #[test]
 fn delay_feedback_loop_produces_echoes() {
-    // Regression test for buffer-mediated feedback through `$delay`. The DSL
-    // helper desugars to:
-    //   $mix([input, $deferred]) -> $buffer -> $delayRead -> feedback_lambda -> $deferred
+    // Buffer-mediated feedback loop:
     //
-    // i.e. delayRead's output is summed back into the buffer's input. The bug
-    // this guards against: an early cut of the wrapper proc-macro left
-    // `block_outputs[0]` stale across the frame whenever a cable read fed
-    // back into the same module (the nested ensure_processed_to advanced the
-    // index past the slot the outer wrapper.update tried to write to, so the
-    // outer write got bounded-out). Result: feedback always read the
-    // previous frame's value with no actual data flowing — exactly the user's
-    // report of "no echo".
+    //   imp ────┐
+    //           ▼
+    //          mix ──► buf ──► delayRead ──► feedback ──┐
+    //           ▲                                       │
+    //           └───────────────────────────────────────┘
     //
-    // Graph (mirrors the user's `.amp(4)` feedback factor — that's
-    // `$scaleAndShift(scale=4)` which is 4/5 = 0.8× gain, attenuation, not
-    // amplification by 4×):
+    //   imp:       constant 1.0 V
+    //   feedback:  delayRead * 0.8       (matches `.amp(4)` in the DSL: 4/5)
+    //   delay:     10 ms                 (480 frames @ 48 kHz)
     //
-    //   imp:       $scaleAndShift(input=1.0, scale=5)         // unity, constant 1.0
-    //   feedback:  $scaleAndShift(input=delayRead, scale=4)   // 0.8× attenuator
-    //   mix:       $mix([imp, feedback])
-    //   buf:       $buffer(input=mix, length=0.05)
-    //   delayRead: $delayRead(buf, time=0.01)
-    //
-    // 0.01s delay @ 48 kHz = 480 frames. With 0.8× feedback the cycle
-    // converges geometrically to 1/(1 - 0.8) = 5 V at steady state. Without
-    // feedback (the bug) the loop never grows past the constant 1.0 V input.
+    // Geometric feedback with gain 0.8 converges to 1 / (1 - 0.8) = 5 V.
     let graph = make_graph(vec![
         (
             "imp",
@@ -878,26 +865,24 @@ fn delay_feedback_loop_produces_echoes() {
     ]);
     let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
 
-    // Run long enough for the geometric series to approach steady state.
-    // 480 frames per delay period; 20 000 frames ≈ 40 periods, more than
-    // enough for 0.8^n to fall below the noise floor.
+    // ~40 delay periods is well past the 0.8^n noise floor.
     for _ in 0..20_000 {
         process_frame(&patch);
     }
 
-    let dr = patch.sampleables.get("delayRead").unwrap();
-    let dr_value = dr.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let dr_value = patch
+        .sampleables
+        .get("delayRead")
+        .unwrap()
+        .get_poly_sample(DEFAULT_PORT)
+        .unwrap()
+        .get(0);
 
-    // Without feedback (the bug): delayRead just plays back the constant
-    // 1.0 V input — dr_value ≈ 1.0. With feedback at 0.8× gain converging
-    // to 5 V steady state, dr_value should be well above 1.0. A modest
-    // threshold of 3.0 V (covering anything past ~7 delay periods,
-    // 1 + 0.8 + 0.64 + 0.512 + 0.41 + 0.33 + 0.26 + 0.21 ≈ 3.56) catches
-    // the regression while leaving plenty of headroom.
+    // Threshold sits between the 7-period partial sum (~3.56 V) and the
+    // 5 V asymptote. A loop without feedback stays at the 1 V input.
     assert!(
         dr_value.abs() > 3.0,
-        "delay feedback should accumulate toward steady state \
-         (~5 V at 0.8× gain); got dr={dr_value}"
+        "expected feedback to converge toward 5 V; got dr={dr_value}"
     );
 }
 
