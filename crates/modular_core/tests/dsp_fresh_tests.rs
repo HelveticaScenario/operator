@@ -816,11 +816,9 @@ fn delay_feedback_loop_produces_echoes() {
     //           ▲                                       │
     //           └───────────────────────────────────────┘
     //
-    //   imp:       constant 1.0 V
-    //   feedback:  delayRead * 0.8       (matches `.amp(4)` in the DSL: 4/5)
-    //   delay:     10 ms                 (480 frames @ 48 kHz)
-    //
-    // Geometric feedback with gain 0.8 converges to 1 / (1 - 0.8) = 5 V.
+    // 10 ms delay, constant 1 V input, feedback attenuator below 1.0.
+    // The geometric series converges; the test asserts the loop output
+    // settles well above the bare input value.
     let graph = make_graph(vec![
         (
             "imp",
@@ -832,7 +830,7 @@ fn delay_feedback_loop_produces_echoes() {
             "$scaleAndShift",
             json!({
                 "input": { "type": "cable", "module": "delayRead", "port": "output", "channel": 0 },
-                "scale": 4.0, // matches `.amp(4)` in the DSL — 0.8× gain
+                "scale": 4.0,
                 "shift": 0.0,
             }),
         ),
@@ -865,7 +863,6 @@ fn delay_feedback_loop_produces_echoes() {
     ]);
     let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
 
-    // ~40 delay periods is well past the 0.8^n noise floor.
     for _ in 0..20_000 {
         process_frame(&patch);
     }
@@ -878,11 +875,10 @@ fn delay_feedback_loop_produces_echoes() {
         .unwrap()
         .get(0);
 
-    // Threshold sits between the 7-period partial sum (~3.56 V) and the
-    // 5 V asymptote. A loop without feedback stays at the 1 V input.
+    // A loop without feedback stays pinned near the 1 V input.
     assert!(
         dr_value.abs() > 3.0,
-        "expected feedback to converge toward 5 V; got dr={dr_value}"
+        "expected feedback to accumulate; got dr={dr_value}"
     );
 }
 
