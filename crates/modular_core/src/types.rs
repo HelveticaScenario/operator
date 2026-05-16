@@ -200,34 +200,38 @@ pub trait Sampleable: MessageHandler + Send {
     fn clear_external_sync(&self) {}
 
     // ========================================================================
-    // Block-buffered processing API (additive — defaults make this trait
-    // backwards-compatible with master's per-sample pull pipeline; consumers
-    // and overrides land with the wrapper rewrite).
+    // Block-buffered processing API
+    //
+    // Transitional surface: today `update`/`get_poly_sample`/`tick` above are
+    // still live (driven by `audio.rs`'s per-sample pull loop) and the methods
+    // below cover only the work that's already wired in. The remaining block-
+    // buffered hooks (`start_block`, `set_initial_index`,
+    // `inject_audio_in_block`, plus the eventual `tick_buffers`) land in the
+    // audio-callback rewrite PR alongside their actual callers; adding them
+    // now would just be dead surface.
+    //
+    // Long-term, `update`/`get_poly_sample`/`tick` go away and the API below
+    // becomes the only way to drive a module.
     // ========================================================================
-
-    /// Reset the wrapper's per-sample cursor to 0 at the start of an internal
-    /// `block_size` block. Cache slots from the previous block remain readable
-    /// for SCC reentrancy until they are overwritten by the new block's
-    /// processing.
-    ///
-    /// Default no-op for back-compat.
-    fn start_block(&self) {}
 
     /// Process outputs up to (but not including) sample `target` within the
     /// current internal block. Wrapper clamps `target` to `block_size`.
     ///
     /// Incremental: each call advances the per-sample cursor by 0+ samples,
     /// stopping at min(target, block_size). Cursor persists across calls and
-    /// across CPAL callbacks; only `start_block()` resets it.
+    /// across CPAL callbacks; only the block-start reset (added with the
+    /// audio rewrite) clears it.
     ///
-    /// Default no-op.
+    /// Default no-op so the legacy `update()`-based wrapper path can ship
+    /// before every consumer migrates. The proc-macro-generated wrapper
+    /// overrides it.
     fn ensure_processed_to(&self, _target: usize) {}
 
     /// Complete any remaining block computation. Equivalent to
     /// `ensure_processed_to(block_size)`. Called on every module after the
-    /// sink pull so disconnected modules also tick their state forward.
+    /// sink pull so disconnected modules also advance their state.
     ///
-    /// Default no-op.
+    /// Default no-op (same rationale as `ensure_processed_to`).
     fn ensure_processed(&self) {}
 
     /// Read the value of port `port`, channel `ch`, at sample slot `index`
@@ -235,24 +239,13 @@ pub trait Sampleable: MessageHandler + Send {
     /// (full block in one go); sample-mode wrappers compute up through the
     /// requested index.
     ///
-    /// Default returns 0.0 — old `get_poly_sample`-based wrappers don't
-    /// participate yet.
+    /// Default returns 0.0 so manual `Sampleable` impls that haven't been
+    /// migrated to the new API yet (test fixtures, future overrides) compile
+    /// without a body. Every wrapper produced by the proc-macro overrides
+    /// this with the real block-buffer read.
     fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
         0.0
     }
-
-    /// Align a newly-inserted module's per-sample cursor to a non-zero
-    /// starting index, so it reads its first sample from slot `idx` rather
-    /// than slot 0. Used during mid-block patch swaps.
-    ///
-    /// Default no-op.
-    fn set_initial_index(&self, _idx: usize) {}
-
-    /// Inject the host audio input for the next block. Only the
-    /// `HiddenAudioIn` module overrides this. `block.len() == block_size`.
-    ///
-    /// Default no-op.
-    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
     fn get_state(&self) -> Option<serde_json::Value> {
         None
     }

@@ -704,8 +704,10 @@ fn impl_module_macro_attr(
             /// raw back-pointer to it (set during `connect()`) and read it
             /// inline when fetching upstream block samples.
             ///
-            /// In the per-sample pull adapter (block_size=1) this stays at 0;
-            /// the block-buffered audio loop will mutate it during processing.
+            /// Today the audio thread runs per-sample with `block_size=1`,
+            /// so `tick()` resets it back to 0 between samples. The
+            /// upcoming block-buffered audio loop will treat it as the
+            /// active block cursor and advance it across the full block.
             index: std::cell::Cell<usize>,
             /// Block-sized output buffer. One `BlockPort` per output port,
             /// each pre-allocated to `block_size` samples. The wrapper writes
@@ -733,9 +735,10 @@ fn impl_module_macro_attr(
             fn tick(&self) {
                 self.processed.store(false, core::sync::atomic::Ordering::Release);
                 // Reset the per-block sample cursor so the next call cycle
-                // writes back into slot 0 of the BlockPort. Required for the
-                // per-sample adapter (block_size=1) where every CPAL sample is
-                // its own "block".
+                // writes back into slot 0 of the BlockPort. Today every CPAL
+                // sample is one block (`block_size=1`); the audio-callback
+                // rewrite will replace this entry point with `start_block`
+                // driven from the audio loop.
                 self.index.set(0);
             }
 
@@ -773,11 +776,6 @@ fn impl_module_macro_attr(
                 }
             }
 
-            fn start_block(&self) {
-                self.index.set(0);
-                self.processed.store(false, core::sync::atomic::Ordering::Release);
-            }
-
             fn ensure_processed_to(&self, target: usize) {
                 let target = target.min(self.block_size);
                 while self.index.get() < target {
@@ -788,10 +786,6 @@ fn impl_module_macro_attr(
 
             fn ensure_processed(&self) {
                 self.ensure_processed_to(self.block_size);
-            }
-
-            fn set_initial_index(&self, idx: usize) {
-                self.index.set(idx.min(self.block_size));
             }
 
             fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32 {

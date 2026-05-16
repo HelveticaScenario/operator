@@ -530,9 +530,6 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 #(#copy_inner_stmts)*
             }
 
-            /// Called once per CPAL callback to advance any stateful per-block fields.
-            /// Default is a no-op; specialised impls (e.g. `BufferWrite`) override this.
-            pub fn tick_buffers(&mut self, _block_size: usize) {}
         }
     };
 

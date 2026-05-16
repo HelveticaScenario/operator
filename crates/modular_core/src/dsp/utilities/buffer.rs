@@ -123,8 +123,6 @@ impl BufferWriteBlockOutputs {
             self.sample.set(slot, ch, inner.sample.get_cycling(ch));
         }
     }
-
-    pub fn tick_buffers(&mut self, _block_size: usize) {}
 }
 
 #[derive(Default)]
