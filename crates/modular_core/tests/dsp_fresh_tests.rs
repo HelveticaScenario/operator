@@ -874,11 +874,11 @@ fn buffer_feedback_cycle_propagates_through_delay_read() {
         .unwrap()
         .get(0);
 
-    // With the feedback path live, delayRead diverges from the 1 V input.
-    // A dropped cycle would pin it at ~1 V.
+    // Steady state of 1 / (1 - 0.8) = 5. A dropped cycle pins delayRead at
+    // the 1 V input.
     assert!(
-        dr_value.abs() > 3.0,
-        "feedback cycle did not propagate; got dr={dr_value}"
+        (dr_value - 5.0).abs() < 0.1,
+        "feedback cycle did not converge to steady state; got dr={dr_value}"
     );
 }
 
