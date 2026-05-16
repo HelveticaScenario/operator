@@ -452,7 +452,15 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
             let field_name = &o.field_name;
             match o.precision {
                 OutputPrecision::F32 => quote! {
-                    self.#field_name.data[slot][0] = inner.#field_name;
+                    // Broadcast the mono f32 value to every channel slot.
+                    // Mirrors the old `PolyOutput::mono(value).get_cycling(ch)`
+                    // path that downstream cables relied on: an f32 output
+                    // reads as the same value on any consumer channel rather
+                    // than silence on channels >= 1.
+                    let v = inner.#field_name;
+                    for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+                        self.#field_name.data[slot][ch] = v;
+                    }
                 },
                 OutputPrecision::PolySignal => quote! {
                     {

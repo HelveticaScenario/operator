@@ -807,6 +807,96 @@ fn buffer_and_delay_read_pipeline() {
 }
 
 #[test]
+fn delay_feedback_loop_produces_echoes() {
+    // Regression test: the $delay DSL helper desugars to
+    //   $mix([input, $deferred]) -> $buffer -> $delayRead -> feedback_lambda -> $deferred
+    // i.e. a Buffer-mediated feedback cycle. The $delayRead's output is the
+    // feedback signal, scaled and summed back into the buffer's input.
+    //
+    // After the input pulse decays, the buffer should keep playing back
+    // attenuated echoes for several delay periods.
+    //
+    // Graph:
+    //   impulse: $sine at extremely low freq, then take a single sample as the
+    //            initial pulse (we use $scaleAndShift with shift=0 and a constant
+    //            input as a stand-in for an impulse — the test only needs *some*
+    //            non-zero energy in the early frames to seed the echo).
+    //   mix: $mix([impulse, feedback])
+    //   buf: $buffer(input=mix, length=0.05)
+    //   feedback: $delayRead(buf, time=0.01).amp(4) ≡ $scaleAndShift(delayRead, scale=20)
+    //   (loop back via feedback -> mix.inputs[1])
+    //
+    // 0.01s delay at 48 kHz = 480 frames. With scale=20 (= 4× gain) we get
+    // exponential growth bounded by the buffer's natural wrap. We just check
+    // that buffer output well after the initial input has non-trivial energy
+    // — proof that delayed signal is being added back.
+    let graph = make_graph(vec![
+        // Constant 1 V impulse seed (kept on the whole time for simplicity —
+        // the test verifies feedback presence, not exact echo timing).
+        (
+            "imp",
+            "$scaleAndShift",
+            json!({ "input": 1.0, "scale": 5.0, "shift": 0.0 }),
+        ),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "delayRead", "port": "output", "channel": 0 },
+                "scale": 20.0, // 4× gain
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "imp", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.05,
+            }),
+        ),
+        (
+            "delayRead",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 0.01,
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+
+    // Run several delay periods so feedback echoes accumulate.
+    // 0.01s delay = 480 frames @ 48 kHz. Run 2000 frames so feedback compounds
+    // through at least 4 delay periods.
+    for _ in 0..2000 {
+        process_frame(&patch);
+    }
+
+    let dr = patch.sampleables.get("delayRead").unwrap();
+    let dr_value = dr.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+
+    // Without feedback, delayRead just plays back the constant 1.0 input —
+    // its output would be ~1.0. With feedback at 4× gain, the cumulative
+    // signal in the buffer should be substantially larger (clipped or wrapped,
+    // but definitely > the input alone).
+    assert!(
+        dr_value.abs() > 1.5,
+        "delay feedback should accumulate echoes; got dr={dr_value} (would expect |dr|>1.5 with 4x feedback gain)"
+    );
+}
+
+#[test]
 fn delay_read_output_lags_behind_buffer_passthrough() {
     // Use a ramp signal (via $saw at a moderate frequency) as input to $buffer.
     // Compare the $buffer passthrough output to the $delayRead output.

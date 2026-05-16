@@ -746,24 +746,28 @@ fn impl_module_macro_attr(
                     core::sync::atomic::Ordering::Acquire,
                     core::sync::atomic::Ordering::Relaxed,
                 ) {
+                    // Snapshot the index *before* inner.update so the write
+                    // below targets the slot the wrapper is logically
+                    // producing — not whatever slot a nested `get_value_at`
+                    // happens to leave `self.index` pointing at.
+                    //
+                    // Without this snapshot, a feedback cycle that re-enters
+                    // this same wrapper through `get_value_at → ensure_processed_to`
+                    // advances `self.index` to `self.block_size` mid-update;
+                    // the outer write then either OOBs (no bound check) or
+                    // silently skips (with bound check), leaving
+                    // `block_outputs[0]` stale across the entire frame and
+                    // breaking buffer-mediated feedback (e.g. `$delay` with
+                    // a `$delayRead` feedback path).
+                    let starting_idx = self.index.get();
                     unsafe {
                         let module = &mut *self.module.get();
                         module.update(self.sample_rate);
                         let outputs = &mut *self.outputs.get();
                         crate::types::OutputStruct::copy_from(outputs, &module.outputs);
-                        // Mirror the per-sample write into the block buffer so
-                        // downstream `get_value_at` callers see the same data.
-                        //
-                        // Bound check: in cycle/feedback resolution, a nested
-                        // `ensure_processed_to` from a downstream cable read
-                        // may have already advanced `self.index` past the slot
-                        // we'd write here. Skip rather than overwrite (the
-                        // nested write is the correct cycle resolution) and
-                        // avoid the out-of-bounds panic.
-                        let idx = self.index.get();
-                        if idx < self.block_size {
+                        if starting_idx < self.block_size {
                             let block_outputs = &mut *self.block_outputs.get();
-                            block_outputs.copy_from_inner(&module.outputs, idx);
+                            block_outputs.copy_from_inner(&module.outputs, starting_idx);
                         }
                     }
                 }
