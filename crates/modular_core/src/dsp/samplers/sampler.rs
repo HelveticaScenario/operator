@@ -141,15 +141,45 @@ mod tests {
             &id.to_string(),
             SAMPLE_RATE,
             deserialized,
-            1,
+            TEST_BLOCK_SIZE,
             crate::types::ProcessingMode::Block,
         )
         .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
     }
 
-    fn step(module: &dyn Sampleable) {
-        module.start_block();
-        module.ensure_processed();
+    /// Block size used at construction by every test in this module. Bumping
+    /// this exercises the wrapper's per-block dispatch — `Stepper` walks all
+    /// `TEST_BLOCK_SIZE` slots between `start_block` calls.
+    const TEST_BLOCK_SIZE: usize = 1;
+
+    /// Per-sample cursor that hides block boundaries from tests. Each
+    /// `tick()` returns the slot index to read; when the cursor wraps past
+    /// `TEST_BLOCK_SIZE`, it triggers a new `start_block` + `ensure_processed`.
+    struct Stepper {
+        slot: usize,
+    }
+
+    impl Stepper {
+        fn new() -> Self {
+            // Initialise out-of-range so the first tick triggers a block.
+            Self {
+                slot: TEST_BLOCK_SIZE,
+            }
+        }
+
+        /// Advance one sample. Returns the slot index to read this frame's
+        /// outputs from. Multiple reads in the same frame (e.g. L+R of a
+        /// stereo output) share the returned slot.
+        fn tick(&mut self, module: &dyn Sampleable) -> usize {
+            if self.slot >= TEST_BLOCK_SIZE {
+                module.start_block();
+                module.ensure_processed();
+                self.slot = 0;
+            }
+            let s = self.slot;
+            self.slot += 1;
+            s
+        }
     }
 
     fn make_test_wav(samples: Vec<Vec<f32>>) -> Arc<WavData> {
@@ -178,11 +208,12 @@ mod tests {
         module.connect(&patch);
 
         // Run a few samples — no trigger, should output silence
+        let mut s = Stepper::new();
+        let mut last = 0;
         for _ in 0..4 {
-            step(module.as_ref());
+            last = s.tick(module.as_ref());
         }
-
-        assert_eq!(module.get_value_at("output", 0, 0), 0.0);
+        assert_eq!(module.get_value_at("output", 0, last), 0.0);
     }
 
     #[test]
@@ -205,12 +236,10 @@ mod tests {
 
         // First tick: gate is high, Schmitt trigger detects rising edge, position resets to 0
         // 0.2 * 5.0 = 1.0
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 1.0).abs() < 1e-6,
-            "expected 1.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
+        let mut s = Stepper::new();
+        let slot = s.tick(module.as_ref());
+        let v = module.get_value_at("output", 0, slot);
+        assert!((v - 1.0).abs() < 1e-6, "expected 1.0, got {v}");
     }
 
     #[test]
@@ -231,11 +260,15 @@ mod tests {
         module.connect(&patch);
 
         // Play through the 2-frame sample
-        step(module.as_ref()); // frame 0 -> output 1.0
-        step(module.as_ref()); // frame 1 -> output 2.0
-        step(module.as_ref()); // frame 2 -> past end -> silence
-
-        assert_eq!(module.get_value_at("output", 0, 0), 0.0, "should be silent after sample ends");
+        let mut s = Stepper::new();
+        s.tick(module.as_ref()); // frame 0 -> output 1.0
+        s.tick(module.as_ref()); // frame 1 -> output 2.0
+        let slot = s.tick(module.as_ref()); // frame 2 -> past end -> silence
+        assert_eq!(
+            module.get_value_at("output", 0, slot),
+            0.0,
+            "should be silent after sample ends"
+        );
     }
 
     #[test]
@@ -258,37 +291,20 @@ mod tests {
 
         // With negative speed, gate trigger should start from end of sample.
         // Frame 3 = 0.8*5=4.0, frame 2 = 0.6*5=3.0, frame 1 = 0.4*5=2.0, frame 0 = 0.2*5=1.0
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 4.0).abs() < 1e-6,
-            "reverse frame 0: expected 4.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
+        let mut s = Stepper::new();
+        let expected = [4.0_f32, 3.0, 2.0, 1.0];
+        for (i, &want) in expected.iter().enumerate() {
+            let slot = s.tick(module.as_ref());
+            let v = module.get_value_at("output", 0, slot);
+            assert!(
+                (v - want).abs() < 1e-6,
+                "reverse frame {i}: expected {want}, got {v}"
+            );
+        }
 
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 3.0).abs() < 1e-6,
-            "reverse frame 1: expected 3.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
-
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 2.0).abs() < 1e-6,
-            "reverse frame 2: expected 2.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
-
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 1.0).abs() < 1e-6,
-            "reverse frame 3: expected 1.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
-
-        step(module.as_ref());
+        let slot = s.tick(module.as_ref());
         assert_eq!(
-            module.get_value_at("output", 0, 0),
+            module.get_value_at("output", 0, slot),
             0.0,
             "should be silent after reverse playback ends"
         );
@@ -313,32 +329,22 @@ mod tests {
         patch.wav_data.insert("stereo".to_string(), wav_data);
         module.connect(&patch);
 
+        let mut s = Stepper::new();
+
         // First tick: gate rises, plays frame 0
         // L: 0.2*5=1.0, R: 0.8*5=4.0
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 1.0).abs() < 1e-6,
-            "L ch should be 1.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
-        assert!(
-            (module.get_value_at("output", 1, 0) - 4.0).abs() < 1e-6,
-            "R ch should be 4.0, got {}",
-            module.get_value_at("output", 1, 0)
-        );
+        let slot = s.tick(module.as_ref());
+        let l = module.get_value_at("output", 0, slot);
+        let r = module.get_value_at("output", 1, slot);
+        assert!((l - 1.0).abs() < 1e-6, "L ch should be 1.0, got {l}");
+        assert!((r - 4.0).abs() < 1e-6, "R ch should be 4.0, got {r}");
 
         // Second tick: frame 1
         // L: 0.4*5=2.0, R: 1.0*5=5.0
-        step(module.as_ref());
-        assert!(
-            (module.get_value_at("output", 0, 0) - 2.0).abs() < 1e-6,
-            "L ch should be 2.0, got {}",
-            module.get_value_at("output", 0, 0)
-        );
-        assert!(
-            (module.get_value_at("output", 1, 0) - 5.0).abs() < 1e-6,
-            "R ch should be 5.0, got {}",
-            module.get_value_at("output", 1, 0)
-        );
+        let slot = s.tick(module.as_ref());
+        let l = module.get_value_at("output", 0, slot);
+        let r = module.get_value_at("output", 1, slot);
+        assert!((l - 2.0).abs() < 1e-6, "L ch should be 2.0, got {l}");
+        assert!((r - 5.0).abs() < 1e-6, "R ch should be 5.0, got {r}");
     }
 }

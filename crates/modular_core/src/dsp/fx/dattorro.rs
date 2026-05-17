@@ -436,6 +436,10 @@ mod tests {
 
     const SAMPLE_RATE: f32 = 48000.0;
     const DEFAULT_PORT: &str = "output";
+    /// Block size used at construction by every test in this module. Bumping
+    /// this exercises the wrapper's per-block dispatch — the collect helper
+    /// walks all `TEST_BLOCK_SIZE` slots between `start_block` calls.
+    const TEST_BLOCK_SIZE: usize = 1;
 
     fn make_dattorro(params: serde_json::Value) -> Box<dyn Sampleable> {
         let constructors = get_constructors();
@@ -451,24 +455,25 @@ mod tests {
             &"test-dattorro".to_string(),
             SAMPLE_RATE,
             deserialized,
-            1,
+            TEST_BLOCK_SIZE,
             crate::types::ProcessingMode::Block,
         )
         .unwrap()
     }
 
-    fn step(module: &dyn Sampleable) {
-        module.start_block();
-        module.ensure_processed();
-    }
-
     fn collect_stereo(module: &dyn Sampleable, n: usize) -> (Vec<f32>, Vec<f32>) {
         let mut left = Vec::with_capacity(n);
         let mut right = Vec::with_capacity(n);
-        for _ in 0..n {
-            step(module);
-            left.push(module.get_value_at(DEFAULT_PORT, 0, 0));
-            right.push(module.get_value_at(DEFAULT_PORT, 1, 0));
+        let mut produced = 0;
+        while produced < n {
+            module.start_block();
+            module.ensure_processed();
+            let take = TEST_BLOCK_SIZE.min(n - produced);
+            for slot in 0..take {
+                left.push(module.get_value_at(DEFAULT_PORT, 0, slot));
+                right.push(module.get_value_at(DEFAULT_PORT, 1, slot));
+            }
+            produced += take;
         }
         (left, right)
     }

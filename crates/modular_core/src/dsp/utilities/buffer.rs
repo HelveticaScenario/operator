@@ -396,15 +396,38 @@ mod tests {
             &id.to_string(),
             SAMPLE_RATE,
             deserialized,
-            1,
+            TEST_BLOCK_SIZE,
             crate::types::ProcessingMode::Block,
         )
         .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
     }
 
-    fn step(module: &dyn Sampleable) {
-        module.start_block();
-        module.ensure_processed();
+    /// Block size used at construction by every test in this module. Bumping
+    /// this exercises the wrapper's per-block dispatch — `Stepper` walks all
+    /// `TEST_BLOCK_SIZE` slots between `start_block` calls.
+    const TEST_BLOCK_SIZE: usize = 1;
+
+    struct Stepper {
+        slot: usize,
+    }
+
+    impl Stepper {
+        fn new() -> Self {
+            Self {
+                slot: TEST_BLOCK_SIZE,
+            }
+        }
+
+        fn tick(&mut self, module: &dyn Sampleable) -> usize {
+            if self.slot >= TEST_BLOCK_SIZE {
+                module.start_block();
+                module.ensure_processed();
+                self.slot = 0;
+            }
+            let s = self.slot;
+            self.slot += 1;
+            s
+        }
     }
 
     #[test]
@@ -415,9 +438,9 @@ mod tests {
             serde_json::json!({ "input": 3.0, "length": 0.01 }),
         );
 
-        step(module.as_ref());
-
-        let value = module.get_value_at("output", 0, 0);
+        let mut s = Stepper::new();
+        let slot = s.tick(module.as_ref());
+        let value = module.get_value_at("output", 0, slot);
         assert!(
             (value - 3.0).abs() < 1e-6,
             "expected passthrough of 3.0, got {value}",
@@ -432,9 +455,13 @@ mod tests {
             serde_json::json!({ "input": 1.0, "length": 0.01 }),
         );
 
-        let n = 10;
+        // Drive complete blocks so the assertion stays exact regardless of
+        // TEST_BLOCK_SIZE — every block writes `TEST_BLOCK_SIZE` samples.
+        let blocks = 10;
+        let n = blocks * TEST_BLOCK_SIZE;
+        let mut s = Stepper::new();
         for _ in 0..n {
-            step(module.as_ref());
+            s.tick(module.as_ref());
         }
 
         let buffer = module
@@ -456,7 +483,8 @@ mod tests {
             serde_json::json!({ "input": input_val, "length": 0.01 }),
         );
 
-        step(module.as_ref());
+        let mut s = Stepper::new();
+        s.tick(module.as_ref());
 
         let buffer = module
             .get_buffer_output("buffer")
@@ -486,8 +514,9 @@ mod tests {
 
         // Step more than frame_count times to force wrapping
         let total_steps = frame_count + 3;
+        let mut s = Stepper::new();
         for _ in 0..total_steps {
-            step(module.as_ref());
+            s.tick(module.as_ref());
         }
 
         // write_index should keep incrementing past frame_count (no modular reset)

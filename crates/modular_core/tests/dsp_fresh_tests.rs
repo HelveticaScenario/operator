@@ -12,6 +12,13 @@ use serde_json::json;
 
 const SAMPLE_RATE: f32 = 48000.0;
 const DEFAULT_PORT: &str = "output";
+/// Block size used at construction by every direct-module test in this file.
+/// Bumping this exercises the wrapper's per-block dispatch — the collect
+/// helpers walk all `TEST_BLOCK_SIZE` slots between `start_block` calls.
+///
+/// Note: patch-level helpers (`process_frame`, the `from_graph_*` tests) are
+/// still locked to `block_size=1` because `Patch::from_graph` hardcodes it.
+const TEST_BLOCK_SIZE: usize = 1;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,24 +42,50 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
         &id.to_string(),
         SAMPLE_RATE,
         deserialized,
-        1,
+        TEST_BLOCK_SIZE,
         modular_core::types::ProcessingMode::Block,
     )
     .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
 }
 
-/// Advance one block (single sample at `block_size=1`).
-fn step(module: &dyn Sampleable) {
-    module.start_block();
-    module.ensure_processed();
+/// Per-sample cursor that hides block boundaries from tests. Each `tick()`
+/// returns the slot index to read; when the cursor wraps past
+/// `TEST_BLOCK_SIZE`, it triggers a fresh `start_block` + `ensure_processed`
+/// on the module.
+struct Stepper {
+    slot: usize,
+}
+
+impl Stepper {
+    fn new() -> Self {
+        // Initialise out-of-range so the first tick triggers a block.
+        Self {
+            slot: TEST_BLOCK_SIZE,
+        }
+    }
+
+    /// Advance one sample. Returns the slot index to read this frame's
+    /// outputs from. Multiple reads in the same frame (e.g. L+R of a stereo
+    /// output) share the returned slot.
+    fn tick(&mut self, module: &dyn Sampleable) -> usize {
+        if self.slot >= TEST_BLOCK_SIZE {
+            module.start_block();
+            module.ensure_processed();
+            self.slot = 0;
+        }
+        let s = self.slot;
+        self.slot += 1;
+        s
+    }
 }
 
 /// Advance N samples and collect the first channel of `output`.
 fn collect_samples(module: &dyn Sampleable, n: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(n);
+    let mut s = Stepper::new();
     for _ in 0..n {
-        step(module);
-        out.push(module.get_value_at(DEFAULT_PORT, 0, 0));
+        let slot = s.tick(module);
+        out.push(module.get_value_at(DEFAULT_PORT, 0, slot));
     }
     out
 }
@@ -60,11 +93,25 @@ fn collect_samples(module: &dyn Sampleable, n: usize) -> Vec<f32> {
 /// Collect N samples from a specific channel.
 fn collect_channel(module: &dyn Sampleable, channel: usize, n: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(n);
+    let mut s = Stepper::new();
     for _ in 0..n {
-        step(module);
-        out.push(module.get_value_at(DEFAULT_PORT, channel, 0));
+        let slot = s.tick(module);
+        out.push(module.get_value_at(DEFAULT_PORT, channel, slot));
     }
     out
+}
+
+/// Advance N samples and return the final sample read from channel 0 of
+/// `DEFAULT_PORT`. Used by convergence tests that only care about the
+/// post-settling value.
+fn settle_and_read(module: &dyn Sampleable, n: usize) -> f32 {
+    debug_assert!(n > 0, "settle_and_read needs at least one tick");
+    let mut s = Stepper::new();
+    let mut slot = 0;
+    for _ in 0..n {
+        slot = s.tick(module);
+    }
+    module.get_value_at(DEFAULT_PORT, 0, slot)
 }
 
 fn min_max(samples: &[f32]) -> (f32, f32) {
@@ -124,10 +171,11 @@ fn sine_polyphonic() {
 
     let mut ch0_samples = Vec::new();
     let mut ch1_samples = Vec::new();
+    let mut s = Stepper::new();
     for _ in 0..500 {
-        step(osc2.as_ref());
-        ch0_samples.push(osc2.get_value_at(DEFAULT_PORT, 0, 0));
-        ch1_samples.push(osc2.get_value_at(DEFAULT_PORT, 1, 0));
+        let slot = s.tick(osc2.as_ref());
+        ch0_samples.push(osc2.get_value_at(DEFAULT_PORT, 0, slot));
+        ch1_samples.push(osc2.get_value_at(DEFAULT_PORT, 1, slot));
     }
 
     let (mn0, mx0) = min_max(&ch0_samples);
@@ -234,11 +282,7 @@ fn scale_and_shift_applies() {
     // input=1.0, scale=5.0 (= 1x gain), shift=2.0 → output = 1.0 * 1.0 + 2.0 = 3.0
 
     // Step enough times for param smoothing to converge
-    for _ in 0..500 {
-        step(sas.as_ref());
-    }
-    let sample = sas.get_value_at(DEFAULT_PORT, 0, 0);
-
+    let sample = settle_and_read(sas.as_ref(), 500);
     assert!(approx_eq(sample, 3.0, 0.1), "expected ~3.0, got {sample}");
 }
 
@@ -668,10 +712,7 @@ fn step_rejects_empty_steps() {
 fn curve_linear_passthrough() {
     // exp=1 should be linear: output ≈ input
     let m = make_module("$curve", "curve-1", json!({ "input": 3.0, "exp": 1.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 3.0, 0.1),
         "exp=1 should pass through, got {sample}"
@@ -682,10 +723,7 @@ fn curve_linear_passthrough() {
 fn curve_unity_at_5v() {
     // At 5V input, output should be 5V regardless of exponent
     let m = make_module("$curve", "curve-2", json!({ "input": 5.0, "exp": 3.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 5.0, 0.1),
         "5V should stay 5V, got {sample}"
@@ -696,10 +734,7 @@ fn curve_unity_at_5v() {
 fn curve_cubic_midpoint() {
     // exp=3, input=2.5: output = 5 * (2.5/5)^3 = 5 * 0.125 = 0.625
     let m = make_module("$curve", "curve-3", json!({ "input": 2.5, "exp": 3.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 0.625, 0.1),
         "expected ~0.625, got {sample}"
@@ -710,10 +745,7 @@ fn curve_cubic_midpoint() {
 fn curve_preserves_sign() {
     // Negative input should produce negative output
     let m = make_module("$curve", "curve-4", json!({ "input": -2.5, "exp": 2.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
+    let sample = settle_and_read(m.as_ref(), 500);
     // sign(-2.5) * 5 * (2.5/5)^2 = -1 * 5 * 0.25 = -1.25
     assert!(
         approx_eq(sample, -1.25, 0.1),
@@ -725,10 +757,7 @@ fn curve_preserves_sign() {
 fn curve_zero_input() {
     // Zero input should produce zero output
     let m = make_module("$curve", "curve-5", json!({ "input": 0.0, "exp": 3.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 0.0, 0.01),
         "0V input should produce 0V, got {sample}"
@@ -739,10 +768,7 @@ fn curve_zero_input() {
 fn curve_exp_zero_step_function() {
     // exp=0: any nonzero input → ±5V
     let m = make_module("$curve", "curve-6", json!({ "input": 1.0, "exp": 0.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 5.0, 0.1),
         "exp=0 nonzero input should → 5V, got {sample}"
