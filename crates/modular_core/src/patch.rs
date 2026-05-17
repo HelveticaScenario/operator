@@ -99,15 +99,12 @@ impl Patch {
         Ok(())
     }
 
-    /// Get the output sample from the root module
+    /// Get the output sample from the root module (channel 0, slot 0).
     pub fn get_output(&self) -> f32 {
-        if let Some(root) = self.sampleables.get(&*ROOT_ID) {
-            root.get_poly_sample(&ROOT_OUTPUT_PORT)
-                .map(|p| p.get(0))
-                .unwrap_or_default()
-        } else {
-            0.0
-        }
+        self.sampleables
+            .get(&*ROOT_ID)
+            .map(|root| root.get_value_at(&ROOT_OUTPUT_PORT, 0, 0))
+            .unwrap_or_default()
     }
 
     /// Build a Patch from a [`PatchGraph`] for testing.
@@ -273,19 +270,21 @@ mod tests {
             &self.id
         }
 
-        fn tick(&self) {}
-
-        fn update(&self) {}
-
-        fn get_poly_sample(&self, _port: &str) -> Result<crate::poly::PolyOutput> {
-            Ok(crate::poly::PolyOutput::default())
-        }
-
         fn get_module_type(&self) -> &str {
             "dummy"
         }
 
         fn connect(&self, _patch: &Patch) {}
+
+        fn start_block(&self) {}
+
+        fn ensure_processed_to(&self, _target: usize) {}
+
+        fn ensure_processed(&self) {}
+
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
 
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -331,19 +330,21 @@ mod tests {
             &self.id
         }
 
-        fn tick(&self) {}
-
-        fn update(&self) {}
-
-        fn get_poly_sample(&self, _port: &str) -> Result<crate::poly::PolyOutput> {
-            Ok(crate::poly::PolyOutput::default())
-        }
-
         fn get_module_type(&self) -> &str {
             "counting"
         }
 
         fn connect(&self, _patch: &Patch) {}
+
+        fn start_block(&self) {}
+
+        fn ensure_processed_to(&self, _target: usize) {}
+
+        fn ensure_processed(&self) {}
+
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
 
         fn as_any(&self) -> &dyn std::any::Any {
             self

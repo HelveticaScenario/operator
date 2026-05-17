@@ -1,14 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
-use napi::Result;
 use serde_json::json;
 
 use modular_core::patch::Patch;
 use modular_core::types::{
-    Buffer, BufferData, ClockMessages, Connect, Message, MessageHandler, MessageTag,
-    MidiControlChange, MidiNoteOn, Sampleable, Signal, SignalExt,
+    ClockMessages, Connect, Message, MessageHandler, MessageTag, MidiControlChange, MidiNoteOn,
+    Sampleable, Signal, SignalExt,
 };
 
 // The proc-macro expands to `crate::types::...`; provide that module in this integration test crate.
@@ -42,26 +39,22 @@ impl Sampleable for DummySampleable {
         &self.id
     }
 
-    fn tick(&self) {}
-
-    fn update(&self) {}
-
-    fn get_poly_sample(&self, port: &str) -> Result<modular_core::poly::PolyOutput> {
-        Ok(modular_core::poly::PolyOutput::mono(
-            *self.outputs.get(port).unwrap_or(&0.0),
-        ))
-    }
-
-    fn get_value_at(&self, port: &str, _ch: usize, _index: usize) -> f32 {
-        *self.outputs.get(port).unwrap_or(&0.0)
-    }
-
     fn get_module_type(&self) -> &str {
         &self.module_type
     }
 
     fn connect(&self, _patch: &Patch) {
         println!("Connecting DummySampleable {}", self.id);
+    }
+
+    fn start_block(&self) {}
+
+    fn ensure_processed_to(&self, _target: usize) {}
+
+    fn ensure_processed(&self) {}
+
+    fn get_value_at(&self, port: &str, _ch: usize, _index: usize) -> f32 {
+        *self.outputs.get(port).unwrap_or(&0.0)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

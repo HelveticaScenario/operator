@@ -299,23 +299,6 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
-    // Generate get_poly_sample match arms (returns PolyOutput)
-    let poly_sample_match_arms: Vec<_> = outputs
-        .iter()
-        .map(|o| {
-            let output_name = &o.output_name;
-            let field_name = &o.field_name;
-            match o.precision {
-                OutputPrecision::F32 => quote! {
-                    #output_name => Some(crate::poly::PolyOutput::mono(self.#field_name)),
-                },
-                OutputPrecision::PolySignal => quote! {
-                    #output_name => Some(self.#field_name),
-                },
-            }
-        })
-        .collect();
-
     let schema_exprs: Vec<_> = outputs
         .iter()
         .map(|o| {
@@ -344,16 +327,6 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
-    let copy_stmts: Vec<_> = outputs
-        .iter()
-        .map(|o| {
-            let field_name = &o.field_name;
-            quote! {
-                self.#field_name = other.#field_name;
-            }
-        })
-        .collect();
-
     let set_channels_stmts: Vec<_> = outputs
         .iter()
         .filter(|o| o.precision == OutputPrecision::PolySignal)
@@ -375,17 +348,6 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         }
 
         impl crate::types::OutputStruct for #name {
-            fn copy_from(&mut self, other: &Self) {
-                #(#copy_stmts)*
-            }
-
-            fn get_poly_sample(&self, port: &str) -> Option<crate::poly::PolyOutput> {
-                match port {
-                    #(#poly_sample_match_arms)*
-                    _ => None,
-                }
-            }
-
             fn set_all_channels(&mut self, channels: usize) {
                 #(#set_channels_stmts)*
             }
