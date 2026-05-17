@@ -56,7 +56,7 @@ function SliderControl({ slider, onChange }: SliderControlProps) {
 
     const handleInput = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {
-            const newValue = parseFloat(e.target.value);
+            const newValue = parseFloat(e.currentTarget.value);
             setLocalValue(newValue);
             onChange(slider.label, newValue);
         },
@@ -79,7 +79,7 @@ function SliderControl({ slider, onChange }: SliderControlProps) {
                 max={slider.max}
                 step={step}
                 value={localValue}
-                onInput={handleInput}
+                onChange={handleInput}
             />
             <div className="slider-range">
                 <span>{formatValue(slider.min)}</span>
