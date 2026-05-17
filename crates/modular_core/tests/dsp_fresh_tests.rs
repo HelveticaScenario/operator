@@ -35,6 +35,8 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
         &id.to_string(),
         SAMPLE_RATE,
         deserialized,
+        1,
+        modular_core::types::ProcessingMode::Block,
     )
     .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
 }
@@ -323,7 +325,13 @@ fn all_constructors_produce_valid_modules() {
             argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
-        let module = constructor(&format!("test-{name}"), SAMPLE_RATE, deserialized);
+        let module = constructor(
+            &format!("test-{name}"),
+            SAMPLE_RATE,
+            deserialized,
+            1,
+            modular_core::types::ProcessingMode::Block,
+        );
         assert!(
             module.is_ok(),
             "constructor for '{name}' should succeed, got: {:?}",
@@ -350,7 +358,14 @@ fn all_constructors_can_tick() {
             argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
-        let module = constructor(&format!("test-{name}"), SAMPLE_RATE, deserialized).unwrap();
+        let module = constructor(
+            &format!("test-{name}"),
+            SAMPLE_RATE,
+            deserialized,
+            1,
+            modular_core::types::ProcessingMode::Block,
+        )
+        .unwrap();
         // Should not panic with minimal params
         module.tick();
         module.update();
@@ -788,6 +803,82 @@ fn buffer_and_delay_read_pipeline() {
     assert!(
         (sample - 2.0).abs() < 0.1,
         "delay read should output ~2.0 (constant input after filling), got {sample}"
+    );
+}
+
+#[test]
+fn buffer_feedback_cycle_propagates_through_delay_read() {
+    // Verify that a cable cycle routed through a Buffer (delayRead's output
+    // fed back into the buffer's input via mix) actually moves data around
+    // the loop. If the cycle drops samples, delayRead never sees its own
+    // output and the loop output stays pinned at the input value.
+    //
+    //   src ────┐
+    //           ▼
+    //          mix ──► buf ──► delayRead ──► feedback ──┐
+    //           ▲                                       │
+    //           └───────────────────────────────────────┘
+    let graph = make_graph(vec![
+        (
+            "src",
+            "$scaleAndShift",
+            json!({ "input": 1.0, "scale": 5.0, "shift": 0.0 }),
+        ),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "delayRead", "port": "output", "channel": 0 },
+                "scale": 4.0,
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.05,
+            }),
+        ),
+        (
+            "delayRead",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 0.01,
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+
+    for _ in 0..20_000 {
+        process_frame(&patch);
+    }
+
+    let dr_value = patch
+        .sampleables
+        .get("delayRead")
+        .unwrap()
+        .get_poly_sample(DEFAULT_PORT)
+        .unwrap()
+        .get(0);
+
+    // Steady state of 1 / (1 - 0.8) = 5. A dropped cycle pins delayRead at
+    // the 1 V input.
+    assert!(
+        (dr_value - 5.0).abs() < 0.1,
+        "feedback cycle did not converge to steady state; got dr={dr_value}"
     );
 }
 

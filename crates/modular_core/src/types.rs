@@ -198,6 +198,54 @@ pub trait Sampleable: MessageHandler + Send {
     fn sync_external_clock(&self, _bar_phase: f64, _bpm: f64) {}
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
+
+    // ========================================================================
+    // Block-buffered processing API
+    //
+    // Transitional surface: today `update`/`get_poly_sample`/`tick` above are
+    // still live (driven by `audio.rs`'s per-sample pull loop) and the methods
+    // below cover only the work that's already wired in. The remaining block-
+    // buffered hooks (`start_block`, `set_initial_index`,
+    // `inject_audio_in_block`, plus the eventual `tick_buffers`) land in the
+    // audio-callback rewrite PR alongside their actual callers; adding them
+    // now would just be dead surface.
+    //
+    // Long-term, `update`/`get_poly_sample`/`tick` go away and the API below
+    // becomes the only way to drive a module.
+    // ========================================================================
+
+    /// Process outputs up to (but not including) sample `target` within the
+    /// current internal block. Wrapper clamps `target` to `block_size`.
+    ///
+    /// Incremental: each call advances the per-sample cursor by 0+ samples,
+    /// stopping at min(target, block_size). Cursor persists across calls and
+    /// across CPAL callbacks; only the block-start reset (added with the
+    /// audio rewrite) clears it.
+    ///
+    /// Default no-op so the legacy `update()`-based wrapper path can ship
+    /// before every consumer migrates. The proc-macro-generated wrapper
+    /// overrides it.
+    fn ensure_processed_to(&self, _target: usize) {}
+
+    /// Complete any remaining block computation. Equivalent to
+    /// `ensure_processed_to(block_size)`. Called on every module after the
+    /// sink pull so disconnected modules also advance their state.
+    ///
+    /// Default no-op (same rationale as `ensure_processed_to`).
+    fn ensure_processed(&self) {}
+
+    /// Read the value of port `port`, channel `ch`, at sample slot `index`
+    /// within the current block. Block-mode wrappers compute on demand
+    /// (full block in one go); sample-mode wrappers compute up through the
+    /// requested index.
+    ///
+    /// Default returns 0.0 so manual `Sampleable` impls that haven't been
+    /// migrated to the new API yet (test fixtures, future overrides) compile
+    /// without a body. Every wrapper produced by the proc-macro overrides
+    /// this with the real block-buffer read.
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+        0.0
+    }
     fn get_state(&self) -> Option<serde_json::Value> {
         None
     }
@@ -2253,7 +2301,8 @@ impl JsonSchema for Signal {
 impl Signal {
     /// Get the mono voltage value from this signal.
     /// For Volts, returns the stored value.
-    /// For Cable, fetches the specific channel from the connected module's output.
+    /// For Cable, fetches the specific channel from the connected module's
+    /// output at the consumer's current per-block sample index.
     pub fn get_value(&self) -> f32 {
         match self {
             Signal::Volts(v) => *v,
@@ -2261,12 +2310,21 @@ impl Signal {
                 resolved,
                 port,
                 channel,
+                index_ptr,
                 ..
             } => match resolved {
-                Some(ptr) => unsafe { ptr.as_ref() }
-                    .get_poly_sample(port)
-                    .map(|p| p.get_cycling(*channel))
-                    .unwrap_or(0.0),
+                Some(ptr) => {
+                    // `index_ptr` is null until the consumer wrapper's
+                    // `connect()` injects it. Pre-injection (or after a
+                    // disconnect) we fall back to slot 0, which matches the
+                    // old per-sample behaviour for block_size=1.
+                    let index = if index_ptr.is_null() {
+                        0
+                    } else {
+                        unsafe { (*(*index_ptr)).get() }
+                    };
+                    unsafe { ptr.as_ref() }.get_value_at(port, *channel, index)
+                }
                 None => 0.0,
             },
         }
@@ -2616,8 +2674,15 @@ pub struct ModuleIdRemap {
     pub to: String,
 }
 
-pub type SampleableConstructor =
-    Box<dyn Fn(&String, f32, crate::params::DeserializedParams) -> Result<Box<dyn Sampleable>>>;
+pub type SampleableConstructor = Box<
+    dyn Fn(
+        &String,
+        f32,
+        crate::params::DeserializedParams,
+        usize,
+        ProcessingMode,
+    ) -> Result<Box<dyn Sampleable>>,
+>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

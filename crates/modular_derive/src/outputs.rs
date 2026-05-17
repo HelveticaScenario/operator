@@ -452,13 +452,26 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
             let field_name = &o.field_name;
             match o.precision {
                 OutputPrecision::F32 => quote! {
-                    self.#field_name.data[slot][0] = inner.#field_name;
+                    // Broadcast the mono f32 value to every channel slot.
+                    // Mirrors the old `PolyOutput::mono(value).get_cycling(ch)`
+                    // path that downstream cables relied on: an f32 output
+                    // reads as the same value on any consumer channel rather
+                    // than silence on channels >= 1.
+                    let v = inner.#field_name;
+                    for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+                        self.#field_name.data[slot][ch] = v;
+                    }
                 },
                 OutputPrecision::PolySignal => quote! {
                     {
+                        // `get_cycling` mirrors the old `PolyOutput::get_cycling`
+                        // semantics that `get_poly_sample(...).get_cycling(ch)`
+                        // used to provide: a mono producer broadcasts its single
+                        // value to all consumer channels rather than producing
+                        // silence on channels >= producer channel count.
                         let poly = &inner.#field_name;
                         for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                            self.#field_name.data[slot][ch] = poly.get(ch);
+                            self.#field_name.data[slot][ch] = poly.get_cycling(ch);
                         }
                     }
                 },
@@ -517,9 +530,6 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 #(#copy_inner_stmts)*
             }
 
-            /// Called once per CPAL callback to advance any stateful per-block fields.
-            /// Default is a no-op; specialised impls (e.g. `BufferWrite`) override this.
-            pub fn tick_buffers(&mut self, _block_size: usize) {}
         }
     };
 

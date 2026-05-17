@@ -52,6 +52,10 @@ impl Sampleable for DummySampleable {
         ))
     }
 
+    fn get_value_at(&self, port: &str, _ch: usize, _index: usize) -> f32 {
+        *self.outputs.get(port).unwrap_or(&0.0)
+    }
+
     fn get_module_type(&self) -> &str {
         &self.module_type
     }

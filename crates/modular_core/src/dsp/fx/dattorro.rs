@@ -452,6 +452,8 @@ mod tests {
             &"test-dattorro".to_string(),
             SAMPLE_RATE,
             deserialized,
+            1,
+            crate::types::ProcessingMode::Block,
         )
         .unwrap()
     }
