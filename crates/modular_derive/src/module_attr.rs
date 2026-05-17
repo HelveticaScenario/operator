@@ -789,17 +789,24 @@ fn impl_module_macro_attr(
             }
 
             fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32 {
-                // Reentrancy: block-mode module is mid-computation and a cycle
-                // has read back into it. Return the previous slot's value so
-                // feedback delay stays exactly 1 sample regardless of block size.
-                if self.computing.get() && index >= self.index.get() {
-                    let cur = self.index.get();
-                    let prev = if cur == 0 { self.block_size.saturating_sub(1).max(0) } else { cur - 1 };
-                    let outputs = unsafe { &*self.block_outputs.get() };
-                    let port_idx = match <#block_outputs_ty>::port_index(port) {
-                        Some(i) => i,
-                        None => return 0.0,
+                let port_idx = match <#block_outputs_ty>::port_index(port) {
+                    Some(i) => i,
+                    None => return 0.0,
+                };
+                // Reentrancy: a cycle has read back into this module while
+                // it is mid-computation. Return the slot one step *behind*
+                // the requested one (wrapping at the block boundary) so the
+                // feedback path sees exactly a 1-sample delay regardless of
+                // block size. Slots not yet written this block still hold
+                // the previous block's data, which preserves the 1-sample
+                // invariant across the boundary.
+                if self.computing.get() {
+                    let prev = if index == 0 {
+                        self.block_size.saturating_sub(1)
+                    } else {
+                        index - 1
                     };
+                    let outputs = unsafe { &*self.block_outputs.get() };
                     return outputs.get_at(port_idx, ch, prev);
                 }
                 match self.mode {
@@ -816,10 +823,6 @@ fn impl_module_macro_attr(
                     }
                 }
                 let outputs = unsafe { &*self.block_outputs.get() };
-                let port_idx = match <#block_outputs_ty>::port_index(port) {
-                    Some(i) => i,
-                    None => return 0.0,
-                };
                 outputs.get_at(port_idx, ch, index)
             }
 
