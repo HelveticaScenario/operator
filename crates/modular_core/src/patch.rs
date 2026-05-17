@@ -49,9 +49,7 @@ impl Patch {
     /// Re-insert the AudioIn module into sampleables.
     /// Called after sampleables.clear() to restore the hidden audio input module.
     pub fn insert_audio_in(&mut self) {
-        let audio_in_sampleable = AudioIn {
-            input: self.audio_in.clone(),
-        };
+        let audio_in_sampleable = AudioIn::with_input(self.audio_in.clone());
         let id = WellKnownModule::HiddenAudioIn.id().to_string();
         self.sampleables.insert(id, Box::new(audio_in_sampleable));
     }

@@ -199,6 +199,13 @@ pub trait Sampleable: MessageHandler + Send {
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
 
+    /// Inject one block's worth of host audio input frames. Only
+    /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
+    /// callback pulls one CPAL frame per slot into `block` and hands the
+    /// whole thing in once per internal block, so the inner module can
+    /// serve per-slot reads via `get_value_at(_, ch, slot)`.
+    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
+
     /// Reset the per-block sample cursor to 0 at the start of an internal
     /// `block_size` block. Cache slots in `block_outputs` keep their
     /// previous-block values for reentrancy reads until they are overwritten.
