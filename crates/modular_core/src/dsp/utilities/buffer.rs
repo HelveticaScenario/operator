@@ -48,17 +48,6 @@ impl Default for BufferWriteOutputs {
 }
 
 impl crate::types::OutputStruct for BufferWriteOutputs {
-    fn copy_from(&mut self, other: &Self) {
-        self.sample = other.sample;
-    }
-
-    fn get_poly_sample(&self, port: &str) -> Option<PolyOutput> {
-        match port {
-            "output" => Some(self.sample),
-            _ => None,
-        }
-    }
-
     fn set_all_channels(&mut self, channels: usize) {
         self.sample.set_channels(channels);
     }
@@ -282,15 +271,16 @@ mod tests {
         fn get_id(&self) -> &str {
             &self.id
         }
-        fn tick(&self) {}
-        fn update(&self) {}
-        fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
-            Ok(PolyOutput::default())
-        }
         fn get_module_type(&self) -> &str {
             "$buffer"
         }
         fn connect(&self, _patch: &Patch) {}
+        fn start_block(&self) {}
+        fn ensure_processed_to(&self, _target: usize) {}
+        fn ensure_processed(&self) {}
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
@@ -413,8 +403,8 @@ mod tests {
     }
 
     fn step(module: &dyn Sampleable) {
-        module.tick();
-        module.update();
+        module.start_block();
+        module.ensure_processed();
     }
 
     #[test]
@@ -427,13 +417,10 @@ mod tests {
 
         step(module.as_ref());
 
-        let output = module
-            .get_poly_sample("output")
-            .expect("get_poly_sample failed");
+        let value = module.get_value_at("output", 0, 0);
         assert!(
-            (output.get(0) - 3.0).abs() < 1e-6,
-            "expected passthrough of 3.0, got {}",
-            output.get(0)
+            (value - 3.0).abs() < 1e-6,
+            "expected passthrough of 3.0, got {value}",
         );
     }
 

@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use napi::Result;
 use parking_lot::Mutex;
 
 use crate::{
@@ -19,16 +18,8 @@ pub struct AudioIn {
 }
 
 impl Sampleable for AudioIn {
-    fn update(&self) {}
-
     fn get_id(&self) -> &str {
         WellKnownModule::HiddenAudioIn.id()
-    }
-
-    fn tick(&self) {}
-
-    fn get_poly_sample(&self, _port: &str) -> Result<PolyOutput> {
-        Ok(*self.input.lock())
     }
 
     fn get_module_type(&self) -> &str {
@@ -37,10 +28,19 @@ impl Sampleable for AudioIn {
 
     fn connect(&self, _patch: &crate::Patch) {}
 
-    fn on_patch_update(&self) {}
+    /// Reset the per-block cursor. `AudioIn`'s input is a single snapshot
+    /// owned by the audio thread — there's nothing per-sample to advance.
+    fn start_block(&self) {}
 
-    fn get_state(&self) -> Option<serde_json::Value> {
-        None
+    fn ensure_processed_to(&self, _target: usize) {}
+
+    fn ensure_processed(&self) {}
+
+    /// Snapshot read of the current host audio input frame. The audio
+    /// callback writes `self.input` once per block before pulling outputs,
+    /// so `get_value_at` returns the same value for every slot in a block.
+    fn get_value_at(&self, _port: &str, ch: usize, _index: usize) -> f32 {
+        self.input.lock().get(ch)
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

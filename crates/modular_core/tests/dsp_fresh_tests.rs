@@ -41,10 +41,10 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
     .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
 }
 
-/// Advance one sample: tick then update.
+/// Advance one block (single sample at `block_size=1`).
 fn step(module: &dyn Sampleable) {
-    module.tick();
-    module.update();
+    module.start_block();
+    module.ensure_processed();
 }
 
 /// Advance N samples and collect the first channel of `output`.
@@ -52,11 +52,7 @@ fn collect_samples(module: &dyn Sampleable, n: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         step(module);
-        let sample = module
-            .get_poly_sample(DEFAULT_PORT)
-            .expect("get_poly_sample failed")
-            .get(0);
-        out.push(sample);
+        out.push(module.get_value_at(DEFAULT_PORT, 0, 0));
     }
     out
 }
@@ -66,11 +62,7 @@ fn collect_channel(module: &dyn Sampleable, channel: usize, n: usize) -> Vec<f32
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
         step(module);
-        let sample = module
-            .get_poly_sample(DEFAULT_PORT)
-            .expect("get_poly_sample failed")
-            .get(channel);
-        out.push(sample);
+        out.push(module.get_value_at(DEFAULT_PORT, channel, 0));
     }
     out
 }
@@ -134,9 +126,8 @@ fn sine_polyphonic() {
     let mut ch1_samples = Vec::new();
     for _ in 0..500 {
         step(osc2.as_ref());
-        let poly = osc2.get_poly_sample(DEFAULT_PORT).unwrap();
-        ch0_samples.push(poly.get(0));
-        ch1_samples.push(poly.get(1));
+        ch0_samples.push(osc2.get_value_at(DEFAULT_PORT, 0, 0));
+        ch1_samples.push(osc2.get_value_at(DEFAULT_PORT, 1, 0));
     }
 
     let (mn0, mx0) = min_max(&ch0_samples);
@@ -246,7 +237,7 @@ fn scale_and_shift_applies() {
     for _ in 0..500 {
         step(sas.as_ref());
     }
-    let sample = sas.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = sas.get_value_at(DEFAULT_PORT, 0, 0);
 
     assert!(approx_eq(sample, 3.0, 0.1), "expected ~3.0, got {sample}");
 }
@@ -302,6 +293,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$tah" => json!({ "input": 0.0, "gate": 0.0 }),
         "$dattorro" => json!({ "input": 0.0 }),
         "$plate" => json!({ "input": 0.0 }),
+        "$overdrive" => json!({ "input": 0.0, "drive": 0.0 }),
         "$step" => json!({ "steps": [0.0], "next": 0.0 }),
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
@@ -367,9 +359,9 @@ fn all_constructors_can_tick() {
         )
         .unwrap();
         // Should not panic with minimal params
-        module.tick();
-        module.update();
-        let _ = module.get_poly_sample(DEFAULT_PORT);
+        module.start_block();
+        module.ensure_processed();
+        let _ = module.get_value_at(DEFAULT_PORT, 0, 0);
     }
 }
 
@@ -404,14 +396,15 @@ fn schemas_have_non_empty_documentation() {
 
 // ─── Patch-level helpers ─────────────────────────────────────────────────────
 
-/// Process one frame of the entire patch (update all, then tick all).
-/// Mirrors the ordering in `AudioThread::process_frame`.
+/// Process one frame (single sample at `block_size=1`) of the entire patch.
+/// Mirrors `AudioProcessor::process_frame`: reset cursors, then ensure every
+/// module advances.
 fn process_frame(patch: &Patch) {
     for module in patch.sampleables.values() {
-        module.update();
+        module.start_block();
     }
     for module in patch.sampleables.values() {
-        module.tick();
+        module.ensure_processed();
     }
 }
 
@@ -479,7 +472,7 @@ fn from_graph_params_are_applied() {
     }
 
     let module = patch.sampleables.get("sas1").unwrap();
-    let sample = module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = module.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 3.0, 0.15),
         "expected ~3.0 after param smoothing, got {sample}"
@@ -510,8 +503,8 @@ fn from_graph_cable_routing_sine_to_signal() {
     let mut osc_samples = Vec::new();
     for _ in 0..1000 {
         process_frame(&patch);
-        sig_samples.push(sig_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        osc_samples.push(osc_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        sig_samples.push(sig_module.get_value_at(DEFAULT_PORT, 0, 0));
+        osc_samples.push(osc_module.get_value_at(DEFAULT_PORT, 0, 0));
     }
 
     // The $signal output should match the oscillator's output exactly
@@ -584,8 +577,8 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
     for _ in 0..2000 {
         process_frame(&patch);
         process_frame(&direct_patch);
-        filtered.push(mix_filtered.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        direct.push(mix_direct.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        filtered.push(mix_filtered.get_value_at(DEFAULT_PORT, 0, 0));
+        direct.push(mix_direct.get_value_at(DEFAULT_PORT, 0, 0));
     }
 
     // Direct signal should have significant amplitude
@@ -625,8 +618,8 @@ fn from_graph_process_frame_advances_all_modules() {
     let mut slow_samples = Vec::new();
     for _ in 0..2000 {
         process_frame(&patch);
-        fast_samples.push(fast.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        slow_samples.push(slow.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        fast_samples.push(fast.get_value_at(DEFAULT_PORT, 0, 0));
+        slow_samples.push(slow.get_value_at(DEFAULT_PORT, 0, 0));
     }
 
     let (fast_mn, fast_mx) = min_max(&fast_samples);
@@ -678,7 +671,7 @@ fn curve_linear_passthrough() {
     for _ in 0..500 {
         step(m.as_ref());
     }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 3.0, 0.1),
         "exp=1 should pass through, got {sample}"
@@ -692,7 +685,7 @@ fn curve_unity_at_5v() {
     for _ in 0..500 {
         step(m.as_ref());
     }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 5.0, 0.1),
         "5V should stay 5V, got {sample}"
@@ -706,7 +699,7 @@ fn curve_cubic_midpoint() {
     for _ in 0..500 {
         step(m.as_ref());
     }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 0.625, 0.1),
         "expected ~0.625, got {sample}"
@@ -720,7 +713,7 @@ fn curve_preserves_sign() {
     for _ in 0..500 {
         step(m.as_ref());
     }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
     // sign(-2.5) * 5 * (2.5/5)^2 = -1 * 5 * 0.25 = -1.25
     assert!(
         approx_eq(sample, -1.25, 0.1),
@@ -735,7 +728,7 @@ fn curve_zero_input() {
     for _ in 0..500 {
         step(m.as_ref());
     }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 0.0, 0.01),
         "0V input should produce 0V, got {sample}"
@@ -749,7 +742,7 @@ fn curve_exp_zero_step_function() {
     for _ in 0..500 {
         step(m.as_ref());
     }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = m.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 5.0, 0.1),
         "exp=0 nonzero input should → 5V, got {sample}"
@@ -798,7 +791,7 @@ fn buffer_and_delay_read_pipeline() {
     }
 
     let delay_module = patch.sampleables.get("delay").unwrap();
-    let sample = delay_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = delay_module.get_value_at(DEFAULT_PORT, 0, 0);
 
     assert!(
         (sample - 2.0).abs() < 0.1,
@@ -870,9 +863,7 @@ fn buffer_feedback_cycle_propagates_through_delay_read() {
         .sampleables
         .get("delayRead")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
 
     // Steady state of 1 / (1 - 0.8) = 5. A dropped cycle pins delayRead at
     // the 1 V input.
@@ -922,8 +913,8 @@ fn delay_read_output_lags_behind_buffer_passthrough() {
     let sample_count = 500;
     for _ in 0..sample_count {
         process_frame(&patch);
-        let buf_sample = buf_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
-        let delay_sample = delay_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+        let buf_sample = buf_module.get_value_at(DEFAULT_PORT, 0, 0);
+        let delay_sample = delay_module.get_value_at(DEFAULT_PORT, 0, 0);
         if (buf_sample - delay_sample).abs() > 0.01 {
             differences += 1;
         }
@@ -1009,16 +1000,12 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         .sampleables
         .get("a")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
     let old_b_output = old_patch
         .sampleables
         .get("b")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
 
     // Verify we're at steady state with non-zero values
     assert!(
@@ -1052,16 +1039,12 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         .sampleables
         .get("a")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
     let new_b_output = new_patch
         .sampleables
         .get("b")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
 
     // The outputs should be close to the old steady-state values.
     // Without the fix, one module reads zeros from the other's wrapper,
@@ -1136,9 +1119,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         .sampleables
         .get("seq")
         .unwrap()
-        .get_poly_sample("cv")
-        .unwrap()
-        .get(0);
+        .get_value_at("cv", 0, 0);
 
     // During rest, the old module should still hold the last active voltage.
     // (This verifies the test setup is correct — the old module works fine.)
@@ -1172,9 +1153,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         .sampleables
         .get("seq")
         .unwrap()
-        .get_poly_sample("cv")
-        .unwrap()
-        .get(0);
+        .get_value_at("cv", 0, 0);
 
     // The CV should still hold the previous active voltage, not drop to 0.
     assert!(

@@ -694,26 +694,21 @@ fn impl_module_macro_attr(
         /// Violating these invariants will cause undefined behavior (data races).
         struct #struct_name {
             id: String,
-            outputs: std::cell::UnsafeCell<#outputs_ty>,
             module: std::cell::UnsafeCell<#name #static_ty_generics>,
-            processed: core::sync::atomic::AtomicBool,
             sample_rate: f32,
             argument_spans: std::cell::UnsafeCell<std::collections::HashMap<String, crate::params::ArgumentSpan>>,
-            /// Per-block sample-index counter. Stored on the wrapper so
-            /// embedded `Signal::Cable`s in this module's params can hold a
-            /// raw back-pointer to it (set during `connect()`) and read it
-            /// inline when fetching upstream block samples.
-            ///
-            /// Today the audio thread runs per-sample with `block_size=1`,
-            /// so `tick()` resets it back to 0 between samples. The
-            /// upcoming block-buffered audio loop will treat it as the
-            /// active block cursor and advance it across the full block.
+            /// Per-block sample-index cursor. `start_block()` resets it to 0
+            /// at the top of each internal `block_size` block; `ensure_processed_to`
+            /// advances it as samples get written. Embedded `Signal::Cable`s
+            /// in this module's params hold a raw back-pointer to it (set
+            /// during `connect()`) and read it inline when fetching upstream
+            /// block samples.
             index: std::cell::Cell<usize>,
             /// Block-sized output buffer. One `BlockPort` per output port,
-            /// each pre-allocated to `block_size` samples. The wrapper writes
-            /// the inner module's per-sample outputs into slot `index` after
-            /// each `update()` call, and downstream cables read from it via
-            /// `get_value_at(port_idx, ch, index)`.
+            /// each pre-allocated to `block_size` samples. `ensure_processed_to`
+            /// writes the inner module's per-sample outputs into slot `i`
+            /// after each `inner.update`, and downstream cables read from it
+            /// via `get_value_at(port_idx, ch, index)`.
             ///
             /// Allocated once at construction; never resized on the audio
             /// thread.
@@ -725,63 +720,42 @@ fn impl_module_macro_attr(
             /// first request; Sample-mode wrappers compute one sample per
             /// request (used for modules inside feedback cycles).
             mode: crate::types::ProcessingMode,
-            /// Reentrancy guard for block-mode `get_value_at`. When a cycle
-            /// reads back into a module that is mid-computation, the cable
-            /// returns the previous block's last sample instead of looping
-            /// forever.
+            /// Reentrancy guard for `get_value_at`. Set by `ensure_processed_to`
+            /// while it runs the inner update loop. When a cycle reads back
+            /// into a module that is mid-computation, `get_value_at` returns
+            /// the slot one step *behind* the requested one (wrapping at the
+            /// block boundary) so the feedback path sees exactly a 1-sample
+            /// delay.
             computing: std::cell::Cell<bool>,
         }
         impl crate::types::Sampleable for #struct_name {
-            fn tick(&self) {
-                self.processed.store(false, core::sync::atomic::Ordering::Release);
-                // Reset the per-block sample cursor so the next call cycle
-                // writes back into slot 0 of the BlockPort. Today every CPAL
-                // sample is one block (`block_size=1`); the audio-callback
-                // rewrite will replace this entry point with `start_block`
-                // driven from the audio loop.
+            fn start_block(&self) {
                 self.index.set(0);
-            }
-
-            fn update(&self) {
-                if let Ok(_) = self.processed.compare_exchange(
-                    false,
-                    true,
-                    core::sync::atomic::Ordering::Acquire,
-                    core::sync::atomic::Ordering::Relaxed,
-                ) {
-                    // Snapshot the index *before* inner.update so the write
-                    // below targets the slot the wrapper is logically
-                    // producing — not whatever slot a nested `get_value_at`
-                    // happens to leave `self.index` pointing at.
-                    //
-                    // Without this snapshot, a feedback cycle that re-enters
-                    // this same wrapper through `get_value_at → ensure_processed_to`
-                    // advances `self.index` to `self.block_size` mid-update;
-                    // the outer write then either OOBs (no bound check) or
-                    // silently skips (with bound check), leaving
-                    // `block_outputs[0]` stale across the entire frame and
-                    // breaking buffer-mediated feedback (e.g. `$delay` with
-                    // a `$delayRead` feedback path).
-                    let starting_idx = self.index.get();
-                    unsafe {
-                        let module = &mut *self.module.get();
-                        module.update(self.sample_rate);
-                        let outputs = &mut *self.outputs.get();
-                        crate::types::OutputStruct::copy_from(outputs, &module.outputs);
-                        if starting_idx < self.block_size {
-                            let block_outputs = &mut *self.block_outputs.get();
-                            block_outputs.copy_from_inner(&module.outputs, starting_idx);
-                        }
-                    }
-                }
             }
 
             fn ensure_processed_to(&self, target: usize) {
                 let target = target.min(self.block_size);
-                while self.index.get() < target {
-                    self.update();
-                    self.index.set(self.index.get() + 1);
+                if self.index.get() >= target {
+                    return;
                 }
+                // Re-entry guard: if a cycle bounces back into the same
+                // wrapper while it is mid-loop, bail without doing any work.
+                // `get_value_at` handles that case by returning the previous
+                // slot's value.
+                if self.computing.get() {
+                    return;
+                }
+                self.computing.set(true);
+                while self.index.get() < target {
+                    let i = self.index.get();
+                    unsafe {
+                        let module = &mut *self.module.get();
+                        module.update(self.sample_rate);
+                        (*self.block_outputs.get()).copy_from_inner(&module.outputs, i);
+                    }
+                    self.index.set(i + 1);
+                }
+                self.computing.set(false);
             }
 
             fn ensure_processed(&self) {
@@ -793,13 +767,6 @@ fn impl_module_macro_attr(
                     Some(i) => i,
                     None => return 0.0,
                 };
-                // Reentrancy: a cycle has read back into this module while
-                // it is mid-computation. Return the slot one step *behind*
-                // the requested one (wrapping at the block boundary) so the
-                // feedback path sees exactly a 1-sample delay regardless of
-                // block size. Slots not yet written this block still hold
-                // the previous block's data, which preserves the 1-sample
-                // invariant across the boundary.
                 if self.computing.get() {
                     let prev = if index == 0 {
                         self.block_size.saturating_sub(1)
@@ -809,36 +776,14 @@ fn impl_module_macro_attr(
                     let outputs = unsafe { &*self.block_outputs.get() };
                     return outputs.get_at(port_idx, ch, prev);
                 }
-                match self.mode {
-                    crate::types::ProcessingMode::Block => {
-                        self.computing.set(true);
-                        self.ensure_processed();
-                        self.computing.set(false);
-                    }
-                    crate::types::ProcessingMode::Sample => {
-                        self.computing.set(true);
-                        // Inclusive — process up through the requested slot.
-                        self.ensure_processed_to(index + 1);
-                        self.computing.set(false);
-                    }
-                }
+                let target = match self.mode {
+                    crate::types::ProcessingMode::Block => self.block_size,
+                    // Inclusive — process up through the requested slot.
+                    crate::types::ProcessingMode::Sample => index + 1,
+                };
+                self.ensure_processed_to(target);
                 let outputs = unsafe { &*self.block_outputs.get() };
                 outputs.get_at(port_idx, ch, index)
-            }
-
-            fn get_poly_sample(&self, port: &str) -> napi::Result<crate::poly::PolyOutput> {
-                self.update();
-                let outputs = unsafe { &*self.outputs.get() };
-                crate::types::OutputStruct::get_poly_sample(outputs, port).ok_or_else(|| {
-                    napi::Error::from_reason(
-                        format!(
-                            "{} with id {} does not have port {}",
-                            #module_name,
-                            &self.id,
-                            port
-                        )
-                    )
-                })
             }
 
             fn get_module_type(&self) -> &str {
@@ -893,15 +838,16 @@ fn impl_module_macro_attr(
                         &mut new_inner.outputs,
                         &mut old_inner.outputs,
                     );
-                    // Transfer wrapper outputs so feedback cycles read previous-frame
-                    // values instead of zeros on the patch-update frame. Without this,
-                    // the module that is "second" in a cycle reads Default outputs
-                    // (all zeros) from the "first" module's wrapper, injecting a
-                    // one-sample discontinuity into the feedback loop.
+                    // Swap the block-sample buffers so feedback cycles read the
+                    // previous block's values on the patch-update frame
+                    // instead of the new wrapper's zero-initialised buffer.
+                    // Without this swap the "second" module in a cycle would
+                    // see zeros from the freshly-constructed wrapper and
+                    // inject a one-sample discontinuity into the feedback loop.
                     unsafe {
-                        let new_outputs = &mut *self.outputs.get();
-                        let old_outputs = &mut *old_typed.outputs.get();
-                        std::mem::swap(new_outputs, old_outputs);
+                        let new_block_outputs = &mut *self.block_outputs.get();
+                        let old_block_outputs = &mut *old_typed.block_outputs.get();
+                        std::mem::swap(new_block_outputs, old_block_outputs);
                     }
                 }
             }
@@ -931,9 +877,7 @@ fn impl_module_macro_attr(
             let sampleable = #struct_name {
                 id: id.clone(),
                 sample_rate,
-                outputs: std::cell::UnsafeCell::new(Default::default()),
                 module: std::cell::UnsafeCell::new(inner),
-                processed: core::sync::atomic::AtomicBool::new(false),
                 argument_spans: std::cell::UnsafeCell::new(deserialized.argument_spans),
                 index: std::cell::Cell::new(0),
                 block_outputs: std::cell::UnsafeCell::new(<#block_outputs_ty>::new(_block_size)),

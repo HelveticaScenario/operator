@@ -433,7 +433,6 @@ mod tests {
     use crate::params::DeserializedParams;
     use crate::types::Sampleable;
     use serde_json::json;
-    use std::sync::Arc;
 
     const SAMPLE_RATE: f32 = 48000.0;
     const DEFAULT_PORT: &str = "output";
@@ -459,8 +458,8 @@ mod tests {
     }
 
     fn step(module: &dyn Sampleable) {
-        module.tick();
-        module.update();
+        module.start_block();
+        module.ensure_processed();
     }
 
     fn collect_stereo(module: &dyn Sampleable, n: usize) -> (Vec<f32>, Vec<f32>) {
@@ -468,9 +467,8 @@ mod tests {
         let mut right = Vec::with_capacity(n);
         for _ in 0..n {
             step(module);
-            let poly = module.get_poly_sample(DEFAULT_PORT).unwrap();
-            left.push(poly.get(0));
-            right.push(poly.get(1));
+            left.push(module.get_value_at(DEFAULT_PORT, 0, 0));
+            right.push(module.get_value_at(DEFAULT_PORT, 1, 0));
         }
         (left, right)
     }
@@ -592,10 +590,17 @@ mod tests {
 
     #[test]
     fn output_is_two_channels() {
-        let dattorro = make_dattorro(dattorro_params(json!({})));
-        step(dattorro.as_ref());
-        let poly = dattorro.get_poly_sample(DEFAULT_PORT).unwrap();
-        assert_eq!(poly.channels(), 2, "output should be stereo (2 channels)");
+        // Drive an impulse into the reverb and verify both output channels
+        // produce distinct non-zero output once the early reflections kick
+        // in — confirming the dattorro genuinely emits stereo.
+        let dattorro = make_dattorro(dattorro_params(json!({ "input": 5.0 })));
+        let (left, right) = collect_stereo(dattorro.as_ref(), 10_000);
+        let mean_l: f32 = left.iter().map(|v| v.abs()).sum::<f32>() / left.len() as f32;
+        let mean_r: f32 = right.iter().map(|v| v.abs()).sum::<f32>() / right.len() as f32;
+        assert!(mean_l > 0.0, "left channel produced no output");
+        assert!(mean_r > 0.0, "right channel produced no output");
+        let diffs = left.iter().zip(right.iter()).filter(|(l, r)| (*l - *r).abs() > 1e-6).count();
+        assert!(diffs > left.len() / 4, "channels look mono — only {diffs} of {} frames differ", left.len());
     }
 
     #[test]

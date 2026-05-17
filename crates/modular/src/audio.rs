@@ -1563,7 +1563,9 @@ impl AudioProcessor {
       return output; // Skip processing when stopped
     }
 
-    // 1. Sync Link state to ROOT_CLOCK, then update ROOT_CLOCK
+    // 1. Sync Link state into ROOT_CLOCK and run its block. The trigger
+    //    outputs need to be live before we inspect them for queued patch
+    //    swaps below.
     let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
     self.link.sync_frame(|bar_phase, tempo| {
       if let Some(clock) = root_clock {
@@ -1571,73 +1573,63 @@ impl AudioProcessor {
       }
     });
 
-    // 2. Update ROOT_CLOCK so its trigger outputs are available this frame
+    for module in self.patch.sampleables.values() {
+      module.start_block();
+    }
     if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
-      root_clock.update();
+      root_clock.ensure_processed();
     }
 
-    // 2. Check queued update trigger against ROOT_CLOCK outputs
+    // 2. Check queued update trigger against ROOT_CLOCK outputs.
     let should_apply = if let Some((_, trigger)) = self.queued_update.as_ref() {
       match trigger {
         QueuedTrigger::Immediate => true,
-        QueuedTrigger::NextBar => {
-          if let Some(clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
-            clock
-              .get_poly_sample("barTrigger")
-              .map(|p| p.get(0) >= 1.0)
-              .unwrap_or(true)
-          } else {
-            true // No clock module = apply immediately
-          }
-        }
-        QueuedTrigger::NextBeat => {
-          if let Some(clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
-            clock
-              .get_poly_sample("beatTrigger")
-              .map(|p| p.get(0) >= 1.0)
-              .unwrap_or(true)
-          } else {
-            true
-          }
-        }
+        QueuedTrigger::NextBar => self
+          .patch
+          .sampleables
+          .get(&*ROOT_CLOCK_ID)
+          .map(|c| c.get_value_at("barTrigger", 0, 0) >= 1.0)
+          .unwrap_or(true),
+        QueuedTrigger::NextBeat => self
+          .patch
+          .sampleables
+          .get(&*ROOT_CLOCK_ID)
+          .map(|c| c.get_value_at("beatTrigger", 0, 0) >= 1.0)
+          .unwrap_or(true),
       }
     } else {
       false
     };
 
-    // 3. If triggered, apply the patch update
+    // 3. If triggered, apply the patch update.
     if should_apply {
       let (update, _) = self.queued_update.take().unwrap();
       let applied_id = update.update_id;
       self.apply_patch_update(update);
       self.transport_meter.write_applied_update_id(applied_id);
-    }
-
-    // 4. Update all modules (ROOT_CLOCK won't re-run due to CAS guard;
-    //    newly inserted modules participate on this same frame)
-    {
-      profiling::scope!("update_modules");
+      // Newly-constructed modules need a fresh block reset before their
+      // first ensure_processed below.
       for module in self.patch.sampleables.values() {
-        module.update();
+        module.start_block();
       }
     }
 
-    // 4.5 Write transport state from ROOT_CLOCK outputs (CAS guard prevents re-execution)
+    // 4. Drive every module to completion (idempotent; ROOT_CLOCK and any
+    //    cable-pulled modules short-circuit on `self.index >= block_size`).
+    {
+      profiling::scope!("ensure_processed");
+      for module in self.patch.sampleables.values() {
+        module.ensure_processed();
+      }
+    }
+
+    // 4.5 Write transport state from ROOT_CLOCK outputs.
     {
       let has_queued = self.queued_update.is_some();
       if let Some(clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
-        let bar_phase = clock
-          .get_poly_sample("playhead")
-          .map(|p| p.get(0) as f64)
-          .unwrap_or(0.0);
-        let bar_count = clock
-          .get_poly_sample("playhead")
-          .map(|p| p.get(1) as u64)
-          .unwrap_or(0);
-        let beat_in_bar = clock
-          .get_poly_sample("beatInBar")
-          .map(|p| p.get(0) as u32)
-          .unwrap_or(0);
+        let bar_phase = clock.get_value_at("playhead", 0, 0) as f64;
+        let bar_count = clock.get_value_at("playhead", 1, 0) as u64;
+        let beat_in_bar = clock.get_value_at("beatInBar", 0, 0) as u32;
         let is_playing = !self.is_stopped();
         self.transport_meter.write_from_audio(
           bar_phase,
@@ -1653,38 +1645,22 @@ impl AudioProcessor {
       }
     }
 
-    // 5. Tick all modules (reset processed flags)
-    {
-      profiling::scope!("tick_modules");
-      for module in self.patch.sampleables.values() {
-        module.tick();
-      }
-    }
-
-    // Capture audio for scopes
+    // Capture audio for scopes.
     {
       profiling::scope!("capture_scopes");
       let mut scope_lock = self.scope_collection.lock();
       for (key, scope_buffer) in scope_lock.iter_mut() {
-        if let Some(module) = self.patch.sampleables.get(&key.module_id)
-          && let Ok(poly) = module.get_poly_sample(&key.port_name)
-        {
-          let sample = if (key.channel as usize) < poly.channels() {
-            poly.get(key.channel as usize)
-          } else {
-            0.0
-          };
+        if let Some(module) = self.patch.sampleables.get(&key.module_id) {
+          let sample = module.get_value_at(&key.port_name, key.channel as usize, 0);
           scope_buffer.push(sample);
         }
       }
     }
 
-    // Get output from root module
+    // Get output from root module.
     if let Some(root) = self.patch.sampleables.get(&*ROOT_ID) {
-      if let Ok(poly) = root.get_poly_sample(&ROOT_OUTPUT_PORT) {
-        for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-          output[ch] = poly.get(ch) * AUDIO_OUTPUT_ATTENUATION;
-        }
+      for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
+        output[ch] = root.get_value_at(&ROOT_OUTPUT_PORT, ch, 0) * AUDIO_OUTPUT_ATTENUATION;
       }
     }
 
@@ -2337,7 +2313,6 @@ pub struct TransportSnapshot {
 mod tests {
   use super::*;
   use modular_core::Signal;
-  use modular_core::poly::PolyOutput;
   use modular_core::types::ModuleIdRemap;
   use modular_core::types::{Message, MessageHandler, MessageTag, MidiNoteOn};
   use std::sync::atomic::AtomicUsize;
@@ -2422,15 +2397,16 @@ mod tests {
     fn get_id(&self) -> &str {
       &self.current_id
     }
-    fn tick(&self) {}
-    fn update(&self) {}
-    fn get_poly_sample(&self, _port: &str) -> napi::Result<modular_core::poly::PolyOutput> {
-      Ok(modular_core::poly::PolyOutput::default())
-    }
     fn get_module_type(&self) -> &str {
       &self.label
     }
     fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn start_block(&self) {}
+    fn ensure_processed_to(&self, _target: usize) {}
+    fn ensure_processed(&self) {}
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      0.0
+    }
     fn as_any(&self) -> &dyn std::any::Any {
       self
     }
@@ -2467,15 +2443,16 @@ mod tests {
     fn get_id(&self) -> &str {
       &self.current_id
     }
-    fn tick(&self) {}
-    fn update(&self) {}
-    fn get_poly_sample(&self, _port: &str) -> napi::Result<modular_core::poly::PolyOutput> {
-      Ok(modular_core::poly::PolyOutput::default())
-    }
     fn get_module_type(&self) -> &str {
       &self.label
     }
     fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn start_block(&self) {}
+    fn ensure_processed_to(&self, _target: usize) {}
+    fn ensure_processed(&self) {}
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      0.0
+    }
     fn as_any(&self) -> &dyn std::any::Any {
       self
     }
@@ -2501,18 +2478,16 @@ mod tests {
     fn get_id(&self) -> &str {
       &self.current_id
     }
-    fn tick(&self) {}
-    fn update(&self) {}
-    fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
-      Ok(PolyOutput::mono(self.value))
-    }
-    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
-      self.value
-    }
     fn get_module_type(&self) -> &str {
       "constant-output"
     }
     fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn start_block(&self) {}
+    fn ensure_processed_to(&self, _target: usize) {}
+    fn ensure_processed(&self) {}
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      self.value
+    }
     fn as_any(&self) -> &dyn std::any::Any {
       self
     }
@@ -2540,14 +2515,6 @@ mod tests {
     fn get_id(&self) -> &str {
       &self.current_id
     }
-    fn tick(&self) {}
-    fn update(&self) {}
-    fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
-      Ok(PolyOutput::mono(self.cached_signal.lock().get_value()))
-    }
-    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
-      self.cached_signal.lock().get_value()
-    }
     fn get_module_type(&self) -> &str {
       "patch-update-sensitive"
     }
@@ -2557,6 +2524,12 @@ mod tests {
     fn on_patch_update(&self) {
       let signal = self.params_signal.lock().clone();
       *self.cached_signal.lock() = signal;
+    }
+    fn start_block(&self) {}
+    fn ensure_processed_to(&self, _target: usize) {}
+    fn ensure_processed(&self) {}
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      self.cached_signal.lock().get_value()
     }
     fn as_any(&self) -> &dyn std::any::Any {
       self
@@ -2813,9 +2786,7 @@ mod tests {
       .sampleables
       .get("dep")
       .unwrap()
-      .get_poly_sample("out")
-      .unwrap()
-      .get(0);
+      .get_value_at("out", 0, 0);
     assert_eq!(initial, 3.5);
 
     cmd_producer
@@ -2832,9 +2803,7 @@ mod tests {
       .sampleables
       .get("dep")
       .unwrap()
-      .get_poly_sample("out")
-      .unwrap()
-      .get(0);
+      .get_value_at("out", 0, 0);
     assert_eq!(updated, 7.25);
   }
 
