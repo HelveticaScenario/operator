@@ -1060,6 +1060,25 @@ function $ott(input: Collection | ModuleOutput, config?: {
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
 
 /**
+ * @param count - Size of the output
+ * @param playhead - 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
+ * @param range - \`[off, on]\` weight pair (default \`[0, 1]\`)
+ * @param interpolationType - Easing between keyframes (default linear)
+ *
+ * @example
+ * // Crossfade the amplitude of the different voices
+ * const osc = $sine(['c', 'e', 'g'])
+ * const weights = $cross(osc.length, $sine('0.25hz').range(0, 1));
+ * osc.amp(weights).out();
+ */
+function $cross(
+    count: number,
+    playhead: Mono<Signal>,
+    range?: [number, number],
+    interpolationType?: Parameters<typeof $track>[1]['interpolationType'],
+): Collection;
+
+/**
  * Phase-warp table descriptors for modules that accept a {@link Table}
  * (e.g. the \`phase\` config field on \`$wavetable\`).
  *
