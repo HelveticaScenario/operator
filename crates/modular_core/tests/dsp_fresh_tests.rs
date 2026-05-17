@@ -1183,3 +1183,50 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
          (0.0 means inner outputs were not preserved across state transfer)"
     );
 }
+
+// ─── $track playhead boundaries ──────────────────────────────────────────────
+
+/// Helper: run the module past initial param smoothing, then read channel 0.
+fn track_value_at(playhead: f32, keyframes: serde_json::Value) -> f32 {
+    let m = make_module(
+        "$track",
+        "track-1",
+        json!({ "playhead": playhead, "keyframes": keyframes }),
+    );
+    for _ in 0..500 {
+        step(m.as_ref());
+    }
+    m.get_poly_sample(DEFAULT_PORT).unwrap().get(0)
+}
+
+#[test]
+fn track_last_keyframe_at_time_1_reachable_with_playhead_1() {
+    // Regression: previously `fract(1.0) == 0.0` mapped playhead=1 to t=0,
+    // clamping to the first keyframe and making the time=1 keyframe unreachable.
+    let v = track_value_at(1.0, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 5.0, 0.01), "expected 5.0, got {v}");
+}
+
+#[test]
+fn track_first_keyframe_at_time_0_with_playhead_0() {
+    let v = track_value_at(0.0, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 1.0, 0.01), "expected 1.0, got {v}");
+}
+
+#[test]
+fn track_midpoint_interpolates_linearly() {
+    let v = track_value_at(0.5, json!([[1.0, 0.0], [5.0, 0.5], [3.0, 1.0]]));
+    assert!(approx_eq(v, 5.0, 0.01), "expected 5.0, got {v}");
+}
+
+#[test]
+fn track_clamps_playhead_above_one() {
+    let v = track_value_at(1.5, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 5.0, 0.01), "expected 5.0 (clamped), got {v}");
+}
+
+#[test]
+fn track_clamps_playhead_below_zero() {
+    let v = track_value_at(-0.1, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 1.0, 0.01), "expected 1.0 (clamped), got {v}");
+}
