@@ -45,19 +45,34 @@ impl ArgumentSpan {
 
 /// Object-safe trait for cloning type-erased params boxes.
 ///
-/// Blanket-implemented for all `T: Clone + Send + 'static`, so concrete param
-/// structs only need to derive `Clone`.
+/// Blanket-implemented for all `T: Clone + Send + 'static + Connect`, so
+/// concrete params structs only need to derive `Clone` and `Connect`. Every
+/// module's params struct already does both — `Connect` is required to
+/// resolve cable references at runtime and now also so the type-erased box
+/// can expose [`collect_cables`](Self::collect_cables) for SCC analysis.
 pub trait CloneableParams: Send + 'static {
     fn clone_box(&self) -> Box<dyn CloneableParams>;
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any>;
+
+    /// Walk the params and push every producer module ID it references
+    /// (cables, buffer sources, table-internal signals) into `sink`.
+    ///
+    /// Used by graph cycle classification before module construction so
+    /// downstream code (e.g. `graph_analysis::classify_modules`) can decide
+    /// whether each module needs `Block` or `Sample` processing without
+    /// requiring the audio thread to know the params type.
+    fn collect_cables(&self, sink: &mut Vec<String>);
 }
 
-impl<T: Clone + Send + 'static> CloneableParams for T {
+impl<T: Clone + Send + 'static + crate::types::Connect> CloneableParams for T {
     fn clone_box(&self) -> Box<dyn CloneableParams> {
         Box::new(self.clone())
     }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        <T as crate::types::Connect>::collect_cables(self, sink)
     }
 }
 

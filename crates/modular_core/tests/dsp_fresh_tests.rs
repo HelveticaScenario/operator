@@ -4,6 +4,8 @@
 //! constructing modules via the public API, setting params as JSON, and
 //! reading samples after ticking.
 
+use std::collections::HashMap;
+
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
@@ -12,12 +14,16 @@ use serde_json::json;
 
 const SAMPLE_RATE: f32 = 48000.0;
 const DEFAULT_PORT: &str = "output";
-/// Block size used at construction by every direct-module test in this file.
-/// Bumping this exercises the wrapper's per-block dispatch — the collect
-/// helpers walk all `TEST_BLOCK_SIZE` slots between `start_block` calls.
+/// Block size used at construction by every test in this file (direct-module
+/// and patch-level). Bumping this exercises the wrapper's per-block dispatch
+/// — the collect helpers walk all `TEST_BLOCK_SIZE` slots between
+/// `start_block` calls.
 ///
-/// Note: patch-level helpers (`process_frame`, the `from_graph_*` tests) are
-/// still locked to `block_size=1` because `Patch::from_graph` hardcodes it.
+/// Note: cycle classification (`Block` vs `Sample`) is the caller's
+/// responsibility in `Patch::from_graph`; the tests below pass an empty
+/// `mode_map`, which defaults every module to `Block`. Cycle-aware tests
+/// would build the map via `modular::graph_analysis::classify_modules`
+/// first, but the patches here are acyclic.
 const TEST_BLOCK_SIZE: usize = 1;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -477,7 +483,7 @@ fn from_graph_creates_patch_with_modules() {
         ("osc1", "$sine", json!({ "freq": 0.0 })),
         ("osc2", "$saw", json!({ "freq": 1.0 })),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Both oscillators plus the hidden AudioIn
     assert!(patch.sampleables.contains_key("osc1"));
@@ -488,7 +494,7 @@ fn from_graph_creates_patch_with_modules() {
 #[test]
 fn from_graph_rejects_unknown_module_type() {
     let graph = make_graph(vec![("bad", "$nonexistent", json!({}))]);
-    let result = Patch::from_graph(&graph, SAMPLE_RATE);
+    let result = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new());
     match result {
         Err(msg) => assert!(
             msg.contains("Unknown module type"),
@@ -508,7 +514,7 @@ fn from_graph_params_are_applied() {
         "$scaleAndShift",
         json!({ "input": 2.0, "scale": 5.0, "shift": 1.0 }),
     )]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Let param smoothing converge
     for _ in 0..500 {
@@ -537,7 +543,7 @@ fn from_graph_cable_routing_sine_to_signal() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Collect samples from the $signal module — it should reproduce the sine output
     let sig_module = patch.sampleables.get("sig").unwrap();
@@ -589,7 +595,7 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Also build a direct (unfiltered) patch for comparison
     let direct_graph = make_graph(vec![
@@ -604,7 +610,7 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
             }),
         ),
     ]);
-    let direct_patch = Patch::from_graph(&direct_graph, SAMPLE_RATE).expect("from_graph failed");
+    let direct_patch = Patch::from_graph(&direct_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Let filter settle
     for _ in 0..500 {
@@ -649,7 +655,7 @@ fn from_graph_process_frame_advances_all_modules() {
         ("fast", "$sine", json!({ "freq": 3.0 })),
         ("slow", "$sine", json!({ "freq": -3.0 })),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     for _ in 0..500 {
         process_frame(&patch);
@@ -808,7 +814,7 @@ fn buffer_and_delay_read_pipeline() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // 0.001s delay at 48 kHz = 48 frames.
     // Process 500 frames so param smoothing converges and the buffer is well-filled.
@@ -879,7 +885,7 @@ fn buffer_feedback_cycle_propagates_through_delay_read() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     for _ in 0..20_000 {
         process_frame(&patch);
@@ -924,7 +930,7 @@ fn delay_read_output_lags_behind_buffer_passthrough() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Let oscillator and buffer settle for 500 frames
     for _ in 0..500 {
@@ -1011,7 +1017,7 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         ),
     ]);
 
-    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Run 200 frames to reach steady state
     // With gain=0.5 and shift=1.0:
@@ -1044,7 +1050,7 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 
     // Build a new patch with identical graph and transfer state
-    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Transfer state from old modules to new modules
     for (id, new_module) in &new_patch.sampleables {
@@ -1129,7 +1135,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         ),
     ]);
 
-    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Advance through cycle 0 (degree 0) into the start of cycle 1 (rest).
     // One bar = 240 samples. Process 260 samples to be well into cycle 1.
@@ -1155,7 +1161,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
     );
 
     // Now simulate a force update: build new patch, transfer state, connect.
-    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
@@ -1198,10 +1204,7 @@ fn track_value_at(playhead: f32, keyframes: serde_json::Value) -> f32 {
         "track-1",
         json!({ "playhead": playhead, "keyframes": keyframes }),
     );
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    m.get_poly_sample(DEFAULT_PORT).unwrap().get(0)
+    settle_and_read(m.as_ref(), 500)
 }
 
 #[test]

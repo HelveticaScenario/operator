@@ -772,7 +772,12 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
   let (command_tx, command_rx, error_tx, error_rx, garbage_tx, garbage_rx) =
     create_audio_channels();
 
-  // Create audio state handle (main thread side)
+  // Create audio state handle (main thread side).
+  //
+  // `block_size = 1` keeps the audio callback running per-sample. The
+  // block-aware callback rewrite (and the CPAL-driven `block_size` value
+  // that comes with it) lands separately; for now this just plumbs the
+  // field through the constructor surface so module creation can use it.
   let state = Arc::new(AudioState::new_with_channels(
     command_tx,
     error_rx,
@@ -780,6 +785,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
     params.sample_rate as f32,
     channels,
     params.midi_manager.clone(),
+    1,
   ));
 
   // Get shared state for audio processor

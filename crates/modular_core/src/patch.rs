@@ -112,7 +112,19 @@ impl Patch {
     /// Replicates the logic of `AudioState::apply_patch()` without the command
     /// queue or audio-thread indirection: instantiate modules, deserialize params
     /// on the calling thread, apply them, connect cables, and fire `on_patch_update`.
-    pub fn from_graph(graph: &crate::types::PatchGraph, sample_rate: f32) -> Result<Self, String> {
+    ///
+    /// `block_size` and `mode_map` flow through to each module's constructor.
+    /// Modules absent from `mode_map` default to [`ProcessingMode::Block`]. The
+    /// cycle classification itself lives in the `modular` crate (`graph_analysis`);
+    /// callers that want cycle-aware modes should run that first and pass the
+    /// resulting map in here. Tests that don't care typically pass `block_size=1`
+    /// and an empty map.
+    pub fn from_graph(
+        graph: &crate::types::PatchGraph,
+        sample_rate: f32,
+        block_size: usize,
+        mode_map: &HashMap<String, crate::types::ProcessingMode>,
+    ) -> Result<Self, String> {
         use crate::dsp::{get_constructors, get_params_deserializers};
         use crate::params::{DeserializedParams, extract_argument_spans};
 
@@ -145,15 +157,16 @@ impl Patch {
                 argument_spans,
                 channel_count: cached.channel_count,
             };
+            let mode = mode_map
+                .get(&module_state.id)
+                .copied()
+                .unwrap_or(crate::types::ProcessingMode::Block);
             let module = constructor(
                 &module_state.id,
                 sample_rate,
                 deserialized,
-                // Block-buffered runtime not yet wired through patch construction;
-                // default to per-sample (block_size=1, Block mode). Real values flow
-                // in once the audio callback is rewritten.
-                1,
-                crate::types::ProcessingMode::Block,
+                block_size,
+                mode,
             )
             .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
             patch.sampleables.insert(module_state.id.clone(), module);

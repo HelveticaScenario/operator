@@ -858,6 +858,12 @@ pub struct AudioState {
   /// callback writes silence forever; the stream must be torn down and the
   /// Synthesizer recreated to recover.
   pub audio_thread_panicked: Arc<AtomicBool>,
+  /// Internal block size used when constructing modules. Today the audio
+  /// callback drives the inner loop at `block_size=1` regardless of the
+  /// CPAL buffer size; the block-aware callback rewrite lands separately.
+  /// Plumbed through `make_stream` so the audio thread can be flipped to
+  /// a real block size without touching every constructor call site.
+  pub block_size: usize,
 }
 
 #[derive(Default)]
@@ -880,6 +886,7 @@ impl AudioState {
     sample_rate: f32,
     channels: u16,
     midi_manager: Arc<MidiInputManager>,
+    block_size: usize,
   ) -> Self {
     Self {
       command_tx: Mutex::new(command_tx),
@@ -896,6 +903,7 @@ impl AudioState {
       midi_manager,
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      block_size,
     }
   }
 
@@ -1099,24 +1107,48 @@ impl AudioState {
         .collect();
     }
 
-    // Construct all modules that appear in desired graph on main thread.
-    // The audio thread will always replace existing modules and transfer state.
-    let constructors = get_constructors();
+    // Pass 1 — deserialize every module's params and collect the cable
+    // adjacency. Keep the deserialized params alongside the module type so
+    // pass 2 can pick the right constructor without re-deserializing.
+    let mut deserialized_modules: Vec<(String, String, modular_core::params::DeserializedParams)> =
+      Vec::with_capacity(desired_modules.len());
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
     for (id, module_state) in desired_modules {
-      // Deserialize params FIRST (before construction)
       let deserialized =
         crate::deserialize_params(&module_state.module_type, module_state.params, true).map_err(
           |e| napi::Error::from_reason(format!("Failed to deserialize params for {}: {}", id, e)),
         )?;
+      let mut producers = Vec::new();
+      deserialized.params.collect_cables(&mut producers);
+      adjacency.insert(id.clone(), producers);
+      deserialized_modules.push((id, module_state.module_type, deserialized));
+    }
 
-      if let Some(constructor) = constructors.get(&module_state.module_type) {
-        match constructor(
-          &id,
-          sample_rate,
-          deserialized,
-          1,
-          modular_core::types::ProcessingMode::Block,
-        ) {
+    // Tarjan SCC over the adjacency map. Cycle participants get `Sample`
+    // mode so the wrapper computes one sample at a time and the 1-sample
+    // feedback delay invariant holds; everyone else gets `Block`.
+    let mode_map = crate::graph_analysis::classify_modules(&adjacency);
+
+    // Pass 2 — construct modules on the main thread with the resolved mode.
+    // The audio thread will always replace existing modules and transfer state.
+    let constructors = get_constructors();
+    for (id, module_type, deserialized) in deserialized_modules {
+      if let Some(constructor) = constructors.get(&module_type) {
+        // ROOT_CLOCK is always Sample mode: the block-aware audio callback
+        // (when it lands) needs to eager-fill its trigger outputs one
+        // sample at a time so the queued-update trigger check can fire on
+        // an exact sample boundary, not a block boundary. At today's
+        // effective `block_size=1` the choice is moot, but baking the
+        // override in here keeps it correct once the audio loop flips.
+        let mode = if id == *modular_core::types::ROOT_CLOCK_ID {
+          modular_core::types::ProcessingMode::Sample
+        } else {
+          mode_map
+            .get(&id)
+            .copied()
+            .unwrap_or(modular_core::types::ProcessingMode::Block)
+        };
+        match constructor(&id, sample_rate, deserialized, self.block_size, mode) {
           Ok(module) => {
             update.inserts.push((id.clone(), module));
           }
@@ -1130,7 +1162,7 @@ impl AudioState {
       } else {
         return Err(napi::Error::from_reason(format!(
           "{} is not a valid module type",
-          module_state.module_type
+          module_type
         )));
       }
     }
