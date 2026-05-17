@@ -1598,10 +1598,20 @@ impl AudioProcessor {
     // 1. Sync Link state into ROOT_CLOCK and run its block. The trigger
     //    outputs need to be live before we inspect them for queued patch
     //    swaps below.
+    //
+    // We're past the `is_stopped` early-return, so the Operator-local
+    // transport is playing — set `playing: true` in the injected state.
+    // Once the block-aware audio callback lands and ROOT_CLOCK eager-fills
+    // per sample, this will pick up the peer's actual `is_playing` from
+    // the Link session state instead.
     let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
     self.link.sync_frame(|bar_phase, tempo| {
       if let Some(clock) = root_clock {
-        clock.sync_external_clock(bar_phase, tempo);
+        clock.sync_external_clock(modular_core::types::ExternalClockState {
+          bar_phase,
+          bpm: tempo,
+          playing: true,
+        });
       }
     });
 

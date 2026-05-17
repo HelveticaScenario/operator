@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 
 use crate::PolyOutput;
 use crate::dsp::utils::{SchmittTrigger, TempGate, TempGateState, min_gate_samples};
-use crate::types::ClockMessages;
+use crate::types::{ClockMessages, ExternalClockState};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,11 @@ struct ClockParams {
 struct ExternalClockSync {
     bar_phase: f64,
     bpm: f64,
+    /// Peer-driven playing state. `false` short-circuits the inner update —
+    /// no phase advance, no trigger outputs — so a peer Stop on the Link
+    /// session reads as silence here without the audio thread having to
+    /// gate ROOT_CLOCK separately.
+    playing: bool,
 }
 
 struct ClockState {
@@ -103,8 +108,15 @@ message_handlers!(impl Clock {
 });
 
 impl Clock {
-    pub fn sync_external_clock(&mut self, bar_phase: f64, bpm: f64) {
-        self.state.external_sync = Some(ExternalClockSync { bar_phase, bpm });
+    /// Inject one sample's worth of Link transport state. Called by the
+    /// audio callback before each inner `update`, so the clock can resolve
+    /// triggers on the exact sample boundary the peer's timeline lands on.
+    pub fn sync_external_clock_impl(&mut self, state: ExternalClockState) {
+        self.state.external_sync = Some(ExternalClockSync {
+            bar_phase: state.bar_phase,
+            bpm: state.bpm,
+            playing: state.playing,
+        });
     }
 
     pub fn clear_external_sync(&mut self) {
@@ -113,9 +125,20 @@ impl Clock {
 
     fn update(&mut self, sample_rate: f32) {
         // External clock sync: override free-running clock with Link data.
-        // Whether the clock produces output is gated by the enclosing
-        // Operator `stopped` flag, not by the peer's playing state.
         if let Some(sync) = self.state.external_sync.take() {
+            // Peer transport stopped — freeze phase, zero triggers, return.
+            // The audio thread's separate `stopped` flag still gates whether
+            // process_frame runs at all; this path covers the case where
+            // ROOT_CLOCK is being eager-filled by the callback but the
+            // peer's Link session is paused.
+            if !sync.playing {
+                self.state.running = false;
+                self.outputs.bar_trigger = 0.0;
+                self.outputs.beat_trigger = 0.0;
+                self.outputs.ppq_trigger = 0.0;
+                return;
+            }
+
             self.state.running = true;
             self.params.tempo = sync.bpm;
 
@@ -604,7 +627,11 @@ mod tests {
         assert!(free_phase > 0.0);
 
         // Now sync to a specific phase externally
-        c.sync_external_clock(0.75, 140.0);
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.75,
+            bpm: 140.0,
+            playing: true,
+        });
         c.update(sr);
 
         // Phase should be near 0.75 (the externally-set value), not free-running
@@ -628,7 +655,11 @@ mod tests {
 
         for i in 0..samples_per_bar {
             let bar_phase = i as f64 / samples_per_bar as f64;
-            c.sync_external_clock(bar_phase, 120.0);
+            c.sync_external_clock_impl(ExternalClockState {
+                bar_phase,
+                bpm: 120.0,
+                playing: true,
+            });
             c.update(sr);
 
             let is_high = c.outputs.beat_trigger == 5.0;
@@ -651,7 +682,11 @@ mod tests {
         let sr = 48_000.0;
 
         // Sync externally
-        c.sync_external_clock(0.5, 120.0);
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.5,
+            bpm: 120.0,
+            playing: true,
+        });
         c.update(sr);
 
         // Clear external sync

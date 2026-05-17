@@ -189,9 +189,13 @@ pub trait Sampleable: MessageHandler + Send {
     /// Called after the patch is updated and all modules are connected.
     /// Modules can override this to refresh caches or perform other post-update work.
     fn on_patch_update(&self) {}
-    /// Provide external clock synchronization data.
-    /// Only ROOT_CLOCK overrides this. Default: no-op.
-    fn sync_external_clock(&self, _bar_phase: f64, _bpm: f64) {}
+    /// Inject one sample's worth of external clock state. Only ROOT_CLOCK's
+    /// wrapper overrides this (via the `#[module(clock_sync)]` attribute);
+    /// every other module is a no-op. Called per sample by the audio
+    /// callback's eager-fill loop so the inner [`crate::dsp::core::clock::Clock`]
+    /// can resolve trigger crossings on the exact sample boundary the
+    /// peer's Link timeline lands on.
+    fn sync_external_clock(&self, _state: ExternalClockState) {}
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
 
