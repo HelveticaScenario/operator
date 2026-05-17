@@ -1,0 +1,863 @@
+[
+    {
+        "factoryName": "$adsr",
+        "moduleName": "$adsr",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["gate"]
+    },
+    {
+        "factoryName": "$bpf",
+        "moduleName": "$bpf",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "center", "resonance"]
+    },
+    {
+        "factoryName": "$bufRead",
+        "moduleName": "$bufRead",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["buffer", "frame"]
+    },
+    {
+        "factoryName": "$buffer",
+        "moduleName": "$buffer",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "length"]
+    },
+    {
+        "factoryName": "$cheby",
+        "moduleName": "$cheby",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "amount"]
+    },
+    {
+        "factoryName": "$clamp",
+        "moduleName": "$clamp",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$clockDivider",
+        "moduleName": "$clockDivider",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "division"]
+    },
+    {
+        "factoryName": "$comp",
+        "moduleName": "$comp",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "sample",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$crush",
+        "moduleName": "$crush",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "amount"]
+    },
+    {
+        "factoryName": "$curve",
+        "moduleName": "$curve",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "exp"]
+    },
+    {
+        "factoryName": "$cycle",
+        "moduleName": "$cycle",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "cv",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "gate",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "trig",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["pattern"]
+    },
+    {
+        "factoryName": "$dattorro",
+        "moduleName": "$dattorro",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$delayRead",
+        "moduleName": "$delayRead",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["buffer", "time"]
+    },
+    {
+        "factoryName": "$falling",
+        "moduleName": "$falling",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$feedback",
+        "moduleName": "$feedback",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "amount"]
+    },
+    {
+        "factoryName": "$fold",
+        "moduleName": "$fold",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "amount"]
+    },
+    {
+        "factoryName": "$hpf",
+        "moduleName": "$hpf",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "cutoff", "resonance"]
+    },
+    {
+        "factoryName": "$iCycle",
+        "moduleName": "$iCycle",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "cv",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "gate",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "trig",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["patterns", "scale"]
+    },
+    {
+        "factoryName": "$jup6f",
+        "moduleName": "$jup6f",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "lp12",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "bp",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "hp",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "cutoff", "resonance"]
+    },
+    {
+        "factoryName": "$lpf",
+        "moduleName": "$lpf",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "cutoff", "resonance"]
+    },
+    {
+        "factoryName": "$macro",
+        "moduleName": "$macro",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "mix",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "main",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "aux",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["freq", "engine"]
+    },
+    {
+        "factoryName": "$math",
+        "moduleName": "$math",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": false
+            }
+        ],
+        "positionalArgNames": ["expression"]
+    },
+    {
+        "factoryName": "$midiCC",
+        "moduleName": "$midiCC",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": false
+            }
+        ],
+        "positionalArgNames": []
+    },
+    {
+        "factoryName": "$midiCV",
+        "moduleName": "$midiCV",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "pitch",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "gate",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "velocity",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "aftertouch",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "retrigger",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "pitchWheel",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "modWheel",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": []
+    },
+    {
+        "factoryName": "$mix",
+        "moduleName": "$mix",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["inputs"]
+    },
+    {
+        "factoryName": "$noise",
+        "moduleName": "$noise",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": false
+            }
+        ],
+        "positionalArgNames": ["color"]
+    },
+    {
+        "factoryName": "$overdrive",
+        "moduleName": "$overdrive",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "drive"]
+    },
+    {
+        "factoryName": "$pPulse",
+        "moduleName": "$pPulse",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["phase"]
+    },
+    {
+        "factoryName": "$pSaw",
+        "moduleName": "$pSaw",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["phase"]
+    },
+    {
+        "factoryName": "$pSine",
+        "moduleName": "$pSine",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["phase"]
+    },
+    {
+        "factoryName": "$perc",
+        "moduleName": "$perc",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["trigger"]
+    },
+    {
+        "factoryName": "$plate",
+        "moduleName": "$plate",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$pulsar",
+        "moduleName": "$pulsar",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "amount"]
+    },
+    {
+        "factoryName": "$pulse",
+        "moduleName": "$pulse",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["freq"]
+    },
+    {
+        "factoryName": "$quantizer",
+        "moduleName": "$quantizer",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "trig",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "scale"]
+    },
+    {
+        "factoryName": "$ramp",
+        "moduleName": "$ramp",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["freq"]
+    },
+    {
+        "factoryName": "$remap",
+        "moduleName": "$remap",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "outMin", "outMax", "inMin", "inMax"]
+    },
+    {
+        "factoryName": "$rising",
+        "moduleName": "$rising",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$sah",
+        "moduleName": "$sah",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "trigger"]
+    },
+    {
+        "factoryName": "$sampler",
+        "moduleName": "$sampler",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["wav", "gate"]
+    },
+    {
+        "factoryName": "$saw",
+        "moduleName": "$saw",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["freq"]
+    },
+    {
+        "factoryName": "$scaleAndShift",
+        "moduleName": "$scaleAndShift",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "scale", "shift"]
+    },
+    {
+        "factoryName": "$segment",
+        "moduleName": "$segment",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "amount"]
+    },
+    {
+        "factoryName": "$signal",
+        "moduleName": "$signal",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["source"]
+    },
+    {
+        "factoryName": "$sine",
+        "moduleName": "$sine",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["freq"]
+    },
+    {
+        "factoryName": "$slew",
+        "moduleName": "$slew",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$spread",
+        "moduleName": "$spread",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["min", "max", "count"]
+    },
+    {
+        "factoryName": "$step",
+        "moduleName": "$step",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["steps", "next"]
+    },
+    {
+        "factoryName": "$stereoMix",
+        "moduleName": "$stereoMix",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "$supersaw",
+        "moduleName": "$supersaw",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["freq"]
+    },
+    {
+        "factoryName": "$tah",
+        "moduleName": "$tah",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "gate"]
+    },
+    {
+        "factoryName": "$track",
+        "moduleName": "$track",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["keyframes"]
+    },
+    {
+        "factoryName": "$unison",
+        "moduleName": "$unison",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "count", "spread"]
+    },
+    {
+        "factoryName": "$wavetable",
+        "moduleName": "$wavetable",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["wav", "pitch", "position"]
+    },
+    {
+        "factoryName": "$wrap",
+        "moduleName": "$wrap",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input", "min", "max"]
+    },
+    {
+        "factoryName": "$xover",
+        "moduleName": "$xover",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "output",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "low",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "mid",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "high",
+                "polyphonic": true
+            }
+        ],
+        "positionalArgNames": ["input"]
+    },
+    {
+        "factoryName": "_clock",
+        "moduleName": "_clock",
+        "namespacePath": [],
+        "outputs": [
+            {
+                "default": true,
+                "name": "playhead",
+                "polyphonic": true
+            },
+            {
+                "default": false,
+                "name": "barTrigger",
+                "polyphonic": false
+            },
+            {
+                "default": false,
+                "name": "beatTrigger",
+                "polyphonic": false
+            },
+            {
+                "default": false,
+                "name": "ramp",
+                "polyphonic": false
+            },
+            {
+                "default": false,
+                "name": "ppqTrigger",
+                "polyphonic": false
+            },
+            {
+                "default": false,
+                "name": "beatInBar",
+                "polyphonic": false
+            }
+        ],
+        "positionalArgNames": ["tempo", "numerator", "denominator"]
+    }
+]
