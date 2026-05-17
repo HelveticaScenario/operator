@@ -1,5 +1,5 @@
 import type { ModuleSchema } from '@modular/core';
-import type { SliderDefinition } from '../../../shared/dsl/sliderTypes';
+import type { SliderDefinition } from '../../../../../../src/shared/dsl/sliderTypes';
 import { $cartesian, $c, $r } from '../graph';
 import { DSLContext, hz, note } from '../factory';
 import { create$bus } from '../composites/$bus';

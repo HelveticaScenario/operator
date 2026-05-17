@@ -1,5 +1,8 @@
-import type { SourceSpan } from '../../../shared/dsl/spanTypes';
-import type { CallSiteKey, SpanRegistry } from '../analyzeSource';
+import type {
+    CallSiteKey,
+    SourceSpan,
+    SpanRegistry,
+} from '../types/analysis';
 import { getDSLWrapperLineOffset } from '../captureSourceLocation';
 
 /**
