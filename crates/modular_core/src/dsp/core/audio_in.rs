@@ -3,13 +3,10 @@
 //! This module allows reading audio from the system's audio input device.
 
 use std::cell::UnsafeCell;
-use std::sync::Arc;
-
-use parking_lot::Mutex;
 
 use crate::{
     Sampleable,
-    poly::{PORT_MAX_CHANNELS, PolyOutput},
+    poly::PORT_MAX_CHANNELS,
     types::{MessageHandler, WellKnownModule},
 };
 
@@ -22,11 +19,6 @@ const AUDIO_IN_MAX_BLOCK: usize = 4096;
 /// `inject_audio_in_block`, and consumers read per-slot values via
 /// `get_value_at(_, ch, slot)`.
 pub struct AudioIn {
-    /// Shared with `Patch::audio_in` so `Patch::insert_audio_in` can
-    /// reconstruct the module pointing at the patch's `Arc<Mutex<PolyOutput>>`.
-    /// Held but unused for sample reads now that `block` is the source of
-    /// truth — kept for backwards-compat with existing `Patch` construction.
-    pub input: Arc<Mutex<PolyOutput>>,
     /// Per-block input frames, one entry per slot, each holding all
     /// channels. Layout mirrors `BlockPort`: `block[sample_index][channel_index]`.
     ///
@@ -54,7 +46,6 @@ fn make_empty_block() -> Box<[[f32; PORT_MAX_CHANNELS]]> {
 impl Default for AudioIn {
     fn default() -> Self {
         Self {
-            input: Arc::new(Mutex::new(PolyOutput::default())),
             block: UnsafeCell::new(make_empty_block()),
             block_len: UnsafeCell::new(0),
         }
@@ -104,18 +95,6 @@ impl Sampleable for AudioIn {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-}
-
-impl AudioIn {
-    /// Construct an `AudioIn` sharing an existing `input` Arc. Used by
-    /// `Patch::insert_audio_in` to keep the legacy field hooked up.
-    pub fn with_input(input: Arc<Mutex<PolyOutput>>) -> Self {
-        Self {
-            input,
-            block: UnsafeCell::new(make_empty_block()),
-            block_len: UnsafeCell::new(0),
-        }
     }
 }
 

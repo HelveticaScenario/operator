@@ -1661,6 +1661,9 @@ impl AudioProcessor {
     // Advance Link's in-buffer frame index on every cpal frame; only sync
     // ROOT_CLOCK at the block boundary.
     let should_sync_clock = at_block_boundary;
+    // 1. Sync Link state into ROOT_CLOCK and run its block. The trigger
+    //    outputs need to be live before we inspect them for queued patch
+    //    swaps below.
     let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
     self.link.sync_frame(|bar_phase, tempo| {
       if should_sync_clock
@@ -1669,7 +1672,6 @@ impl AudioProcessor {
         clock.sync_external_clock(modular_core::types::ExternalClockState {
           bar_phase,
           bpm: tempo,
-          playing: true,
         });
       }
     });
