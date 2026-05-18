@@ -23,6 +23,10 @@ import {
 } from './monaco/scopeViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import {
+    bindEditorFocus,
+    bindEditorWidgetVisibility,
+} from '../keybindings/contextKeyBootstrap';
 import electronAPI from '../electronAPI';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
 
@@ -195,6 +199,18 @@ export function MonacoPatchEditor({
             schemas,
         });
     }, [monaco, libSource, schemas]);
+
+    // Mirror Monaco focus and suggest/find widget visibility into the
+    // context-key service so when-clauses (Phase 2.x) can react.
+    useEffect(() => {
+        if (!editor) return;
+        const stopFocus = bindEditorFocus(editor);
+        const stopWidgets = bindEditorWidgetVisibility(editor);
+        return () => {
+            stopFocus();
+            stopWidgets();
+        };
+    }, [editor]);
 
     const {
         theme: appTheme,
