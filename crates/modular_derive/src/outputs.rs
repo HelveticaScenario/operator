@@ -18,6 +18,11 @@ struct OutputAttr {
     description: Option<LitStr>,
     is_default: bool,
     range: Option<(f64, f64)>,
+    /// True when the `#[output(..., dynamic_range)]` flag is set. Triggers
+    /// generation of virtual `<port>.rangeMin` / `<port>.rangeMax` ports
+    /// backed by per-slot `BlockPort`s the inner module writes via
+    /// `PolyOutput::set_range`.
+    dynamic_range: bool,
 }
 
 /// Precision type for output fields
@@ -35,6 +40,7 @@ struct OutputField {
     description: TokenStream2,
     is_default: bool,
     range: Option<(f64, f64)>,
+    dynamic_range: bool,
 }
 
 /// Parse output attribute tokens into OutputAttr
@@ -52,6 +58,7 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
         description: Option<LitStr>,
         is_default: bool,
         range: Option<(f64, f64)>,
+        dynamic_range: bool,
     }
 
     impl Parse for OutputAttrParser {
@@ -88,9 +95,10 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
             // Parse description string
             let description: LitStr = input.parse()?;
 
-            // Parse optional attributes (default, range)
+            // Parse optional attributes (default, range, dynamic_range)
             let mut is_default = false;
             let mut range: Option<(f64, f64)> = None;
+            let mut dynamic_range = false;
             while input.peek(Token![,]) {
                 input.parse::<Token![,]>()?;
 
@@ -111,11 +119,13 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
                         content.parse::<Token![,]>()?;
                         let max: syn::LitFloat = content.parse()?;
                         range = Some((min.base10_parse()?, max.base10_parse()?));
+                    } else if ident == "dynamic_range" {
+                        dynamic_range = true;
                     } else {
                         return Err(syn::Error::new(
                             ident.span(),
                             format!(
-                                "Unknown output attribute '{}'. Expected 'default' or 'range'",
+                                "Unknown output attribute '{}'. Expected 'default', 'range', or 'dynamic_range'",
                                 ident
                             ),
                         ));
@@ -128,17 +138,27 @@ fn parse_output_attr(tokens: TokenStream2) -> syn::Result<OutputAttr> {
                 description: Some(description),
                 is_default,
                 range,
+                dynamic_range,
             })
         }
     }
 
     let parsed = syn::parse2::<OutputAttrParser>(tokens)?;
 
+    if parsed.dynamic_range && parsed.range.is_none() {
+        return Err(syn::Error::new(
+            parsed.name.span(),
+            "'dynamic_range' requires a fallback static 'range = (..)'. The static range is used \
+             when no per-channel runtime range is recorded.",
+        ));
+    }
+
     Ok(OutputAttr {
         name: parsed.name,
         description: parsed.description,
         is_default: parsed.is_default,
         range: parsed.range,
+        dynamic_range: parsed.dynamic_range,
     })
 }
 
@@ -206,6 +226,16 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                         .map(|d| quote!(#d.to_string()))
                         .unwrap_or(quote!("".to_string()));
 
+                    if output_attr.dynamic_range && precision != OutputPrecision::PolySignal {
+                        return syn::Error::new(
+                            f.ty.span(),
+                            "'dynamic_range' is only supported on PolyOutput fields. Per-channel \
+                             runtime ranges require PolyOutput storage.",
+                        )
+                        .to_compile_error()
+                        .into();
+                    }
+
                     out.push(OutputField {
                         field_name,
                         output_name,
@@ -213,6 +243,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                         description,
                         is_default: output_attr.is_default,
                         range: output_attr.range,
+                        dynamic_range: output_attr.dynamic_range,
                     });
                 }
                 out
@@ -314,6 +345,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 Some((_, max)) => quote! { Some(#max) },
                 None => quote! { None },
             };
+            let dynamic_range = o.dynamic_range;
             quote! {
                 crate::types::OutputSchema {
                     name: #output_name.to_string(),
@@ -322,6 +354,7 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                     default: #is_default,
                     min_value: #min_value,
                     max_value: #max_value,
+                    dynamic_range: #dynamic_range,
                 }
             }
         })
@@ -370,76 +403,139 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         format_ident!("{}BlockOutputs", name_str)
     };
 
-    let block_fields: Vec<_> = outputs
-        .iter()
-        .map(|o| {
-            let field_name = &o.field_name;
-            quote! { pub #field_name: crate::block_port::BlockPort }
-        })
-        .collect();
+    // Walk every output and emit (in declaration order):
+    //   1. The data BlockPort field, port_index entry, and get_at arm.
+    //   2. If the output has a `range`, two virtual ports
+    //      `<name>.rangeMin` / `<name>.rangeMax` for `.range()`-style chains.
+    //      Static ranges return their constants directly from `get_at`;
+    //      dynamic ranges store extra BlockPorts so the inner module can write
+    //      per-channel per-slot bounds via `PolyOutput::set_range`.
+    //   3. A `get_range(port, ch, index)` match arm so consumers can read the
+    //      runtime range without composing virtual port names.
+    let mut block_fields: Vec<TokenStream2> = Vec::new();
+    let mut block_new_inits: Vec<TokenStream2> = Vec::new();
+    let mut port_index_arms: Vec<TokenStream2> = Vec::new();
+    let mut get_at_arms: Vec<TokenStream2> = Vec::new();
+    let mut get_range_arms: Vec<TokenStream2> = Vec::new();
+    let mut copy_inner_stmts: Vec<TokenStream2> = Vec::new();
+    let mut next_idx: usize = 0;
 
-    let block_new_inits: Vec<_> = outputs
-        .iter()
-        .map(|o| {
-            let field_name = &o.field_name;
-            quote! { #field_name: crate::block_port::BlockPort::new(block_size) }
-        })
-        .collect();
+    for o in &outputs {
+        let field_name = &o.field_name;
+        let output_name = &o.output_name;
 
-    // String → index map (cold path: called once at connect time).
-    let port_index_arms: Vec<_> = outputs
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            let output_name = &o.output_name;
-            quote! { #output_name => Some(#i), }
-        })
-        .collect();
+        // Data port: regular BlockPort field + port_index + get_at.
+        block_fields.push(quote! { pub #field_name: crate::block_port::BlockPort });
+        block_new_inits.push(quote! {
+            #field_name: crate::block_port::BlockPort::new(block_size)
+        });
+        port_index_arms.push(quote! { #output_name => Some(#next_idx), });
+        get_at_arms.push(quote! { #next_idx => self.#field_name.get(index, ch), });
+        next_idx += 1;
 
-    // Index → field dispatch (hot path: called per-sample on audio thread).
-    // `match` on `usize` lowers to a jump table or dense branch tree, much
-    // tighter than per-string compare on `&str`.
-    let get_at_arms: Vec<_> = outputs
-        .iter()
-        .enumerate()
-        .map(|(i, o)| {
-            let field_name = &o.field_name;
-            quote! { #i => self.#field_name.get(index, ch), }
-        })
-        .collect();
-
-    let copy_inner_stmts: Vec<_> = outputs
-        .iter()
-        .map(|o| {
-            let field_name = &o.field_name;
-            match o.precision {
-                OutputPrecision::F32 => quote! {
-                    // Broadcast the mono f32 value to every channel slot.
-                    // Mirrors the old `PolyOutput::mono(value).get_cycling(ch)`
-                    // path that downstream cables relied on: an f32 output
-                    // reads as the same value on any consumer channel rather
-                    // than silence on channels >= 1.
-                    let v = inner.#field_name;
+        // Copy data into the block buffer at `slot`.
+        match o.precision {
+            OutputPrecision::F32 => copy_inner_stmts.push(quote! {
+                // Broadcast the mono f32 value to every channel slot.
+                let v = inner.#field_name;
+                for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+                    self.#field_name.data[slot][ch] = v;
+                }
+            }),
+            OutputPrecision::PolySignal => copy_inner_stmts.push(quote! {
+                {
+                    // `get_cycling` mirrors the old `PolyOutput::get_cycling`
+                    // semantics: a mono producer broadcasts its single value to
+                    // all consumer channels rather than producing silence on
+                    // channels >= producer channel count.
+                    let poly = &inner.#field_name;
                     for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                        self.#field_name.data[slot][ch] = v;
+                        self.#field_name.data[slot][ch] = poly.get_cycling(ch);
                     }
-                },
-                OutputPrecision::PolySignal => quote! {
+                }
+            }),
+        }
+
+        // Virtual range ports for any output that declared a `range`.
+        if let Some((min, max)) = o.range {
+            let min_lit = min as f32;
+            let max_lit = max as f32;
+            let base_name = output_name.value();
+            let range_min_name = LitStr::new(
+                &format!("{}.rangeMin", base_name),
+                output_name.span(),
+            );
+            let range_max_name = LitStr::new(
+                &format!("{}.rangeMax", base_name),
+                output_name.span(),
+            );
+
+            if o.dynamic_range {
+                // Extra BlockPorts let the inner module write per-channel
+                // per-slot bounds; only allocated for `dynamic_range` outputs.
+                let field_min = format_ident!("{}_range_min", field_name);
+                let field_max = format_ident!("{}_range_max", field_name);
+                block_fields.push(quote! { pub #field_min: crate::block_port::BlockPort });
+                block_fields.push(quote! { pub #field_max: crate::block_port::BlockPort });
+                block_new_inits.push(quote! {
+                    #field_min: crate::block_port::BlockPort::new(block_size)
+                });
+                block_new_inits.push(quote! {
+                    #field_max: crate::block_port::BlockPort::new(block_size)
+                });
+
+                let min_idx = next_idx;
+                port_index_arms.push(quote! { #range_min_name => Some(#min_idx), });
+                get_at_arms.push(quote! { #min_idx => self.#field_min.get(index, ch), });
+                next_idx += 1;
+                let max_idx = next_idx;
+                port_index_arms.push(quote! { #range_max_name => Some(#max_idx), });
+                get_at_arms.push(quote! { #max_idx => self.#field_max.get(index, ch), });
+                next_idx += 1;
+
+                // Mirror per-channel range from the inner PolyOutput into the
+                // virtual BlockPorts each slot. Fall back to the static range
+                // when the inner module hasn't set bounds yet (NaN).
+                copy_inner_stmts.push(quote! {
                     {
-                        // `get_cycling` mirrors the old `PolyOutput::get_cycling`
-                        // semantics that `get_poly_sample(...).get_cycling(ch)`
-                        // used to provide: a mono producer broadcasts its single
-                        // value to all consumer channels rather than producing
-                        // silence on channels >= producer channel count.
                         let poly = &inner.#field_name;
                         for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                            self.#field_name.data[slot][ch] = poly.get_cycling(ch);
+                            let rmin = poly.get_range_min(ch);
+                            let rmax = poly.get_range_max(ch);
+                            self.#field_min.data[slot][ch] =
+                                if rmin.is_nan() { #min_lit } else { rmin };
+                            self.#field_max.data[slot][ch] =
+                                if rmax.is_nan() { #max_lit } else { rmax };
                         }
                     }
-                },
+                });
+
+                // Runtime range query reads slot `index` so consumers stay
+                // aligned with the producer's per-block index.
+                get_range_arms.push(quote! {
+                    #output_name => Some((
+                        self.#field_min.get(index, ch),
+                        self.#field_max.get(index, ch),
+                    )),
+                });
+            } else {
+                // Static range — no extra storage. `get_at` returns the
+                // compile-time constants directly.
+                let min_idx = next_idx;
+                port_index_arms.push(quote! { #range_min_name => Some(#min_idx), });
+                get_at_arms.push(quote! { #min_idx => #min_lit, });
+                next_idx += 1;
+                let max_idx = next_idx;
+                port_index_arms.push(quote! { #range_max_name => Some(#max_idx), });
+                get_at_arms.push(quote! { #max_idx => #max_lit, });
+                next_idx += 1;
+
+                get_range_arms.push(quote! {
+                    #output_name => Some((#min_lit, #max_lit)),
+                });
             }
-        })
-        .collect();
+        }
+    }
 
     let block_generated = quote! {
         /// Generated block-output buffer for #name.
@@ -487,9 +583,25 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 }
             }
 
-            /// Copy the inner module's scalar outputs into this block buffer at `slot`.
+            /// Copy the inner module's scalar outputs (and per-channel dynamic
+            /// range bounds, if any) into this block buffer at `slot`.
             pub fn copy_from_inner(&mut self, inner: &#name, slot: usize) {
                 #(#copy_inner_stmts)*
+            }
+
+            /// Read the per-channel range bounds of the data port `port` at
+            /// sample slot `index`. Returns the compile-time constants for
+            /// static-range outputs, the per-slot runtime values for
+            /// dynamic-range outputs, and `None` for ports without range
+            /// metadata.
+            ///
+            /// Zero-allocation. The match lowers to one branch per output.
+            #[inline]
+            pub fn get_range(&self, port: &str, ch: usize, index: usize) -> Option<(f32, f32)> {
+                match port {
+                    #(#get_range_arms)*
+                    _ => None,
+                }
             }
 
         }

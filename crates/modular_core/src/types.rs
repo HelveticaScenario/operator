@@ -237,6 +237,17 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
+    /// Read the per-channel range bounds of an output port. Returns
+    /// `Some((min, max))` for outputs that declared a static `range = (...)`
+    /// or `dynamic_range`, and `None` for outputs without range metadata.
+    ///
+    /// Zero-allocation. Lowers (via the proc-macro wrapper) to a `match` on
+    /// the port name that either returns compile-time constants (static
+    /// range) or reads the per-channel runtime values written by the inner
+    /// module via `PolyOutput::set_range` (dynamic range).
+    fn get_range(&self, _port: &str, _ch: usize) -> Option<(f32, f32)> {
+        None
+    }
     fn get_state(&self) -> Option<serde_json::Value> {
         None
     }
@@ -2327,6 +2338,30 @@ impl Signal {
             },
         }
     }
+
+    /// Read the per-channel range bounds of the connected output, if any.
+    ///
+    /// - `Volts` returns `None` — a constant has no signal range.
+    /// - `Cable` delegates to the upstream `Sampleable::get_range`, which
+    ///   reads compile-time constants for static-range outputs or the
+    ///   per-slot runtime values for `dynamic_range` outputs.
+    ///
+    /// Zero-allocation. Used by utility modules (`$clamp`, `$scaleAndShift`)
+    /// to compose their output range from their input's range.
+    pub fn get_range(&self) -> Option<(f32, f32)> {
+        match self {
+            Signal::Volts(_) => None,
+            Signal::Cable {
+                resolved,
+                port,
+                channel,
+                ..
+            } => {
+                let ptr = resolved.as_ref()?;
+                unsafe { ptr.as_ref() }.get_range(port, *channel)
+            }
+        }
+    }
 }
 
 /// Extension trait for normalling pattern on optional signals.
@@ -2502,6 +2537,13 @@ pub struct OutputSchema {
     /// The maximum value of the raw output range (before any remapping)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_value: Option<f64>,
+    /// Whether the module computes per-channel range bounds at runtime
+    /// (via `PolyOutput::set_range`). When true, consumers can read the
+    /// runtime bounds via the virtual `<port>.rangeMin` / `<port>.rangeMax`
+    /// ports — useful for DSL `.range(...)` chains where the actual output
+    /// range depends on params or an upstream signal.
+    #[serde(default)]
+    pub dynamic_range: bool,
 }
 
 pub trait OutputStruct: Default + Send + 'static {

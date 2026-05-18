@@ -41,7 +41,7 @@ struct RemapState {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct RemapOutputs {
-    #[output("output", "remapped signal output", default)]
+    #[output("output", "remapped signal output", default, range = (-5.0, 5.0), dynamic_range)]
     sample: PolyOutput,
 }
 
@@ -89,6 +89,12 @@ impl Remap {
             );
 
             self.outputs.sample.set(i, output);
+            // The remap output range is exactly the smoothed `outMin..outMax`
+            // — that's the contract. Publish it so downstream `.range(...)`
+            // chains and `$clamp` / `$scaleAndShift` can pick it up.
+            self.outputs
+                .sample
+                .set_range(i, *state.out_min, *state.out_max);
         }
     }
 }

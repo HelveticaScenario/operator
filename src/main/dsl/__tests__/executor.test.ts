@@ -346,6 +346,58 @@ describe('chaining methods', () => {
         expect(findModules(patch, '$sine').length).toBe(1);
         expect(findModules(patch, '$remap').length).toBeGreaterThan(0);
     });
+
+    test('dynamicRange output wires .range() through virtual rangeMin / rangeMax cables', () => {
+        // $pulse declares dynamic_range, so .range(0, 5) should bind the
+        // remap's inMin / inMax to the upstream's virtual range ports rather
+        // than baking in the static [-5, 5].
+        const patch = execPatch(
+            '$pulse("C4", { width: 1 }).range(0, 5).out()',
+        );
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBeGreaterThan(0);
+
+        const params = remaps[0].params as Record<string, unknown>;
+
+        const cableOf = (v: unknown): Record<string, unknown> | undefined => {
+            if (Array.isArray(v)) {
+                return v[0] as Record<string, unknown>;
+            }
+            if (v && typeof v === 'object') {
+                return v as Record<string, unknown>;
+            }
+            return undefined;
+        };
+
+        const inMin = cableOf(params.inMin);
+        const inMax = cableOf(params.inMax);
+        expect(inMin).toBeDefined();
+        expect(inMax).toBeDefined();
+        expect(inMin?.type).toBe('cable');
+        expect(inMax?.type).toBe('cable');
+        expect(inMin?.port).toBe('output.rangeMin');
+        expect(inMax?.port).toBe('output.rangeMax');
+    });
+
+    test('static-range output keeps numeric inMin / inMax on .range()', () => {
+        // $sine has a static range — no dynamic_range, so .range() should
+        // still pass numeric bounds straight into the remap.
+        const patch = execPatch('$sine("C4").range(0, 1).out()');
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBeGreaterThan(0);
+        const params = remaps[0].params as Record<string, unknown>;
+        // Numeric (or constant Volts wrapped) — definitely not a cable to a
+        // rangeMin / rangeMax port.
+        const inMin = params.inMin;
+        const inMax = params.inMax;
+        const looksLikeCable = (v: unknown) =>
+            v &&
+            typeof v === 'object' &&
+            !Array.isArray(v) &&
+            (v as Record<string, unknown>).type === 'cable';
+        expect(looksLikeCable(inMin)).toBe(false);
+        expect(looksLikeCable(inMax)).toBe(false);
+    });
 });
 
 // ─── Modulation routing ──────────────────────────────────────────────────────

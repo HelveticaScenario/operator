@@ -591,10 +591,18 @@ interface ModuleOutputWithRange extends ModuleOutput {
   readonly minValue: number;
   /** The maximum value this output produces */
   readonly maxValue: number;
-  
+  /**
+   * True when the module computes per-channel range bounds at runtime
+   * (e.g. \`$pulse\` whose range depends on \`width\`). \`.range(...)\` wires
+   * cables to the upstream's virtual \`<port>.rangeMin\` / \`<port>.rangeMax\`
+   * ports so the downstream remap tracks the live bounds.
+   */
+  readonly dynamicRange: boolean;
+
   /**
    * Remap the output from its native range to a new range.
-   * Uses the stored minValue/maxValue automatically.
+   * Static-range outputs use the stored minValue/maxValue; dynamic-range
+   * outputs route through virtual rangeMin / rangeMax ports.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @returns A {@link ModuleOutput} with the remapped signal

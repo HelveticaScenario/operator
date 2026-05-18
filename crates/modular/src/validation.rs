@@ -203,7 +203,18 @@ fn validate_signal_reference(
         return;
       };
 
-      if !src_schema.outputs.iter().any(|o| o.name == *src_port) {
+      // Match either a real output port, or a virtual `<port>.rangeMin` /
+      // `<port>.rangeMax` for any output that declared a `range` (static
+      // or dynamic). The `Outputs` derive surfaces both kinds the same way
+      // — for static range outputs `get_at` returns the constant, for
+      // dynamic_range outputs it reads the per-slot BlockPort.
+      let is_valid_port = src_schema.outputs.iter().any(|o| {
+        o.name == *src_port
+          || (o.min_value.is_some()
+            && (src_port == &format!("{}.rangeMin", o.name)
+              || src_port == &format!("{}.rangeMax", o.name)))
+      });
+      if !is_valid_port {
         errors.push(ValidationError {
           field: field.to_string(),
           message: format!(
@@ -431,8 +442,15 @@ pub fn validate_patch(
         continue;
       };
 
-      // Output port must exist in module schema
-      if !schema.outputs.iter().any(|o| o.name == *channel.port_name) {
+      // Output port must exist in module schema. Scopes can also target
+      // the virtual `<port>.rangeMin` / `<port>.rangeMax` views.
+      let is_valid_scope_port = schema.outputs.iter().any(|o| {
+        o.name == *channel.port_name
+          || (o.min_value.is_some()
+            && (channel.port_name == format!("{}.rangeMin", o.name)
+              || channel.port_name == format!("{}.rangeMax", o.name)))
+      });
+      if !is_valid_scope_port {
         errors.push(ValidationError {
           field: "scopes".to_string(),
           message: format!(

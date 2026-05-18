@@ -32,6 +32,14 @@ export interface OutputSchemaWithRange {
     polyphonic?: boolean;
     minValue?: number;
     maxValue?: number;
+    /**
+     * When true the module computes per-channel range bounds at runtime
+     * and exposes them as `<port>.rangeMin` / `<port>.rangeMax` virtual
+     * ports. `.range(...)` wiring routes through those cables so the
+     * downstream `$remap` adapts to the live bounds (e.g. `$pulse` whose
+     * range depends on `width`).
+     */
+    dynamicRange?: boolean;
 }
 
 const ResolvedModuleOutput = z.object({
@@ -416,7 +424,13 @@ export class Collection extends BaseCollection<ModuleOutput> {
  */
 export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
     /**
-     * Remap outputs from their known range to a new output range
+     * Remap outputs from their known range to a new output range.
+     *
+     * Outputs marked `dynamicRange` wire cables to the upstream module's
+     * virtual `<port>.rangeMin` / `<port>.rangeMax` ports so the
+     * downstream `$remap` tracks the live bounds (e.g. `$pulse` whose range
+     * depends on `width`). Static-range outputs pass their compile-time
+     * `minValue` / `maxValue` directly.
      */
     range(outMin: PolySignal, outMax: PolySignal): Collection {
         if (this.items.length === 0) {
@@ -430,8 +444,26 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
             this.items,
             outMin,
             outMax,
-            this.items.map((o) => o.minValue),
-            this.items.map((o) => o.maxValue),
+            this.items.map((o) =>
+                o.dynamicRange
+                    ? new ModuleOutput(
+                          o.builder,
+                          o.moduleId,
+                          `${o.portName}.rangeMin`,
+                          o.channel,
+                      )
+                    : o.minValue,
+            ),
+            this.items.map((o) =>
+                o.dynamicRange
+                    ? new ModuleOutput(
+                          o.builder,
+                          o.moduleId,
+                          `${o.portName}.rangeMax`,
+                          o.channel,
+                      )
+                    : o.maxValue,
+            ),
         ) as Collection;
     }
 }
@@ -1085,6 +1117,7 @@ export class ModuleNode {
                             i,
                             outputSchema.minValue!,
                             outputSchema.maxValue!,
+                            outputSchema.dynamicRange ?? false,
                         ),
                     );
                 }
@@ -1107,6 +1140,7 @@ export class ModuleNode {
                 0,
                 outputSchema.minValue!,
                 outputSchema.maxValue!,
+                outputSchema.dynamicRange ?? false,
             );
         }
         return new ModuleOutput(this.builder, this.id, portName);
@@ -1281,6 +1315,7 @@ export class ModuleOutput {
 export class ModuleOutputWithRange extends ModuleOutput {
     readonly minValue: number;
     readonly maxValue: number;
+    readonly dynamicRange: boolean;
 
     constructor(
         builder: GraphBuilder,
@@ -1289,18 +1324,36 @@ export class ModuleOutputWithRange extends ModuleOutput {
         channel: number = 0,
         minValue: number,
         maxValue: number,
+        dynamicRange: boolean = false,
     ) {
         super(builder, moduleId, portName, channel);
         this.minValue = minValue;
         this.maxValue = maxValue;
+        this.dynamicRange = dynamicRange;
     }
 
     /**
-     * Remap this output from its known range to a new range.
-     * Creates a remap module internally.
+     * Remap this output from its known range to a new range. Dynamic-range
+     * outputs route through the virtual `<port>.rangeMin` /
+     * `<port>.rangeMax` cables so the remap tracks the live bounds.
      */
     range(outMin: PolySignal, outMax: PolySignal): Collection {
         const factory = this.builder.getFactory('$remap');
+        if (this.dynamicRange) {
+            const rangeMin = new ModuleOutput(
+                this.builder,
+                this.moduleId,
+                `${this.portName}.rangeMin`,
+                this.channel,
+            );
+            const rangeMax = new ModuleOutput(
+                this.builder,
+                this.moduleId,
+                `${this.portName}.rangeMax`,
+                this.channel,
+            );
+            return factory(this, outMin, outMax, rangeMin, rangeMax) as Collection;
+        }
         return factory(
             this,
             outMin,

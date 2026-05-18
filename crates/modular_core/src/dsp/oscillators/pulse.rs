@@ -35,7 +35,7 @@ struct PulseOscillatorParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PulseOscillatorOutputs {
-    #[output("output", "signal output", default, range = (-5.0, 5.0))]
+    #[output("output", "signal output", default, range = (-5.0, 5.0), dynamic_range)]
     sample: PolyOutput,
 }
 
@@ -119,6 +119,12 @@ impl PulseOscillator {
             // [-10*w, 10*(1-w)] instead of [-5, 5].
             let dc = (2.0 * pulse_width - 1.0) * 5.0;
             self.outputs.sample.set(ch, naive_pulse * 5.0 - dc);
+
+            // Publish the DC-shifted range so downstream `.range(...)` chains
+            // and `$scaleAndShift` / `$clamp` can map the actual swing.
+            self.outputs
+                .sample
+                .set_range(ch, -10.0 * pulse_width, 10.0 * (1.0 - pulse_width));
         }
     }
 }
