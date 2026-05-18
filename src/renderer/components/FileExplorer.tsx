@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+    Tree,
+    type NodeApi,
+    type NodeRendererProps,
+    type TreeApi,
+} from 'react-arborist';
+import * as ContextMenu from '@radix-ui/react-context-menu';
 import './FileExplorer.css';
 import type { FileTreeEntry } from '../../shared/ipcTypes';
 import type { EditorBuffer } from '../types/editor';
 import { getBufferId } from '../app/buffers';
 import electronAPI from '../electronAPI';
+import { setContextKey } from '../keybindings/contextKeys';
+
+const EXPANDED_STORAGE_KEY = 'modular_expanded_folders';
+const ROW_HEIGHT = 22;
+const INDENT = 14;
 
 interface FileExplorerProps {
     workspaceRoot: string | null;
@@ -25,123 +37,48 @@ interface FileExplorerProps {
     onRenameCommit: (path: string, newName: string) => void;
     onRenameCancel: () => void;
     onKeepBuffer: (bufferId: string) => void;
+    /** Move a workspace file (drag-and-drop in the tree). */
+    onMoveFile?: (sourcePath: string, destPath: string) => void | Promise<void>;
 }
 
-function TreeNode({
-    entry,
-    onOpenFile,
-    onContextMenu,
-    renamingPath,
-    onRenameCommit,
-    onRenameCancel,
-    expandedPaths,
-    onToggleFolder,
-}: {
-    entry: FileTreeEntry;
-    onOpenFile: (relPath: string, options?: { preview?: boolean }) => void;
-    onContextMenu: (e: React.MouseEvent, entry: FileTreeEntry) => void;
-    renamingPath: string | null;
-    onRenameCommit: (path: string, newName: string) => void;
-    onRenameCancel: () => void;
-    expandedPaths: Set<string>;
-    onToggleFolder: (path: string) => void;
-}) {
-    const expanded = expandedPaths.has(entry.path);
-    const inputRef = useRef<HTMLInputElement>(null);
+function basename(p: string): string {
+    const parts = p.split(/[/\\]/);
+    return parts[parts.length - 1] ?? p;
+}
 
-    const isRenaming = renamingPath === entry.path;
+function dirname(p: string): string {
+    const idx = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'));
+    return idx === -1 ? '' : p.slice(0, idx);
+}
 
-    useEffect(() => {
-        if (isRenaming && inputRef.current) {
-            inputRef.current.focus();
-            const { name } = entry;
-            const lastDotIndex = name.lastIndexOf('.');
-            if (lastDotIndex !== -1) {
-                inputRef.current.setSelectionRange(0, lastDotIndex);
-            } else {
-                inputRef.current.select();
-            }
+function joinPath(dir: string, name: string): string {
+    if (!dir) return name;
+    return `${dir}/${name}`;
+}
+
+function loadInitialOpenState(): Record<string, boolean> {
+    try {
+        const raw = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
+        if (raw) {
+            const list = JSON.parse(raw) as string[];
+            const map: Record<string, boolean> = {};
+            for (const p of list) map[p] = true;
+            return map;
         }
-    }, [isRenaming, entry.name]);
+    } catch {}
+    return {};
+}
 
-    const handleKeyDown = (e: React.KeyboardEvent) => {
-        if (e.key === 'Enter') {
-            e.stopPropagation();
-            onRenameCommit(entry.path, inputRef.current?.value ?? entry.name);
-        } else if (e.key === 'Escape') {
-            e.stopPropagation();
-            onRenameCancel();
-        }
-    };
-
-    const handleSingleClick = () => {
-        if (!isRenaming && entry.fileType !== 'wav') {
-            onOpenFile(entry.path, { preview: true });
-        }
-    };
-
-    const handleDoubleClick = () => {
-        if (!isRenaming && entry.fileType !== 'wav') {
-            onOpenFile(entry.path, { preview: false });
-        }
-    };
-
-    if (entry.type === 'file') {
-        const isWav = entry.fileType === 'wav';
-        return (
-            <li
-                className={`tree-file${isWav ? ' tree-file-wav' : ''}`}
-                onClick={handleSingleClick}
-                onDoubleClick={handleDoubleClick}
-                onContextMenu={(e) => !isWav && onContextMenu(e, entry)}
-            >
-                <span className="file-icon">{isWav ? '🔊' : '📄'}</span>
-                {isRenaming ? (
-                    <input
-                        ref={inputRef}
-                        type="text"
-                        className="rename-input"
-                        defaultValue={entry.name}
-                        onKeyDown={handleKeyDown}
-                        // OnBlur={handleBlur} // Blur handling can be tricky with specific commit logic, skipping for now to avoid accidental commits while debugging
-                        onBlur={onRenameCancel} // For now cancel on blur to be safe, or just keep focus
-                    />
-                ) : (
-                    <span className="file-name">{entry.name}</span>
-                )}
-            </li>
+function persistOpenState(openState: Record<string, boolean>): void {
+    try {
+        const list = Object.entries(openState)
+            .filter(([, v]) => v)
+            .map(([k]) => k);
+        window.localStorage.setItem(
+            EXPANDED_STORAGE_KEY,
+            JSON.stringify(list),
         );
-    }
-
-    return (
-        <li className="tree-folder">
-            <div
-                className="folder-header"
-                onClick={() => !isRenaming && onToggleFolder(entry.path)}
-                onContextMenu={(e) => onContextMenu(e, entry)}
-            >
-                <span className="folder-icon">{expanded ? '📂' : '📁'}</span>
-                <span className="folder-name">{entry.name}</span>
-            </div>
-            {expanded && entry.children && entry.children.length > 0 && (
-                <ul className="tree-children">
-                    {entry.children.map((child) => (
-                        <TreeNode
-                            key={child.path}
-                            entry={child}
-                            onOpenFile={onOpenFile}
-                            onContextMenu={onContextMenu}
-                            renamingPath={renamingPath}
-                            onRenameCommit={onRenameCommit}
-                            onRenameCancel={onRenameCancel}
-                            expandedPaths={expandedPaths}
-                            onToggleFolder={onToggleFolder}
-                        />
-                    ))}
-                </ul>
-            )}
-        </li>
-    );
+    } catch {}
 }
 
 function BufferItem({
@@ -258,6 +195,324 @@ function BufferItem({
     );
 }
 
+/**
+ * Custom row renderer for arborist. Wraps each row in a Radix
+ * context menu and exposes inline rename via `node.edit()`.
+ */
+function TreeRow({
+    node,
+    style,
+    dragHandle,
+    tree,
+    onRevealInFinder,
+    onDeleteEntry,
+    onCreateFileInDir,
+    onCreateFolderInDir,
+}: NodeRendererProps<FileTreeEntry> & {
+    tree: TreeApi<FileTreeEntry>;
+    onRevealInFinder: (path: string) => void;
+    onDeleteEntry: (path: string) => void;
+    onCreateFileInDir: (parentDir: string) => void;
+    onCreateFolderInDir: (parentDir: string) => void;
+}) {
+    const entry = node.data;
+    const isDir = entry.type === 'directory';
+    const isWav = entry.fileType === 'wav';
+    const icon = isDir ? (node.isOpen ? '📂' : '📁') : isWav ? '🔊' : '📄';
+
+    const parentDir = isDir ? entry.path : dirname(entry.path);
+
+    return (
+        <ContextMenu.Root>
+            <ContextMenu.Trigger asChild>
+                <div
+                    ref={dragHandle}
+                    style={style}
+                    className={[
+                        'arborist-row',
+                        isDir ? 'arborist-folder' : 'arborist-file',
+                        isWav ? 'arborist-file-wav' : '',
+                        node.isSelected ? 'selected' : '',
+                        node.isFocused ? 'focused' : '',
+                        node.willReceiveDrop ? 'drop-target' : '',
+                    ]
+                        .filter(Boolean)
+                        .join(' ')}
+                    onClick={(e) => {
+                        // Avoid hijacking the toggle chevron click below.
+                        if ((e.target as HTMLElement).dataset.toggle) return;
+                        node.handleClick(e);
+                    }}
+                >
+                    <span
+                        className="arborist-toggle"
+                        data-toggle="1"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            if (isDir) node.toggle();
+                        }}
+                    >
+                        {isDir ? (node.isOpen ? '▾' : '▸') : ''}
+                    </span>
+                    <span className="arborist-icon">{icon}</span>
+                    {node.isEditing ? (
+                        <input
+                            className="rename-input"
+                            autoFocus
+                            defaultValue={entry.name}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.stopPropagation();
+                                    node.submit(
+                                        (e.target as HTMLInputElement).value,
+                                    );
+                                } else if (e.key === 'Escape') {
+                                    e.stopPropagation();
+                                    node.reset();
+                                }
+                            }}
+                            onBlur={() => node.reset()}
+                        />
+                    ) : (
+                        <span className="arborist-name">{entry.name}</span>
+                    )}
+                </div>
+            </ContextMenu.Trigger>
+            <ContextMenu.Portal>
+                <ContextMenu.Content className="context-menu-content">
+                    <ContextMenu.Item
+                        className="context-menu-item"
+                        onSelect={() => onCreateFileInDir(parentDir)}
+                    >
+                        New File
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                        className="context-menu-item"
+                        onSelect={() => onCreateFolderInDir(parentDir)}
+                    >
+                        New Folder
+                    </ContextMenu.Item>
+                    <ContextMenu.Separator className="context-menu-separator" />
+                    <ContextMenu.Item
+                        className="context-menu-item"
+                        disabled={isWav}
+                        onSelect={() => {
+                            // Defer to allow Radix to close the menu first.
+                            setTimeout(() => {
+                                tree.select(node);
+                                void node.edit();
+                            }, 0);
+                        }}
+                    >
+                        Rename
+                    </ContextMenu.Item>
+                    <ContextMenu.Item
+                        className="context-menu-item danger"
+                        onSelect={() => onDeleteEntry(entry.path)}
+                    >
+                        Delete
+                    </ContextMenu.Item>
+                    <ContextMenu.Separator className="context-menu-separator" />
+                    <ContextMenu.Item
+                        className="context-menu-item"
+                        onSelect={() => onRevealInFinder(entry.path)}
+                    >
+                        Reveal in Finder/Explorer
+                    </ContextMenu.Item>
+                </ContextMenu.Content>
+            </ContextMenu.Portal>
+        </ContextMenu.Root>
+    );
+}
+
+function WorkspaceTree({
+    fileTree,
+    onOpenFile,
+    onMoveFile,
+    onRenameCommit,
+    onDeleteFile,
+    onRefreshTree,
+}: {
+    fileTree: FileTreeEntry[];
+    onOpenFile: (relPath: string, options?: { preview?: boolean }) => void;
+    onMoveFile?: (sourcePath: string, destPath: string) => void | Promise<void>;
+    onRenameCommit: (path: string, newName: string) => void;
+    onDeleteFile: (id?: string) => void;
+    onRefreshTree: () => void;
+}) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const treeRef = useRef<TreeApi<FileTreeEntry> | null>(null);
+    const [size, setSize] = useState({
+        width: 0,
+        height: 0,
+    });
+
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const update = () => {
+            setSize({ width: el.clientWidth, height: el.clientHeight });
+        };
+        update();
+        const ro = new ResizeObserver(update);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+
+    const initialOpenState = useMemo(() => loadInitialOpenState(), []);
+
+    const handleToggle = useCallback(() => {
+        const state = treeRef.current?.openState ?? {};
+        persistOpenState(state as Record<string, boolean>);
+    }, []);
+
+    const handleActivate = useCallback(
+        (node: NodeApi<FileTreeEntry>) => {
+            const entry = node.data;
+            if (entry.type === 'directory') return;
+            if (entry.fileType === 'wav') return;
+            onOpenFile(entry.path, { preview: false });
+        },
+        [onOpenFile],
+    );
+
+    const handleClickNode = useCallback(
+        (node: NodeApi<FileTreeEntry>) => {
+            const entry = node.data;
+            if (entry.type === 'directory') return;
+            if (entry.fileType === 'wav') return;
+            onOpenFile(entry.path, { preview: true });
+        },
+        [onOpenFile],
+    );
+
+    const handleFocus = useCallback(
+        (node: NodeApi<FileTreeEntry>) => {
+            // Preview-open on focus (keyboard navigation).
+            handleClickNode(node);
+        },
+        [handleClickNode],
+    );
+
+    const handleRename = useCallback(
+        ({ id, name }: { id: string; name: string }) => {
+            onRenameCommit(id, name);
+        },
+        [onRenameCommit],
+    );
+
+    const handleMove = useCallback(
+        ({
+            dragIds,
+            parentNode,
+        }: {
+            dragIds: string[];
+            parentId: string | null;
+            parentNode: NodeApi<FileTreeEntry> | null;
+            index: number;
+        }) => {
+            if (!onMoveFile) return;
+            const parentDir = parentNode ? parentNode.data.path : '';
+            for (const sourcePath of dragIds) {
+                const destPath = joinPath(parentDir, basename(sourcePath));
+                if (destPath === sourcePath) continue;
+                void onMoveFile(sourcePath, destPath);
+            }
+        },
+        [onMoveFile],
+    );
+
+    const handleRevealInFinder = useCallback(async (path: string) => {
+        await electronAPI.filesystem.revealInFinder(path);
+    }, []);
+
+    const handleDeleteEntry = useCallback(
+        (path: string) => {
+            onDeleteFile(path);
+        },
+        [onDeleteFile],
+    );
+
+    const handleCreateFileInDir = useCallback(
+        async (parentDir: string) => {
+            const name = await electronAPI.filesystem.showInputDialog(
+                'New File',
+                'untitled.mjs',
+            );
+            if (!name) return;
+            const relPath = joinPath(parentDir, name);
+            const result = await electronAPI.filesystem.writeFile(relPath, '');
+            if (result.success) {
+                onRefreshTree();
+                onOpenFile(relPath, { preview: false });
+            }
+        },
+        [onOpenFile, onRefreshTree],
+    );
+
+    const handleCreateFolderInDir = useCallback(
+        async (parentDir: string) => {
+            const name = await electronAPI.filesystem.showInputDialog(
+                'New Folder',
+                'untitled-folder',
+            );
+            if (!name) return;
+            const relPath = joinPath(parentDir, name);
+            const result = await electronAPI.filesystem.createFolder(relPath);
+            if (result.success) {
+                onRefreshTree();
+            }
+        },
+        [onRefreshTree],
+    );
+
+    return (
+        <div ref={containerRef} className="arborist-container">
+            {fileTree.length === 0 ? (
+                <div className="empty-message">No files found</div>
+            ) : (
+                size.height > 0 && (
+                    <Tree
+                        ref={treeRef}
+                        data={fileTree}
+                        idAccessor="path"
+                        childrenAccessor={(d) => d.children ?? null}
+                        openByDefault={false}
+                        initialOpenState={initialOpenState}
+                        width={size.width}
+                        height={size.height}
+                        rowHeight={ROW_HEIGHT}
+                        indent={INDENT}
+                        overscanCount={8}
+                        onToggle={handleToggle}
+                        onActivate={handleActivate}
+                        onFocus={handleFocus}
+                        onRename={handleRename}
+                        onMove={handleMove}
+                        disableEdit={(entry) => entry.fileType === 'wav'}
+                        disableDrop={({ parentNode }) =>
+                            parentNode !== null &&
+                            parentNode.data.type !== 'directory'
+                        }
+                    >
+                        {(props) => (
+                            <TreeRow
+                                {...props}
+                                tree={treeRef.current as TreeApi<FileTreeEntry>}
+                                onRevealInFinder={handleRevealInFinder}
+                                onDeleteEntry={handleDeleteEntry}
+                                onCreateFileInDir={handleCreateFileInDir}
+                                onCreateFolderInDir={handleCreateFolderInDir}
+                            />
+                        )}
+                    </Tree>
+                )
+            )}
+        </div>
+    );
+}
+
 export function FileExplorer({
     workspaceRoot,
     fileTree,
@@ -271,68 +526,19 @@ export function FileExplorer({
     onCreateFile,
     onSaveFile: _onSaveFile,
     onRenameFile: _onRenameFile,
-    onDeleteFile: _onDeleteFile,
+    onDeleteFile,
     onCloseBuffer,
     onSelectWorkspace: _onSelectWorkspace,
     onRefreshTree,
     onRenameCommit,
     onRenameCancel,
     onKeepBuffer,
+    onMoveFile,
 }: FileExplorerProps) {
-    const _activeBuffer = buffers.find(
-        (b) => getBufferId(b) === activeBufferId,
-    );
-
-    const EXPANDED_STORAGE_KEY = 'modular_expanded_folders';
-
-    const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => {
-        try {
-            const raw = window.localStorage.getItem(EXPANDED_STORAGE_KEY);
-            if (raw) return new Set(JSON.parse(raw) as string[]);
-        } catch {}
-        return new Set();
-    });
-
-    const dirPaths = useMemo(() => {
-        const set = new Set<string>();
-        const walk = (entries: FileTreeEntry[]) => {
-            for (const e of entries) {
-                if (e.type === 'directory') {
-                    set.add(e.path);
-                    if (e.children) walk(e.children);
-                }
-            }
-        };
-        walk(fileTree);
-        return set;
-    }, [fileTree]);
-
-    const effectiveExpanded = useMemo(() => {
-        if (dirPaths.size === 0) return expandedPaths;
-        const pruned = new Set<string>();
-        for (const p of expandedPaths) if (dirPaths.has(p)) pruned.add(p);
-        return pruned;
-    }, [expandedPaths, dirPaths]);
-
-    useEffect(() => {
-        try {
-            window.localStorage.setItem(
-                EXPANDED_STORAGE_KEY,
-                JSON.stringify([...effectiveExpanded]),
-            );
-        } catch {}
-    }, [effectiveExpanded]);
-
-    const toggleFolder = useCallback((path: string) => {
-        setExpandedPaths((prev) => {
-            const next = new Set(prev);
-            if (next.has(path)) next.delete(path);
-            else next.add(path);
-            return next;
-        });
-    }, []);
-
-    const handleBufferContextMenu = (e: React.MouseEvent, bufferId: string) => {
+    const handleBufferContextMenu = (
+        e: React.MouseEvent,
+        bufferId: string,
+    ) => {
         e.preventDefault();
         const buffer = buffers.find((b) => getBufferId(b) === bufferId);
 
@@ -344,9 +550,9 @@ export function FileExplorer({
         }
 
         void electronAPI.showContextMenu({
-            type: contextType, // Only allow file operations for real files
+            type: contextType,
             path: buffer?.kind === 'file' ? buffer.filePath : undefined,
-            bufferId: bufferId,
+            bufferId,
             isOpenBuffer: true,
             isWorkspaceFile: false,
             x: e.clientX,
@@ -354,30 +560,16 @@ export function FileExplorer({
         });
     };
 
-    const handleTreeContextMenu = (
-        e: React.MouseEvent,
-        entry: FileTreeEntry,
-    ) => {
-        e.preventDefault();
-
-        // Check if it's open
-        const buffer = buffers.find(
-            (b) => b.kind === 'file' && b.filePath === entry.path,
-        );
-
-        void electronAPI.showContextMenu({
-            bufferId: buffer ? getBufferId(buffer) : undefined,
-            isOpenBuffer: !!buffer,
-            isWorkspaceFile: true,
-            path: entry.path,
-            type: entry.type === 'directory' ? 'directory' : 'file',
-            x: e.clientX,
-            y: e.clientY,
-        });
-    };
-
     return (
-        <div className="file-explorer">
+        <div
+            className="file-explorer"
+            onFocus={() => setContextKey('fileExplorerFocused', true)}
+            onBlur={(e) => {
+                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setContextKey('fileExplorerFocused', false);
+                }
+            }}
+        >
             <div className="file-sections">
                 {/* Open Editors Section */}
                 <div className="section">
@@ -398,16 +590,16 @@ export function FileExplorer({
                             <ul>
                                 {buffers.map((buffer) => {
                                     const bufferId = getBufferId(buffer);
-                                    const isActive =
-                                        bufferId === activeBufferId;
-                                    const isRunning =
-                                        bufferId === runningBufferId;
                                     return (
                                         <BufferItem
                                             key={bufferId}
                                             buffer={buffer}
-                                            isActive={isActive}
-                                            isRunning={isRunning}
+                                            isActive={
+                                                bufferId === activeBufferId
+                                            }
+                                            isRunning={
+                                                bufferId === runningBufferId
+                                            }
                                             renamingPath={renamingPath}
                                             formatLabel={formatLabel}
                                             onSelectBuffer={onSelectBuffer}
@@ -428,7 +620,7 @@ export function FileExplorer({
 
                 {/* Workspace Files Tree */}
                 {workspaceRoot && (
-                    <div className="section">
+                    <div className="section section-workspace">
                         <div className="section-header">
                             <span>Workspace Files</span>
                             <button
@@ -439,31 +631,14 @@ export function FileExplorer({
                                 ↻
                             </button>
                         </div>
-                        <div className="file-tree">
-                            {fileTree.length === 0 ? (
-                                <div className="empty-message">
-                                    No files found
-                                </div>
-                            ) : (
-                                <ul className="tree-root">
-                                    {fileTree.map((entry) => (
-                                        <TreeNode
-                                            key={entry.path}
-                                            entry={entry}
-                                            onOpenFile={onOpenFile}
-                                            onContextMenu={
-                                                handleTreeContextMenu
-                                            }
-                                            renamingPath={renamingPath}
-                                            onRenameCommit={onRenameCommit}
-                                            onRenameCancel={onRenameCancel}
-                                            expandedPaths={effectiveExpanded}
-                                            onToggleFolder={toggleFolder}
-                                        />
-                                    ))}
-                                </ul>
-                            )}
-                        </div>
+                        <WorkspaceTree
+                            fileTree={fileTree}
+                            onOpenFile={onOpenFile}
+                            onMoveFile={onMoveFile}
+                            onRenameCommit={onRenameCommit}
+                            onDeleteFile={onDeleteFile}
+                            onRefreshTree={onRefreshTree}
+                        />
                     </div>
                 )}
             </div>

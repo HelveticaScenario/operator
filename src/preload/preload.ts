@@ -168,6 +168,9 @@ export interface ElectronAPI {
         createFolder: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.FS_CREATE_FOLDER]
         >;
+        revealInFinder: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.FS_REVEAL_IN_FINDER]
+        >;
         showSaveDialog: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.FS_SHOW_SAVE_DIALOG]
         >;
@@ -397,6 +400,8 @@ const electronAPI: ElectronAPI = {
         readFile: (...args) => invokeIPC('FS_READ_FILE', ...args),
 
         renameFile: (...args) => invokeIPC('FS_RENAME_FILE', ...args),
+
+        revealInFinder: (...args) => invokeIPC('FS_REVEAL_IN_FINDER', ...args),
 
         selectWorkspace: (...args) => invokeIPC('FS_SELECT_WORKSPACE', ...args),
 
