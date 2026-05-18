@@ -33,8 +33,14 @@ pub struct DelayRead {
 
 impl DelayRead {
     fn update(&mut self, sample_rate: f32) {
-        // Ensure the $buffer module has processed this block first.
-        self.params.buffer.ensure_source_updated();
+        // Drive the source up through this reader's current slot so the
+        // writer's per-slot cursor lands at the same position the reader
+        // is about to read. Calling `ensure_processed()` (full block)
+        // breaks feedback cycles: the writer races ahead of this reader's
+        // interleave and pulls stale `block_outputs` slots back via the
+        // 1-sample-delay reentrancy path.
+        let slot = self.current_block_index();
+        self.params.buffer.ensure_source_updated_to(slot + 1);
 
         // Effective write position for this slot = base (set by the
         // source's `tick_buffers` at block start) + `current_block_index`.
@@ -42,7 +48,7 @@ impl DelayRead {
         // the same delay position — 64× sample-and-hold artefact at
         // `block_size = 64`.
         let write_index =
-            (self.params.buffer.read_write_index() as f64) + (self.current_block_index() as f64);
+            (self.params.buffer.read_write_index() as f64) + (slot as f64);
         let frame_count = self.params.buffer.frame_count();
         let channels = self.channel_count();
 
