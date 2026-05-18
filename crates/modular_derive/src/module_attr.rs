@@ -559,9 +559,9 @@ fn impl_module_macro_attr(
     // Check for clock_sync flag
     let clock_sync_impl = if attr_args.clock_sync {
         quote! {
-            fn sync_external_clock(&self, bar_phase: f64, bpm: f64) {
+            fn sync_external_clock(&self, state: crate::types::ExternalClockState) {
                 let module = unsafe { &mut *self.module.get() };
-                module.sync_external_clock(bar_phase, bpm);
+                module.sync_external_clock_impl(state);
             }
 
             fn clear_external_sync(&self) {

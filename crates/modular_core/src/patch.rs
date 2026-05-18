@@ -4,9 +4,6 @@
 //! connected audio modules. The patch contains sampleable modules and tracks
 //! that can be processed to generate audio.
 
-use parking_lot::Mutex;
-
-use crate::PolyOutput;
 use crate::dsp::core::audio_in::AudioIn;
 use crate::types::{
     Message, MessageTag, ROOT_ID, ROOT_OUTPUT_PORT, Sampleable, SampleableMap, WavData,
@@ -18,7 +15,6 @@ use std::sync::Arc;
 
 /// The core patch structure containing the DSP graph
 pub struct Patch {
-    pub audio_in: Arc<Mutex<PolyOutput>>,
     pub sampleables: SampleableMap,
     pub wav_data: HashMap<String, Arc<WavData>>,
     message_listeners: HashMap<MessageTag, Vec<String>>,
@@ -28,16 +24,13 @@ impl Patch {
     /// Create a new empty patch
     pub fn new() -> Self {
         let mut sampleables: SampleableMap = Default::default();
-        let audio_in_sampleable: AudioIn = Default::default();
-        let audio_in = audio_in_sampleable.input.clone();
+        let audio_in_sampleable = AudioIn::default();
 
         sampleables.insert(
             audio_in_sampleable.get_id().to_string(),
             Box::new(audio_in_sampleable),
         );
-        println!("sampleables {:?}", sampleables.keys());
         let mut patch = Patch {
-            audio_in,
             sampleables,
             wav_data: HashMap::new(),
             message_listeners: HashMap::new(),
@@ -49,9 +42,7 @@ impl Patch {
     /// Re-insert the AudioIn module into sampleables.
     /// Called after sampleables.clear() to restore the hidden audio input module.
     pub fn insert_audio_in(&mut self) {
-        let audio_in_sampleable = AudioIn {
-            input: self.audio_in.clone(),
-        };
+        let audio_in_sampleable = AudioIn::default();
         let id = WellKnownModule::HiddenAudioIn.id().to_string();
         self.sampleables.insert(id, Box::new(audio_in_sampleable));
     }

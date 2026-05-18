@@ -1291,6 +1291,19 @@ struct AudioProcessor {
   transport_meter: Arc<TransportMeter>,
   /// Sample rate of the audio stream
   sample_rate: f32,
+  /// Internal block size used for module construction (matches the
+  /// `block_size` each wrapper allocates `BlockPort`s for). The audio
+  /// callback drains `block_size` cpal frames per block-level pass.
+  block_size: usize,
+  /// Position within the current internal block. Persists across CPAL
+  /// callbacks. Initialised to `block_size` so the first cpal frame
+  /// triggers block-level work immediately.
+  block_pos: usize,
+  /// Pre-allocated scratch buffer for one internal block's worth of host
+  /// audio input. Filled at the block boundary from `input_reader` and
+  /// injected into `HiddenAudioIn` via `inject_audio_in_block`. Sized to
+  /// `block_size` once in `new()` so the audio thread never allocates.
+  input_block_scratch: Vec<[f32; PORT_MAX_CHANNELS]>,
   /// Ableton Link integration (audio-thread side). Owns the live
   /// `rusty_link` resources when active and exposes only RT-safe operations.
   link: crate::link::LinkState,
@@ -1303,6 +1316,7 @@ impl AudioProcessor {
     garbage_tx: GarbageProducer,
     shared: AudioSharedState,
     sample_rate: f32,
+    block_size: usize,
   ) -> Self {
     Self {
       patch: Patch::new(),
@@ -1316,6 +1330,9 @@ impl AudioProcessor {
       queued_update: None,
       transport_meter: shared.transport_meter,
       sample_rate,
+      block_size,
+      block_pos: block_size,
+      input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
       link: crate::link::LinkState::new(),
     }
   }
@@ -1584,118 +1601,184 @@ impl AudioProcessor {
     }
   }
 
-  /// Process a single frame, returning multi-channel output
+  /// Pull host audio input from `input_reader` and inject it into
+  /// `HiddenAudioIn` once per internal block. Called by the cpal callback
+  /// before `process_frame`, so the block-level work inside `process_frame`
+  /// sees up-to-date per-slot input.
+  ///
+  /// At a block boundary while running, pulls `block_size` cpal frames in
+  /// one tight loop and hands them to `HiddenAudioIn` via
+  /// `inject_audio_in_block`. Mid-block (running) does nothing — the same
+  /// block has already been injected. While stopped, drains one cpal frame
+  /// to keep the ring buffer flowing; the audio thread never injects so
+  /// inner modules don't react to ghost input.
+  fn before_process_frame(&mut self, input_reader: &mut InputBufferReader) {
+    use modular_core::types::WellKnownModule;
+    if self.is_stopped() {
+      let _ = input_reader.read_frame();
+      return;
+    }
+    if self.block_pos < self.block_size {
+      return;
+    }
+    for slot in self.input_block_scratch.iter_mut() {
+      let frame = input_reader.read_frame();
+      for ch in 0..PORT_MAX_CHANNELS {
+        slot[ch] = frame[ch] * AUDIO_INPUT_GAIN;
+      }
+    }
+    if let Some(audio_in) = self.patch.sampleables.get(WellKnownModule::HiddenAudioIn.id()) {
+      audio_in.inject_audio_in_block(&self.input_block_scratch);
+    }
+  }
+
+  /// Process one cpal frame. At a block boundary (`block_pos >= block_size`)
+  /// this runs the heavy block-level work (link sync, ROOT_CLOCK update,
+  /// queued patch swap, `ensure_processed` on every module, transport-meter
+  /// write) and resets the cursor; otherwise it just reads the pre-computed
+  /// output at the current slot. `link.sync_frame` advances the in-buffer
+  /// frame index on every call so Link's timeline stays accurate, but the
+  /// closure body only fires at block boundaries — ROOT_CLOCK is synced
+  /// once per block. Per-sample eager-fill of ROOT_CLOCK lands separately.
   fn process_frame(&mut self, num_channels: usize) -> [f32; PORT_MAX_CHANNELS] {
     use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID};
     profiling::scope!("process_frame");
 
     let mut output = [0.0f32; PORT_MAX_CHANNELS];
 
+    let at_block_boundary = self.block_pos >= self.block_size;
+
     if self.is_stopped() {
-      return output; // Skip processing when stopped
+      // Keep block alignment after a stop/start cycle by forcing the next
+      // unmuted frame to start a fresh block.
+      self.block_pos = self.block_size;
+      // Still advance Link's frame counter so the timeline stays in sync
+      // with cpal frames consumed by the silence path.
+      self.link.sync_frame(|_bar_phase, _tempo| {});
+      return output;
     }
 
+    // Advance Link's in-buffer frame index on every cpal frame; only sync
+    // ROOT_CLOCK at the block boundary.
+    let should_sync_clock = at_block_boundary;
     // 1. Sync Link state into ROOT_CLOCK and run its block. The trigger
     //    outputs need to be live before we inspect them for queued patch
     //    swaps below.
     let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
     self.link.sync_frame(|bar_phase, tempo| {
-      if let Some(clock) = root_clock {
-        clock.sync_external_clock(bar_phase, tempo);
+      if should_sync_clock
+        && let Some(clock) = root_clock
+      {
+        clock.sync_external_clock(modular_core::types::ExternalClockState {
+          bar_phase,
+          bpm: tempo,
+        });
       }
     });
 
-    for module in self.patch.sampleables.values() {
-      module.start_block();
-    }
-    if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
-      root_clock.ensure_processed();
-    }
+    if at_block_boundary {
+      profiling::scope!("process_block");
+      self.block_pos = 0;
 
-    // 2. Check queued update trigger against ROOT_CLOCK outputs.
-    let should_apply = if let Some((_, trigger)) = self.queued_update.as_ref() {
-      match trigger {
-        QueuedTrigger::Immediate => true,
-        QueuedTrigger::NextBar => self
-          .patch
-          .sampleables
-          .get(&*ROOT_CLOCK_ID)
-          .map(|c| c.get_value_at("barTrigger", 0, 0) >= 1.0)
-          .unwrap_or(true),
-        QueuedTrigger::NextBeat => self
-          .patch
-          .sampleables
-          .get(&*ROOT_CLOCK_ID)
-          .map(|c| c.get_value_at("beatTrigger", 0, 0) >= 1.0)
-          .unwrap_or(true),
-      }
-    } else {
-      false
-    };
-
-    // 3. If triggered, apply the patch update.
-    if should_apply {
-      let (update, _) = self.queued_update.take().unwrap();
-      let applied_id = update.update_id;
-      self.apply_patch_update(update);
-      self.transport_meter.write_applied_update_id(applied_id);
-      // Newly-constructed modules need a fresh block reset before their
-      // first ensure_processed below.
       for module in self.patch.sampleables.values() {
         module.start_block();
       }
-    }
-
-    // 4. Drive every module to completion (idempotent; ROOT_CLOCK and any
-    //    cable-pulled modules short-circuit on `self.index >= block_size`).
-    {
-      profiling::scope!("ensure_processed");
-      for module in self.patch.sampleables.values() {
-        module.ensure_processed();
+      if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+        root_clock.ensure_processed();
       }
-    }
 
-    // 4.5 Write transport state from ROOT_CLOCK outputs.
-    {
-      let has_queued = self.queued_update.is_some();
-      if let Some(clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
-        let bar_phase = clock.get_value_at("playhead", 0, 0) as f64;
-        let bar_count = clock.get_value_at("playhead", 1, 0) as u64;
-        let beat_in_bar = clock.get_value_at("beatInBar", 0, 0) as u32;
-        let is_playing = !self.is_stopped();
-        self.transport_meter.write_from_audio(
-          bar_phase,
-          bar_count,
-          beat_in_bar,
-          is_playing,
-          has_queued,
-        );
+      // Check queued update trigger against ROOT_CLOCK outputs. At
+      // `block_size > 1` the trigger may fire on any slot within the
+      // block, so scan every slot rather than just slot 0. Latency is
+      // bounded by `block_size` samples (still sub-millisecond at the
+      // default 64-sample block @ 48 kHz).
+      let block_size = self.block_size;
+      let should_apply = if let Some((_, trigger)) = self.queued_update.as_ref() {
+        match trigger {
+          QueuedTrigger::Immediate => true,
+          QueuedTrigger::NextBar => self
+            .patch
+            .sampleables
+            .get(&*ROOT_CLOCK_ID)
+            .map(|c| (0..block_size).any(|slot| c.get_value_at("barTrigger", 0, slot) >= 1.0))
+            .unwrap_or(true),
+          QueuedTrigger::NextBeat => self
+            .patch
+            .sampleables
+            .get(&*ROOT_CLOCK_ID)
+            .map(|c| (0..block_size).any(|slot| c.get_value_at("beatTrigger", 0, slot) >= 1.0))
+            .unwrap_or(true),
+        }
       } else {
-        self
-          .transport_meter
-          .write_from_audio(0.0, 0, 0, false, has_queued);
+        false
+      };
+
+      if should_apply {
+        let (update, _) = self.queued_update.take().unwrap();
+        let applied_id = update.update_id;
+        self.apply_patch_update(update);
+        self.transport_meter.write_applied_update_id(applied_id);
+        // Newly-constructed modules need a fresh block reset before
+        // their first ensure_processed below.
+        for module in self.patch.sampleables.values() {
+          module.start_block();
+        }
+      }
+
+      {
+        profiling::scope!("ensure_processed");
+        for module in self.patch.sampleables.values() {
+          module.ensure_processed();
+        }
+      }
+
+      // Write transport state from ROOT_CLOCK outputs (slot 0 of the new
+      // block; meter doesn't need per-sample precision).
+      {
+        let has_queued = self.queued_update.is_some();
+        if let Some(clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+          let bar_phase = clock.get_value_at("playhead", 0, 0) as f64;
+          let bar_count = clock.get_value_at("playhead", 1, 0) as u64;
+          let beat_in_bar = clock.get_value_at("beatInBar", 0, 0) as u32;
+          let is_playing = !self.is_stopped();
+          self.transport_meter.write_from_audio(
+            bar_phase,
+            bar_count,
+            beat_in_bar,
+            is_playing,
+            has_queued,
+          );
+        } else {
+          self
+            .transport_meter
+            .write_from_audio(0.0, 0, 0, false, has_queued);
+        }
       }
     }
 
-    // Capture audio for scopes.
+    let slot = self.block_pos;
+
+    // Capture audio for scopes at this slot.
     {
       profiling::scope!("capture_scopes");
       let mut scope_lock = self.scope_collection.lock();
       for (key, scope_buffer) in scope_lock.iter_mut() {
         if let Some(module) = self.patch.sampleables.get(&key.module_id) {
-          let sample = module.get_value_at(&key.port_name, key.channel as usize, 0);
+          let sample = module.get_value_at(&key.port_name, key.channel as usize, slot);
           scope_buffer.push(sample);
         }
       }
     }
 
-    // Get output from root module.
+    // Get output from root module at this slot.
     if let Some(root) = self.patch.sampleables.get(&*ROOT_ID) {
       for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-        output[ch] = root.get_value_at(&ROOT_OUTPUT_PORT, ch, 0) * AUDIO_OUTPUT_ATTENUATION;
+        output[ch] =
+          root.get_value_at(&ROOT_OUTPUT_PORT, ch, slot) * AUDIO_OUTPUT_ATTENUATION;
       }
     }
 
+    self.block_pos += 1;
     output
   }
 
@@ -1742,6 +1825,7 @@ pub fn make_stream<T>(
   garbage_tx: GarbageProducer,
   shared: AudioSharedState,
   mut input_reader: InputBufferReader,
+  block_size: usize,
 ) -> Result<cpal::Stream>
 where
   T: SizedSample + FromSample<f32> + hound::Sample,
@@ -1760,8 +1844,14 @@ where
 
   // Create the audio processor that owns the patch
   let sample_rate = config.sample_rate as f32;
-  let mut audio_processor =
-    AudioProcessor::new(command_rx, error_tx, garbage_tx, shared, sample_rate);
+  let mut audio_processor = AudioProcessor::new(
+    command_rx,
+    error_tx,
+    garbage_tx,
+    shared,
+    sample_rate,
+    block_size,
+  );
 
   let mut final_state_processor = FinalStateProcessor::new(num_channels);
 
@@ -1818,18 +1908,9 @@ where
           {
             profiling::scope!("process_frames");
             for frame in output.chunks_mut(num_channels) {
-              // Read from the input buffer and update audio_in
-              {
-                let mut audio_in = audio_processor.patch.audio_in.lock();
-                let input_samples = input_reader.read_frame();
-
-                // Set channel count so that get() returns values instead of 0.0
-                audio_in.set_channels(PORT_MAX_CHANNELS);
-                for i in 0..PORT_MAX_CHANNELS {
-                  // Apply gain to bring input from [-1, 1] to [-5, 5] volt range
-                  audio_in.set(i, input_samples[i] * AUDIO_INPUT_GAIN);
-                }
-              }
+              // Pull host input + inject into HiddenAudioIn once per
+              // internal block, before block-level work runs.
+              audio_processor.before_process_frame(&mut input_reader);
 
               // Process frame and get multi-channel output
               let samples = final_state_processor
@@ -2398,6 +2479,7 @@ mod tests {
       garbage_producer,
       shared,
       44100.0,
+      1,
     );
 
     // Processor starts with empty patch (may have hidden audio_in)
@@ -2595,6 +2677,7 @@ mod tests {
       garbage_producer,
       shared,
       44100.0,
+      1,
     );
 
     (cmd_producer, processor)

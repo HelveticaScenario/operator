@@ -178,8 +178,6 @@ pub struct ExternalClockState {
     pub bar_phase: f64,
     /// Tempo in BPM.
     pub bpm: f64,
-    /// Whether the Link session is playing.
-    pub playing: bool,
 }
 
 pub trait Sampleable: MessageHandler + Send {
@@ -189,11 +187,22 @@ pub trait Sampleable: MessageHandler + Send {
     /// Called after the patch is updated and all modules are connected.
     /// Modules can override this to refresh caches or perform other post-update work.
     fn on_patch_update(&self) {}
-    /// Provide external clock synchronization data.
-    /// Only ROOT_CLOCK overrides this. Default: no-op.
-    fn sync_external_clock(&self, _bar_phase: f64, _bpm: f64) {}
+    /// Inject one sample's worth of external clock state. Only ROOT_CLOCK's
+    /// wrapper overrides this (via the `#[module(clock_sync)]` attribute);
+    /// every other module is a no-op. Called per sample by the audio
+    /// callback's eager-fill loop so the inner [`crate::dsp::core::clock::Clock`]
+    /// can resolve trigger crossings on the exact sample boundary the
+    /// peer's Link timeline lands on.
+    fn sync_external_clock(&self, _state: ExternalClockState) {}
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
+
+    /// Inject one block's worth of host audio input frames. Only
+    /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
+    /// callback pulls one CPAL frame per slot into `block` and hands the
+    /// whole thing in once per internal block, so the inner module can
+    /// serve per-slot reads via `get_value_at(_, ch, slot)`.
+    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
 
     /// Reset the per-block sample cursor to 0 at the start of an internal
     /// `block_size` block. Cache slots in `block_outputs` keep their
