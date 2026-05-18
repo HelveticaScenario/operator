@@ -17,6 +17,7 @@ import type {
     FileTreeEntry,
     ContextMenuOptions,
     DSLExecuteResult,
+    KeybindingOverride,
     MainLogLevel,
     MainLogEntry,
     UpdateAvailableInfo,
@@ -346,6 +347,16 @@ try {
 } catch (error) {
     console.error('Error determining config file path:', error);
     CONFIG_FILE = 'config.json';
+}
+
+// User keybinding overrides live alongside the main config file. The renderer
+// loader merges them on top of the default keymap shipped in defaultKeymap.ts.
+let KEYBINDINGS_FILE: string;
+try {
+    KEYBINDINGS_FILE = path.join(app.getPath('userData'), 'keybindings.json');
+} catch (error) {
+    console.error('Error determining keybindings file path:', error);
+    KEYBINDINGS_FILE = 'keybindings.json';
 }
 
 const AppConfigSchema = z.object({
@@ -1554,6 +1565,65 @@ registerIPCHandler('CONFIG_WRITE', (partial: Partial<AppConfig>) => {
     const merged = { ...current, ...partial };
     saveConfig(merged);
 });
+
+// User keybinding overrides. Schema is intentionally permissive: invalid
+// entries are dropped at load time so a malformed file never breaks the
+// renderer's bootstrap.
+const KeybindingOverrideSchema = z.object({
+    key: z.string().min(1),
+    command: z.string().nullable(),
+    when: z.string().optional(),
+    args: z.array(z.unknown()).optional(),
+});
+const UserKeybindingsSchema = z.array(KeybindingOverrideSchema);
+
+function loadUserKeybindings(): KeybindingOverride[] {
+    try {
+        if (!fs.existsSync(KEYBINDINGS_FILE)) {
+            return [];
+        }
+        const raw = fs.readFileSync(KEYBINDINGS_FILE, 'utf-8').trim();
+        if (raw.length === 0) {
+            return [];
+        }
+        const parsed = JSON.parse(raw);
+        const result = UserKeybindingsSchema.safeParse(parsed);
+        if (!result.success) {
+            console.error(
+                'User keybindings validation failed:',
+                result.error.flatten(),
+            );
+            return [];
+        }
+        return result.data;
+    } catch (error) {
+        console.error('Error loading user keybindings:', error);
+        return [];
+    }
+}
+
+function saveUserKeybindings(overrides: KeybindingOverride[]) {
+    try {
+        const validated = UserKeybindingsSchema.parse(overrides);
+        fs.writeFileSync(
+            KEYBINDINGS_FILE,
+            JSON.stringify(validated, null, 2),
+            'utf-8',
+        );
+    } catch (error) {
+        console.error('Error saving user keybindings:', error);
+        throw error;
+    }
+}
+
+registerIPCHandler('KEYBINDINGS_GET_PATH', () => KEYBINDINGS_FILE);
+registerIPCHandler('KEYBINDINGS_READ_USER', () => loadUserKeybindings());
+registerIPCHandler(
+    'KEYBINDINGS_WRITE_USER',
+    (overrides: KeybindingOverride[]) => {
+        saveUserKeybindings(overrides);
+    },
+);
 
 // Update operations
 ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, async () => {
