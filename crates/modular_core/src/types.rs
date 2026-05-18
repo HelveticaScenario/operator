@@ -209,6 +209,14 @@ pub trait Sampleable: MessageHandler + Send {
     /// previous-block values for reentrancy reads until they are overwritten.
     fn start_block(&self);
 
+    /// Force the per-block sample cursor to `slot` (clamped to `block_size`)
+    /// without touching cached outputs. Used by the audio thread after a
+    /// mid-block patch swap: ROOT_CLOCK survives the swap structurally, so
+    /// its cache for `[swap_pos, block_size)` may have been computed under
+    /// the old params and needs to be refilled from `swap_pos` forward.
+    /// Modules that have no per-block index can leave this as a no-op.
+    fn set_initial_index(&self, _slot: usize) {}
+
     /// Process outputs up to (but not including) sample `target` within the
     /// current internal block. Wrapper clamps `target` to `block_size`.
     ///

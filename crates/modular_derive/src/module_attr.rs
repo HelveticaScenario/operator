@@ -733,6 +733,10 @@ fn impl_module_macro_attr(
                 self.index.set(0);
             }
 
+            fn set_initial_index(&self, slot: usize) {
+                self.index.set(slot.min(self.block_size));
+            }
+
             fn ensure_processed_to(&self, target: usize) {
                 let target = target.min(self.block_size);
                 if self.index.get() >= target {

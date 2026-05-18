@@ -54,9 +54,6 @@ pub struct LinkState {
   /// Per-buffer Link snapshot, refreshed at the start of every audio
   /// callback by [`LinkState::capture_buffer_state`].
   buffer: Option<LinkBufferState>,
-  /// Frame index within the current buffer (used to compute per-frame host
-  /// times when syncing ROOT_CLOCK).
-  frame_in_buffer: usize,
   /// Pending quantized start — a Start was requested but transport is
   /// waiting for the next Link bar boundary before actually playing.
   pending_start: bool,
@@ -70,7 +67,6 @@ impl LinkState {
       session_state: None,
       sample_count: 0,
       buffer: None,
-      frame_in_buffer: 0,
       pending_start: false,
     }
   }
@@ -130,10 +126,9 @@ impl LinkState {
     self.pending_start = false;
   }
 
-  /// Audio-callback prologue: capture the session state once per buffer and
-  /// reset the in-buffer frame index. No-op when Link is inactive.
+  /// Audio-callback prologue: capture the session state once per buffer.
+  /// No-op when Link is inactive.
   pub fn capture_buffer_state(&mut self, sample_rate: f32) {
-    self.frame_in_buffer = 0;
     self.buffer = self.capture(sample_rate);
   }
 
@@ -181,23 +176,17 @@ impl LinkState {
     }
   }
 
-  /// Compute the current frame's bar-phase and tempo and pass them to
-  /// `sync` so the caller can drive ROOT_CLOCK. Always advances the
-  /// in-buffer frame index when Link is active. No-op when inactive.
-  pub fn sync_frame<F: FnOnce(f64, f64)>(&mut self, sync: F) {
-    let buffer = match &self.buffer {
-      Some(b) => b,
-      None => return,
-    };
-    if let Some(ref ss) = self.session_state {
-      let frame_offset_micros =
-        (self.frame_in_buffer as f64 * buffer.micros_per_sample) as i64;
-      let frame_host_time = buffer.host_time_micros + frame_offset_micros;
-      let phase = ss.phase_at_time(frame_host_time, buffer.quantum);
-      let bar_phase = phase / buffer.quantum;
-      sync(bar_phase, buffer.tempo);
-    }
-    self.frame_in_buffer += 1;
+  /// Read bar-phase + tempo at the given cpal-frame offset within the current
+  /// callback's buffer snapshot. Returns `None` when Link is inactive.
+  /// Pure read — used by the eager-fill loop to sync ROOT_CLOCK one
+  /// sample at a time across arbitrary frame indices in a callback.
+  pub fn phase_at_frame(&self, cb_frame: usize) -> Option<(f64, f64)> {
+    let buffer = self.buffer.as_ref()?;
+    let ss = self.session_state.as_ref()?;
+    let frame_offset_micros = (cb_frame as f64 * buffer.micros_per_sample) as i64;
+    let frame_host_time = buffer.host_time_micros + frame_offset_micros;
+    let phase = ss.phase_at_time(frame_host_time, buffer.quantum);
+    Some((phase / buffer.quantum, buffer.tempo))
   }
 
   /// Push an explicit tempo override to the Link session via the RT-safe
