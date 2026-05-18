@@ -13,6 +13,7 @@ import './App.css';
 import { editor } from 'monaco-editor';
 import { getErrorMessage } from './utils/errorUtils';
 import { FileExplorer } from './components/FileExplorer';
+import { EditorTabs } from './components/EditorTabs';
 import { Sidebar } from './components/Sidebar';
 import { ControlPanel } from './components/ControlPanel';
 import electronAPI from './electronAPI';
@@ -1082,6 +1083,15 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
+                            <EditorTabs
+                                buffers={buffers}
+                                activeBufferId={activeBufferId}
+                                runningBufferId={runningBufferId}
+                                formatLabel={formatLabel}
+                                onSelectBuffer={setActiveBufferId}
+                                onCloseBuffer={handleCloseBuffer}
+                                onReorderBuffers={setBuffers}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}
