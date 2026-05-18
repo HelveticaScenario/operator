@@ -178,8 +178,6 @@ pub struct ExternalClockState {
     pub bar_phase: f64,
     /// Tempo in BPM.
     pub bpm: f64,
-    /// Whether the Link session is playing.
-    pub playing: bool,
 }
 
 pub trait Sampleable: MessageHandler + Send {
