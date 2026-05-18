@@ -1486,12 +1486,19 @@ impl Buffer {
         self.cached_buffer.map(|ptr| unsafe { ptr.as_ref() })
     }
 
-    /// Ensure the source module has been updated this tick (demand-driven ordering).
-    /// This triggers the $buffer module's `update()` which writes the current sample
-    /// and increments write_index. Must be called before reading the buffer.
-    pub fn ensure_source_updated(&self) {
+    /// Ensure the source module has produced output up through (but not
+    /// including) sample `target` within the current internal block.
+    /// Demand-driven ordering — readers call this with their own current
+    /// slot + 1 so the source's write cursor lands at the same slot the
+    /// reader will read this iteration.
+    ///
+    /// Calling with the full `block_size` (the old behaviour) breaks
+    /// feedback cycles at `block_size > 1`: the source races ahead of the
+    /// reader's per-slot interleave and pulls stale `block_outputs` slots
+    /// from the reader via the 1-sample-delay reentrancy path.
+    pub fn ensure_source_updated_to(&self, target: usize) {
         if let Some(module_ptr) = self.cached_source_ptr {
-            unsafe { module_ptr.as_ref().ensure_processed() };
+            unsafe { module_ptr.as_ref().ensure_processed_to(target) };
         }
     }
 
@@ -2510,6 +2517,12 @@ pub trait OutputStruct: Default + Send + 'static {
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
+    /// Advance any owned circular buffers by `block_size` once per internal
+    /// block. Called from the wrapper's `start_block()` before any per-sample
+    /// `update()` runs. Default: no-op. `BufferWrite` overrides this to bump
+    /// its write cursor by the block; inner `update` then offsets the
+    /// per-sample write position by `current_block_index()`.
+    fn tick_buffers(&mut self, _block_size: usize) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -3297,7 +3310,7 @@ mod tests {
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
         buffer.connect(&patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
 
         assert_eq!(update_count.load(Ordering::SeqCst), 1);
     }
@@ -3323,11 +3336,11 @@ mod tests {
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
         buffer.connect(&patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
         assert_eq!(update_count.load(Ordering::SeqCst), 1);
 
         buffer.connect(&empty_patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
 
         assert!(buffer.cached_source_ptr.is_none());
         assert!(buffer.cached_buffer.is_none());
@@ -3340,7 +3353,7 @@ mod tests {
         let mut buffer = Buffer::new("buf".to_string(), "missing".to_string(), 1);
 
         buffer.connect(&patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
 
         assert!(buffer.cached_source_ptr.is_none());
         assert!(buffer.cached_buffer.is_none());

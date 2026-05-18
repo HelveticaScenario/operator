@@ -222,6 +222,7 @@ mod tests {
             params,
             outputs,
             _channel_count: 1,
+            _block_index: Default::default(),
             state: OverdriveState::default(),
         };
         od.init(48000.0);
