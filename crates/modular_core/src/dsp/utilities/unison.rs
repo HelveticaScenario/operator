@@ -120,6 +120,7 @@ mod tests {
             params,
             outputs,
             _channel_count: channels,
+            _block_index: Default::default(),
         }
     }
 

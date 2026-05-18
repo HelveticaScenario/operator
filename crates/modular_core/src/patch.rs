@@ -4,9 +4,6 @@
 //! connected audio modules. The patch contains sampleable modules and tracks
 //! that can be processed to generate audio.
 
-use parking_lot::Mutex;
-
-use crate::PolyOutput;
 use crate::dsp::core::audio_in::AudioIn;
 use crate::types::{
     Message, MessageTag, ROOT_ID, ROOT_OUTPUT_PORT, Sampleable, SampleableMap, WavData,
@@ -18,7 +15,6 @@ use std::sync::Arc;
 
 /// The core patch structure containing the DSP graph
 pub struct Patch {
-    pub audio_in: Arc<Mutex<PolyOutput>>,
     pub sampleables: SampleableMap,
     pub wav_data: HashMap<String, Arc<WavData>>,
     message_listeners: HashMap<MessageTag, Vec<String>>,
@@ -28,16 +24,13 @@ impl Patch {
     /// Create a new empty patch
     pub fn new() -> Self {
         let mut sampleables: SampleableMap = Default::default();
-        let audio_in_sampleable: AudioIn = Default::default();
-        let audio_in = audio_in_sampleable.input.clone();
+        let audio_in_sampleable = AudioIn::default();
 
         sampleables.insert(
             audio_in_sampleable.get_id().to_string(),
             Box::new(audio_in_sampleable),
         );
-        println!("sampleables {:?}", sampleables.keys());
         let mut patch = Patch {
-            audio_in,
             sampleables,
             wav_data: HashMap::new(),
             message_listeners: HashMap::new(),
@@ -49,9 +42,7 @@ impl Patch {
     /// Re-insert the AudioIn module into sampleables.
     /// Called after sampleables.clear() to restore the hidden audio input module.
     pub fn insert_audio_in(&mut self) {
-        let audio_in_sampleable = AudioIn {
-            input: self.audio_in.clone(),
-        };
+        let audio_in_sampleable = AudioIn::default();
         let id = WellKnownModule::HiddenAudioIn.id().to_string();
         self.sampleables.insert(id, Box::new(audio_in_sampleable));
     }
@@ -99,15 +90,12 @@ impl Patch {
         Ok(())
     }
 
-    /// Get the output sample from the root module
+    /// Get the output sample from the root module (channel 0, slot 0).
     pub fn get_output(&self) -> f32 {
-        if let Some(root) = self.sampleables.get(&*ROOT_ID) {
-            root.get_poly_sample(&ROOT_OUTPUT_PORT)
-                .map(|p| p.get(0))
-                .unwrap_or_default()
-        } else {
-            0.0
-        }
+        self.sampleables
+            .get(&*ROOT_ID)
+            .map(|root| root.get_value_at(&ROOT_OUTPUT_PORT, 0, 0))
+            .unwrap_or_default()
     }
 
     /// Build a Patch from a [`PatchGraph`] for testing.
@@ -115,7 +103,19 @@ impl Patch {
     /// Replicates the logic of `AudioState::apply_patch()` without the command
     /// queue or audio-thread indirection: instantiate modules, deserialize params
     /// on the calling thread, apply them, connect cables, and fire `on_patch_update`.
-    pub fn from_graph(graph: &crate::types::PatchGraph, sample_rate: f32) -> Result<Self, String> {
+    ///
+    /// `block_size` and `mode_map` flow through to each module's constructor.
+    /// Modules absent from `mode_map` default to [`ProcessingMode::Block`]. The
+    /// cycle classification itself lives in the `modular` crate (`graph_analysis`);
+    /// callers that want cycle-aware modes should run that first and pass the
+    /// resulting map in here. Tests that don't care typically pass `block_size=1`
+    /// and an empty map.
+    pub fn from_graph(
+        graph: &crate::types::PatchGraph,
+        sample_rate: f32,
+        block_size: usize,
+        mode_map: &HashMap<String, crate::types::ProcessingMode>,
+    ) -> Result<Self, String> {
         use crate::dsp::{get_constructors, get_params_deserializers};
         use crate::params::{DeserializedParams, extract_argument_spans};
 
@@ -148,8 +148,18 @@ impl Patch {
                 argument_spans,
                 channel_count: cached.channel_count,
             };
-            let module = constructor(&module_state.id, sample_rate, deserialized)
-                .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
+            let mode = mode_map
+                .get(&module_state.id)
+                .copied()
+                .unwrap_or(crate::types::ProcessingMode::Block);
+            let module = constructor(
+                &module_state.id,
+                sample_rate,
+                deserialized,
+                block_size,
+                mode,
+            )
+            .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
             patch.sampleables.insert(module_state.id.clone(), module);
         }
 
@@ -264,23 +274,21 @@ mod tests {
             &self.id
         }
 
-        fn tick(&self) {}
-
-        fn update(&self) {}
-
-        fn get_poly_sample(&self, _port: &str) -> Result<crate::poly::PolyOutput> {
-            Ok(crate::poly::PolyOutput::default())
-        }
-
-        fn get_sample(&self, _port: &str, channel: usize) -> Result<f32> {
-            Ok(crate::poly::PolyOutput::default().get_cycling(channel))
-        }
-
         fn get_module_type(&self) -> &str {
             "dummy"
         }
 
         fn connect(&self, _patch: &Patch) {}
+
+        fn start_block(&self) {}
+
+        fn ensure_processed_to(&self, _target: usize) {}
+
+        fn ensure_processed(&self) {}
+
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
 
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -326,23 +334,21 @@ mod tests {
             &self.id
         }
 
-        fn tick(&self) {}
-
-        fn update(&self) {}
-
-        fn get_poly_sample(&self, _port: &str) -> Result<crate::poly::PolyOutput> {
-            Ok(crate::poly::PolyOutput::default())
-        }
-
-        fn get_sample(&self, _port: &str, _channel: usize) -> Result<f32> {
-            Ok(0.0)
-        }
-
         fn get_module_type(&self) -> &str {
             "counting"
         }
 
         fn connect(&self, _patch: &Patch) {}
+
+        fn start_block(&self) {}
+
+        fn ensure_processed_to(&self, _target: usize) {}
+
+        fn ensure_processed(&self) {}
+
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
 
         fn as_any(&self) -> &dyn std::any::Any {
             self

@@ -664,6 +664,7 @@ fn build_output_stream(
   garbage_tx: GarbageProducer,
   shared: AudioSharedState,
   input_reader: InputBufferReader,
+  block_size: usize,
 ) -> Result<cpal::Stream> {
   match sample_format {
     cpal::SampleFormat::I8 => make_stream::<i8>(
@@ -674,6 +675,7 @@ fn build_output_stream(
       garbage_tx,
       shared,
       input_reader,
+      block_size,
     ),
     cpal::SampleFormat::I16 => make_stream::<i16>(
       device,
@@ -683,6 +685,7 @@ fn build_output_stream(
       garbage_tx,
       shared,
       input_reader,
+      block_size,
     ),
     cpal::SampleFormat::I32 => make_stream::<i32>(
       device,
@@ -692,6 +695,7 @@ fn build_output_stream(
       garbage_tx,
       shared,
       input_reader,
+      block_size,
     ),
     cpal::SampleFormat::F32 => make_stream::<f32>(
       device,
@@ -701,6 +705,7 @@ fn build_output_stream(
       garbage_tx,
       shared,
       input_reader,
+      block_size,
     ),
     _ => Err(napi::Error::from_reason(format!(
       "Unsupported output sample format: {:?}",
@@ -772,7 +777,19 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
   let (command_tx, command_rx, error_tx, error_rx, garbage_tx, garbage_rx) =
     create_audio_channels();
 
-  // Create audio state handle (main thread side)
+  // Internal block size. The audio callback drains `block_size` cpal
+  // frames per block-level pass (link sync, queued patch swap,
+  // `ensure_processed` on every module, transport-meter write). CPAL's
+  // own buffer size is independent — the callback handles any count of
+  // cpal frames per invocation, splitting them across internal blocks
+  // via `block_pos`.
+  //
+  // 64 samples @ 48 kHz = ~1.33 ms per block. Chosen as a balance
+  // between block-amortised CPU savings and per-bar-trigger jitter
+  // (triggers fire at block granularity until per-sample eager-fill of
+  // ROOT_CLOCK lands).
+  const BLOCK_SIZE: usize = 64;
+
   let state = Arc::new(AudioState::new_with_channels(
     command_tx,
     error_rx,
@@ -780,6 +797,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
     params.sample_rate as f32,
     channels,
     params.midi_manager.clone(),
+    BLOCK_SIZE,
   ));
 
   // Get shared state for audio processor
@@ -805,6 +823,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
     garbage_tx,
     shared,
     input_reader,
+    BLOCK_SIZE,
   )?;
 
   output_stream
@@ -1144,7 +1163,14 @@ impl Synthesizer {
     let constructor = constructors
       .get(&module_type)
       .ok_or_else(|| napi::Error::from_reason(format!("Unknown module type: {}", module_type)))?;
-    let module = constructor(&module_id, self.sample_rate, deserialized).map_err(|e| {
+    let module = constructor(
+      &module_id,
+      self.sample_rate,
+      deserialized,
+      self.state.block_size,
+      modular_core::types::ProcessingMode::Block,
+    )
+    .map_err(|e| {
       napi::Error::from_reason(format!("Failed to create module {}: {}", module_id, e))
     })?;
 

@@ -80,8 +80,7 @@
         "name": "output",
         "description": "forwarded signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -224,8 +223,7 @@
         "name": "output",
         "description": "multichannel mix: each output channel mixes the same channel index from all inputs (not a mono fold-down)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -360,8 +358,7 @@
         "name": "output",
         "description": "stereo mix output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -434,8 +431,7 @@
         "name": "playhead",
         "description": "Bar playhead: channel 0 is bar phase (0..1), channel 1 is completed bar count",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       },
       {
         "name": "barTrigger",
@@ -443,8 +439,7 @@
         "polyphonic": false,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "beatTrigger",
@@ -452,8 +447,7 @@
         "polyphonic": false,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "ramp",
@@ -461,8 +455,7 @@
         "polyphonic": false,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "ppqTrigger",
@@ -470,15 +463,13 @@
         "polyphonic": false,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "beatInBar",
         "description": "Current beat within the bar (0-indexed)",
         "polyphonic": false,
-        "default": false,
-        "dynamicRange": false
+        "default": false
       }
     ],
     "signalParams": [],
@@ -697,8 +688,7 @@
         "name": "sample",
         "description": "compressed signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -908,29 +898,25 @@
         "name": "output",
         "description": "input passed through unchanged",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       },
       {
         "name": "low",
         "description": "low band output",
         "polyphonic": true,
-        "default": false,
-        "dynamicRange": false
+        "default": false
       },
       {
         "name": "mid",
         "description": "mid band output",
         "polyphonic": true,
-        "default": false,
-        "dynamicRange": false
+        "default": false
       },
       {
         "name": "high",
         "description": "high band output",
         "polyphonic": true,
-        "default": false,
-        "dynamicRange": false
+        "default": false
       }
     ],
     "signalParams": [
@@ -1064,8 +1050,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -1202,8 +1187,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -1401,8 +1385,7 @@
         "name": "output",
         "description": "stereo reverb output (ch0=left, ch1=right)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -1598,8 +1581,7 @@
         "name": "output",
         "description": "overdriven signal output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -1775,8 +1757,7 @@
         "name": "output",
         "description": "stereo reverb output (ch0=left, ch1=right)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -1927,8 +1908,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2085,8 +2065,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2243,8 +2222,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2420,8 +2398,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": true
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2547,8 +2524,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2661,8 +2637,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2794,8 +2769,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -2872,8 +2846,7 @@
         "polyphonic": false,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [],
@@ -3228,8 +3201,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "main",
@@ -3237,8 +3209,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "aux",
@@ -3246,8 +3217,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -3502,8 +3472,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -3824,8 +3793,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -3963,8 +3931,7 @@
         "name": "output",
         "description": "filtered signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -4102,8 +4069,7 @@
         "name": "output",
         "description": "filtered signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -4241,8 +4207,7 @@
         "name": "output",
         "description": "filtered signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -4382,8 +4347,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "lp12",
@@ -4391,8 +4355,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "bp",
@@ -4400,8 +4363,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "hp",
@@ -4409,8 +4371,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -4545,8 +4506,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0,
-        "dynamicRange": false
+        "maxValue": 1.0
       }
     ],
     "signalParams": [
@@ -4681,8 +4641,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0,
-        "dynamicRange": false
+        "maxValue": 1.0
       }
     ],
     "signalParams": [
@@ -4825,8 +4784,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0,
-        "dynamicRange": false
+        "maxValue": 1.0
       }
     ],
     "signalParams": [
@@ -4947,8 +4905,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0,
-        "dynamicRange": false
+        "maxValue": 1.0
       }
     ],
     "signalParams": [
@@ -5094,8 +5051,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -5257,8 +5213,7 @@
         "name": "output",
         "description": "buffer sample output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -5360,8 +5315,7 @@
         "name": "output",
         "description": "input signal passthrough",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -5486,8 +5440,7 @@
         "name": "output",
         "description": "clamped signal output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": true
+        "default": true
       }
     ],
     "signalParams": [
@@ -5621,8 +5574,7 @@
         "name": "output",
         "description": "divided clock output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -5738,8 +5690,7 @@
         "name": "output",
         "description": "curved signal output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -5880,8 +5831,7 @@
         "name": "output",
         "description": "delayed signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6006,8 +5956,7 @@
         "name": "output",
         "description": "slewed signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6123,8 +6072,7 @@
         "name": "output",
         "description": "edge detection pulse (5V when edge detected, 0V otherwise)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6224,8 +6172,7 @@
         "name": "output",
         "description": "edge detection pulse (5V when edge detected, 0V otherwise)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6358,8 +6305,7 @@
         "name": "output",
         "description": "result of the expression",
         "polyphonic": false,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6495,10 +6441,7 @@
         "name": "output",
         "description": "remapped signal output",
         "polyphonic": true,
-        "default": true,
-        "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": true
+        "default": true
       }
     ],
     "signalParams": [
@@ -6647,8 +6590,7 @@
         "name": "output",
         "description": "held voltage",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6764,8 +6706,7 @@
         "name": "output",
         "description": "tracked or held voltage",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -6889,8 +6830,7 @@
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -7016,8 +6956,7 @@
         "name": "output",
         "description": "quantized V/Oct output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       },
       {
         "name": "trig",
@@ -7025,8 +6964,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -7159,8 +7097,7 @@
         "name": "output",
         "description": "signal output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": true
+        "default": true
       }
     ],
     "signalParams": [
@@ -7305,8 +7242,7 @@
         "name": "output",
         "description": "spread signal output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": true
+        "default": true
       }
     ],
     "signalParams": [
@@ -7447,8 +7383,7 @@
         "name": "output",
         "description": "signal output with unison-expanded channels",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -7572,10 +7507,7 @@
         "name": "output",
         "description": "wrapped signal output",
         "polyphonic": true,
-        "default": true,
-        "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": true
+        "default": true
       }
     ],
     "signalParams": [
@@ -7721,8 +7653,7 @@
         "name": "cv",
         "description": "pitch output in V/Oct",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       },
       {
         "name": "gate",
@@ -7730,8 +7661,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "trig",
@@ -7739,8 +7669,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -7914,8 +7843,7 @@
         "name": "output",
         "description": "interpolated value at the current playhead position",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -8055,8 +7983,7 @@
         "name": "cv",
         "description": "pitch output in V/Oct (quantized to scale)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       },
       {
         "name": "gate",
@@ -8064,8 +7991,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "trig",
@@ -8073,8 +7999,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [
@@ -8209,8 +8134,7 @@
         "name": "output",
         "description": "forwarded signal",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [
@@ -8349,8 +8273,7 @@
         "name": "pitch",
         "description": "pitch CV in 1V/octave (0V = C4, includes pitch bend)",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       },
       {
         "name": "gate",
@@ -8358,8 +8281,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "velocity",
@@ -8367,8 +8289,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "aftertouch",
@@ -8376,8 +8297,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "retrigger",
@@ -8385,8 +8305,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "pitchWheel",
@@ -8394,8 +8313,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       },
       {
         "name": "modWheel",
@@ -8403,8 +8321,7 @@
         "polyphonic": true,
         "default": false,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [],
@@ -8466,8 +8383,7 @@
         "polyphonic": false,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
+        "maxValue": 5.0
       }
     ],
     "signalParams": [],
@@ -8593,8 +8509,7 @@
         "name": "output",
         "description": "sample playback output",
         "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
+        "default": true
       }
     ],
     "signalParams": [

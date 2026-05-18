@@ -395,30 +395,6 @@ impl Plaits {
             let fm_val = self.params.fm.value_or(ch, 0.0);
             let fm_mod = fm_val / 5.0 * 6.0;
 
-            // Harmonics: -5V to +5V bipolar, scaled to modulation range
-            let harmonics_cv = self.params.harmonics.value_or(ch, 0.0);
-            let harmonics_mod = if self.params.harmonics.is_disconnected() {
-                0.0
-            } else {
-                (harmonics_cv - *state.harmonics) / 10.0
-            };
-
-            // Timbre: -5V to +5V bipolar
-            let timbre_cv = self.params.timbre.value_or(ch, 0.0);
-            let timbre_mod = if self.params.timbre.is_disconnected() {
-                0.0
-            } else {
-                (timbre_cv - *state.timbre) / 10.0
-            };
-
-            // Morph: -5V to +5V bipolar
-            let morph_cv = self.params.morph.value_or(ch, 0.0);
-            let morph_mod = if self.params.morph.is_disconnected() {
-                0.0
-            } else {
-                (morph_cv - *state.morph) / 10.0
-            };
-
             // Use latched trigger value to ensure short triggers aren't missed
             // The latch captures any rising edge that occurred since last block render
             let trigger_mod = if state.trigger_latch { 1.0 } else { 0.0 };
@@ -427,18 +403,23 @@ impl Plaits {
             let level_val = self.params.level.value_or(ch, 0.0);
             let level_mod = (level_val / 8.0).clamp(0.0, 1.0);
 
+            // Operator merges Plaits' knob + CV jack into a single port per
+            // destination, so harmonics/timbre/morph have no concept of an
+            // external modulation source: the smoothed signal feeds the
+            // patch.* base values, and timbreAmt / morphAmt route the
+            // internal trigger envelope into those destinations.
             let modulations = Modulations {
                 engine: 0.0, // No CV modulation of engine
                 note: 0.0,   // No additional note modulation
                 frequency: fm_mod,
-                harmonics: harmonics_mod,
-                timbre: timbre_mod,
-                morph: morph_mod,
+                harmonics: 0.0,
+                timbre: 0.0,
+                morph: 0.0,
                 trigger: trigger_mod,
                 level: level_mod,
                 frequency_patched: !self.params.fm.is_disconnected(),
-                timbre_patched: !self.params.timbre.is_disconnected(),
-                morph_patched: !self.params.morph.is_disconnected(),
+                timbre_patched: false,
+                morph_patched: false,
                 trigger_patched: !self.params.trigger.is_disconnected(),
                 level_patched: !self.params.level.is_disconnected(),
             };

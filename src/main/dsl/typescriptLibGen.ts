@@ -591,13 +591,10 @@ interface ModuleOutputWithRange extends ModuleOutput {
   readonly minValue: number;
   /** The maximum value this output produces */
   readonly maxValue: number;
-  /** Whether this output provides dynamic per-channel range at runtime */
-  readonly dynamicRange: boolean;
   
   /**
    * Remap the output from its native range to a new range.
-   * For dynamic range outputs, uses runtime per-channel bounds.
-   * For static range outputs, uses the stored minValue/maxValue.
+   * Uses the stored minValue/maxValue automatically.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @returns A {@link ModuleOutput} with the remapped signal
@@ -1061,6 +1058,25 @@ function $ott(input: Collection | ModuleOutput, config?: {
  * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
+
+/**
+ * @param count - Size of the output
+ * @param playhead - 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
+ * @param range - \`[off, on]\` weight pair (default \`[0, 1]\`)
+ * @param interpolationType - Easing between keyframes (default linear)
+ *
+ * @example
+ * // Crossfade the amplitude of the different voices
+ * const osc = $sine(['c', 'e', 'g'])
+ * const weights = $cross(osc.length, $sine('0.25hz').range(0, 1));
+ * osc.amp(weights).out();
+ */
+function $cross(
+    count: number,
+    playhead: Mono<Signal>,
+    range?: [number, number],
+    interpolationType?: Parameters<typeof $track>[1]['interpolationType'],
+): Collection;
 
 /**
  * Phase-warp table descriptors for modules that accept a {@link Table}

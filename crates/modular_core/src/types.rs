@@ -53,7 +53,7 @@ use std::{collections::HashMap, sync::Arc};
 use crate::dsp::tables::warp;
 use crate::dsp::utils::{hz_to_voct, midi_to_voct};
 use crate::patch::Patch;
-use crate::poly::{PolyOutput, PolySignal};
+use crate::poly::PolySignal;
 
 // ============================================================================
 // Well-known module IDs and ports
@@ -178,29 +178,65 @@ pub struct ExternalClockState {
     pub bar_phase: f64,
     /// Tempo in BPM.
     pub bpm: f64,
-    /// Whether the Link session is playing.
-    pub playing: bool,
 }
 
 pub trait Sampleable: MessageHandler + Send {
     fn get_id(&self) -> &str;
-    fn tick(&self) -> ();
-    fn update(&self) -> ();
-    /// Get polyphonic sample output for a port.
-    fn get_poly_sample(&self, port: &str) -> Result<PolyOutput>;
-    /// Get a single sample value for a specific port and channel.
-    /// Fast path that avoids copying the full PolyOutput.
-    fn get_sample(&self, port: &str, channel: usize) -> Result<f32>;
     fn get_module_type(&self) -> &str;
     fn connect(&self, patch: &Patch);
     /// Called after the patch is updated and all modules are connected.
     /// Modules can override this to refresh caches or perform other post-update work.
     fn on_patch_update(&self) {}
-    /// Provide external clock synchronization data.
-    /// Only ROOT_CLOCK overrides this. Default: no-op.
-    fn sync_external_clock(&self, _bar_phase: f64, _bpm: f64) {}
+    /// Inject one sample's worth of external clock state. Only ROOT_CLOCK's
+    /// wrapper overrides this (via the `#[module(clock_sync)]` attribute);
+    /// every other module is a no-op. Called per sample by the audio
+    /// callback's eager-fill loop so the inner [`crate::dsp::core::clock::Clock`]
+    /// can resolve trigger crossings on the exact sample boundary the
+    /// peer's Link timeline lands on.
+    fn sync_external_clock(&self, _state: ExternalClockState) {}
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
+
+    /// Inject one block's worth of host audio input frames. Only
+    /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
+    /// callback pulls one CPAL frame per slot into `block` and hands the
+    /// whole thing in once per internal block, so the inner module can
+    /// serve per-slot reads via `get_value_at(_, ch, slot)`.
+    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
+
+    /// Reset the per-block sample cursor to 0 at the start of an internal
+    /// `block_size` block. Cache slots in `block_outputs` keep their
+    /// previous-block values for reentrancy reads until they are overwritten.
+    fn start_block(&self);
+
+    /// Force the per-block sample cursor to `slot` (clamped to `block_size`)
+    /// without touching cached outputs. Used by the audio thread after a
+    /// mid-block patch swap: ROOT_CLOCK survives the swap structurally, so
+    /// its cache for `[swap_pos, block_size)` may have been computed under
+    /// the old params and needs to be refilled from `swap_pos` forward.
+    /// Modules that have no per-block index can leave this as a no-op.
+    fn set_initial_index(&self, _slot: usize) {}
+
+    /// Process outputs up to (but not including) sample `target` within the
+    /// current internal block. Wrapper clamps `target` to `block_size`.
+    ///
+    /// Incremental: each call advances the per-sample cursor by 0+ samples,
+    /// stopping at min(target, block_size). Cursor persists across calls and
+    /// across audio callbacks; only `start_block()` resets it.
+    fn ensure_processed_to(&self, target: usize);
+
+    /// Complete any remaining block computation. Equivalent to
+    /// `ensure_processed_to(block_size)`. Called on every module after the
+    /// sink pull so disconnected modules also advance their state.
+    fn ensure_processed(&self);
+
+    /// Read the value of port `port`, channel `ch`, at sample slot `index`
+    /// within the current block. Block-mode wrappers compute on demand
+    /// (full block in one go); sample-mode wrappers compute up through the
+    /// requested index. Returns the slot one step behind the requested one
+    /// (wrapping at the block boundary) when called re-entrantly during the
+    /// wrapper's own update loop — preserving the 1-sample feedback delay.
+    fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
     fn get_state(&self) -> Option<serde_json::Value> {
         None
     }
@@ -214,11 +250,6 @@ pub trait Sampleable: MessageHandler + Send {
     /// phase (reads samples) never overlap. The returned `&BufferData` must not
     /// be held across a `connect()` or `transfer_state_from()` call.
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
-        None
-    }
-    /// Get the range of a specific output port and channel, if available.
-    /// Zero-allocation: returns `Some((min, max))` directly.
-    fn get_range(&self, _port: &str, _channel: usize) -> Option<(f32, f32)> {
         None
     }
     /// Called on the main thread after construction and before the module
@@ -1455,12 +1486,19 @@ impl Buffer {
         self.cached_buffer.map(|ptr| unsafe { ptr.as_ref() })
     }
 
-    /// Ensure the source module has been updated this tick (demand-driven ordering).
-    /// This triggers the $buffer module's `update()` which writes the current sample
-    /// and increments write_index. Must be called before reading the buffer.
-    pub fn ensure_source_updated(&self) {
+    /// Ensure the source module has produced output up through (but not
+    /// including) sample `target` within the current internal block.
+    /// Demand-driven ordering — readers call this with their own current
+    /// slot + 1 so the source's write cursor lands at the same slot the
+    /// reader will read this iteration.
+    ///
+    /// Calling with the full `block_size` (the old behaviour) breaks
+    /// feedback cycles at `block_size > 1`: the source races ahead of the
+    /// reader's per-slot interleave and pulls stale `block_outputs` slots
+    /// from the reader via the 1-sample-delay reentrancy path.
+    pub fn ensure_source_updated_to(&self, target: usize) {
         if let Some(module_ptr) = self.cached_source_ptr {
-            unsafe { module_ptr.as_ref().update() };
+            unsafe { module_ptr.as_ref().ensure_processed_to(target) };
         }
     }
 
@@ -2261,7 +2299,8 @@ impl JsonSchema for Signal {
 impl Signal {
     /// Get the mono voltage value from this signal.
     /// For Volts, returns the stored value.
-    /// For Cable, fetches the specific channel from the connected module's output.
+    /// For Cable, fetches the specific channel from the connected module's
+    /// output at the consumer's current per-block sample index.
     pub fn get_value(&self) -> f32 {
         match self {
             Signal::Volts(v) => *v,
@@ -2269,31 +2308,23 @@ impl Signal {
                 resolved,
                 port,
                 channel,
+                index_ptr,
                 ..
             } => match resolved {
-                Some(ptr) => unsafe { ptr.as_ref() }
-                    .get_sample(port, *channel)
-                    .unwrap_or(0.0),
+                Some(ptr) => {
+                    // `index_ptr` is null until the consumer wrapper's
+                    // `connect()` injects it. Pre-injection (or after a
+                    // disconnect) we fall back to slot 0, which matches the
+                    // old per-sample behaviour for block_size=1.
+                    let index = if index_ptr.is_null() {
+                        0
+                    } else {
+                        unsafe { (*(*index_ptr)).get() }
+                    };
+                    unsafe { ptr.as_ref() }.get_value_at(port, *channel, index)
+                }
                 None => 0.0,
             },
-        }
-    }
-
-    /// Get the range of this signal, if available.
-    /// - Volts: returns None (a constant has no meaningful range)
-    /// - Cable: calls get_range() on the connected module — zero allocation
-    pub fn get_range(&self) -> Option<(f32, f32)> {
-        match self {
-            Signal::Volts(_) => None,
-            Signal::Cable {
-                resolved,
-                port,
-                channel,
-                ..
-            } => {
-                let ptr = resolved.as_ref()?;
-                unsafe { ptr.as_ref() }.get_range(port, *channel)
-            }
         }
     }
 }
@@ -2471,19 +2502,9 @@ pub struct OutputSchema {
     /// The maximum value of the raw output range (before any remapping)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_value: Option<f64>,
-    /// Whether this output provides dynamic per-channel range metadata at runtime.
-    /// When true, virtual `.rangeMin`/`.rangeMax` ports are available.
-    #[serde(default)]
-    pub dynamic_range: bool,
 }
 
 pub trait OutputStruct: Default + Send + 'static {
-    fn copy_from(&mut self, other: &Self);
-    /// Get polyphonic sample output for a port.
-    fn get_poly_sample(&self, port: &str) -> Option<PolyOutput>;
-    /// Get a single sample value for a specific port and channel.
-    /// This avoids copying the full PolyOutput — used by Signal::Cable::get_value().
-    fn get_sample(&self, port: &str, channel: usize) -> Option<f32>;
     /// Set the channel count on all PolyOutput fields.
     fn set_all_channels(&mut self, channels: usize);
     fn schemas() -> Vec<OutputSchema>
@@ -2496,11 +2517,12 @@ pub trait OutputStruct: Default + Send + 'static {
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
-    /// Get the range of a specific output port and channel, if available.
-    /// Returns `Some((min, max))` for outputs with `range` or `dynamic_range` annotations.
-    fn get_range(&self, _port: &str, _channel: usize) -> Option<(f32, f32)> {
-        None
-    }
+    /// Advance any owned circular buffers by `block_size` once per internal
+    /// block. Called from the wrapper's `start_block()` before any per-sample
+    /// `update()` runs. Default: no-op. `BufferWrite` overrides this to bump
+    /// its write cursor by the block; inner `update` then offsets the
+    /// per-sample write position by `current_block_index()`.
+    fn tick_buffers(&mut self, _block_size: usize) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2653,8 +2675,15 @@ pub struct ModuleIdRemap {
     pub to: String,
 }
 
-pub type SampleableConstructor =
-    Box<dyn Fn(&String, f32, crate::params::DeserializedParams) -> Result<Box<dyn Sampleable>>>;
+pub type SampleableConstructor = Box<
+    dyn Fn(
+        &String,
+        f32,
+        crate::params::DeserializedParams,
+        usize,
+        ProcessingMode,
+    ) -> Result<Box<dyn Sampleable>>,
+>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2780,25 +2809,29 @@ mod tests {
             &self.id
         }
 
-        fn tick(&self) {}
-
-        fn update(&self) {
-            self.update_count.fetch_add(1, Ordering::SeqCst);
-        }
-
-        fn get_poly_sample(&self, _port: &str) -> Result<PolyOutput> {
-            Ok(PolyOutput::mono(0.0))
-        }
-
-        fn get_sample(&self, _port: &str, _channel: usize) -> Result<f32> {
-            Ok(0.0)
-        }
-
         fn get_module_type(&self) -> &str {
             "buffer_source_test"
         }
 
         fn connect(&self, _patch: &Patch) {}
+
+        fn start_block(&self) {}
+
+        fn ensure_processed_to(&self, _target: usize) {
+            // Mirrors the legacy `update()`-counts contract: every call from
+            // a downstream `ensure_source_updated` bumps the counter, the
+            // tests then check it. CAS-style dedupe lives in the wrapper, not
+            // in this fixture.
+            self.update_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn ensure_processed(&self) {
+            self.update_count.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
 
         fn get_buffer_output(&self, port: &str) -> Option<&BufferData> {
             (port == "buffer").then_some(&self.buffer)
@@ -3277,7 +3310,7 @@ mod tests {
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
         buffer.connect(&patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
 
         assert_eq!(update_count.load(Ordering::SeqCst), 1);
     }
@@ -3303,11 +3336,11 @@ mod tests {
         let mut buffer = Buffer::new("buf".to_string(), "buffer".to_string(), 1);
 
         buffer.connect(&patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
         assert_eq!(update_count.load(Ordering::SeqCst), 1);
 
         buffer.connect(&empty_patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
 
         assert!(buffer.cached_source_ptr.is_none());
         assert!(buffer.cached_buffer.is_none());
@@ -3320,7 +3353,7 @@ mod tests {
         let mut buffer = Buffer::new("buf".to_string(), "missing".to_string(), 1);
 
         buffer.connect(&patch);
-        buffer.ensure_source_updated();
+        buffer.ensure_source_updated_to(1);
 
         assert!(buffer.cached_source_ptr.is_none());
         assert!(buffer.cached_buffer.is_none());

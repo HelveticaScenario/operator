@@ -4,6 +4,8 @@
 //! constructing modules via the public API, setting params as JSON, and
 //! reading samples after ticking.
 
+use std::collections::HashMap;
+
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
@@ -12,6 +14,17 @@ use serde_json::json;
 
 const SAMPLE_RATE: f32 = 48000.0;
 const DEFAULT_PORT: &str = "output";
+/// Block size used at construction by every test in this file (direct-module
+/// and patch-level). Bumping this exercises the wrapper's per-block dispatch
+/// — the collect helpers walk all `TEST_BLOCK_SIZE` slots between
+/// `start_block` calls.
+///
+/// Note: cycle classification (`Block` vs `Sample`) is the caller's
+/// responsibility in `Patch::from_graph`; the tests below pass an empty
+/// `mode_map`, which defaults every module to `Block`. Cycle-aware tests
+/// would build the map via `modular::graph_analysis::classify_modules`
+/// first, but the patches here are acyclic.
+const TEST_BLOCK_SIZE: usize = 1;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,26 +48,50 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
         &id.to_string(),
         SAMPLE_RATE,
         deserialized,
+        TEST_BLOCK_SIZE,
+        modular_core::types::ProcessingMode::Block,
     )
     .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
 }
 
-/// Advance one sample: tick then update.
-fn step(module: &dyn Sampleable) {
-    module.tick();
-    module.update();
+/// Per-sample cursor that hides block boundaries from tests. Each `tick()`
+/// returns the slot index to read; when the cursor wraps past
+/// `TEST_BLOCK_SIZE`, it triggers a fresh `start_block` + `ensure_processed`
+/// on the module.
+struct Stepper {
+    slot: usize,
+}
+
+impl Stepper {
+    fn new() -> Self {
+        // Initialise out-of-range so the first tick triggers a block.
+        Self {
+            slot: TEST_BLOCK_SIZE,
+        }
+    }
+
+    /// Advance one sample. Returns the slot index to read this frame's
+    /// outputs from. Multiple reads in the same frame (e.g. L+R of a stereo
+    /// output) share the returned slot.
+    fn tick(&mut self, module: &dyn Sampleable) -> usize {
+        if self.slot >= TEST_BLOCK_SIZE {
+            module.start_block();
+            module.ensure_processed();
+            self.slot = 0;
+        }
+        let s = self.slot;
+        self.slot += 1;
+        s
+    }
 }
 
 /// Advance N samples and collect the first channel of `output`.
 fn collect_samples(module: &dyn Sampleable, n: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(n);
+    let mut s = Stepper::new();
     for _ in 0..n {
-        step(module);
-        let sample = module
-            .get_poly_sample(DEFAULT_PORT)
-            .expect("get_poly_sample failed")
-            .get(0);
-        out.push(sample);
+        let slot = s.tick(module);
+        out.push(module.get_value_at(DEFAULT_PORT, 0, slot));
     }
     out
 }
@@ -62,15 +99,25 @@ fn collect_samples(module: &dyn Sampleable, n: usize) -> Vec<f32> {
 /// Collect N samples from a specific channel.
 fn collect_channel(module: &dyn Sampleable, channel: usize, n: usize) -> Vec<f32> {
     let mut out = Vec::with_capacity(n);
+    let mut s = Stepper::new();
     for _ in 0..n {
-        step(module);
-        let sample = module
-            .get_poly_sample(DEFAULT_PORT)
-            .expect("get_poly_sample failed")
-            .get(channel);
-        out.push(sample);
+        let slot = s.tick(module);
+        out.push(module.get_value_at(DEFAULT_PORT, channel, slot));
     }
     out
+}
+
+/// Advance N samples and return the final sample read from channel 0 of
+/// `DEFAULT_PORT`. Used by convergence tests that only care about the
+/// post-settling value.
+fn settle_and_read(module: &dyn Sampleable, n: usize) -> f32 {
+    debug_assert!(n > 0, "settle_and_read needs at least one tick");
+    let mut s = Stepper::new();
+    let mut slot = 0;
+    for _ in 0..n {
+        slot = s.tick(module);
+    }
+    module.get_value_at(DEFAULT_PORT, 0, slot)
 }
 
 fn min_max(samples: &[f32]) -> (f32, f32) {
@@ -130,11 +177,11 @@ fn sine_polyphonic() {
 
     let mut ch0_samples = Vec::new();
     let mut ch1_samples = Vec::new();
+    let mut s = Stepper::new();
     for _ in 0..500 {
-        step(osc2.as_ref());
-        let poly = osc2.get_poly_sample(DEFAULT_PORT).unwrap();
-        ch0_samples.push(poly.get(0));
-        ch1_samples.push(poly.get(1));
+        let slot = s.tick(osc2.as_ref());
+        ch0_samples.push(osc2.get_value_at(DEFAULT_PORT, 0, slot));
+        ch1_samples.push(osc2.get_value_at(DEFAULT_PORT, 1, slot));
     }
 
     let (mn0, mx0) = min_max(&ch0_samples);
@@ -241,11 +288,7 @@ fn scale_and_shift_applies() {
     // input=1.0, scale=5.0 (= 1x gain), shift=2.0 → output = 1.0 * 1.0 + 2.0 = 3.0
 
     // Step enough times for param smoothing to converge
-    for _ in 0..500 {
-        step(sas.as_ref());
-    }
-    let sample = sas.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
-
+    let sample = settle_and_read(sas.as_ref(), 500);
     assert!(approx_eq(sample, 3.0, 0.1), "expected ~3.0, got {sample}");
 }
 
@@ -274,6 +317,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$signal" => json!({ "source": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
+        "$overdrive" => json!({ "input": 0.0, "drive": 0.0 }),
         "$buffer" => {
             json!({ "input": 0.0 })
         }
@@ -323,7 +367,13 @@ fn all_constructors_produce_valid_modules() {
             argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
-        let module = constructor(&format!("test-{name}"), SAMPLE_RATE, deserialized);
+        let module = constructor(
+            &format!("test-{name}"),
+            SAMPLE_RATE,
+            deserialized,
+            1,
+            modular_core::types::ProcessingMode::Block,
+        );
         assert!(
             module.is_ok(),
             "constructor for '{name}' should succeed, got: {:?}",
@@ -350,11 +400,18 @@ fn all_constructors_can_tick() {
             argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
-        let module = constructor(&format!("test-{name}"), SAMPLE_RATE, deserialized).unwrap();
+        let module = constructor(
+            &format!("test-{name}"),
+            SAMPLE_RATE,
+            deserialized,
+            1,
+            modular_core::types::ProcessingMode::Block,
+        )
+        .unwrap();
         // Should not panic with minimal params
-        module.tick();
-        module.update();
-        let _ = module.get_poly_sample(DEFAULT_PORT);
+        module.start_block();
+        module.ensure_processed();
+        let _ = module.get_value_at(DEFAULT_PORT, 0, 0);
     }
 }
 
@@ -389,14 +446,15 @@ fn schemas_have_non_empty_documentation() {
 
 // ─── Patch-level helpers ─────────────────────────────────────────────────────
 
-/// Process one frame of the entire patch (update all, then tick all).
-/// Mirrors the ordering in `AudioThread::process_frame`.
+/// Process one frame (single sample at `block_size=1`) of the entire patch.
+/// Mirrors `AudioProcessor::process_frame`: reset cursors, then ensure every
+/// module advances.
 fn process_frame(patch: &Patch) {
     for module in patch.sampleables.values() {
-        module.update();
+        module.start_block();
     }
     for module in patch.sampleables.values() {
-        module.tick();
+        module.ensure_processed();
     }
 }
 
@@ -425,7 +483,7 @@ fn from_graph_creates_patch_with_modules() {
         ("osc1", "$sine", json!({ "freq": 0.0 })),
         ("osc2", "$saw", json!({ "freq": 1.0 })),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Both oscillators plus the hidden AudioIn
     assert!(patch.sampleables.contains_key("osc1"));
@@ -436,7 +494,7 @@ fn from_graph_creates_patch_with_modules() {
 #[test]
 fn from_graph_rejects_unknown_module_type() {
     let graph = make_graph(vec![("bad", "$nonexistent", json!({}))]);
-    let result = Patch::from_graph(&graph, SAMPLE_RATE);
+    let result = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new());
     match result {
         Err(msg) => assert!(
             msg.contains("Unknown module type"),
@@ -456,7 +514,7 @@ fn from_graph_params_are_applied() {
         "$scaleAndShift",
         json!({ "input": 2.0, "scale": 5.0, "shift": 1.0 }),
     )]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Let param smoothing converge
     for _ in 0..500 {
@@ -464,7 +522,7 @@ fn from_graph_params_are_applied() {
     }
 
     let module = patch.sampleables.get("sas1").unwrap();
-    let sample = module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = module.get_value_at(DEFAULT_PORT, 0, 0);
     assert!(
         approx_eq(sample, 3.0, 0.15),
         "expected ~3.0 after param smoothing, got {sample}"
@@ -485,7 +543,7 @@ fn from_graph_cable_routing_sine_to_signal() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Collect samples from the $signal module — it should reproduce the sine output
     let sig_module = patch.sampleables.get("sig").unwrap();
@@ -495,8 +553,8 @@ fn from_graph_cable_routing_sine_to_signal() {
     let mut osc_samples = Vec::new();
     for _ in 0..1000 {
         process_frame(&patch);
-        sig_samples.push(sig_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        osc_samples.push(osc_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        sig_samples.push(sig_module.get_value_at(DEFAULT_PORT, 0, 0));
+        osc_samples.push(osc_module.get_value_at(DEFAULT_PORT, 0, 0));
     }
 
     // The $signal output should match the oscillator's output exactly
@@ -537,7 +595,7 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Also build a direct (unfiltered) patch for comparison
     let direct_graph = make_graph(vec![
@@ -552,7 +610,7 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
             }),
         ),
     ]);
-    let direct_patch = Patch::from_graph(&direct_graph, SAMPLE_RATE).expect("from_graph failed");
+    let direct_patch = Patch::from_graph(&direct_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Let filter settle
     for _ in 0..500 {
@@ -569,8 +627,8 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
     for _ in 0..2000 {
         process_frame(&patch);
         process_frame(&direct_patch);
-        filtered.push(mix_filtered.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        direct.push(mix_direct.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        filtered.push(mix_filtered.get_value_at(DEFAULT_PORT, 0, 0));
+        direct.push(mix_direct.get_value_at(DEFAULT_PORT, 0, 0));
     }
 
     // Direct signal should have significant amplitude
@@ -597,7 +655,7 @@ fn from_graph_process_frame_advances_all_modules() {
         ("fast", "$sine", json!({ "freq": 3.0 })),
         ("slow", "$sine", json!({ "freq": -3.0 })),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     for _ in 0..500 {
         process_frame(&patch);
@@ -610,8 +668,8 @@ fn from_graph_process_frame_advances_all_modules() {
     let mut slow_samples = Vec::new();
     for _ in 0..2000 {
         process_frame(&patch);
-        fast_samples.push(fast.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        slow_samples.push(slow.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
+        fast_samples.push(fast.get_value_at(DEFAULT_PORT, 0, 0));
+        slow_samples.push(slow.get_value_at(DEFAULT_PORT, 0, 0));
     }
 
     let (fast_mn, fast_mx) = min_max(&fast_samples);
@@ -660,10 +718,7 @@ fn step_rejects_empty_steps() {
 fn curve_linear_passthrough() {
     // exp=1 should be linear: output ≈ input
     let m = make_module("$curve", "curve-1", json!({ "input": 3.0, "exp": 1.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 3.0, 0.1),
         "exp=1 should pass through, got {sample}"
@@ -674,10 +729,7 @@ fn curve_linear_passthrough() {
 fn curve_unity_at_5v() {
     // At 5V input, output should be 5V regardless of exponent
     let m = make_module("$curve", "curve-2", json!({ "input": 5.0, "exp": 3.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 5.0, 0.1),
         "5V should stay 5V, got {sample}"
@@ -688,10 +740,7 @@ fn curve_unity_at_5v() {
 fn curve_cubic_midpoint() {
     // exp=3, input=2.5: output = 5 * (2.5/5)^3 = 5 * 0.125 = 0.625
     let m = make_module("$curve", "curve-3", json!({ "input": 2.5, "exp": 3.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 0.625, 0.1),
         "expected ~0.625, got {sample}"
@@ -702,10 +751,7 @@ fn curve_cubic_midpoint() {
 fn curve_preserves_sign() {
     // Negative input should produce negative output
     let m = make_module("$curve", "curve-4", json!({ "input": -2.5, "exp": 2.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = settle_and_read(m.as_ref(), 500);
     // sign(-2.5) * 5 * (2.5/5)^2 = -1 * 5 * 0.25 = -1.25
     assert!(
         approx_eq(sample, -1.25, 0.1),
@@ -717,10 +763,7 @@ fn curve_preserves_sign() {
 fn curve_zero_input() {
     // Zero input should produce zero output
     let m = make_module("$curve", "curve-5", json!({ "input": 0.0, "exp": 3.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 0.0, 0.01),
         "0V input should produce 0V, got {sample}"
@@ -731,10 +774,7 @@ fn curve_zero_input() {
 fn curve_exp_zero_step_function() {
     // exp=0: any nonzero input → ±5V
     let m = make_module("$curve", "curve-6", json!({ "input": 1.0, "exp": 0.0 }));
-    for _ in 0..500 {
-        step(m.as_ref());
-    }
-    let sample = m.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = settle_and_read(m.as_ref(), 500);
     assert!(
         approx_eq(sample, 5.0, 0.1),
         "exp=0 nonzero input should → 5V, got {sample}"
@@ -774,7 +814,7 @@ fn buffer_and_delay_read_pipeline() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // 0.001s delay at 48 kHz = 48 frames.
     // Process 500 frames so param smoothing converges and the buffer is well-filled.
@@ -783,11 +823,85 @@ fn buffer_and_delay_read_pipeline() {
     }
 
     let delay_module = patch.sampleables.get("delay").unwrap();
-    let sample = delay_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+    let sample = delay_module.get_value_at(DEFAULT_PORT, 0, 0);
 
     assert!(
         (sample - 2.0).abs() < 0.1,
         "delay read should output ~2.0 (constant input after filling), got {sample}"
+    );
+}
+
+#[test]
+fn buffer_feedback_cycle_propagates_through_delay_read() {
+    // Verify that a cable cycle routed through a Buffer (delayRead's output
+    // fed back into the buffer's input via mix) actually moves data around
+    // the loop. If the cycle drops samples, delayRead never sees its own
+    // output and the loop output stays pinned at the input value.
+    //
+    //   src ────┐
+    //           ▼
+    //          mix ──► buf ──► delayRead ──► feedback ──┐
+    //           ▲                                       │
+    //           └───────────────────────────────────────┘
+    let graph = make_graph(vec![
+        (
+            "src",
+            "$scaleAndShift",
+            json!({ "input": 1.0, "scale": 5.0, "shift": 0.0 }),
+        ),
+        (
+            "feedback",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "delayRead", "port": "output", "channel": 0 },
+                "scale": 4.0,
+                "shift": 0.0,
+            }),
+        ),
+        (
+            "mix",
+            "$mix",
+            json!({
+                "inputs": [
+                    { "type": "cable", "module": "src", "port": "output", "channel": 0 },
+                    { "type": "cable", "module": "feedback", "port": "output", "channel": 0 },
+                ],
+            }),
+        ),
+        (
+            "buf",
+            "$buffer",
+            json!({
+                "input": { "type": "cable", "module": "mix", "port": "output", "channel": 0 },
+                "length": 0.05,
+            }),
+        ),
+        (
+            "delayRead",
+            "$delayRead",
+            json!({
+                "buffer": { "type": "buffer_ref", "module": "buf", "port": "buffer", "channels": 1 },
+                "time": 0.01,
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+
+    for _ in 0..20_000 {
+        process_frame(&patch);
+    }
+
+    let dr_value = patch
+        .sampleables
+        .get("delayRead")
+        .unwrap()
+        .get_value_at(DEFAULT_PORT, 0, 0);
+
+    // Steady state of 1 / (1 - 0.8) = 5. A dropped cycle pins delayRead at
+    // the 1 V input.
+    assert!(
+        (dr_value - 5.0).abs() < 0.1,
+        "feedback cycle did not converge to steady state; got dr={dr_value}"
     );
 }
 
@@ -816,7 +930,7 @@ fn delay_read_output_lags_behind_buffer_passthrough() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Let oscillator and buffer settle for 500 frames
     for _ in 0..500 {
@@ -831,8 +945,8 @@ fn delay_read_output_lags_behind_buffer_passthrough() {
     let sample_count = 500;
     for _ in 0..sample_count {
         process_frame(&patch);
-        let buf_sample = buf_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
-        let delay_sample = delay_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0);
+        let buf_sample = buf_module.get_value_at(DEFAULT_PORT, 0, 0);
+        let delay_sample = delay_module.get_value_at(DEFAULT_PORT, 0, 0);
         if (buf_sample - delay_sample).abs() > 0.01 {
             differences += 1;
         }
@@ -903,7 +1017,7 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         ),
     ]);
 
-    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Run 200 frames to reach steady state
     // With gain=0.5 and shift=1.0:
@@ -918,16 +1032,12 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         .sampleables
         .get("a")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
     let old_b_output = old_patch
         .sampleables
         .get("b")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
 
     // Verify we're at steady state with non-zero values
     assert!(
@@ -940,7 +1050,7 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 
     // Build a new patch with identical graph and transfer state
-    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Transfer state from old modules to new modules
     for (id, new_module) in &new_patch.sampleables {
@@ -961,16 +1071,12 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         .sampleables
         .get("a")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
     let new_b_output = new_patch
         .sampleables
         .get("b")
         .unwrap()
-        .get_poly_sample(DEFAULT_PORT)
-        .unwrap()
-        .get(0);
+        .get_value_at(DEFAULT_PORT, 0, 0);
 
     // The outputs should be close to the old steady-state values.
     // Without the fix, one module reads zeros from the other's wrapper,
@@ -1029,7 +1135,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         ),
     ]);
 
-    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     // Advance through cycle 0 (degree 0) into the start of cycle 1 (rest).
     // One bar = 240 samples. Process 260 samples to be well into cycle 1.
@@ -1045,9 +1151,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         .sampleables
         .get("seq")
         .unwrap()
-        .get_poly_sample("cv")
-        .unwrap()
-        .get(0);
+        .get_value_at("cv", 0, 0);
 
     // During rest, the old module should still hold the last active voltage.
     // (This verifies the test setup is correct — the old module works fine.)
@@ -1057,7 +1161,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
     );
 
     // Now simulate a force update: build new patch, transfer state, connect.
-    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
+    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
 
     for (id, new_module) in &new_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
@@ -1081,9 +1185,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         .sampleables
         .get("seq")
         .unwrap()
-        .get_poly_sample("cv")
-        .unwrap()
-        .get(0);
+        .get_value_at("cv", 0, 0);
 
     // The CV should still hold the previous active voltage, not drop to 0.
     assert!(
@@ -1093,7 +1195,51 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
     );
 }
 
-// ─── DC Offset tests ─────────────────────────────────────────────────────────
+// ─── $track playhead boundaries ──────────────────────────────────────────────
+
+/// Helper: run the module past initial param smoothing, then read channel 0.
+fn track_value_at(playhead: f32, keyframes: serde_json::Value) -> f32 {
+    let m = make_module(
+        "$track",
+        "track-1",
+        json!({ "playhead": playhead, "keyframes": keyframes }),
+    );
+    settle_and_read(m.as_ref(), 500)
+}
+
+#[test]
+fn track_last_keyframe_at_time_1_reachable_with_playhead_1() {
+    // Regression: previously `fract(1.0) == 0.0` mapped playhead=1 to t=0,
+    // clamping to the first keyframe and making the time=1 keyframe unreachable.
+    let v = track_value_at(1.0, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 5.0, 0.01), "expected 5.0, got {v}");
+}
+
+#[test]
+fn track_first_keyframe_at_time_0_with_playhead_0() {
+    let v = track_value_at(0.0, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 1.0, 0.01), "expected 1.0, got {v}");
+}
+
+#[test]
+fn track_midpoint_interpolates_linearly() {
+    let v = track_value_at(0.5, json!([[1.0, 0.0], [5.0, 0.5], [3.0, 1.0]]));
+    assert!(approx_eq(v, 5.0, 0.01), "expected 5.0, got {v}");
+}
+
+#[test]
+fn track_clamps_playhead_above_one() {
+    let v = track_value_at(1.5, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 5.0, 0.01), "expected 5.0 (clamped), got {v}");
+}
+
+#[test]
+fn track_clamps_playhead_below_zero() {
+    let v = track_value_at(-0.1, json!([[1.0, 0.0], [5.0, 1.0]]));
+    assert!(approx_eq(v, 1.0, 0.01), "expected 1.0 (clamped), got {v}");
+}
+
+// ─── Pulse DC offset ─────────────────────────────────────────────────────────
 
 /// Helper: compute the mean (DC component) of a sample buffer.
 fn dc_offset(samples: &[f32]) -> f32 {
@@ -1102,10 +1248,8 @@ fn dc_offset(samples: &[f32]) -> f32 {
 
 #[test]
 fn pulse_square_wave_has_zero_dc() {
-    // Width 2.5 = 50% duty cycle = square wave => DC should be ~0
+    // Width 2.5 = 50% duty cycle => DC should be ~0 even without DC subtraction
     let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 2.5 }));
-    // Run for many cycles to get a good average (C4 ~261Hz, 48kHz SR => ~184 samples/cycle)
-    // 10000 samples = ~54 full cycles
     let samples = collect_samples(&*osc, 10000);
     let dc = dc_offset(&samples);
     assert!(
@@ -1116,7 +1260,8 @@ fn pulse_square_wave_has_zero_dc() {
 
 #[test]
 fn pulse_narrow_width_has_zero_dc() {
-    // Width 1.25 = 25% duty cycle => after DC subtraction, should be ~0
+    // Width 1.25 = 25% duty cycle: without DC subtraction would sit at -2.5V.
+    // After analytic DC subtraction, mean should land near 0V.
     let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 1.25 }));
     let samples = collect_samples(&*osc, 10000);
     let dc = dc_offset(&samples);
@@ -1128,7 +1273,7 @@ fn pulse_narrow_width_has_zero_dc() {
 
 #[test]
 fn pulse_wide_width_has_zero_dc() {
-    // Width 3.75 = 75% duty cycle => after DC subtraction, should be ~0
+    // Width 3.75 = 75% duty cycle: without DC subtraction would sit at +2.5V.
     let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 3.75 }));
     let samples = collect_samples(&*osc, 10000);
     let dc = dc_offset(&samples);
@@ -1140,7 +1285,7 @@ fn pulse_wide_width_has_zero_dc() {
 
 #[test]
 fn pulse_extreme_widths_have_zero_dc() {
-    // Test near-extreme duty cycles (5% and 95%)
+    // Near-extreme duty cycles (5% and 95%) — DC subtraction still centers the mean.
     for width in [0.25, 4.75] {
         let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": width }));
         let samples = collect_samples(&*osc, 10000);
@@ -1154,8 +1299,7 @@ fn pulse_extreme_widths_have_zero_dc() {
 
 #[test]
 fn pulse_preserves_amplitude_after_dc_fix() {
-    // The peak-to-peak amplitude should still be 10V (±5V from center),
-    // but now the center is always 0V regardless of width.
+    // Peak-to-peak amplitude stays 10V; only the center is shifted to 0V.
     for width in [1.25, 2.5, 3.75] {
         let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": width }));
         let samples = collect_samples(&*osc, 10000);
@@ -1164,694 +1308,6 @@ fn pulse_preserves_amplitude_after_dc_fix() {
         assert!(
             pp > 9.0,
             "pulse at width={width} should have ~10V peak-to-peak, got {pp}V (min={mn}, max={mx})"
-        );
-    }
-}
-
-#[test]
-fn saw_has_zero_dc() {
-    // DPW saw should be DC-free by construction
-    let osc = make_module("$saw", "saw-1", json!({ "freq": 0.0 }));
-    let samples = collect_samples(&*osc, 10000);
-    let dc = dc_offset(&samples);
-    assert!(
-        dc.abs() < 0.1,
-        "saw wave should have near-zero DC, got {dc}V"
-    );
-}
-
-#[test]
-fn sine_has_zero_dc() {
-    let osc = make_module("$sine", "sine-1", json!({ "freq": 0.0 }));
-    let samples = collect_samples(&*osc, 10000);
-    let dc = dc_offset(&samples);
-    assert!(
-        dc.abs() < 0.1,
-        "sine wave should have near-zero DC, got {dc}V"
-    );
-}
-
-// ─── get_sample tests ────────────────────────────────────────────────────────
-
-#[test]
-fn get_sample_matches_get_poly_sample_for_pulse() {
-    let osc = make_module("$pulse", "pulse-gs", json!({ "freq": 0.0, "width": 2.5 }));
-    for _ in 0..100 {
-        step(&*osc);
-        let poly = osc.get_poly_sample(DEFAULT_PORT).unwrap();
-        let via_get_sample = osc.get_sample(DEFAULT_PORT, 0).unwrap();
-        assert_eq!(
-            poly.get_cycling(0),
-            via_get_sample,
-            "get_sample should match get_poly_sample().get_cycling()"
-        );
-    }
-}
-
-#[test]
-fn get_sample_matches_get_poly_sample_for_clock() {
-    // Noise has f32 outputs — tests that path too
-    let noise = make_module("$noise", "noise-gs", json!({}));
-    for _ in 0..100 {
-        step(&*noise);
-        let poly = noise.get_poly_sample(DEFAULT_PORT).unwrap();
-        let via_get_sample = noise.get_sample(DEFAULT_PORT, 0).unwrap();
-        assert_eq!(
-            poly.get_cycling(0),
-            via_get_sample,
-            "get_sample on f32 output should match get_poly_sample"
-        );
-    }
-}
-
-#[test]
-fn get_sample_returns_error_for_invalid_port() {
-    let osc = make_module("$sine", "sine-gs", json!({ "freq": 0.0 }));
-    step(&*osc);
-    let result = osc.get_sample("nonexistent", 0);
-    assert!(
-        result.is_err(),
-        "get_sample on invalid port should return Err"
-    );
-}
-
-// ─── Schema tests ────────────────────────────────────────────────────────────
-
-#[test]
-fn pulse_output_schema_has_dynamic_range() {
-    use modular_core::dsp::schema;
-    let schemas = schema();
-    let pulse_schema = schemas
-        .iter()
-        .find(|s| s.name == "$pulse")
-        .expect("$pulse schema not found");
-    let output_schema = pulse_schema
-        .outputs
-        .iter()
-        .find(|o| o.name == "output")
-        .expect("output not found in $pulse schema");
-    assert!(
-        output_schema.dynamic_range,
-        "$pulse output should have dynamic_range = true"
-    );
-}
-
-// ─── Virtual range port tests ────────────────────────────────────────────────
-
-#[test]
-fn pulse_virtual_range_ports_at_50_percent() {
-    let osc = make_module("$pulse", "pulse-rp", json!({ "freq": 0.0, "width": 2.5 }));
-    // Run a few samples to let Clickless settle
-    for _ in 0..1000 {
-        step(&*osc);
-    }
-    let range_min = osc.get_poly_sample("output.rangeMin").unwrap();
-    let range_max = osc.get_poly_sample("output.rangeMax").unwrap();
-    assert!(
-        (range_min.get(0) - (-5.0)).abs() < 0.01,
-        "rangeMin at 50% width should be -5.0, got {}",
-        range_min.get(0)
-    );
-    assert!(
-        (range_max.get(0) - 5.0).abs() < 0.01,
-        "rangeMax at 50% width should be 5.0, got {}",
-        range_max.get(0)
-    );
-}
-
-#[test]
-fn pulse_virtual_range_ports_at_25_percent() {
-    // Width 1.25 = 25% duty cycle => min = -10*0.25 = -2.5, max = 10*0.75 = 7.5
-    let osc = make_module("$pulse", "pulse-rp2", json!({ "freq": 0.0, "width": 1.25 }));
-    for _ in 0..1000 {
-        step(&*osc);
-    }
-    let range_min = osc.get_poly_sample("output.rangeMin").unwrap();
-    let range_max = osc.get_poly_sample("output.rangeMax").unwrap();
-    assert!(
-        (range_min.get(0) - (-2.5)).abs() < 0.1,
-        "rangeMin at 25% width should be ~-2.5, got {}",
-        range_min.get(0)
-    );
-    assert!(
-        (range_max.get(0) - 7.5).abs() < 0.1,
-        "rangeMax at 25% width should be ~7.5, got {}",
-        range_max.get(0)
-    );
-}
-
-#[test]
-fn pulse_output_stays_within_dynamic_range() {
-    // Verify the actual signal stays within the declared range bounds
-    for width in [1.25, 2.5, 3.75] {
-        let osc = make_module(
-            "$pulse",
-            "pulse-rng",
-            json!({ "freq": 0.0, "width": width }),
-        );
-        // Let Clickless settle
-        for _ in 0..1000 {
-            step(&*osc);
-        }
-        let range_min = osc.get_poly_sample("output.rangeMin").unwrap().get(0);
-        let range_max = osc.get_poly_sample("output.rangeMax").unwrap().get(0);
-
-        // Collect samples and verify bounds
-        let samples = collect_samples(&*osc, 5000);
-        let (mn, mx) = min_max(&samples);
-        assert!(
-            mn >= range_min - 0.1,
-            "width={width}: sample min {mn} below rangeMin {range_min}"
-        );
-        assert!(
-            mx <= range_max + 0.1,
-            "width={width}: sample max {mx} above rangeMax {range_max}"
-        );
-    }
-}
-
-// ─── End-to-end .range() test with dynamic bounds ────────────────────────────
-
-#[test]
-fn pulse_remap_via_virtual_range_ports() {
-    // Simulate what .range(0, 1) does with dynamic range:
-    // $pulse(width=1.25) → $remap(input, outMin=0, outMax=1,
-    //                              inMin=<virtual rangeMin>, inMax=<virtual rangeMax>)
-    //
-    // At 25% duty (width=1.25): rangeMin ≈ -2.5, rangeMax ≈ 7.5
-    // So remap maps [-2.5, 7.5] → [0, 1]
-    // Expected output: all samples in approximately [0, 1]
-
-    let graph = make_graph(vec![
-        ("pulse-e2e", "$pulse", json!({ "freq": 0.0, "width": 1.25 })),
-        (
-            "remap-e2e",
-            "$remap",
-            json!({
-                "input":  { "type": "cable", "module": "pulse-e2e", "port": "output", "channel": 0 },
-                "outMin": 0.0,
-                "outMax": 1.0,
-                "inMin":  { "type": "cable", "module": "pulse-e2e", "port": "output.rangeMin", "channel": 0 },
-                "inMax":  { "type": "cable", "module": "pulse-e2e", "port": "output.rangeMax", "channel": 0 }
-            }),
-        ),
-    ]);
-
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("patch construction failed");
-
-    // Let Clickless smoothing and params converge
-    for _ in 0..2000 {
-        process_frame(&patch);
-    }
-
-    // Collect samples from the remap module's output
-    let remap_module = patch.sampleables.get("remap-e2e").unwrap();
-    let mut samples = Vec::new();
-    for _ in 0..5000 {
-        process_frame(&patch);
-        samples.push(remap_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-    }
-
-    let (mn, mx) = min_max(&samples);
-
-    // All samples should be in [0, 1] (with small tolerance for smoothing)
-    assert!(mn >= -0.05, "remap output min should be >= 0, got {mn}");
-    assert!(mx <= 1.05, "remap output max should be <= 1, got {mx}");
-
-    // Verify the output actually spans most of [0, 1] — not stuck at a single value
-    assert!(
-        mn < 0.15,
-        "remap output should reach near 0, but min was {mn}"
-    );
-    assert!(
-        mx > 0.85,
-        "remap output should reach near 1, but max was {mx}"
-    );
-}
-
-#[test]
-fn pulse_remap_width1_range_0_5() {
-    // Regression test: $pulse(width=1).range(0, 5) must produce output in [0, 5].
-    //
-    // width=1 → pulse_width = 1/5 = 0.2
-    // DC = (2*0.2 - 1)*5 = -3.0
-    // Signal range after DC subtraction: [-2.0, 8.0]
-    // Virtual range ports should report: rangeMin=-2.0, rangeMax=8.0
-    // Remap: map [-2.0, 8.0] → [0, 5]
-
-    let graph = make_graph(vec![
-        ("pulse", "$pulse", json!({ "freq": 0.0, "width": 1.0 })),
-        (
-            "remap",
-            "$remap",
-            json!({
-                "input":  { "type": "cable", "module": "pulse", "port": "output", "channel": 0 },
-                "outMin": 0.0,
-                "outMax": 5.0,
-                "inMin":  { "type": "cable", "module": "pulse", "port": "output.rangeMin", "channel": 0 },
-                "inMax":  { "type": "cable", "module": "pulse", "port": "output.rangeMax", "channel": 0 }
-            }),
-        ),
-    ]);
-
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("patch construction failed");
-    let pulse_module = patch.sampleables.get("pulse").unwrap();
-    let remap_module = patch.sampleables.get("remap").unwrap();
-
-    // Let Clickless smoothing converge
-    for _ in 0..2000 {
-        process_frame(&patch);
-    }
-
-    // Verify virtual range ports report the correct DC-adjusted bounds
-    let range_min = pulse_module
-        .get_poly_sample("output.rangeMin")
-        .unwrap()
-        .get(0);
-    let range_max = pulse_module
-        .get_poly_sample("output.rangeMax")
-        .unwrap()
-        .get(0);
-    assert!(
-        (range_min - (-2.0)).abs() < 0.01,
-        "virtual rangeMin should be -2.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 8.0).abs() < 0.01,
-        "virtual rangeMax should be 8.0, got {range_max}"
-    );
-
-    // Collect pulse and remap output samples
-    let mut pulse_samples = Vec::new();
-    let mut remap_samples = Vec::new();
-    for _ in 0..5000 {
-        process_frame(&patch);
-        pulse_samples.push(pulse_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-        remap_samples.push(remap_module.get_poly_sample(DEFAULT_PORT).unwrap().get(0));
-    }
-
-    let (pulse_min, pulse_max) = min_max(&pulse_samples);
-    let (remap_min, remap_max) = min_max(&remap_samples);
-
-    // Pulse output should span [-2.0, 8.0] after DC subtraction
-    assert!(
-        pulse_min < -1.5,
-        "pulse min should be near -2.0, got {pulse_min}"
-    );
-    assert!(
-        pulse_max > 7.5,
-        "pulse max should be near 8.0, got {pulse_max}"
-    );
-
-    // Remap output should be within [0, 5]
-    assert!(
-        remap_min >= -0.1,
-        "remap output min should be >= 0, got {remap_min}"
-    );
-    assert!(
-        remap_max <= 5.1,
-        "remap output max should be <= 5, got {remap_max}"
-    );
-    assert!(
-        remap_min < 0.25,
-        "remap output should reach near 0, but min was {remap_min}"
-    );
-    assert!(
-        remap_max > 4.75,
-        "remap output should reach near 5, but max was {remap_max}"
-    );
-}
-
-#[test]
-fn static_range_output_exposes_virtual_range_ports() {
-    // $sine has range = (-5.0, 5.0) but no dynamic_range
-    // It should still expose output.rangeMin / output.rangeMax returning static values
-    let osc = make_module("$sine", "osc", json!({ "freq": 440.0 }));
-    step(&*osc);
-
-    // get_sample should work for virtual range ports
-    let range_min = osc
-        .get_sample("output.rangeMin", 0)
-        .expect("static-range output should expose output.rangeMin virtual port");
-    let range_max = osc
-        .get_sample("output.rangeMax", 0)
-        .expect("static-range output should expose output.rangeMax virtual port");
-
-    assert!(
-        (range_min - (-5.0)).abs() < 0.01,
-        "rangeMin should be -5.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 5.0).abs() < 0.01,
-        "rangeMax should be 5.0, got {range_max}"
-    );
-
-    // get_poly_sample should also work
-    let poly_min = osc
-        .get_poly_sample("output.rangeMin")
-        .expect("get_poly_sample should work for static rangeMin");
-    let poly_max = osc
-        .get_poly_sample("output.rangeMax")
-        .expect("get_poly_sample should work for static rangeMax");
-    assert!(
-        (poly_min.get(0) - (-5.0)).abs() < 0.01,
-        "poly rangeMin ch0 should be -5.0"
-    );
-    assert!(
-        (poly_max.get(0) - 5.0).abs() < 0.01,
-        "poly rangeMax ch0 should be 5.0"
-    );
-}
-
-// ─── get_range() zero-allocation API tests ───────────────────────────────────
-
-#[test]
-fn signal_get_range_returns_none_for_volts() {
-    use modular_core::types::Signal;
-    let signal = Signal::Volts(3.0);
-    assert!(
-        signal.get_range().is_none(),
-        "Volts should return None for get_range()"
-    );
-}
-
-#[test]
-fn signal_get_range_reads_dynamic_range_from_cable() {
-    use modular_core::types::Signal;
-    // $pulse with width=1.25 (25% duty): rangeMin ≈ -2.5, rangeMax ≈ 7.5
-    let osc = make_module("$pulse", "pulse", json!({ "freq": 0.0, "width": 1.25 }));
-    step(&*osc);
-
-    let signal = Signal::Cable {
-        module: "pulse".into(),
-        resolved: Some(std::ptr::NonNull::from(osc.as_ref())),
-        port: "output".into(),
-        channel: 0,
-        index_ptr: std::ptr::null(),
-    };
-
-    let range = signal.get_range();
-    assert!(
-        range.is_some(),
-        "Cable to dynamic_range output should return Some"
-    );
-    let (min, max) = range.unwrap();
-    assert!((min - (-2.5)).abs() < 0.1, "expected min ~-2.5, got {min}");
-    assert!((max - 7.5).abs() < 0.1, "expected max ~7.5, got {max}");
-}
-
-#[test]
-fn signal_get_range_reads_static_range_from_cable() {
-    use modular_core::types::Signal;
-    // $sine has range = (-5.0, 5.0) (static, not dynamic)
-    let osc = make_module("$sine", "osc", json!({ "freq": 0.0 }));
-    step(&*osc);
-
-    let signal = Signal::Cable {
-        module: "osc".into(),
-        resolved: Some(std::ptr::NonNull::from(osc.as_ref())),
-        port: "output".into(),
-        channel: 0,
-        index_ptr: std::ptr::null(),
-    };
-
-    let range = signal.get_range();
-    assert!(
-        range.is_some(),
-        "Cable to static-range output should return Some"
-    );
-    let (min, max) = range.unwrap();
-    assert!((min - (-5.0)).abs() < 0.01, "expected min -5.0, got {min}");
-    assert!((max - 5.0).abs() < 0.01, "expected max 5.0, got {max}");
-}
-
-#[test]
-fn poly_signal_get_range_per_channel() {
-    use modular_core::poly::PolySignal;
-    use modular_core::types::Signal;
-    // $pulse with width=1.25 (25% duty): rangeMin ≈ -2.5, rangeMax ≈ 7.5
-    let osc = make_module("$pulse", "pulse", json!({ "freq": 0.0, "width": 1.25 }));
-    step(&*osc);
-
-    let poly = PolySignal::mono(Signal::Cable {
-        module: "pulse".into(),
-        resolved: Some(std::ptr::NonNull::from(osc.as_ref())),
-        port: "output".into(),
-        channel: 0,
-        index_ptr: std::ptr::null(),
-    });
-
-    let range = poly.get_range(0);
-    assert!(range.is_some(), "PolySignal cable should return range");
-    let (min, max) = range.unwrap();
-    assert!((min - (-2.5)).abs() < 0.1, "expected min ~-2.5, got {min}");
-    assert!((max - 7.5).abs() < 0.1, "expected max ~7.5, got {max}");
-}
-
-#[test]
-fn remap_has_dynamic_range() {
-    let osc = make_module(
-        "$remap",
-        "remap",
-        json!({ "input": 0.0, "inMin": -5.0, "inMax": 5.0, "outMin": -3.0, "outMax": 7.0 }),
-    );
-
-    // Let Clickless smoothing converge
-    for _ in 0..1000 {
-        step(&*osc);
-    }
-
-    let range_min = osc.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = osc.get_poly_sample("output.rangeMax").unwrap().get(0);
-
-    assert!(
-        (range_min - (-3.0)).abs() < 0.1,
-        "rangeMin should be ~-3.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 7.0).abs() < 0.1,
-        "rangeMax should be ~7.0, got {range_max}"
-    );
-}
-
-#[test]
-fn wrap_has_dynamic_range() {
-    let m = make_module(
-        "$wrap",
-        "wrap",
-        json!({ "input": 6.0, "min": 1.0, "max": 4.0 }),
-    );
-    for _ in 0..100 {
-        step(&*m);
-    }
-    let range_min = m.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = m.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - 1.0).abs() < 0.01,
-        "wrap rangeMin should be 1.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 4.0).abs() < 0.01,
-        "wrap rangeMax should be 4.0, got {range_max}"
-    );
-}
-
-#[test]
-fn wrap_dynamic_range_swaps_when_max_lt_min() {
-    // When max < min, $wrap swaps them internally
-    let m = make_module(
-        "$wrap",
-        "wrap",
-        json!({ "input": 0.0, "min": 5.0, "max": 0.0 }),
-    );
-    for _ in 0..100 {
-        step(&*m);
-    }
-    let range_min = m.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = m.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - 0.0).abs() < 0.01,
-        "wrap rangeMin should be 0.0 (swapped), got {range_min}"
-    );
-    assert!(
-        (range_max - 5.0).abs() < 0.01,
-        "wrap rangeMax should be 5.0 (swapped), got {range_max}"
-    );
-}
-
-#[test]
-fn spread_has_dynamic_range() {
-    let m = make_module(
-        "$spread",
-        "spread",
-        json!({ "min": 2.0, "max": 8.0, "count": 4 }),
-    );
-    for _ in 0..100 {
-        step(&*m);
-    }
-    let range_min = m.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = m.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - 2.0).abs() < 0.01,
-        "spread rangeMin should be 2.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 8.0).abs() < 0.01,
-        "spread rangeMax should be 8.0, got {range_max}"
-    );
-}
-
-#[test]
-fn scale_and_shift_has_dynamic_range_from_input() {
-    // Chain: $sine → $scaleAndShift(scale=5, shift=1)
-    // $sine range = (-5, 5), scale=5 means gain=1.0, shift=1
-    // Output range should be (-5*1+1, 5*1+1) = (-4, 6)
-    let graph = make_graph(vec![
-        ("osc", "$sine", json!({ "freq": 0.0 })),
-        (
-            "sas",
-            "$scaleAndShift",
-            json!({
-                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
-                "scale": 5.0,
-                "shift": 1.0
-            }),
-        ),
-    ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
-    for _ in 0..200 {
-        process_frame(&patch);
-    }
-    let sas = patch.sampleables.get("sas").unwrap();
-    let range_min = sas.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = sas.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - (-4.0)).abs() < 0.1,
-        "scaleAndShift rangeMin should be ~-4.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 6.0).abs() < 0.1,
-        "scaleAndShift rangeMax should be ~6.0, got {range_max}"
-    );
-}
-
-#[test]
-fn scale_and_shift_inverted_scale_swaps_range() {
-    // scale=0 means gain=-1 (inverted). Input range (-5,5) → (5*-1+0, -5*-1+0) = (-5,5) swapped → (-5,5)
-    // Actually scale=0 → gain = 0/5 = 0, output = 0. Let's use scale=-5 → no that's clamped.
-    // scale param range is 0..10, where 5=unity. scale=0 → gain=0/5=0.
-    // Let's test scale=2.5 → gain=0.5, shift=2. Input (-5,5) → (-5*0.5+2, 5*0.5+2) = (-0.5, 4.5)
-    let graph = make_graph(vec![
-        ("osc", "$sine", json!({ "freq": 0.0 })),
-        (
-            "sas",
-            "$scaleAndShift",
-            json!({
-                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
-                "scale": 2.5,
-                "shift": 2.0
-            }),
-        ),
-    ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
-    for _ in 0..200 {
-        process_frame(&patch);
-    }
-    let sas = patch.sampleables.get("sas").unwrap();
-    let range_min = sas.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = sas.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - (-0.5)).abs() < 0.1,
-        "scaleAndShift rangeMin should be ~-0.5, got {range_min}"
-    );
-    assert!(
-        (range_max - 4.5).abs() < 0.1,
-        "scaleAndShift rangeMax should be ~4.5, got {range_max}"
-    );
-}
-
-#[test]
-fn clamp_has_dynamic_range_from_input() {
-    // Chain: $sine(-5,5) → $clamp(min=-2, max=3)
-    // Output range should be intersection: (-2, 3)
-    let graph = make_graph(vec![
-        ("osc", "$sine", json!({ "freq": 0.0 })),
-        (
-            "cl",
-            "$clamp",
-            json!({
-                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
-                "min": -2.0,
-                "max": 3.0
-            }),
-        ),
-    ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
-    for _ in 0..200 {
-        process_frame(&patch);
-    }
-    let cl = patch.sampleables.get("cl").unwrap();
-    let range_min = cl.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = cl.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - (-2.0)).abs() < 0.1,
-        "clamp rangeMin should be ~-2.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 3.0).abs() < 0.1,
-        "clamp rangeMax should be ~3.0, got {range_max}"
-    );
-}
-
-#[test]
-fn clamp_one_sided_preserves_input_range_on_open_side() {
-    // $sine(-5,5) → $clamp(min=0) — no max
-    // Output range should be (0, 5) — clamped below, open above uses input max
-    let graph = make_graph(vec![
-        ("osc", "$sine", json!({ "freq": 0.0 })),
-        (
-            "cl",
-            "$clamp",
-            json!({
-                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
-                "min": 0.0
-            }),
-        ),
-    ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE).expect("from_graph failed");
-    for _ in 0..200 {
-        process_frame(&patch);
-    }
-    let cl = patch.sampleables.get("cl").unwrap();
-    let range_min = cl.get_poly_sample("output.rangeMin").unwrap().get(0);
-    let range_max = cl.get_poly_sample("output.rangeMax").unwrap().get(0);
-    assert!(
-        (range_min - 0.0).abs() < 0.1,
-        "one-sided clamp rangeMin should be ~0.0, got {range_min}"
-    );
-    assert!(
-        (range_max - 5.0).abs() < 0.1,
-        "one-sided clamp rangeMax should be ~5.0, got {range_max}"
-    );
-}
-
-#[test]
-fn utility_modules_have_dynamic_range_in_schema() {
-    use modular_core::dsp::schema;
-    let schemas = schema();
-    for module_name in ["$remap", "$wrap", "$spread", "$scaleAndShift", "$clamp"] {
-        let s = schemas
-            .iter()
-            .find(|s| s.name == module_name)
-            .unwrap_or_else(|| panic!("missing schema for {module_name}"));
-        let output = s
-            .outputs
-            .iter()
-            .find(|o| o.default)
-            .unwrap_or_else(|| panic!("{module_name} has no default output"));
-        assert!(
-            output.dynamic_range,
-            "{module_name} default output should have dynamic_range = true"
         );
     }
 }

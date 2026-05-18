@@ -48,24 +48,6 @@ impl Default for BufferWriteOutputs {
 }
 
 impl crate::types::OutputStruct for BufferWriteOutputs {
-    fn copy_from(&mut self, other: &Self) {
-        self.sample = other.sample;
-    }
-
-    fn get_poly_sample(&self, port: &str) -> Option<PolyOutput> {
-        match port {
-            "output" => Some(self.sample),
-            _ => None,
-        }
-    }
-
-    fn get_sample(&self, port: &str, channel: usize) -> Option<f32> {
-        match port {
-            "output" => Some(self.sample.get_cycling(channel)),
-            _ => None,
-        }
-    }
-
     fn set_all_channels(&mut self, channels: usize) {
         self.sample.set_channels(channels);
     }
@@ -78,7 +60,6 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
             default: true,
             min_value: None,
             max_value: None,
-            dynamic_range: false,
         }]
     }
 
@@ -90,6 +71,59 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
         match port {
             "buffer" => Some(&self.buffer),
             _ => None,
+        }
+    }
+
+    /// Advance the circular buffer write position by `block_size` once per
+    /// internal block. Called from the wrapper's `start_block()` before
+    /// any per-sample `update()` runs, so `read_write_index()` becomes the
+    /// base offset for the new block — `BufferWrite::update` adds
+    /// `current_block_index()` for the per-slot write position.
+    fn tick_buffers(&mut self, block_size: usize) {
+        let frame_count = self.buffer.frame_count();
+        if frame_count == 0 {
+            return;
+        }
+        let new_index = self.buffer.read_write_index().wrapping_add(block_size);
+        self.buffer.set_write_index(new_index);
+    }
+}
+
+/// Manual `{Name}BlockOutputs` companion for `BufferWriteOutputs`. Mirrors
+/// what `#[derive(Outputs)]` auto-generates, but only covers the `sample`
+/// port — the `buffer` field on `BufferWriteOutputs` is a `BufferData`
+/// circular buffer surfaced via `get_buffer_output`, not a sample-indexed
+/// output port.
+struct BufferWriteBlockOutputs {
+    sample: crate::block_port::BlockPort,
+}
+
+impl BufferWriteBlockOutputs {
+    pub fn new(block_size: usize) -> Self {
+        Self {
+            sample: crate::block_port::BlockPort::new(block_size),
+        }
+    }
+
+    #[inline]
+    pub fn port_index(name: &str) -> Option<usize> {
+        match name {
+            "output" => Some(0),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn get_at(&self, port_idx: usize, ch: usize, index: usize) -> f32 {
+        match port_idx {
+            0 => self.sample.get(index, ch),
+            _ => 0.0,
+        }
+    }
+
+    pub fn copy_from_inner(&mut self, inner: &BufferWriteOutputs, slot: usize) {
+        for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+            self.sample.set(slot, ch, inner.sample.get_cycling(ch));
         }
     }
 }
@@ -127,9 +161,12 @@ impl BufferWrite {
             return;
         }
 
-        let write_index = self.outputs.buffer.read_write_index().wrapping_add(1);
-        self.outputs.buffer.set_write_index(write_index);
-        let frame = write_index % frame_count;
+        // `tick_buffers` advanced the write cursor by `block_size` at the
+        // block boundary. Inside the per-sample loop the effective write
+        // position for slot `i` is `read_write_index() + i`.
+        let base = self.outputs.buffer.read_write_index();
+        let offset = self.current_block_index();
+        let frame = base.wrapping_add(offset) % frame_count;
         let buffer_channels = self.outputs.buffer.channel_count();
 
         for channel in 0..channels {
@@ -251,18 +288,16 @@ mod tests {
         fn get_id(&self) -> &str {
             &self.id
         }
-        fn tick(&self) {}
-        fn update(&self) {}
-        fn get_poly_sample(&self, _port: &str) -> napi::Result<PolyOutput> {
-            Ok(PolyOutput::default())
-        }
-        fn get_sample(&self, _port: &str, channel: usize) -> napi::Result<f32> {
-            Ok(PolyOutput::default().get_cycling(channel))
-        }
         fn get_module_type(&self) -> &str {
             "$buffer"
         }
         fn connect(&self, _patch: &Patch) {}
+        fn start_block(&self) {}
+        fn ensure_processed_to(&self, _target: usize) {}
+        fn ensure_processed(&self) {}
+        fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+            0.0
+        }
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
@@ -306,6 +341,7 @@ mod tests {
             params,
             outputs,
             _channel_count: channels,
+            _block_index: Default::default(),
         }
     }
 
@@ -378,13 +414,38 @@ mod tests {
             &id.to_string(),
             SAMPLE_RATE,
             deserialized,
+            TEST_BLOCK_SIZE,
+            crate::types::ProcessingMode::Block,
         )
         .unwrap_or_else(|e| panic!("constructor for '{module_type}' failed: {e}"))
     }
 
-    fn step(module: &dyn Sampleable) {
-        module.tick();
-        module.update();
+    /// Block size used at construction by every test in this module. Bumping
+    /// this exercises the wrapper's per-block dispatch — `Stepper` walks all
+    /// `TEST_BLOCK_SIZE` slots between `start_block` calls.
+    const TEST_BLOCK_SIZE: usize = 1;
+
+    struct Stepper {
+        slot: usize,
+    }
+
+    impl Stepper {
+        fn new() -> Self {
+            Self {
+                slot: TEST_BLOCK_SIZE,
+            }
+        }
+
+        fn tick(&mut self, module: &dyn Sampleable) -> usize {
+            if self.slot >= TEST_BLOCK_SIZE {
+                module.start_block();
+                module.ensure_processed();
+                self.slot = 0;
+            }
+            let s = self.slot;
+            self.slot += 1;
+            s
+        }
     }
 
     #[test]
@@ -395,15 +456,12 @@ mod tests {
             serde_json::json!({ "input": 3.0, "length": 0.01 }),
         );
 
-        step(module.as_ref());
-
-        let output = module
-            .get_poly_sample("output")
-            .expect("get_poly_sample failed");
+        let mut s = Stepper::new();
+        let slot = s.tick(module.as_ref());
+        let value = module.get_value_at("output", 0, slot);
         assert!(
-            (output.get(0) - 3.0).abs() < 1e-6,
-            "expected passthrough of 3.0, got {}",
-            output.get(0)
+            (value - 3.0).abs() < 1e-6,
+            "expected passthrough of 3.0, got {value}",
         );
     }
 
@@ -415,9 +473,13 @@ mod tests {
             serde_json::json!({ "input": 1.0, "length": 0.01 }),
         );
 
-        let n = 10;
+        // Drive complete blocks so the assertion stays exact regardless of
+        // TEST_BLOCK_SIZE — every block writes `TEST_BLOCK_SIZE` samples.
+        let blocks = 10;
+        let n = blocks * TEST_BLOCK_SIZE;
+        let mut s = Stepper::new();
         for _ in 0..n {
-            step(module.as_ref());
+            s.tick(module.as_ref());
         }
 
         let buffer = module
@@ -439,7 +501,8 @@ mod tests {
             serde_json::json!({ "input": input_val, "length": 0.01 }),
         );
 
-        step(module.as_ref());
+        let mut s = Stepper::new();
+        s.tick(module.as_ref());
 
         let buffer = module
             .get_buffer_output("buffer")
@@ -469,8 +532,9 @@ mod tests {
 
         // Step more than frame_count times to force wrapping
         let total_steps = frame_count + 3;
+        let mut s = Stepper::new();
         for _ in 0..total_steps {
-            step(module.as_ref());
+            s.tick(module.as_ref());
         }
 
         // write_index should keep incrementing past frame_count (no modular reset)

@@ -26,7 +26,7 @@ struct SpreadParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct SpreadOutputs {
-    #[output("output", "spread signal output", default, dynamic_range)]
+    #[output("output", "spread signal output", default)]
     sample: PolyOutput,
 }
 
@@ -82,7 +82,6 @@ impl Spread {
 
             let value = min_val + (max_val - min_val) * t_biased;
             self.outputs.sample.set(i, value);
-            self.outputs.sample.set_range(i, min_val, max_val);
         }
     }
 }

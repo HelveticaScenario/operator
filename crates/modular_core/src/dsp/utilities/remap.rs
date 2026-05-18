@@ -41,7 +41,7 @@ struct RemapState {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct RemapOutputs {
-    #[output("output", "remapped signal output", default, range = (-5.0, 5.0), dynamic_range)]
+    #[output("output", "remapped signal output", default)]
     sample: PolyOutput,
 }
 
@@ -89,9 +89,6 @@ impl Remap {
             );
 
             self.outputs.sample.set(i, output);
-            self.outputs
-                .sample
-                .set_range(i, *state.out_min, *state.out_max);
         }
     }
 }

@@ -245,6 +245,7 @@ mod tests {
             outputs,
             state: WavetableOscState::default(),
             _channel_count: channels,
+            _block_index: Default::default(),
         }
     }
 

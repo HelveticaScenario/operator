@@ -61,11 +61,7 @@ pub struct Track {
 
 impl Track {
     fn update(&mut self, _sample_rate: f32) {
-        // Sum channels 0 and 1 of the playhead
-        let playhead_value = self.params.playhead.value_or_zero() as f64;
-
-        let t = playhead_value.fract() as f32;
-        let t = if t < 0.0 { t + 1.0 } else { t };
+        let t = (self.params.playhead.value_or_zero() as f32).clamp(0.0, 1.0);
         let channel_count = self.channel_count();
 
         for channel in 0..channel_count {

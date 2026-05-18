@@ -337,10 +337,7 @@ export function executePatchScript(
      * // tame highs, push lows
      * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
      */
-    const $ott = (
-        input: PolySignal,
-        config: OttConfig = {},
-    ): Collection => {
+    const $ott = (input: PolySignal, config: OttConfig = {}): Collection => {
         const compConf = {
             attack: config.attack ?? 0.003,
             makeup: config.makeup ?? 1.0,
@@ -402,6 +399,38 @@ export function executePatchScript(
             $scaleAndShift(input, dryWeight as Signal, 0),
             $scaleAndShift(wet, depth, 0),
         ]) as Collection;
+    };
+
+    const $track = userNamespaceTree['$track'];
+    if (typeof $track !== 'function') {
+        throw new Error(
+            'DSL execution error: "$cross" requires "$track" module',
+        );
+    }
+
+    /**
+     * @example
+     * // crossfade 3 voices by a slow LFO
+     * const osc = $sine(['c', 'e', 'g'])
+     * const weights = $cross(osc.length, $sine('0.25hz').range(0, 1));
+     * osc.amp(weights).out();
+     */
+    const $cross = (
+        count: number,
+        playhead: Signal,
+        range: [number, number] = [0, 5],
+        interpolationType?: string,
+    ): Collection => {
+        const frames: [Signal[], number][] = [];
+        for (let i = 0; i < count; i++) {
+            const frame: Signal[] = Array.from(
+                { length: count },
+                () => range[0],
+            );
+            frame[i] = range[1];
+            frames.push([frame, count > 1 ? i / (count - 1) : 0]);
+        }
+        return $track(frames, { playhead, interpolationType }) as Collection;
     };
 
     // Slider collector — populated by $slider() calls during execution
@@ -704,6 +733,7 @@ export function executePatchScript(
         $buffer,
         $delay,
         $ott,
+        $cross,
         // WAV sample loading
         $wavs,
         // Built-in modules
