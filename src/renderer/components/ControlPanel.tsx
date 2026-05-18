@@ -55,8 +55,8 @@ function SliderControl({ slider, onChange }: SliderControlProps) {
     const step = (slider.max - slider.min) / 1000;
 
     const handleInput = useCallback(
-        (e: React.ChangeEvent<HTMLInputElement>) => {
-            const newValue = parseFloat(e.target.value);
+        (e: React.FormEvent<HTMLInputElement>) => {
+            const newValue = parseFloat(e.currentTarget.value);
             setLocalValue(newValue);
             onChange(slider.label, newValue);
         },
