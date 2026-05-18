@@ -317,6 +317,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$signal" => json!({ "source": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
+        "$overdrive" => json!({ "input": 0.0, "drive": 0.0 }),
         "$buffer" => {
             json!({ "input": 0.0 })
         }
@@ -343,7 +344,6 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$tah" => json!({ "input": 0.0, "gate": 0.0 }),
         "$dattorro" => json!({ "input": 0.0 }),
         "$plate" => json!({ "input": 0.0 }),
-        "$overdrive" => json!({ "input": 0.0, "drive": 0.0 }),
         "$step" => json!({ "steps": [0.0], "next": 0.0 }),
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),

@@ -17,9 +17,6 @@ pub mod tables;
 pub mod utilities;
 pub mod utils;
 
-// #[cfg(test)]
-mod test_overlap;
-
 pub fn get_constructors() -> HashMap<String, SampleableConstructor> {
     let mut map = HashMap::new();
     core::install_constructors(&mut map);

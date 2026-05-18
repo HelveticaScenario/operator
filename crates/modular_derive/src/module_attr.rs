@@ -909,14 +909,6 @@ fn impl_module_macro_attr(
 
             fn get_schema() -> crate::types::ModuleSchema {
                 let params_schema = schemars::schema_for!(#params_struct_name);
-
-                let param_names: std::collections::HashSet<String> = params_schema
-                    .pointer("/properties")
-                    .or_else(|| params_schema.pointer("/schema/properties"))
-                    .and_then(serde_json::Value::as_object)
-                    .map(|props| props.keys().cloned().collect())
-                    .unwrap_or_default();
-
                 let outputs = <#outputs_ty as crate::types::OutputStruct>::schemas();
            
                 crate::types::ModuleSchema {
