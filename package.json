@@ -95,6 +95,7 @@
         "@fontsource/source-code-pro": "^5.2.7",
         "@fontsource/victor-mono": "^5.2.8",
         "@monaco-editor/react": "^4.7.0",
+        "cmdk": "^1.1.1",
         "electron-squirrel-startup": "^1.0.1",
         "monaco-editor": "^0.55.1",
         "prettier": "^3.4.2",
