@@ -87,6 +87,20 @@ export interface PrettierConfig {
     [key: string]: unknown;
 }
 
+/**
+ * One user-keybinding entry persisted in `<userData>/keybindings.json`.
+ *
+ * `command: null` removes any default binding with the same `key`, mirroring
+ * VS Code's `keybindings.json` "remove" syntax. `args` is reserved for
+ * commands that accept positional arguments (none today).
+ */
+export interface KeybindingOverride {
+    key: string;
+    command: string | null;
+    when?: string;
+    args?: unknown[];
+}
+
 export interface AppConfig {
     theme?: string;
     cursorStyle?:
@@ -308,6 +322,11 @@ export const IPC_CHANNELS = {
     CONFIG_WRITE: 'modular:config:write',
     CONFIG_ON_CHANGE: 'modular:config:on-change',
 
+    // Keybinding operations
+    KEYBINDINGS_GET_PATH: 'modular:keybindings:get-path',
+    KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
+    KEYBINDINGS_WRITE_USER: 'modular:keybindings:write-user',
+
     // Main process logging
     MAIN_LOG: 'modular:main:log',
 
@@ -468,6 +487,13 @@ export interface IPCHandlers {
     [IPC_CHANNELS.CONFIG_READ]: () => AppConfig;
     [IPC_CHANNELS.CONFIG_WRITE]: (config: Partial<AppConfig>) => void;
     [IPC_CHANNELS.CONFIG_ON_CHANGE]: (config: AppConfig) => void;
+
+    // Keybinding operations
+    [IPC_CHANNELS.KEYBINDINGS_GET_PATH]: () => string;
+    [IPC_CHANNELS.KEYBINDINGS_READ_USER]: () => KeybindingOverride[];
+    [IPC_CHANNELS.KEYBINDINGS_WRITE_USER]: (
+        overrides: KeybindingOverride[],
+    ) => void;
 
     // Main process logging
     [IPC_CHANNELS.MAIN_LOG]: (entry: MainLogEntry) => void;
