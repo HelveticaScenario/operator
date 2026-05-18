@@ -1068,6 +1068,7 @@ impl Default for IntervalSeq {
             state: IntervalSeqState::default(),
             params: IntervalSeqParams::default(),
             _channel_count: 4,
+            _block_index: Default::default(),
         }
     }
 }

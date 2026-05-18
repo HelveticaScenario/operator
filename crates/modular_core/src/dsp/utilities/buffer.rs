@@ -73,6 +73,20 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
             _ => None,
         }
     }
+
+    /// Advance the circular buffer write position by `block_size` once per
+    /// internal block. Called from the wrapper's `start_block()` before
+    /// any per-sample `update()` runs, so `read_write_index()` becomes the
+    /// base offset for the new block — `BufferWrite::update` adds
+    /// `current_block_index()` for the per-slot write position.
+    fn tick_buffers(&mut self, block_size: usize) {
+        let frame_count = self.buffer.frame_count();
+        if frame_count == 0 {
+            return;
+        }
+        let new_index = self.buffer.read_write_index().wrapping_add(block_size);
+        self.buffer.set_write_index(new_index);
+    }
 }
 
 /// Manual `{Name}BlockOutputs` companion for `BufferWriteOutputs`. Mirrors
@@ -147,9 +161,12 @@ impl BufferWrite {
             return;
         }
 
-        let write_index = self.outputs.buffer.read_write_index().wrapping_add(1);
-        self.outputs.buffer.set_write_index(write_index);
-        let frame = write_index % frame_count;
+        // `tick_buffers` advanced the write cursor by `block_size` at the
+        // block boundary. Inside the per-sample loop the effective write
+        // position for slot `i` is `read_write_index() + i`.
+        let base = self.outputs.buffer.read_write_index();
+        let offset = self.current_block_index();
+        let frame = base.wrapping_add(offset) % frame_count;
         let buffer_channels = self.outputs.buffer.channel_count();
 
         for channel in 0..channels {
@@ -324,6 +341,7 @@ mod tests {
             params,
             outputs,
             _channel_count: channels,
+            _block_index: Default::default(),
         }
     }
 

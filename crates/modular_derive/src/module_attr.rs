@@ -231,6 +231,19 @@ pub fn module_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
 
+    // Inject `_block_index: Cell<usize>` so inner DSP can read the current
+    // sample position within the block via `self.current_block_index()`.
+    // The wrapper's `ensure_processed_to` writes the slot index here before
+    // each `inner.update` call.
+    if let Data::Struct(ref mut data_struct) = ast.data {
+        if let Fields::Named(ref mut fields) = data_struct.fields {
+            let field: syn::Field = syn::parse_quote! {
+                pub _block_index: std::cell::Cell<usize>
+            };
+            fields.named.push(field);
+        }
+    }
+
     match impl_module_macro_attr(&ast, &attr_args) {
         Ok(generated) => {
             let mut output = quote!(#ast);
@@ -376,6 +389,9 @@ fn impl_module_macro_attr(
                                 "params" => Ok(quote! { params: *concrete_params }),
                                 "_channel_count" => {
                                     Ok(quote! { _channel_count: deserialized.channel_count })
+                                }
+                                "_block_index" => {
+                                    Ok(quote! { _block_index: Default::default() })
                                 }
                                 "outputs" | "state" => {
                                     Ok(quote! { #field_name: Default::default() })
@@ -665,6 +681,15 @@ fn impl_module_macro_attr(
             pub fn channel_count(&self) -> usize {
                 self._channel_count
             }
+
+            /// Returns the current sample slot index within the block being
+            /// processed. Only valid to call from inside `update()` — the
+            /// wrapper writes the slot index here before each per-sample
+            /// inner update.
+            #[inline]
+            pub fn current_block_index(&self) -> usize {
+                self._block_index.get()
+            }
         }
 
         /// Generated wrapper struct for audio-thread-only module access.
@@ -731,6 +756,17 @@ fn impl_module_macro_attr(
         impl crate::types::Sampleable for #struct_name {
             fn start_block(&self) {
                 self.index.set(0);
+                // Let modules with circular-buffer outputs (e.g. BufferWrite)
+                // advance their write cursor once per internal block. Inner
+                // `update` then offsets the per-sample write position by
+                // `current_block_index()`.
+                unsafe {
+                    let module = &mut *self.module.get();
+                    crate::types::OutputStruct::tick_buffers(
+                        &mut module.outputs,
+                        self.block_size,
+                    );
+                }
             }
 
             fn set_initial_index(&self, slot: usize) {
@@ -754,6 +790,13 @@ fn impl_module_macro_attr(
                     let i = self.index.get();
                     unsafe {
                         let module = &mut *self.module.get();
+                        // Expose the current slot index to the inner DSP
+                        // via `self.current_block_index()` before running
+                        // the per-sample update. Used by modules that
+                        // need slot-aware reads/writes against shared
+                        // resources (BufferWrite / DelayRead's circular
+                        // buffer cursor, etc).
+                        module._block_index.set(i);
                         module.update(self.sample_rate);
                         (*self.block_outputs.get()).copy_from_inner(&module.outputs, i);
                     }

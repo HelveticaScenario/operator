@@ -2510,6 +2510,12 @@ pub trait OutputStruct: Default + Send + 'static {
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
+    /// Advance any owned circular buffers by `block_size` once per internal
+    /// block. Called from the wrapper's `start_block()` before any per-sample
+    /// `update()` runs. Default: no-op. `BufferWrite` overrides this to bump
+    /// its write cursor by the block; inner `update` then offsets the
+    /// per-sample write position by `current_block_index()`.
+    fn tick_buffers(&mut self, _block_size: usize) {}
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
