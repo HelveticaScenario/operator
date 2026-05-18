@@ -1299,6 +1299,11 @@ struct AudioProcessor {
   /// callbacks. Initialised to `block_size` so the first cpal frame
   /// triggers block-level work immediately.
   block_pos: usize,
+  /// Pre-allocated scratch buffer for one internal block's worth of host
+  /// audio input. Filled at the block boundary from `input_reader` and
+  /// injected into `HiddenAudioIn` via `inject_audio_in_block`. Sized to
+  /// `block_size` once in `new()` so the audio thread never allocates.
+  input_block_scratch: Vec<[f32; PORT_MAX_CHANNELS]>,
   /// Ableton Link integration (audio-thread side). Owns the live
   /// `rusty_link` resources when active and exposes only RT-safe operations.
   link: crate::link::LinkState,
@@ -1327,6 +1332,7 @@ impl AudioProcessor {
       sample_rate,
       block_size,
       block_pos: block_size,
+      input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
       link: crate::link::LinkState::new(),
     }
   }
@@ -1595,6 +1601,37 @@ impl AudioProcessor {
     }
   }
 
+  /// Pull host audio input from `input_reader` and inject it into
+  /// `HiddenAudioIn` once per internal block. Called by the cpal callback
+  /// before `process_frame`, so the block-level work inside `process_frame`
+  /// sees up-to-date per-slot input.
+  ///
+  /// At a block boundary while running, pulls `block_size` cpal frames in
+  /// one tight loop and hands them to `HiddenAudioIn` via
+  /// `inject_audio_in_block`. Mid-block (running) does nothing — the same
+  /// block has already been injected. While stopped, drains one cpal frame
+  /// to keep the ring buffer flowing; the audio thread never injects so
+  /// inner modules don't react to ghost input.
+  fn before_process_frame(&mut self, input_reader: &mut InputBufferReader) {
+    use modular_core::types::WellKnownModule;
+    if self.is_stopped() {
+      let _ = input_reader.read_frame();
+      return;
+    }
+    if self.block_pos < self.block_size {
+      return;
+    }
+    for slot in self.input_block_scratch.iter_mut() {
+      let frame = input_reader.read_frame();
+      for ch in 0..PORT_MAX_CHANNELS {
+        slot[ch] = frame[ch] * AUDIO_INPUT_GAIN;
+      }
+    }
+    if let Some(audio_in) = self.patch.sampleables.get(WellKnownModule::HiddenAudioIn.id()) {
+      audio_in.inject_audio_in_block(&self.input_block_scratch);
+    }
+  }
+
   /// Process one cpal frame. At a block boundary (`block_pos >= block_size`)
   /// this runs the heavy block-level work (link sync, ROOT_CLOCK update,
   /// queued patch swap, `ensure_processed` on every module, transport-meter
@@ -1624,6 +1661,9 @@ impl AudioProcessor {
     // Advance Link's in-buffer frame index on every cpal frame; only sync
     // ROOT_CLOCK at the block boundary.
     let should_sync_clock = at_block_boundary;
+    // 1. Sync Link state into ROOT_CLOCK and run its block. The trigger
+    //    outputs need to be live before we inspect them for queued patch
+    //    swaps below.
     let root_clock = self.patch.sampleables.get(&*ROOT_CLOCK_ID);
     self.link.sync_frame(|bar_phase, tempo| {
       if should_sync_clock
@@ -1632,7 +1672,6 @@ impl AudioProcessor {
         clock.sync_external_clock(modular_core::types::ExternalClockState {
           bar_phase,
           bpm: tempo,
-          playing: true,
         });
       }
     });
@@ -1869,18 +1908,9 @@ where
           {
             profiling::scope!("process_frames");
             for frame in output.chunks_mut(num_channels) {
-              // Read from the input buffer and update audio_in
-              {
-                let mut audio_in = audio_processor.patch.audio_in.lock();
-                let input_samples = input_reader.read_frame();
-
-                // Set channel count so that get() returns values instead of 0.0
-                audio_in.set_channels(PORT_MAX_CHANNELS);
-                for i in 0..PORT_MAX_CHANNELS {
-                  // Apply gain to bring input from [-1, 1] to [-5, 5] volt range
-                  audio_in.set(i, input_samples[i] * AUDIO_INPUT_GAIN);
-                }
-              }
+              // Pull host input + inject into HiddenAudioIn once per
+              // internal block, before block-level work runs.
+              audio_processor.before_process_frame(&mut input_reader);
 
               // Process frame and get multi-channel output
               let samples = final_state_processor

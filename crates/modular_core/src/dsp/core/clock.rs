@@ -22,11 +22,6 @@ struct ClockParams {
 struct ExternalClockSync {
     bar_phase: f64,
     bpm: f64,
-    /// Peer-driven playing state. `false` short-circuits the inner update —
-    /// no phase advance, no trigger outputs — so a peer Stop on the Link
-    /// session reads as silence here without the audio thread having to
-    /// gate ROOT_CLOCK separately.
-    playing: bool,
 }
 
 struct ClockState {
@@ -115,7 +110,6 @@ impl Clock {
         self.state.external_sync = Some(ExternalClockSync {
             bar_phase: state.bar_phase,
             bpm: state.bpm,
-            playing: state.playing,
         });
     }
 
@@ -126,19 +120,6 @@ impl Clock {
     fn update(&mut self, sample_rate: f32) {
         // External clock sync: override free-running clock with Link data.
         if let Some(sync) = self.state.external_sync.take() {
-            // Peer transport stopped — freeze phase, zero triggers, return.
-            // The audio thread's separate `stopped` flag still gates whether
-            // process_frame runs at all; this path covers the case where
-            // ROOT_CLOCK is being eager-filled by the callback but the
-            // peer's Link session is paused.
-            if !sync.playing {
-                self.state.running = false;
-                self.outputs.bar_trigger = 0.0;
-                self.outputs.beat_trigger = 0.0;
-                self.outputs.ppq_trigger = 0.0;
-                return;
-            }
-
             self.state.running = true;
             self.params.tempo = sync.bpm;
 
@@ -630,7 +611,6 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.75,
             bpm: 140.0,
-            playing: true,
         });
         c.update(sr);
 
@@ -658,7 +638,6 @@ mod tests {
             c.sync_external_clock_impl(ExternalClockState {
                 bar_phase,
                 bpm: 120.0,
-                playing: true,
             });
             c.update(sr);
 
@@ -685,7 +664,6 @@ mod tests {
         c.sync_external_clock_impl(ExternalClockState {
             bar_phase: 0.5,
             bpm: 120.0,
-            playing: true,
         });
         c.update(sr);
 
