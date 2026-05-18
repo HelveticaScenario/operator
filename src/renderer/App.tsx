@@ -319,6 +319,33 @@ function App() {
         [deleteFile],
     );
 
+    const handleMoveFile = useCallback(
+        async (sourcePath: string, destPath: string) => {
+            try {
+                const result = await electronAPI.filesystem.moveFile(
+                    sourcePath,
+                    destPath,
+                );
+                if (!result.success) {
+                    setError(result.error ?? 'Failed to move file');
+                    return;
+                }
+                // Reconcile any open buffer pointing at the moved file.
+                setBuffers((prev) =>
+                    prev.map((b) =>
+                        b.kind === 'file' && b.filePath === sourcePath
+                            ? { ...b, filePath: destPath }
+                            : b,
+                    ),
+                );
+                await refreshFileTree();
+            } catch (err) {
+                setError(getErrorMessage(err, 'Failed to move file'));
+            }
+        },
+        [refreshFileTree, setBuffers],
+    );
+
     const formatLabel = useCallback(
         (buffer: EditorBuffer) => {
             const path = formatFileLabel(buffer);
@@ -1118,6 +1145,7 @@ function App() {
                                     onRenameCommit={handleRenameCommitSafe}
                                     onRenameCancel={() => setRenamingPath(null)}
                                     onKeepBuffer={keepBuffer}
+                                    onMoveFile={handleMoveFile}
                                 />
                             }
                             controlContent={

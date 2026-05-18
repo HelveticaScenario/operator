@@ -1412,6 +1412,19 @@ registerIPCHandler('FS_CREATE_FOLDER', (relativePath) => {
     }
 });
 
+registerIPCHandler('FS_REVEAL_IN_FINDER', (relativePath) => {
+    const absolutePath = validatePathInWorkspace(relativePath);
+    if (!absolutePath) {
+        return {
+            error: 'Invalid path or no workspace selected',
+            success: false,
+        };
+    }
+
+    shell.showItemInFolder(absolutePath);
+    return { success: true };
+});
+
 // @ts-expect-error - async handler returns Promise
 registerIPCHandler('FS_SHOW_SAVE_DIALOG', async (defaultPath?: string) => {
     console.log('defaultPath:', defaultPath);

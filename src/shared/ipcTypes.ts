@@ -290,6 +290,7 @@ export const IPC_CHANNELS = {
     FS_DELETE_FILE: 'modular:fs:delete-file',
     FS_MOVE_FILE: 'modular:fs:move-file',
     FS_CREATE_FOLDER: 'modular:fs:create-folder',
+    FS_REVEAL_IN_FINDER: 'modular:fs:reveal-in-finder',
     FS_SHOW_SAVE_DIALOG: 'modular:fs:show-save-dialog',
     FS_SHOW_INPUT_DIALOG: 'modular:fs:show-input-dialog',
 
@@ -443,6 +444,7 @@ export interface IPCHandlers {
         destPath: string,
     ) => FSOperationResult;
     [IPC_CHANNELS.FS_CREATE_FOLDER]: (filePath: string) => FSOperationResult;
+    [IPC_CHANNELS.FS_REVEAL_IN_FINDER]: (filePath: string) => FSOperationResult;
     [IPC_CHANNELS.FS_SHOW_SAVE_DIALOG]: (defaultPath?: string) => string | null;
     [IPC_CHANNELS.FS_SHOW_INPUT_DIALOG]: (
         title: string,
