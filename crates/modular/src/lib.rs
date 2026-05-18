@@ -1167,7 +1167,7 @@ impl Synthesizer {
       &module_id,
       self.sample_rate,
       deserialized,
-      1,
+      self.state.block_size,
       modular_core::types::ProcessingMode::Block,
     )
     .map_err(|e| {

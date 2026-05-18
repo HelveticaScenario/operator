@@ -1132,6 +1132,8 @@ impl AudioState {
     // Pass 2 — construct modules on the main thread with the resolved mode.
     // The audio thread will always replace existing modules and transfer state.
     let constructors = get_constructors();
+    let mut block_ids: Vec<String> = Vec::new();
+    let mut sample_ids: Vec<String> = Vec::new();
     for (id, module_type, deserialized) in deserialized_modules {
       if let Some(constructor) = constructors.get(&module_type) {
         // ROOT_CLOCK is always Sample mode: the block-aware audio callback
@@ -1150,6 +1152,10 @@ impl AudioState {
         };
         match constructor(&id, sample_rate, deserialized, self.block_size, mode) {
           Ok(module) => {
+            match mode {
+              modular_core::types::ProcessingMode::Block => block_ids.push(id.clone()),
+              modular_core::types::ProcessingMode::Sample => sample_ids.push(id.clone()),
+            }
             update.inserts.push((id.clone(), module));
           }
           Err(err) => {
@@ -1166,6 +1172,14 @@ impl AudioState {
         )));
       }
     }
+    block_ids.sort();
+    sample_ids.sort();
+    println!(
+      "[patch] update_id={} modules:\n  block=[\n    {}\n  ]\n  sample=[\n    {}\n  ]",
+      update.update_id,
+      block_ids.join(",\n    "),
+      sample_ids.join(",\n    ")
+    );
 
     // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread
     update.desired_ids = update.inserts.iter().map(|(id, _)| id.clone()).collect();
