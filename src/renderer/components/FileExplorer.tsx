@@ -4,6 +4,7 @@ import type { FileTreeEntry } from '../../shared/ipcTypes';
 import type { EditorBuffer } from '../types/editor';
 import { getBufferId } from '../app/buffers';
 import electronAPI from '../electronAPI';
+import { bindFileExplorerFocus } from '../keybindings/contextKeyBootstrap';
 
 interface FileExplorerProps {
     workspaceRoot: string | null;
@@ -283,6 +284,13 @@ export function FileExplorer({
         (b) => getBufferId(b) === activeBufferId,
     );
 
+    const rootRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const el = rootRef.current;
+        if (!el) return;
+        return bindFileExplorerFocus(el);
+    }, []);
+
     const EXPANDED_STORAGE_KEY = 'modular_expanded_folders';
 
     const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => {
@@ -377,7 +385,7 @@ export function FileExplorer({
     };
 
     return (
-        <div className="file-explorer">
+        <div className="file-explorer" ref={rootRef}>
             <div className="file-sections">
                 {/* Open Editors Section */}
                 <div className="section">
