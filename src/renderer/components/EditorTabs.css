@@ -1,0 +1,100 @@
+.editor-tabs-root {
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.editor-tabs {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-subtle);
+    scrollbar-width: thin;
+}
+
+.editor-tabs::-webkit-scrollbar {
+    height: 6px;
+}
+
+.editor-tabs::-webkit-scrollbar-thumb {
+    background: var(--border-subtle);
+}
+
+.editor-tab {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-half);
+    padding: var(--sp-half) var(--sp-1);
+    border-right: 1px solid var(--border-subtle);
+    background: var(--bg-secondary);
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 32ch;
+    font-family: var(--font-mono);
+    font-size: var(--font-size);
+    line-height: var(--line-height);
+    touch-action: none;
+}
+
+.editor-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.editor-tab.active {
+    background: var(--bg-active);
+    color: var(--accent-primary);
+}
+
+.editor-tab.running {
+    border-left: 2px solid var(--color-success);
+    padding-left: calc(var(--sp-1) - 2px);
+}
+
+.editor-tab.preview .editor-tab-label {
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+.editor-tab.dragging {
+    cursor: grabbing;
+}
+
+.editor-tab-label {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+}
+
+.editor-tab-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font-mono);
+    font-size: var(--font-size);
+    cursor: pointer;
+    padding: 0;
+    width: 2ch;
+    height: calc(var(--font-size) * var(--line-height));
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.1s;
+}
+
+.editor-tab:hover .editor-tab-close,
+.editor-tab.active .editor-tab-close,
+.editor-tab.dirty .editor-tab-close {
+    display: flex;
+}
+
+.editor-tab-close:hover {
+    color: var(--color-error);
+}
