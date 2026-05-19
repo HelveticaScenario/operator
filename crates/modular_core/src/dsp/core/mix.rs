@@ -33,7 +33,7 @@ pub struct MixParams {
     /// How inputs are combined.
     #[serde(default)]
     #[deserr(default)]
-    mode: MixMode,
+    pub mode: MixMode,
     /// Final output level (perceptual curve, exponent 3).
     #[signal(default = 5.0, range = (0.0, 10.0))]
     #[deserr(default)]
@@ -98,7 +98,27 @@ struct MixState {
 
 message_handlers!(impl Mix {});
 
+#[doc(hidden)]
+pub fn __bench_make_mix(params: MixParams) -> Mix {
+    use crate::types::OutputStruct;
+    let channels = mix_derive_channel_count(&params);
+    let mut outputs = MixOutputs::default();
+    outputs.set_all_channels(channels);
+    Mix {
+        params,
+        outputs,
+        _channel_count: channels,
+        _block_index: Default::default(),
+        state: MixState::default(),
+    }
+}
+
 impl Mix {
+    #[doc(hidden)]
+    pub fn __bench_update(&mut self, sample_rate: f32) {
+        self.update(sample_rate);
+    }
+
     fn update(&mut self, _sample_rate: f32) {
         let inputs = &self.params.inputs;
         let gain = &self.params.gain;
@@ -122,72 +142,96 @@ impl Mix {
             }
         }
 
-        // Pre-compute mixed values for each input channel index.
+        // Pre-compute mixed values per channel. The mode match is hoisted
+        // out of the per-channel loop so we don't compute sum + max-by-abs
+        // + min-by-abs accumulators on every iteration when only one is
+        // selected. Each branch's inner loop carries only the state its
+        // mode needs.
         let mut pre_gain_values = [0.0f32; PORT_MAX_CHANNELS];
-        for channel in 0..max_input_channels {
-            let mut sum: f32 = 0.0;
-            let mut contributor_count: usize = 0;
-            // Max-by-abs accumulators.
-            let mut max_abs: f32 = -1.0;
-            let mut max_val: f32 = 0.0;
-            // Min-by-abs accumulators (excludes zeros).
-            let mut min_abs: f32 = f32::INFINITY;
-            let mut min_val: f32 = 0.0;
-
-            for input in inputs.iter() {
-                if channel >= input.channels() {
-                    continue;
-                }
-                let v = input.get_value(channel);
-                sum += v;
-                contributor_count += 1;
-                let av = v.abs();
-                // NaN comparisons return false, so NaN never replaces a
-                // finite best. Matches old `partial_cmp().unwrap_or(Equal)`
-                // semantics enough to satisfy the no-panic test.
-                if av > max_abs {
-                    max_abs = av;
-                    max_val = v;
-                }
-                if v != 0.0 && av < min_abs {
-                    min_abs = av;
-                    min_val = v;
+        match self.params.mode {
+            MixMode::Sum => {
+                for channel in 0..max_input_channels {
+                    let mut sum: f32 = 0.0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        sum += input.get_value(channel);
+                    }
+                    pre_gain_values[channel] = sum;
                 }
             }
-
-            pre_gain_values[channel] = match self.params.mode {
-                MixMode::Sum => sum,
-                MixMode::Average => {
-                    if contributor_count > 0 {
-                        sum / contributor_count as f32
-                    } else {
-                        0.0
+            MixMode::Average => {
+                for channel in 0..max_input_channels {
+                    let mut sum: f32 = 0.0;
+                    let mut count: u32 = 0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        sum += input.get_value(channel);
+                        count += 1;
                     }
+                    pre_gain_values[channel] =
+                        if count > 0 { sum / count as f32 } else { 0.0 };
                 }
-                MixMode::Max => {
-                    if max_abs >= 0.0 {
-                        max_val
-                    } else {
-                        0.0
+            }
+            MixMode::Max => {
+                for channel in 0..max_input_channels {
+                    let mut best_abs: f32 = -1.0;
+                    let mut best_val: f32 = 0.0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        let v = input.get_value(channel);
+                        let av = v.abs();
+                        // NaN comparisons return false, so NaN never replaces
+                        // a finite best — matches the old `partial_cmp().
+                        // unwrap_or(Equal)` semantics enough for no-panic.
+                        if av > best_abs {
+                            best_abs = av;
+                            best_val = v;
+                        }
                     }
+                    pre_gain_values[channel] = if best_abs >= 0.0 { best_val } else { 0.0 };
                 }
-                MixMode::Min => {
-                    if min_abs.is_finite() {
-                        min_val
-                    } else {
-                        0.0
+            }
+            MixMode::Min => {
+                for channel in 0..max_input_channels {
+                    let mut best_abs: f32 = f32::INFINITY;
+                    let mut best_val: f32 = 0.0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        let v = input.get_value(channel);
+                        if v == 0.0 {
+                            continue;
+                        }
+                        let av = v.abs();
+                        if av < best_abs {
+                            best_abs = av;
+                            best_val = v;
+                        }
                     }
+                    pre_gain_values[channel] =
+                        if best_abs.is_finite() { best_val } else { 0.0 };
                 }
-            };
+            }
         }
 
-        // Apply gain with cycling on pre_gain_values.
+        // Apply gain with cycling on pre_gain_values. `powf(3.0)` is
+        // replaced with `n * n * n` — the exponent is a compile-time
+        // integer so the multiplication form gives identical bit-pattern
+        // results for finite inputs while sidestepping the generic powf
+        // dispatch.
         for i in 0..output_channels {
             let pre_gain_index = i % max_input_channels;
             let pre_gain_value = pre_gain_values[pre_gain_index];
             let amp_val = gain.value_or(i, 5.0);
-            let normalized = (amp_val.abs() / 5.0).max(0.0);
-            let curved = amp_val.signum() * normalized.powf(3.0);
+            let normalized = (amp_val.abs() * (1.0 / 5.0)).max(0.0);
+            let curved = amp_val.signum() * (normalized * normalized * normalized);
             self.state.gain_buffer[i].update(curved);
             let gain_value = *self.state.gain_buffer[i];
             self.outputs.sample.set(i, pre_gain_value * gain_value);
