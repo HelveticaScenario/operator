@@ -31,21 +31,21 @@ pub enum OverdriveMode {
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct OverdriveParams {
+pub struct OverdriveParams {
     /// input signal to overdrive (bipolar, typically -5 to 5)
-    input: PolySignal,
+    pub input: PolySignal,
     /// drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)
     #[signal(default = 0.0, range = (0.0, 5.0))]
-    drive: PolySignal,
+    pub drive: PolySignal,
     /// tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into
     /// the shaper at positive values and de-emphasises them after, and vice versa.
     #[signal(default = 0.0, range = (-5.0, 5.0))]
     #[deserr(default)]
-    tone: Option<PolySignal>,
+    pub tone: Option<PolySignal>,
     /// saturation mode (defaults to soft)
     #[serde(default)]
     #[deserr(default)]
-    mode: Option<OverdriveMode>,
+    pub mode: Option<OverdriveMode>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -106,19 +106,30 @@ impl Overdrive {
         // Tilt-EQ runs inside the 2× oversampled inner loop.
         let upper_rate = (sample_rate * 2.0).max(1.0);
         let tilt = 1.0 - (-2.0 * PI * TILT_PIVOT_HZ / upper_rate).exp();
-        self.state.tilt_coeff = tilt.clamp(0.0, 1.0);
+        let tilt = tilt.clamp(0.0, 1.0);
+        self.state.tilt_coeff = tilt;
 
         // DC blocker runs at the base rate before the upsampler.
         let base_rate = sample_rate.max(1.0);
         self.state.dc_block_coeff =
             (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
+
+        // Seed the tilt filter coeffs on every channel so the per-sample
+        // loop doesn't have to re-set them. Sample-rate is fixed for the
+        // lifetime of a module instance, so a one-shot init is sufficient.
+        for ch in self.state.channels.iter_mut() {
+            ch.tilt_pre.set_coeff(tilt);
+            ch.tilt_post.set_coeff(tilt);
+        }
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let tilt_coeff = self.state.tilt_coeff;
         let dc_coeff = self.state.dc_block_coeff;
         let mode = self.params.mode.unwrap_or_default();
         let num_channels = self.channel_count();
+        // Hoisted constants: see DRIVE_SLOPE / INV_5 docs below.
+        const DRIVE_SLOPE: f32 = (MAX_DRIVE_GAIN - 1.0) / 5.0;
+        const INV_5: f32 = 1.0 / 5.0;
 
         for ch in 0..num_channels {
             let state = &mut self.state.channels[ch];
@@ -132,20 +143,19 @@ impl Overdrive {
             let drive = (*state.drive).clamp(0.0, 5.0);
             let tone = (*state.tone).clamp(-5.0, 5.0);
 
-            let g = 1.0 + drive * ((MAX_DRIVE_GAIN - 1.0) / 5.0);
-            // tone in [-5, 5] maps to symmetric high-band gain pair via 3^(tone/5):
-            // tone=-5 → pre=1/3, post=3; tone=0 → 1, 1; tone=+5 → pre=3, post=1/3.
-            // Linear-signal cascade (pre · post) = 1 at all settings — true
-            // pre-emphasis / de-emphasis pair, no dead zone.
+            let g = 1.0 + drive * DRIVE_SLOPE;
+            // tone in [-5, 5] maps to symmetric high-band gain pair via
+            // 3^(tone/5): tone=-5 → pre=1/3, post=3; tone=0 → 1, 1;
+            // tone=+5 → pre=3, post=1/3. Since pre · post = 1 by
+            // construction (linear cascade is unity for all tone settings),
+            // we compute one powf and derive the other via reciprocal —
+            // ~2× cheaper than two powf calls on M-series.
             let amount = tone * 0.2;
             let pre_high_gain = TONE_RANGE.powf(amount);
-            let post_high_gain = TONE_RANGE.powf(-amount);
-
-            state.tilt_pre.set_coeff(tilt_coeff);
-            state.tilt_post.set_coeff(tilt_coeff);
+            let post_high_gain = 1.0 / pre_high_gain;
 
             // DC-block the input at base rate before upsampling.
-            let x_norm = input / 5.0;
+            let x_norm = input * INV_5;
             let dc_out = x_norm - state.dc_prev_in + dc_coeff * state.dc_prev_out;
             state.dc_prev_in = x_norm;
             state.dc_prev_out = dc_out;
@@ -208,6 +218,29 @@ fn process_one(
 }
 
 message_handlers!(impl Overdrive {});
+
+#[doc(hidden)]
+pub fn __bench_make_overdrive(params: OverdriveParams) -> Overdrive {
+    use crate::types::OutputStruct;
+    let mut outputs = OverdriveOutputs::default();
+    outputs.set_all_channels(1);
+    let mut od = Overdrive {
+        params,
+        outputs,
+        _channel_count: 1,
+        _block_index: Default::default(),
+        state: OverdriveState::default(),
+    };
+    od.init(48000.0);
+    od
+}
+
+impl Overdrive {
+    #[doc(hidden)]
+    pub fn __bench_update(&mut self, sample_rate: f32) {
+        self.update(sample_rate);
+    }
+}
 
 #[cfg(test)]
 mod tests {

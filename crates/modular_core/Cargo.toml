@@ -44,6 +44,10 @@ criterion = { version = "0.5", default-features = false, features = ["cargo_benc
 name = "mix_bench"
 harness = false
 
+[[bench]]
+name = "overdrive_bench"
+harness = false
+
 [dependencies.napi]
 version = "3.7.1"
 features = ["serde", "serde-json"]
