@@ -5,6 +5,7 @@ import { useTheme } from '../themes/ThemeContext';
 import { type AudioSettingsHandle, AudioSettingsTab } from './AudioSettings';
 import { EditorSettingsTab } from './EditorSettingsTab';
 import { FormatterSettingsTab } from './FormatterSettingsTab';
+import { contextKeys } from '../keybindings/contextKey';
 import './Settings.css';
 
 type SettingsTabId = 'editor' | 'audio' | 'formatter';
@@ -112,6 +113,14 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
                 panelRef.current?.focus();
             });
         }
+    }, [isOpen]);
+
+    // Mirror modal state into the context-key service for when-clauses.
+    useEffect(() => {
+        contextKeys.set('inSettingsModal', isOpen);
+        return () => {
+            contextKeys.set('inSettingsModal', false);
+        };
     }, [isOpen]);
 
     if (!isOpen) {

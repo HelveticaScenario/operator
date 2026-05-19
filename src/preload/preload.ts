@@ -10,6 +10,7 @@ import {
     IPCRequest,
     IPCResponse,
     IPC_CHANNELS,
+    KeybindingOverride,
     MENU_CHANNELS,
     MainLogEntry,
     Promisify,
@@ -219,6 +220,13 @@ export interface ElectronAPI {
         read: () => Promise<AppConfig>;
         write: (config: Partial<AppConfig>) => Promise<void>;
         onChange: (callback: (config: AppConfig) => void) => () => void;
+    };
+
+    // Keybinding overrides (read/write `<userData>/keybindings.json`)
+    keybindings: {
+        getPath: () => Promise<string>;
+        readUser: () => Promise<KeybindingOverride[]>;
+        writeUser: (overrides: KeybindingOverride[]) => Promise<void>;
     };
 
     // Wavs folder change notification
@@ -444,6 +452,14 @@ const electronAPI: ElectronAPI = {
         onChange: menuEventHandler(IPC_CHANNELS.CONFIG_ON_CHANGE),
         read: () => invokeIPC('CONFIG_READ'),
         write: (config) => invokeIPC('CONFIG_WRITE', config),
+    },
+
+    // Keybinding overrides
+    keybindings: {
+        getPath: () => invokeIPC('KEYBINDINGS_GET_PATH'),
+        readUser: () => invokeIPC('KEYBINDINGS_READ_USER'),
+        writeUser: (overrides) =>
+            invokeIPC('KEYBINDINGS_WRITE_USER', overrides),
     },
 
     // Main process log forwarding

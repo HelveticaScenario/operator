@@ -12,7 +12,10 @@
         "moduleResolution": "bundler",
         "resolveJsonModule": true,
         "jsx": "react-jsx",
-        "strict": true
+        "strict": true,
+        "paths": {
+            "tinykeys": ["./node_modules/tinykeys/dist/tinykeys"]
+        }
     },
     "include": ["src/**/*"]
 }

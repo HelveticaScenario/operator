@@ -23,14 +23,25 @@ import {
 } from './monaco/scopeViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import {
+    bindEditorFocus,
+    bindEditorWidgetVisibility,
+} from '../keybindings/contextKeyBootstrap';
 import electronAPI from '../electronAPI';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
+import { executeCommand } from '../keybindings/commands';
 
 export interface PatchEditorProps {
     value: string;
     currentFile?: string;
     onChange: (value: string) => void;
     editorRef: React.RefObject<editor.IStandaloneCodeEditor | null>;
+    /**
+     * Notified when the editor instance becomes available (mount) or goes
+     * away (unmount, e.g. last buffer closed). Lets parents subscribe via
+     * state instead of reading `editorRef.current` during render.
+     */
+    onEditorChange?: (editor: editor.IStandaloneCodeEditor | null) => void;
     scopeViews?: ScopeView[];
     /** Tracked decoration collection whose ranges correspond 1:1 with scopeViews. */
     scopeDecorations?: editor.IEditorDecorationsCollection | null;
@@ -44,6 +55,7 @@ export function MonacoPatchEditor({
     currentFile,
     onChange,
     editorRef,
+    onEditorChange,
     scopeViews = [],
     scopeDecorations = null,
     onRegisterScopeCanvas,
@@ -74,6 +86,17 @@ export function MonacoPatchEditor({
     const [editor, setEditor] = useState<editor.IStandaloneCodeEditor | null>(
         null,
     );
+
+    // Mirror the local `editor` state up to the parent (for the command
+    // palette etc.). Cleans up to `null` when the inner Monaco Editor
+    // unmounts (e.g., when the last buffer closes and `currentFile` goes
+    // falsy).
+    useEffect(() => {
+        onEditorChange?.(editor);
+        return () => {
+            onEditorChange?.(null);
+        };
+    }, [editor, onEditorChange]);
 
     // Decoration collection for active module state highlighting (seq steps, etc.)
     const activeDecorationRef =
@@ -185,6 +208,20 @@ export function MonacoPatchEditor({
         ed.addCommand(ctrl | _monacoInstance.KeyCode.KeyW, () => {
             window.electronAPI.triggerMenuAction('CLOSE_BUFFER');
         });
+
+        // Override Monaco's built-in palette (F1, Ctrl+Shift+P) so both chords
+        // open the Operator workbench palette instead of `editor.action.quickCommand`.
+        // Outside the editor the same chord is caught by the window-level
+        // keymap (Phase 2.3). Single palette, one keybinding, no conflict.
+        ed.addCommand(_monacoInstance.KeyCode.F1, () => {
+            executeCommand('operator.showCommandPalette');
+        });
+        ed.addCommand(
+            ctrl | _monacoInstance.KeyMod.Shift | _monacoInstance.KeyCode.KeyP,
+            () => {
+                executeCommand('operator.showCommandPalette');
+            },
+        );
     };
 
     useEffect(() => {
@@ -195,6 +232,18 @@ export function MonacoPatchEditor({
             schemas,
         });
     }, [monaco, libSource, schemas]);
+
+    // Mirror Monaco focus and suggest/find widget visibility into the
+    // context-key service so when-clauses (Phase 2.x) can react.
+    useEffect(() => {
+        if (!editor) return;
+        const stopFocus = bindEditorFocus(editor);
+        const stopWidgets = bindEditorWidgetVisibility(editor);
+        return () => {
+            stopFocus();
+            stopWidgets();
+        };
+    }, [editor]);
 
     const {
         theme: appTheme,
@@ -335,6 +384,12 @@ export function MonacoPatchEditor({
             folding: false,
             matchBrackets: 'always',
             automaticLayout: true,
+            // Monaco's editor context menu hosts a "Command Palette"
+            // entry that invokes `editor.action.quickCommand`
+            // directly, bypassing our keybinding override. Disable
+            // the built-in menu wholesale; Phase 2.1b replaces it
+            // with a Radix context menu.
+            contextmenu: false,
             fontFamily: `${font}, monospace`,
             fontLigatures: fontLigatures,
             fontSize: fontSize,
