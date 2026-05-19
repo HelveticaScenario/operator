@@ -11,6 +11,7 @@ use modular_core::PatchGraph;
 use modular_core::dsp::get_constructors;
 use modular_core::dsp::schema;
 use modular_core::dsp::utils::SchmittTrigger;
+use modular_core::profiling::{ModuleProfileAccum, ModuleProfileCollection};
 
 use modular_core::types::ClockMessages;
 use modular_core::types::Message;
@@ -864,6 +865,10 @@ pub struct AudioState {
   /// Plumbed through `make_stream` so the audio thread can be flipped to
   /// a real block size without touching every constructor call site.
   pub block_size: usize,
+  /// Per-module profile snapshot. Audio thread writes via try_lock at
+  /// callback end (see `modular_core::profiling::flush_into`); main thread
+  /// drains via `get_module_profile`.
+  module_profile_collection: ModuleProfileCollection,
 }
 
 #[derive(Default)]
@@ -904,6 +909,7 @@ impl AudioState {
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
       block_size,
+      module_profile_collection: modular_core::profiling::new_collection(),
     }
   }
 
@@ -983,7 +989,25 @@ impl AudioState {
       midi_manager: self.midi_manager.clone(),
       transport_meter: self.transport_meter.clone(),
       audio_thread_panicked: self.audio_thread_panicked.clone(),
+      module_profile_collection: self.module_profile_collection.clone(),
     }
+  }
+
+  /// Enable / disable per-module profiling. Flips a global atomic the audio
+  /// thread checks once per callback.
+  pub fn set_module_profiling_enabled(&self, on: bool) {
+    modular_core::profiling::set_enabled(on);
+  }
+
+  /// Profile 1-of-N audio callbacks. 1 = every callback.
+  pub fn set_module_profiling_sample_rate(&self, rate: u32) {
+    modular_core::profiling::set_sample_rate(rate);
+  }
+
+  /// Drain the accumulated per-module profile data. Returns one entry per
+  /// module that had activity since the last drain.
+  pub fn get_module_profile(&self) -> Vec<(String, ModuleProfileAccum)> {
+    modular_core::profiling::drain_collection(&self.module_profile_collection)
   }
 
   pub fn start_recording(&self, filename: Option<String>) -> Result<String> {
@@ -1264,6 +1288,9 @@ pub struct AudioSharedState {
   /// Set by the audio callback after catching a panic. The callback then
   /// writes silence forever; the stream must be torn down to recover.
   pub audio_thread_panicked: Arc<AtomicBool>,
+  /// Per-module profiler snapshot — audio thread flushes here via try_lock
+  /// at the end of every callback.
+  pub module_profile_collection: ModuleProfileCollection,
 }
 
 fn chrono_simple_timestamp() -> String {
@@ -1321,6 +1348,8 @@ struct AudioProcessor {
   /// Ableton Link integration (audio-thread side). Owns the live
   /// `rusty_link` resources when active and exposes only RT-safe operations.
   link: crate::link::LinkState,
+  /// Shared per-module profile snapshot — flushed at end of each callback.
+  module_profile_collection: ModuleProfileCollection,
 }
 
 impl AudioProcessor {
@@ -1348,6 +1377,7 @@ impl AudioProcessor {
       block_pos: block_size,
       input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
       link: crate::link::LinkState::new(),
+      module_profile_collection: shared.module_profile_collection,
     }
   }
 
@@ -1778,6 +1808,10 @@ where
 
           let callback_start = Instant::now();
 
+          // Mirror the main-thread enable atomic into the audio thread's
+          // profiler TLS. Cheap relaxed load once per callback.
+          modular_core::profiling::refresh_enabled();
+
           // Process any pending commands from the main thread
           {
             profiling::scope!("process_commands");
@@ -2029,6 +2063,10 @@ where
             profiling::scope!("collect_module_states");
             audio_processor.collect_module_states();
           }
+
+          // Flush per-module profile data into the cross-thread snapshot.
+          // No-op when profiling is disabled (early-out inside the call).
+          modular_core::profiling::flush_into(&audio_processor.module_profile_collection);
 
           let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
 
@@ -2500,6 +2538,7 @@ mod tests {
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      module_profile_collection: modular_core::profiling::new_collection(),
     };
 
     let processor = AudioProcessor::new(
@@ -2698,6 +2737,7 @@ mod tests {
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      module_profile_collection: modular_core::profiling::new_collection(),
     };
 
     let processor = AudioProcessor::new(

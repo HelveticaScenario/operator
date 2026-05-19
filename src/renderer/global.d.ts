@@ -15,6 +15,7 @@ interface TestAPI {
     getAudioHealth: () => Promise<any>;
     isClockRunning: () => boolean;
     openEngineHealth: () => void;
+    openModuleProfile: () => void;
 }
 
 declare global {

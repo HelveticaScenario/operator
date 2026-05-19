@@ -471,6 +471,27 @@ pub struct PatchUpdateResult {
   pub update_id: f64,
 }
 
+/// Per-module audio-thread profile sample. `self_ns` excludes time spent
+/// recursively pulling upstream params; `total_ns - self_ns` is that pull
+/// cost. Counts cover one drain window.
+#[napi(object)]
+pub struct ModuleProfileSample {
+  pub module_id: String,
+  /// Time inside this module's own DSP, excluding recursive upstream pulls.
+  pub self_ns: f64,
+  /// Total time, including recursive upstream pulls.
+  pub total_ns: f64,
+  /// Calls to `ensure_processed_to` that advanced the per-block cursor.
+  pub ensure_calls_did_work: u32,
+  /// Sample slots processed in this window.
+  pub samples_processed: u32,
+  /// Processing mode of this module: "block" for acyclic subgraphs (whole
+  /// block computed per call) or "sample" for modules inside feedback
+  /// cycles (one sample per call). Sample-mode modules pay wrapper +
+  /// profiler overhead per sample, not per block.
+  pub mode: String,
+}
+
 /// Audio configuration for synthesizer initialization
 #[napi(object)]
 #[derive(Debug, Clone, Default)]
@@ -1048,6 +1069,45 @@ impl Synthesizer {
   #[napi]
   pub fn get_scopes(&self) -> Vec<(ScopeBufferKey, Float32Array, ScopeStats)> {
     self.state.get_audio_buffers()
+  }
+
+  /// Drain the per-module profiler snapshot accumulated since the last
+  /// call. Returns one entry per module instance that did work in that
+  /// window. No-op (returns empty) when profiling is disabled.
+  #[napi]
+  pub fn get_module_profile(&self) -> Vec<ModuleProfileSample> {
+    use modular_core::types::ProcessingMode;
+    self
+      .state
+      .get_module_profile()
+      .into_iter()
+      .map(|(module_id, acc)| ModuleProfileSample {
+        module_id,
+        self_ns: acc.self_ns as f64,
+        total_ns: acc.total_ns as f64,
+        ensure_calls_did_work: acc.ensure_calls_did_work,
+        samples_processed: acc.samples_processed,
+        mode: match acc.mode {
+          ProcessingMode::Block => "block".to_string(),
+          ProcessingMode::Sample => "sample".to_string(),
+        },
+      })
+      .collect()
+  }
+
+  /// Turn per-module profiling on or off. Off by default. Disabled-cost is
+  /// a single TLS bool read per `ensure_processed_to` did-work entry.
+  #[napi]
+  pub fn set_module_profiling_enabled(&self, enabled: bool) {
+    self.state.set_module_profiling_enabled(enabled);
+  }
+
+  /// Profile only 1-of-N audio callbacks. `rate` of 1 means every
+  /// callback; higher values reduce overhead proportionally at the cost
+  /// of statistical smoothing in the UI.
+  #[napi]
+  pub fn set_module_profiling_sample_rate(&self, rate: u32) {
+    self.state.set_module_profiling_sample_rate(rate);
   }
 
   #[napi]

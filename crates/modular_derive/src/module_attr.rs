@@ -785,6 +785,8 @@ fn impl_module_macro_attr(
                 if self.computing.get() {
                     return;
                 }
+                let start_index = self.index.get();
+                let _prof_active = crate::profiling::push_frame(&self.id, self.mode);
                 self.computing.set(true);
                 while self.index.get() < target {
                     let i = self.index.get();
@@ -803,6 +805,9 @@ fn impl_module_macro_attr(
                     self.index.set(i + 1);
                 }
                 self.computing.set(false);
+                if _prof_active {
+                    crate::profiling::pop_frame((target - start_index) as u32);
+                }
             }
 
             fn ensure_processed(&self) {

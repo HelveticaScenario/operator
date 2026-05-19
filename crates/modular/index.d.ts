@@ -28,6 +28,23 @@ export declare class Synthesizer {
    */
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
+  /**
+   * Drain the per-module profiler snapshot accumulated since the last
+   * call. Returns one entry per module instance that did work in that
+   * window. No-op (returns empty) when profiling is disabled.
+   */
+  getModuleProfile(): Array<ModuleProfileSample>
+  /**
+   * Turn per-module profiling on or off. Off by default. Disabled-cost is
+   * a single TLS bool read per `ensure_processed_to` did-work entry.
+   */
+  setModuleProfilingEnabled(enabled: boolean): void
+  /**
+   * Profile only 1-of-N audio callbacks. `rate` of 1 means every
+   * callback; higher values reduce overhead proportionally at the cost
+   * of statistical smoothing in the UI.
+   */
+  setModuleProfilingSampleRate(rate: number): void
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
@@ -249,6 +266,30 @@ export interface HostInfo {
 export interface MidiInputInfo {
   name: string
   index: number
+}
+
+/**
+ * Per-module audio-thread profile sample. `self_ns` excludes time spent
+ * recursively pulling upstream params; `total_ns - self_ns` is that pull
+ * cost. Counts cover one drain window.
+ */
+export interface ModuleProfileSample {
+  moduleId: string
+  /** Time inside this module's own DSP, excluding recursive upstream pulls. */
+  selfNs: number
+  /** Total time, including recursive upstream pulls. */
+  totalNs: number
+  /** Calls to `ensure_processed_to` that advanced the per-block cursor. */
+  ensureCallsDidWork: number
+  /** Sample slots processed in this window. */
+  samplesProcessed: number
+  /**
+   * Processing mode of this module: "block" for acyclic subgraphs (whole
+   * block computed per call) or "sample" for modules inside feedback
+   * cycles (one sample per call). Sample-mode modules pay wrapper +
+   * profiler overhead per sample, not per block.
+   */
+  mode: string
 }
 
 /** Result of a patch update, including any validation errors and the assigned update ID. */
