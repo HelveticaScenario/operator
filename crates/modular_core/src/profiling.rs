@@ -18,6 +18,29 @@
 //! - Sampling: `set_sample_rate(N)` profiles 1-of-N audio callbacks.
 //!   Reduces per-callback cost linearly while still giving the UI a
 //!   representative average over its 1 Hz poll window.
+//!
+//! # Allocation-free audio-thread contract
+//!
+//! The audio thread never allocates inside the profiler:
+//!
+//! - The TLS `records` map and the shared cross-thread map are
+//!   pre-allocated on the main thread at patch-swap time, with one entry
+//!   per desired module id. [`swap_records`] and [`swap_shared`] swap
+//!   them in via `mem::replace`; the old maps are returned and routed
+//!   through the command-queue garbage path for drop on the main thread.
+//! - [`pop_frame`] writes through `get_mut` only. A pop with an id
+//!   absent from the records map is dropped silently — possible during
+//!   the window between `set_enabled(true)` and the first subsequent
+//!   patch swap that seeds the map.
+//! - [`flush_into`] iterates `iter_mut` and merges through `get_mut`
+//!   into the shared map; locals are zeroed in place (mode preserved).
+//!   The shared map must contain every key the local map contains;
+//!   main-thread seeding guarantees this.
+//! - [`drain_collection`] (main-thread reader) iterates + clones keys +
+//!   zeros values in place. The audio thread keeps its bucket capacity
+//!   across UI drains.
+//! - The stack is bounded by [`STACK_CAPACITY`]; pushes beyond that cap
+//!   return `false`, so the underlying `Vec` never reallocates.
 
 use crate::types::ProcessingMode;
 use parking_lot::Mutex;
@@ -26,6 +49,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
+
+/// Maximum profiled call-stack depth. Real graphs nest a few levels
+/// (root → mix → osc/fx); 32 leaves headroom for pathological patches.
+/// Pushes past this are dropped to keep the underlying `Vec` from ever
+/// reallocating on the audio thread.
+pub const STACK_CAPACITY: usize = 32;
 
 /// Snapshot of one module's cumulative stats since the last UI drain.
 #[derive(Clone, Copy, Debug, Default)]
@@ -38,17 +67,24 @@ pub struct ModuleProfileAccum {
 }
 
 impl ModuleProfileAccum {
-    fn merge(&mut self, other: &ModuleProfileAccum) {
+    fn add_assign(&mut self, other: &ModuleProfileAccum) {
         self.self_ns = self.self_ns.saturating_add(other.self_ns);
         self.total_ns = self.total_ns.saturating_add(other.total_ns);
         self.ensure_calls_did_work = self
             .ensure_calls_did_work
             .saturating_add(other.ensure_calls_did_work);
         self.samples_processed = self.samples_processed.saturating_add(other.samples_processed);
-        // Mode is write-once per module instance (assigned at construction
-        // by graph_analysis). Merges across drain windows must observe the
-        // same mode for the same id.
-        debug_assert_eq!(self.mode, other.mode);
+        // Last-write-wins on mode. The same id can legitimately switch
+        // mode across patch swaps when graph_analysis reclassifies its
+        // SCC membership.
+        self.mode = other.mode;
+    }
+
+    fn zero_counters(&mut self) {
+        self.self_ns = 0;
+        self.total_ns = 0;
+        self.ensure_calls_did_work = 0;
+        self.samples_processed = 0;
     }
 }
 
@@ -56,6 +92,26 @@ pub type ModuleProfileCollection = Arc<Mutex<HashMap<String, ModuleProfileAccum>
 
 pub fn new_collection() -> ModuleProfileCollection {
     Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Build a pre-seeded records map sized for `ids`, with a default
+/// `ModuleProfileAccum` per id. Allocates on the caller thread (always
+/// the main thread). The result is handed to the audio thread via the
+/// command queue and swapped into TLS / the shared map via
+/// [`swap_records`] / [`swap_shared`].
+pub fn build_seed<I, S>(ids: I) -> HashMap<String, ModuleProfileAccum>
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let iter = ids.into_iter();
+    let (lo, hi) = iter.size_hint();
+    let cap = hi.unwrap_or(lo);
+    let mut map = HashMap::with_capacity(cap);
+    for id in iter {
+        map.insert(id.into(), ModuleProfileAccum::default());
+    }
+    map
 }
 
 /// Global enable flag flipped from the main thread. Audio thread mirrors
@@ -104,7 +160,7 @@ struct Profiler {
 impl Profiler {
     fn new() -> Self {
         Self {
-            stack: Vec::with_capacity(32),
+            stack: Vec::with_capacity(STACK_CAPACITY),
             records: HashMap::new(),
         }
     }
@@ -129,15 +185,16 @@ pub fn refresh_enabled() {
         false
     };
     ENABLED_TLS.with(|c| c.set(on));
-    // Defensive: a panic inside `inner.update` unwinds past the wrapper's
-    // matching `pop_frame`, leaving stale frames on the stack and a stale
-    // `last_resume` on the parent. The audio panic guard catches the
-    // unwind; this clears the residue on the next callback so the next
-    // active window starts clean. No-op when push/pop balanced.
+    // Stack residue clearance for the unwind case: a panic inside
+    // `inner.update` skips the wrapper's matching `pop_frame`, leaving
+    // stale frames and a stale `last_resume` on the parent. The next
+    // callback's clearance gives the next active window a clean start.
+    // No-op when push/pop are balanced. `truncate(0)` keeps the `Vec`'s
+    // backing allocation.
     PROFILER.with(|p| {
         let mut prof = p.borrow_mut();
         if !prof.stack.is_empty() {
-            prof.stack.clear();
+            prof.stack.truncate(0);
         }
     });
 }
@@ -154,6 +211,12 @@ pub fn push_frame(id: &str, mode: ProcessingMode) -> bool {
     let now = Instant::now();
     PROFILER.with(|p| {
         let mut prof = p.borrow_mut();
+        // Bounds check: pushes past `STACK_CAPACITY` are dropped so the
+        // `Vec`'s allocation stays fixed. Caller treats `false` as
+        // "frame not profiled" and skips its matching `pop_frame`.
+        if prof.stack.len() >= STACK_CAPACITY {
+            return false;
+        }
         if let Some(parent) = prof.stack.last_mut() {
             parent.self_accum_ns = parent
                 .self_accum_ns
@@ -167,8 +230,8 @@ pub fn push_frame(id: &str, mode: ProcessingMode) -> bool {
             last_resume: now,
             self_accum_ns: 0,
         });
-    });
-    true
+        true
+    })
 }
 
 /// Called on exit from a wrapper's `ensure_processed_to`, only when the
@@ -193,23 +256,16 @@ pub fn pop_frame(samples_processed: u32) {
             std::str::from_utf8_unchecked(slice)
         };
 
+        // get_mut only. Missing entries drop the sample. The records
+        // map is seeded from the main thread via `swap_records` at each
+        // patch swap; ids absent from the seed (e.g. reserved ids the
+        // caller omitted) record nothing.
         if let Some(rec) = prof.records.get_mut(id) {
             rec.self_ns = rec.self_ns.saturating_add(self_ns);
             rec.total_ns = rec.total_ns.saturating_add(total_ns);
             rec.ensure_calls_did_work = rec.ensure_calls_did_work.saturating_add(1);
             rec.samples_processed = rec.samples_processed.saturating_add(samples_processed);
             rec.mode = frame.mode;
-        } else {
-            prof.records.insert(
-                id.to_string(),
-                ModuleProfileAccum {
-                    self_ns,
-                    total_ns,
-                    ensure_calls_did_work: 1,
-                    samples_processed,
-                    mode: frame.mode,
-                },
-            );
         }
 
         if let Some(parent) = prof.stack.last_mut() {
@@ -218,8 +274,14 @@ pub fn pop_frame(samples_processed: u32) {
     });
 }
 
-/// Drain the audio-thread-local records into the shared cross-thread map.
-/// Uses `try_lock` — drops the merge on contention rather than blocking.
+/// Drain the audio-thread-local records into the shared cross-thread
+/// map. `try_lock` — contention drops the merge for this callback.
+///
+/// Allocation-free: iterates `iter_mut` over the local map, merges each
+/// entry into the matching pre-seeded slot in `dst` via `get_mut`, and
+/// zeros the local counters in place. Local entries whose key is absent
+/// from `dst` are skipped; the main-thread seed populates both maps with
+/// the same key set.
 pub fn flush_into(dst: &ModuleProfileCollection) {
     PROFILER.with(|p| {
         let mut prof = p.borrow_mut();
@@ -229,11 +291,14 @@ pub fn flush_into(dst: &ModuleProfileCollection) {
         let Some(mut guard) = dst.try_lock() else {
             return;
         };
-        for (id, acc) in prof.records.drain() {
-            guard
-                .entry(id)
-                .and_modify(|existing| existing.merge(&acc))
-                .or_insert(acc);
+        for (id, acc) in prof.records.iter_mut() {
+            if acc.ensure_calls_did_work == 0 {
+                continue;
+            }
+            if let Some(existing) = guard.get_mut(id) {
+                existing.add_assign(acc);
+            }
+            acc.zero_counters();
         }
     });
 }
@@ -241,15 +306,49 @@ pub fn flush_into(dst: &ModuleProfileCollection) {
 /// Drain and return the shared cross-thread snapshot. Caller (UI) gets
 /// the accumulated stats since its last drain.
 ///
-/// Uses the blocking `lock()` rather than `try_lock`. The audio thread
-/// holds the lock only for the duration of a `mem::take`-equivalent drain
-/// in `flush_into`, so contention is bounded by a single short critical
-/// section. A blocking acquire here is preferable to a try-and-drop because
-/// the UI poll cadence (1 Hz) cannot afford to silently miss a window.
+/// Iterates + clones keys + zeros values in place, preserving the
+/// shared map's bucket allocation for the audio thread's `flush_into`.
+/// Blocks on `lock()`; contention is bounded by `flush_into`'s in-place
+/// merge, which is the only writer.
 pub fn drain_collection(src: &ModuleProfileCollection) -> Vec<(String, ModuleProfileAccum)> {
     let mut guard = src.lock();
-    let map = std::mem::take(&mut *guard);
-    map.into_iter().collect()
+    let mut out = Vec::with_capacity(guard.len());
+    for (id, acc) in guard.iter_mut() {
+        if acc.ensure_calls_did_work == 0 {
+            // Reset mode-only entries still get zeroed; keep them out
+            // of the snapshot so the UI doesn't see no-op rows.
+            continue;
+        }
+        out.push((id.clone(), *acc));
+        acc.zero_counters();
+    }
+    out
+}
+
+/// Replace the audio thread's TLS records map with `new`. Returns the
+/// previous map for routing through the garbage queue. The swap is two
+/// pointer writes; allocation lives in `new` (built on the main thread)
+/// and in the dropped return value (also dropped on the main thread).
+/// Subsequent `pop_frame` calls neither allocate nor rehash as long as
+/// every active wrapper's id is present in `new`.
+pub fn swap_records(
+    new: HashMap<String, ModuleProfileAccum>,
+) -> HashMap<String, ModuleProfileAccum> {
+    PROFILER.with(|p| {
+        let mut prof = p.borrow_mut();
+        std::mem::replace(&mut prof.records, new)
+    })
+}
+
+/// Replace the shared cross-thread map's contents with `new`. Returns
+/// the previous contents for routing through the garbage queue. Holds
+/// the shared `Mutex` for the duration of one `mem::replace`.
+pub fn swap_shared(
+    dst: &ModuleProfileCollection,
+    new: HashMap<String, ModuleProfileAccum>,
+) -> HashMap<String, ModuleProfileAccum> {
+    let mut guard = dst.lock();
+    std::mem::replace(&mut *guard, new)
 }
 
 #[cfg(test)]
@@ -273,10 +372,15 @@ mod tests {
         });
     }
 
+    fn seed(ids: &[&str]) {
+        let _ = swap_records(build_seed(ids.iter().map(|s| s.to_string())));
+    }
+
     #[test]
     fn push_pop_accumulates_self_time() {
         let _g = TEST_LOCK.lock();
         reset();
+        seed(&["a"]);
         set_enabled(true);
         refresh_enabled();
 
@@ -286,6 +390,8 @@ mod tests {
         pop_frame(10);
 
         let collection = new_collection();
+        // Seed shared map too so flush_into has a slot to write to.
+        let _ = swap_shared(&collection, build_seed(["a".to_string()]));
         flush_into(&collection);
 
         let snap = drain_collection(&collection);
@@ -302,6 +408,7 @@ mod tests {
     fn nested_frames_split_self_and_total() {
         let _g = TEST_LOCK.lock();
         reset();
+        seed(&["parent", "child"]);
         set_enabled(true);
         refresh_enabled();
 
@@ -314,6 +421,10 @@ mod tests {
         pop_frame(4);
 
         let collection = new_collection();
+        let _ = swap_shared(
+            &collection,
+            build_seed(["parent".to_string(), "child".to_string()]),
+        );
         flush_into(&collection);
 
         let snap: HashMap<String, ModuleProfileAccum> = drain_collection(&collection)
@@ -342,6 +453,7 @@ mod tests {
     fn sampling_skips_callbacks() {
         let _g = TEST_LOCK.lock();
         reset();
+        seed(&["m"]);
         set_enabled(true);
         set_sample_rate(3);
 
@@ -355,5 +467,53 @@ mod tests {
         }
         // 9 callbacks at rate 3 = 3 active (counters 0, 3, 6).
         assert_eq!(active_count, 3);
+    }
+
+    #[test]
+    fn unseeded_id_is_dropped_not_allocated() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        // Seed only "a"; push under "b" should not insert into records.
+        seed(&["a"]);
+        set_enabled(true);
+        refresh_enabled();
+        assert!(push_frame("b", ProcessingMode::Block));
+        pop_frame(1);
+
+        PROFILER.with(|p| {
+            let prof = p.borrow();
+            assert!(prof.records.contains_key("a"));
+            assert!(!prof.records.contains_key("b"));
+        });
+    }
+
+    #[test]
+    fn stack_capacity_bounds_pushes() {
+        let _g = TEST_LOCK.lock();
+        reset();
+        // Build a seed covering every id we'll push so pop_frame has slots.
+        let ids: Vec<String> = (0..STACK_CAPACITY + 4).map(|i| format!("m{i}")).collect();
+        let _ = swap_records(build_seed(ids.iter().cloned()));
+        set_enabled(true);
+        refresh_enabled();
+
+        let mut pushed = 0usize;
+        for id in &ids {
+            if push_frame(id, ProcessingMode::Block) {
+                pushed += 1;
+            }
+        }
+        assert_eq!(pushed, STACK_CAPACITY);
+
+        // Capacity preserved — Vec did not grow.
+        PROFILER.with(|p| {
+            let prof = p.borrow();
+            assert_eq!(prof.stack.capacity(), STACK_CAPACITY);
+        });
+
+        // Drain the stack: only the pushes that succeeded matter.
+        for _ in 0..pushed {
+            pop_frame(1);
+        }
     }
 }

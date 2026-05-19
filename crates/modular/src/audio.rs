@@ -1235,6 +1235,14 @@ impl AudioState {
     // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread
     update.desired_ids = update.inserts.iter().map(|(id, _)| id.clone()).collect();
 
+    // Profiler seed maps for the audio thread's TLS records and shared
+    // map. One entry per inserted id, two maps because each `swap_*`
+    // consumes its operand.
+    update.profile_records_seed =
+      modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+    update.profile_shared_seed =
+      modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+
     // Run main-thread resource preparation (e.g. FFT-based mipmap generation for
     // wavetable oscillators). Called here because allocation and file-backed
     // data access must not happen on the audio thread.
@@ -1569,6 +1577,8 @@ impl AudioProcessor {
       scope_adds,
       scope_removes,
       wav_data,
+      profile_records_seed,
+      profile_shared_seed,
       ..
     } = update;
 
@@ -1680,6 +1690,31 @@ impl AudioProcessor {
       for (key, buffer) in scope_adds {
         scope_collection.insert(key, buffer);
       }
+    }
+
+    // Profiler-map swap: `swap_records` updates the audio thread's TLS
+    // records, `swap_shared` updates the cross-thread snapshot. Both
+    // operands were allocated on the main thread; the evicted maps drop
+    // on the main thread via `GarbageItem::ProfileMap`. Counters
+    // accumulated since the last UI drain do not survive the swap — a
+    // patch swap is a graph discontinuity, and pre-swap stats are not
+    // comparable to post-swap ones.
+    {
+      let old_records = modular_core::profiling::swap_records(profile_records_seed);
+      if self
+        .garbage_tx
+        .push(GarbageItem::ProfileMap(old_records))
+        .is_err()
+      {}
+      let old_shared = modular_core::profiling::swap_shared(
+        &self.module_profile_collection,
+        profile_shared_seed,
+      );
+      if self
+        .garbage_tx
+        .push(GarbageItem::ProfileMap(old_shared))
+        .is_err()
+      {}
     }
   }
 

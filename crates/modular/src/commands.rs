@@ -3,6 +3,7 @@
 //! This module defines the commands sent from the main thread to the audio thread,
 //! and the errors reported back from the audio thread.
 
+use modular_core::profiling::ModuleProfileAccum;
 use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey, WavData};
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -55,6 +56,19 @@ pub struct PatchUpdate {
 
   /// Whether the DSL explicitly called $setTempo (don't push default 120 to Link)
   pub tempo_override: Option<f64>,
+
+  /// Pre-allocated TLS profiler records map, one entry per id in
+  /// `desired_ids`. Consumed by `profiling::swap_records` on the audio
+  /// thread; the evicted map flows back via the garbage queue. Always
+  /// populated, even when profiling is disabled — the swap maintains
+  /// the audio-thread allocation invariant for the next enable.
+  pub profile_records_seed: HashMap<String, ModuleProfileAccum>,
+
+  /// Pre-allocated map for the cross-thread `ModuleProfileCollection`,
+  /// consumed by `profiling::swap_shared`. Same key set as
+  /// `profile_records_seed`; held separately because each swap consumes
+  /// its operand.
+  pub profile_shared_seed: HashMap<String, ModuleProfileAccum>,
 }
 
 impl PatchUpdate {
@@ -70,6 +84,8 @@ impl PatchUpdate {
       wav_data: HashMap::new(),
       sample_rate,
       tempo_override: None,
+      profile_records_seed: HashMap::new(),
+      profile_shared_seed: HashMap::new(),
     }
   }
 
@@ -184,6 +200,10 @@ pub enum GarbageItem {
   /// Live Link resources removed from the audio thread. Drop tears down
   /// internal networking threads and sockets — must happen on the main thread.
   Link(Box<LinkResources>),
+  /// Profiler records map evicted by `swap_records` / `swap_shared`.
+  /// Drops on the main thread so the `HashMap`'s bucket deallocation
+  /// stays off the audio thread.
+  ProfileMap(HashMap<String, ModuleProfileAccum>),
 }
 
 /// Capacity for the garbage queue (audio → main).
