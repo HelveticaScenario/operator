@@ -42,6 +42,7 @@ import {
     registerCommand,
     unregisterCommand,
 } from './keybindings/commands';
+import { loadAndInstallKeymap } from './keybindings/keymap';
 
 /**
  * Transform validation errors to use source line numbers instead of module IDs
@@ -1008,6 +1009,30 @@ function App() {
             cleanupOpenEngineHealth();
         };
     }, [isRecording]);
+
+    // Install the window-level tinykeys keymap. Runs after the operator.*
+    // commands above have been registered (effects fire in declaration order),
+    // so dispatch always finds a handler. The loader merges user overrides
+    // from `<userData>/keybindings.json` on top of `DEFAULT_KEYMAP`.
+    useEffect(() => {
+        let disposed = false;
+        let disposer: (() => void) | null = null;
+        loadAndInstallKeymap()
+            .then((result) => {
+                if (disposed) {
+                    result.dispose();
+                } else {
+                    disposer = result.dispose;
+                }
+            })
+            .catch((err) => {
+                console.error('[keymap] failed to install keymap:', err);
+            });
+        return () => {
+            disposed = true;
+            disposer?.();
+        };
+    }, []);
 
     // Ctrl+Enter (and Ctrl+Shift+Enter) are reserved for patch updates.
     // Browsers activate a focused <button> on Enter regardless of modifier
