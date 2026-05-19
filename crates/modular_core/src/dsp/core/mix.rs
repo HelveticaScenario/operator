@@ -113,7 +113,7 @@ impl Mix {
             return;
         }
 
-        // Max channel count over all inputs, no Vec alloc.
+        // Max channel count over all inputs.
         let mut max_input_channels: usize = 0;
         for input in inputs.iter() {
             let c = input.channels();
@@ -122,8 +122,7 @@ impl Mix {
             }
         }
 
-        // Pre-compute mixed values for each input channel index. Single pass
-        // over inputs per channel — no intermediate Vec, no double iteration.
+        // Pre-compute mixed values for each input channel index.
         let mut pre_gain_values = [0.0f32; PORT_MAX_CHANNELS];
         for channel in 0..max_input_channels {
             let mut sum: f32 = 0.0;

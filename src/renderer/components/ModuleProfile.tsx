@@ -93,17 +93,8 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
 
     useEffect(() => {
         if (!isOpen) return;
-        electronAPI.synthesizer
-            .setModuleProfilingSampleRate(sampleRate)
-            .catch(console.error);
-    }, [isOpen, sampleRate]);
-
-    useEffect(() => {
-        if (!isOpen) return;
         let cancelled = false;
-        electronAPI.synthesizer
-            .setModuleProfilingEnabled(true)
-            .catch(console.error);
+        let intervalId: ReturnType<typeof setInterval> | null = null;
 
         const poll = () => {
             electronAPI.synthesizer
@@ -114,18 +105,39 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                 .catch(console.error);
         };
 
-        poll();
-        const intervalId = setInterval(poll, 1000);
+        // Sequence enable → set-rate → poll so a stale sample-rate update
+        // can't land after the disable on a rapid open/close. The enable
+        // refcounts on the Rust side (AudioState), so concurrent consumers
+        // remain safe even if this effect re-runs.
+        void (async () => {
+            try {
+                await electronAPI.synthesizer.setModuleProfilingEnabled(true);
+                if (cancelled) {
+                    await electronAPI.synthesizer.setModuleProfilingEnabled(
+                        false,
+                    );
+                    return;
+                }
+                await electronAPI.synthesizer.setModuleProfilingSampleRate(
+                    sampleRate,
+                );
+                if (cancelled) return;
+                poll();
+                intervalId = setInterval(poll, 1000);
+            } catch (err) {
+                console.error(err);
+            }
+        })();
 
         return () => {
             cancelled = true;
-            clearInterval(intervalId);
+            if (intervalId !== null) clearInterval(intervalId);
             electronAPI.synthesizer
                 .setModuleProfilingEnabled(false)
                 .catch(console.error);
             setRows(null);
         };
-    }, [isOpen]);
+    }, [isOpen, sampleRate]);
 
     useEffect(() => {
         if (!isOpen) return;
@@ -149,11 +161,14 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
         return rows.map((r) => {
             const self = nsPerSample(r.selfNs, r.samplesProcessed);
             const total = nsPerSample(r.totalNs, r.samplesProcessed);
+            // Clamp to 0: clock granularity and timer skew between
+            // push_frame and pop_frame can briefly push self past total.
+            const params = Math.max(0, total - self);
             return {
                 moduleId: r.moduleId,
                 mode: r.mode,
                 selfNsPerSample: self,
-                paramsNsPerSample: total - self,
+                paramsNsPerSample: params,
                 totalNsPerSample: total,
                 samplesProcessed: r.samplesProcessed,
             };

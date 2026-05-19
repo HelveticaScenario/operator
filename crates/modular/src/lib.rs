@@ -1083,6 +1083,9 @@ impl Synthesizer {
       .into_iter()
       .map(|(module_id, acc)| ModuleProfileSample {
         module_id,
+        // u64 → f64: lossy past 2^53 ns (~104 days of accumulated time).
+        // The UI drains on a 1 s cadence, so per-window values are far
+        // below that ceiling. Revisit if the drain window is lengthened.
         self_ns: acc.self_ns as f64,
         total_ns: acc.total_ns as f64,
         ensure_calls_did_work: acc.ensure_calls_did_work,

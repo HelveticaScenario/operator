@@ -45,8 +45,10 @@ impl ModuleProfileAccum {
             .ensure_calls_did_work
             .saturating_add(other.ensure_calls_did_work);
         self.samples_processed = self.samples_processed.saturating_add(other.samples_processed);
-        // Mode is a static property; keep whichever is most recent.
-        self.mode = other.mode;
+        // Mode is write-once per module instance (assigned at construction
+        // by graph_analysis). Merges across drain windows must observe the
+        // same mode for the same id.
+        debug_assert_eq!(self.mode, other.mode);
     }
 }
 
@@ -75,9 +77,17 @@ pub fn set_sample_rate(rate: u32) {
 }
 
 struct Frame {
-    /// Pointer + len back into the wrapper's owned `id: String`. Valid for
-    /// the strict-LIFO lifetime of this frame because the wrapper is alive
-    /// across its own `ensure_processed_to` call.
+    /// Pointer + len back into the wrapper's owned `id: String`.
+    ///
+    /// # Safety contract
+    ///
+    /// Caller (`push_frame`) borrows from `&self.id` on a wrapper that is
+    /// guaranteed alive across the matching `pop_frame` call because the
+    /// wrapper is the one executing `ensure_processed_to`. The wrapper's
+    /// `id: String` is **write-once** — set in the generated constructor
+    /// and never reassigned, mutated, or replaced. If a future change adds
+    /// an id setter, reallocates the `String` (`push_str`, `clear`, etc.),
+    /// or hands out `&mut self.id`, this becomes UB.
     id_ptr: *const u8,
     id_len: usize,
     mode: ProcessingMode,
@@ -110,19 +120,26 @@ thread_local! {
 /// Refresh the thread-local enable mirror. Called once per audio callback
 /// at the top, before any module processing. Honours the sample-rate knob.
 pub fn refresh_enabled() {
-    if !ENABLED.load(Ordering::Relaxed) {
-        ENABLED_TLS.with(|c| c.set(false));
-        return;
-    }
-    let rate = SAMPLE_RATE.load(Ordering::Relaxed).max(1);
-    let count = CALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let on = count.is_multiple_of(rate);
+    let global_on = ENABLED.load(Ordering::Relaxed);
+    let on = if global_on {
+        let rate = SAMPLE_RATE.load(Ordering::Relaxed).max(1);
+        let count = CALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
+        count.is_multiple_of(rate)
+    } else {
+        false
+    };
     ENABLED_TLS.with(|c| c.set(on));
-    if !on {
-        // Defensive: clear leftover stack state. Push/pop should be
-        // balanced, so this is a no-op in practice.
-        PROFILER.with(|p| p.borrow_mut().stack.clear());
-    }
+    // Defensive: a panic inside `inner.update` unwinds past the wrapper's
+    // matching `pop_frame`, leaving stale frames on the stack and a stale
+    // `last_resume` on the parent. The audio panic guard catches the
+    // unwind; this clears the residue on the next callback so the next
+    // active window starts clean. No-op when push/pop balanced.
+    PROFILER.with(|p| {
+        let mut prof = p.borrow_mut();
+        if !prof.stack.is_empty() {
+            prof.stack.clear();
+        }
+    });
 }
 
 /// Called on entry to a wrapper's `ensure_processed_to`, after cache-hit
@@ -223,6 +240,12 @@ pub fn flush_into(dst: &ModuleProfileCollection) {
 
 /// Drain and return the shared cross-thread snapshot. Caller (UI) gets
 /// the accumulated stats since its last drain.
+///
+/// Uses the blocking `lock()` rather than `try_lock`. The audio thread
+/// holds the lock only for the duration of a `mem::take`-equivalent drain
+/// in `flush_into`, so contention is bounded by a single short critical
+/// section. A blocking acquire here is preferable to a try-and-drop because
+/// the UI poll cadence (1 Hz) cannot afford to silently miss a window.
 pub fn drain_collection(src: &ModuleProfileCollection) -> Vec<(String, ModuleProfileAccum)> {
     let mut guard = src.lock();
     let map = std::mem::take(&mut *guard);

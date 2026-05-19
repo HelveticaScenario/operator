@@ -869,6 +869,10 @@ pub struct AudioState {
   /// callback end (see `modular_core::profiling::flush_into`); main thread
   /// drains via `get_module_profile`.
   module_profile_collection: ModuleProfileCollection,
+  /// Refcount of enable requests. The underlying profiling global is on
+  /// iff this is > 0. Lets multiple consumers (UI panel, future telemetry
+  /// hooks) coexist without one clobbering another's enable state.
+  module_profiling_enable_count: Arc<AtomicU32>,
 }
 
 #[derive(Default)]
@@ -910,6 +914,7 @@ impl AudioState {
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
       block_size,
       module_profile_collection: modular_core::profiling::new_collection(),
+      module_profiling_enable_count: Arc::new(AtomicU32::new(0)),
     }
   }
 
@@ -993,10 +998,32 @@ impl AudioState {
     }
   }
 
-  /// Enable / disable per-module profiling. Flips a global atomic the audio
-  /// thread checks once per callback.
+  /// Enable / disable per-module profiling. Refcounted: each `true` must
+  /// be balanced by a `false`. The underlying profiling global is on iff
+  /// the refcount is > 0, so multiple consumers (UI panel + future
+  /// telemetry, etc.) can coexist without one clobbering another's state.
   pub fn set_module_profiling_enabled(&self, on: bool) {
-    modular_core::profiling::set_enabled(on);
+    if on {
+      let prev = self
+        .module_profiling_enable_count
+        .fetch_add(1, Ordering::Relaxed);
+      if prev == 0 {
+        modular_core::profiling::set_enabled(true);
+      }
+    } else {
+      let prev = self
+        .module_profiling_enable_count
+        .fetch_sub(1, Ordering::Relaxed);
+      if prev == 1 {
+        modular_core::profiling::set_enabled(false);
+      } else if prev == 0 {
+        // Unbalanced disable — restore the counter and ignore so callers
+        // who forget a prior enable don't underflow the global.
+        self
+          .module_profiling_enable_count
+          .store(0, Ordering::Relaxed);
+      }
+    }
   }
 
   /// Profile 1-of-N audio callbacks. 1 = every callback.
