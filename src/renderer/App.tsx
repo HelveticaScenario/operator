@@ -8,6 +8,7 @@ import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
+import { CommandPalette } from './components/CommandPalette';
 import './App.css';
 // Import type { editor } from 'monaco-editor';
 import { editor } from 'monaco-editor';
@@ -129,6 +130,7 @@ function App() {
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+    const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
         ValidationError[] | null
@@ -147,6 +149,11 @@ function App() {
     const pendingUpdateVersion = useRef('');
 
     const editorRef = useRef<editor.IStandaloneCodeEditor>(null);
+    // Mirror of editorRef as state so children that need to react when the
+    // editor mounts/unmounts (e.g., the command palette enumerating Monaco
+    // editor actions) can subscribe instead of reading the ref during render.
+    const [paletteEditor, setPaletteEditor] =
+        useState<editor.IStandaloneCodeEditor | null>(null);
     const scopeCanvasMapRef = useRef(new Map<string, HTMLCanvasElement>());
     const lastPatchResultRef = useRef<any>(null);
 
@@ -919,6 +926,13 @@ function App() {
             },
             { label: 'Open Settings', category: 'Preferences' },
         );
+        registerCommand(
+            'operator.showCommandPalette',
+            () => {
+                setIsPaletteOpen(true);
+            },
+            { label: 'Show Command Palette', category: 'View' },
+        );
 
         return () => {
             unregisterCommand('operator.updatePatch');
@@ -929,6 +943,7 @@ function App() {
             unregisterCommand('operator.save');
             unregisterCommand('operator.openWorkspace');
             unregisterCommand('operator.openSettings');
+            unregisterCommand('operator.showCommandPalette');
         };
     }, []);
 
@@ -1069,6 +1084,12 @@ function App() {
 
             <AudioPanicDialog />
 
+            <CommandPalette
+                open={isPaletteOpen}
+                onOpenChange={setIsPaletteOpen}
+                editor={paletteEditor}
+            />
+
             <main className="app-main">
                 {!workspaceRoot ? (
                     <div className="empty-state">
@@ -1088,6 +1109,7 @@ function App() {
                                 currentFile={activeBufferId}
                                 onChange={handlePatchChange}
                                 editorRef={editorRef}
+                                onEditorChange={setPaletteEditor}
                                 scopeViews={scopeViews}
                                 // oxlint-disable-next-line react-hooks-js/refs -- intentional: live Monaco decoration collection mutated outside React
                                 scopeDecorations={scopeDecorationsRef.current}

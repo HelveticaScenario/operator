@@ -1,0 +1,103 @@
+/**
+ * Build the unified command-palette item list shown by `CommandPalette`.
+ *
+ * Sources merged each time the palette opens:
+ *   1. Every entry in the Operator command registry (label + category).
+ *   2. When a Monaco editor instance exists, every action returned by
+ *      `editor.getSupportedActions()` that reports `isSupported() === true`.
+ *
+ * Monaco actions get a fixed `"Editor"` category badge so they sort together
+ * in the palette UI and so users can quickly tell them apart from Operator
+ * commands.
+ *
+ * See `~/.claude/plans/operator-is-at-its-goofy-mist.md` Phase 2.1a.
+ */
+import type { editor } from 'monaco-editor';
+
+import {
+    executeCommand,
+    listCommands,
+    type CommandMetadata,
+} from './commands';
+
+/**
+ * A single row in the cmdk palette. `kind` discriminates between the two
+ * dispatch paths so the consumer doesn't need to know about Monaco actions
+ * directly.
+ */
+export type PaletteItem =
+    | {
+          kind: 'command';
+          id: string;
+          label: string;
+          category?: string;
+          when?: string;
+          run: () => void;
+      }
+    | {
+          kind: 'editor-action';
+          id: string;
+          label: string;
+          category: 'Editor';
+          run: () => void;
+      };
+
+function operatorItem(
+    id: string,
+    metadata: CommandMetadata | undefined,
+): PaletteItem {
+    return {
+        kind: 'command',
+        id,
+        label: metadata?.label ?? id,
+        category: metadata?.category,
+        when: metadata?.when,
+        run: () => {
+            executeCommand(id);
+        },
+    };
+}
+
+function editorActionItem(
+    action: editor.IEditorAction,
+): PaletteItem | null {
+    if (!action.isSupported()) {
+        return null;
+    }
+    const label = action.label?.trim() || action.id;
+    return {
+        kind: 'editor-action',
+        id: action.id,
+        label,
+        category: 'Editor',
+        run: () => {
+            void action.run();
+        },
+    };
+}
+
+/**
+ * Build the merged item list. Pass the current editor instance (if any) so
+ * Monaco's editor actions can be enumerated; with zero buffers open and
+ * therefore no editor, the result contains only Operator commands.
+ */
+export function buildPaletteItems(
+    activeEditor: editor.ICodeEditor | null,
+): PaletteItem[] {
+    const items: PaletteItem[] = [];
+
+    for (const { id, metadata } of listCommands()) {
+        items.push(operatorItem(id, metadata));
+    }
+
+    if (activeEditor) {
+        for (const action of activeEditor.getSupportedActions()) {
+            const item = editorActionItem(action);
+            if (item) {
+                items.push(item);
+            }
+        }
+    }
+
+    return items;
+}
