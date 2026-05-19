@@ -36,6 +36,11 @@ import {
     scopeBufferKeyToString,
 } from './app/oscilloscope';
 import { useEditorBuffers } from './app/hooks/useEditorBuffers';
+import {
+    executeCommand,
+    registerCommand,
+    unregisterCommand,
+} from './keybindings/commands';
 
 /**
  * Transform validation errors to use source line numbers instead of module IDs
@@ -832,31 +837,128 @@ function App() {
         [closeBuffer],
     );
 
+    // Refs keep command handlers stable across renders so the registration
+    // effect below only needs to run once. Anything captured by closure must
+    // funnel through a ref or it goes stale between renders.
+    const activeBufferIdRef = useRef(activeBufferId);
     useEffect(() => {
-        const cleanupNewFile = electronAPI.onMenuNewFile(() => {
-            createUntitledFile();
-        });
-        const cleanupSave = electronAPI.onMenuSave(() => {
-            handleSaveFileRef.current();
-        });
-        const cleanupStop = electronAPI.onMenuStop(() => {
-            handleStopRef.current();
-        });
-        const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
-            handleSubmitRef.current('NextBar');
-        });
-        const cleanupUpdateNextBeat = electronAPI.onMenuUpdatePatchNextBeat(
+        activeBufferIdRef.current = activeBufferId;
+    }, [activeBufferId]);
+
+    const handleCloseBufferRef = useRef(handleCloseBuffer);
+    useEffect(() => {
+        handleCloseBufferRef.current = handleCloseBuffer;
+    }, [handleCloseBuffer]);
+
+    const createUntitledFileRef = useRef(createUntitledFile);
+    useEffect(() => {
+        createUntitledFileRef.current = createUntitledFile;
+    }, [createUntitledFile]);
+
+    // Register operator.* commands in the global registry. The Electron menu
+    // IPC dispatchers below, the future cmdk palette (2.1a), the Radix context
+    // menu (2.1b), and the tinykeys keymap (2.3) all dispatch through
+    // `executeCommand` — single source of truth for what each command does.
+    useEffect(() => {
+        registerCommand(
+            'operator.updatePatch',
+            () => {
+                handleSubmitRef.current('NextBar');
+            },
+            { label: 'Update Patch', category: 'Patch' },
+        );
+        registerCommand(
+            'operator.updatePatchNextBeat',
             () => {
                 handleSubmitRef.current('NextBeat');
             },
+            { label: 'Update Patch (Next Beat)', category: 'Patch' },
+        );
+        registerCommand(
+            'operator.stop',
+            () => {
+                handleStopRef.current();
+            },
+            { label: 'Stop', category: 'Patch' },
+        );
+        registerCommand(
+            'operator.newFile',
+            () => {
+                createUntitledFileRef.current();
+            },
+            { label: 'New File', category: 'File' },
+        );
+        registerCommand(
+            'operator.closeBuffer',
+            () => {
+                const id = activeBufferIdRef.current;
+                if (id) {
+                    void handleCloseBufferRef.current(id);
+                }
+            },
+            { label: 'Close Buffer', category: 'File' },
+        );
+        registerCommand(
+            'operator.save',
+            () => {
+                handleSaveFileRef.current();
+            },
+            { label: 'Save', category: 'File' },
+        );
+        registerCommand(
+            'operator.openWorkspace',
+            () => {
+                handleOpenWorkspaceRef.current();
+            },
+            { label: 'Open Workspace…', category: 'File' },
+        );
+        registerCommand(
+            'operator.openSettings',
+            () => {
+                setIsSettingsOpen(true);
+            },
+            { label: 'Open Settings', category: 'Preferences' },
+        );
+
+        return () => {
+            unregisterCommand('operator.updatePatch');
+            unregisterCommand('operator.updatePatchNextBeat');
+            unregisterCommand('operator.stop');
+            unregisterCommand('operator.newFile');
+            unregisterCommand('operator.closeBuffer');
+            unregisterCommand('operator.save');
+            unregisterCommand('operator.openWorkspace');
+            unregisterCommand('operator.openSettings');
+        };
+    }, []);
+
+    useEffect(() => {
+        // Electron menu items dispatch through the registry so each handler
+        // body lives in exactly one place. Recording is not (yet) in the
+        // registry — toggling it depends on render-state isRecording, which
+        // belongs to Phase 2.2's context-key service.
+        const cleanupNewFile = electronAPI.onMenuNewFile(() => {
+            executeCommand('operator.newFile');
+        });
+        const cleanupSave = electronAPI.onMenuSave(() => {
+            executeCommand('operator.save');
+        });
+        const cleanupStop = electronAPI.onMenuStop(() => {
+            executeCommand('operator.stop');
+        });
+        const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
+            executeCommand('operator.updatePatch');
+        });
+        const cleanupUpdateNextBeat = electronAPI.onMenuUpdatePatchNextBeat(
+            () => {
+                executeCommand('operator.updatePatchNextBeat');
+            },
         );
         const cleanupOpenWorkspace = electronAPI.onMenuOpenWorkspace(() => {
-            handleOpenWorkspaceRef.current();
+            executeCommand('operator.openWorkspace');
         });
         const cleanupCloseBuffer = electronAPI.onMenuCloseBuffer(() => {
-            if (activeBufferId) {
-                void handleCloseBuffer(activeBufferId);
-            }
+            executeCommand('operator.closeBuffer');
         });
         const cleanupToggleRecording = electronAPI.onMenuToggleRecording(() => {
             if (isRecording) {
@@ -870,7 +972,7 @@ function App() {
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
-            setIsSettingsOpen(true);
+            executeCommand('operator.openSettings');
         });
         const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
             () => {
@@ -890,13 +992,7 @@ function App() {
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
         };
-    }, [
-        activeBufferId,
-        handleCloseBuffer,
-        isRecording,
-        buffers,
-        createUntitledFile,
-    ]);
+    }, [isRecording]);
 
     // Ctrl+Enter (and Ctrl+Shift+Enter) are reserved for patch updates.
     // Browsers activate a focused <button> on Enter regardless of modifier
