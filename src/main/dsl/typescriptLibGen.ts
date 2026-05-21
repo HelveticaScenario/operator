@@ -436,6 +436,26 @@ interface ModuleOutput {
    */
   shift(offset: Poly<Signal>): Collection;
 
+  /**
+   * Offset this pitch by an absolute frequency amount, in Hz. The V/Oct signal
+   * is converted to Hz, the offset added, then converted back. Creates an
+   * $addHz module internally.
+   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @returns The retuned {@link Collection} for chaining
+   * @example $saw('C4').addHz(0.5)  // slight detune
+   */
+  addHz(offset: Poly<Signal>): Collection;
+
+  /**
+   * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
+   * The V/Oct signal is converted to Hz, multiplied, then converted back.
+   * Creates a $mulHz module internally.
+   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @returns The retuned {@link Collection} for chaining
+   * @example $saw('C4').mulHz(1.5)  // up a just fifth
+   */
+  mulHz(factor: Poly<Signal>): Collection;
+
     /**
      * Scale the signal by a factor with a perceptual (audio taper) curve
      * (5 = unity, 0 = silence).
@@ -629,6 +649,20 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @see {@link ModuleOutput.shift}
    */
   shift(offset: Poly<Signal>): Collection;
+
+  /**
+   * Offset all pitches by an absolute frequency amount, in Hz.
+   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @see {@link ModuleOutput.addHz}
+   */
+  addHz(offset: Poly<Signal>): Collection;
+
+  /**
+   * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
+   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @see {@link ModuleOutput.mulHz}
+   */
+  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale all signals by a factor with a perceptual (audio taper) curve

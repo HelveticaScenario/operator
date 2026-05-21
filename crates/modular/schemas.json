@@ -4925,6 +4925,122 @@
     ]
   },
   {
+    "name": "$addHz",
+    "documentation": "Offsets a pitch by an absolute frequency amount, in Hz.\n\nThe input V/Oct pitch is converted to Hz, **offset** Hz is added, then the\nresult is converted back to V/Oct. Useful for audible beating detune.\n\n```js\n// detune a saw by +0.5 Hz for slow beating\n$addHz($saw('C4'), 0.5)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AddHzParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "V/Oct pitch signal to detune",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "offset": {
+          "description": "frequency offset added to the input pitch, in Hz",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input",
+        "offset"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "V/Oct pitch output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "V/Oct pitch signal to detune",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "offset",
+        "description": "frequency offset added to the input pitch, in Hz",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "offset"
+      }
+    ]
+  },
+  {
     "name": "$adsr",
     "documentation": "An Attack-Decay-Sustain-Release envelope generator.\n\nGenerates a control voltage envelope driven by a **gate** input.\nWhen the gate goes high (>1V) the envelope enters the attack phase;\nwhen the gate goes low it enters release.\n\n- **attack** / **decay** / **release** — time in seconds\n- **sustain** — level in volts (0–5V)\n\nOutput range is **0–5V**.\n\n## Example\n\n```js\nconst env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.2, sustain: 3, release: 0.5 })\n$sine('c4').amplitude(env).out()\n```",
     "paramsSchema": {
@@ -6341,6 +6457,122 @@
     ]
   },
   {
+    "name": "$mulHz",
+    "documentation": "Multiplies a pitch's frequency by a factor.\n\nThe input V/Oct pitch is converted to Hz, multiplied by **factor**, then the\nresult is converted back to V/Oct. A factor of 1.5 is a just perfect fifth.\n\n```js\n// up a just fifth\n$mulHz($saw('C4'), 1.5)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MulHzParams",
+      "type": "object",
+      "properties": {
+        "factor": {
+          "description": "frequency multiplier (1 = unity, 2 = octave up, 0.5 = octave down)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "V/Oct pitch signal to scale",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input",
+        "factor"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "V/Oct pitch output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "V/Oct pitch signal to scale",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "factor",
+        "description": "frequency multiplier (1 = unity, 2 = octave up, 0.5 = octave down)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "factor"
+      }
+    ]
+  },
+  {
     "name": "$remap",
     "documentation": "Linearly rescales a signal from one voltage range to another.\n\nMaps **input** from \\[inMin, inMax\\] to \\[outMin, outMax\\]. Useful for\nconverting between different voltage standards or reshaping control\nsignals.\n\n```js\n// convert a 0–5 V envelope to a -5–5 V bipolar signal\n$remap(env, -5, 5, 0, 5)\n\n// convert a -5–5 V signal to 0–1 V\n$remap(signal, 0, 1, -5, 5)\n```",
     "paramsSchema": {
@@ -6859,7 +7091,7 @@
   },
   {
     "name": "$quantizer",
-    "documentation": "Snaps a V/Oct signal to the nearest note in a given scale.\n\nFeed any continuous pitch signal into **input** and choose a **scale** —\nthe output locks to the closest scale degree. A **trig** pulse fires\nwhenever the quantized note changes, useful for re-triggering envelopes.\n\nScale format examples:\n- `\"chromatic\"` — all 12 semitones\n- `\"C(major)\"` — C major scale\n- `\"C#(minor)\"` — C# minor scale\n- `\"D(0 2 4 5 7 9 11)\"` — custom intervals from root\n\n```js\n// quantize a random signal to C major\n$sine($quantizer($sine(\".1hz\").range(0,3), \"C(major)\"))\n```",
+    "documentation": "Snaps a V/Oct signal to the nearest note in a given scale.\n\nFeed any continuous pitch signal into **input** and choose a **scale** —\nthe output locks to the closest scale degree. A **trig** pulse fires\nwhenever the quantized note changes, useful for re-triggering envelopes.\n\nScale format examples:\n- `\"chromatic\"` — all 12 semitones\n- `\"C(major)\"` — C major scale\n- `\"C#(minor)\"` — C# minor scale\n- `\"D(0 2 4 5 7 9 11)\"` — custom intervals from root\n- `\"C(just)\"` / `\"C(pythagorean)\"` — 12-tone non-equal tunings\n- `\"C(just 0 3 4 8)\"` — custom intervals tuned with just intonation\n\n```js\n// quantize a random signal to C major\n$sine($quantizer($sine(\".1hz\").range(0,3), \"C(major)\"))\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "QuantizerParams",
@@ -7894,7 +8126,7 @@
         },
         "scale": {
           "description": "scale for quantizing degrees to pitches (supports optional octave, e.g. \"c3(major)\")",
-          "$ref": "#/$defs/IntervalScaleParam"
+          "$ref": "#/$defs/ScaleParam"
         }
       },
       "required": [
@@ -7916,9 +8148,6 @@
             }
           ]
         },
-        "IntervalScaleParam": {
-          "type": "string"
-        },
         "MonoSignal": {
           "anyOf": [
             {
@@ -7931,6 +8160,9 @@
               }
             }
           ]
+        },
+        "ScaleParam": {
+          "type": "string"
         },
         "Signal": {
           "anyOf": [

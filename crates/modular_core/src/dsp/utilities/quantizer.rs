@@ -15,7 +15,7 @@ use crate::{
     types::Connect,
 };
 
-use super::scale::{FixedRoot, ScaleSnapper, validate_scale_type};
+use super::scale::{FixedRoot, ScaleSnapper, et_tuning, named_tuning, validate_scale_type};
 
 /// Hysteresis amount in V/Oct (~10 cents).
 /// Once a note is selected, the input must overshoot the snap boundary by this
@@ -30,15 +30,16 @@ const HYSTERESIS_VOCT: f64 = 10.0 / 1200.0;
 /// - `"C(major)"` - C major scale (root + scale type)
 /// - `"C#(minor)"` - C# minor scale
 /// - `"D(0 2 4 5 7 9 11)"` - D with custom intervals (semitones from root)
+/// - `"C(just)"` / `"C(pythagorean)"` (alias `pythag`) - 12-tone non-equal tunings
+/// - `"C(just 0 3 4 8)"` - custom intervals tuned with just intonation
 ///
-/// Octave syntax (e.g. `"C3(major)"`) is **not** supported here.
-/// Use [`parse_with_octave`] for contexts that need an octave-aware root.
+/// An optional octave in the root (e.g. `"C3(major)"`, `"Db3(min)"`) is accepted.
 #[derive(Clone, Debug)]
 pub struct ScaleParam {
     snapper: Option<Arc<ScaleSnapper>>,
     source: String,
     /// Base MIDI note for degree 0 (default 60 = C4).
-    /// Computed from the root note + optional octave (when using parse_with_octave).
+    /// Computed from the root note + optional octave.
     base_midi: i32,
 }
 
@@ -61,21 +62,9 @@ impl Default for ScaleParam {
 }
 
 impl ScaleParam {
-    /// Parse a scale specification string. Octaves in the root are **not** allowed;
-    /// use [`parse_with_octave`] for contexts that support them.
+    /// Parse a scale specification string. An optional octave in the root
+    /// (e.g. `"C3(major)"`, `"Db3(min)"`) is accepted.
     pub fn parse(source: &str) -> Option<Self> {
-        let result = Self::parse_inner(source, false)?;
-        Some(result)
-    }
-
-    /// Parse a scale specification string, allowing an optional octave in the
-    /// root (e.g. `"C3(major)"`, `"Db3(min)"`).
-    pub fn parse_with_octave(source: &str) -> Option<Self> {
-        Self::parse_inner(source, true)
-    }
-
-    /// Shared parse implementation.
-    fn parse_inner(source: &str, allow_octave: bool) -> Option<Self> {
         let source = source.trim();
 
         if source.is_empty() {
@@ -87,7 +76,7 @@ impl ScaleParam {
         }
 
         // Handle "chromatic" specially
-        if source.to_lowercase() == "chromatic" {
+        if source.eq_ignore_ascii_case("chromatic") {
             let root = FixedRoot::new('c', None);
             let snapper = ScaleSnapper::new(&root, "chromatic")?;
             return Some(Self {
@@ -109,30 +98,30 @@ impl ScaleParam {
         let scale_spec = &source[open_paren + 1..close_paren];
 
         let root = FixedRoot::parse(root_str)?;
-
-        // Reject octave when not allowed
-        if !allow_octave && root.octave.is_some() {
-            return None;
-        }
-
         let base_midi = root.base_midi();
 
         // Check if scale_spec is a known scale type or custom intervals
         let snapper = if is_known_scale_type(scale_spec) {
             ScaleSnapper::new(&root, scale_spec)?
         } else {
-            // Try to parse as space-separated intervals
-            let intervals: Option<Vec<i8>> = scale_spec
-                .split_whitespace()
-                .map(|s| s.parse::<i8>().ok())
-                .collect();
+            // Custom intervals, optionally prefixed by a tuning keyword:
+            // "0 2 4" (12-TET), "just 0 3 4 8", "pythag 0 5 7".
+            let mut tokens = scale_spec.split_whitespace().peekable();
+            let tuning = match named_tuning(tokens.peek()?) {
+                Some(tuning) => {
+                    tokens.next();
+                    tuning
+                }
+                None => et_tuning(),
+            };
 
-            let intervals = intervals?;
+            let intervals: Vec<i8> =
+                tokens.map(|s| s.parse::<i8>().ok()).collect::<Option<_>>()?;
             if intervals.is_empty() {
                 return None;
             }
 
-            ScaleSnapper::from_intervals(&root, &intervals)
+            ScaleSnapper::from_intervals(&root, &intervals, tuning)
         };
 
         Some(Self {
@@ -149,8 +138,8 @@ impl ScaleParam {
 
     /// Get the base MIDI note for degree 0.
     ///
-    /// When an octave is specified via [`parse_with_octave`] (e.g. "C3(major)"),
-    /// this returns the MIDI note for that root+octave (e.g. 48 for C3).
+    /// When an octave is specified in the root (e.g. "C3(major)"), this returns
+    /// the MIDI note for that root+octave (e.g. 48 for C3).
     /// Without an octave, defaults to octave 4 (MIDI 60 for C).
     pub fn base_midi(&self) -> i32 {
         self.base_midi
@@ -258,6 +247,8 @@ impl Default for QuantizerState {
 /// - `"C(major)"` — C major scale
 /// - `"C#(minor)"` — C# minor scale
 /// - `"D(0 2 4 5 7 9 11)"` — custom intervals from root
+/// - `"C(just)"` / `"C(pythagorean)"` — 12-tone non-equal tunings
+/// - `"C(just 0 3 4 8)"` — custom intervals tuned with just intonation
 ///
 /// ```js
 /// // quantize a random signal to C major
@@ -374,23 +365,50 @@ mod tests {
     }
 
     #[test]
-    fn test_scale_param_parse_rejects_octave() {
-        assert!(ScaleParam::parse("C3(major)").is_none());
-        assert!(ScaleParam::parse("Db3(min)").is_none());
-    }
-
-    #[test]
     fn test_scale_param_parse_with_octave() {
-        let scale = ScaleParam::parse_with_octave("C3(major)").unwrap();
+        let scale = ScaleParam::parse("C3(major)").unwrap();
         assert_eq!(scale.base_midi(), 48);
         assert!(scale.snapper().is_some());
 
-        let scale = ScaleParam::parse_with_octave("Db3(min)").unwrap();
+        let scale = ScaleParam::parse("Db3(min)").unwrap();
         assert_eq!(scale.base_midi(), 49);
 
         // Without octave still works and defaults to 4
-        let scale = ScaleParam::parse_with_octave("C(major)").unwrap();
+        let scale = ScaleParam::parse("C(major)").unwrap();
         assert_eq!(scale.base_midi(), 60);
+    }
+
+    #[test]
+    fn test_scale_param_parse_just_pythagorean() {
+        let just = ScaleParam::parse("C(just)").unwrap();
+        assert!(just.snapper().is_some());
+
+        let pyth = ScaleParam::parse("D3(pythagorean)").unwrap();
+        assert!(pyth.snapper().is_some());
+        assert_eq!(pyth.base_midi(), 50); // D3
+
+        // "pythag" alias
+        assert!(ScaleParam::parse("A(pythag)").unwrap().snapper().is_some());
+    }
+
+    #[test]
+    fn test_scale_param_parse_tuned_intervals() {
+        // Tuning keyword prefixing custom intervals.
+        let just = ScaleParam::parse("C(just 0 3 4 8)").unwrap();
+        let just_snapper = just.snapper().unwrap();
+        assert_eq!(just_snapper.scale_intervals().as_slice(), &[0, 3, 4, 8]);
+        // The major-third degree (E4) snaps with the just 5/4 ratio.
+        assert!((just_snapper.snap_voct(4.0 / 12.0) - 1.25_f64.log2()).abs() < 1e-9);
+
+        // Pythagorean alias as a prefix works too.
+        let pyth = ScaleParam::parse("C(pythag 0 5 7)").unwrap();
+        assert!(pyth.snapper().is_some());
+
+        // Without a keyword, intervals stay 12-TET.
+        let et = ScaleParam::parse("C(0 3 4 8)").unwrap();
+        let et_snapper = et.snapper().unwrap();
+        assert_eq!(et_snapper.scale_intervals().as_slice(), &[0, 3, 4, 8]);
+        assert!((et_snapper.snap_voct(4.0 / 12.0) - 4.0 / 12.0).abs() < 1e-9);
     }
 
     #[test]

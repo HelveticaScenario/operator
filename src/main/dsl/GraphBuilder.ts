@@ -234,6 +234,36 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
     }
 
     /**
+     * Offset all pitches by an absolute frequency amount, in Hz.
+     * Creates an $addHz module internally.
+     */
+    addHz(offset: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        const factory = this.items[0].builder.getFactory('$addHz');
+        if (!factory) {
+            throw new Error('Factory for util.addHz not registered');
+        }
+        return factory(this.items, offset) as Collection;
+    }
+
+    /**
+     * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
+     * Creates a $mulHz module internally.
+     */
+    mulHz(factor: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        const factory = this.items[0].builder.getFactory('$mulHz');
+        if (!factory) {
+            throw new Error('Factory for util.mulHz not registered');
+        }
+        return factory(this.items, factor) as Collection;
+    }
+
+    /**
      * Scale all outputs by a factor with a perceptual (audio taper) curve
      * (5 = unity, 0 = silence). Chains $curve → $scaleAndShift with exponent 3.
      *
@@ -1155,6 +1185,28 @@ export class ModuleOutput {
     shift(offset: PolySignal): Collection {
         const factory = this.builder.getFactory('$scaleAndShift');
         return factory(this, undefined, offset) as Collection;
+    }
+
+    /**
+     * Offset this pitch by an absolute frequency amount, in Hz.
+     *
+     * The V/Oct signal is converted to Hz, the offset is added, then the
+     * result is converted back to V/Oct. Creates an $addHz module.
+     */
+    addHz(offset: PolySignal): Collection {
+        const factory = this.builder.getFactory('$addHz');
+        return factory(this, offset) as Collection;
+    }
+
+    /**
+     * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
+     *
+     * The V/Oct signal is converted to Hz, multiplied, then converted back
+     * to V/Oct. Creates a $mulHz module.
+     */
+    mulHz(factor: PolySignal): Collection {
+        const factory = this.builder.getFactory('$mulHz');
+        return factory(this, factor) as Collection;
     }
 
     /**

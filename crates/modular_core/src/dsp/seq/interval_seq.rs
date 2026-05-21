@@ -28,61 +28,6 @@ use crate::{
     types::Connect,
 };
 
-/// Scale parameter for IntervalSeq that supports an optional octave in the root.
-///
-/// Wraps [`ScaleParam`] but deserializes via `parse_with_octave`, accepting
-/// syntax like `"C3(major)"` or `"Db3(min)"` in addition to `"C(major)"`.
-#[derive(Clone, Debug)]
-struct IntervalScaleParam(ScaleParam);
-
-impl Default for IntervalScaleParam {
-    fn default() -> Self {
-        Self(ScaleParam::parse_with_octave("C(major)").unwrap())
-    }
-}
-
-impl schemars::JsonSchema for IntervalScaleParam {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("IntervalScaleParam")
-    }
-    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        String::json_schema(_gen)
-    }
-}
-
-impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalScaleParam {
-    fn deserialize_from_value<V: deserr::IntoValue>(
-        value: deserr::Value<V>,
-        location: deserr::ValuePointerRef<'_>,
-    ) -> std::result::Result<Self, E> {
-        let source = String::deserialize_from_value(value, location)?;
-        crate::dsp::utilities::quantizer::ScaleParam::parse_with_octave(&source)
-            .map(Self)
-            .ok_or_else(|| {
-                deserr::take_cf_content(E::error::<V>(
-                    None,
-                    deserr::ErrorKind::Unexpected {
-                        msg: format!("Invalid scale specification: {}", source),
-                    },
-                    location,
-                ))
-            })
-    }
-}
-
-impl Connect for IntervalScaleParam {
-    fn connect(&mut self, _patch: &Patch) {}
-    fn collect_cables(&self, _sink: &mut Vec<String>) {}
-    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
-}
-
-impl std::ops::Deref for IntervalScaleParam {
-    type Target = ScaleParam;
-    fn deref(&self) -> &ScaleParam {
-        &self.0
-    }
-}
-
 /// Value type for interval patterns: either a degree or rest.
 #[derive(Clone, Debug)]
 pub enum IntervalValue {
@@ -464,7 +409,7 @@ pub struct IntervalSeqParams {
     /// pattern string or an array of pattern strings
     patterns: IntervalPatternParam,
     /// scale for quantizing degrees to pitches (supports optional octave, e.g. "c3(major)")
-    scale: IntervalScaleParam,
+    scale: ScaleParam,
     /// playhead position
     #[default_connection(module = RootClock, port = "playhead", channels = [0, 1])]
     #[signal(range = (0.0, 1.0))]
@@ -712,6 +657,9 @@ struct IntervalSeqState {
     scale_intervals: ArrayVec<i8, CAP>,
     /// Base MIDI note for degree 0 (includes root pitch class + octave)
     base_midi: i32,
+    /// Cached tuning table: V/Oct offset of each chromatic step above the root.
+    /// 12-TET by default; non-equal for just / Pythagorean scales.
+    tuning: [f64; 12],
     /// Last CV voltage per channel — holds through rest periods and state transfers
     last_cv: [f32; PORT_MAX_CHANNELS],
     /// Scratch buffer for onset events — reused each frame to avoid heap alloc
@@ -728,6 +676,7 @@ impl Default for IntervalSeqState {
             module_cache: Vec::new(),
             scale_intervals: [0, 2, 4, 5, 7, 9, 11].into_iter().collect(), // Default major scale
             base_midi: 60,                                                 // C4
+            tuning: std::array::from_fn(|i| i as f64 / 12.0),              // 12-TET
             last_cv: [0.0; PORT_MAX_CHANNELS],
             events_to_process: ArrayVec::new(),
         }
@@ -837,21 +786,31 @@ impl IntervalSeq {
             .copied()
             .unwrap_or(0) as i32;
 
-        // Total MIDI note: base_midi (root + octave) + degree_octave*12 + semitone_in_scale
-        let midi = self.state.base_midi + (octave * 12) + semitone_in_scale;
-
-        midi_to_voct_f64(midi as f64)
+        // Voltage = root + degree octave + the tuning table's offset for this step.
+        // Under 12-TET this is identical to midi_to_voct_f64(base_midi + octave*12 + step).
+        // `semitone_in_scale` is always 0..11 (normalized scale intervals); `get`
+        // keeps a stray value from panicking on the audio thread.
+        let root_v = (self.state.base_midi - 60) as f64 / 12.0;
+        let step_v = self
+            .state
+            .tuning
+            .get(semitone_in_scale as usize)
+            .copied()
+            .unwrap_or(0.0);
+        root_v + octave as f64 + step_v
     }
 
     /// Update cached scale info from params.
     fn update_scale_cache(&mut self) {
-        let scale: &ScaleParam = &self.params.scale;
+        let scale = &self.params.scale;
         self.state.base_midi = scale.base_midi();
         if let Some(snapper) = scale.snapper() {
             self.state.scale_intervals = snapper.scale_intervals().clone();
+            self.state.tuning = *snapper.tuning();
         } else {
-            // Chromatic - all 12 semitones
+            // Chromatic - all 12 semitones, 12-TET
             self.state.scale_intervals = (0i8..CAP as i8).into_iter().collect();
+            self.state.tuning = std::array::from_fn(|i| i as f64 / 12.0);
         }
     }
 }
@@ -1078,7 +1037,7 @@ impl Default for IntervalSeqParams {
     fn default() -> Self {
         Self {
             patterns: IntervalPatternParam::default(),
-            scale: IntervalScaleParam::default(),
+            scale: ScaleParam::parse("C(major)").unwrap(),
             playhead: None,
             channels: default_channels(),
         }
@@ -1230,22 +1189,42 @@ mod tests {
     }
 
     #[test]
+    fn test_degree_to_voltage_just() {
+        use crate::dsp::utilities::scale::named_tuning;
+
+        let mut seq = IntervalSeq::default();
+        // 12-tone just scale rooted at C4.
+        seq.state.scale_intervals = (0i8..12).collect();
+        seq.state.base_midi = 60;
+        seq.state.tuning = named_tuning("just").unwrap();
+
+        // Degree 0 = root = 0V
+        assert!(seq.degree_to_voltage(0).abs() < 1e-9);
+        // Degree 4 = just major third = 5/4
+        assert!((seq.degree_to_voltage(4) - 1.25_f64.log2()).abs() < 1e-9);
+        // Degree 7 = just fifth = 3/2
+        assert!((seq.degree_to_voltage(7) - 1.5_f64.log2()).abs() < 1e-9);
+        // Degree 12 = octave up = exactly +1V
+        assert!((seq.degree_to_voltage(12) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn test_scale_param_with_octave() {
         use crate::dsp::utilities::quantizer::ScaleParam;
 
-        let scale = ScaleParam::parse_with_octave("C3(major)").unwrap();
+        let scale = ScaleParam::parse("C3(major)").unwrap();
         assert_eq!(scale.base_midi(), 48);
         assert!(scale.snapper().is_some());
 
-        let scale = ScaleParam::parse_with_octave("Db3(min)").unwrap();
+        let scale = ScaleParam::parse("Db3(min)").unwrap();
         assert_eq!(scale.base_midi(), 49);
         assert!(scale.snapper().is_some());
 
         // Without octave defaults to octave 4
-        let scale = ScaleParam::parse_with_octave("C(major)").unwrap();
+        let scale = ScaleParam::parse("C(major)").unwrap();
         assert_eq!(scale.base_midi(), 60);
 
-        let scale = ScaleParam::parse_with_octave("D(major)").unwrap();
+        let scale = ScaleParam::parse("D(major)").unwrap();
         assert_eq!(scale.base_midi(), 62);
     }
 
