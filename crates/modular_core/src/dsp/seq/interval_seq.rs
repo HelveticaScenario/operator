@@ -714,7 +714,7 @@ impl IntervalSeq {
 
         let module_idx = (cycle - 1000) as usize;
 
-        if module_idx >= self.state.module_cache.capacity() {
+        if module_idx >= self.state.module_cache.len() {
             self.state.module_cache.resize(module_idx + 1, None);
         }
 
