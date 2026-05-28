@@ -488,7 +488,8 @@ impl SeqPatternParam {
         })
     }
 
-    fn from_sp_payload(payload: SpPatternPayload) -> Result<Self, String> {
+    #[doc(hidden)]
+    pub fn from_sp_payload(payload: SpPatternPayload) -> Result<Self, String> {
         use crate::dsp::seq::interval_seq::{
             IntervalValue, add_interval_values, sub_interval_values,
         };
@@ -705,6 +706,51 @@ impl Connect for SeqPatternParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pattern_system::Fraction;
+
+    #[test]
+    fn test_sp_no_chain_two_atoms() {
+        let p = ParsedPatternPayload::parse_for_test("0 1");
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![p],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+        let pattern = parsed.pattern().expect("should have pattern");
+        let haps = pattern.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(haps.len(), 2, "expected 2 haps");
+        // Degrees 0 and 1 in C major → voltages 0 and 2/12.
+        let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
+        assert!((v[0] - 0.0).abs() < 1e-9);
+        assert!((v[1] - 2.0 / 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_sp_chain_add_in() {
+        let l = ParsedPatternPayload::parse_for_test("0 1");
+        let r = ParsedPatternPayload::parse_for_test("1");
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![l, r],
+            scale: "c(maj)".to_string(),
+            ops: vec![SpOp {
+                op: SpOpKind::Add,
+                mode: SpAlignmentMode::In,
+            }],
+            argument_spans: vec![],
+        };
+        let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+        let pattern = parsed.pattern().expect("should have pattern");
+        let haps = pattern.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(haps.len(), 2, "expected 2 haps");
+        // Left degrees [0, 1] + right degree 1 → [1, 2] → voltages 2/12, 4/12.
+        let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
+        assert!((v[0] - 2.0 / 12.0).abs() < 1e-9, "v[0]={}", v[0]);
+        assert!((v[1] - 4.0 / 12.0).abs() < 1e-9, "v[1]={}", v[1]);
+    }
 
     #[test]
     fn test_seq_value_to_voltage() {

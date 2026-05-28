@@ -577,12 +577,19 @@ export function analyzeArgumentSpans(
         // calls: register the RHS string literal span under the chain
         // method's call site so the TS chain method can capture it via
         // captureSourceLocation()+lookupArgumentSpan(loc, 'rhs').
+        //
+        // V8 reports the call site for property-access calls at the method
+        // name's position, not at the start of the receiver chain. Use the
+        // PropertyAccess name's start to match what the runtime sees.
         if (isSpChainCall(call)) {
             const pArgs = call.getArguments();
             if (pArgs.length < 1) return;
             const span = getTrackableSpan(pArgs[0], constMap);
             if (!span) return;
-            const callStartPos = call.getStart();
+            const callExpr = call.getExpression();
+            const callStartPos = Node.isPropertyAccessExpression(callExpr)
+                ? callExpr.getNameNode().getStart()
+                : call.getStart();
             const { line, column } =
                 sourceFile.getLineAndColumnAtPos(callStartPos);
             const columnOffset = line === 1 ? firstLineColumnOffset : 0;
