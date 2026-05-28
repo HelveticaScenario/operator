@@ -76,10 +76,16 @@ interface ScopeXYBackgroundProps {
      * clear each frame. Converted internally to `fadeAmount = 1 - persistence`.
      */
     persistence?: number;
+    /** Toggle GPU Lanczos upscaling. */
+    upsample?: boolean;
 }
 
 const DEFAULT_INTENSITY = 0.6;
-const DEFAULT_PERSISTENCE = 0.85;
+// 0.6 ≈ fadeAmount 0.4 — matches dood.al's default per-frame phosphor decay.
+// Higher values keep persistence trails visible much longer than the
+// reference; lower (toward 0) clears each frame.
+const DEFAULT_PERSISTENCE = 0.6;
+const DEFAULT_UPSAMPLE = true;
 
 /**
  * Full-bleed Lissajous oscilloscope canvas that lives behind the editor.
@@ -91,6 +97,7 @@ export function ScopeXYBackground({
     paused = false,
     intensity = DEFAULT_INTENSITY,
     persistence = DEFAULT_PERSISTENCE,
+    upsample = DEFAULT_UPSAMPLE,
 }: ScopeXYBackgroundProps = {}) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const pipelineRef = useRef<ScopeXY | null>(null);
@@ -110,6 +117,7 @@ export function ScopeXYBackground({
                 background: initialColors.background,
                 intensity,
                 fadeAmount: 1 - persistence,
+                upsample,
             });
         } catch (err) {
             console.warn('xy scope: failed to initialise WebGL', err);
@@ -140,6 +148,10 @@ export function ScopeXYBackground({
     useEffect(() => {
         pipelineRef.current?.setFadeAmount(1 - persistence);
     }, [persistence]);
+
+    useEffect(() => {
+        pipelineRef.current?.setUpsample(upsample);
+    }, [upsample]);
 
     useEffect(() => {
         if (paused) return;

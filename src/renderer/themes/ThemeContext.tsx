@@ -23,6 +23,7 @@ interface ThemeContextValue {
     prettierConfig: PrettierConfig;
     xyScopeIntensity: number;
     xyScopePersistence: number;
+    xyScopeUpsample: boolean;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -82,7 +83,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [fontSize, setFontSize] = useState(17);
     const [prettierConfig, setPrettierConfig] = useState<PrettierConfig>({});
     const [xyScopeIntensity, setXyScopeIntensity] = useState(0.6);
-    const [xyScopePersistence, setXyScopePersistence] = useState(0.85);
+    const [xyScopePersistence, setXyScopePersistence] = useState(0.6);
+    const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -115,6 +117,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.xyScopePersistence != null) {
                 setXyScopePersistence(config.xyScopePersistence);
             }
+            if (config.xyScopeUpsample != null) {
+                setXyScopeUpsample(config.xyScopeUpsample);
+            }
 
             // Subscribe to config changes
             unsubscribe = electronAPI.config.onChange((newConfig) => {
@@ -141,6 +146,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 }
                 if (newConfig.xyScopePersistence != null) {
                     setXyScopePersistence(newConfig.xyScopePersistence);
+                }
+                if (newConfig.xyScopeUpsample != null) {
+                    setXyScopeUpsample(newConfig.xyScopeUpsample);
                 }
             });
         }
@@ -171,6 +179,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 themes,
                 xyScopeIntensity,
                 xyScopePersistence,
+                xyScopeUpsample,
             }}
         >
             {children}

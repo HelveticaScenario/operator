@@ -24,6 +24,27 @@ import {
 export const MAX_TRACES = 16;
 export const SCOPE_XY_CAPACITY = 2048;
 
+// Lanczos upsampler tuning (matches dood.al/oscilloscope's Filter.init(_, 8, 6)):
+// each input sample produces `STEPS` interpolated outputs using a sinc window
+// of half-width `RADIUS` source samples. Output count = N*STEPS + 1.
+const UPSAMPLE_STEPS = 6;
+const UPSAMPLE_RADIUS = 8;
+const UPSAMPLE_LANCZOS_TWEAK = 1.5;
+const UPSAMPLED_LEN = SCOPE_XY_CAPACITY * UPSAMPLE_STEPS + 1;
+
+function buildLanczosKernel(a: number, steps: number): Float32Array {
+    const kernel = new Float32Array(a * steps);
+    kernel[0] = 1;
+    for (let i = 1; i < kernel.length; i++) {
+        const piX = (Math.PI * i) / steps;
+        const sinc = Math.sin(piX) / piX;
+        const window = (a * Math.sin(piX / a)) / piX;
+        kernel[i] = sinc * Math.pow(window, UPSAMPLE_LANCZOS_TWEAK);
+    }
+    return kernel;
+}
+
+
 export interface ScopeXYPairData {
     x: Float32Array;
     y: Float32Array;
@@ -50,6 +71,8 @@ export interface ScopeXYOptions {
     fadeAmount?: number;
     /** Tonemap exposure passed to the composite (1-exp(-uExposure*L)). */
     exposure?: number;
+    /** Enable GPU Lanczos upsampling. Default true. */
+    upsample?: boolean;
 }
 
 export interface ScopeXY {
@@ -61,6 +84,7 @@ export interface ScopeXY {
     ): void;
     setIntensity(intensity: number): void;
     setFadeAmount(fadeAmount: number): void;
+    setUpsample(enabled: boolean): void;
     dispose(): void;
 }
 
@@ -164,10 +188,17 @@ export function createScopeXY(
     if (!gl) {
         throw new Error('WebGL is not available');
     }
+    // OES_texture_float is required for the per-trace sample texture (raw
+    // voltages stored as 32-bit floats). Available everywhere we care about
+    // (macOS Chromium / Electron, modern desktop GPUs).
+    if (!gl.getExtension('OES_texture_float')) {
+        throw new Error('OES_texture_float not supported');
+    }
 
     const lineSize = options.beamSize ?? 0.012;
     let intensity = options.intensity ?? 0.6;
     let fadeAmount = options.fadeAmount ?? 0.15;
+    let upsample = options.upsample ?? true;
     const exposure = options.exposure ?? 1.2;
     let beamColor = new Float32Array([
         ...(options.color ?? [0.05, 1.0, 0.35]),
@@ -184,10 +215,16 @@ export function createScopeXY(
     const blurShader = link(gl, vsQuad, fsBlur);
     const compositeShader = link(gl, vsQuad, fsComposite);
 
-    const nSamples = SCOPE_XY_CAPACITY;
+    const nSamples = UPSAMPLED_LEN;
 
-    // aIdx: SHORT, one component, vertex index 0..nSamples*4-1.
-    const quadIndexData = new Int16Array(nSamples * 4);
+    // Lanczos kernel uploaded once as a vertex-shader uniform array — the GPU
+    // does the upsampling, so no CPU scratch buffers are needed.
+    const upsampleKernel = buildLanczosKernel(UPSAMPLE_RADIUS, UPSAMPLE_STEPS);
+
+    // aIdx: UNSIGNED_SHORT, one component, vertex index 0..nSamples*4-1.
+    // Upsampling pushes the max index past SHORT's 32k limit, so use the
+    // unsigned 16-bit variant.
+    const quadIndexData = new Uint16Array(nSamples * 4);
     for (let i = 0; i < quadIndexData.length; i++) quadIndexData[i] = i;
     const quadIndexBuf = gl.createBuffer();
     if (!quadIndexBuf) throw new Error('createBuffer failed');
@@ -223,24 +260,52 @@ export function createScopeXY(
     gl.bindBuffer(gl.ARRAY_BUFFER, fullscreenBuf);
     gl.bufferData(gl.ARRAY_BUFFER, fullscreenQuad, gl.STATIC_DRAW);
 
-    // Scratch CPU buffer reused across traces: nSamples × 8 floats per
-    // sample (x,y replicated four times so woscope's stride-8 attribute
-    // trick works).
-    const scratch = new Float32Array(nSamples * 8);
-    const traceVbos: WebGLBuffer[] = [];
-    function getTraceVbo(idx: number): WebGLBuffer {
-        while (traceVbos.length <= idx) {
-            const vbo = gl!.createBuffer();
-            if (!vbo) throw new Error('createBuffer failed');
-            gl!.bindBuffer(gl!.ARRAY_BUFFER, vbo);
-            gl!.bufferData(
-                gl!.ARRAY_BUFFER,
-                scratch.byteLength,
-                gl!.DYNAMIC_DRAW,
+    // Scratch used to interleave one ring of x/y volts into RGBA float texels
+    // before texSubImage2D. Reused across traces; 2048 samples × 4 channels.
+    const sampleScratch = new Float32Array(SCOPE_XY_CAPACITY * 4);
+
+    // Per-trace sample textures (2048×1 RGBA float). Allocated lazily to
+    // match how many traces are actually drawn.
+    const traceTextures: WebGLTexture[] = [];
+    function getTraceTexture(idx: number): WebGLTexture {
+        while (traceTextures.length <= idx) {
+            const tex = gl!.createTexture();
+            if (!tex) throw new Error('createTexture failed');
+            gl!.bindTexture(gl!.TEXTURE_2D, tex);
+            gl!.texImage2D(
+                gl!.TEXTURE_2D,
+                0,
+                gl!.RGBA,
+                SCOPE_XY_CAPACITY,
+                1,
+                0,
+                gl!.RGBA,
+                gl!.FLOAT,
+                null,
             );
-            traceVbos.push(vbo);
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_MIN_FILTER,
+                gl!.NEAREST,
+            );
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_MAG_FILTER,
+                gl!.NEAREST,
+            );
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_WRAP_S,
+                gl!.CLAMP_TO_EDGE,
+            );
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_WRAP_T,
+                gl!.CLAMP_TO_EDGE,
+            );
+            traceTextures.push(tex);
         }
-        return traceVbos[idx];
+        return traceTextures[idx];
     }
 
     function halfDim(n: number) {
@@ -310,39 +375,75 @@ export function createScopeXY(
         fadeAmount = v;
     }
 
-    function loadTraceVbo(vbo: WebGLBuffer, pair: ScopeXYPairData): number {
-        const len = Math.min(nSamples, pair.x.length, pair.y.length);
-        if (len < 2) return 0;
+    function setUpsample(enabled: boolean) {
+        upsample = enabled;
+    }
+
+    interface UploadedTrace {
+        outLen: number;
+        xMin: number;
+        xSpan: number;
+        yMin: number;
+        ySpan: number;
+    }
+
+    function uploadTraceSamples(
+        tex: WebGLTexture,
+        pair: ScopeXYPairData,
+    ): UploadedTrace | null {
+        const inLen = Math.min(
+            SCOPE_XY_CAPACITY,
+            pair.x.length,
+            pair.y.length,
+        );
+        if (inLen < 2) return null;
+
+        // The Rust snapshot() already linearizes the ring into chronological
+        // order — pair.x[0] is the oldest sample, pair.x[inLen-1] the newest.
+        // Applying `head` here was double-counting it, shuffling adjacent
+        // samples out of order and producing phantom strokes between
+        // non-adjacent chronological points.
+        for (let s = 0; s < inLen; s++) {
+            const t = s * 4;
+            sampleScratch[t] = pair.x[s];
+            sampleScratch[t + 1] = pair.y[s];
+            sampleScratch[t + 2] = 0;
+            sampleScratch[t + 3] = 0;
+        }
+        const lastX = pair.x[inLen - 1];
+        const lastY = pair.y[inLen - 1];
+        for (let s = inLen; s < SCOPE_XY_CAPACITY; s++) {
+            const t = s * 4;
+            sampleScratch[t] = lastX;
+            sampleScratch[t + 1] = lastY;
+            sampleScratch[t + 2] = 0;
+            sampleScratch[t + 3] = 0;
+        }
+
+        gl!.bindTexture(gl!.TEXTURE_2D, tex);
+        gl!.texSubImage2D(
+            gl!.TEXTURE_2D,
+            0,
+            0,
+            0,
+            SCOPE_XY_CAPACITY,
+            1,
+            gl!.RGBA,
+            gl!.FLOAT,
+            sampleScratch,
+        );
+
         const xMin = pair.xRange?.[0] ?? -5;
         const xMax = pair.xRange?.[1] ?? 5;
         const yMin = pair.yRange?.[0] ?? -5;
         const yMax = pair.yRange?.[1] ?? 5;
-        const xSpan = Math.max(xMax - xMin, 1e-6);
-        const ySpan = Math.max(yMax - yMin, 1e-6);
-        const head = pair.head;
-        for (let s = 0; s < len; s++) {
-            const r = (head + s) % len;
-            const x = ((pair.x[r] - xMin) / xSpan) * 2 - 1;
-            const y = ((pair.y[r] - yMin) / ySpan) * 2 - 1;
-            const t = s * 8;
-            scratch[t] =
-                scratch[t + 2] =
-                scratch[t + 4] =
-                scratch[t + 6] =
-                    x;
-            scratch[t + 1] =
-                scratch[t + 3] =
-                scratch[t + 5] =
-                scratch[t + 7] =
-                    y;
-        }
-        gl!.bindBuffer(gl!.ARRAY_BUFFER, vbo);
-        gl!.bufferSubData(
-            gl!.ARRAY_BUFFER,
-            0,
-            scratch.subarray(0, len * 8),
-        );
-        return len;
+        return {
+            outLen: inLen * UPSAMPLE_STEPS + 1,
+            xMin,
+            xSpan: Math.max(xMax - xMin, 1e-6),
+            yMin,
+            ySpan: Math.max(yMax - yMin, 1e-6),
+        };
     }
 
     function bindFullscreenQuad(shader: WebGLProgram) {
@@ -383,8 +484,21 @@ export function createScopeXY(
         if (aPos > -1) gl!.disableVertexAttribArray(aPos);
     }
 
-    function drawLine(vbo: WebGLBuffer, color: Float32Array, len: number) {
+    let lineShaderUniformsSetup = false;
+    function drawLine(
+        sampleTex: WebGLTexture,
+        color: Float32Array,
+        upload: UploadedTrace,
+    ) {
         gl!.useProgram(lineShader);
+        // Kernel is constant for the lifetime of the pipeline; upload once.
+        if (!lineShaderUniformsSetup) {
+            gl!.uniform1fv(
+                gl!.getUniformLocation(lineShader, 'uKernel[0]'),
+                upsampleKernel,
+            );
+            lineShaderUniformsSetup = true;
+        }
         gl!.uniform1f(
             gl!.getUniformLocation(lineShader, 'uSize'),
             lineSize,
@@ -405,24 +519,30 @@ export function createScopeXY(
             gl!.getUniformLocation(lineShader, 'uColor'),
             color,
         );
+        gl!.uniform2f(
+            gl!.getUniformLocation(lineShader, 'uXRange'),
+            upload.xMin,
+            upload.xSpan,
+        );
+        gl!.uniform2f(
+            gl!.getUniformLocation(lineShader, 'uYRange'),
+            upload.yMin,
+            upload.ySpan,
+        );
+        gl!.uniform1f(
+            gl!.getUniformLocation(lineShader, 'uUpsample'),
+            upsample ? 1.0 : 0.0,
+        );
+
+        gl!.activeTexture(gl!.TEXTURE0);
+        gl!.bindTexture(gl!.TEXTURE_2D, sampleTex);
+        gl!.uniform1i(gl!.getUniformLocation(lineShader, 'uSamples'), 0);
 
         gl!.bindBuffer(gl!.ARRAY_BUFFER, quadIndexBuf);
         const aIdx = gl!.getAttribLocation(lineShader, 'aIdx');
         if (aIdx > -1) {
             gl!.enableVertexAttribArray(aIdx);
-            gl!.vertexAttribPointer(aIdx, 1, gl!.SHORT, false, 2, 0);
-        }
-
-        gl!.bindBuffer(gl!.ARRAY_BUFFER, vbo);
-        const aStart = gl!.getAttribLocation(lineShader, 'aStart');
-        if (aStart > -1) {
-            gl!.enableVertexAttribArray(aStart);
-            gl!.vertexAttribPointer(aStart, 2, gl!.FLOAT, false, 8, 0);
-        }
-        const aEnd = gl!.getAttribLocation(lineShader, 'aEnd');
-        if (aEnd > -1) {
-            gl!.enableVertexAttribArray(aEnd);
-            gl!.vertexAttribPointer(aEnd, 2, gl!.FLOAT, false, 8, 8 * 4);
+            gl!.vertexAttribPointer(aIdx, 1, gl!.UNSIGNED_SHORT, false, 2, 0);
         }
 
         gl!.enable(gl!.BLEND);
@@ -430,15 +550,13 @@ export function createScopeXY(
         gl!.bindBuffer(gl!.ELEMENT_ARRAY_BUFFER, vertexIndexBuf);
         gl!.drawElements(
             gl!.TRIANGLES,
-            (len - 1) * 6,
+            (upload.outLen - 1) * 6,
             gl!.UNSIGNED_SHORT,
             0,
         );
         gl!.disable(gl!.BLEND);
 
         if (aIdx > -1) gl!.disableVertexAttribArray(aIdx);
-        if (aStart > -1) gl!.disableVertexAttribArray(aStart);
-        if (aEnd > -1) gl!.disableVertexAttribArray(aEnd);
     }
 
     function copyPass(src: Fbo, dst: Fbo) {
@@ -512,10 +630,10 @@ export function createScopeXY(
         gl!.viewport(0, 0, lineFbo.width, lineFbo.height);
         const drawCount = Math.min(pairs.length, MAX_TRACES);
         for (let i = 0; i < drawCount; i++) {
-            const vbo = getTraceVbo(i);
-            const len = loadTraceVbo(vbo, pairs[i]);
-            if (len < 2) continue;
-            drawLine(vbo, beamColor, len);
+            const tex = getTraceTexture(i);
+            const upload = uploadTraceSamples(tex, pairs[i]);
+            if (!upload) continue;
+            drawLine(tex, beamColor, upload);
         }
 
         // Pass 3: tight bloom — downsample, then horizontal+vertical blur.
@@ -539,7 +657,7 @@ export function createScopeXY(
         disposeFbo(tightFboB);
         disposeFbo(bigFboA);
         disposeFbo(bigFboB);
-        for (const vbo of traceVbos) gl!.deleteBuffer(vbo);
+        for (const tex of traceTextures) gl!.deleteTexture(tex);
         gl!.deleteBuffer(quadIndexBuf);
         gl!.deleteBuffer(vertexIndexBuf);
         gl!.deleteBuffer(fullscreenBuf);
@@ -556,6 +674,7 @@ export function createScopeXY(
         setColors,
         setIntensity,
         setFadeAmount,
+        setUpsample,
         dispose,
     };
 }

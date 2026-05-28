@@ -107,6 +107,8 @@ export interface AppConfig {
     xyScopeIntensity?: number;
     /** XY scope phosphor persistence (0..1). 1 = never fade. Default 0.85. */
     xyScopePersistence?: number;
+    /** XY scope GPU upscaling (clamped Lanczos). Default true. */
+    xyScopeUpsample?: boolean;
 }
 
 /**

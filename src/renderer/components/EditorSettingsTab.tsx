@@ -235,7 +235,7 @@ export function EditorSettingsTab({
                         min={0}
                         max={1}
                         step={0.01}
-                        value={config.xyScopePersistence ?? 0.85}
+                        value={config.xyScopePersistence ?? 0.6}
                         onChange={(e) =>
                             onConfigChange({
                                 xyScopePersistence: Number(e.target.value),
@@ -243,9 +243,26 @@ export function EditorSettingsTab({
                         }
                     />
                     <span className="settings-range-value">
-                        {(config.xyScopePersistence ?? 0.85).toFixed(2)}
+                        {(config.xyScopePersistence ?? 0.6).toFixed(2)}
                     </span>
                 </div>
+            </div>
+
+            {/* XY Scope Upscaling */}
+            <div className="settings-section">
+                <h3>XY Scope Upscaling</h3>
+                <label className="settings-toggle-label">
+                    <input
+                        type="checkbox"
+                        className="settings-toggle"
+                        checked={config.xyScopeUpsample ?? true}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopeUpsample: e.target.checked,
+                            })
+                        }
+                    />
+                </label>
             </div>
         </div>
     );

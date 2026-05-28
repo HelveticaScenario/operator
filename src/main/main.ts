@@ -409,6 +409,7 @@ const AppConfigSchema = z.object({
     theme: z.string().optional(),
     xyScopeIntensity: z.number().min(0).max(1).optional(),
     xyScopePersistence: z.number().min(0).max(1).optional(),
+    xyScopeUpsample: z.boolean().optional(),
 });
 
 type AppConfig = z.infer<typeof AppConfigSchema>;

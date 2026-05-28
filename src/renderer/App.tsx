@@ -88,7 +88,8 @@ function transformErrorsWithSourceLocations(
 }
 
 function App() {
-    const { xyScopeIntensity, xyScopePersistence } = useTheme();
+    const { xyScopeIntensity, xyScopePersistence, xyScopeUpsample } =
+        useTheme();
 
     // Workspace & filesystem
     const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
@@ -996,6 +997,7 @@ function App() {
                                     paused={b.id !== activeBufferId}
                                     intensity={xyScopeIntensity}
                                     persistence={xyScopePersistence}
+                                    upsample={xyScopeUpsample}
                                 />
                             ))}
                             <PatchEditor

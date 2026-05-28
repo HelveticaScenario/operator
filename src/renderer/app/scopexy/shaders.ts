@@ -7,37 +7,101 @@
 // We drop dood.al's noise-jpg screen texture and its hue control (the beam
 // colour comes from the host theme instead).
 
+// GPU Lanczos upsampler. Per-frame: a 2048×1 RGBA-float texture is uploaded
+// with the raw ring (x in .r, y in .g). Each vertex's output sample index
+// drives a 15-tap (2a-1) sinc-windowed sum to interpolate `STEPS` outputs per
+// input sample. Keeps CPU work to just an interleave + texSubImage2D.
 export const vsLine = `\
 precision highp float;
 #define EPS 1E-6
+#define STEPS 6
+#define RADIUS 8
+#define KERNEL_LEN 48
+#define BUFFER_SIZE 2048.0
 uniform float uSize;
-attribute vec2 aStart, aEnd;
+uniform sampler2D uSamples;
+uniform float uKernel[KERNEL_LEN];
+uniform vec2 uXRange; // (min, span)
+uniform vec2 uYRange;
+uniform float uUpsample; // 1.0 = Lanczos, 0.0 = nearest input sample
 attribute float aIdx;
 varying vec4 uvl;
+
+vec2 fetchSample(float inPos) {
+    float clamped = clamp(inPos, 0.0, BUFFER_SIZE - 1.0);
+    return texture2D(uSamples, vec2((clamped + 0.5) / BUFFER_SIZE, 0.5)).rg;
+}
+
+vec2 lanczosFetch(float outSampleIdx) {
+    float inPos = floor(outSampleIdx / float(STEPS));
+    int frac = int(mod(outSampleIdx, float(STEPS)));
+    if (uUpsample < 0.5) return fetchSample(inPos);
+    if (frac == 0) return fetchSample(inPos);
+    vec2 sum = vec2(0.0);
+    for (int s = -RADIUS + 1; s < RADIUS; s++) {
+        vec2 sample = fetchSample(inPos + float(s));
+        int kernelPos = -frac + s * STEPS;
+        int absK = kernelPos < 0 ? -kernelPos : kernelPos;
+        sum += sample * uKernel[absK];
+    }
+    // Clamp to the 4-sample neighborhood hull. Lanczos' negative side
+    // lobes cause big overshoots at fast transitions, which on the XY
+    // scope read as stray straight strokes extending past the figure.
+    // Clamping preserves curvature inside the neighborhood while
+    // killing the runaway overshoots.
+    vec2 p0 = fetchSample(inPos - 1.0);
+    vec2 p1 = fetchSample(inPos);
+    vec2 p2 = fetchSample(inPos + 1.0);
+    vec2 p3 = fetchSample(inPos + 2.0);
+    vec2 mn = min(min(p0, p1), min(p2, p3));
+    vec2 mx = max(max(p0, p1), max(p2, p3));
+    return clamp(sum, mn, mx);
+}
+
+vec2 voltToClip(vec2 v) {
+    return (v - vec2(uXRange.x, uYRange.x))
+         / vec2(uXRange.y, uYRange.y) * 2.0 - 1.0;
+}
+
+uniform float uIntensity;
+uniform float uFadeAmount;
+uniform float uNumSamples;
+
 void main () {
+    float idx = mod(aIdx, 4.0);
+    float outIdx = floor(aIdx / 4.0);
+
+    vec2 startClip = voltToClip(lanczosFetch(outIdx));
+    vec2 endClip   = voltToClip(lanczosFetch(outIdx + 1.0));
+
+    vec2 dir = endClip - startClip;
+    float len = length(dir);
+    if (len > EPS) dir = dir / len;
+    else dir = vec2(1.0, 0.0);
+    vec2 norm = vec2(-dir.y, dir.x);
+
+    // dood.al's coordinate convention for uvl.xy: xy.x is signed distance
+    // along the segment in clip-space units; xy.y is signed perpendicular
+    // offset in the same units. fsLine plugs these straight into the
+    // gaussian-line integral.
     float tang;
     vec2 current;
-    float idx = mod(aIdx,4.0);
     if (idx >= 2.0) {
-        current = aEnd;
+        current = endClip;
         tang = 1.0;
+        uvl.x = -uSize;
     } else {
-        current = aStart;
+        current = startClip;
         tang = -1.0;
+        uvl.x = len + uSize;
     }
-    float side = (mod(idx, 2.0)-0.5)*2.0;
-    uvl.xy = vec2(tang, side);
-    uvl.w = floor(aIdx / 4.0 + 0.5);
+    float side = (mod(idx, 2.0) - 0.5) * 2.0;
+    uvl.y = side * uSize;
+    uvl.z = len;
+    // Per-vertex brightness baked in — matches dood.al's vsLine output.
+    uvl.w = uIntensity * mix(1.0 - uFadeAmount, 1.0, outIdx / uNumSamples);
 
-    vec2 dir = aEnd-aStart;
-    uvl.z = length(dir);
-    if (uvl.z > EPS) {
-        dir = dir / uvl.z;
-    } else {
-        dir = vec2(1.0, 0.0);
-    }
-    vec2 norm = vec2(-dir.y, dir.x);
-    gl_Position = vec4(current+(tang*dir+norm*side)*uSize,0.0,1.0);
+    gl_Position = vec4(current + (tang * dir + norm * side) * uSize, 0.0, 1.0);
 }
 `;
 
@@ -46,9 +110,6 @@ precision highp float;
 #define EPS 1E-6
 #define SQRT2 1.4142135623730951
 uniform float uSize;
-uniform float uIntensity;
-uniform float uFadeAmount;
-uniform float uNumSamples;
 uniform vec4 uColor;
 varying vec4 uvl;
 float erf(float x) {
@@ -60,21 +121,27 @@ float erf(float x) {
 void main (void)
 {
     float len = uvl.z;
-    vec2 xy = vec2((len/2.0+uSize)*uvl.x+len/2.0, uSize*uvl.y);
+    // uvl.xy is already in clip-space distance units (vsLine matches
+    // dood.al's convention: x along segment, y perpendicular).
+    vec2 xy = uvl.xy;
     float alpha;
-
-    float sigma = uSize/4.0;
+    // Tighter sigma (uSize/5) matches dood.al's beam profile. uSize/4 was
+    // too wide and pushed too much energy into junction overlaps.
+    float sigma = uSize / 5.0;
     if (len < EPS) {
-        alpha = exp(-pow(length(xy),2.0)/(2.0*sigma*sigma))/2.0/sqrt(uSize);
+        alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) / (2.0 * sqrt(uSize));
     } else {
-        alpha = erf((len-xy.x)/SQRT2/sigma) + erf(xy.x/SQRT2/sigma);
-        alpha *= exp(-xy.y*xy.y/(2.0*sigma*sigma))/2.0/len*uSize;
+        // dood.al's analytic gaussian line integral: erf(x) - erf(x-len),
+        // no extra *uSize multiplier (which was making our beam dimmer
+        // per fragment and pushing user toward higher intensity, which
+        // amplified persistence trails).
+        alpha = erf(xy.x / SQRT2 / sigma)
+              - erf((xy.x - len) / SQRT2 / sigma);
+        alpha *= exp(-xy.y * xy.y / (2.0 * sigma * sigma)) / 2.0 / len;
     }
-    // dood.al-style intra-frame gradient: oldest samples in the ring fade
-    // toward (1 - uFadeAmount) so the trailing edge dims smoothly even
-    // before the persistence pass kicks in.
-    float afterglow = mix(1.0 - uFadeAmount, 1.0, uvl.w / uNumSamples);
-    alpha *= afterglow * uIntensity;
+    // Per-vertex brightness (afterglow × intensity) is already baked into
+    // uvl.w by vsLine — matches dood.al's convention.
+    alpha *= uvl.w;
     gl_FragColor = vec4(vec3(uColor), uColor.a * alpha);
 }
 `;
