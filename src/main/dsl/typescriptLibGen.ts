@@ -341,6 +341,48 @@ type BufferOutputRef = {
 };
 
 /**
+ * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
+ * \`$cycle\` / \`$iCycle\` as their pattern argument. Opaque to user code;
+ * the shape is \`{ __kind, ast, source, all_spans }\`. Construct with
+ * \`$p(...)\`; never build one by hand.
+ */
+type ParsedPattern = {
+  readonly __kind: 'ParsedPattern';
+  readonly ast: unknown;
+  readonly source: string;
+  readonly all_spans: ReadonlyArray<readonly [number, number]>;
+};
+
+/**
+ * Parse a mini-notation source string into a \`ParsedPattern\`.
+ *
+ * \`$p()\` is the entry point for mini-notation in the DSL. The pattern
+ * sequencers (\`$cycle\`, \`$iCycle\`) accept a \`ParsedPattern\` rather than
+ * a raw string, so every mini-notation literal flows through \`$p()\`.
+ *
+ * \`\`\`js
+ * $cycle($p("c4 e4 g4"))                       // single-pattern sequencer
+ * $iCycle([$p("0 2 4"), $p("0,4")], "c4(major)") // folded scale-degree sequencer
+ *
+ * const bass = $p("c2 [c2 g2] c2 e2");         // reuse a parsed pattern
+ * $cycle(bass)
+ * \`\`\`
+ *
+ * Returned object is opaque — pass it through, don't read its fields.
+ * It is JSON-serializable and embeds source + span info so the editor
+ * can highlight individual leaves of the pattern as the audio plays.
+ * Binding the result to a \`const\` (\`const p = $p(...)\`) preserves
+ * highlighting through the indirection.
+ *
+ * Throws if \`source\` is not a string or fails to parse. See \`$cycle\`
+ * for the full grammar (groupings, stacks, modifiers, Euclidean, etc.);
+ * see \`$iCycle\` for the scale-degree-specific value vocabulary.
+ *
+ * @param source - mini-notation source string
+ */
+declare function $p(source: string): ParsedPattern;
+
+/**
  * A loaded WAV sample handle — returned by \`$wavs()\`, passed to \`$sampler()\` as the \`wav\` param.
  */
 type WavHandle = {
@@ -361,8 +403,6 @@ type WavHandle = {
     readonly num: number;
     readonly den: number;
   };
-  /** Number of bars the sample spans, computed from BPM and time signature. E.g. an exact 2-bar loop is \`2.0\`; a 2.64-bar buffer is \`2.64\`. Absent when no BPM could be derived. */
-  readonly barCount?: number;
   readonly loops: ReadonlyArray<{
     readonly type: 'forward' | 'pingpong' | 'backward';
     readonly start: number;
@@ -435,26 +475,6 @@ interface ModuleOutput {
    * @example lfo.shift(2.5)  // Shift to 0-5V range
    */
   shift(offset: Poly<Signal>): Collection;
-
-  /**
-   * Offset this pitch by an absolute frequency amount, in Hz. The V/Oct signal
-   * is converted to Hz, the offset added, then converted back. Creates an
-   * $addHz module internally.
-   * @param offset - Hz offset as {@link Poly<Signal>}
-   * @returns The retuned {@link Collection} for chaining
-   * @example $saw('C4').addHz(0.5)  // slight detune
-   */
-  addHz(offset: Poly<Signal>): Collection;
-
-  /**
-   * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
-   * The V/Oct signal is converted to Hz, multiplied, then converted back.
-   * Creates a $mulHz module internally.
-   * @param factor - Frequency multiplier as {@link Poly<Signal>}
-   * @returns The retuned {@link Collection} for chaining
-   * @example $saw('C4').mulHz(1.5)  // up a just fifth
-   */
-  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale the signal by a factor with a perceptual (audio taper) curve
@@ -649,20 +669,6 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @see {@link ModuleOutput.shift}
    */
   shift(offset: Poly<Signal>): Collection;
-
-  /**
-   * Offset all pitches by an absolute frequency amount, in Hz.
-   * @param offset - Hz offset as {@link Poly<Signal>}
-   * @see {@link ModuleOutput.addHz}
-   */
-  addHz(offset: Poly<Signal>): Collection;
-
-  /**
-   * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
-   * @param factor - Frequency multiplier as {@link Poly<Signal>}
-   * @see {@link ModuleOutput.mulHz}
-   */
-  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale all signals by a factor with a perceptual (audio taper) curve
@@ -990,88 +996,6 @@ function $bus(cb: (mixed: Collection) => unknown): Bus;
  */
 function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection | CollectionWithRange): void;
 
-/** Create a buffer module that captures an input signal into a circular audio buffer. */
-function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;
-
-/**
- * Delay with feedback. Mixes \`input\` with a deferred feedback signal,
- * captures the mix into a buffer of \`length\` seconds, and routes the
- * buffer through \`feedbackCb\` to produce the feedback signal.
- *
- * Returns the wet+dry \\$mix output (same shape as \\$mix) augmented with a
- * \`buffer\` property referencing the captured buffer for further reads.
- *
- * @param input - Dry signal collection. Channel count of the feedback path
- *                matches \`input.length\` or 1 if input is a ModuleOutput.
- * @param feedbackCb - Receives the captured buffer ref and returns the
- *                     feedback signal mixed back into the input.
- * @param length - Buffer length in seconds.
- *
- * \`\`\`
- *   // simple feedback delay
- *   $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()
- * \`\`\`
- *
- * \`\`\`ts
- *   // tap the buffer for an additional read
- *   const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)
- *   $delayRead(d.buffer, 0.75).out()
- * \`\`\`
- */
-function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): ReturnType<typeof $mix> & { buffer: BufferOutputRef };
-
-/**
- * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
- *
- * Splits the input into low / mid / high via \`$xover\`, then runs each band
- * through \`$comp\` with both upward and downward compression engaged at fast
- * attack/release ballistics. Bands are summed and crossfaded against the
- * original input via \`depth\`.
- *
- * Per-band trim (\`lowGain\` / \`midGain\` / \`highGain\`) follows the
- * \`$scaleAndShift\` convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
- *
- * \`\`\`js
- * $ott(drums).out()
- * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
- * \`\`\`
- */
-function $ott(input: Collection | ModuleOutput, config?: {
-    /**
-     * Optional side-chain detector signal. The same crossover network splits
-     * the sidechain into low/mid/high and each band's compressor keys off the
-     * matching band — the gain is still applied to \`input\`.
-     */
-    sidechain?: Collection | ModuleOutput;
-    /** wet/dry blend, 0–5 (default 5 = fully wet) */
-    depth?: Poly<Signal>;
-    /** low/mid crossover (V/Oct, default ~120 Hz) */
-    lowMidFreq?: Poly<Signal>;
-    /** mid/high crossover (V/Oct, default ~2500 Hz) */
-    midHighFreq?: Poly<Signal>;
-    /** downward stage threshold in volts (default 1.0) */
-    threshold?: Poly<Signal>;
-    /** downward stage ratio: > 1 compresses, < 1 expands (boosts loud), 1 = passthrough. Default 4 */
-    ratio?: Poly<Signal>;
-    /** upward stage threshold in volts (default 0.5) */
-    upwardThreshold?: Poly<Signal>;
-    /** upward stage ratio: > 1 boosts quiet, < 1 gates quiet, 1 = passthrough. Default 4 */
-    upwardRatio?: Poly<Signal>;
-    /** envelope attack in seconds (default 0.003) */
-    attack?: Poly<Signal>;
-    /** envelope release in seconds (default 0.05) */
-    release?: Poly<Signal>;
-    /** per-band makeup gain as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
-    makeup?: Poly<Signal>;
-    /** low-band trim — 5 = unity (default 5) */
-    lowGain?: Poly<Signal>;
-    /** mid-band trim — 5 = unity (default 5) */
-    midGain?: Poly<Signal>;
-    /** high-band trim — 5 = unity (default 5) */
-    highGain?: Poly<Signal>;
-    id?: string;
-}): Collection;
-
 /**
  * Compute the Cartesian product of the given arrays.
  *
@@ -1092,25 +1016,6 @@ function $ott(input: Collection | ModuleOutput, config?: {
  * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
-
-/**
- * @param count - Size of the output
- * @param playhead - 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
- * @param range - \`[off, on]\` weight pair (default \`[0, 1]\`)
- * @param interpolationType - Easing between keyframes (default linear)
- *
- * @example
- * // Crossfade the amplitude of the different voices
- * const osc = $sine(['c', 'e', 'g'])
- * const weights = $cross(osc.length, $sine('0.25hz').range(0, 1));
- * osc.amp(weights).out();
- */
-function $cross(
-    count: number,
-    playhead: Mono<Signal>,
-    range?: [number, number],
-    interpolationType?: Parameters<typeof $track>[1]['interpolationType'],
-): Collection;
 
 /**
  * Phase-warp table descriptors for modules that accept a {@link Table}
@@ -1191,7 +1096,7 @@ export function buildLibSource(
 ): string {
     const schemaLib = generateDSL(schemas);
     const wavsDecl = generateWavsTypeDeclaration(wavsFolderTree ?? null);
-    return `declare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
+    return `/* oxlint-disable */\ndeclare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
 }
 
 interface NamespaceNode {
@@ -1574,8 +1479,7 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (declared in BASE_LIB_SOURCE
-    // with a custom BufferOutputRef return type)
+    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
     const userFacingSchemas = schemas.filter(
         (s) => s.name !== '_clock' && s.name !== '$buffer',
     );
@@ -1606,6 +1510,14 @@ export function generateDSL(schemas: Schemas): string {
         const signalReturnType = getFactoryReturnType(signalSchema);
         lines.push(`export const $input: Readonly<${signalReturnType}>;`);
     }
+
+    lines.push('');
+    lines.push(
+        '/** Create a buffer module that captures an input signal into a circular audio buffer. */',
+    );
+    lines.push(
+        'export function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;',
+    );
 
     return lines.join('\n') + '\n';
 }

@@ -10,7 +10,7 @@ import {
     shell,
 } from 'electron';
 import type { PatchGraph, AudioConfigOptions } from '@modular/core';
-import { getMiniLeafSpans, Synthesizer } from '@modular/core';
+import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import type {
     IPCHandlers,
@@ -950,8 +950,6 @@ registerIPCHandler('SYNTH_GET_CHANNELS', () => synth.channels());
 registerIPCHandler('SYNTH_GET_SCOPES', () => synth.getScopes());
 
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
-
-registerIPCHandler('GET_MINI_LEAF_SPANS', (source) => getMiniLeafSpans(source));
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     // Requirement: assume a full change when a different file/buffer is evaluated.

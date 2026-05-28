@@ -8,8 +8,6 @@ import { describe, test, expect } from 'vitest';
 import {
     validatePatchGraph,
     deriveChannelCount,
-    getMiniLeafSpans,
-    getPatternPolyphony,
     type PatchGraph,
 } from '@modular/core';
 
@@ -182,49 +180,8 @@ describe('deriveChannelCount', () => {
     });
 });
 
-// ─── getMiniLeafSpans ────────────────────────────────────────────────────────
-
-describe('getMiniLeafSpans', () => {
-    test('simple mini-notation returns spans', () => {
-        // getMiniLeafSpans parses music mini-notation, not JavaScript
-        const spans = getMiniLeafSpans('C4 E4 G4');
-        expect(Array.isArray(spans)).toBe(true);
-        expect(spans.length).toBe(3);
-        // Each span is [start, end]
-        for (const span of spans) {
-            expect(Array.isArray(span)).toBe(true);
-            expect(span.length).toBe(2);
-            expect(typeof span[0]).toBe('number');
-            expect(typeof span[1]).toBe('number');
-        }
-    });
-
-    test('pattern with groups', () => {
-        const spans = getMiniLeafSpans('C4 [E4 G4]');
-        expect(spans.length).toBeGreaterThan(0);
-    });
-
-    test('single note', () => {
-        const spans = getMiniLeafSpans('C4');
-        expect(spans).toEqual([[0, 2]]);
-    });
-});
-
-// ─── getPatternPolyphony ─────────────────────────────────────────────────────
-
-describe('getPatternPolyphony', () => {
-    test('single note is 1', () => {
-        const p = getPatternPolyphony('C4');
-        expect(p).toBe(1);
-    });
-
-    test('chord is polyphonic', () => {
-        const p = getPatternPolyphony('[C4,E4,G4]');
-        expect(p).toBe(3);
-    });
-
-    test('sequential pattern is monophonic', () => {
-        const p = getPatternPolyphony('C4 E4 G4');
-        expect(p).toBe(1);
-    });
-});
+// `getMiniLeafSpans` and `getPatternPolyphony` were removed when
+// mini-notation parsing moved TypeScript-side (`$p()`). The TS parser is
+// covered by `src/main/dsl/miniNotation/__tests__/parser.test.ts`;
+// pre-cached polyphony derivation is exercised through the seq/iCycle
+// deserialization tests in `crates/modular_core/src/dsp/seq/`.

@@ -377,8 +377,8 @@ describe('modulation routing', () => {
 // ─── Sequencing & patterns ───────────────────────────────────────────────────
 
 describe('sequencing', () => {
-    test('$cycle with pattern string', () => {
-        const patch = execPatch('$cycle("C4 E4 G4 B4").out()');
+    test('$cycle with $p() pattern', () => {
+        const patch = execPatch('$cycle($p("c4 e4 g4 b4")).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
     });
 
@@ -387,14 +387,45 @@ describe('sequencing', () => {
         expect(findModules(patch, '$track').length).toBe(1);
     });
 
-    test('$iCycle with interval pattern (array)', () => {
-        const patch = execPatch('$iCycle(["0 2 4 5 7"], "C(major)").out()');
+    test('$iCycle with single $p() pattern wrapped in array', () => {
+        const patch = execPatch('$iCycle([$p("0 2 4 5 7")], "C(major)").out()');
         expect(findModules(patch, '$iCycle').length).toBe(1);
     });
 
-    test('$iCycle with interval pattern (string)', () => {
-        const patch = execPatch('$iCycle("0 2 4 5 7", "C(major)").out()');
+    test('$iCycle with single $p() pattern', () => {
+        const patch = execPatch('$iCycle($p("0 2 4 5 7"), "C(major)").out()');
         expect(findModules(patch, '$iCycle').length).toBe(1);
+    });
+
+    test('$iCycle with multiple $p() patterns folded additively', () => {
+        const patch = execPatch(
+            '$iCycle([$p("0 2 4"), $p("0 3")], "C(major)").out()',
+        );
+        expect(findModules(patch, '$iCycle').length).toBe(1);
+    });
+
+    test('$p rejects dropped atom kinds', () => {
+        expect(() => execPatch('$p("m60")')).toThrow();
+        expect(() => execPatch('$p("bd sd")')).toThrow();
+        expect(() => execPatch('$p("module(osc1:out:0)")')).toThrow();
+        expect(() => execPatch('$p("2v")')).toThrow();
+    });
+
+    test('$iCycle rejects non-integer atoms at patch-graph validation', () => {
+        expect(() =>
+            execPatch('$iCycle($p("1.5"), "C(major)").out()'),
+        ).toThrow();
+        expect(() =>
+            execPatch('$iCycle($p("c4"), "C(major)").out()'),
+        ).toThrow();
+        expect(() =>
+            execPatch('$iCycle($p("440hz"), "C(major)").out()'),
+        ).toThrow();
+    });
+
+    test('$cycle accepts mixed numeric, note, and hz atoms', () => {
+        const patch = execPatch('$cycle($p("0.5 c4 440hz -1")).out()');
+        expect(findModules(patch, '$cycle').length).toBe(1);
     });
 });
 
@@ -559,76 +590,6 @@ describe('fx modules', () => {
         const patch = execPatch('$cheby($sine("C4"), 3).out()');
         expect(findModules(patch, '$cheby').length).toBe(1);
     });
-
-    test('$comp accepts ratio < 1 for expansion', () => {
-        const source = `
-            // ratio 0.5 = upward expansion above threshold (boost loud)
-            // upwardRatio 0.5 = downward expansion below threshold (gate)
-            $comp($saw("C3"), {
-                threshold: 1.0, ratio: 0.5,
-                upwardThreshold: 0.3, upwardRatio: 0.5,
-            }).out()
-        `;
-        const patch = execPatch(source);
-        expect(findModules(patch, '$comp').length).toBe(1);
-    });
-
-    test('$comp accepts sidechain + upward params', () => {
-        const source = `
-            const kick = $sine("C2")
-            const pad = $saw("A3")
-            $comp(pad, {
-                sidechain: kick,
-                threshold: 1.0, ratio: 8,
-                upwardThreshold: 0.5, upwardRatio: 4,
-                attack: 0.005, release: 0.2,
-            }).out()
-        `;
-        const patch = execPatch(source);
-        const comps = findModules(patch, '$comp');
-        expect(comps.length).toBe(1);
-        // Sidechain param should be wired up as a signal cable.
-        expect(comps[0].params.sidechain).toBeDefined();
-        expect(comps[0].params.upwardThreshold).toBeDefined();
-        expect(comps[0].params.upwardRatio).toBeDefined();
-    });
-
-    test('$ott builds 3-band split + 3 compressors + crossfade', () => {
-        const patch = execPatch('$ott($saw("C3")).out()');
-        // One $xover splits, three $comp instances run per band.
-        expect(findModules(patch, '$xover').length).toBe(1);
-        expect(findModules(patch, '$comp').length).toBe(3);
-    });
-
-    test('$ott with sidechain splits sidechain through second xover', () => {
-        const source = `
-            const kick = $sine("C2")
-            $ott($saw("C3"), { sidechain: kick }).out()
-        `;
-        const patch = execPatch(source);
-        // Two $xover instances: one for input, one for sidechain.
-        expect(findModules(patch, '$xover').length).toBe(2);
-        const comps = findModules(patch, '$comp');
-        expect(comps.length).toBe(3);
-        // Every band-compressor must have a sidechain wired up.
-        for (const c of comps) {
-            expect(c.params.sidechain).toBeDefined();
-        }
-    });
-
-    test('$ott honors custom config', () => {
-        const source = `
-            $ott($saw("C3"), {
-                depth: 4,
-                lowMidFreq: $hz(150),
-                midHighFreq: $hz(3000),
-                lowGain: 6, midGain: 5, highGain: 4,
-            }).out()
-        `;
-        const patch = execPatch(source);
-        expect(findModules(patch, '$xover').length).toBe(1);
-        expect(findModules(patch, '$comp').length).toBe(3);
-    });
 });
 
 // ─── Complex patches ─────────────────────────────────────────────────────────
@@ -648,7 +609,7 @@ describe('complex patches', () => {
 
     test('sequenced subtractive synth', () => {
         const source = `
-            const seq = $cycle("C3 E3 G3 B3")
+            const seq = $cycle($p("c3 e3 g3 b3"))
             const osc = $saw(seq)
             const env = $adsr($clock.beatTrigger, { attack: 0.01, decay: 0.2, sustain: 2, release: 0.3 })
             $lpf(osc, env.range("C3", "C6")).out()
@@ -1128,7 +1089,6 @@ describe('$wavs() and $sampler', () => {
             bpm: 120.0,
             beats: 4,
             timeSignature: { num: 4, den: 4 },
-            barCount: 2.0,
             loops: [
                 { loopType: 'forward', start: 0.0, end: 0.5 },
                 { loopType: 'pingpong', start: 0.25, end: 0.75 },

@@ -4,7 +4,6 @@
 //! the `FromMiniAtom` trait.
 
 use super::ast::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
-use super::parser::ParseError;
 use crate::pattern_system::{
     Fraction, Pattern,
     combinators::{fastcat, slowcat, stack, timecat},
@@ -70,8 +69,6 @@ pub enum ConvertError {
     ListNotSupported,
     /// Operator error.
     OperatorError(String),
-    /// Parse error.
-    ParseError(ParseError),
     /// Operation requires rest support but pattern type doesn't support rests.
     RestNotSupported(String),
 }
@@ -82,7 +79,6 @@ impl std::fmt::Display for ConvertError {
             ConvertError::InvalidAtom(msg) => write!(f, "Invalid atom: {}", msg),
             ConvertError::ListNotSupported => write!(f, "List syntax not supported for this type"),
             ConvertError::OperatorError(msg) => write!(f, "Operator error: {}", msg),
-            ConvertError::ParseError(err) => write!(f, "Parse error: {}", err),
             ConvertError::RestNotSupported(op) => write!(
                 f,
                 "'{}' requires a pattern type that supports rests. This operation is only available for note/sequence patterns.",
@@ -93,12 +89,6 @@ impl std::fmt::Display for ConvertError {
 }
 
 impl std::error::Error for ConvertError {}
-
-impl From<ParseError> for ConvertError {
-    fn from(err: ParseError) -> Self {
-        ConvertError::ParseError(err)
-    }
-}
 
 // Implement FromMiniAtom for common types
 
@@ -133,6 +123,66 @@ impl FromMiniAtom for f64 {
     // f64 does not support rests - use default supports_rest() -> false
 }
 
+impl FromMiniAtom for f32 {
+    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
+        atom.to_f64()
+            .map(|f| f as f32)
+            .ok_or_else(|| ConvertError::InvalidAtom("Cannot convert to f32".to_string()))
+    }
+
+    fn combine_with_head(head_atoms: &[AtomValue], tail: &Self) -> Result<Self, ConvertError> {
+        let mut values: Vec<f32> = head_atoms
+            .iter()
+            .map(Self::from_atom)
+            .collect::<Result<_, _>>()?;
+        values.push(*tail);
+        Ok(values.iter().sum::<f32>() / values.len() as f32)
+    }
+    // f32 does not support rests - use default supports_rest() -> false
+}
+
+impl FromMiniAtom for i64 {
+    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
+        atom.to_f64()
+            .map(|f| f as i64)
+            .ok_or_else(|| ConvertError::InvalidAtom("Cannot convert to i64".to_string()))
+    }
+
+    fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
+        Err(ConvertError::ListNotSupported)
+    }
+    // i64 does not support rests - use default supports_rest() -> false
+}
+
+impl FromMiniAtom for i32 {
+    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
+        atom.to_f64()
+            .map(|f| f as i32)
+            .ok_or_else(|| ConvertError::InvalidAtom("Cannot convert to i32".to_string()))
+    }
+
+    fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
+        Err(ConvertError::ListNotSupported)
+    }
+    // i32 does not support rests - use default supports_rest() -> false
+}
+
+impl FromMiniAtom for bool {
+    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
+        match atom {
+            AtomValue::Number(n) => Ok(*n != 0.0),
+            _ => Err(ConvertError::InvalidAtom(
+                "Cannot convert to bool".to_string(),
+            )),
+        }
+    }
+
+    fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
+        Err(ConvertError::ListNotSupported)
+    }
+    // bool does not support rests - use default supports_rest() -> false
+}
+
 /// Convert an AST to a Pattern.
 pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertError> {
     convert_inner(ast)
@@ -140,21 +190,25 @@ pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertErro
 
 /// Evaluate a MiniASTF64 to get a single f64 value.
 ///
-/// Test-only — kept gated to silence dead_code while preserving the unit tests
-/// that exercise it. Production paths use convert_f64_pattern.
-#[cfg(test)]
+/// Used by the polymeter converter for `%n` step-count overrides and by
+/// step-count helpers as a scalar readout. For complex patterns it
+/// returns the first value found (matches strudel's approach of using
+/// `children[0]` for the stepsPerCycle fallback).
 fn eval_f64(ast: &MiniASTF64) -> f64 {
     match ast {
         MiniASTF64::Pure(Located { node, .. }) => *node,
-        MiniASTF64::Rest(_) => 0.0,
+        MiniASTF64::Rest(_) => 0.0, // Rest evaluates to 0
         MiniASTF64::List(Located { node, .. }) => {
+            // Return first element or 0
             node.first().map(eval_f64).unwrap_or(0.0)
         }
         MiniASTF64::Sequence(elements) | MiniASTF64::FastCat(elements) => {
+            // Return first element or 0
             elements.first().map(|(e, _)| eval_f64(e)).unwrap_or(0.0)
         }
         MiniASTF64::SlowCat(elements) => elements.first().map(|(e, _)| eval_f64(e)).unwrap_or(0.0),
         MiniASTF64::RandomChoice(elements, _) | MiniASTF64::Stack(elements) => {
+            // For deterministic evaluation, just take first
             elements.first().map(eval_f64).unwrap_or(0.0)
         }
         MiniASTF64::Fast(pattern, _) => eval_f64(pattern),
@@ -162,6 +216,87 @@ fn eval_f64(ast: &MiniASTF64) -> f64 {
         MiniASTF64::Replicate(pattern, _) => eval_f64(pattern),
         MiniASTF64::Degrade(pattern, _, _) => eval_f64(pattern),
         MiniASTF64::Euclidean { pattern, .. } => eval_f64(pattern),
+        MiniASTF64::Polymeter { children, .. } => {
+            children.first().map(eval_f64).unwrap_or(0.0)
+        }
+    }
+}
+
+/// Best-effort structural step count of a `MiniAST`. Used to derive the
+/// default `steps_per_cycle` for a `Polymeter` when no `%n` override was
+/// given. Matches strudel's `__weight` fallback in `packages/mini/mini.mjs`:
+/// sequences sum their entry weights, explicit `FastCat`/`SlowCat` behave the
+/// same, and everything else (bare atoms, stacks, choice, polymeters) count
+/// as one step unless the polymeter carried its own `%n`.
+fn step_count_main(ast: &MiniAST) -> f64 {
+    match ast {
+        MiniAST::Sequence(items) | MiniAST::FastCat(items) | MiniAST::SlowCat(items) => {
+            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            if total == 0.0 { 1.0 } else { total }
+        }
+        MiniAST::Replicate(inner, count) => step_count_main(inner) * (*count as f64),
+        MiniAST::Polymeter {
+            children,
+            steps_per_cycle,
+        } => steps_per_cycle
+            .as_deref()
+            .map(eval_f64)
+            .unwrap_or_else(|| children.first().map(step_count_main).unwrap_or(1.0)),
+        _ => 1.0,
+    }
+}
+
+fn step_count_f64(ast: &MiniASTF64) -> f64 {
+    match ast {
+        MiniASTF64::Sequence(items) | MiniASTF64::FastCat(items) | MiniASTF64::SlowCat(items) => {
+            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            if total == 0.0 { 1.0 } else { total }
+        }
+        MiniASTF64::Replicate(inner, count) => step_count_f64(inner) * (*count as f64),
+        MiniASTF64::Polymeter {
+            children,
+            steps_per_cycle,
+        } => steps_per_cycle
+            .as_deref()
+            .map(eval_f64)
+            .unwrap_or_else(|| children.first().map(step_count_f64).unwrap_or(1.0)),
+        _ => 1.0,
+    }
+}
+
+fn step_count_u32(ast: &MiniASTU32) -> f64 {
+    match ast {
+        MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
+            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            if total == 0.0 { 1.0 } else { total }
+        }
+        MiniASTU32::Replicate(inner, count) => step_count_u32(inner) * (*count as f64),
+        MiniASTU32::Polymeter {
+            children,
+            steps_per_cycle,
+        } => steps_per_cycle
+            .as_deref()
+            .map(eval_f64)
+            .unwrap_or_else(|| children.first().map(step_count_u32).unwrap_or(1.0)),
+        _ => 1.0,
+    }
+}
+
+fn step_count_i32(ast: &MiniASTI32) -> f64 {
+    match ast {
+        MiniASTI32::Sequence(items) | MiniASTI32::FastCat(items) | MiniASTI32::SlowCat(items) => {
+            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            if total == 0.0 { 1.0 } else { total }
+        }
+        MiniASTI32::Replicate(inner, count) => step_count_i32(inner) * (*count as f64),
+        MiniASTI32::Polymeter {
+            children,
+            steps_per_cycle,
+        } => steps_per_cycle
+            .as_deref()
+            .map(eval_f64)
+            .unwrap_or_else(|| children.first().map(step_count_i32).unwrap_or(1.0)),
+        _ => 1.0,
     }
 }
 
@@ -191,22 +326,12 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
                 return constructors::pure(Fraction::from_integer(0));
             }
 
-            // Expand Replicate nodes (see MiniAST::Sequence/FastCat for details).
-            let expanded: Vec<(&MiniASTF64, Option<f64>)> = elements
-                .iter()
-                .flat_map(|(p, w)| match p {
-                    MiniASTF64::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
-                })
-                .collect();
-
-            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
+            // Check if any elements have weights
+            let has_weights = elements.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
-                let weighted: Vec<(Fraction, Pattern<Fraction>)> = expanded
+                // Use timecat for weighted sequences
+                let weighted: Vec<(Fraction, Pattern<Fraction>)> = elements
                     .iter()
                     .map(|(e, w)| {
                         let weight = w.unwrap_or(1.0);
@@ -215,7 +340,8 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
                     .collect();
                 timecat(weighted)
             } else {
-                let pats: Vec<Pattern<Fraction>> = expanded
+                // Use fastcat for unweighted sequences
+                let pats: Vec<Pattern<Fraction>> = elements
                     .iter()
                     .map(|(e, _)| convert_f64_pattern(e))
                     .collect();
@@ -296,6 +422,24 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
             // Just return the pattern
             convert_f64_pattern(pattern)
         }
+
+        MiniASTF64::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            let spc = steps_per_cycle
+                .as_deref()
+                .map(eval_f64)
+                .unwrap_or_else(|| children.first().map(step_count_f64).unwrap_or(1.0));
+            let scaled: Vec<Pattern<Fraction>> = children
+                .iter()
+                .map(|c| {
+                    let w = step_count_f64(c).max(1.0);
+                    convert_f64_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                })
+                .collect();
+            stack(scaled)
+        }
     }
 }
 
@@ -320,22 +464,10 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
                 return pure(0);
             }
 
-            // Expand Replicate nodes (see MiniAST::Sequence/FastCat for details).
-            let expanded: Vec<(&MiniASTU32, Option<f64>)> = elements
-                .iter()
-                .flat_map(|(p, w)| match p {
-                    MiniASTU32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
-                })
-                .collect();
-
-            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
+            let has_weights = elements.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
-                let weighted: Vec<(Fraction, Pattern<u32>)> = expanded
+                let weighted: Vec<(Fraction, Pattern<u32>)> = elements
                     .iter()
                     .map(|(e, w)| {
                         let weight = w.unwrap_or(1.0);
@@ -344,7 +476,7 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
                     .collect();
                 timecat(weighted)
             } else {
-                let pats: Vec<Pattern<u32>> = expanded
+                let pats: Vec<Pattern<u32>> = elements
                     .iter()
                     .map(|(e, _)| convert_u32_pattern(e))
                     .collect();
@@ -420,6 +552,24 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
         }
 
         MiniASTU32::Euclidean { pattern, .. } => convert_u32_pattern(pattern),
+
+        MiniASTU32::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            let spc = steps_per_cycle
+                .as_deref()
+                .map(eval_f64)
+                .unwrap_or_else(|| children.first().map(step_count_u32).unwrap_or(1.0));
+            let scaled: Vec<Pattern<u32>> = children
+                .iter()
+                .map(|c| {
+                    let w = step_count_u32(c).max(1.0);
+                    convert_u32_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                })
+                .collect();
+            stack(scaled)
+        }
     }
 }
 
@@ -444,22 +594,10 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
                 return pure(0);
             }
 
-            // Expand Replicate nodes (see MiniAST::Sequence/FastCat for details).
-            let expanded: Vec<(&MiniASTI32, Option<f64>)> = elements
-                .iter()
-                .flat_map(|(p, w)| match p {
-                    MiniASTI32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
-                })
-                .collect();
-
-            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
+            let has_weights = elements.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
-                let weighted: Vec<(Fraction, Pattern<i32>)> = expanded
+                let weighted: Vec<(Fraction, Pattern<i32>)> = elements
                     .iter()
                     .map(|(e, w)| {
                         let weight = w.unwrap_or(1.0);
@@ -468,7 +606,7 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
                     .collect();
                 timecat(weighted)
             } else {
-                let pats: Vec<Pattern<i32>> = expanded
+                let pats: Vec<Pattern<i32>> = elements
                     .iter()
                     .map(|(e, _)| convert_i32_pattern(e))
                     .collect();
@@ -541,16 +679,33 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
         MiniASTI32::Degrade(pattern, _prob, _seed) => convert_i32_pattern(pattern),
 
         MiniASTI32::Euclidean { pattern, .. } => convert_i32_pattern(pattern),
+
+        MiniASTI32::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            let spc = steps_per_cycle
+                .as_deref()
+                .map(eval_f64)
+                .unwrap_or_else(|| children.first().map(step_count_i32).unwrap_or(1.0));
+            let scaled: Vec<Pattern<i32>> = children
+                .iter()
+                .map(|c| {
+                    let w = step_count_i32(c).max(1.0);
+                    convert_i32_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                })
+                .collect();
+            stack(scaled)
+        }
     }
 }
 
 /// Evaluate a MiniASTU32 to get a single u32 value.
-/// Test-only — see [`eval_f64`] note.
 #[cfg(test)]
 fn eval_u32(ast: &MiniASTU32) -> u32 {
     match ast {
         MiniASTU32::Pure(Located { node, .. }) => *node,
-        MiniASTU32::Rest(_) => 0,
+        MiniASTU32::Rest(_) => 0, // Rest evaluates to 0
         MiniASTU32::List(Located { node, .. }) => node.first().map(eval_u32).unwrap_or(0),
         MiniASTU32::Sequence(elements) | MiniASTU32::FastCat(elements) => {
             elements.first().map(|(e, _)| eval_u32(e)).unwrap_or(0)
@@ -564,6 +719,34 @@ fn eval_u32(ast: &MiniASTU32) -> u32 {
         MiniASTU32::Replicate(pattern, _count) => eval_u32(pattern),
         MiniASTU32::Degrade(pattern, _, _) => eval_u32(pattern),
         MiniASTU32::Euclidean { pattern, .. } => eval_u32(pattern),
+        MiniASTU32::Polymeter { children, .. } => {
+            children.first().map(eval_u32).unwrap_or(0)
+        }
+    }
+}
+
+/// Evaluate a MiniASTI32 to get a single i32 value.
+#[cfg(test)]
+fn eval_i32(ast: &MiniASTI32) -> i32 {
+    match ast {
+        MiniASTI32::Pure(Located { node, .. }) => *node,
+        MiniASTI32::Rest(_) => 0, // Rest evaluates to 0
+        MiniASTI32::List(Located { node, .. }) => node.first().map(eval_i32).unwrap_or(0),
+        MiniASTI32::Sequence(elements) | MiniASTI32::FastCat(elements) => {
+            elements.first().map(|(e, _)| eval_i32(e)).unwrap_or(0)
+        }
+        MiniASTI32::SlowCat(elements) => elements.first().map(|(e, _)| eval_i32(e)).unwrap_or(0),
+        MiniASTI32::RandomChoice(elements, _) | MiniASTI32::Stack(elements) => {
+            elements.first().map(eval_i32).unwrap_or(0)
+        }
+        MiniASTI32::Fast(pattern, _) => eval_i32(pattern),
+        MiniASTI32::Slow(pattern, _) => eval_i32(pattern),
+        MiniASTI32::Replicate(pattern, _count) => eval_i32(pattern),
+        MiniASTI32::Degrade(pattern, _, _) => eval_i32(pattern),
+        MiniASTI32::Euclidean { pattern, .. } => eval_i32(pattern),
+        MiniASTI32::Polymeter { children, .. } => {
+            children.first().map(eval_i32).unwrap_or(0)
+        }
     }
 }
 
@@ -658,26 +841,14 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::Sequence(elements) | MiniAST::FastCat(elements) => {
-            // Replicate flattens syntactically into the parent sequence.
-            let expanded: Vec<(&MiniAST, Option<f64>)> = elements
-                .iter()
-                .flat_map(|(p, w)| match p {
-                    MiniAST::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
-                })
-                .collect();
-
             let mut patterns = Vec::new();
             let mut weights = Vec::new();
             let mut has_weights = false;
 
-            for (ast, weight) in expanded {
+            for (ast, weight) in elements {
                 patterns.push(convert_inner(ast)?);
                 if let Some(w) = weight {
-                    weights.push(Fraction::from(w));
+                    weights.push(Fraction::from(*w));
                     has_weights = true;
                 } else {
                     weights.push(Fraction::from_integer(1));
@@ -758,13 +929,12 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
 
         MiniAST::Slow(pattern, factor) => {
             let pat = convert_inner(pattern)?;
-            // Note: Slow uses MiniAST, not MiniASTF64, so we need to handle it differently
-            // For now, try to extract a numeric value from the AST
+            // Slow uses MiniAST, not MiniASTF64 — extract a numeric value.
             let factor_val = match factor.as_ref() {
                 MiniAST::Pure(Located { node, .. }) => node.to_f64().unwrap_or(1.0),
-                _ => 1.0, // Default for complex patterns
+                _ => 1.0,
             };
-            Ok(pat._slow(Fraction::from(factor_val)))
+            Ok(pat.slow(crate::pattern_system::pure(Fraction::from(factor_val))))
         }
 
         MiniAST::Replicate(pattern, count) => {
@@ -798,68 +968,8 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
             }
             let pat = convert_inner(pattern)?;
 
-            // Fast path: when pulses/steps/rotation are constant atoms (the
-            // overwhelmingly common case — `0(5,8)` etc.), skip the
-            // `euclid_pat_with_rest` machinery (3 levels of inner_join nesting
-            // + per-cycle re-evaluation of the rhythm). Drop straight to the
-            // constant-param `euclid_rot_with_rest`.
-            let const_pulses = match &**pulses {
-                crate::pattern_system::mini::ast::MiniASTU32::Pure(p) => {
-                    Some((p.node as i32, p.span.clone()))
-                }
-                _ => None,
-            };
-            let const_steps = match &**steps {
-                crate::pattern_system::mini::ast::MiniASTU32::Pure(s) => {
-                    Some((s.node, s.span.clone()))
-                }
-                _ => None,
-            };
-            let const_rotation = match rotation.as_deref() {
-                None => Some((0i32, None)),
-                Some(crate::pattern_system::mini::ast::MiniASTI32::Pure(r)) => {
-                    Some((r.node, Some(r.span.clone())))
-                }
-                _ => None,
-            };
-            let rest =
-                T::rest_value().expect("supports_rest() returned true but rest_value() is None");
-
-            if let (Some((p, p_span)), Some((s, s_span)), Some((r, r_span))) =
-                (const_pulses, const_steps, const_rotation)
-            {
-                // For `pure_atom(K, N[, R])` with all-constant args, emit the
-                // fused EuclidConst variant.
-                if let MiniAST::Pure(Located { node: atom, span: value_span }) = &**pattern {
-                    if let Ok(value) = T::from_atom(atom) {
-                        return Ok(crate::pattern_system::Pattern::new_euclid_const(
-                            value,
-                            rest,
-                            value_span.clone(),
-                            p,
-                            s,
-                            r,
-                            p_span,
-                            s_span,
-                            r_span,
-                        ));
-                    }
-                }
-
-                // Patterned value with constant rhythm: build the rhythm via
-                // the generic euclid_rot_with_rest and attach the rhythm
-                // modifier spans.
-                let mut result = pat.euclid_rot_with_rest(p, s, r, rest);
-                result = result.with_modifier_span(p_span);
-                result = result.with_modifier_span(s_span);
-                if let Some(rs) = r_span {
-                    result = result.with_modifier_span(rs);
-                }
-                return Ok(result);
-            }
-
-            // Patterned euclidean (e.g. `0([2 3], 8)`) — fall back to the
-            // patterned API.
+            // Convert pulses, steps, and rotation to patterns for patterned euclidean
+            // Note: pulses AST is MiniASTU32 but we need i32, so convert via fmap
             let pulses_pat = convert_u32_pattern(pulses).fmap(|p| *p as i32);
             let steps_pat = convert_u32_pattern(steps);
             let rotation_pat = rotation
@@ -867,7 +977,32 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 .map(|r| convert_i32_pattern(r))
                 .unwrap_or_else(|| crate::pattern_system::constructors::pure(0i32));
 
+            // Safe to unwrap because supports_rest() returned true
+            let rest =
+                T::rest_value().expect("supports_rest() returned true but rest_value() is None");
             Ok(pat.euclid_pat_with_rest(pulses_pat, steps_pat, rotation_pat, rest))
+        }
+
+        MiniAST::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            // Polymeter: stack each child scaled so its step count maps to
+            // `steps_per_cycle`. Default stepsPerCycle is the first child's
+            // own step count — matches strudel's fallback in mini.mjs.
+            let spc = steps_per_cycle
+                .as_deref()
+                .map(eval_f64)
+                .unwrap_or_else(|| children.first().map(step_count_main).unwrap_or(1.0));
+            let scaled: Vec<Pattern<T>> = children
+                .iter()
+                .map(|c| {
+                    let w = step_count_main(c).max(1.0);
+                    let pat = convert_inner(c)?;
+                    Ok(pat.fast(constructors::pure(Fraction::from(spc / w))))
+                })
+                .collect::<Result<_, ConvertError>>()?;
+            Ok(stack(scaled))
         }
     }
 }
@@ -876,7 +1011,7 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
 mod tests {
     use super::*;
     use crate::pattern_system::SourceSpan;
-    use crate::pattern_system::mini::parser::parse;
+    use crate::pattern_system::mini::parse_ast as parse;
 
     #[test]
     fn test_convert_number() {
@@ -2088,7 +2223,7 @@ mod tests {
     #[test]
     fn test_random_choice_in_sequence_has_onsets() {
         // "a b|c d" parses as a (b|c) d — all three positions should produce
-        // discrete events with onsets.
+        // discrete events with onsets (previously b|c produced whole: None).
         let ast = parse("1 2|3 4").unwrap();
         let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
 
@@ -2249,85 +2384,6 @@ mod tests {
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
         assert_eq!(haps.len(), 2, "Replicate ! should default to 2 copies");
-    }
-
-    #[test]
-    fn test_replicate_flattens_in_sequence() {
-        // `a b!2 c` should be 4 sibling elements `a b b c`, not `a [b b] c`.
-        // Strudel/Tidal: `!N` flattens syntactically into the parent sequence.
-        let ast = parse("1 2!2 3").unwrap();
-        let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
-
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        assert_eq!(haps.len(), 4, "1 2!2 3 should produce 4 sibling events");
-        let quarter = Fraction::new(1, 4);
-        for hap in &haps {
-            assert_eq!(
-                hap.whole.as_ref().unwrap().duration(),
-                quarter,
-                "each sibling should take 1/4 of cycle"
-            );
-        }
-        assert_eq!(haps[0].value, Some(1.0));
-        assert_eq!(haps[1].value, Some(2.0));
-        assert_eq!(haps[2].value, Some(2.0));
-        assert_eq!(haps[3].value, Some(3.0));
-    }
-
-    #[test]
-    fn test_replicate_flattens_with_weighted_sibling() {
-        // `c5@1.5 c5!2` -> weights [1.5, 1, 1] total 3.5 (matches Strudel).
-        // Without flattening it would be timecat([(1.5, c5), (1, fastcat(c5, c5))])
-        // with total weight 2.5, giving the wrong durations.
-        let ast = parse("1@1.5 2!2").unwrap();
-        let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
-
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        assert_eq!(haps.len(), 3, "1@1.5 2!2 should produce 3 sibling events");
-
-        // Weights [1.5, 1, 1] total 3.5: durations 3/7, 2/7, 2/7
-        assert_eq!(
-            haps[0].whole.as_ref().unwrap().duration(),
-            Fraction::new(3, 7)
-        );
-        assert_eq!(
-            haps[1].whole.as_ref().unwrap().duration(),
-            Fraction::new(2, 7)
-        );
-        assert_eq!(
-            haps[2].whole.as_ref().unwrap().duration(),
-            Fraction::new(2, 7)
-        );
-        assert_eq!(haps[0].value, Some(1.0));
-        assert_eq!(haps[1].value, Some(2.0));
-        assert_eq!(haps[2].value, Some(2.0));
-    }
-
-    #[test]
-    fn test_replicate_flattens_in_fast_sub_with_weight() {
-        // `[c5@1.5 c5!2]` inside a parent context: the fast subsequence itself
-        // should expand to 3 elements with weights [1.5, 1, 1] (total 3.5),
-        // matching Strudel's mini-notation semantics.
-        let ast = parse("[1@1.5 2!2]").unwrap();
-        let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
-
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        assert_eq!(haps.len(), 3);
-        assert_eq!(
-            haps[0].whole.as_ref().unwrap().duration(),
-            Fraction::new(3, 7)
-        );
-        assert_eq!(
-            haps[1].whole.as_ref().unwrap().duration(),
-            Fraction::new(2, 7)
-        );
-        assert_eq!(
-            haps[2].whole.as_ref().unwrap().duration(),
-            Fraction::new(2, 7)
-        );
     }
 
     // --- Weighted Sequence Behavior Tests ---

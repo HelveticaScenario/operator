@@ -468,6 +468,42 @@ export function analyzeArgumentSpans(
             return; // $slider is not a module factory, skip further processing
         }
 
+        // Track $p(literal) calls: register the literal span under the $p
+        // call site so $p() can embed its own argument_span in the returned
+        // ParsedPattern at runtime. Factories that receive a ParsedPattern
+        // read that span as the argument_span for their pattern param.
+        if (funcName === '$p') {
+            const pArgs = call.getArguments();
+            if (pArgs.length < 1) return;
+            const span = getTrackableSpan(pArgs[0], constMap);
+            if (!span) return;
+            const callStartPos = call.getStart();
+            const { line, column } =
+                sourceFile.getLineAndColumnAtPos(callStartPos);
+            const columnOffset = line === 1 ? firstLineColumnOffset : 0;
+            const callKey: CallSiteKey = `${line + lineOffset}:${column + columnOffset}`;
+            const argsMap = new Map<string, SourceSpan>();
+            argsMap.set('source', span);
+            registry.set(callKey, {
+                args: argsMap,
+                moduleType: '$p',
+            });
+            // Resolve interpolations for template expressions passed to $p
+            const innerNode = getTrackableNode(pArgs[0], constNodeMap);
+            if (innerNode) {
+                const resolutions = resolveInterpolations(
+                    innerNode,
+                    constNodeMap,
+                    constMap,
+                );
+                if (resolutions) {
+                    const spanKey = `${span.start}:${span.end}`;
+                    interpolationResolutions.set(spanKey, resolutions);
+                }
+            }
+            return;
+        }
+
         // Skip if not a tracked factory
         if (!funcName || !factoryNames.has(funcName)) {
             return;

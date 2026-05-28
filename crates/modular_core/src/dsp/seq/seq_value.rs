@@ -4,8 +4,9 @@
 //! - Voltage values (V/Oct, pre-converted at parse time)
 //! - Rests
 
-use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
+use deserr::{Deserr, DeserializeError, ErrorKind, IntoValue, Map, Sequence, ValuePointerRef};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Patch,
@@ -13,7 +14,7 @@ use crate::{
     pattern_system::{
         Pattern,
         mini::{
-            FromMiniAtom,
+            FromMiniAtom, MiniAST,
             ast::AtomValue,
             convert::{ConvertError, HasRest},
         },
@@ -129,28 +130,19 @@ impl FromMiniAtom for SeqValue {
     fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
         match atom {
             AtomValue::Number(n) => {
-                // Treat number as MIDI note, convert to voltage at parse time
-                Ok(SeqValue::Voltage(midi_to_voct_f64(*n)))
-            }
-            AtomValue::Midi(m) => {
-                // Convert MIDI to voltage at parse time
-                Ok(SeqValue::Voltage(midi_to_voct_f64(*m as f64)))
+                // Bare numbers are voltages directly (1V/oct CV).
+                Ok(SeqValue::Voltage(*n))
             }
             AtomValue::Hz(hz) => {
-                // Convert Hz to MIDI then to voltage
+                // Convert Hz to MIDI then to voltage.
                 let midi = 12.0 * (hz / 440.0).log2() + 69.0;
                 Ok(SeqValue::Voltage(midi_to_voct_f64(midi)))
-            }
-            AtomValue::Volts(v) => {
-                // Direct voltage value
-                Ok(SeqValue::Voltage(*v))
             }
             AtomValue::Note {
                 letter,
                 accidental,
                 octave,
             } => {
-                // Convert note to voltage at parse time
                 if let Some(midi) = note_to_midi(*letter, *accidental, *octave) {
                     Ok(SeqValue::Voltage(midi_to_voct_f64(midi)))
                 } else {
@@ -165,25 +157,6 @@ impl FromMiniAtom for SeqValue {
                     )))
                 }
             }
-            AtomValue::Identifier(s) => {
-                // Otherwise treat as note without octave if single letter
-                if s.len() == 1 {
-                    let c = s.chars().next().unwrap().to_ascii_lowercase();
-                    if ('a'..='g').contains(&c)
-                        && let Some(midi) = note_to_midi(c, None, None)
-                    {
-                        return Ok(SeqValue::Voltage(midi_to_voct_f64(midi)));
-                    }
-                }
-                Err(ConvertError::InvalidAtom(format!(
-                    "Cannot convert '{}' to SeqValue",
-                    s
-                )))
-            }
-            AtomValue::String(s) => Err(ConvertError::InvalidAtom(format!(
-                "Cannot convert string '{}' to SeqValue",
-                s
-            ))),
         }
     }
 
@@ -217,59 +190,164 @@ impl HasRest for SeqValue {
     }
 }
 
-/// A pattern parameter that wraps a pattern string and its parsed components.
+/// JSON payload shape delivered in the patch graph for
+/// `SeqPatternParam` / `IntervalPatternParam`. Produced client-side by
+/// the TypeScript `$p(...)` helper in `src/main/dsl/miniNotation/`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ParsedPatternPayload {
+    /// The parsed AST.
+    pub ast: MiniAST,
+    /// The original mini-notation source string.
+    pub source: String,
+    /// Pre-computed leaf spans (used for Monaco tracked decorations).
+    pub all_spans: Vec<(usize, usize)>,
+}
+
+impl ParsedPatternPayload {
+    /// Build a payload by parsing a mini-notation string via the in-crate
+    /// test parser. Integration tests in `tests/` need this (they're a
+    /// separate crate, so `#[cfg(test)]` items in the lib aren't visible).
+    /// The production path is the TypeScript `$p()` helper; this exists
+    /// only so existing Rust fixtures don't need to hand-build ASTs.
+    #[doc(hidden)]
+    pub fn parse_for_test(source: &str) -> Self {
+        if source.is_empty() {
+            return Self {
+                ast: MiniAST::Sequence(Vec::new()),
+                source: String::new(),
+                all_spans: Vec::new(),
+            };
+        }
+        let ast = crate::pattern_system::mini::parse_ast(source)
+            .expect("test_parser should parse the fixture source");
+        let all_spans = crate::pattern_system::mini::collect_leaf_spans(&ast);
+        ParsedPatternPayload {
+            ast,
+            source: source.to_string(),
+            all_spans,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<&str> for ParsedPatternPayload {
+    fn from(source: &str) -> Self {
+        Self::parse_for_test(source)
+    }
+}
+
+#[cfg(test)]
+impl From<String> for ParsedPatternPayload {
+    fn from(source: String) -> Self {
+        Self::parse_for_test(&source)
+    }
+}
+
+/// Deserr bridge — round-trip via `serde_json::Value`. The payload is
+/// structurally complex (recursive `MiniAST`), so a hand-rolled deserr
+/// impl would duplicate the existing serde `Deserialize` impl. deserr's
+/// `IntoValue` is trivially convertible to `serde_json::Value`, so we
+/// lean on that.
+impl<E: DeserializeError> Deserr<E> for ParsedPatternPayload {
+    fn deserialize_from_value<V: IntoValue>(
+        value: deserr::Value<V>,
+        location: ValuePointerRef<'_>,
+    ) -> Result<Self, E> {
+        let json = value_to_json(value);
+        serde_json::from_value::<ParsedPatternPayload>(json).map_err(|e| {
+            deserr::take_cf_content(E::error::<V>(
+                None,
+                ErrorKind::Unexpected {
+                    msg: format!("invalid parsed pattern payload: {e}"),
+                },
+                location,
+            ))
+        })
+    }
+}
+
+fn value_to_json<V: IntoValue>(value: deserr::Value<V>) -> serde_json::Value {
+    match value {
+        deserr::Value::Null => serde_json::Value::Null,
+        deserr::Value::Boolean(b) => serde_json::Value::Bool(b),
+        deserr::Value::Integer(i) => serde_json::Value::Number(i.into()),
+        deserr::Value::NegativeInteger(i) => serde_json::Value::Number(i.into()),
+        deserr::Value::Float(f) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        deserr::Value::String(s) => serde_json::Value::String(s),
+        deserr::Value::Sequence(seq) => serde_json::Value::Array(
+            seq.into_iter()
+                .map(|v: V| value_to_json::<V>(v.into_value()))
+                .collect(),
+        ),
+        deserr::Value::Map(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map.into_iter() {
+                out.insert(k, value_to_json::<V>(v.into_value()));
+            }
+            serde_json::Value::Object(out)
+        }
+    }
+}
+
+/// Default for `MiniAST` — empty sequence. Required so
+/// `ParsedPatternPayload` can derive `Default`; deserialization always
+/// overwrites the default.
+impl Default for MiniAST {
+    fn default() -> Self {
+        MiniAST::Sequence(Vec::new())
+    }
+}
+
+/// A pattern parameter that wraps a parsed pattern payload and its
+/// derived runtime state.
 ///
-/// This struct is serialized as a simple string but contains the parsed pattern
-/// and cached query results.
-#[derive(Clone, Default, JsonSchema, Debug)]
-#[serde(transparent)]
-#[schemars(transparent)]
+/// The wire shape is [`ParsedPatternPayload`] (JSON object with `ast`,
+/// `source`, `all_spans`). Parsing happens TypeScript-side via `$p(...)`;
+/// this struct only lowers the AST into a runtime [`Pattern<SeqValue>`]
+/// and pre-computes cycles 0..`PARAM_CACHE_CYCLES` of haps for the audio
+/// thread.
+#[derive(Clone, Default, Debug)]
 pub struct SeqPatternParam {
-    /// The source pattern string (used for serialization)
+    /// The source pattern string (echoed from the payload for Monaco
+    /// highlighting / IPC). Not serialized — the wire shape is the
+    /// payload, not the struct itself.
     #[allow(dead_code)]
     source: String,
 
-    /// The parsed pattern (skipped in serialization)
-    #[serde(skip, default)]
-    #[schemars(skip)]
+    /// The parsed pattern.
     pub(crate) pattern: Option<Pattern<SeqValue>>,
 
-    /// All leaf spans in the pattern (character offsets within the pattern string).
-    /// Computed once at parse time for creating Monaco tracked decorations.
-    ///
-    /// These differ from the "spans" returned in module state:
-    /// - `all_spans`: All pattern leaves, used to create decorations that track edits
-    /// - `spans` (in get_state): Currently active/playing spans, used for highlighting
-    #[serde(skip, default)]
-    #[schemars(skip)]
+    /// All leaf spans (character offsets in `source`).
     pub(crate) all_spans: Vec<(usize, usize)>,
 
-    /// Pre-computed haps for cycles 0..PARAM_CACHE_CYCLES, populated at parse time.
-    /// Each element is a [`SeqCycleStorage`] holding scalar haps and a parallel
-    /// span arena — voices can hold their cycle index without keeping an Arc.
-    #[serde(skip, default)]
-    #[schemars(skip)]
+    /// Pre-computed haps for cycles 0..PARAM_CACHE_CYCLES.
     pub(crate) cached_haps: Vec<SeqCycleStorage>,
 
-    /// Largest `haps.len()` seen across the cached cycles. Used by the
-    /// audio-thread module cache to pre-size its slots.
-    #[serde(skip, default)]
-    #[schemars(skip)]
+    /// Largest `haps.len()` seen across the cached cycles.
     pub(crate) max_haps_per_cycle: usize,
 
     /// Largest `span_arena.len()` seen across the cached cycles.
-    #[serde(skip, default)]
-    #[schemars(skip)]
     pub(crate) max_spans_per_cycle: usize,
 }
 
+impl JsonSchema for SeqPatternParam {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        ParsedPatternPayload::schema_name()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        ParsedPatternPayload::json_schema(generator)
+    }
+}
+
 impl SeqPatternParam {
-    /// Parse a pattern string.
-    fn parse(source: &str) -> Result<Self, String> {
-        let ast = crate::pattern_system::mini::parse_ast(source).map_err(|e| e.to_string())?;
-        let all_spans = crate::pattern_system::mini::collect_leaf_spans(&ast);
-        let pattern =
-            crate::pattern_system::mini::convert::<SeqValue>(&ast).map_err(|e| e.to_string())?;
+    fn from_payload(payload: ParsedPatternPayload) -> Result<Self, String> {
+        if payload.source.is_empty() {
+            return Ok(Self::default());
+        }
+        let pattern = crate::pattern_system::mini::convert::<SeqValue>(&payload.ast)
+            .map_err(|e| e.to_string())?;
 
         let mut bump = bumpalo::Bump::new();
         let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(PARAM_CACHE_CYCLES);
@@ -288,14 +366,13 @@ impl SeqPatternParam {
             .map(|c| c.span_arena.len())
             .max()
             .unwrap_or(0);
-        // Leave a 1.5× margin on top of the observed maximum.
         let max_haps_per_cycle = (max_haps.max(MIN_HAPS_CAP_HINT) * 3) / 2;
         let max_spans_per_cycle = (max_spans.max(MIN_SPANS_CAP_HINT) * 3) / 2;
 
         Ok(Self {
-            source: source.to_string(),
+            source: payload.source,
             pattern: Some(pattern),
-            all_spans,
+            all_spans: payload.all_spans,
             cached_haps,
             max_haps_per_cycle,
             max_spans_per_cycle,
@@ -333,17 +410,17 @@ impl SeqPatternParam {
     }
 }
 
-// deserr implementation for SeqPatternParam - transparent string wrapper that parses.
-impl<E: DeserializeError> deserr::Deserr<E> for SeqPatternParam {
+// deserr implementation: reads the JSON `ParsedPatternPayload` shape
+// (`{ ast, source, all_spans }`). Source-only strings are no longer
+// accepted; the DSL must wrap mini-notation in `$p(...)` before passing
+// to `$cycle`.
+impl<E: DeserializeError> Deserr<E> for SeqPatternParam {
     fn deserialize_from_value<V: IntoValue>(
         value: deserr::Value<V>,
         location: ValuePointerRef<'_>,
     ) -> Result<Self, E> {
-        let source = String::deserialize_from_value(value, location)?;
-        if source.is_empty() {
-            return Ok(Self::default());
-        }
-        Self::parse(&source).map_err(|e| {
+        let payload = ParsedPatternPayload::deserialize_from_value(value, location)?;
+        Self::from_payload(payload).map_err(|e| {
             deserr::take_cf_content(E::error::<V>(
                 None,
                 ErrorKind::Unexpected { msg: e },
@@ -396,10 +473,9 @@ mod tests {
 
     #[test]
     fn test_from_atom() {
-        // Number is treated as MIDI and converted to voltage
-        let n = SeqValue::from_atom(&AtomValue::Number(60.0)).unwrap();
-        let expected_voltage = midi_to_voct_f64(60.0);
-        assert!(matches!(n, SeqValue::Voltage(v) if (v - expected_voltage).abs() < 0.001));
+        // Bare numbers are voltages directly (1V/oct).
+        let n = SeqValue::from_atom(&AtomValue::Number(2.0)).unwrap();
+        assert!(matches!(n, SeqValue::Voltage(v) if (v - 2.0).abs() < 0.001));
 
         // Note is converted to voltage at parse time
         let note = SeqValue::from_atom(&AtomValue::Note {
@@ -410,14 +486,6 @@ mod tests {
         .unwrap();
         let expected_a4_voltage = midi_to_voct_f64(69.0); // A4 = MIDI 69
         assert!(matches!(note, SeqValue::Voltage(v) if (v - expected_a4_voltage).abs() < 0.001));
-
-        assert!(
-            SeqValue::from_atom(&AtomValue::Identifier("module(src:output:0)".to_string()))
-                .is_err()
-        );
-        assert!(
-            SeqValue::from_atom(&AtomValue::String("module(src:output:0)".to_string())).is_err()
-        );
     }
 
     #[test]

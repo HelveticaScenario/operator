@@ -39,9 +39,6 @@ export interface ElectronAPI {
 
     // Schema operations
     getSchemas: Promisify<IPCHandlers[typeof IPC_CHANNELS.GET_SCHEMAS]>;
-    getMiniLeafSpans: Promisify<
-        IPCHandlers[typeof IPC_CHANNELS.GET_MINI_LEAF_SPANS]
-    >;
 
     // DSL operations
     executeDSL: (
@@ -252,7 +249,6 @@ const electronAPI: ElectronAPI = {
 
     // Schema operations
     getSchemas: (...args) => invokeIPC('GET_SCHEMAS', ...args),
-    getMiniLeafSpans: (...args) => invokeIPC('GET_MINI_LEAF_SPANS', ...args),
 
     // DSL operations
     executeDSL: (source, sourceId, trigger) =>
