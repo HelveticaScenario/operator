@@ -9600,16 +9600,16 @@
           ]
         },
         "SpAlignmentMode": {
-          "description": "Strudel-style alignment mode for chained `$sp` ops. Mirrors\n[`crate::pattern_system::sp_combine::SpAlignmentMode`] (kept in sync\nmanually since the wire-shape variant needs serde + schemars).",
+          "description": "Strudel-style alignment mode for chained `$sp` ops. Wire form uses\nlowercase strings (`\"in\"`, `\"out\"`, `\"mix\"`, `\"squeeze\"`,\n`\"squeezeout\"`, `\"reset\"`, `\"restart\"`) to match the TS builder.\nMirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].",
           "type": "string",
           "enum": [
-            "In",
-            "Out",
-            "Mix",
-            "Squeeze",
-            "SqueezeOut",
-            "Reset",
-            "Restart"
+            "in",
+            "out",
+            "mix",
+            "squeeze",
+            "squeezeout",
+            "reset",
+            "restart"
           ]
         },
         "SpKindTag": {
@@ -9636,11 +9636,11 @@
           ]
         },
         "SpOpKind": {
-          "description": "Arithmetic operation kind for chained `$sp` ops.",
+          "description": "Arithmetic operation kind for chained `$sp` ops. Wire form uses\nlowercase strings (`\"add\"`, `\"sub\"`) to match the TS builder.",
           "type": "string",
           "enum": [
-            "Add",
-            "Sub"
+            "add",
+            "sub"
           ]
         },
         "SpPatternPayload": {

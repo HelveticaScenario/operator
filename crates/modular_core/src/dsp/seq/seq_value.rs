@@ -306,17 +306,21 @@ impl Default for MiniAST {
     }
 }
 
-/// Arithmetic operation kind for chained `$sp` ops.
+/// Arithmetic operation kind for chained `$sp` ops. Wire form uses
+/// lowercase strings (`"add"`, `"sub"`) to match the TS builder.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum SpOpKind {
     Add,
     Sub,
 }
 
-/// Strudel-style alignment mode for chained `$sp` ops. Mirrors
-/// [`crate::pattern_system::sp_combine::SpAlignmentMode`] (kept in sync
-/// manually since the wire-shape variant needs serde + schemars).
+/// Strudel-style alignment mode for chained `$sp` ops. Wire form uses
+/// lowercase strings (`"in"`, `"out"`, `"mix"`, `"squeeze"`,
+/// `"squeezeout"`, `"reset"`, `"restart"`) to match the TS builder.
+/// Mirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum SpAlignmentMode {
     In,
     Out,
