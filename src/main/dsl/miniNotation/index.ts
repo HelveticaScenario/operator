@@ -114,11 +114,15 @@ const SP_KIND = 'SpPattern' as const;
 /**
  * Mini-notation payload shape — same as `ParsedPattern` minus chain
  * methods. Used as elements of `SpPattern.sources`.
+ *
+ * Mutable arrays (rather than readonly) so the shape lines up with the
+ * factory's schema-generated param types. Treat as immutable by
+ * convention.
  */
 export interface ParsedPatternPayload {
     ast: MiniAST;
     source: string;
-    all_spans: ReadonlyArray<readonly [number, number]>;
+    all_spans: Array<[number, number]>;
 }
 
 /** Callable + method bag for chain methods. */
@@ -131,15 +135,19 @@ export type SpCombineBuilder = ((rhs: string) => SpPattern) & {
  * deserializer recognises `__kind === 'SpPattern'` via the
  * `SeqPatternSource` untagged enum and lowers the chain to a
  * `Pattern<SeqValue>` at param ingestion time.
+ *
+ * Arrays are mutable (rather than readonly) so the shape lines up with
+ * the schema-generated `$cycle.pattern` param type. Treat as immutable
+ * by convention.
  */
 export interface SpPattern {
-    readonly __kind: typeof SP_KIND;
-    readonly sources: ReadonlyArray<ParsedPatternPayload>;
-    readonly scale: string;
-    readonly ops: ReadonlyArray<SpOp>;
-    readonly argument_spans: ReadonlyArray<SourceSpan>;
-    readonly add: SpCombineBuilder;
-    readonly sub: SpCombineBuilder;
+    __kind: typeof SP_KIND;
+    sources: Array<ParsedPatternPayload>;
+    scale: string;
+    ops: Array<SpOp>;
+    argument_spans: Array<SourceSpan>;
+    add: SpCombineBuilder;
+    sub: SpCombineBuilder;
 }
 
 /**

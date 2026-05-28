@@ -527,21 +527,19 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
  * Chainable scale-degree pattern returned by \`$sp()\`. Pass directly to
  * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
  * and gets its own editor-highlight argument span.
+ *
+ * Arrays declared mutable (rather than readonly) to line up with the
+ * schema-generated factory param types. Treat as immutable by
+ * convention — chain methods return fresh objects.
  */
 type SpPattern = {
-  readonly __kind: 'SpPattern';
-  readonly sources: ReadonlyArray<ParsedPattern>;
-  readonly scale: string;
-  readonly ops: ReadonlyArray<{
-    readonly op: 'add' | 'sub';
-    readonly mode: SpAlignmentMode;
-  }>;
-  readonly argument_spans: ReadonlyArray<{
-    readonly start: number;
-    readonly end: number;
-  }>;
-  readonly add: SpCombineBuilder;
-  readonly sub: SpCombineBuilder;
+  __kind: 'SpPattern';
+  sources: ParsedPattern[];
+  scale: string;
+  ops: { op: 'add' | 'sub'; mode: SpAlignmentMode }[];
+  argument_spans: { start: number; end: number }[];
+  add: SpCombineBuilder;
+  sub: SpCombineBuilder;
 };
 
 /**
