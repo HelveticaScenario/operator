@@ -1,15 +1,19 @@
-// Pipeline combining m1el/woscope's analytic line shader with the rendering
-// passes from dood.al/oscilloscope (Neil Thapen). Five stages per frame:
+// XY scope pipeline. Renders pairs of voltage samples per trace through a
+// five-stage GPU pipeline each frame:
 //
-//   1. fade           — alpha-blend a dark quad over the previous frame's
-//                       lineFbo so the trace decays exponentially (CRT
-//                       phosphor persistence).
-//   2. line           — additive draw of every active trace into lineFbo.
-//   3. tight bloom    — half-res downsample then separable 17-tap Gaussian.
-//   4. big bloom      — further 1/8-res downsample then another 17-tap blur
-//                       for the wide ambient halo.
-//   5. composite      — tonemapped sum of line + tight + big with bright
-//                       pixels washing toward white.
+//   1. fade        — alpha-blend a dark quad over lineFbo so the trace
+//                    decays exponentially (CRT phosphor persistence).
+//   2. line        — additive draw of every active trace into lineFbo.
+//   3. tight bloom — half-res downsample + separable 17-tap gaussian.
+//   4. big bloom   — 1/8-res downsample + another 17-tap blur for the
+//                    wide ambient halo.
+//   5. composite   — tonemapped sum of line + tight + big to the canvas,
+//                    with bright pixels washing toward white.
+//
+// Attribution: line geometry/integral adapted from m1el/woscope (MIT,
+// https://github.com/m1el/woscope); persistence pass, dual-stage gaussian
+// bloom, and exposure-mapped composite adapted from dood.al/oscilloscope
+// by Neil Thapen (https://dood.al/oscilloscope/).
 
 import {
     fsBlur,
@@ -24,9 +28,9 @@ import {
 export const MAX_TRACES = 16;
 export const SCOPE_XY_CAPACITY = 2048;
 
-// Lanczos upsampler tuning (matches dood.al/oscilloscope's Filter.init(_, 8, 6)):
-// each input sample produces `STEPS` interpolated outputs using a sinc window
-// of half-width `RADIUS` source samples. Output count = N*STEPS + 1.
+// Lanczos upsampler tuning: each input sample produces STEPS interpolated
+// outputs using a sinc window of half-width RADIUS source samples. Output
+// count = N*STEPS + 1.
 const UPSAMPLE_STEPS = 6;
 const UPSAMPLE_RADIUS = 8;
 const UPSAMPLE_LANCZOS_TWEAK = 1.5;
@@ -66,7 +70,7 @@ export interface ScopeXYOptions {
     intensity?: number;
     /**
      * Fraction of `lineFbo` discarded per frame (0..1). Higher = shorter
-     * trail. dood.al exposes this as a slider; we hard-code a default.
+     * trail; 0 = no fade (trail accumulates indefinitely).
      */
     fadeAmount?: number;
     /** Tonemap exposure passed to the composite (1-exp(-uExposure*L)). */
@@ -217,8 +221,8 @@ export function createScopeXY(
 
     const nSamples = UPSAMPLED_LEN;
 
-    // Lanczos kernel uploaded once as a vertex-shader uniform array — the GPU
-    // does the upsampling, so no CPU scratch buffers are needed.
+    // Lanczos kernel uploaded once as a vertex-shader uniform array; the
+    // GPU does the upsampling.
     const upsampleKernel = buildLanczosKernel(UPSAMPLE_RADIUS, UPSAMPLE_STEPS);
 
     // aIdx: UNSIGNED_SHORT, one component, vertex index 0..nSamples*4-1.
@@ -260,8 +264,8 @@ export function createScopeXY(
     gl.bindBuffer(gl.ARRAY_BUFFER, fullscreenBuf);
     gl.bufferData(gl.ARRAY_BUFFER, fullscreenQuad, gl.STATIC_DRAW);
 
-    // Scratch used to interleave one ring of x/y volts into RGBA float texels
-    // before texSubImage2D. Reused across traces; 2048 samples × 4 channels.
+    // Interleaves one trace's x/y volts into RGBA float texels before
+    // texSubImage2D. 2048 samples × 4 channels, reused across traces.
     const sampleScratch = new Float32Array(SCOPE_XY_CAPACITY * 4);
 
     // Per-trace sample textures (2048×1 RGBA float). Allocated lazily to
@@ -398,11 +402,9 @@ export function createScopeXY(
         );
         if (inLen < 2) return null;
 
-        // The Rust snapshot() already linearizes the ring into chronological
-        // order — pair.x[0] is the oldest sample, pair.x[inLen-1] the newest.
-        // Applying `head` here was double-counting it, shuffling adjacent
-        // samples out of order and producing phantom strokes between
-        // non-adjacent chronological points.
+        // pair.x/y arrive pre-linearized by the audio thread's snapshot():
+        // index 0 is the oldest sample, index inLen-1 the newest. Read
+        // sequentially; `pair.head` is metadata only.
         for (let s = 0; s < inLen; s++) {
             const t = s * 4;
             sampleScratch[t] = pair.x[s];

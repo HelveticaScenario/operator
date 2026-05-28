@@ -81,17 +81,15 @@ interface ScopeXYBackgroundProps {
 }
 
 const DEFAULT_INTENSITY = 0.6;
-// 0.6 ≈ fadeAmount 0.4 — matches dood.al's default per-frame phosphor decay.
-// Higher values keep persistence trails visible much longer than the
-// reference; lower (toward 0) clears each frame.
+// Maps to fadeAmount = 1 - persistence = 0.4 per frame. Higher values
+// retain trails for many frames; 0 clears every frame.
 const DEFAULT_PERSISTENCE = 0.6;
 const DEFAULT_UPSAMPLE = true;
 
 /**
- * Full-bleed Lissajous oscilloscope canvas that lives behind the editor.
- * Polls `synthesizer.getScopeXy()` on every RAF tick and redraws. The
- * underlying renderer is a port of m1el/woscope + dood.al/oscilloscope —
- * see pipeline.ts for the attribution / pass-by-pass breakdown.
+ * Full-bleed XY scope canvas that lives behind the editor. Polls
+ * `synthesizer.getScopeXy()` on every RAF tick and redraws. See
+ * pipeline.ts for the pass-by-pass breakdown.
  */
 export function ScopeXYBackground({
     paused = false,

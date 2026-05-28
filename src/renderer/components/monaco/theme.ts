@@ -53,9 +53,9 @@ export function applyMonacoTheme(
             'editorStickyScroll.background': TRANSPARENT,
             'editorStickyScrollHover.background': TRANSPARENT,
             'editor.lineHighlightBackground': lineHighlightAlpha,
-            // Match border to fill so the 1px outline Monaco draws around
-            // the current line blends in — otherwise the semi-transparent
-            // fill makes it read as a hard rectangle.
+            // Match the 1px line-highlight border to the fill so the row
+            // reads as a single soft tint instead of a hard outlined box
+            // against the transparent fill.
             'editor.lineHighlightBorder': lineHighlightAlpha,
         },
         inherit: true,

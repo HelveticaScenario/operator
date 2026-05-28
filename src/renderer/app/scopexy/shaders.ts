@@ -1,11 +1,9 @@
-// Ports of m1el/woscope (MIT) and dood.al/oscilloscope by Neil Thapen.
-//   woscope: https://github.com/m1el/woscope
-//   dood.al: https://dood.al/oscilloscope/
-//
-// The line geometry/integral is woscope's; persistence, dual-stage bloom,
-// 17-tap real-gaussian blur, and exposure-mapped composite are from dood.al.
-// We drop dood.al's noise-jpg screen texture and its hue control (the beam
-// colour comes from the host theme instead).
+// XY scope shaders. Renders pairs of voltage samples as an additive
+// gaussian-line trace on a phosphor-style background. Attribution: line
+// geometry/integral adapted from m1el/woscope (MIT,
+// https://github.com/m1el/woscope); persistence pass, dual-stage gaussian
+// bloom, and exposure-mapped composite adapted from dood.al/oscilloscope by
+// Neil Thapen (https://dood.al/oscilloscope/).
 
 // GPU Lanczos upsampler. Per-frame: a 2048×1 RGBA-float texture is uploaded
 // with the raw ring (x in .r, y in .g). Each vertex's output sample index
@@ -80,10 +78,9 @@ void main () {
     else dir = vec2(1.0, 0.0);
     vec2 norm = vec2(-dir.y, dir.x);
 
-    // dood.al's coordinate convention for uvl.xy: xy.x is signed distance
-    // along the segment in clip-space units; xy.y is signed perpendicular
-    // offset in the same units. fsLine plugs these straight into the
-    // gaussian-line integral.
+    // uvl.xy carries signed distances in clip-space units (x along the
+    // segment, y perpendicular). fsLine plugs them straight into the
+    // gaussian-line integral without further remapping.
     float tang;
     vec2 current;
     if (idx >= 2.0) {
@@ -98,7 +95,10 @@ void main () {
     float side = (mod(idx, 2.0) - 0.5) * 2.0;
     uvl.y = side * uSize;
     uvl.z = len;
-    // Per-vertex brightness baked in — matches dood.al's vsLine output.
+    // Per-vertex brightness baked here so the fragment shader only needs
+    // to multiply, not recompute the ramp per pixel. Oldest sample in the
+    // ring is dimmed to (1 - uFadeAmount) of full intensity; newest is
+    // full.
     uvl.w = uIntensity * mix(1.0 - uFadeAmount, 1.0, outIdx / uNumSamples);
 
     gl_Position = vec4(current + (tang * dir + norm * side) * uSize, 0.0, 1.0);
@@ -121,26 +121,25 @@ float erf(float x) {
 void main (void)
 {
     float len = uvl.z;
-    // uvl.xy is already in clip-space distance units (vsLine matches
-    // dood.al's convention: x along segment, y perpendicular).
+    // uvl.xy is already in clip-space distance units (x along segment,
+    // y perpendicular).
     vec2 xy = uvl.xy;
     float alpha;
-    // Tighter sigma (uSize/5) matches dood.al's beam profile. uSize/4 was
-    // too wide and pushed too much energy into junction overlaps.
+    // sigma = uSize/5 keeps the beam tight enough that junction overlaps
+    // between consecutive quads don't pile excess energy on top of each
+    // other; wider sigma reads as a fat smudge.
     float sigma = uSize / 5.0;
     if (len < EPS) {
         alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) / (2.0 * sqrt(uSize));
     } else {
-        // dood.al's analytic gaussian line integral: erf(x) - erf(x-len),
-        // no extra *uSize multiplier (which was making our beam dimmer
-        // per fragment and pushing user toward higher intensity, which
-        // amplified persistence trails).
+        // Analytic gaussian-line integral: convolution of a unit gaussian
+        // with the segment [0, len] along its x axis, evaluated at xy.
         alpha = erf(xy.x / SQRT2 / sigma)
               - erf((xy.x - len) / SQRT2 / sigma);
         alpha *= exp(-xy.y * xy.y / (2.0 * sigma * sigma)) / 2.0 / len;
     }
     // Per-vertex brightness (afterglow × intensity) is already baked into
-    // uvl.w by vsLine — matches dood.al's convention.
+    // uvl.w by vsLine.
     alpha *= uvl.w;
     gl_FragColor = vec4(vec3(uColor), uColor.a * alpha);
 }
@@ -178,9 +177,9 @@ void main (void) {
 }
 `;
 
-// dood.al's 17-tap separable Gaussian (sigma ≈ 3). Real gaussian weights
-// (not the triangle 1/2/3/4/5 woscope ships with) so the bloom has circular
-// iso-contours.
+// 17-tap separable gaussian blur (sigma ≈ 3). Real gaussian weights so the
+// bloom halo has circular iso-contours; triangle weights would give the
+// halo square corners.
 export const fsBlur = `\
 precision highp float;
 uniform sampler2D uTexture;
@@ -210,9 +209,10 @@ void main (void)
 }
 `;
 
-// Final composite: line + tight glow + big glow tonemapped via 1-exp(-uExp*L)
-// (dood.al's curve). Bright pixels mix toward white for the phosphor over-
-// saturation feel; uBackground adds the canvas tint.
+// Final composite: line + tight glow + big glow, tonemapped through
+// 1 - exp(-uExposure*L) to compress the unbounded additive accumulation
+// back into [0, 1]. Bright pixels mix toward white for the phosphor
+// over-saturation feel; uBackground adds the canvas tint.
 export const fsComposite = `\
 precision highp float;
 uniform sampler2D uLine;
