@@ -662,8 +662,8 @@ impl<E: DeserializeError> Deserr<E> for SeqPatternParam {
             let preview = serde_json::to_string(&json)
                 .ok()
                 .map(|s| {
-                    let mut t: String = s.chars().take(400).collect();
-                    if s.len() > 400 {
+                    let mut t: String = s.chars().take(4000).collect();
+                    if s.len() > 4000 {
                         t.push_str("...");
                     }
                     t
