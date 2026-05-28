@@ -75,6 +75,15 @@ impl Fraction {
         }
     }
 
+    /// Position within the current cycle: `self - self.sam()`. Always in
+    /// `[0, 1)`. Used by `reset_join` to align an inner pattern's cycle 0
+    /// to the cycle-relative onset of an outer hap.
+    #[inline]
+    pub fn cycle_pos(&self) -> Fraction {
+        let sam = self.floor_value();
+        Fraction::new(self.num - sam * self.den, self.den)
+    }
+
     /// TimeSpan representing the full cycle containing this time.
     #[inline]
     pub fn whole_cycle(&self) -> super::TimeSpan {

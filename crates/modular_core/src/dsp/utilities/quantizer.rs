@@ -146,6 +146,51 @@ impl ScaleParam {
     }
 }
 
+/// Convert a signed scale degree to a V/Oct voltage.
+///
+/// Shared by `IntervalSeq` (Rust audio path) and the `degrees_to_voltages`
+/// N-API helper (used by the `$sp` DSL helper). Both must produce identical
+/// voltages for the same inputs.
+///
+/// `scale_intervals` is the list of semitone offsets per scale step (e.g.
+/// `[0, 2, 4, 5, 7, 9, 11]` for major). `tuning` is the 12-entry V/Oct table
+/// indexed by chromatic semitone within the octave (12-TET by default,
+/// adjusted for `just` / `pythagorean`).
+pub fn degree_to_voltage(
+    degree: i32,
+    base_midi: i32,
+    scale_intervals: &[i8],
+    tuning: &[f64],
+) -> f64 {
+    if scale_intervals.is_empty() {
+        // Chromatic fallback — no scale snapping.
+        return crate::dsp::utils::midi_to_voct_f64(60.0 + degree as f64);
+    }
+
+    let scale_len = scale_intervals.len() as i32;
+
+    let (octave, wrapped_degree) = if degree >= 0 {
+        (degree / scale_len, (degree % scale_len) as usize)
+    } else {
+        let adj_degree = degree + 1;
+        let octave = (adj_degree / scale_len) - 1;
+        let wrapped = ((degree % scale_len) + scale_len) % scale_len;
+        (octave, wrapped as usize)
+    };
+
+    let semitone_in_scale = scale_intervals
+        .get(wrapped_degree)
+        .copied()
+        .unwrap_or(0) as i32;
+
+    let root_v = (base_midi - 60) as f64 / 12.0;
+    let step_v = tuning
+        .get(semitone_in_scale as usize)
+        .copied()
+        .unwrap_or(0.0);
+    root_v + octave as f64 + step_v
+}
+
 /// Check if a string is a known scale type name.
 fn is_known_scale_type(name: &str) -> bool {
     validate_scale_type(name)

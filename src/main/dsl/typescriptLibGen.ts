@@ -354,33 +354,131 @@ type ParsedPattern = {
 };
 
 /**
- * Parse a mini-notation source string into a \`ParsedPattern\`.
- *
- * \`$p()\` is the entry point for mini-notation in the DSL. The pattern
- * sequencers (\`$cycle\`, \`$iCycle\`) accept a \`ParsedPattern\` rather than
- * a raw string, so every mini-notation literal flows through \`$p()\`.
+ * Parse a mini-notation source string into a \`ParsedPattern\` suitable
+ * for \`$cycle\`. Every mini-notation literal in the DSL flows through
+ * \`$p()\` — \`$cycle\` accepts a \`ParsedPattern\`, not a raw string.
  *
  * \`\`\`js
- * $cycle($p("c4 e4 g4"))                       // single-pattern sequencer
- * $iCycle([$p("0 2 4"), $p("0,4")], "c4(major)") // folded scale-degree sequencer
- *
- * const bass = $p("c2 [c2 g2] c2 e2");         // reuse a parsed pattern
+ * $cycle($p("c4 e4 g4"))                    // basic sequence
+ * const bass = $p("c2 [c2 g2] c2 e2");      // reuse a parsed pattern
  * $cycle(bass)
  * \`\`\`
  *
- * Returned object is opaque — pass it through, don't read its fields.
- * It is JSON-serializable and embeds source + span info so the editor
- * can highlight individual leaves of the pattern as the audio plays.
- * Binding the result to a \`const\` (\`const p = $p(...)\`) preserves
- * highlighting through the indirection.
+ * The returned object is opaque (JSON-serializable; carries source +
+ * span info for editor highlighting). Binding to a \`const\` preserves
+ * highlighting through the indirection. Throws if \`source\` is not a
+ * string or fails to parse.
  *
- * Throws if \`source\` is not a string or fails to parse. See \`$cycle\`
- * for the full grammar (groupings, stacks, modifiers, Euclidean, etc.);
- * see \`$iCycle\` for the scale-degree-specific value vocabulary.
+ * ### Atoms
+ *
+ * | Form | Meaning | Example |
+ * |------|---------|---------|
+ * | Bare number | Direct V/Oct voltage (1 V/oct CV) | \`0\`, \`1.5\`, \`-0.25\` |
+ * | \`<n>hz\` | Frequency in Hz (converted to V/Oct) | \`440hz\`, \`220hz\` |
+ * | Note letter (+ accidental, + octave) | Pitched note | \`c4\`, \`d#3\`, \`eb5\` |
+ * | \`~\` or \`-\` | Rest (gate low) | \`'c4 ~ e4'\`, \`'c4 - e4'\` |
+ *
+ * ### Mini-notation
+ *
+ * | Syntax | Meaning | Example |
+ * |--------|---------|---------|
+ * | \`a b c\` | Sequence — one element per time slot | \`'c4 e4 g4'\` |
+ * | \`[a b c]\` | Fast subsequence — subdivides parent slot | \`'c4 [e4 g4]'\` |
+ * | \`<a b c>\` | Slow / alternating — one element per cycle | \`'<c4 e4 g4>'\` |
+ * | \`a|b|c\` | Random choice each time the slot is reached | \`'c4|e4|g4'\` |
+ * | \`a, b\` | Stack — comma-separated patterns play simultaneously | \`'c4 e4, g4 b4'\` |
+ * | \`{a b, c d e}\` | Polymeter — children scaled to a shared step count, then stacked. \`%n\` overrides the step count: \`{a b c}%4\` | \`'{c4 e4, g4 b4 d5}'\` |
+ * | \`a . b c\` | Feet — split the slot at \`.\` boundaries (useful for aligning polymeter children) | \`'{c4 . e4 g4, f4 a4 . b4}'\` |
+ *
+ * Grouping, stacks, polymeter, and random choice nest arbitrarily.
+ *
+ * ### Per-element modifiers
+ *
+ * Modifiers attach directly to an element (no spaces) and chain in any order.
+ *
+ * | Modifier | Syntax | Meaning |
+ * |----------|--------|---------|
+ * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'c4 _ _'\` is the same as \`'c4@3'\` |
+ * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
+ * | Slow down | \`/n\` | Stretch over \`n\` cycles |
+ * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
+ * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
  *
  * @param source - mini-notation source string
  */
 declare function $p(source: string): ParsedPattern;
+
+/**
+ * Parse a scale-degree mini-notation source and resolve each integer
+ * degree to its V/Oct voltage against \`scale\`, returning a
+ * \`ParsedPattern\` suitable for \`$cycle\`.
+ *
+ * Atoms are **0-indexed scale degrees** rather than absolute pitches:
+ * \`0\` is the scale's root, \`1\` is the second scale tone, \`2\` the third,
+ * and so on. Negative values move downward. Values beyond the scale
+ * length wrap into higher/lower octaves automatically. Hz and note
+ * atoms are rejected.
+ *
+ * \`\`\`js
+ * $cycle($sp("0 2 4 7", "c(major)"))       // C-major arpeggio
+ * $cycle($sp("-1 0 2 4", "a3(min)"))       // negative degrees wrap below the root
+ * $cycle($sp("0 1 2 3 4", "c(0 2 4 7 9)")) // custom intervals (pentatonic)
+ * $cycle($sp("0 4 7", "c(just)"))          // just intonation
+ * \`\`\`
+ *
+ * ### Atoms
+ *
+ * | Form | Meaning | Example |
+ * |------|---------|---------|
+ * | Bare integer | Scale degree (0-indexed) | \`0\`, \`2\`, \`-1\` |
+ * | \`~\` or \`-\` | Rest (gate low, no pitch change) | \`'0 ~ 2 ~'\`, \`'0 - 2 -'\` |
+ *
+ * ### Mini-notation
+ *
+ * | Syntax | Meaning | Example |
+ * |--------|---------|---------|
+ * | \`a b c\` | Sequence — one degree per time slot | \`'0 2 4'\` |
+ * | \`[a b c]\` | Fast subsequence — subdivides parent slot | \`'0 [2 4]'\` |
+ * | \`<a b c>\` | Slow / alternating — one element per cycle | \`'<0 4 7>'\` |
+ * | \`a|b|c\` | Random choice each time the slot is reached | \`'0|2|4'\` |
+ * | \`a, b\` | Stack — comma-separated patterns play simultaneously | \`'0 2, 4 7'\` |
+ * | \`{a b, c d e}\` | Polymeter — children scaled to a shared step count, then stacked. \`%n\` overrides the step count: \`{a b c}%4\` | \`'{0 2, 4 5 7}'\` |
+ * | \`a . b c\` | Feet — split the slot at \`.\` boundaries (useful for aligning polymeter children) | \`'{0 . 2 4, 5 7 . 9}'\` |
+ *
+ * Grouping, stacks, polymeter, and random choice nest arbitrarily.
+ * Modifiers attach directly to an element (no spaces) and chain in any
+ * order:
+ *
+ * | Modifier | Syntax | Meaning |
+ * |----------|--------|---------|
+ * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'0 _ _'\` is the same as \`'0@3'\` |
+ * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
+ * | Slow down | \`/n\` | Stretch over \`n\` cycles |
+ * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
+ * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * ### Scale strings
+ *
+ * | Form | Example | Meaning |
+ * |------|---------|---------|
+ * | \`tonic(name)\` | \`"c(major)"\`, \`"d#(min)"\`, \`"f(dorian)"\` | Named scale type rooted at the tonic |
+ * | \`tonic<octave>(name)\` | \`"c3(major)"\`, \`"D#4(min)"\` | Same with an explicit octave (default 4 → root = C4 = 0 V) |
+ * | \`tonic(custom intervals)\` | \`"c(0 2 4 5 7 9 11)"\` | Custom semitone offsets from the tonic |
+ * | \`tonic(just)\` / \`tonic(pythagorean)\` | \`"c(just)"\`, \`"a(pythag)"\` | Non-equal 12-tone tunings |
+ * | \`chromatic\` | \`"chromatic"\` | All 12 semitones, 12-TET |
+ *
+ * Recognized scale names include major, minor, ionian, dorian, phrygian,
+ * lydian, mixolydian, aeolian, locrian, harmonic/melodic minor,
+ * pentatonic major/minor, blues, whole tone.
+ *
+ * @param source - integer scale-degree mini-notation source
+ * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
+ */
+declare function $sp(source: string, scale: string): ParsedPattern;
 
 /**
  * A loaded WAV sample handle — returned by \`$wavs()\`, passed to \`$sampler()\` as the \`wav\` param.

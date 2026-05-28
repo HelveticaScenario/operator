@@ -575,8 +575,9 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { Synthesizer, deriveChannelCount, getReservedOutputNames, QueuedTrigger, validatePatchGraph, ScopeMode } = nativeBinding
+const { Synthesizer, degreesToVoltages, deriveChannelCount, getReservedOutputNames, QueuedTrigger, validatePatchGraph, ScopeMode } = nativeBinding
 export { Synthesizer }
+export { degreesToVoltages }
 export { deriveChannelCount }
 export { getReservedOutputNames }
 export { QueuedTrigger }

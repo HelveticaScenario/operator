@@ -318,3 +318,82 @@ describe('whitespace and edge cases', () => {
         expect(() => $p('0 & 1')).toThrow(MiniParseError);
     });
 });
+
+describe('rest alternatives', () => {
+    test('`-` parses as a rest', () => {
+        const r = $p('-');
+        expect(r.ast).toEqual({ Rest: { start: 0, end: 1 } });
+    });
+
+    test('`-` and `~` rests interchangeable inside a sequence', () => {
+        const r1 = $p('c4 - e4');
+        const r2 = $p('c4 ~ e4');
+        expect('Sequence' in r1.ast).toBe(true);
+        expect('Sequence' in r2.ast).toBe(true);
+        if ('Sequence' in r1.ast && 'Sequence' in r2.ast) {
+            expect('Rest' in r1.ast.Sequence[1][0]).toBe(true);
+            expect('Rest' in r2.ast.Sequence[1][0]).toBe(true);
+        }
+    });
+
+    test('`-` followed by digit is a negative number, not a rest', () => {
+        const r = $p('-1');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: { node: { Number: -1 }, span: { start: 0, end: 2 } },
+        });
+    });
+});
+
+describe('elongation `_`', () => {
+    test('`_` extends preceding step weight by 1 (equivalent to @n)', () => {
+        const elongated = $p('0 _ _');
+        const weighted = $p('0@3');
+        // Both should yield the same effective duration via different shapes.
+        // Cheap structural check: elongated is a Sequence whose first entry
+        // carries weight 3.
+        expect('Sequence' in elongated.ast).toBe(true);
+        if ('Sequence' in elongated.ast) {
+            expect(elongated.ast.Sequence.length).toBe(1);
+            expect(elongated.ast.Sequence[0][1]).toBe(3);
+        }
+        expect('Sequence' in weighted.ast || 'Pure' in weighted.ast).toBe(true);
+    });
+
+    test('multiple `_` after a step', () => {
+        const r = $p('c4 _ _ _');
+        expect('Sequence' in r.ast).toBe(true);
+        if ('Sequence' in r.ast) {
+            expect(r.ast.Sequence[0][1]).toBe(4);
+        }
+    });
+});
+
+describe('polymeter `{...}`', () => {
+    test('basic polymeter wraps children in Polymeter node', () => {
+        const r = $p('{c4 e4, g4 b4 d5}');
+        expect('Polymeter' in r.ast).toBe(true);
+        if ('Polymeter' in r.ast) {
+            expect(r.ast.Polymeter.children.length).toBe(2);
+            expect(r.ast.Polymeter.steps_per_cycle).toBe(null);
+        }
+    });
+
+    test('polymeter with explicit step count `%n`', () => {
+        const r = $p('{c4 e4 g4}%4');
+        expect('Polymeter' in r.ast).toBe(true);
+        if ('Polymeter' in r.ast) {
+            expect(r.ast.Polymeter.steps_per_cycle).not.toBe(null);
+        }
+    });
+});
+
+describe('feet `.`', () => {
+    test('feet split sequence elements at `.` boundaries', () => {
+        // `.` alignment is mainly meaningful inside polymeter children, but
+        // parser should accept it without error.
+        const r = $p('{c4 . e4 g4, f4 a4 . b4}');
+        expect('Polymeter' in r.ast).toBe(true);
+    });
+});
+

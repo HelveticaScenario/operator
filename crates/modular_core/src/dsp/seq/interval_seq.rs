@@ -20,7 +20,7 @@ use crate::{
     MonoSignal, Patch,
     dsp::{
         utilities::quantizer::ScaleParam,
-        utils::{TempGate, TempGateState, midi_to_voct_f64, min_gate_samples},
+        utils::{TempGate, TempGateState, min_gate_samples},
     },
     pattern_system::Pattern,
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
@@ -904,46 +904,17 @@ impl IntervalSeq {
         )
     }
 
-    /// Convert a scale degree to V/Oct voltage.
+    /// Convert a scale degree to V/Oct voltage. Thin wrapper over the
+    /// shared [`crate::dsp::utilities::quantizer::degree_to_voltage`] free
+    /// function so `IntervalSeq` and the `$sp` DSL helper produce
+    /// bit-identical voltages.
     fn degree_to_voltage(&self, degree: i32) -> f64 {
-        if self.state.scale_intervals.is_empty() {
-            // Chromatic fallback
-            return midi_to_voct_f64(60.0 + degree as f64);
-        }
-
-        let scale_len = self.state.scale_intervals.len() as i32;
-
-        // Handle negative degrees with proper wrapping
-        let (octave, wrapped_degree) = if degree >= 0 {
-            (degree / scale_len, (degree % scale_len) as usize)
-        } else {
-            // For negative: -1 in 7-note scale is degree 6 in octave -1
-            let adj_degree = degree + 1;
-            let octave = (adj_degree / scale_len) - 1;
-            let wrapped = ((degree % scale_len) + scale_len) % scale_len;
-            (octave, wrapped as usize)
-        };
-
-        // Get semitone offset within octave from scale intervals
-        let semitone_in_scale = self
-            .state
-            .scale_intervals
-            .get(wrapped_degree)
-            .copied()
-            .unwrap_or(0) as i32;
-
-        // Voltage = root + degree octave + the tuning table's offset for this step.
-        // Under 12-TET this is identical to midi_to_voct_f64(base_midi + octave*12 + step).
-        // `semitone_in_scale` is always 0..11 (normalized scale intervals); `get`
-        // keeps a stray value from panicking on the audio thread.
-        let root_v = (self.state.base_midi - 60) as f64 / 12.0;
-        let step_v = self
-            .state
-            .tuning
-            .get(semitone_in_scale as usize)
-            .copied()
-            .unwrap_or(0.0);
-        root_v + octave as f64 + step_v
+        crate::dsp::utilities::quantizer::degree_to_voltage(
+            degree,
+            self.state.base_midi,
+            &self.state.scale_intervals,
+            &self.state.tuning,
+        )
     }
 
     /// Update cached scale info from params.
@@ -1408,6 +1379,36 @@ mod tests {
 
         let scale = ScaleParam::parse("D(major)").unwrap();
         assert_eq!(scale.base_midi(), 62);
+    }
+
+    #[test]
+    fn test_degree_to_voltage_free_fn_matches_method() {
+        use crate::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
+
+        // Drive both paths from the same scale + degree set so `$sp` and
+        // `$iCycle` stay bit-identical. Cover positive, negative, and
+        // octave-crossing degrees over a non-12-TET tuning to exercise the
+        // tuning table.
+        for scale_str in ["C(major)", "D#3(min)", "C(just)", "A(0 2 4 5 7 9 11)"] {
+            let scale = ScaleParam::parse(scale_str).unwrap();
+            let snapper = scale.snapper().unwrap();
+            let intervals: Vec<i8> = snapper.scale_intervals().iter().copied().collect();
+            let tuning = snapper.tuning();
+
+            let mut seq = IntervalSeq::default();
+            seq.state.scale_intervals = snapper.scale_intervals().clone();
+            seq.state.tuning = *tuning;
+            seq.state.base_midi = scale.base_midi();
+
+            for d in [-12, -7, -1, 0, 1, 3, 7, 12] {
+                let via_method = seq.degree_to_voltage(d);
+                let via_free = degree_to_voltage(d, scale.base_midi(), &intervals, tuning);
+                assert!(
+                    (via_method - via_free).abs() < 1e-12,
+                    "mismatch for scale={scale_str} degree={d}: method={via_method} free={via_free}",
+                );
+            }
+        }
     }
 
     #[test]
