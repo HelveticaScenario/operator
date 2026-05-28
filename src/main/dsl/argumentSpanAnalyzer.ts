@@ -94,6 +94,73 @@ function getCalledFunctionName(call: CallExpression): string | null {
 }
 
 /**
+ * Identify `$sp(...).add(...)`, `.sub(...)`, `.add.in(...)`, `.sub.squeeze(...)`
+ * and friends. Returns true when the chain root is `$sp(...)`.
+ *
+ * Shapes covered:
+ * - `$sp(...).add(rhs)` — callee = `<call>.add`
+ * - `$sp(...).add.in(rhs)` — callee = `<call>.add.in`
+ * - longer chains: `.add(rhs).sub.squeeze(rhs2)` — each call's chain
+ *   root recurses through the receiver
+ */
+const SP_OPS = new Set(['add', 'sub']);
+const SP_MODES = new Set([
+    'in',
+    'out',
+    'mix',
+    'squeeze',
+    'squeezeout',
+    'reset',
+    'restart',
+]);
+
+function isSpChainCall(call: CallExpression): boolean {
+    const expr = call.getExpression();
+    if (!Node.isPropertyAccessExpression(expr)) return false;
+    const methodName = expr.getName();
+
+    // Two forms:
+    //   <receiver>.<op>(rhs)         where op ∈ {add, sub}
+    //   <receiver>.<op>.<mode>(rhs)  where op ∈ {add, sub}, mode ∈ MODES
+    let receiver = expr.getExpression();
+    if (SP_MODES.has(methodName)) {
+        if (!Node.isPropertyAccessExpression(receiver)) return false;
+        const innerName = receiver.getName();
+        if (!SP_OPS.has(innerName)) return false;
+        receiver = receiver.getExpression();
+    } else if (!SP_OPS.has(methodName)) {
+        return false;
+    }
+
+    return chainRootIsSp(receiver);
+}
+
+function chainRootIsSp(node: import('ts-morph').Node): boolean {
+    // Walk back through nested `.add(...).sub.x(...)` chains until we
+    // either reach `$sp(...)` or something else.
+    let n: import('ts-morph').Node = node;
+    while (true) {
+        if (Node.isCallExpression(n)) {
+            const inner = n.getExpression();
+            if (Node.isIdentifier(inner)) {
+                return inner.getText() === '$sp';
+            }
+            if (Node.isPropertyAccessExpression(inner)) {
+                // Another chain link — recurse into its receiver.
+                n = inner.getExpression();
+                continue;
+            }
+            return false;
+        }
+        if (Node.isPropertyAccessExpression(n)) {
+            n = n.getExpression();
+            continue;
+        }
+        return false;
+    }
+}
+
+/**
  * Get the full dotted path for a property access call.
  * e.g., "$.iCycle" for $.iCycle()
  */
@@ -491,6 +558,41 @@ export function analyzeArgumentSpans(
                 moduleType: funcName,
             });
             // Resolve interpolations for template expressions passed as source
+            const innerNode = getTrackableNode(pArgs[0], constNodeMap);
+            if (innerNode) {
+                const resolutions = resolveInterpolations(
+                    innerNode,
+                    constNodeMap,
+                    constMap,
+                );
+                if (resolutions) {
+                    const spanKey = `${span.start}:${span.end}`;
+                    interpolationResolutions.set(spanKey, resolutions);
+                }
+            }
+            return;
+        }
+
+        // Track $sp(...).add(...) / .sub(...) / .add.in(...) chain method
+        // calls: register the RHS string literal span under the chain
+        // method's call site so the TS chain method can capture it via
+        // captureSourceLocation()+lookupArgumentSpan(loc, 'rhs').
+        if (isSpChainCall(call)) {
+            const pArgs = call.getArguments();
+            if (pArgs.length < 1) return;
+            const span = getTrackableSpan(pArgs[0], constMap);
+            if (!span) return;
+            const callStartPos = call.getStart();
+            const { line, column } =
+                sourceFile.getLineAndColumnAtPos(callStartPos);
+            const columnOffset = line === 1 ? firstLineColumnOffset : 0;
+            const callKey: CallSiteKey = `${line + lineOffset}:${column + columnOffset}`;
+            const argsMap = new Map<string, SourceSpan>();
+            argsMap.set('rhs', span);
+            registry.set(callKey, {
+                args: argsMap,
+                moduleType: '$sp.chain',
+            });
             const innerNode = getTrackableNode(pArgs[0], constNodeMap);
             if (innerNode) {
                 const resolutions = resolveInterpolations(

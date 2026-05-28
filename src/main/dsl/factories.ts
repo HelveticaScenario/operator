@@ -54,6 +54,21 @@ function isParsedPatternLike(
 }
 
 /**
+ * Structural check for a chained `SpPattern` (returned by `$sp().add(...)` /
+ * `.sub(...)`). Each chained source has a parallel `argument_spans[i]`
+ * entry used to map runtime per-source highlights back to editor literals.
+ */
+function isSpPatternLike(
+    value: unknown,
+): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        (value as { __kind?: unknown }).__kind === 'SpPattern'
+    );
+}
+
+/**
  * Look up argument spans from the active span registry using the source location.
  * Returns undefined if no registry is set or no spans found for this call site.
  *
@@ -277,11 +292,25 @@ export class DSLContext {
             // ($p() embeds its own source-literal span so highlighting stays
             // attached through const indirections — `const p = $p(...); $cycle(p)`
             // works without the static analyzer having to reason about $p).
+            //
+            // $sp(...).add(...) chains arrive as SpPattern objects whose
+            // `argument_spans[i]` lines up with `sources[i]`. Emit those
+            // as `<paramName>.0`, `<paramName>.1`, ... matching the multi-
+            // source `pattern.<i>` keys the Rust side puts on `param_spans`.
             const mergedArgumentSpans: ArgumentSpans = {
                 ...(argumentSpans ?? {}),
             };
             for (const [paramName, value] of Object.entries(params)) {
-                if (isParsedPatternLike(value) && value.argument_span) {
+                if (isSpPatternLike(value)) {
+                    const argSpans = value.argument_spans;
+                    if (argSpans && argSpans.length > 0) {
+                        argSpans.forEach((span, j) => {
+                            if (span && (span.start !== 0 || span.end !== 0)) {
+                                mergedArgumentSpans[`${paramName}.${j}`] = span;
+                            }
+                        });
+                    }
+                } else if (isParsedPatternLike(value) && value.argument_span) {
                     mergedArgumentSpans[paramName] = value.argument_span;
                 } else if (Array.isArray(value)) {
                     for (let j = 0; j < value.length; j++) {

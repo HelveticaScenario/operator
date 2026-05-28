@@ -1705,48 +1705,6 @@ pub fn derive_channel_count(
   }
 }
 
-/// Resolve scale degrees to V/Oct voltages using the same math `$iCycle`
-/// uses internally. Powers the `$sp(source, scale)` DSL helper.
-///
-/// Returns one voltage per input degree. Errors if `scale` doesn't parse
-/// or any degree is non-integer / non-finite.
-#[napi]
-pub fn degrees_to_voltages(degrees: Vec<f64>, scale: String) -> Result<Vec<f64>> {
-  use modular_core::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
-
-  let parsed = ScaleParam::parse(&scale)
-    .ok_or_else(|| napi::Error::from_reason(format!("invalid scale: {scale}")))?;
-  let base_midi = parsed.base_midi();
-
-  // For chromatic / no-snapper scales fall back to the 12-TET chromatic
-  // ladder rooted at MIDI 60 — same path `IntervalSeq` takes when the
-  // snapper is absent.
-  let (intervals_owned, tuning_owned): (Vec<i8>, [f64; 12]) = match parsed.snapper() {
-    Some(snapper) => (snapper.scale_intervals().iter().copied().collect(), *snapper.tuning()),
-    None => (
-      (0i8..12).collect(),
-      std::array::from_fn(|i| i as f64 / 12.0),
-    ),
-  };
-
-  degrees
-    .iter()
-    .map(|&d| {
-      if !d.is_finite() || d.fract() != 0.0 {
-        return Err(napi::Error::from_reason(format!(
-          "degree must be integer, got {d}"
-        )));
-      }
-      Ok(degree_to_voltage(
-        d as i32,
-        base_midi,
-        &intervals_owned,
-        &tuning_owned,
-      ))
-    })
-    .collect()
-}
-
 // ============================================================================
 // Tests
 // ============================================================================

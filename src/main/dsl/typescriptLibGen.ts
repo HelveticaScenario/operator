@@ -475,10 +475,74 @@ declare function $p(source: string): ParsedPattern;
  * lydian, mixolydian, aeolian, locrian, harmonic/melodic minor,
  * pentatonic major/minor, blues, whole tone.
  *
+ * ### Chaining
+ *
+ * The returned \`SpPattern\` is chainable with \`.add(...)\` and \`.sub(...)\`.
+ * Each accepts another scale-degree mini-notation string and combines
+ * the two patterns. Bare \`.add(x)\` defaults to \`.add.in(x)\`; explicit
+ * mode methods cover all seven Strudel alignments:
+ *
+ * | Mode | Behaviour |
+ * |------|-----------|
+ * | \`.in\` (default) | Left pattern's onsets drive timing; right is sampled at each left event. |
+ * | \`.out\` | Right pattern's onsets drive timing; left is sampled at each right event. |
+ * | \`.mix\` | Output events at every intersection of left + right onsets. |
+ * | \`.squeeze\` | Each left event nests a full cycle of the right pattern. |
+ * | \`.squeezeout\` | Each right event nests a full cycle of the left pattern. |
+ * | \`.reset\` | Right pattern retriggers the left, aligned to cycle position. |
+ * | \`.restart\` | Right pattern retriggers the left, aligned to cycle 0. |
+ *
+ * \`\`\`js
+ * $cycle($sp("0 1 2", "c(maj)").add("0 2"))               // .add defaults to .add.in
+ * $cycle($sp("0 1 2", "d#(min)").add.in("10 20"))
+ * $cycle($sp("0 1 2", "c(maj)").sub.squeeze("1 2 3"))
+ * \`\`\`
+ *
  * @param source - integer scale-degree mini-notation source
  * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
  */
-declare function $sp(source: string, scale: string): ParsedPattern;
+declare function $sp(source: string, scale: string): SpPattern;
+
+/**
+ * One Strudel-style alignment for an \`$sp\` chain op.
+ */
+type SpAlignmentMode =
+  | 'in'
+  | 'out'
+  | 'mix'
+  | 'squeeze'
+  | 'squeezeout'
+  | 'reset'
+  | 'restart';
+
+/**
+ * Callable + method-bag returned by \`.add\` / \`.sub\` on an \`SpPattern\`.
+ * Bare invocation aliases the \`.in\` method.
+ */
+type SpCombineBuilder = ((rhs: string) => SpPattern) & {
+  readonly [M in SpAlignmentMode]: (rhs: string) => SpPattern;
+};
+
+/**
+ * Chainable scale-degree pattern returned by \`$sp()\`. Pass directly to
+ * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
+ * and gets its own editor-highlight argument span.
+ */
+type SpPattern = {
+  readonly __kind: 'SpPattern';
+  readonly sources: ReadonlyArray<ParsedPattern>;
+  readonly scale: string;
+  readonly ops: ReadonlyArray<{
+    readonly op: 'add' | 'sub';
+    readonly mode: SpAlignmentMode;
+  }>;
+  readonly argument_spans: ReadonlyArray<{
+    readonly start: number;
+    readonly end: number;
+  }>;
+  readonly add: SpCombineBuilder;
+  readonly sub: SpCombineBuilder;
+};
 
 /**
  * A loaded WAV sample handle — returned by \`$wavs()\`, passed to \`$sampler()\` as the \`wav\` param.

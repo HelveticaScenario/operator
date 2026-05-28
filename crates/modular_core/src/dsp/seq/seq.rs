@@ -546,8 +546,12 @@ struct PendingEvent {
 impl crate::types::StatefulModule for Seq {
     fn get_state(&self) -> Option<serde_json::Value> {
         let num_channels = self.channel_count().clamp(1, PORT_MAX_CHANNELS);
-        // Collect all source spans from all active voices
-        let mut active_spans: Vec<(usize, usize)> = Vec::new();
+        let per_source = self.params.pattern.per_source();
+        let num_sources = per_source.len().max(1);
+
+        // Per-pattern active spans from all active voices.
+        let mut per_pattern_spans: Vec<Vec<(usize, usize)>> =
+            vec![Vec::new(); num_sources];
         let mut any_non_rest = false;
 
         for voice in self.state.voices.iter().take(num_channels) {
@@ -560,30 +564,60 @@ impl crate::types::StatefulModule for Seq {
                 {
                     let start = hap.span_offset as usize;
                     let end = start + hap.span_len as usize;
-                    active_spans.extend_from_slice(&storage.span_arena[start..end]);
+                    for span in &storage.span_arena[start..end] {
+                        let idx = span.pattern_idx as usize;
+                        if idx < num_sources {
+                            per_pattern_spans[idx]
+                                .push((span.start as usize, span.end as usize));
+                        }
+                    }
                 }
             }
         }
 
-        if active_spans.is_empty() && !any_non_rest {
+        if !any_non_rest && per_pattern_spans.iter().all(|s| s.is_empty()) {
             None
         } else {
-            // Deduplicate spans (same span could be in multiple voices for stacked patterns)
-            active_spans.sort();
-            active_spans.dedup();
+            for spans in &mut per_pattern_spans {
+                spans.sort();
+                spans.dedup();
+            }
 
-            // Generic param_spans format: map of param name -> { spans, source, all_spans }
-            // - spans: currently active spans (for highlighting)
-            // - source: the evaluated pattern string
-            // - all_spans: all leaf spans in the pattern (for creating tracked decorations at patch time)
+            // Build param_spans keyed by "pattern" for single-source legacy
+            // payloads and "pattern.0", "pattern.1", ... for chained `$sp`
+            // payloads. The argument-span analyzer registers chain RHS
+            // literals under the chain call site, so the renderer maps
+            // pattern_idx > 0 to those.
+            let is_multi = self.params.pattern.is_multi_source();
+            let mut param_spans = serde_json::Map::new();
+            if !is_multi && num_sources == 1 {
+                let meta = &per_source[0];
+                param_spans.insert(
+                    "pattern".to_string(),
+                    serde_json::json!({
+                        "spans": &per_pattern_spans[0],
+                        "source": meta.source,
+                        "all_spans": meta.all_spans,
+                    }),
+                );
+            } else {
+                for (i, meta) in per_source.iter().enumerate() {
+                    param_spans.insert(
+                        format!("pattern.{i}"),
+                        serde_json::json!({
+                            "spans": per_pattern_spans
+                                .get(i)
+                                .cloned()
+                                .unwrap_or_default(),
+                            "source": meta.source,
+                            "all_spans": meta.all_spans,
+                        }),
+                    );
+                }
+            }
+
             Some(serde_json::json!({
-                "param_spans": {
-                    "pattern": {
-                        "spans": active_spans,
-                        "source": self.params.pattern.source(),
-                        "all_spans": self.params.pattern.all_spans(),
-                    }
-                },
+                "param_spans": param_spans,
                 "num_channels": num_channels,
             }))
         }

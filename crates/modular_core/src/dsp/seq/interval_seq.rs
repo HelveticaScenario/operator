@@ -141,14 +141,7 @@ pub struct SourceMeta {
     all_spans: Vec<(usize, usize)>,
 }
 
-/// Flat span entry — encodes (pattern_idx, start, end) without nested Vecs.
-/// Stored in a per-cycle arena (`CycleStorage::span_arena`).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct FlatSpan {
-    pub pattern_idx: u8,
-    pub start: u32,
-    pub end: u32,
-}
+pub(crate) use super::cache::FlatSpan;
 
 /// Per-cycle storage for IntervalSeq. Combined-degree haps + flat span arena.
 pub(crate) type CycleStorage = super::cache::CycleStorage<CombinedHap, FlatSpan>;
@@ -539,9 +532,17 @@ fn derive_combined_polyphony(param: &IntervalPatternParam) -> usize {
 }
 
 /// Add two `IntervalValue`s. Rest + anything = Rest.
-fn add_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
+pub(crate) fn add_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
     match (a.degree(), b.degree()) {
         (Some(da), Some(db)) => IntervalValue::Degree(da + db),
+        _ => IntervalValue::Rest,
+    }
+}
+
+/// Subtract two `IntervalValue`s. Rest - anything (or anything - Rest) = Rest.
+pub(crate) fn sub_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
+    match (a.degree(), b.degree()) {
+        (Some(da), Some(db)) => IntervalValue::Degree(da - db),
         _ => IntervalValue::Rest,
     }
 }

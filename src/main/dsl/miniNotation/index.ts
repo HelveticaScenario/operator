@@ -2,19 +2,26 @@
  * Public entry point for the TypeScript mini-notation implementation.
  *
  * `$p(source)` parses a mini-notation string into a serializable
- * `ParsedPattern` object that can be passed as an argument to `$cycle` or
- * `$iCycle`. The object is consumed by the Rust side during patch-graph
- * deserialization: its `ast`, `source`, and `all_spans` fields map
- * directly onto the Rust `SeqPatternParam` / `IntervalPatternParam`
- * deserialization payload.
+ * `ParsedPattern`. `$sp(source, scale)` returns an `SpPattern` chainable
+ * with `.add(...)` / `.sub(...)` and seven alignment modes (`.add.in`,
+ * `.add.out`, `.add.mix`, `.add.squeeze`, `.add.squeezeout`,
+ * `.add.reset`, `.add.restart`, same for `.sub`). Both are consumed by
+ * `$cycle`'s `pattern` param: the Rust side dispatches on the wire shape
+ * (`SeqPatternSource::Single | Sp`) and lowers either to a runtime
+ * `Pattern<SeqValue>`.
  */
 
-import type { AtomValue, MiniAST, ParsedPattern, SourceSpan } from './ast';
+import type {
+    AtomValue,
+    MiniAST,
+    ParsedPattern,
+    SourceSpan,
+    Located,
+} from './ast';
 import { collectLeafSpans } from './collectLeafSpans';
 import { MiniParseError, parseMini } from './parser';
 import { captureSourceLocation } from '../captureSourceLocation';
 import { lookupArgumentSpan } from '../factories';
-import { degreesToVoltages } from '@modular/core';
 
 export type { MiniAST, ParsedPattern } from './ast';
 export { MiniParseError } from './parser';
@@ -22,27 +29,23 @@ export { MiniParseError } from './parser';
 /**
  * Parse a mini-notation string into a `ParsedPattern`.
  *
- * Entry point for all mini-notation usage in the DSL: `$cycle` and
- * `$iCycle` accept a `ParsedPattern`, so every mini-notation literal
- * flows through `$p()`. Examples:
+ * Entry point for all mini-notation usage in the DSL: `$cycle` accepts
+ * a `ParsedPattern`, so every mini-notation literal flows through
+ * `$p()`. Examples:
  *
  * ```js
  * $cycle($p("c4 e4 g4"))
- * $iCycle([$p("0 2 4"), $p("0,4")], "c4(major)")
  * const bass = $p("c2 [c2 g2] c2 e2");
  * $cycle(bass)
  * ```
  *
  * The returned object is JSON-serializable and structurally compatible
- * with the Rust `{ ast, source, all_spans }` shape expected by
- * `SeqPatternParam` / `IntervalPatternParam` during patch-graph
- * deserialization. It also embeds an `argument_span` captured from the
- * call site so that editor highlighting follows the pattern through
- * `const` indirections (`const p = $p(...); $cycle(p)`).
+ * with the Rust `{ ast, source, all_spans }` shape expected during
+ * patch-graph deserialization. It also embeds an `argument_span`
+ * captured from the call site so that editor highlighting follows the
+ * pattern through `const` indirections.
  *
- * Throws `MiniParseError` if `source` is not a string or fails to
- * parse. See the `$cycle` doc comment for the full mini-notation
- * grammar.
+ * Throws `MiniParseError` if `source` is not a string or fails to parse.
  */
 export function $p(source: string): ParsedPattern {
     if (typeof source !== 'string') {
@@ -75,15 +78,82 @@ export function isParsedPattern(value: unknown): value is ParsedPattern {
     );
 }
 
+// ─── $sp chainable + alignment ──────────────────────────────────────────
+
+/** Strudel-style alignment modes for `$sp` chain ops. */
+export type SpAlignmentMode =
+    | 'in'
+    | 'out'
+    | 'mix'
+    | 'squeeze'
+    | 'squeezeout'
+    | 'reset'
+    | 'restart';
+
+const ALIGNMENT_MODES: ReadonlyArray<SpAlignmentMode> = [
+    'in',
+    'out',
+    'mix',
+    'squeeze',
+    'squeezeout',
+    'reset',
+    'restart',
+];
+
+/** Wire-shape op carried in `SpPattern.ops`. */
+export type SpOpKind = 'add' | 'sub';
+
+export interface SpOp {
+    op: SpOpKind;
+    mode: SpAlignmentMode;
+}
+
+/** Discriminator string the Rust side matches against. */
+const SP_KIND = 'SpPattern' as const;
+
 /**
- * Parse a scale-degree mini-notation source and resolve each integer
- * degree to its V/Oct voltage against `scale`, returning a
- * `ParsedPattern` suitable for `$cycle`.
+ * Mini-notation payload shape — same as `ParsedPattern` minus chain
+ * methods. Used as elements of `SpPattern.sources`.
+ */
+export interface ParsedPatternPayload {
+    ast: MiniAST;
+    source: string;
+    all_spans: ReadonlyArray<readonly [number, number]>;
+}
+
+/** Callable + method bag for chain methods. */
+export type SpCombineBuilder = ((rhs: string) => SpPattern) & {
+    [M in SpAlignmentMode]: (rhs: string) => SpPattern;
+};
+
+/**
+ * Wire shape for chained scale-degree patterns. `$cycle`'s Rust-side
+ * deserializer recognises `__kind === 'SpPattern'` via the
+ * `SeqPatternSource` untagged enum and lowers the chain to a
+ * `Pattern<SeqValue>` at param ingestion time.
+ */
+export interface SpPattern {
+    readonly __kind: typeof SP_KIND;
+    readonly sources: ReadonlyArray<ParsedPatternPayload>;
+    readonly scale: string;
+    readonly ops: ReadonlyArray<SpOp>;
+    readonly argument_spans: ReadonlyArray<SourceSpan>;
+    readonly add: SpCombineBuilder;
+    readonly sub: SpCombineBuilder;
+}
+
+/**
+ * Parse a scale-degree mini-notation source against `scale`, returning
+ * an `SpPattern`. Chain via `.add(...)` / `.sub(...)` (defaults to
+ * `.in` alignment) or any of the seven explicit modes
+ * (`.add.in`, `.add.out`, `.add.mix`, `.add.squeeze`, `.add.squeezeout`,
+ * `.add.reset`, `.add.restart`). Each chained RHS is itself a mini-
+ * notation source of integer scale degrees.
  *
  * Atoms are 0-indexed scale degrees: `0` is the scale's root, `1` the
- * second tone, `2` the third, and so on. Negative values move downward.
- * Values beyond the scale length wrap into higher/lower octaves
- * automatically. Hz and note atoms are rejected — use `$p` for those.
+ * second tone, `2` the third, etc. Negative degrees move downward;
+ * degrees beyond the scale length wrap into higher/lower octaves
+ * automatically. Hz / note atoms are rejected at `$cycle` ingestion.
  *
  * Mini-notation grammar (groups, stacks, modifiers, euclidean, etc.) is
  * the same as `$p`; only the atom vocabulary differs.
@@ -92,7 +162,7 @@ export function isParsedPattern(value: unknown): value is ParsedPattern {
  * `"c(0 2 4 5 7 9 11)"`, just-intonation tunings `"c(just)"` /
  * `"c(pythagorean)"`, and the bare `"chromatic"` ladder.
  */
-export function $sp(source: string, scale: string): ParsedPattern {
+export function $sp(source: string, scale: string): SpPattern {
     if (typeof source !== 'string') {
         throw new MiniParseError(
             `$sp() expects a string source, got ${typeof source}`,
@@ -103,231 +173,100 @@ export function $sp(source: string, scale: string): ParsedPattern {
             `$sp() expects a string scale, got ${typeof scale}`,
         );
     }
+    const payload = parsePayload(source);
+    const loc = captureSourceLocation();
+    const argSpan = lookupArgumentSpan(loc, 'source');
+    return buildSpPattern(
+        [payload],
+        scale,
+        [],
+        argSpan ? [argSpan] : [{ start: 0, end: 0 }],
+    );
+}
 
+/** Type guard for runtime `SpPattern` checks. */
+export function isSpPattern(value: unknown): value is SpPattern {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        (value as { __kind?: unknown }).__kind === SP_KIND
+    );
+}
+
+function parsePayload(source: string): ParsedPatternPayload {
     const ast = parseMini(source);
     const all_spans = collectLeafSpans(ast);
+    return { ast, source, all_spans };
+}
 
-    // Walk in declaration order, collecting every Pure Number atom while
-    // rejecting Hz / Note atoms. Order is preserved between collect + map
-    // passes so voltages line up with their atoms.
-    const degrees: number[] = [];
-    visitPureAtoms(ast, (atom, span) => {
-        if ('Hz' in atom) {
-            throw new MiniParseError(
-                '$sp() rejects Hz atoms — use integer scale degrees',
-                span.start,
-                span.end,
-            );
-        }
-        if ('Note' in atom) {
-            throw new MiniParseError(
-                '$sp() rejects note atoms — use integer scale degrees',
-                span.start,
-                span.end,
-            );
-        }
-        const n = atom.Number;
-        if (!Number.isFinite(n) || !Number.isInteger(n)) {
-            throw new MiniParseError(
-                `$sp() requires integer scale degrees, got ${n}`,
-                span.start,
-                span.end,
-            );
-        }
-        degrees.push(n);
-    });
-
-    const voltages: number[] =
-        degrees.length === 0 ? [] : degreesToVoltages(degrees, scale);
-
-    let voltageIdx = 0;
-    const resolved = mapPureAtoms(ast, () => {
-        const v = voltages[voltageIdx++];
-        return { Number: v };
-    });
-
-    const sourceLocation = captureSourceLocation();
-    const argument_span = lookupArgumentSpan(sourceLocation, 'source');
-    const pattern: ParsedPattern = {
-        __kind: 'ParsedPattern',
-        ast: resolved,
-        source,
-        all_spans,
+function buildSpPattern(
+    sources: ParsedPatternPayload[],
+    scale: string,
+    ops: SpOp[],
+    argument_spans: SourceSpan[],
+): SpPattern {
+    const pat: Record<string, unknown> = {
+        __kind: SP_KIND,
+        sources,
+        scale,
+        ops,
+        argument_spans,
     };
-    if (argument_span) {
-        pattern.argument_span = argument_span;
-    }
-    return pattern;
+    const handle = pat as unknown as SpPattern;
+
+    // add / sub are non-enumerable so JSON.stringify omits them and only
+    // the wire-shape fields cross the IPC boundary.
+    Object.defineProperty(pat, 'add', {
+        enumerable: false,
+        configurable: true,
+        get: () => makeCombineBuilder(handle, 'add'),
+    });
+    Object.defineProperty(pat, 'sub', {
+        enumerable: false,
+        configurable: true,
+        get: () => makeCombineBuilder(handle, 'sub'),
+    });
+    return handle;
 }
 
-/**
- * Visit every `Pure` atom of a `MiniAST` in declaration (depth-first,
- * left-to-right) order. Modifier-argument sub-ASTs (Fast factor, Slow
- * factor, euclidean pulses/steps/rotation, polymeter steps_per_cycle) are
- * NOT visited — they carry numeric modifier values, not pattern atoms.
- */
-function visitPureAtoms(
-    ast: MiniAST,
-    visit: (atom: AtomValue, span: SourceSpan) => void,
-): void {
-    if ('Pure' in ast) {
-        visit(ast.Pure.node, ast.Pure.span);
-        return;
+function makeCombineBuilder(
+    pat: SpPattern,
+    op: SpOpKind,
+): SpCombineBuilder {
+    const apply = (mode: SpAlignmentMode, rhs: string): SpPattern => {
+        if (typeof rhs !== 'string') {
+            throw new MiniParseError(
+                `$sp().${op}.${mode}() expects a string RHS, got ${typeof rhs}`,
+            );
+        }
+        const payload = parsePayload(rhs);
+        // Capture argument span at the chain method's call site. The
+        // argument-span analyzer registers each chain RHS under the
+        // method's source location, keyed by the param name `rhs`.
+        const loc = captureSourceLocation();
+        const argSpan =
+            lookupArgumentSpan(loc, 'rhs') ?? ({ start: 0, end: 0 } as SourceSpan);
+        return buildSpPattern(
+            [...pat.sources, payload],
+            pat.scale,
+            [...pat.ops, { op, mode }],
+            [...pat.argument_spans, argSpan],
+        );
+    };
+
+    // Bare invocation defaults to `.in` (strudel's default alignment).
+    const builder = ((rhs: string) => apply('in', rhs)) as SpCombineBuilder;
+    for (const mode of ALIGNMENT_MODES) {
+        // Use defineProperty to keep these non-enumerable on the builder
+        // for cleaner JSON serialization snapshots if it ever leaks out.
+        Object.defineProperty(builder, mode, {
+            enumerable: false,
+            configurable: true,
+            value: (rhs: string) => apply(mode, rhs),
+        });
     }
-    if ('Rest' in ast) return;
-    if ('List' in ast) {
-        for (const child of ast.List.node) visitPureAtoms(child, visit);
-        return;
-    }
-    if ('Sequence' in ast) {
-        for (const [child] of ast.Sequence) visitPureAtoms(child, visit);
-        return;
-    }
-    if ('FastCat' in ast) {
-        for (const [child] of ast.FastCat) visitPureAtoms(child, visit);
-        return;
-    }
-    if ('SlowCat' in ast) {
-        for (const [child] of ast.SlowCat) visitPureAtoms(child, visit);
-        return;
-    }
-    if ('Stack' in ast) {
-        for (const child of ast.Stack) visitPureAtoms(child, visit);
-        return;
-    }
-    if ('RandomChoice' in ast) {
-        for (const child of ast.RandomChoice[0]) visitPureAtoms(child, visit);
-        return;
-    }
-    if ('Fast' in ast) {
-        visitPureAtoms(ast.Fast[0], visit);
-        return;
-    }
-    if ('Slow' in ast) {
-        // Slow's factor (second slot) is a separate numeric value, not a
-        // pattern atom — convert.rs reads it via to_f64. Skip.
-        visitPureAtoms(ast.Slow[0], visit);
-        return;
-    }
-    if ('Replicate' in ast) {
-        visitPureAtoms(ast.Replicate[0], visit);
-        return;
-    }
-    if ('Degrade' in ast) {
-        visitPureAtoms(ast.Degrade[0], visit);
-        return;
-    }
-    if ('Euclidean' in ast) {
-        visitPureAtoms(ast.Euclidean.pattern, visit);
-        return;
-    }
-    if ('Polymeter' in ast) {
-        for (const child of ast.Polymeter.children) visitPureAtoms(child, visit);
-        return;
-    }
+    return builder;
 }
 
-/**
- * Produce a new `MiniAST` with every `Pure` atom replaced by `transform`'s
- * return value, preserving structure and spans. Visits in the same order
- * as `visitPureAtoms`.
- */
-function mapPureAtoms(
-    ast: MiniAST,
-    transform: (atom: AtomValue, span: SourceSpan) => AtomValue,
-): MiniAST {
-    if ('Pure' in ast) {
-        return {
-            Pure: {
-                node: transform(ast.Pure.node, ast.Pure.span),
-                span: ast.Pure.span,
-            },
-        };
-    }
-    if ('Rest' in ast) return ast;
-    if ('List' in ast) {
-        return {
-            List: {
-                node: ast.List.node.map((c) => mapPureAtoms(c, transform)),
-                span: ast.List.span,
-            },
-        };
-    }
-    if ('Sequence' in ast) {
-        return {
-            Sequence: ast.Sequence.map(
-                ([c, w]) => [mapPureAtoms(c, transform), w] as [MiniAST, number | null],
-            ),
-        };
-    }
-    if ('FastCat' in ast) {
-        return {
-            FastCat: ast.FastCat.map(
-                ([c, w]) => [mapPureAtoms(c, transform), w] as [MiniAST, number | null],
-            ),
-        };
-    }
-    if ('SlowCat' in ast) {
-        return {
-            SlowCat: ast.SlowCat.map(
-                ([c, w]) => [mapPureAtoms(c, transform), w] as [MiniAST, number | null],
-            ),
-        };
-    }
-    if ('Stack' in ast) {
-        return { Stack: ast.Stack.map((c) => mapPureAtoms(c, transform)) };
-    }
-    if ('RandomChoice' in ast) {
-        return {
-            RandomChoice: [
-                ast.RandomChoice[0].map((c) => mapPureAtoms(c, transform)),
-                ast.RandomChoice[1],
-            ],
-        };
-    }
-    if ('Fast' in ast) {
-        return { Fast: [mapPureAtoms(ast.Fast[0], transform), ast.Fast[1]] };
-    }
-    if ('Slow' in ast) {
-        return { Slow: [mapPureAtoms(ast.Slow[0], transform), ast.Slow[1]] };
-    }
-    if ('Replicate' in ast) {
-        return {
-            Replicate: [
-                mapPureAtoms(ast.Replicate[0], transform),
-                ast.Replicate[1],
-            ],
-        };
-    }
-    if ('Degrade' in ast) {
-        return {
-            Degrade: [
-                mapPureAtoms(ast.Degrade[0], transform),
-                ast.Degrade[1],
-                ast.Degrade[2],
-            ],
-        };
-    }
-    if ('Euclidean' in ast) {
-        return {
-            Euclidean: {
-                pattern: mapPureAtoms(ast.Euclidean.pattern, transform),
-                pulses: ast.Euclidean.pulses,
-                steps: ast.Euclidean.steps,
-                rotation: ast.Euclidean.rotation,
-            },
-        };
-    }
-    if ('Polymeter' in ast) {
-        return {
-            Polymeter: {
-                children: ast.Polymeter.children.map((c) =>
-                    mapPureAtoms(c, transform),
-                ),
-                steps_per_cycle: ast.Polymeter.steps_per_cycle,
-            },
-        };
-    }
-    // Exhaustive — every variant handled above.
-    return ast;
-}
+// `Located` is re-exported for tests that hand-construct ASTs.
+export type { AtomValue, Located, SourceSpan };

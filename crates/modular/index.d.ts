@@ -183,15 +183,6 @@ export interface CurrentAudioState {
 }
 
 /**
- * Resolve scale degrees to V/Oct voltages using the same math `$iCycle`
- * uses internally. Powers the `$sp(source, scale)` DSL helper.
- *
- * Returns one voltage per input degree. Errors if `scale` doesn't parse
- * or any degree is non-integer / non-finite.
- */
-export declare function degreesToVoltages(degrees: Array<number>, scale: string): Array<number>
-
-/**
  * Derive the output channel count for a module from its params JSON.
  *
  * Returns a structured result with either the derived channel count or

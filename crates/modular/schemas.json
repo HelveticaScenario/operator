@@ -7799,7 +7799,7 @@
         },
         "pattern": {
           "description": "pattern string in mini-notation",
-          "$ref": "#/$defs/ParsedPatternPayload"
+          "$ref": "#/$defs/SeqPatternSource"
         },
         "playhead": {
           "description": "playhead position (driven by the global clock)",
@@ -7817,6 +7817,26 @@
         "pattern"
       ],
       "$defs": {
+        "ArgumentSpan": {
+          "description": "Source span used as an editor argument-span anchor.",
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        },
         "AtomValue": {
           "description": "Atomic value types produced by the `$p()` DSL parser.\n\nThe reduced set from strudel's krill grammar: `Number` covers bare\nnumeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), and\n`Note` covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`).\nEvery other atom form (`m60` midi shorthand, sample-name identifiers,\n`2v` voltage, module references, quoted strings) has been removed from\nthe grammar and is not representable here.",
           "oneOf": [
@@ -9502,6 +9522,17 @@
             "all_spans"
           ]
         },
+        "SeqPatternSource": {
+          "description": "Wire-level dispatch shape: either a single `ParsedPatternPayload`\n(legacy single-source path used by `$cycle($p(...))`) or a chained\n`$sp` payload with multi-source highlighting.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SpPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ParsedPatternPayload"
+            }
+          ]
+        },
         "Signal": {
           "anyOf": [
             {
@@ -9566,6 +9597,88 @@
           "required": [
             "start",
             "end"
+          ]
+        },
+        "SpAlignmentMode": {
+          "description": "Strudel-style alignment mode for chained `$sp` ops. Mirrors\n[`crate::pattern_system::sp_combine::SpAlignmentMode`] (kept in sync\nmanually since the wire-shape variant needs serde + schemars).",
+          "type": "string",
+          "enum": [
+            "In",
+            "Out",
+            "Mix",
+            "Squeeze",
+            "SqueezeOut",
+            "Reset",
+            "Restart"
+          ]
+        },
+        "SpKindTag": {
+          "description": "Phantom-style discriminator that matches the literal `\"SpPattern\"`\nstring in JSON.",
+          "type": "string",
+          "enum": [
+            "SpPattern"
+          ]
+        },
+        "SpOp": {
+          "description": "One chained op in an `$sp` payload: arithmetic op + alignment mode.\nPaired positionally with `sources[i+1]` for `i = 0..ops.len()`.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/SpAlignmentMode"
+            },
+            "op": {
+              "$ref": "#/$defs/SpOpKind"
+            }
+          },
+          "required": [
+            "op",
+            "mode"
+          ]
+        },
+        "SpOpKind": {
+          "description": "Arithmetic operation kind for chained `$sp` ops.",
+          "type": "string",
+          "enum": [
+            "Add",
+            "Sub"
+          ]
+        },
+        "SpPatternPayload": {
+          "description": "JSON payload shape delivered for chained `$sp(...).add(...)` patterns.\nFirst entry of `sources` is the left pattern; subsequent entries are\nchained RHS patterns combined via the parallel `ops` slot.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `$sp` builds objects with this set so the\n`SeqPatternSource` untagged enum picks the `Sp` variant.",
+              "$ref": "#/$defs/SpKindTag"
+            },
+            "argument_spans": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArgumentSpan"
+              }
+            },
+            "ops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SpOp"
+              }
+            },
+            "scale": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ParsedPatternPayload"
+              }
+            }
+          },
+          "required": [
+            "__kind",
+            "sources",
+            "scale",
+            "ops",
+            "argument_spans"
           ]
         }
       }
