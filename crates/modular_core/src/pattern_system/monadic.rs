@@ -4,28 +4,12 @@
 //! the next pattern. Different join strategies determine how the
 //! inner pattern's timing relates to the outer pattern.
 
-use super::{Hap, HapContext, Pattern, State, TimeSpan};
+use super::{ArenaHap, ArenaHapContext, Pattern, State, TimeSpan};
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 use std::sync::Arc;
 
 impl<T: Clone + Send + Sync + 'static> Pattern<T> {
-    /// Bind (flatMap) with a function that produces patterns.
-    ///
-    /// For each hap, applies the function to get an inner pattern,
-    /// then combines using intersection of wholes.
-    pub fn bind<U, F>(&self, f: F) -> Pattern<U>
-    where
-        U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> Pattern<U> + Send + Sync + 'static,
-    {
-        self.bind_whole(
-            |outer_whole, inner_whole| match (outer_whole, inner_whole) {
-                (Some(o), Some(i)) => o.intersection(i),
-                _ => None,
-            },
-            f,
-        )
-    }
-
     /// Generalized bind with custom whole-span combination.
     pub fn bind_whole<U, W, F>(&self, whole_fn: W, f: F) -> Pattern<U>
     where
@@ -37,38 +21,41 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         let f = Arc::new(f);
         let whole_fn = Arc::new(whole_fn);
 
-        Pattern::new(move |state: &State| {
-            let outer_haps = outer.query(state);
-            let mut result = Vec::new();
+        Pattern::new_into(
+            move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, U>>| {
+                let mut outer_haps: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                outer.query_into(state, bump, &mut outer_haps);
 
-            for outer_hap in outer_haps {
-                let inner_pat = f(&outer_hap.value);
-                // Query inner pattern constrained to outer hap's part
-                // (matching Strudel's behavior)
-                let inner_state = state.set_span(outer_hap.part.clone());
-                let inner_haps = inner_pat.query(&inner_state);
+                for outer_hap in &outer_haps {
+                    let inner_pat = f(&outer_hap.value);
+                    // Query inner pattern constrained to outer hap's part
+                    let inner_state = State::new(outer_hap.part.clone());
+                    let mut inner_haps: BumpVec<'_, ArenaHap<'_, U>> = BumpVec::new_in(bump);
+                    inner_pat.query_into(&inner_state, bump, &mut inner_haps);
 
-                for inner_hap in inner_haps {
-                    if let Some(part) = outer_hap.part.intersection(&inner_hap.part) {
-                        let whole = whole_fn(outer_hap.whole.as_ref(), inner_hap.whole.as_ref());
-                        // Merge contexts: inner is primary (its source_span is kept),
-                        // outer's source_span becomes a modifier_span.
-                        // This matches the semantic that the inner pattern's value is
-                        // the "result" and the outer is a modifier (e.g., fast factor).
-                        let context = HapContext::merge(&inner_hap.context, &outer_hap.context);
+                    for inner_hap in &inner_haps {
+                        if let Some(part) = outer_hap.part.intersection(&inner_hap.part) {
+                            let whole =
+                                whole_fn(outer_hap.whole.as_ref(), inner_hap.whole.as_ref());
+                            // Merge contexts: inner is primary (its source_span is kept),
+                            // outer's source_span becomes a modifier_span.
+                            let context = ArenaHapContext::combine_in(
+                                &inner_hap.context,
+                                &outer_hap.context,
+                                bump,
+                            );
 
-                        result.push(Hap {
-                            whole,
-                            part,
-                            value: inner_hap.value.clone(),
-                            context,
-                        });
+                            out.push(ArenaHap {
+                                whole,
+                                part,
+                                value: inner_hap.value.clone(),
+                                context,
+                            });
+                        }
                     }
                 }
-            }
-
-            result
-        })
+            },
+        )
     }
 
     /// Inner join - preserves inner pattern structure.
@@ -82,242 +69,62 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         self.bind_whole(|_outer, inner| inner.cloned(), f)
     }
 
-    /// Outer join - preserves outer pattern structure.
-    ///
-    /// The whole span comes from the outer pattern.
-    pub fn outer_join<U, F>(&self, f: F) -> Pattern<U>
+    /// Inner-join variant whose closure writes haps directly into the
+    /// caller's arena, with no `Pattern<U>` materialised per outer hap.
+    /// Used by `fast`/`slow`/`late`/`early` and other patterned-factor
+    /// transforms.
+    pub fn inner_join_into<U, F>(&self, f: F) -> Pattern<U>
     where
         U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> Pattern<U> + Send + Sync + 'static,
-    {
-        self.bind_whole(|outer, _inner| outer.cloned(), f)
-    }
-
-    /// Squeeze join - fit inner pattern into outer events.
-    ///
-    /// Each outer event's timespan is used to "squeeze" the inner pattern,
-    /// compressing its full cycle into that event's duration.
-    pub fn squeeze_join<U, F>(&self, f: F) -> Pattern<U>
-    where
-        U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> Pattern<U> + Send + Sync + 'static,
+        F: for<'b> Fn(
+                &T,
+                &State,
+                &'b Bump,
+                &mut BumpVec<'b, ArenaHap<'b, U>>,
+            )
+            + Send
+            + Sync
+            + 'static,
     {
         let outer = self.clone();
-        let f = Arc::new(f);
+        let f = std::sync::Arc::new(f);
+        Pattern::new_into(
+            move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, U>>| {
+                let mut outer_haps: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                outer.query_into(state, bump, &mut outer_haps);
 
-        Pattern::new(move |state: &State| {
-            // Only consider discrete (onset) events from outer
-            let outer_haps: Vec<_> = outer
-                .query(state)
-                .into_iter()
-                .filter(|h| h.has_onset())
-                .collect();
+                for outer_hap in &outer_haps {
+                    let inner_state = State::new(outer_hap.part.clone());
+                    let mut inner_haps: BumpVec<'_, ArenaHap<'_, U>> = BumpVec::new_in(bump);
+                    f(&outer_hap.value, &inner_state, bump, &mut inner_haps);
 
-            let mut result = Vec::new();
-
-            for outer_hap in outer_haps {
-                let inner_pat = f(&outer_hap.value);
-
-                // Get the span to squeeze into
-                let squeeze_span = outer_hap.whole_or_part();
-
-                // Focus the inner pattern into this span
-                let focused = inner_pat.focus_span(squeeze_span);
-
-                // Query the focused pattern at the current state
-                let inner_haps = focused.query(state);
-
-                for inner_hap in inner_haps {
-                    // Part must still intersect with query span
-                    if let Some(part) = inner_hap.part.intersection(&state.span) {
-                        // Inner is primary (its source_span is kept),
-                        // outer's source_span becomes a modifier_span
-                        let context = HapContext::merge(&inner_hap.context, &outer_hap.context);
-
-                        result.push(Hap {
-                            whole: inner_hap.whole,
-                            part,
-                            value: inner_hap.value,
-                            context,
-                        });
+                    for inner_hap in &inner_haps {
+                        if let Some(part) = outer_hap.part.intersection(&inner_hap.part) {
+                            // inner_join: inner's whole wins.
+                            let context = ArenaHapContext::combine_in(
+                                &inner_hap.context,
+                                &outer_hap.context,
+                                bump,
+                            );
+                            out.push(ArenaHap {
+                                whole: inner_hap.whole.clone(),
+                                part,
+                                value: inner_hap.value.clone(),
+                                context,
+                            });
+                        }
                     }
                 }
-            }
-
-            result
-        })
+            },
+        )
     }
 
-    /// Reset join - retrigger inner patterns at outer onsets.
-    ///
-    /// For each discrete outer event, the inner pattern is shifted so that
-    /// its timing aligns with the outer event's start:
-    /// - `restart=false` (reset): align cycle position with outer hap start
-    /// - `restart=true` (restart): align from cycle zero
-    ///
-    /// Ported from Strudel's `resetJoin(restart: bool)`.
-    pub fn reset_join<U, F>(&self, f: F, restart: bool) -> Pattern<U>
-    where
-        U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> Pattern<U> + Send + Sync + 'static,
-    {
-        let outer = self.clone();
-        let f = Arc::new(f);
-
-        Pattern::new(move |state: &State| {
-            // Only consider discrete (onset) events from outer
-            let outer_haps: Vec<_> = outer
-                .query(state)
-                .into_iter()
-                .filter(|h| h.is_discrete() && h.has_onset())
-                .collect();
-
-            let mut result = Vec::new();
-
-            for outer_hap in outer_haps {
-                let inner_pat = f(&outer_hap.value);
-
-                // Calculate shift amount:
-                // - reset: align cycle position (use whole.begin.cycle_pos())
-                // - restart: align from zero (use whole.begin directly)
-                let outer_begin = &outer_hap.whole_or_part().begin;
-                let shift = if restart {
-                    outer_begin.clone()
-                } else {
-                    outer_begin.cycle_pos()
-                };
-
-                // Shift inner pattern later by the calculated amount
-                let shifted = inner_pat.late(shift);
-
-                // Query shifted pattern
-                let inner_haps = shifted.query(state);
-
-                for inner_hap in inner_haps {
-                    let outer_whole = outer_hap.whole_or_part();
-
-                    // For inner whole: intersect if discrete, else None
-                    let new_whole = inner_hap
-                        .whole
-                        .as_ref()
-                        .and_then(|w| w.intersection(outer_whole));
-
-                    // For inner part: must intersect with outer hap's part
-                    if let Some(new_part) = inner_hap.part.intersection(&outer_hap.part) {
-                        let combined_context = outer_hap.combine_context(&inner_hap);
-                        result.push(Hap::with_context(
-                            new_whole,
-                            new_part,
-                            inner_hap.value.clone(),
-                            combined_context,
-                        ));
-                    }
-                }
-            }
-
-            result
-        })
-    }
-
-    /// Restart join - retrigger inner patterns at outer onsets from cycle zero.
-    ///
-    /// Convenience wrapper for `reset_join(f, true)`.
-    pub fn restart_join<U, F>(&self, f: F) -> Pattern<U>
-    where
-        U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> Pattern<U> + Send + Sync + 'static,
-    {
-        self.reset_join(f, true)
-    }
-
-    /// Squeeze out join - squeeze outer pattern into inner pattern's events.
-    ///
-    /// Inverse of squeeze_join: structure comes from the inner (argument) pattern.
-    /// For `a.squeeze_out_join(|v| b)`:
-    /// - Structure comes from `b`
-    /// - For each event in `b`, squeeze `a` into that event's duration
-    ///
-    /// This is equivalent to Strudel's `_opSqueezeOut`:
-    /// `return otherPat.fmap((a) => thisPat.fmap((b) => func(b)(a))).squeezeJoin()`
-    pub fn squeeze_out_join<U, F>(&self, f: F) -> Pattern<U>
-    where
-        U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> Pattern<U> + Send + Sync + 'static,
-    {
-        let outer = self.clone();
-        let f = Arc::new(f);
-
-        Pattern::new(move |state: &State| {
-            // Query outer for structure (only onset events)
-            let outer_haps: Vec<_> = outer
-                .query(state)
-                .into_iter()
-                .filter(|h| h.has_onset())
-                .collect();
-
-            let mut result = Vec::new();
-
-            for outer_hap in outer_haps {
-                let inner_pat = f(&outer_hap.value);
-
-                // Focus the inner pattern to fit within the outer event's duration
-                let squeeze_span = outer_hap.whole_or_part();
-                let focused = inner_pat.focus_span(squeeze_span);
-
-                let inner_haps = focused.query(state);
-
-                for inner_hap in inner_haps {
-                    if let Some(new_part) = inner_hap.part.intersection(&outer_hap.part) {
-                        let new_whole = inner_hap
-                            .whole
-                            .as_ref()
-                            .and_then(|w| w.intersection(outer_hap.whole_or_part()));
-
-                        let combined_context = outer_hap.combine_context(&inner_hap);
-                        result.push(Hap::with_context(
-                            new_whole,
-                            new_part,
-                            inner_hap.value.clone(),
-                            combined_context,
-                        ));
-                    }
-                }
-            }
-
-            result
-        })
-    }
-}
-
-/// Pattern of patterns - can be joined/flattened
-impl<T: Clone + Send + Sync + 'static> Pattern<Pattern<T>> {
-    /// Flatten a pattern of patterns using bind.
-    pub fn join(&self) -> Pattern<T> {
-        self.bind(|inner| inner.clone())
-    }
-
-    /// Flatten using squeeze semantics.
-    pub fn squeeze(&self) -> Pattern<T> {
-        self.squeeze_join(|inner| inner.clone())
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::pattern_system::Fraction;
-    use crate::pattern_system::combinators::fastcat;
     use crate::pattern_system::constructors::pure;
-
-    #[test]
-    fn test_bind_basic() {
-        let outer = pure(2);
-        let result = outer.bind(|n| pure(*n * 10));
-
-        let haps = result.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-        assert_eq!(haps.len(), 1);
-        assert_eq!(haps[0].value, 20);
-    }
 
     #[test]
     fn test_inner_join() {
@@ -327,80 +134,5 @@ mod tests {
         let haps = result.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
         assert_eq!(haps.len(), 1);
         assert_eq!(haps[0].value, 6);
-    }
-
-    #[test]
-    fn test_outer_join() {
-        let outer = pure(5);
-        let result = outer.outer_join(|n| pure(*n + 1));
-
-        let haps = result.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-        assert_eq!(haps.len(), 1);
-        assert_eq!(haps[0].value, 6);
-    }
-
-    #[test]
-    fn test_squeeze_join() {
-        // Outer: 2 events per cycle
-        let outer = fastcat(vec![pure(1), pure(2)]);
-
-        // Each value produces a pattern with 2 events
-        let result = outer.squeeze_join(|n| fastcat(vec![pure(*n), pure(*n * 10)]));
-
-        let haps = result.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        // Should have at least 4 events (may have more due to boundary handling)
-        assert!(
-            haps.len() >= 4,
-            "Expected at least 4 events, got {}",
-            haps.len()
-        );
-
-        // Verify we have the expected values
-        let values: Vec<_> = haps.iter().map(|h| h.value).collect();
-        assert!(values.contains(&1));
-        assert!(values.contains(&10));
-        assert!(values.contains(&2));
-        assert!(values.contains(&20));
-    }
-
-    #[test]
-    fn test_focus_span() {
-        let pat = fastcat(vec![pure(1), pure(2)]);
-
-        // Focus into [0.5, 1)
-        let span = TimeSpan::new(Fraction::new(1, 2), Fraction::from_integer(1));
-        let focused = pat.focus_span(&span);
-
-        let haps = focused.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        // Should have events squeezed into [0.5, 1)
-        // Due to focus_span implementation via early/fast/late, we may get more events
-        assert!(
-            haps.len() >= 2,
-            "Expected at least 2 events, got {}",
-            haps.len()
-        );
-
-        // At least some events should be in the [0.5, 1) range
-        let in_range_count = haps
-            .iter()
-            .filter(|h| {
-                h.part.begin >= Fraction::new(1, 2) && h.part.end <= Fraction::from_integer(1)
-            })
-            .count();
-        assert!(in_range_count >= 1, "Expected events in [0.5, 1) range");
-    }
-
-    #[test]
-    fn test_pattern_of_patterns_join() {
-        let inner1 = pure(1);
-        let inner2 = pure(2);
-        let outer: Pattern<Pattern<i32>> = fastcat(vec![pure(inner1), pure(inner2)]);
-
-        let flattened = outer.join();
-        let haps = flattened.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        assert_eq!(haps.len(), 2);
     }
 }

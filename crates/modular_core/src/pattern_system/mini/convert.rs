@@ -133,105 +133,6 @@ impl FromMiniAtom for f64 {
     // f64 does not support rests - use default supports_rest() -> false
 }
 
-impl FromMiniAtom for f32 {
-    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
-        atom.to_f64()
-            .map(|f| f as f32)
-            .ok_or_else(|| ConvertError::InvalidAtom("Cannot convert to f32".to_string()))
-    }
-
-    fn combine_with_head(head_atoms: &[AtomValue], tail: &Self) -> Result<Self, ConvertError> {
-        let mut values: Vec<f32> = head_atoms
-            .iter()
-            .map(Self::from_atom)
-            .collect::<Result<_, _>>()?;
-        values.push(*tail);
-        Ok(values.iter().sum::<f32>() / values.len() as f32)
-    }
-    // f32 does not support rests - use default supports_rest() -> false
-}
-
-impl FromMiniAtom for i64 {
-    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
-        atom.to_f64()
-            .map(|f| f as i64)
-            .ok_or_else(|| ConvertError::InvalidAtom("Cannot convert to i64".to_string()))
-    }
-
-    fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
-        Err(ConvertError::ListNotSupported)
-    }
-    // i64 does not support rests - use default supports_rest() -> false
-}
-
-impl FromMiniAtom for i32 {
-    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
-        atom.to_f64()
-            .map(|f| f as i32)
-            .ok_or_else(|| ConvertError::InvalidAtom("Cannot convert to i32".to_string()))
-    }
-
-    fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
-        Err(ConvertError::ListNotSupported)
-    }
-    // i32 does not support rests - use default supports_rest() -> false
-}
-
-impl FromMiniAtom for String {
-    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
-        match atom {
-            AtomValue::Identifier(s) => Ok(s.clone()),
-            AtomValue::String(s) => Ok(s.clone()),
-            AtomValue::Number(n) => Ok(n.to_string()),
-            _ => Err(ConvertError::InvalidAtom(
-                "Cannot convert to String".to_string(),
-            )),
-        }
-    }
-
-    fn from_list(atoms: &[AtomValue]) -> Result<Self, ConvertError> {
-        // Join with colons for string lists
-        let strings: Vec<String> = atoms
-            .iter()
-            .map(Self::from_atom)
-            .collect::<Result<_, _>>()?;
-        Ok(strings.join(":"))
-    }
-
-    fn combine_with_head(head_atoms: &[AtomValue], tail: &Self) -> Result<Self, ConvertError> {
-        let mut strings: Vec<String> = head_atoms
-            .iter()
-            .map(Self::from_atom)
-            .collect::<Result<_, _>>()?;
-        strings.push(tail.clone());
-        Ok(strings.join(":"))
-    }
-}
-
-impl FromMiniAtom for bool {
-    fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
-        match atom {
-            AtomValue::Number(n) => Ok(*n != 0.0),
-            AtomValue::Identifier(s) => match s.to_lowercase().as_str() {
-                "true" | "t" | "1" | "yes" => Ok(true),
-                "false" | "f" | "0" | "no" => Ok(false),
-                _ => Err(ConvertError::InvalidAtom(format!(
-                    "Cannot convert '{}' to bool",
-                    s
-                ))),
-            },
-            _ => Err(ConvertError::InvalidAtom(
-                "Cannot convert to bool".to_string(),
-            )),
-        }
-    }
-
-    fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
-        Err(ConvertError::ListNotSupported)
-    }
-    // bool does not support rests - use default supports_rest() -> false
-}
-
 /// Convert an AST to a Pattern.
 pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertError> {
     convert_inner(ast)
@@ -239,23 +140,21 @@ pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertErro
 
 /// Evaluate a MiniASTF64 to get a single f64 value.
 ///
-/// This recursively evaluates the AST at cycle 0. For complex patterns,
-/// it returns the first value found.
+/// Test-only — kept gated to silence dead_code while preserving the unit tests
+/// that exercise it. Production paths use convert_f64_pattern.
+#[cfg(test)]
 fn eval_f64(ast: &MiniASTF64) -> f64 {
     match ast {
         MiniASTF64::Pure(Located { node, .. }) => *node,
-        MiniASTF64::Rest(_) => 0.0, // Rest evaluates to 0
+        MiniASTF64::Rest(_) => 0.0,
         MiniASTF64::List(Located { node, .. }) => {
-            // Return first element or 0
             node.first().map(eval_f64).unwrap_or(0.0)
         }
         MiniASTF64::Sequence(elements) | MiniASTF64::FastCat(elements) => {
-            // Return first element or 0
             elements.first().map(|(e, _)| eval_f64(e)).unwrap_or(0.0)
         }
         MiniASTF64::SlowCat(elements) => elements.first().map(|(e, _)| eval_f64(e)).unwrap_or(0.0),
         MiniASTF64::RandomChoice(elements, _) | MiniASTF64::Stack(elements) => {
-            // For deterministic evaluation, just take first
             elements.first().map(eval_f64).unwrap_or(0.0)
         }
         MiniASTF64::Fast(pattern, _) => eval_f64(pattern),
@@ -646,10 +545,12 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
 }
 
 /// Evaluate a MiniASTU32 to get a single u32 value.
+/// Test-only — see [`eval_f64`] note.
+#[cfg(test)]
 fn eval_u32(ast: &MiniASTU32) -> u32 {
     match ast {
         MiniASTU32::Pure(Located { node, .. }) => *node,
-        MiniASTU32::Rest(_) => 0, // Rest evaluates to 0
+        MiniASTU32::Rest(_) => 0,
         MiniASTU32::List(Located { node, .. }) => node.first().map(eval_u32).unwrap_or(0),
         MiniASTU32::Sequence(elements) | MiniASTU32::FastCat(elements) => {
             elements.first().map(|(e, _)| eval_u32(e)).unwrap_or(0)
@@ -663,27 +564,6 @@ fn eval_u32(ast: &MiniASTU32) -> u32 {
         MiniASTU32::Replicate(pattern, _count) => eval_u32(pattern),
         MiniASTU32::Degrade(pattern, _, _) => eval_u32(pattern),
         MiniASTU32::Euclidean { pattern, .. } => eval_u32(pattern),
-    }
-}
-
-/// Evaluate a MiniASTI32 to get a single i32 value.
-fn eval_i32(ast: &MiniASTI32) -> i32 {
-    match ast {
-        MiniASTI32::Pure(Located { node, .. }) => *node,
-        MiniASTI32::Rest(_) => 0, // Rest evaluates to 0
-        MiniASTI32::List(Located { node, .. }) => node.first().map(eval_i32).unwrap_or(0),
-        MiniASTI32::Sequence(elements) | MiniASTI32::FastCat(elements) => {
-            elements.first().map(|(e, _)| eval_i32(e)).unwrap_or(0)
-        }
-        MiniASTI32::SlowCat(elements) => elements.first().map(|(e, _)| eval_i32(e)).unwrap_or(0),
-        MiniASTI32::RandomChoice(elements, _) | MiniASTI32::Stack(elements) => {
-            elements.first().map(eval_i32).unwrap_or(0)
-        }
-        MiniASTI32::Fast(pattern, _) => eval_i32(pattern),
-        MiniASTI32::Slow(pattern, _) => eval_i32(pattern),
-        MiniASTI32::Replicate(pattern, _count) => eval_i32(pattern),
-        MiniASTI32::Degrade(pattern, _, _) => eval_i32(pattern),
-        MiniASTI32::Euclidean { pattern, .. } => eval_i32(pattern),
     }
 }
 
@@ -884,7 +764,7 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 MiniAST::Pure(Located { node, .. }) => node.to_f64().unwrap_or(1.0),
                 _ => 1.0, // Default for complex patterns
             };
-            Ok(pat.slow(Fraction::from(factor_val)))
+            Ok(pat._slow(Fraction::from(factor_val)))
         }
 
         MiniAST::Replicate(pattern, count) => {
@@ -918,8 +798,68 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
             }
             let pat = convert_inner(pattern)?;
 
-            // Convert pulses, steps, and rotation to patterns for patterned euclidean
-            // Note: pulses AST is MiniASTU32 but we need i32, so convert via fmap
+            // Fast path: when pulses/steps/rotation are constant atoms (the
+            // overwhelmingly common case — `0(5,8)` etc.), skip the
+            // `euclid_pat_with_rest` machinery (3 levels of inner_join nesting
+            // + per-cycle re-evaluation of the rhythm). Drop straight to the
+            // constant-param `euclid_rot_with_rest`.
+            let const_pulses = match &**pulses {
+                crate::pattern_system::mini::ast::MiniASTU32::Pure(p) => {
+                    Some((p.node as i32, p.span.clone()))
+                }
+                _ => None,
+            };
+            let const_steps = match &**steps {
+                crate::pattern_system::mini::ast::MiniASTU32::Pure(s) => {
+                    Some((s.node, s.span.clone()))
+                }
+                _ => None,
+            };
+            let const_rotation = match rotation.as_deref() {
+                None => Some((0i32, None)),
+                Some(crate::pattern_system::mini::ast::MiniASTI32::Pure(r)) => {
+                    Some((r.node, Some(r.span.clone())))
+                }
+                _ => None,
+            };
+            let rest =
+                T::rest_value().expect("supports_rest() returned true but rest_value() is None");
+
+            if let (Some((p, p_span)), Some((s, s_span)), Some((r, r_span))) =
+                (const_pulses, const_steps, const_rotation)
+            {
+                // For `pure_atom(K, N[, R])` with all-constant args, emit the
+                // fused EuclidConst variant.
+                if let MiniAST::Pure(Located { node: atom, span: value_span }) = &**pattern {
+                    if let Ok(value) = T::from_atom(atom) {
+                        return Ok(crate::pattern_system::Pattern::new_euclid_const(
+                            value,
+                            rest,
+                            value_span.clone(),
+                            p,
+                            s,
+                            r,
+                            p_span,
+                            s_span,
+                            r_span,
+                        ));
+                    }
+                }
+
+                // Patterned value with constant rhythm: build the rhythm via
+                // the generic euclid_rot_with_rest and attach the rhythm
+                // modifier spans.
+                let mut result = pat.euclid_rot_with_rest(p, s, r, rest);
+                result = result.with_modifier_span(p_span);
+                result = result.with_modifier_span(s_span);
+                if let Some(rs) = r_span {
+                    result = result.with_modifier_span(rs);
+                }
+                return Ok(result);
+            }
+
+            // Patterned euclidean (e.g. `0([2 3], 8)`) — fall back to the
+            // patterned API.
             let pulses_pat = convert_u32_pattern(pulses).fmap(|p| *p as i32);
             let steps_pat = convert_u32_pattern(steps);
             let rotation_pat = rotation
@@ -927,84 +867,8 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 .map(|r| convert_i32_pattern(r))
                 .unwrap_or_else(|| crate::pattern_system::constructors::pure(0i32));
 
-            // Safe to unwrap because supports_rest() returned true
-            let rest =
-                T::rest_value().expect("supports_rest() returned true but rest_value() is None");
             Ok(pat.euclid_pat_with_rest(pulses_pat, steps_pat, rotation_pat, rest))
         }
-    }
-}
-
-/// Convert an AST back to a string representation.
-fn ast_to_string(ast: &MiniAST) -> String {
-    match ast {
-        MiniAST::Pure(Located { node, .. }) => atom_to_string(node),
-        MiniAST::List(Located { node, .. }) => {
-            node.iter().map(ast_to_string).collect::<Vec<_>>().join(":")
-        }
-        MiniAST::Sequence(elements) => elements
-            .iter()
-            .map(|(a, w)| {
-                let s = ast_to_string(a);
-                match w {
-                    Some(weight) => format!("{}@{}", s, weight),
-                    None => s,
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(" "),
-        MiniAST::FastCat(elements) => {
-            format!(
-                "[{}]",
-                elements
-                    .iter()
-                    .map(|(a, w)| {
-                        let s = ast_to_string(a);
-                        match w {
-                            Some(weight) => format!("{}@{}", s, weight),
-                            None => s,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            )
-        }
-        MiniAST::SlowCat(patterns) => {
-            format!(
-                "<{}>",
-                patterns
-                    .iter()
-                    .map(|(p, _)| ast_to_string(p))
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            )
-        }
-        _ => String::new(),
-    }
-}
-
-fn atom_to_string(atom: &AtomValue) -> String {
-    match atom {
-        AtomValue::Number(n) => n.to_string(),
-        AtomValue::Midi(m) => format!("m{}", m),
-        AtomValue::Hz(h) => format!("{}hz", h),
-        AtomValue::Volts(v) => format!("{}v", v),
-        AtomValue::Note {
-            letter,
-            accidental,
-            octave,
-        } => {
-            let mut s = letter.to_string();
-            if let Some(acc) = accidental {
-                s.push(*acc);
-            }
-            if let Some(oct) = octave {
-                s.push_str(&oct.to_string());
-            }
-            s
-        }
-        AtomValue::Identifier(s) => s.clone(),
-        AtomValue::String(s) => format!("\"{}\"", s),
     }
 }
 
@@ -2224,7 +2088,7 @@ mod tests {
     #[test]
     fn test_random_choice_in_sequence_has_onsets() {
         // "a b|c d" parses as a (b|c) d — all three positions should produce
-        // discrete events with onsets (previously b|c produced whole: None).
+        // discrete events with onsets.
         let ast = parse("1 2|3 4").unwrap();
         let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
 

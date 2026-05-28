@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::params::ParamsDeserializer;
 use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
+pub(crate) mod cache;
 pub mod interval_seq;
 pub mod scale;
 pub mod seq;

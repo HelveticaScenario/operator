@@ -4,8 +4,6 @@
 //! - Voltage values (V/Oct, pre-converted at parse time)
 //! - Rests
 
-use std::sync::Arc;
-
 use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
 use schemars::JsonSchema;
 
@@ -13,7 +11,7 @@ use crate::{
     Patch,
     dsp::utils::midi_to_voct_f64,
     pattern_system::{
-        DspHap, Pattern,
+        Pattern,
         mini::{
             FromMiniAtom,
             ast::AtomValue,
@@ -23,12 +21,61 @@ use crate::{
     types::Connect,
 };
 
+use super::cache::{
+    CycleStorage, MIN_HAPS_CAP_HINT, MIN_SPANS_CAP_HINT, PARAM_CACHE_CYCLES, SPANS_RESERVE_PER_HAP,
+    populate_cycle_storage as cache_populate,
+};
+
+/// Scalar cached hap data. No `Vec` or `Arc` — voices can hold these
+/// by value without keeping cycle storage alive.
+#[derive(Clone, Debug)]
+pub(crate) struct SeqCycleHap {
+    pub whole_begin: f64,
+    pub whole_end: f64,
+    pub part_begin: f64,
+    pub part_end: f64,
+    pub value: SeqValue,
+    pub has_onset: bool,
+    /// Range into the owning [`SeqCycleStorage::span_arena`].
+    pub span_offset: u32,
+    pub span_len: u32,
+}
+
+/// Per-cycle storage for Seq. Scalar haps + flat span arena.
+pub(crate) type SeqCycleStorage = CycleStorage<SeqCycleHap, (usize, usize)>;
+
+/// Fill `storage` with the pattern's haps for `cycle`.
+pub(crate) fn populate_cycle_storage(
+    pattern: &Pattern<SeqValue>,
+    cycle: i64,
+    bump: &mut bumpalo::Bump,
+    storage: &mut SeqCycleStorage,
+) {
+    cache_populate(pattern, cycle, bump, storage, |hap, haps, span_arena| {
+        let span_offset = span_arena.len() as u32;
+        hap.context.walk(&mut |_pattern_idx, span| {
+            span_arena.push(span.to_tuple());
+        });
+        let span_len = span_arena.len() as u32 - span_offset;
+        haps.push(SeqCycleHap {
+            whole_begin: hap.whole_begin_f64(),
+            whole_end: hap.whole_end_f64(),
+            part_begin: hap.part_begin_f64(),
+            part_end: hap.part_end_f64(),
+            value: hap.value,
+            has_onset: hap.has_onset(),
+            span_offset,
+            span_len,
+        });
+    });
+}
+
 /// A value in a sequence pattern.
 ///
 /// Represents the different types of values that can be sequenced:
 /// - Voltage (V/Oct, pre-converted from MIDI/note at parse time)
 /// - Rests (silence/no output)
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum SeqValue {
     /// Pre-converted V/Oct voltage value.
     /// This replaces both Midi and Note variants - conversion happens at parse time.
@@ -197,36 +244,61 @@ pub struct SeqPatternParam {
     #[schemars(skip)]
     pub(crate) all_spans: Vec<(usize, usize)>,
 
-    /// Pre-computed haps for cycles 0..999, populated at parse time.
-    /// Each element is an Arc-wrapped Vec of all haps intersecting that cycle.
+    /// Pre-computed haps for cycles 0..PARAM_CACHE_CYCLES, populated at parse time.
+    /// Each element is a [`SeqCycleStorage`] holding scalar haps and a parallel
+    /// span arena — voices can hold their cycle index without keeping an Arc.
     #[serde(skip, default)]
     #[schemars(skip)]
-    pub(crate) cached_haps: Vec<Arc<Vec<DspHap<SeqValue>>>>,
+    pub(crate) cached_haps: Vec<SeqCycleStorage>,
+
+    /// Largest `haps.len()` seen across the cached cycles. Used by the
+    /// audio-thread module cache to pre-size its slots.
+    #[serde(skip, default)]
+    #[schemars(skip)]
+    pub(crate) max_haps_per_cycle: usize,
+
+    /// Largest `span_arena.len()` seen across the cached cycles.
+    #[serde(skip, default)]
+    #[schemars(skip)]
+    pub(crate) max_spans_per_cycle: usize,
 }
 
 impl SeqPatternParam {
     /// Parse a pattern string.
     fn parse(source: &str) -> Result<Self, String> {
-        // Parse mini notation AST first (for span collection)
         let ast = crate::pattern_system::mini::parse_ast(source).map_err(|e| e.to_string())?;
-
-        // Collect all leaf spans from AST
         let all_spans = crate::pattern_system::mini::collect_leaf_spans(&ast);
-
-        // Convert AST to pattern
         let pattern =
             crate::pattern_system::mini::convert::<SeqValue>(&ast).map_err(|e| e.to_string())?;
 
-        // Pre-compute and cache haps for cycles 0..999
-        let cached_haps: Vec<Arc<Vec<DspHap<SeqValue>>>> = (0..1000)
-            .map(|cycle| Arc::new(pattern.query_cycle_all(cycle)))
-            .collect();
+        let mut bump = bumpalo::Bump::new();
+        let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(PARAM_CACHE_CYCLES);
+        for cycle in 0..PARAM_CACHE_CYCLES as i64 {
+            let mut storage = SeqCycleStorage::with_capacity(
+                MIN_HAPS_CAP_HINT,
+                MIN_HAPS_CAP_HINT * SPANS_RESERVE_PER_HAP,
+            );
+            populate_cycle_storage(&pattern, cycle, &mut bump, &mut storage);
+            cached_haps.push(storage);
+        }
+
+        let max_haps = cached_haps.iter().map(|c| c.haps.len()).max().unwrap_or(0);
+        let max_spans = cached_haps
+            .iter()
+            .map(|c| c.span_arena.len())
+            .max()
+            .unwrap_or(0);
+        // Leave a 1.5× margin on top of the observed maximum.
+        let max_haps_per_cycle = (max_haps.max(MIN_HAPS_CAP_HINT) * 3) / 2;
+        let max_spans_per_cycle = (max_spans.max(MIN_SPANS_CAP_HINT) * 3) / 2;
 
         Ok(Self {
             source: source.to_string(),
             pattern: Some(pattern),
             all_spans,
             cached_haps,
+            max_haps_per_cycle,
+            max_spans_per_cycle,
         })
     }
 
@@ -245,9 +317,19 @@ impl SeqPatternParam {
         &self.all_spans
     }
 
-    /// Get the pre-computed cached haps for cycles 0..999.
-    pub fn cached_haps(&self) -> &[Arc<Vec<DspHap<SeqValue>>>] {
+    /// Get the pre-computed cached cycle storages for cycles 0..PARAM_CACHE_CYCLES.
+    pub(crate) fn cached_haps(&self) -> &[SeqCycleStorage] {
         &self.cached_haps
+    }
+
+    /// Capacity hint for sizing audio-thread cycle storages.
+    pub(crate) fn max_haps_per_cycle(&self) -> usize {
+        self.max_haps_per_cycle
+    }
+
+    /// Capacity hint for sizing audio-thread span arenas.
+    pub(crate) fn max_spans_per_cycle(&self) -> usize {
+        self.max_spans_per_cycle
     }
 }
 

@@ -11,7 +11,6 @@
 //! - Trig: Short pulse at note onset
 
 use std::cmp::Ordering;
-use std::sync::Arc;
 
 use arrayvec::ArrayVec;
 use deserr::Deserr;
@@ -133,6 +132,18 @@ pub struct SourceMeta {
     all_spans: Vec<(usize, usize)>,
 }
 
+/// Flat span entry — encodes (pattern_idx, start, end) without nested Vecs.
+/// Stored in a per-cycle arena (`CycleStorage::span_arena`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FlatSpan {
+    pub pattern_idx: u8,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Per-cycle storage for IntervalSeq. Combined-degree haps + flat span arena.
+pub(crate) type CycleStorage = super::cache::CycleStorage<CombinedHap, FlatSpan>;
+
 /// A pattern parameter for interval/degree patterns.
 ///
 /// Accepts either a single pattern string or an array of strings.
@@ -153,9 +164,15 @@ pub struct IntervalPatternParam {
     /// Number of source strings that contributed to the combined pattern
     num_sources: usize,
 
-    /// Pre-computed combined haps for cycles 0..999, populated at parse time.
-    /// Each element is an Arc-wrapped Vec of all CombinedHaps intersecting that cycle.
-    cached_haps: Vec<Arc<Vec<CombinedHap>>>,
+    /// Pre-computed combined haps for cycles 0..PARAM_CACHE_CYCLES.
+    cached_haps: Vec<CycleStorage>,
+
+    /// Hint for sizing audio-thread module_cache slots — max hap count seen
+    /// across sampled cycles at parse time.
+    max_haps_per_cycle: usize,
+
+    /// Hint for sizing the per-cycle span arena.
+    max_spans_per_cycle: usize,
 }
 
 impl Default for IntervalPatternParam {
@@ -166,6 +183,8 @@ impl Default for IntervalPatternParam {
             per_source: Vec::new(),
             num_sources: 0,
             cached_haps: Vec::new(),
+            max_haps_per_cycle: 0,
+            max_spans_per_cycle: 0,
         }
     }
 }
@@ -200,6 +219,8 @@ impl IntervalPatternParam {
                 source,
                 combined_pattern: None,
                 cached_haps: Vec::new(),
+                max_haps_per_cycle: 0,
+                max_spans_per_cycle: 0,
             });
         }
 
@@ -234,28 +255,41 @@ impl IntervalPatternParam {
 
         let num_sources = sources.len();
 
-        // Pre-compute and cache combined haps for cycles 0..999
-        let cached_haps: Vec<Arc<Vec<CombinedHap>>> = (0..1000)
-            .map(|cycle| {
-                let haps = combined.query_cycle_all(cycle);
-                let combined_haps: Vec<CombinedHap> = haps
-                    .iter()
-                    .map(|hap| {
-                        let pattern_spans = extract_pattern_spans(&hap.context, num_sources);
-                        CombinedHap {
-                            whole_begin: hap.whole_begin,
-                            whole_end: hap.whole_end,
-                            part_begin: hap.part_begin,
-                            part_end: hap.part_end,
-                            degree: hap.value.degree(),
-                            has_onset: hap.has_onset(),
-                            pattern_spans,
-                        }
-                    })
-                    .collect();
-                Arc::new(combined_haps)
-            })
-            .collect();
+        // Pre-compute and cache combined haps for cycles 0..PARAM_CACHE_CYCLES.
+        let mut cached_haps: Vec<CycleStorage> = Vec::with_capacity(PARAM_CACHE_CYCLES);
+        for cycle in 0..PARAM_CACHE_CYCLES as i64 {
+            let haps = combined.query_cycle_all(cycle);
+            let mut storage = CycleStorage::with_capacity(haps.len(), haps.len() * SPANS_RESERVE_PER_HAP);
+            for hap in &haps {
+                let span_offset = storage.span_arena.len() as u32;
+                extract_pattern_spans_into(&hap.context, num_sources, &mut storage.span_arena);
+                let span_len = storage.span_arena.len() as u32 - span_offset;
+                storage.haps.push(CombinedHap {
+                    whole_begin: hap.whole_begin,
+                    whole_end: hap.whole_end,
+                    part_begin: hap.part_begin,
+                    part_end: hap.part_end,
+                    degree: hap.value.degree(),
+                    has_onset: hap.has_onset(),
+                    span_offset,
+                    span_len,
+                });
+            }
+            cached_haps.push(storage);
+        }
+
+        // Derive audio-thread capacity hints from the cached cycles. With
+        // PARAM_CACHE_CYCLES samples already on hand we have plenty of data
+        // to size module_cache slots without extra queries.
+        let max_haps = cached_haps.iter().map(|c| c.haps.len()).max().unwrap_or(0);
+        let max_spans = cached_haps
+            .iter()
+            .map(|c| c.span_arena.len())
+            .max()
+            .unwrap_or(0);
+        // Add headroom so occasional larger cycles don't realloc on audio thread.
+        let max_haps_per_cycle = (max_haps.max(MIN_HAPS_CAP_HINT) * 3) / 2;
+        let max_spans_per_cycle = (max_spans.max(MIN_SPANS_CAP_HINT) * 3) / 2;
 
         Ok(Self {
             source,
@@ -263,6 +297,8 @@ impl IntervalPatternParam {
             per_source,
             num_sources,
             cached_haps,
+            max_haps_per_cycle,
+            max_spans_per_cycle,
         })
     }
 
@@ -289,9 +325,18 @@ impl IntervalPatternParam {
         &self.per_source
     }
 
-    /// Get the pre-computed cached combined haps for cycles 0..999.
-    pub(crate) fn cached_haps(&self) -> &[Arc<Vec<CombinedHap>>] {
+    /// Get the pre-computed cached storage for cycles 0..PARAM_CACHE_CYCLES.
+    pub(crate) fn cached_haps(&self) -> &[CycleStorage] {
         &self.cached_haps
+    }
+
+    /// Capacity hint for pre-allocating module_cache slots.
+    pub(crate) fn max_haps_per_cycle(&self) -> usize {
+        self.max_haps_per_cycle
+    }
+
+    pub(crate) fn max_spans_per_cycle(&self) -> usize {
+        self.max_spans_per_cycle
     }
 }
 
@@ -354,36 +399,31 @@ impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalPatternParam {
     }
 }
 
-/// Cached hap info for voice assignment.
-/// Holds an Arc reference to the cycle's combined hap vector plus an index,
-/// avoiding clone allocations on the audio thread.
-#[derive(Clone, Debug)]
+/// Cached hap info for voice assignment. Holds only scalars — no Arc, no
+/// pattern lookup — so the audio-thread `contains()` and dedup checks are
+/// pointer-free.
+#[derive(Clone, Copy, Debug, Default)]
 struct CachedIntervalHap {
-    /// Arc reference to the full cycle's combined hap vector.
-    cycle_haps: Arc<Vec<CombinedHap>>,
-    /// Index of this hap within the cycle_haps vector.
-    hap_index: usize,
-    /// The cycle this hap was cached for.
+    /// Index of this hap within the cycle's storage.
+    hap_index: u32,
+    /// The cycle this hap belongs to.
     cached_cycle: i64,
+    /// Cached `whole_begin` for the release check.
+    whole_begin: f64,
+    /// Cached `whole_end` for the release check.
+    whole_end: f64,
 }
 
 impl CachedIntervalHap {
-    /// Get a reference to the underlying CombinedHap.
-    #[inline]
-    fn hap(&self) -> &CombinedHap {
-        &self.cycle_haps[self.hap_index]
-    }
-
     fn contains(&self, playhead: f64) -> bool {
-        let hap = self.hap();
-        playhead >= hap.whole_begin && playhead < hap.whole_end
+        playhead >= self.whole_begin && playhead < self.whole_end
     }
 }
 
 /// Per-voice state for polyphonic interval sequencer.
 #[derive(Clone, Debug, Default)]
 struct IntervalVoiceState {
-    /// Cached hap info for this voice
+    /// Cached hap info for this voice (scalar-only)
     cached_hap: Option<CachedIntervalHap>,
     /// Quantized voltage cached at voice allocation time
     cached_voltage: f64,
@@ -447,8 +487,8 @@ fn derive_combined_polyphony(param: &IntervalPatternParam) -> usize {
     // Sweep line algorithm using f64 coordinates from cached combined haps
     let mut events: Vec<(f64, i32)> = Vec::new();
 
-    for cycle_haps in cached {
-        for hap in cycle_haps.iter() {
+    for cycle_storage in cached {
+        for hap in cycle_storage.haps.iter() {
             if hap.degree.is_none() {
                 continue; // Skip rests
             }
@@ -494,45 +534,92 @@ fn add_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
     }
 }
 
-/// Extract per-pattern source spans from a combined hap's context.
+/// Extract per-pattern source spans from a combined hap's context, pushing
+/// into a flat arena. Returns nothing — caller diffs `arena.len()` before/after
+/// to record (offset, length).
 ///
-/// After a left-fold of N patterns via `app_left`, the merged `HapContext`
-/// has:
-/// - `source_span` = pattern 0's leaf span
-/// - `modifier_spans[i]` = pattern (i+1)'s leaf span
-fn extract_pattern_spans(
+/// After a left-fold of N patterns via `app_left`, the merged `HapContext` has:
+/// - `source_span` + `source_extra_spans` = pattern 0's spans
+/// - `modifier_spans[i]` + `modifier_extra_spans[i]` = pattern (i+1)'s spans
+fn extract_pattern_spans_into(
     context: &crate::pattern_system::HapContext,
     num_patterns: usize,
-) -> Vec<Vec<(usize, usize)>> {
-    let mut result = Vec::with_capacity(num_patterns);
-
-    // Pattern 0's span = source_span + source_extra_spans
-    if num_patterns > 0 {
-        let mut spans: Vec<(usize, usize)> =
-            context.source_span.iter().map(|s| s.to_tuple()).collect();
-        spans.extend(context.source_extra_spans.iter().map(|s| s.to_tuple()));
-        result.push(spans);
+    arena: &mut Vec<FlatSpan>,
+) {
+    if num_patterns == 0 {
+        return;
     }
 
-    // Patterns 1..N spans = modifier_spans in order
+    // Pattern 0: source_span + source_extra_spans
+    for s in context.source_span.iter() {
+        let (start, end) = s.to_tuple();
+        arena.push(FlatSpan {
+            pattern_idx: 0,
+            start: start as u32,
+            end: end as u32,
+        });
+    }
+    for s in &context.source_extra_spans {
+        let (start, end) = s.to_tuple();
+        arena.push(FlatSpan {
+            pattern_idx: 0,
+            start: start as u32,
+            end: end as u32,
+        });
+    }
+
+    // Patterns 1..N: modifier_spans[i] + modifier_extra_spans[i]
     let modifier_limit = context
         .modifier_spans
         .len()
         .min(num_patterns.saturating_sub(1));
     for i in 0..modifier_limit {
-        let mut spans = vec![context.modifier_spans[i].to_tuple()];
+        let (start, end) = context.modifier_spans[i].to_tuple();
+        arena.push(FlatSpan {
+            pattern_idx: (i + 1) as u8,
+            start: start as u32,
+            end: end as u32,
+        });
         if let Some(extras) = context.modifier_extra_spans.get(i) {
-            spans.extend(extras.iter().map(|s| s.to_tuple()));
+            for s in extras {
+                let (start, end) = s.to_tuple();
+                arena.push(FlatSpan {
+                    pattern_idx: (i + 1) as u8,
+                    start: start as u32,
+                    end: end as u32,
+                });
+            }
         }
-        result.push(spans);
     }
+}
 
-    // Pad with empty vecs if needed
-    while result.len() < num_patterns {
-        result.push(Vec::new());
+/// Arena-context variant of [`extract_pattern_spans_into`]. Walks the
+/// tree-shaped [`crate::pattern_system::ArenaHapContext`] and emits one
+/// `FlatSpan` per source span keyed by pattern index.
+fn extract_pattern_spans_from_arena_into(
+    context: &crate::pattern_system::ArenaHapContext<'_>,
+    num_patterns: usize,
+    arena: &mut Vec<FlatSpan>,
+) {
+    if num_patterns == 0 {
+        return;
     }
-
-    result
+    // An `Empty` context has no spans to walk; short-circuit.
+    if matches!(context, crate::pattern_system::ArenaHapContext::Empty) {
+        return;
+    }
+    let pattern_cap = num_patterns as u8;
+    context.walk(&mut |pattern_idx, span| {
+        if pattern_idx >= pattern_cap {
+            return;
+        }
+        let (start, end) = span.to_tuple();
+        arena.push(FlatSpan {
+            pattern_idx,
+            start: start as u32,
+            end: end as u32,
+        });
+    });
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -547,6 +634,12 @@ struct IntervalSeqOutputs {
 }
 
 const CAP: usize = 12;
+
+#[allow(unused_imports)]
+use super::cache::{
+    MAX_MODULE_CYCLES, MIN_HAPS_CAP_HINT, MIN_SPANS_CAP_HINT, PARAM_CACHE_CYCLES,
+    SPANS_RESERVE_PER_HAP,
+};
 
 /// Scale-degree sequencer using a compact text syntax ported
 /// from TidalCycles/Strudel.
@@ -649,10 +742,13 @@ struct IntervalSeqState {
     next_voice: usize,
     /// Current cycle number
     current_cycle: Option<i64>,
-    /// Arc-wrapped combined haps for the current cycle, updated on cycle boundaries
-    current_cycle_haps: Option<Arc<Vec<CombinedHap>>>,
-    /// Module-level cache for cycles >= 1000 (element 0 = cycle 1000)
-    module_cache: Vec<Option<Arc<Vec<CombinedHap>>>>,
+    /// Module-level cache for cycles >= PARAM_CACHE_CYCLES.
+    /// Always sized to MAX_MODULE_CYCLES so the audio thread never resizes
+    /// the outer Vec. Each slot's inner Vecs are pre-sized to the
+    /// `max_haps_per_cycle`/`max_spans_per_cycle` hints from the param.
+    module_cache: Vec<CycleStorage>,
+    /// Populated flag per module_cache slot.
+    module_cache_populated: Vec<bool>,
     /// Cached scale intervals for degree-to-semitone conversion (no audio-thread allocs)
     scale_intervals: ArrayVec<i8, CAP>,
     /// Base MIDI note for degree 0 (includes root pitch class + octave)
@@ -662,8 +758,22 @@ struct IntervalSeqState {
     tuning: [f64; 12],
     /// Last CV voltage per channel — holds through rest periods and state transfers
     last_cv: [f32; PORT_MAX_CHANNELS],
-    /// Scratch buffer for onset events — reused each frame to avoid heap alloc
-    events_to_process: ArrayVec<(usize, i32), PORT_MAX_CHANNELS>,
+    /// Scratch buffer for onset events. Holds scalars copied out of the
+    /// cycle storage so voice allocation runs without borrowing the cache.
+    events_to_process: ArrayVec<PendingEvent, PORT_MAX_CHANNELS>,
+    /// Bumpalo arena reused across `ensure_cycle_cached` calls. Reset
+    /// before each miss-path query so the pattern_system combinator chain
+    /// allocates intermediates from a single chunk.
+    query_arena: bumpalo::Bump,
+}
+
+/// Onset event awaiting voice allocation. All scalars — no heap reference.
+#[derive(Clone, Copy, Debug)]
+struct PendingEvent {
+    hap_index: u32,
+    degree: i32,
+    whole_begin: f64,
+    whole_end: f64,
 }
 
 impl Default for IntervalSeqState {
@@ -672,90 +782,114 @@ impl Default for IntervalSeqState {
             voices: std::array::from_fn(|_| IntervalVoiceState::default()),
             next_voice: 0,
             current_cycle: None,
-            current_cycle_haps: None,
             module_cache: Vec::new(),
+            module_cache_populated: Vec::new(),
             scale_intervals: [0, 2, 4, 5, 7, 9, 11].into_iter().collect(), // Default major scale
             base_midi: 60,                                                 // C4
             tuning: std::array::from_fn(|i| i as f64 / 12.0),              // 12-TET
             last_cv: [0.0; PORT_MAX_CHANNELS],
             events_to_process: ArrayVec::new(),
+            query_arena: bumpalo::Bump::new(),
         }
     }
 }
 
 /// A combined hap from the folded pattern, ready for voice allocation.
-#[derive(Clone, Debug)]
+/// Pattern spans live in a parallel arena (`CycleStorage::span_arena`),
+/// addressed by `span_offset`/`span_len`.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct CombinedHap {
-    whole_begin: f64,
-    whole_end: f64,
-    part_begin: f64,
-    part_end: f64,
+    pub whole_begin: f64,
+    pub whole_end: f64,
+    pub part_begin: f64,
+    pub part_end: f64,
     /// Combined degree, None if rest
-    degree: Option<i32>,
-    has_onset: bool,
-    /// Source spans per input pattern (index 0 = first pattern, etc.)
-    pattern_spans: Vec<Vec<(usize, usize)>>,
+    pub degree: Option<i32>,
+    pub has_onset: bool,
+    /// Range into the owning `CycleStorage::span_arena`.
+    pub span_offset: u32,
+    pub span_len: u32,
 }
 
 impl IntervalSeq {
-    /// Invalidate the cycle cache.
+    /// Invalidate the cycle cache. Keeps allocated Vec capacities so the
+    /// audio thread can re-fill without reallocation.
+    ///
+    /// Voices are left untouched so any sounding note can still be released
+    /// by its `whole_end` after a patch update.
     fn invalidate_cache(&mut self) {
         self.state.current_cycle = None;
-        self.state.current_cycle_haps = None;
-        self.state.module_cache.clear();
-        // Do NOT clear voices — they hold their own Arc
+        super::cache::invalidate_module_cache(
+            &mut self.state.module_cache,
+            &mut self.state.module_cache_populated,
+        );
     }
 
-    /// Ensure that the given cycle's haps are available in either param cache or module cache.
+    /// Resize the module_cache to MAX_MODULE_CYCLES with each slot pre-allocated
+    /// to the param's capacity hints. Called on patch update from the main thread.
+    fn rebuild_module_cache(&mut self) {
+        super::cache::rebuild_module_cache(
+            &mut self.state.module_cache,
+            &mut self.state.module_cache_populated,
+            self.params.patterns.max_haps_per_cycle(),
+            self.params.patterns.max_spans_per_cycle(),
+        );
+    }
+
+    /// Ensure that the given cycle's haps are available in either the
+    /// param cache or the module cache. Audio-thread entry point — uses
+    /// pre-sized capacities so the common path needs no heap allocation.
     fn ensure_cycle_cached(&mut self, cycle: i64) {
-        if cycle < 1000 {
+        if cycle < PARAM_CACHE_CYCLES as i64 {
             return; // Already in param cache
         }
 
-        let module_idx = (cycle - 1000) as usize;
-
+        let module_idx = (cycle - PARAM_CACHE_CYCLES as i64) as usize;
         if module_idx >= self.state.module_cache.len() {
-            self.state.module_cache.resize(module_idx + 1, None);
+            return; // Beyond cache horizon — caller will re-query each frame
         }
-
-        if self.state.module_cache[module_idx].is_some() {
+        if self.state.module_cache_populated[module_idx] {
             return;
         }
 
-        // Query pattern, convert to CombinedHaps, store in module cache
-        if let Some(pattern) = self.params.patterns.pattern() {
-            let haps = pattern.query_cycle_all(cycle);
-            let num_patterns = self.params.patterns.num_sources();
-            let combined_haps: Vec<CombinedHap> = haps
-                .iter()
-                .map(|hap| {
-                    let pattern_spans = extract_pattern_spans(&hap.context, num_patterns);
-                    CombinedHap {
-                        whole_begin: hap.whole_begin,
-                        whole_end: hap.whole_end,
-                        part_begin: hap.part_begin,
-                        part_end: hap.part_end,
-                        degree: hap.value.degree(),
-                        has_onset: hap.has_onset(),
-                        pattern_spans,
-                    }
-                })
-                .collect();
-            self.state.module_cache[module_idx] = Some(Arc::new(combined_haps));
-        }
+        let Some(pattern) = self.params.patterns.pattern() else {
+            return;
+        };
+        let num_patterns = self.params.patterns.num_sources();
+        let slot = &mut self.state.module_cache[module_idx];
+        super::cache::populate_cycle_storage(
+            pattern,
+            cycle,
+            &mut self.state.query_arena,
+            slot,
+            |hap, haps, span_arena| {
+                let span_offset = span_arena.len() as u32;
+                extract_pattern_spans_from_arena_into(&hap.context, num_patterns, span_arena);
+                let span_len = span_arena.len() as u32 - span_offset;
+                haps.push(CombinedHap {
+                    whole_begin: hap.whole_begin_f64(),
+                    whole_end: hap.whole_end_f64(),
+                    part_begin: hap.part_begin_f64(),
+                    part_end: hap.part_end_f64(),
+                    degree: hap.value.degree(),
+                    has_onset: hap.has_onset(),
+                    span_offset,
+                    span_len,
+                });
+            },
+        );
+        self.state.module_cache_populated[module_idx] = true;
     }
 
-    /// Get a reference to the Arc-wrapped haps for the given cycle.
-    fn get_cycle_haps(&self, cycle: i64) -> Option<&Arc<Vec<CombinedHap>>> {
-        if cycle < 1000 {
-            self.params.patterns.cached_haps().get(cycle as usize)
-        } else {
-            let module_idx = (cycle - 1000) as usize;
-            self.state
-                .module_cache
-                .get(module_idx)
-                .and_then(|opt| opt.as_ref())
-        }
+    /// Look up the storage for `cycle` from param cache or module cache.
+    /// Returns None for cycles past the cache horizon.
+    fn get_cycle_storage(&self, cycle: i64) -> Option<&CycleStorage> {
+        super::cache::get_cycle_storage(
+            cycle,
+            self.params.patterns.cached_haps(),
+            &self.state.module_cache,
+            &self.state.module_cache_populated,
+        )
     }
 
     /// Convert a scale degree to V/Oct voltage.
@@ -842,66 +976,87 @@ impl IntervalSeq {
         let current_cycle = playhead.floor() as i64;
         if self.state.current_cycle != Some(current_cycle) {
             self.ensure_cycle_cached(current_cycle);
-            self.state.current_cycle_haps = self.get_cycle_haps(current_cycle).cloned();
             self.state.current_cycle = Some(current_cycle);
         }
 
-        // Collect events to process (avoids borrow conflicts)
-        // Store (hap_index, degree) tuples — we'll create CachedIntervalHap from the Arc later
-        let cycle_haps_arc = self.state.current_cycle_haps.clone();
-        self.state.events_to_process.clear();
-        if let Some(ref cycle_haps) = cycle_haps_arc {
-            for (hap_index, combined) in cycle_haps.iter().enumerate() {
-                if !combined.has_onset {
-                    continue;
+        // Collect events to process. Split-borrow self.state so we can hold a
+        // &CycleStorage from module_cache while pushing into events_to_process
+        // (different fields, no aliasing).
+        {
+            let IntervalSeqState {
+                module_cache,
+                module_cache_populated,
+                voices,
+                events_to_process,
+                ..
+            } = &mut self.state;
+            let storage: Option<&CycleStorage> = if current_cycle < PARAM_CACHE_CYCLES as i64 {
+                self.params.patterns.cached_haps().get(current_cycle as usize)
+            } else {
+                let idx = (current_cycle - PARAM_CACHE_CYCLES as i64) as usize;
+                if idx < module_cache.len() && module_cache_populated[idx] {
+                    Some(&module_cache[idx])
+                } else {
+                    None
                 }
-                if playhead < combined.part_begin || playhead >= combined.part_end {
-                    continue;
-                }
-                let Some(degree) = combined.degree else {
-                    continue;
-                };
-                let already_assigned = (0..num_channels).any(|i| {
-                    if let Some(ref existing) = self.state.voices[i].cached_hap {
-                        existing.hap_index == hap_index && existing.cached_cycle == current_cycle
-                    } else {
-                        false
+            };
+            events_to_process.clear();
+            if let Some(storage) = storage {
+                for (hap_index, combined) in storage.haps.iter().enumerate() {
+                    if !combined.has_onset {
+                        continue;
                     }
-                });
-                if already_assigned {
-                    continue;
-                }
-                // Cap at buffer capacity — extra events are skipped (no free voices anyway)
-                if self.state.events_to_process.remaining_capacity() > 0 {
-                    self.state.events_to_process.push((hap_index, degree));
+                    if playhead < combined.part_begin || playhead >= combined.part_end {
+                        continue;
+                    }
+                    let Some(degree) = combined.degree else {
+                        continue;
+                    };
+                    let hap_index_u32 = hap_index as u32;
+                    let already_assigned = voices[..num_channels].iter().any(|v| {
+                        v.cached_hap.is_some_and(|c| {
+                            c.hap_index == hap_index_u32 && c.cached_cycle == current_cycle
+                        })
+                    });
+                    if already_assigned {
+                        continue;
+                    }
+                    if events_to_process.remaining_capacity() == 0 {
+                        break;
+                    }
+                    events_to_process.push(PendingEvent {
+                        hap_index: hap_index_u32,
+                        degree,
+                        whole_begin: combined.whole_begin,
+                        whole_end: combined.whole_end,
+                    });
                 }
             }
         }
 
         // Process collected events
-        if let Some(cycle_haps) = cycle_haps_arc {
-            for idx in 0..self.state.events_to_process.len() {
-                let (hap_index, degree) = self.state.events_to_process[idx];
-                let Some(voice_idx) = self.allocate_voice(playhead, num_channels) else {
-                    continue; // No free voice — skip this event
-                };
-                let voltage = self.degree_to_voltage(degree);
+        for idx in 0..self.state.events_to_process.len() {
+            let event = self.state.events_to_process[idx];
+            let Some(voice_idx) = self.allocate_voice(playhead, num_channels) else {
+                continue;
+            };
+            let voltage = self.degree_to_voltage(event.degree);
 
-                let voice = &mut self.state.voices[voice_idx];
-                voice.cached_hap = Some(CachedIntervalHap {
-                    cycle_haps: cycle_haps.clone(),
-                    hap_index,
-                    cached_cycle: current_cycle,
-                });
-                voice.cached_voltage = voltage;
-                voice.active = true;
-                voice
-                    .gate
-                    .set_state(TempGateState::Low, TempGateState::High, hold);
-                voice
-                    .trigger
-                    .set_state(TempGateState::High, TempGateState::Low, hold);
-            }
+            let voice = &mut self.state.voices[voice_idx];
+            voice.cached_hap = Some(CachedIntervalHap {
+                hap_index: event.hap_index,
+                cached_cycle: current_cycle,
+                whole_begin: event.whole_begin,
+                whole_end: event.whole_end,
+            });
+            voice.cached_voltage = voltage;
+            voice.active = true;
+            voice
+                .gate
+                .set_state(TempGateState::Low, TempGateState::High, hold);
+            voice
+                .trigger
+                .set_state(TempGateState::High, TempGateState::Low, hold);
         }
 
         // Output all voices
@@ -934,7 +1089,7 @@ impl IntervalSeq {
 
     fn release_ended_voices(&mut self, playhead: f64, num_channels: usize) {
         for i in 0..num_channels {
-            if let Some(ref cached) = self.state.voices[i].cached_hap {
+            if let Some(cached) = self.state.voices[i].cached_hap {
                 if !cached.contains(playhead) {
                     self.state.voices[i].active = false;
                     self.state.voices[i].cached_hap = None;
@@ -958,14 +1113,25 @@ impl crate::types::StatefulModule for IntervalSeq {
         let mut any_active = false;
 
         for voice in self.state.voices.iter().take(num_channels) {
-            if voice.active {
-                if let Some(ref cached) = voice.cached_hap {
-                    any_active = true;
-                    for (i, spans) in cached.hap().pattern_spans.iter().enumerate() {
-                        if i < num_sources {
-                            per_pattern_spans[i].extend(spans.iter().cloned());
-                        }
-                    }
+            if !voice.active {
+                continue;
+            }
+            let Some(cached) = voice.cached_hap else {
+                continue;
+            };
+            let Some(storage) = self.get_cycle_storage(cached.cached_cycle) else {
+                continue;
+            };
+            let Some(hap) = storage.haps.get(cached.hap_index as usize) else {
+                continue;
+            };
+            any_active = true;
+            let start = hap.span_offset as usize;
+            let end = start + hap.span_len as usize;
+            for span in &storage.span_arena[start..end] {
+                let idx = span.pattern_idx as usize;
+                if idx < num_sources {
+                    per_pattern_spans[idx].push((span.start as usize, span.end as usize));
                 }
             }
         }
@@ -1012,6 +1178,7 @@ impl crate::types::StatefulModule for IntervalSeq {
 impl crate::types::PatchUpdateHandler for IntervalSeq {
     fn on_patch_update(&mut self) {
         self.invalidate_cache();
+        self.rebuild_module_cache();
         self.update_scale_cache();
         // Combined pattern is already built at parse time inside IntervalPatternParam
     }
@@ -1297,9 +1464,13 @@ mod tests {
         let mut ctx = HapContext::with_span(SourceSpan::new(0, 1));
         ctx.source_extra_spans.push(SourceSpan::new(5, 6));
 
-        let spans = extract_pattern_spans(&ctx, 1);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0], vec![(0, 1), (5, 6)]); // source + extra
+        let mut arena: Vec<FlatSpan> = Vec::new();
+        extract_pattern_spans_into(&ctx, 1, &mut arena);
+        assert_eq!(arena.len(), 2);
+        assert_eq!(arena[0].pattern_idx, 0);
+        assert_eq!((arena[0].start, arena[0].end), (0, 1));
+        assert_eq!(arena[1].pattern_idx, 0);
+        assert_eq!((arena[1].start, arena[1].end), (5, 6));
 
         // Two patterns: pattern 0 has extras, pattern 1 has extras
         let mut ctx2 = HapContext::with_span(SourceSpan::new(0, 1));
@@ -1308,9 +1479,559 @@ mod tests {
         ctx2.modifier_extra_spans
             .push(vec![SourceSpan::new(15, 16)]);
 
-        let spans2 = extract_pattern_spans(&ctx2, 2);
-        assert_eq!(spans2.len(), 2);
-        assert_eq!(spans2[0], vec![(0, 1), (5, 6)]); // pattern 0: source + extras
-        assert_eq!(spans2[1], vec![(10, 11), (15, 16)]); // pattern 1: modifier + extras
+        let mut arena2: Vec<FlatSpan> = Vec::new();
+        extract_pattern_spans_into(&ctx2, 2, &mut arena2);
+        assert_eq!(arena2.len(), 4);
+        // Pattern 0
+        assert_eq!(arena2[0].pattern_idx, 0);
+        assert_eq!((arena2[0].start, arena2[0].end), (0, 1));
+        assert_eq!(arena2[1].pattern_idx, 0);
+        assert_eq!((arena2[1].start, arena2[1].end), (5, 6));
+        // Pattern 1
+        assert_eq!(arena2[2].pattern_idx, 1);
+        assert_eq!((arena2[2].start, arena2[2].end), (10, 11));
+        assert_eq!(arena2[3].pattern_idx, 1);
+        assert_eq!((arena2[3].start, arena2[3].end), (15, 16));
+    }
+
+    /// Multi-pattern highlighting must bucket flat spans by `pattern_idx`
+    /// correctly. Verifies that span arena entries for a 2-pattern source
+    /// contain both pattern_idx 0 (from pattern 0 source leaves) and
+    /// pattern_idx 1 (from pattern 1's modifier_spans).
+    #[test]
+    fn test_multi_pattern_highlighting() {
+        use crate::types::StatefulModule;
+
+        // Source positions for "0 2 4" are 0..1, 2..3, 4..5.
+        // Source positions for "1 3 5" are 0..1, 2..3, 4..5 (own string).
+        let param = IntervalPatternParam::from_source(IntervalPatternSource::Multiple(vec![
+            "0 2 4".into(),
+            "1 3 5".into(),
+        ]))
+        .unwrap();
+
+        // Cached cycle 0 storage must hold spans from both patterns,
+        // tagged with the right pattern_idx.
+        let storage = &param.cached_haps()[0];
+        assert!(!storage.haps.is_empty(), "expected onset haps in cycle 0");
+
+        let mut saw_p0 = false;
+        let mut saw_p1 = false;
+        for hap in &storage.haps {
+            let start = hap.span_offset as usize;
+            let end = start + hap.span_len as usize;
+            for span in &storage.span_arena[start..end] {
+                match span.pattern_idx {
+                    0 => saw_p0 = true,
+                    1 => saw_p1 = true,
+                    other => panic!("unexpected pattern_idx {other}"),
+                }
+            }
+        }
+        assert!(saw_p0, "expected pattern_idx 0 span (pattern 0 source leaf)");
+        assert!(saw_p1, "expected pattern_idx 1 span (pattern 1 modifier)");
+
+        // End-to-end: simulate an active voice referencing the first onset
+        // hap and check get_state buckets spans into "patterns.0" / "patterns.1".
+        let mut seq = IntervalSeq::default();
+        seq.params.patterns = param;
+        seq.rebuild_module_cache();
+
+        // Find first onset hap in cycle 0 storage.
+        let storage = &seq.params.patterns.cached_haps()[0];
+        let (onset_idx, onset_hap) = storage
+            .haps
+            .iter()
+            .enumerate()
+            .find(|(_, h)| h.has_onset && h.degree.is_some())
+            .expect("at least one onset hap");
+        let whole_begin = onset_hap.whole_begin;
+        let whole_end = onset_hap.whole_end;
+
+        seq.state.voices[0].active = true;
+        seq.state.voices[0].cached_hap = Some(CachedIntervalHap {
+            hap_index: onset_idx as u32,
+            cached_cycle: 0,
+            whole_begin,
+            whole_end,
+        });
+
+        let json = seq.get_state().expect("expected state with active voice");
+        let param_spans = json
+            .get("param_spans")
+            .and_then(|v| v.as_object())
+            .expect("param_spans map");
+        // Array source → indexed keys "patterns.0", "patterns.1".
+        assert!(
+            param_spans.contains_key("patterns.0"),
+            "missing patterns.0 key: {param_spans:?}"
+        );
+        assert!(
+            param_spans.contains_key("patterns.1"),
+            "missing patterns.1 key: {param_spans:?}"
+        );
+        // Each entry must have a non-empty spans array (the active voice's
+        // hap contributes leaves from both patterns).
+        for key in ["patterns.0", "patterns.1"] {
+            let spans = param_spans[key]
+                .get("spans")
+                .and_then(|v| v.as_array())
+                .unwrap_or_else(|| panic!("{key} missing spans array"));
+            assert!(!spans.is_empty(), "{key} spans empty");
+        }
+    }
+
+    /// Parse-time cost: how long does `IntervalPatternParam::from_source`
+    /// take for various patterns? Drives the choice of `PARAM_CACHE_CYCLES`.
+    #[test]
+    #[ignore]
+    fn bench_parse_time() {
+        use std::time::Instant;
+
+        let cases: &[(&str, IntervalPatternSource)] = &[
+            (
+                "simple 4-note",
+                IntervalPatternSource::Single("0 2 4 5".into()),
+            ),
+            (
+                "euclidean",
+                IntervalPatternSource::Single("0(5,8) 2(3,8) 4(7,16)".into()),
+            ),
+            (
+                "3-pattern fold",
+                IntervalPatternSource::Multiple(vec![
+                    "0 2 4 5 7".into(),
+                    "<0 3 5>".into(),
+                    "0(3,8)".into(),
+                ]),
+            ),
+            (
+                "stack polyphony",
+                IntervalPatternSource::Multiple(vec!["0 2 4".into(), "0,4,7".into()]),
+            ),
+        ];
+
+        const RUNS: usize = 5;
+
+        for (label, source) in cases {
+            let mut total = std::time::Duration::ZERO;
+            for _ in 0..RUNS {
+                let start = Instant::now();
+                let _ = std::hint::black_box(
+                    IntervalPatternParam::from_source(source.clone()).unwrap(),
+                );
+                total += start.elapsed();
+            }
+            let avg = total / RUNS as u32;
+            println!(
+                "{:<20} avg_parse={:>8.2} ms  (PARAM_CACHE_CYCLES={})",
+                label,
+                avg.as_secs_f64() * 1000.0,
+                PARAM_CACHE_CYCLES,
+            );
+        }
+    }
+
+    /// Arena-direct query measurement: just the pattern.query_cycle_all_into
+    /// call timing in isolation. Excludes IntervalSeq's post-processing.
+    #[test]
+    #[ignore]
+    fn bench_arena_query_only() {
+        use std::time::Instant;
+
+        let cases: &[(&str, IntervalPatternSource)] = &[
+            ("simple 4-note", IntervalPatternSource::Single("0 2 4 5".into())),
+            (
+                "euclidean",
+                IntervalPatternSource::Single("0(5,8) 2(3,8) 4(7,16)".into()),
+            ),
+            (
+                "3-pattern fold",
+                IntervalPatternSource::Multiple(vec![
+                    "0 2 4 5 7".into(),
+                    "<0 3 5>".into(),
+                    "0(3,8)".into(),
+                ]),
+            ),
+        ];
+
+        const ITERS: usize = 2000;
+
+        for (label, source) in cases {
+            let param = IntervalPatternParam::from_source(source.clone()).unwrap();
+            let pattern = param.pattern().unwrap();
+            let mut bump = bumpalo::Bump::new();
+            // Warm-up
+            for _ in 0..16 {
+                bump.reset();
+                let mut buf: bumpalo::collections::Vec<
+                    '_,
+                    crate::pattern_system::ArenaHap<'_, IntervalValue>,
+                > = bumpalo::collections::Vec::new_in(&bump);
+                pattern.query_cycle_all_into(1, &bump, &mut buf);
+            }
+            let start = Instant::now();
+            for i in 0..ITERS {
+                bump.reset();
+                let mut buf: bumpalo::collections::Vec<
+                    '_,
+                    crate::pattern_system::ArenaHap<'_, IntervalValue>,
+                > = bumpalo::collections::Vec::new_in(&bump);
+                pattern.query_cycle_all_into(1 + i as i64, &bump, &mut buf);
+                std::hint::black_box(&buf);
+            }
+            let ns_per_call = start.elapsed().as_nanos() as f64 / ITERS as f64;
+            println!("{:<20} arena_query={:>8.1} ns", label, ns_per_call);
+        }
+    }
+
+    /// Breakdown bench: how much of `ensure_cycle_cached` is the pattern
+    /// `query_cycle_all` call vs. our local post-processing.
+    #[test]
+    #[ignore]
+    fn bench_miss_breakdown() {
+        use std::time::Instant;
+
+        let cases: &[(&str, IntervalPatternSource)] = &[
+            ("simple 4-note", IntervalPatternSource::Single("0 2 4 5".into())),
+            (
+                "euclidean",
+                IntervalPatternSource::Single("0(5,8) 2(3,8) 4(7,16)".into()),
+            ),
+            (
+                "3-pattern fold",
+                IntervalPatternSource::Multiple(vec![
+                    "0 2 4 5 7".into(),
+                    "<0 3 5>".into(),
+                    "0(3,8)".into(),
+                ]),
+            ),
+        ];
+
+        const ITERS: usize = 2000;
+
+        for (label, source) in cases {
+            let param = IntervalPatternParam::from_source(source.clone()).unwrap();
+            let pattern = param.pattern().unwrap();
+            let num_patterns = param.num_sources();
+
+            // A) query_cycle_all only.
+            let start = Instant::now();
+            for i in 0..ITERS {
+                let _ = std::hint::black_box(pattern.query_cycle_all(1 + i as i64));
+            }
+            let query_ns = start.elapsed().as_nanos() as f64 / ITERS as f64;
+
+            // B) query + extract/fill into a fresh storage (worst case).
+            let start = Instant::now();
+            for i in 0..ITERS {
+                let haps = pattern.query_cycle_all(1 + i as i64);
+                let mut storage = CycleStorage::with_capacity(
+                    param.max_haps_per_cycle(),
+                    param.max_spans_per_cycle(),
+                );
+                for hap in &haps {
+                    let off = storage.span_arena.len() as u32;
+                    extract_pattern_spans_into(&hap.context, num_patterns, &mut storage.span_arena);
+                    let len = storage.span_arena.len() as u32 - off;
+                    storage.haps.push(CombinedHap {
+                        whole_begin: hap.whole_begin,
+                        whole_end: hap.whole_end,
+                        part_begin: hap.part_begin,
+                        part_end: hap.part_end,
+                        degree: hap.value.degree(),
+                        has_onset: hap.has_onset(),
+                        span_offset: off,
+                        span_len: len,
+                    });
+                }
+                std::hint::black_box(storage);
+            }
+            let full_ns = start.elapsed().as_nanos() as f64 / ITERS as f64;
+
+            // C) query + fill into a *reused* pre-allocated storage (our path).
+            let mut reuse_storage = CycleStorage::with_capacity(
+                param.max_haps_per_cycle(),
+                param.max_spans_per_cycle(),
+            );
+            let start = Instant::now();
+            for i in 0..ITERS {
+                let haps = pattern.query_cycle_all(1 + i as i64);
+                reuse_storage.reset();
+                for hap in &haps {
+                    let off = reuse_storage.span_arena.len() as u32;
+                    extract_pattern_spans_into(
+                        &hap.context,
+                        num_patterns,
+                        &mut reuse_storage.span_arena,
+                    );
+                    let len = reuse_storage.span_arena.len() as u32 - off;
+                    reuse_storage.haps.push(CombinedHap {
+                        whole_begin: hap.whole_begin,
+                        whole_end: hap.whole_end,
+                        part_begin: hap.part_begin,
+                        part_end: hap.part_end,
+                        degree: hap.value.degree(),
+                        has_onset: hap.has_onset(),
+                        span_offset: off,
+                        span_len: len,
+                    });
+                }
+                std::hint::black_box(&reuse_storage);
+            }
+            let reuse_ns = start.elapsed().as_nanos() as f64 / ITERS as f64;
+
+            println!(
+                "{:<20} query={:>8.1} ns  full={:>8.1} ns  reuse={:>8.1} ns  post-only={:>7.1} ns",
+                label,
+                query_ns,
+                full_ns,
+                reuse_ns,
+                reuse_ns - query_ns
+            );
+        }
+    }
+
+    /// Correctness check: dump every hap from every benched pattern across
+    /// the first 16 cycles. Run on baseline + post-refactor and diff the
+    /// outputs — must match exactly.
+    /// Run: `cargo test -p modular_core --release dump_pattern_haps -- --ignored --nocapture > /tmp/haps.txt`
+    #[test]
+    #[ignore]
+    fn dump_pattern_haps() {
+        let cases: &[(&str, IntervalPatternSource)] = &[
+            ("simple_4_note", IntervalPatternSource::Single("0 2 4 5".into())),
+            ("euclidean", IntervalPatternSource::Single("0(5,8) 2(3,8) 4(7,16)".into())),
+            ("3_pattern_fold", IntervalPatternSource::Multiple(vec!["0 2 4 5 7".into(), "<0 3 5>".into(), "0(3,8)".into()])),
+            ("stack_polyphony", IntervalPatternSource::Multiple(vec!["0 2 4".into(), "0,4,7".into()])),
+            ("stack_slowcat", IntervalPatternSource::Multiple(vec!["<0 2> 4".into(), "-7, <0!6 1>".into()])),
+            ("stack_only", IntervalPatternSource::Single("0, < 4!2 5 >".into())),
+            ("fast_stack", IntervalPatternSource::Multiple(vec!["<0 0 0 0 [3 2] 4 0 2>*8".into(), "0, <4 ~>*6".into()])),
+            ("fast_stack_2", IntervalPatternSource::Multiple(vec!["<0 0 [3 2] 0 [4 0] 2>*8".into(), "0, <4 ~>*6".into()])),
+            ("stack_euclid", IntervalPatternSource::Multiple(vec!["<0 0 [3 2] 0 [4 0] 2>*8".into(), "0, <4 ~>*6, <2(2,5) ~!2>*8".into()])),
+            ("complex", IntervalPatternSource::Multiple(vec!["<[0 -1] 0 [3 2] 0 [4 0] 2>*8".into(), "-7, 0, <4 ~>*6, <2(2,5) ~!2>*8".into()])),
+            ("bass2", IntervalPatternSource::Multiple(vec!["<[0,-7,4, <6 7 8>] ~>*16".into(), "[0@7 -2@4 -3@5]/2".into()])),
+            ("nest_single1", IntervalPatternSource::Single("<0 <[4 2] 3> [1 3]>*4".into())),
+            ("speed_subseq", IntervalPatternSource::Single("0*[8 <6 4>]".into())),
+            ("dminor_duo", IntervalPatternSource::Multiple(vec!["<0 <-1 2>>*4".into(), "<0@4 2@2 5@2>".into()])),
+            ("speed_seq", IntervalPatternSource::Single("0*[8 8 12 8]".into())),
+            ("bass_long", IntervalPatternSource::Single(
+                "<0 0 2 2 3 4 0 0 2 2 3 4 0 0 2 2 3 4 0 0 2 2 3 [4 -1]>".into(),
+            )),
+            ("wale_long", IntervalPatternSource::Single(
+                "<7 7 [6@7 7] 4 [3@3 2] [3 4] 7 7 [6@7 7] 4 [3@3 2] [3 4] 7 7 [6@7 7] 4 [3@3 2] [3 4] 7 7 [6@7 7] 4 [3@3 2] [3 4]>".into(),
+            )),
+        ];
+
+        for (label, source) in cases {
+            let param = IntervalPatternParam::from_source(source.clone()).unwrap();
+            let Some(pattern) = param.pattern() else {
+                continue;
+            };
+            println!("=== {} ===", label);
+            for cycle in 0..16 {
+                let haps = pattern.query_cycle_all(cycle);
+                for (i, hap) in haps.iter().enumerate() {
+                    let mut spans = hap.context.get_all_span_tuples();
+                    spans.sort();
+                    println!(
+                        "cycle={} hap={} wb={:.6} we={:.6} pb={:.6} pe={:.6} deg={:?} onset={} spans={:?}",
+                        cycle,
+                        i,
+                        hap.whole_begin,
+                        hap.whole_end,
+                        hap.part_begin,
+                        hap.part_end,
+                        hap.value.degree(),
+                        hap.has_onset(),
+                        spans,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Real-world bench: pulled directly from the user's live-coding patterns.
+    /// Mix of patterned euclidean, stacks, replicates, slowcat alternations,
+    /// and speed modifiers — exercises the chain end-to-end.
+    #[test]
+    #[ignore]
+    fn bench_realworld_patterns() {
+        use std::time::Instant;
+
+        let cases: &[(&str, IntervalPatternSource)] = &[
+            (
+                "stack+slowcat",
+                IntervalPatternSource::Multiple(vec![
+                    "<0 2> 4".into(),
+                    "-7, <0!6 1>".into(),
+                ]),
+            ),
+            (
+                "stack-only",
+                IntervalPatternSource::Single("0, < 4!2 5 >".into()),
+            ),
+            (
+                "fast-stack",
+                IntervalPatternSource::Multiple(vec![
+                    "<0 0 0 0 [3 2] 4 0 2>*8".into(),
+                    "0, <4 ~>*6".into(),
+                ]),
+            ),
+            (
+                "fast-stack-2",
+                IntervalPatternSource::Multiple(vec![
+                    "<0 0 [3 2] 0 [4 0] 2>*8".into(),
+                    "0, <4 ~>*6".into(),
+                ]),
+            ),
+            (
+                "stack-euclid",
+                IntervalPatternSource::Multiple(vec![
+                    "<0 0 [3 2] 0 [4 0] 2>*8".into(),
+                    "0, <4 ~>*6, <2(2,5) ~!2>*8".into(),
+                ]),
+            ),
+            (
+                "complex",
+                IntervalPatternSource::Multiple(vec![
+                    "<[0 -1] 0 [3 2] 0 [4 0] 2>*8".into(),
+                    "-7, 0, <4 ~>*6, <2(2,5) ~!2>*8".into(),
+                ]),
+            ),
+            (
+                "bass2",
+                IntervalPatternSource::Multiple(vec![
+                    "<[0,-7,4, <6 7 8>] ~>*16".into(),
+                    "[0@7 -2@4 -3@5]/2".into(),
+                ]),
+            ),
+            (
+                "nest_single1",
+                IntervalPatternSource::Single("<0 <[4 2] 3> [1 3]>*4".into()),
+            ),
+            (
+                "speed_subseq",
+                IntervalPatternSource::Single("0*[8 <6 4>]".into()),
+            ),
+            (
+                "dminor_duo",
+                IntervalPatternSource::Multiple(vec![
+                    "<0 <-1 2>>*4".into(),
+                    "<0@4 2@2 5@2>".into(),
+                ]),
+            ),
+            (
+                "speed_seq",
+                IntervalPatternSource::Single("0*[8 8 12 8]".into()),
+            ),
+            (
+                "bass_long",
+                IntervalPatternSource::Single(
+                    "<0 0 2 2 3 4 0 0 2 2 3 4 0 0 2 2 3 4 0 0 2 2 3 [4 -1]>".into(),
+                ),
+            ),
+            (
+                "wale_long",
+                IntervalPatternSource::Single(
+                    "<7 7 [6@7 7] 4 [3@3 2] [3 4] 7 7 [6@7 7] 4 [3@3 2] [3 4] 7 7 [6@7 7] 4 [3@3 2] [3 4] 7 7 [6@7 7] 4 [3@3 2] [3 4]>".into(),
+                ),
+            ),
+        ];
+
+        const ITERS: usize = 2000;
+
+        for (label, source) in cases {
+            let mut seq = IntervalSeq::default();
+            seq.params.patterns = IntervalPatternParam::from_source(source.clone()).unwrap();
+            seq.rebuild_module_cache();
+
+            // Warm-up
+            for _ in 0..32 {
+                seq.ensure_cycle_cached(PARAM_CACHE_CYCLES as i64);
+                seq.invalidate_cache();
+            }
+
+            let start = Instant::now();
+            for i in 0..ITERS {
+                let cycle = PARAM_CACHE_CYCLES as i64 + (i % MAX_MODULE_CYCLES) as i64;
+                seq.ensure_cycle_cached(cycle);
+                seq.invalidate_cache();
+            }
+            let per_call_ns = start.elapsed().as_nanos() as f64 / ITERS as f64;
+            println!("{:<20} miss={:>9.1} ns", label, per_call_ns);
+        }
+    }
+
+    /// Benchmark for `ensure_cycle_cached` on the audio-thread fall-through path.
+    /// Run with: `cargo test -p modular_core --release bench_ensure_cycle_cached -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_ensure_cycle_cached() {
+        use std::time::Instant;
+
+        let cases: &[(&str, IntervalPatternSource)] = &[
+            (
+                "simple 4-note",
+                IntervalPatternSource::Single("0 2 4 5".into()),
+            ),
+            (
+                "euclidean",
+                IntervalPatternSource::Single("0(5,8) 2(3,8) 4(7,16)".into()),
+            ),
+            (
+                "3-pattern fold",
+                IntervalPatternSource::Multiple(vec![
+                    "0 2 4 5 7".into(),
+                    "<0 3 5>".into(),
+                    "0(3,8)".into(),
+                ]),
+            ),
+            (
+                "stack polyphony",
+                IntervalPatternSource::Multiple(vec!["0 2 4".into(), "0,4,7".into()]),
+            ),
+        ];
+
+        const ITERS: usize = 2000;
+
+        for (label, source) in cases {
+            // Fresh seq per case; rebuild cache so capacities are pre-allocated.
+            let mut seq = IntervalSeq::default();
+            seq.params.patterns = IntervalPatternParam::from_source(source.clone()).unwrap();
+            seq.rebuild_module_cache();
+
+            // Warm up — first call may include incidental setup
+            seq.ensure_cycle_cached(PARAM_CACHE_CYCLES as i64);
+            seq.invalidate_cache();
+
+            let start = Instant::now();
+            for i in 0..ITERS {
+                // Every iter targets a fresh-invalidated slot, so the miss
+                // path runs every time (worst case).
+                let cycle = PARAM_CACHE_CYCLES as i64 + (i % MAX_MODULE_CYCLES) as i64;
+                seq.ensure_cycle_cached(cycle);
+                seq.invalidate_cache();
+            }
+            let elapsed = start.elapsed();
+            let per_call_ns = elapsed.as_nanos() as f64 / ITERS as f64;
+
+            // Steady-state hit
+            let mut seq2 = IntervalSeq::default();
+            seq2.params.patterns = IntervalPatternParam::from_source(source.clone()).unwrap();
+            seq2.rebuild_module_cache();
+            seq2.ensure_cycle_cached(PARAM_CACHE_CYCLES as i64); // prime
+            let start_hit = Instant::now();
+            for _ in 0..ITERS {
+                seq2.ensure_cycle_cached(PARAM_CACHE_CYCLES as i64);
+            }
+            let elapsed_hit = start_hit.elapsed();
+            let per_hit_ns = elapsed_hit.as_nanos() as f64 / ITERS as f64;
+
+            println!(
+                "{:<20} miss={:>8.1} ns  hit={:>6.1} ns",
+                label, per_call_ns, per_hit_ns
+            );
+        }
     }
 }

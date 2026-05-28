@@ -55,7 +55,7 @@ pub mod ast;
 pub mod convert;
 pub mod parser;
 
-pub use ast::{AtomValue, Located, MiniAST, collect_leaf_spans};
+pub use ast::{AtomValue, MiniAST, collect_leaf_spans};
 pub use convert::{ConvertError, FromMiniAtom, HasRest, convert};
 pub use parser::{ParseError, parse as parse_ast};
 

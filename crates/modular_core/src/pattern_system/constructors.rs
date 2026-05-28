@@ -5,7 +5,9 @@
 //! - `silence()` - No events
 //! - `signal(fn)` - A continuous signal (no discrete events)
 
-use super::{Fraction, Hap, HapContext, Pattern, SourceSpan, State};
+use super::{ArenaHap, ArenaHapContext, Fraction, Pattern, SourceSpan, State};
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 
 /// Create a pattern that repeats a single value once per cycle.
 ///
@@ -16,41 +18,14 @@ use super::{Fraction, Hap, HapContext, Pattern, SourceSpan, State};
 /// // Returns 2 haps, one for each cycle
 /// ```
 pub fn pure<T: Clone + Send + Sync + 'static>(value: T) -> Pattern<T> {
-    Pattern::new(move |state: &State| {
-        state
-            .span
-            .span_cycles()
-            .into_iter()
-            .map(|subspan| {
-                let whole = subspan.begin.whole_cycle();
-                Hap::new(Some(whole), subspan, value.clone())
-            })
-            .collect()
-    })
-    .with_steps(Fraction::from_integer(1))
+    Pattern::new_pure(value, None)
 }
 
 /// Create a pattern that repeats a single value once per cycle, with source span tracking.
 ///
 /// This version includes source location information for editor highlighting.
 pub fn pure_with_span<T: Clone + Send + Sync + 'static>(value: T, span: SourceSpan) -> Pattern<T> {
-    Pattern::new(move |state: &State| {
-        state
-            .span
-            .span_cycles()
-            .into_iter()
-            .map(|subspan| {
-                let whole = subspan.begin.whole_cycle();
-                Hap::with_context(
-                    Some(whole),
-                    subspan,
-                    value.clone(),
-                    HapContext::with_span(span.clone()),
-                )
-            })
-            .collect()
-    })
-    .with_steps(Fraction::from_integer(1))
+    Pattern::new_pure(value, Some(span))
 }
 
 /// Create a pattern that produces no events.
@@ -62,14 +37,7 @@ pub fn pure_with_span<T: Clone + Send + Sync + 'static>(value: T, span: SourceSp
 /// assert!(haps.is_empty());
 /// ```
 pub fn silence<T: Clone + Send + Sync + 'static>() -> Pattern<T> {
-    Pattern::new(|_state: &State| Vec::new()).with_steps(Fraction::from_integer(1))
-}
-
-/// Create a gap (silence) with a specific step count.
-///
-/// This is useful for polymeter calculations.
-pub fn gap<T: Clone + Send + Sync + 'static>(steps: Fraction) -> Pattern<T> {
-    Pattern::new(|_state: &State| Vec::new()).with_steps(steps)
+    Pattern::new_silence(Fraction::from_integer(1))
 }
 
 /// Create a continuous signal pattern.
@@ -81,91 +49,23 @@ pub fn gap<T: Clone + Send + Sync + 'static>(steps: Fraction) -> Pattern<T> {
 /// # Example
 /// ```ignore
 /// // Sawtooth wave (0 to 1 within each cycle)
-/// let saw = signal(|t| t.cycle_pos().to_f64());
+/// let saw = signal(|t| (t - &t.sam()).to_f64());
 /// ```
 pub fn signal<T, F>(f: F) -> Pattern<T>
 where
     T: Clone + Send + Sync + 'static,
     F: Fn(&Fraction) -> T + Send + Sync + 'static,
 {
-    Pattern::new(move |state: &State| {
-        vec![Hap::new(
-            None, // No whole span for continuous signals
-            state.span.clone(),
-            f(&state.span.begin),
-        )]
-    })
-}
-
-/// Create a signal pattern that also receives the controls.
-///
-/// Useful for signals that need access to random seeds or other control values.
-pub fn signal_with_controls<T, F>(f: F) -> Pattern<T>
-where
-    T: Clone + Send + Sync + 'static,
-    F: Fn(&Fraction, &super::Controls) -> T + Send + Sync + 'static,
-{
-    Pattern::new(move |state: &State| {
-        vec![Hap::new(
-            None,
-            state.span.clone(),
-            f(&state.span.begin, &state.controls),
-        )]
-    })
-}
-
-/// Sawtooth wave signal (0 to 1 within each cycle).
-pub fn saw() -> Pattern<f64> {
-    signal(|t| t.cycle_pos().to_f64())
-}
-
-/// Inverted sawtooth wave signal (1 to 0 within each cycle).
-pub fn isaw() -> Pattern<f64> {
-    signal(|t| 1.0 - t.cycle_pos().to_f64())
-}
-
-/// Triangle wave signal (0 to 1 to 0 within each cycle).
-pub fn tri() -> Pattern<f64> {
-    signal(|t| {
-        let pos = t.cycle_pos().to_f64();
-        if pos < 0.5 {
-            pos * 2.0
-        } else {
-            (1.0 - pos) * 2.0
-        }
-    })
-}
-
-/// Square wave signal (0 then 1 within each cycle).
-pub fn square() -> Pattern<f64> {
-    signal(|t| {
-        if t.cycle_pos().to_f64() < 0.5 {
-            0.0
-        } else {
-            1.0
-        }
-    })
-}
-
-/// Sine wave signal (0 to 1 to 0 to -1 to 0, but shifted to 0-1 range).
-pub fn sine() -> Pattern<f64> {
-    signal(|t| {
-        let pos = t.cycle_pos().to_f64();
-        (1.0 + (pos * std::f64::consts::TAU).sin()) / 2.0
-    })
-}
-
-/// Cosine wave signal (shifted sine, starts at 1).
-pub fn cosine() -> Pattern<f64> {
-    signal(|t| {
-        let pos = t.cycle_pos().to_f64();
-        (1.0 + (pos * std::f64::consts::TAU).cos()) / 2.0
-    })
-}
-
-/// Time signal (returns the current time as a fraction).
-pub fn time() -> Pattern<Fraction> {
-    signal(|t| t.clone())
+    Pattern::new_into(
+        move |state: &State, _bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, T>>| {
+            out.push(ArenaHap {
+                whole: None,
+                part: state.span.clone(),
+                value: f(&state.span.begin),
+                context: ArenaHapContext::empty_ref(),
+            });
+        },
+    )
 }
 
 #[cfg(test)]
@@ -208,28 +108,5 @@ mod tests {
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(10));
 
         assert!(haps.is_empty());
-    }
-
-    #[test]
-    fn test_saw() {
-        let pat = saw();
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        assert_eq!(haps.len(), 1);
-        assert!(!haps[0].has_onset()); // Continuous signal
-        assert_eq!(haps[0].value, 0.0); // Starts at 0
-    }
-
-    #[test]
-    fn test_sine() {
-        let pat = sine();
-
-        // At t=0, sine should be 0.5 (shifted sine starts at 0.5)
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::new(1, 100));
-        assert!((haps[0].value - 0.5).abs() < 0.01);
-
-        // At t=0.25, sine should be 1.0 (peak)
-        let haps = pat.query_arc(Fraction::new(1, 4), Fraction::new(26, 100));
-        assert!((haps[0].value - 1.0).abs() < 0.01);
     }
 }

@@ -290,172 +290,11 @@ impl AtomValue {
         }
     }
 
-    /// Try to parse a string as an AtomValue.
-    pub fn parse(s: &str) -> AtomValue {
-        // Try parsing as number first
-        if let Ok(n) = s.parse::<f64>() {
-            return AtomValue::Number(n);
-        }
-
-        // Check for Hz suffix
-        if (s.ends_with("hz") || s.ends_with("Hz"))
-            && let Ok(n) = s[..s.len() - 2].parse::<f64>()
-        {
-            return AtomValue::Hz(n);
-        }
-
-        // Check for voltage suffix
-        if (s.ends_with('v') || s.ends_with('V'))
-            && let Ok(n) = s[..s.len() - 1].parse::<f64>()
-        {
-            return AtomValue::Volts(n);
-        }
-
-        // Check for MIDI prefix
-        if (s.starts_with('m') || s.starts_with('M'))
-            && let Ok(n) = s[1..].parse::<i32>()
-        {
-            return AtomValue::Midi(n);
-        }
-
-        // Try parsing as note
-        if let Some(note) = parse_note(s) {
-            return note;
-        }
-
-        // Default to identifier
-        AtomValue::Identifier(s.to_string())
-    }
-}
-
-fn parse_note(s: &str) -> Option<AtomValue> {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-
-    let letter = chars[0].to_ascii_lowercase();
-    if !('a'..='g').contains(&letter) {
-        return None;
-    }
-
-    // A single letter like "c" might be a note, but multi-char without
-    // accidental or octave is likely an identifier
-    if chars.len() == 1 {
-        // Single letter could be a note without octave
-        return Some(AtomValue::Note {
-            letter,
-            accidental: None,
-            octave: None,
-        });
-    }
-
-    let mut idx = 1;
-    let mut accidental = None;
-
-    // Check for single accidental
-    if idx < chars.len() {
-        match chars[idx] {
-            '#' | 's' => {
-                accidental = Some('#');
-                idx += 1;
-            }
-            'b' | 'f' => {
-                // 'b' or 'f' as accidental only if followed by digit, or at end
-                // and not part of a word like "bd" (bass drum)
-                if idx + 1 >= chars.len() {
-                    // At end - this is ambiguous, treat as accidental for single letter note
-                    accidental = Some('b');
-                    idx += 1;
-                } else if chars[idx + 1].is_ascii_digit() || chars[idx + 1] == '-' {
-                    accidental = Some('b');
-                    idx += 1;
-                } else {
-                    // Followed by non-digit like "bd" - this is an identifier
-                    return None;
-                }
-            }
-            c if c.is_ascii_digit() || c == '-' => {
-                // Octave follows directly
-            }
-            _ => {
-                // Invalid note format (e.g., "bd", "sn")
-                return None;
-            }
-        }
-    }
-
-    // Parse octave
-    let octave = if idx < chars.len() {
-        let octave_str: String = chars[idx..].iter().collect();
-        octave_str.parse::<i32>().ok()
-    } else {
-        None
-    };
-
-    Some(AtomValue::Note {
-        letter,
-        accidental,
-        octave,
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_atom_parse_number() {
-        assert_eq!(AtomValue::parse("42"), AtomValue::Number(42.0));
-        assert_eq!(AtomValue::parse("3.14"), AtomValue::Number(3.14));
-        assert_eq!(AtomValue::parse("-1.5"), AtomValue::Number(-1.5));
-    }
-
-    #[test]
-    fn test_atom_parse_hz() {
-        assert_eq!(AtomValue::parse("440hz"), AtomValue::Hz(440.0));
-        assert_eq!(AtomValue::parse("880Hz"), AtomValue::Hz(880.0));
-    }
-
-    #[test]
-    fn test_atom_parse_volts() {
-        assert_eq!(AtomValue::parse("5v"), AtomValue::Volts(5.0));
-        assert_eq!(AtomValue::parse("1.5V"), AtomValue::Volts(1.5));
-    }
-
-    #[test]
-    fn test_atom_parse_midi() {
-        assert_eq!(AtomValue::parse("m60"), AtomValue::Midi(60));
-        assert_eq!(AtomValue::parse("M127"), AtomValue::Midi(127));
-    }
-
-    #[test]
-    fn test_atom_parse_note() {
-        assert_eq!(
-            AtomValue::parse("c4"),
-            AtomValue::Note {
-                letter: 'c',
-                accidental: None,
-                octave: Some(4)
-            }
-        );
-        assert_eq!(
-            AtomValue::parse("a#3"),
-            AtomValue::Note {
-                letter: 'a',
-                accidental: Some('#'),
-                octave: Some(3)
-            }
-        );
-        assert_eq!(
-            AtomValue::parse("bb5"),
-            AtomValue::Note {
-                letter: 'b',
-                accidental: Some('b'),
-                octave: Some(5)
-            }
-        );
-    }
 
     #[test]
     fn test_note_to_f64() {
@@ -472,18 +311,6 @@ mod tests {
             octave: Some(4),
         };
         assert_eq!(a4.to_f64(), Some(69.0)); // A440
-    }
-
-    #[test]
-    fn test_atom_parse_identifier() {
-        assert_eq!(
-            AtomValue::parse("maj"),
-            AtomValue::Identifier("maj".to_string())
-        );
-        assert_eq!(
-            AtomValue::parse("bd"),
-            AtomValue::Identifier("bd".to_string())
-        );
     }
 
     #[test]
@@ -835,7 +662,7 @@ pub fn assign_seeds(ast: &mut MiniAST, counter: &mut u64) {
 }
 
 /// Assign deterministic seeds to `RandomChoice`/`Degrade` nodes in an f64 AST.
-pub fn assign_seeds_f64(ast: &mut MiniASTF64, counter: &mut u64) {
+fn assign_seeds_f64(ast: &mut MiniASTF64, counter: &mut u64) {
     match ast {
         MiniASTF64::Pure(_) | MiniASTF64::Rest(_) => {}
         MiniASTF64::List(located) => {
@@ -889,7 +716,7 @@ pub fn assign_seeds_f64(ast: &mut MiniASTF64, counter: &mut u64) {
 }
 
 /// Assign deterministic seeds to `RandomChoice`/`Degrade` nodes in a u32 AST.
-pub fn assign_seeds_u32(ast: &mut MiniASTU32, counter: &mut u64) {
+fn assign_seeds_u32(ast: &mut MiniASTU32, counter: &mut u64) {
     match ast {
         MiniASTU32::Pure(_) | MiniASTU32::Rest(_) => {}
         MiniASTU32::List(located) => {
@@ -943,7 +770,7 @@ pub fn assign_seeds_u32(ast: &mut MiniASTU32, counter: &mut u64) {
 }
 
 /// Assign deterministic seeds to `RandomChoice`/`Degrade` nodes in an i32 AST.
-pub fn assign_seeds_i32(ast: &mut MiniASTI32, counter: &mut u64) {
+fn assign_seeds_i32(ast: &mut MiniASTI32, counter: &mut u64) {
     match ast {
         MiniASTI32::Pure(_) | MiniASTI32::Rest(_) => {}
         MiniASTI32::List(located) => {
