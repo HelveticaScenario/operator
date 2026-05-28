@@ -201,6 +201,52 @@ export function EditorSettingsTab({
                     ))}
                 </select>
             </div>
+
+            {/* XY Scope Intensity */}
+            <div className="settings-section">
+                <h3>XY Scope Beam Intensity</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={config.xyScopeIntensity ?? 0.6}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopeIntensity: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.xyScopeIntensity ?? 0.6).toFixed(2)}
+                    </span>
+                </div>
+            </div>
+
+            {/* XY Scope Persistence */}
+            <div className="settings-section">
+                <h3>XY Scope Persistence</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={config.xyScopePersistence ?? 0.85}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopePersistence: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.xyScopePersistence ?? 0.85).toFixed(2)}
+                    </span>
+                </div>
+            </div>
         </div>
     );
 }

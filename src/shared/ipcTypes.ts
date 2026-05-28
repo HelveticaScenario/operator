@@ -103,6 +103,10 @@ export interface AppConfig {
     lastOpenedFolder?: string;
     audioConfig?: AudioConfig;
     skippedUpdateVersion?: string;
+    /** XY scope beam intensity (0..1). Default 0.6. */
+    xyScopeIntensity?: number;
+    /** XY scope phosphor persistence (0..1). 1 = never fade. Default 0.85. */
+    xyScopePersistence?: number;
 }
 
 /**

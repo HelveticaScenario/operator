@@ -8,7 +8,7 @@ import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
-import { WoscopeBackground } from './app/woscope/WoscopeBackground';
+import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
 import './App.css';
 // Import type { editor } from 'monaco-editor';
 import { editor } from 'monaco-editor';
@@ -37,6 +37,7 @@ import {
     scopeBufferKeyToString,
 } from './app/oscilloscope';
 import { useEditorBuffers } from './app/hooks/useEditorBuffers';
+import { useTheme } from './themes/ThemeContext';
 
 /**
  * Transform validation errors to use source line numbers instead of module IDs
@@ -87,6 +88,8 @@ function transformErrorsWithSourceLocations(
 }
 
 function App() {
+    const { xyScopeIntensity, xyScopePersistence } = useTheme();
+
     // Workspace & filesystem
     const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
     const [fileTree, setFileTree] = useState<FileTreeEntry[]>([]);
@@ -987,7 +990,14 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
-                            <WoscopeBackground />
+                            {buffers.map((b) => (
+                                <ScopeXYBackground
+                                    key={b.id}
+                                    paused={b.id !== activeBufferId}
+                                    intensity={xyScopeIntensity}
+                                    persistence={xyScopePersistence}
+                                />
+                            ))}
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}

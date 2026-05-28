@@ -407,6 +407,8 @@ const AppConfigSchema = z.object({
     prettier: z.record(z.string(), z.unknown()).optional(),
     skippedUpdateVersion: z.string().optional(),
     theme: z.string().optional(),
+    xyScopeIntensity: z.number().min(0).max(1).optional(),
+    xyScopePersistence: z.number().min(0).max(1).optional(),
 });
 
 type AppConfig = z.infer<typeof AppConfigSchema>;
