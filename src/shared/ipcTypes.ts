@@ -239,6 +239,7 @@ export const IPC_CHANNELS = {
     SYNTH_GET_SAMPLE_RATE: 'modular:synth:get-sample-rate',
     SYNTH_GET_CHANNELS: 'modular:synth:get-channels',
     SYNTH_GET_SCOPES: 'modular:synth:get-scopes',
+    SYNTH_GET_SCOPE_XY: 'modular:synth:get-scope-xy',
     SYNTH_UPDATE_PATCH: 'modular:synth:update-patch',
     SYNTH_START_RECORDING: 'modular:synth:start-recording',
     SYNTH_STOP_RECORDING: 'modular:synth:stop-recording',
@@ -358,6 +359,8 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_GET_CHANNELS]: typeof Synthesizer.prototype.channels;
 
     [IPC_CHANNELS.SYNTH_GET_SCOPES]: typeof Synthesizer.prototype.getScopes;
+
+    [IPC_CHANNELS.SYNTH_GET_SCOPE_XY]: typeof Synthesizer.prototype.getScopeXy;
 
     [IPC_CHANNELS.SYNTH_UPDATE_PATCH]: (
         patch: PatchGraph,

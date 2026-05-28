@@ -39,7 +39,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use modular_core::patch::Patch;
-use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey};
+use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey};
 use std::time::Instant;
 
 use crate::commands::{
@@ -781,6 +781,58 @@ impl ScopeBuffer {
   }
 }
 
+/// Sample-rate ring buffer for the $scopeXY visualizer.
+///
+/// One buffer per (xChannel, yChannel) pair. The audio callback pushes
+/// (x, y) pairs at full sample rate — no decimation, no trigger, no
+/// double-buffering — so the renderer can draw a woscope-style XY beam
+/// over the most recent CAPACITY samples (~43 ms at 48 kHz).
+pub const SCOPE_XY_CAPACITY: usize = 2048;
+
+pub struct ScopeXyBuffer {
+  x: [f32; SCOPE_XY_CAPACITY],
+  y: [f32; SCOPE_XY_CAPACITY],
+  write_idx: usize,
+}
+
+impl ScopeXyBuffer {
+  pub fn new() -> Self {
+    Self {
+      x: [0.0; SCOPE_XY_CAPACITY],
+      y: [0.0; SCOPE_XY_CAPACITY],
+      write_idx: 0,
+    }
+  }
+
+  #[inline]
+  pub fn push(&mut self, xv: f32, yv: f32) {
+    self.x[self.write_idx] = xv;
+    self.y[self.write_idx] = yv;
+    self.write_idx = (self.write_idx + 1) % SCOPE_XY_CAPACITY;
+  }
+
+  /// Returns (x, y, head). x/y are CAPACITY-long, indices [0..CAPACITY) in
+  /// chronological order: element 0 is the oldest sample of the window.
+  /// Called on the main thread — Vec allocation is safe here.
+  pub fn snapshot(&self) -> (Float32Array, Float32Array, u32) {
+    let head = self.write_idx;
+    let mut x = vec![0.0; SCOPE_XY_CAPACITY];
+    let mut y = vec![0.0; SCOPE_XY_CAPACITY];
+    for i in 0..SCOPE_XY_CAPACITY {
+      let src = (head + i) % SCOPE_XY_CAPACITY;
+      x[i] = self.x[src];
+      y[i] = self.y[src];
+    }
+    (Float32Array::new(x), Float32Array::new(y), head as u32)
+  }
+}
+
+impl Default for ScopeXyBuffer {
+  fn default() -> Self {
+    Self::new()
+  }
+}
+
 // ============================================================================
 // Command Queue Types
 // ============================================================================
@@ -838,6 +890,9 @@ pub struct AudioState {
   stopped: Arc<AtomicBool>,
   /// Scope collection - shared with audio thread for UI reads
   scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+  /// XY scope collection - shared with audio thread for UI reads.
+  /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
+  scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, ScopeXyBuffer>>>,
   /// Recording writer - shared with audio thread
   recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   /// Recording path
@@ -894,6 +949,7 @@ impl AudioState {
       garbage_rx: Mutex::new(garbage_rx),
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
       recording_writer: Arc::new(Mutex::new(None)),
       recording_path: Arc::new(Mutex::new(None)),
       sample_rate,
@@ -977,6 +1033,7 @@ impl AudioState {
     AudioSharedState {
       stopped: self.stopped.clone(),
       scope_collection: self.scope_collection.clone(),
+      scope_xy_collection: self.scope_xy_collection.clone(),
       recording_writer: self.recording_writer.clone(),
       audio_budget_meter: self.audio_budget_meter.clone(),
       module_states: self.module_states.clone(),
@@ -1038,6 +1095,26 @@ impl AudioState {
       .collect()
   }
 
+  /// Snapshot every active $scopeXY pair as (key, xSamples, ySamples, head).
+  /// Mirrors `get_audio_buffers` — skipped while stopped, never blocks on
+  /// the audio-thread mutex.
+  pub fn get_scope_xy_buffers(
+    &self,
+  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, u32)> {
+    if self.is_stopped() {
+      return Vec::new();
+    }
+    let Some(lock) = self.scope_xy_collection.try_lock() else {
+      return Vec::new();
+    };
+    let mut out = Vec::with_capacity(lock.len());
+    for (key, buffer) in lock.iter() {
+      let (x, y, head) = buffer.snapshot();
+      out.push((key.clone(), x, y, head));
+    }
+    out
+  }
+
   pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
     // Read module states from shared buffer (written by audio thread)
     match self.module_states.try_lock() {
@@ -1061,6 +1138,7 @@ impl AudioState {
       modules,
       module_id_remaps,
       scopes,
+      scope_xy,
       ..
     } = desired_graph;
 
@@ -1104,6 +1182,35 @@ impl AudioState {
           let buffer = ScopeBuffer::new(key.ms_per_frame, key.trigger_threshold, sample_rate);
           (key.clone(), buffer)
         })
+        .collect();
+    }
+
+    // Compute XY scope diff against the audio-thread collection. Single
+    // global $scopeXY → one HashSet round-trip; keys are pair-indexed so
+    // re-ordering one pair forces a full rebuild (intentional — buffers
+    // are sample-rate ring buffers that would smear if reused).
+    {
+      let scope_xy_collection = self.scope_xy_collection.lock();
+      let current_keys: HashSet<ScopeXyBufferKey> =
+        scope_xy_collection.keys().cloned().collect();
+
+      let desired_keys: HashSet<ScopeXyBufferKey> = match scope_xy.as_ref() {
+        Some(sx) => sx
+          .pairs
+          .iter()
+          .enumerate()
+          .map(|(i, p)| ScopeXyBufferKey {
+            index: i as u32,
+            pair: p.clone(),
+          })
+          .collect(),
+        None => HashSet::new(),
+      };
+
+      update.scope_xy_removes = current_keys.difference(&desired_keys).cloned().collect();
+      update.scope_xy_adds = desired_keys
+        .difference(&current_keys)
+        .map(|key| (key.clone(), ScopeXyBuffer::new()))
         .collect();
     }
 
@@ -1226,6 +1333,7 @@ impl AudioState {
     if self.is_stopped() {
       let _ = self.send_command(GraphCommand::ClearPatch);
       self.scope_collection.lock().clear();
+      self.scope_xy_collection.lock().clear();
       self.request_start();
     }
 
@@ -1253,6 +1361,7 @@ impl AudioState {
 pub struct AudioSharedState {
   pub stopped: Arc<AtomicBool>,
   pub scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+  pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, ScopeXyBuffer>>>,
   pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   pub audio_budget_meter: Arc<AudioBudgetMeter>,
   /// Module states (e.g., seq current step) - written by audio thread, read by main thread
@@ -1295,6 +1404,8 @@ struct AudioProcessor {
   stopped: Arc<AtomicBool>,
   /// Shared scope collection
   scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+  /// Shared XY scope collection (single global $scopeXY at most)
+  scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, ScopeXyBuffer>>>,
   /// Shared module states (e.g., seq current step)
   module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
   /// MIDI input manager for polling
@@ -1339,6 +1450,7 @@ impl AudioProcessor {
       garbage_tx,
       stopped: shared.stopped,
       scope_collection: shared.scope_collection,
+      scope_xy_collection: shared.scope_xy_collection,
       module_states: shared.module_states,
       midi_manager: shared.midi_manager,
       queued_update: None,
@@ -1511,6 +1623,8 @@ impl AudioProcessor {
       desired_ids,
       scope_adds,
       scope_removes,
+      scope_xy_adds,
+      scope_xy_removes,
       wav_data,
       ..
     } = update;
@@ -1622,6 +1736,19 @@ impl AudioProcessor {
       // Add new scopes
       for (key, buffer) in scope_adds {
         scope_collection.insert(key, buffer);
+      }
+    }
+
+    // Update XY scopes
+    {
+      let mut scope_xy_collection = self.scope_xy_collection.lock();
+      for key in &scope_xy_removes {
+        if let Some(buffer) = scope_xy_collection.remove(key) {
+          let _ = self.garbage_tx.push(GarbageItem::ScopeXy(buffer));
+        }
+      }
+      for (key, buffer) in scope_xy_adds {
+        scope_xy_collection.insert(key, buffer);
       }
     }
   }
@@ -1878,6 +2005,7 @@ where
               // `FinalStateProcessor` used to provide per-frame.
               if end > audio_processor.block_pos {
                 let mut scope_guard = audio_processor.scope_collection.try_lock();
+                let mut scope_xy_guard = audio_processor.scope_xy_collection.try_lock();
                 let mut writer_guard = recording_writer.try_lock();
                 for i in audio_processor.block_pos..end {
                   let is_stopped = audio_processor.is_stopped();
@@ -1957,6 +2085,33 @@ where
                           );
                           scope_buffer.push(s);
                         }
+                      }
+                    }
+                    if let Some(xy_lock) = scope_xy_guard.as_mut() {
+                      for (key, xy_buffer) in xy_lock.iter_mut() {
+                        let (Some(x_mod), Some(y_mod)) = (
+                          audio_processor
+                            .patch
+                            .sampleables
+                            .get(&key.pair.x.module_id),
+                          audio_processor
+                            .patch
+                            .sampleables
+                            .get(&key.pair.y.module_id),
+                        ) else {
+                          continue;
+                        };
+                        let xv = x_mod.get_value_at(
+                          &key.pair.x.port_name,
+                          key.pair.x.channel as usize,
+                          i,
+                        );
+                        let yv = y_mod.get_value_at(
+                          &key.pair.y.port_name,
+                          key.pair.y.channel as usize,
+                          i,
+                        );
+                        xy_buffer.push(xv, yv);
                       }
                     }
                   } else {
@@ -2494,6 +2649,7 @@ mod tests {
     let shared = AudioSharedState {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
       recording_writer: Arc::new(Mutex::new(None)),
       audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
       module_states: Arc::new(Mutex::new(HashMap::new())),
@@ -2692,6 +2848,7 @@ mod tests {
     let shared = AudioSharedState {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
       recording_writer: Arc::new(Mutex::new(None)),
       audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
       module_states: Arc::new(Mutex::new(HashMap::new())),

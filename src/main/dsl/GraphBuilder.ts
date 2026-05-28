@@ -3,7 +3,10 @@ import type {
     ModuleState,
     PatchGraph,
     Scope,
+    ScopeChannel,
     ScopeMode,
+    ScopeXy,
+    ScopeXyPair,
 } from '@modular/core';
 import type { ProcessedModuleSchema } from './paramsSchema';
 import { processSchemas } from './paramsSchema';
@@ -22,6 +25,17 @@ const GAIN_CURVE_EXP = 3;
  * ignored by Rust but flows through to the renderer via IPC.
  */
 export type ScopeWithLocation = Scope & {
+    sourceLocation?: { line: number; column: number };
+};
+
+/**
+ * Per-call $scopeXY state with an optional source location. Lives on
+ * GraphBuilder until `toPatch` resolves the deferred outputs.
+ */
+export type ScopeXYWithLocation = {
+    pairs: ScopeXyPair[];
+    xRange: [number, number];
+    yRange: [number, number];
     sourceLocation?: { line: number; column: number };
 };
 
@@ -523,6 +537,11 @@ export class GraphBuilder {
     private schemas: ProcessedModuleSchema[] = [];
     private schemaByName = new Map<string, ProcessedModuleSchema>();
     private scopes: ScopeWithLocation[] = [];
+    /**
+     * Latest call to `$scopeXY` — last-call-wins (only one global XY scope
+     * at a time). Resolved during `toPatch` like deferred outputs in scopes.
+     */
+    private scopeXY: ScopeXYWithLocation | null = null;
     /** Output groups keyed by baseChannel */
     private outGroups = new Map<number, OutGroup[]>();
     private factoryRegistry = new Map<string, FactoryFunction>();
@@ -877,6 +896,7 @@ export class GraphBuilder {
                     (s: ScopeWithLocation | null): s is ScopeWithLocation =>
                         s !== null,
                 ),
+            scopeXy: this.resolveScopeXY(),
         };
 
         console.log('Built PatchGraph:', ret);
@@ -889,6 +909,7 @@ export class GraphBuilder {
     reset(): void {
         this.modules.clear();
         this.scopes = [];
+        this.scopeXY = null;
         this.counters.clear();
         this.outGroups.clear();
         this.sourceLocationMap.clear();
@@ -1026,6 +1047,68 @@ export class GraphBuilder {
             sourceLocation,
             triggerThreshold: thresh,
         });
+    }
+
+    /**
+     * Resolve the current $scopeXY's channel refs against deferred outputs.
+     * Returns undefined if no scope is registered or any leg fails to resolve
+     * (matches the per-scope skip behaviour for the multi-channel scope path).
+     */
+    private resolveScopeXY(): ScopeXy | undefined {
+        if (this.scopeXY === null) return undefined;
+        const resolveChannel = (ch: ScopeChannel): ScopeChannel | null => {
+            const deferred = this.deferredOutputs.get(ch.moduleId);
+            if (!deferred) return ch;
+            const resolved = deferred.resolve();
+            if (!resolved) return null;
+            return {
+                channel: ch.channel,
+                moduleId: resolved.moduleId,
+                portName: resolved.portName,
+            };
+        };
+        const resolvedPairs: ScopeXyPair[] = [];
+        for (const pair of this.scopeXY.pairs) {
+            const x = resolveChannel(pair.x);
+            const y = resolveChannel(pair.y);
+            if (!x || !y) return undefined;
+            resolvedPairs.push({ x, y });
+        }
+        return {
+            pairs: resolvedPairs,
+            xRange: this.scopeXY.xRange,
+            yRange: this.scopeXY.yRange,
+        };
+    }
+
+    /**
+     * Replace the current $scopeXY (last-call-wins). Pairs are already
+     * cycled to a common arity by the caller; this just records the channel
+     * refs and per-axis display range. Resolved in `toPatch`.
+     */
+    setScopeXY(
+        pairs: { x: ModuleOutput; y: ModuleOutput }[],
+        xRange: [number, number],
+        yRange: [number, number],
+        sourceLocation?: { line: number; column: number },
+    ) {
+        this.scopeXY = {
+            pairs: pairs.map((p) => ({
+                x: {
+                    channel: p.x.channel,
+                    moduleId: p.x.moduleId,
+                    portName: p.x.portName,
+                },
+                y: {
+                    channel: p.y.channel,
+                    moduleId: p.y.moduleId,
+                    portName: p.y.portName,
+                },
+            })),
+            xRange,
+            yRange,
+            sourceLocation,
+        };
     }
 }
 

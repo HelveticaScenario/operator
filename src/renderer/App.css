@@ -55,16 +55,39 @@
     flex-direction: column;
     background-color: var(--bg-primary);
     min-width: 0;
+    position: relative;
+}
+
+/* Lissajous background canvas — sits behind Monaco, never receives events. */
+.woscope-background {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
 }
 
 .patch-editor {
     flex: 1;
     overflow: visible;
     position: relative;
+    z-index: 1;
 }
 
 .patch-editor .cm-editor {
     height: 100%;
+}
+
+/* Let the woscope show through. The theme override at
+ * `components/monaco/theme.ts` already zeroes editor.background in Monaco's
+ * colour map; this catches any inline background Monaco paints on chrome. */
+.editor-panel .monaco-editor,
+.editor-panel .monaco-editor .margin,
+.editor-panel .monaco-editor-background,
+.editor-panel .monaco-editor .monaco-editor-background,
+.editor-panel .monaco-editor .inputarea.ime-input {
+    background: transparent !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

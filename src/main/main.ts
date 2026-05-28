@@ -949,6 +949,8 @@ registerIPCHandler('SYNTH_GET_CHANNELS', () => synth.channels());
 
 registerIPCHandler('SYNTH_GET_SCOPES', () => synth.getScopes());
 
+registerIPCHandler('SYNTH_GET_SCOPE_XY', () => synth.getScopeXy());
+
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('GET_MINI_LEAF_SPANS', (source) => getMiniLeafSpans(source));

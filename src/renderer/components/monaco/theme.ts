@@ -22,9 +22,19 @@ export function applyMonacoTheme(
         })
         .flat();
 
+    // Force editor chrome transparent so the $scopeXY woscope canvas shows
+    // through. Keep all other token colours from the theme intact.
+    const TRANSPARENT = '#00000000';
     monaco.editor.defineTheme(monacoThemeId, {
         base: appTheme.type === 'light' ? 'vs' : 'vs-dark',
-        colors: raw.colors,
+        colors: {
+            ...raw.colors,
+            'editor.background': TRANSPARENT,
+            'editorGutter.background': TRANSPARENT,
+            'minimap.background': TRANSPARENT,
+            'editorStickyScroll.background': TRANSPARENT,
+            'editorStickyScrollHover.background': TRANSPARENT,
+        },
         inherit: true,
         rules,
     });

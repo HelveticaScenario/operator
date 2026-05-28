@@ -28,6 +28,11 @@ export declare class Synthesizer {
    */
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
+  /**
+   * Snapshot every active $scopeXY pair as (key, x samples, y samples, head).
+   * `head` is the write index — the renderer can use it to find the newest sample.
+   */
+  getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, number]>
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
@@ -417,6 +422,7 @@ export interface PatchGraph {
   modules: Array<ModuleState>
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
+  scopeXy?: ScopeXy
 }
 
 export interface PositionalArg {
@@ -454,6 +460,25 @@ export interface ScopeStats {
   max: number
   peakToPeak: number
   readOffset: number
+}
+
+export interface ScopeXy {
+  pairs: Array<ScopeXyPair>
+  /** (xMin, xMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
+  xRange: [number, number]
+  /** (yMin, yMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
+  yRange: [number, number]
+}
+
+export interface ScopeXyBufferKey {
+  /** Index of this pair inside the active `$scopeXY` call. */
+  index: number
+  pair: ScopeXyPair
+}
+
+export interface ScopeXyPair {
+  x: ScopeChannel
+  y: ScopeChannel
 }
 
 export interface SignalParamSchema {

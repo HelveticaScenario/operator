@@ -2657,6 +2657,35 @@ fn default_scope_range() -> (f64, f64) {
     (-5.0, 5.0)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct ScopeXyPair {
+    pub x: ScopeChannel,
+    pub y: ScopeChannel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct ScopeXyBufferKey {
+    /// Index of this pair inside the active `$scopeXY` call.
+    pub index: u32,
+    pub pair: ScopeXyPair,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[napi(object)]
+pub struct ScopeXy {
+    pub pairs: Vec<ScopeXyPair>,
+    /// (xMin, xMax) volts for display; defaults to [-5, 5] via `default_scope_range`.
+    #[serde(default = "default_scope_range")]
+    pub x_range: (f64, f64),
+    /// (yMin, yMax) volts for display; defaults to [-5, 5] via `default_scope_range`.
+    #[serde(default = "default_scope_range")]
+    pub y_range: (f64, f64),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]
@@ -2665,6 +2694,7 @@ pub struct PatchGraph {
     pub module_id_remaps: Option<Vec<ModuleIdRemap>>,
     // #[serde(default)]
     pub scopes: Vec<Scope>,
+    pub scope_xy: Option<ScopeXy>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

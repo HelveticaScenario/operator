@@ -8,6 +8,7 @@ import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
+import { WoscopeBackground } from './app/woscope/WoscopeBackground';
 import './App.css';
 // Import type { editor } from 'monaco-editor';
 import { editor } from 'monaco-editor';
@@ -986,6 +987,7 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
+                            <WoscopeBackground />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}

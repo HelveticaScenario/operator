@@ -472,6 +472,7 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
             .collect(),
         module_id_remaps: None,
         scopes: vec![],
+        scope_xy: None,
     }
 }
 

@@ -1305,3 +1305,100 @@ describe('$table helpers', () => {
         });
     });
 });
+
+// ─── $scopeXY (background Lissajous) ─────────────────────────────────────────
+
+describe('$scopeXY', () => {
+    test('records a single (x, y) pair with default range', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(440))
+            const b = $sine($hz(330))
+            $scopeXY(a, b)
+            a.out()
+        `);
+        expect(patch.scopeXy).toBeDefined();
+        expect(patch.scopeXy!.pairs).toHaveLength(1);
+        expect(patch.scopeXy!.pairs[0].x.portName).toBe('output');
+        expect(patch.scopeXy!.pairs[0].y.portName).toBe('output');
+        expect(patch.scopeXy!.xRange).toEqual([-5, 5]);
+        expect(patch.scopeXy!.yRange).toEqual([-5, 5]);
+    });
+
+    test('cycles the shorter axis to match the longer one', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(110))
+            const b = $sine($hz(220))
+            const c = $sine($hz(440))
+            $scopeXY($c(a, b), c)
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(2);
+        // Both pairs share the same y module (cycling c with len 1)
+        const yModules = patch.scopeXy!.pairs.map((p) => p.y.moduleId);
+        expect(new Set(yModules).size).toBe(1);
+    });
+
+    test('cycles both ways when neither length divides the other', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(110))
+            const b = $sine($hz(220))
+            const p = $sine($hz(330))
+            const q = $sine($hz(440))
+            const r = $sine($hz(550))
+            $scopeXY($c(a, b), $c(p, q, r))
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(3);
+        // x: [a, b, a] (cycle), y: [p, q, r]
+        const xs = patch.scopeXy!.pairs.map((p) => p.x.moduleId);
+        const ys = patch.scopeXy!.pairs.map((p) => p.y.moduleId);
+        expect(xs[0]).toBe(xs[2]);
+        expect(xs[0]).not.toBe(xs[1]);
+        expect(new Set(ys).size).toBe(3);
+    });
+
+    test('last call wins', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(110))
+            const b = $sine($hz(220))
+            const c = $sine($hz(330))
+            $scopeXY(a, b)
+            $scopeXY(b, c)
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(1);
+        // second call's pair must be the visible one
+        expect(patch.scopeXy!.pairs[0].x.moduleId).not.toBe(
+            patch.scopeXy!.pairs[0].y.moduleId,
+        );
+    });
+
+    test('custom xRange / yRange flow through to the patch', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(440))
+            $scopeXY(a, a, { xRange: [-1, 1], yRange: [0, 10] })
+            a.out()
+        `);
+        expect(patch.scopeXy!.xRange).toEqual([-1, 1]);
+        expect(patch.scopeXy!.yRange).toEqual([0, 10]);
+    });
+
+    test('empty x or y is a no-op', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(440))
+            $scopeXY([], a)
+            a.out()
+        `);
+        expect(patch.scopeXy).toBeUndefined();
+    });
+
+    test('bad range throws', () => {
+        expect(() =>
+            execPatch(`
+                const a = $sine($hz(440))
+                $scopeXY(a, a, { xRange: [5, -5] })
+                a.out()
+            `),
+        ).toThrow(/xRange/);
+    });
+});

@@ -907,6 +907,23 @@ function $setTempo(tempo: number): void;
 function $setOutputGain(gain: Mono<Signal>): void;
 
 /**
+ * Render a Lissajous-style XY oscilloscope as the editor background.
+ * Each axis is cycled to the longer arity, producing one trace per pair.
+ * Last call wins; only one global XY scope can be active at a time.
+ * @param x - Horizontal channel(s)
+ * @param y - Vertical channel(s)
+ * @param config.xRange - Horizontal voltage window (default [-5, 5])
+ * @param config.yRange - Vertical voltage window (default [-5, 5])
+ * @example $scopeXY($sine($hz(440)), $sine($hz(311)))
+ * @example $scopeXY($c(osc1, osc2), osc3) // 2 traces, both share osc3 as Y
+ */
+function $scopeXY(
+  x: Poly<Signal>,
+  y: Poly<Signal>,
+  config?: { xRange?: [number, number]; yRange?: [number, number] },
+): void;
+
+/**
  * Set the time signature for the root clock.
  * Both values must be positive integers.
  * @param numerator - Beats per bar (e.g. 3, 4, 6, 7)
