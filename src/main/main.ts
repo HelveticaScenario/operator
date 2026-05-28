@@ -1838,22 +1838,34 @@ const createMenu = (): void => {
         {
             role: 'windowMenu',
         },
-        // Help menu (non-macOS: includes Check for Updates)
-        ...(!isMac
-            ? ([
-                  {
-                      label: 'Help',
-                      submenu: [
+        // Help menu — Migrate is cross-platform; Check for Updates is
+        // already in the App menu on macOS, so only add it elsewhere.
+        {
+            role: 'help',
+            submenu: [
+                {
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(MENU_CHANNELS.MIGRATE_BUFFER);
+                        }
+                    },
+                    label: 'Migrate $cycle to $p()...',
+                },
+                ...(!isMac
+                    ? ([
+                          { type: 'separator' },
                           {
                               click: async () => {
                                   await checkForUpdateAvailability();
                               },
                               label: 'Check for Updates...',
                           },
-                      ],
-                  },
-              ] satisfies Electron.MenuItemConstructorOptions[])
-            : []),
+                      ] satisfies Electron.MenuItemConstructorOptions[])
+                    : []),
+            ],
+        },
     ];
 
     const menu = Menu.buildFromTemplate(template);
