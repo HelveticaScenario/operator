@@ -658,11 +658,21 @@ impl<E: DeserializeError> Deserr<E> for SeqPatternParam {
         location: ValuePointerRef<'_>,
     ) -> Result<Self, E> {
         let json = value_to_json(value);
-        let parsed: SeqPatternSource = serde_json::from_value(json).map_err(|e| {
+        let parsed: SeqPatternSource = serde_json::from_value(json.clone()).map_err(|e| {
+            let preview = serde_json::to_string(&json)
+                .ok()
+                .map(|s| {
+                    let mut t: String = s.chars().take(400).collect();
+                    if s.len() > 400 {
+                        t.push_str("...");
+                    }
+                    t
+                })
+                .unwrap_or_else(|| "<unserializable>".to_string());
             deserr::take_cf_content(E::error::<V>(
                 None,
                 ErrorKind::Unexpected {
-                    msg: format!("invalid seq pattern payload: {e}"),
+                    msg: format!("invalid seq pattern payload: {e}\n  payload: {preview}"),
                 },
                 location,
             ))
