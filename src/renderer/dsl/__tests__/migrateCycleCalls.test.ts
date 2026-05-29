@@ -229,7 +229,7 @@ $cycle($sp("0 2", scale).add("4"));`,
         expect(result.callsChanged).toBe(1);
     });
 
-    test('migrates $iCycle with a reassigned string source variable', () => {
+    test('pushes $sp into a reassigned string source variable', () => {
         const source = [
             `const key = 'c(maj)'`,
             ``,
@@ -243,25 +243,71 @@ $cycle($sp("0 2", scale).add("4"));`,
             [
                 `const key = 'c(maj)'`,
                 ``,
-                `let pat = '<0 2 4>*16'`,
-                `pat = '<0 2 <4!2 5>>*16'`,
+                `let pat = $sp('<0 2 4>*16', key)`,
+                `pat = $sp('<0 2 <4!2 5>>*16', key)`,
                 ``,
-                `const seq = $cycle($sp(pat, key))`,
+                `const seq = $cycle(pat)`,
             ].join('\n'),
         );
         expect(result.callsChanged).toBe(1);
-        expect(result.assignmentsChanged).toBe(0);
+        expect(result.assignmentsChanged).toBe(2);
         expect(result.skippedVariables).toEqual([]);
     });
 
-    test('preserves single string source variable as identifier', () => {
+    test('idempotent — re-migrating pushed-down $sp output is a no-op', () => {
+        const source = [
+            `const key = 'c(maj)'`,
+            `let pat = '<0 2 4>*16'`,
+            `pat = '<0 2 <4!2 5>>*16'`,
+            `$iCycle(pat, key)`,
+        ].join('\n');
+        const once = migrateCycleCalls(source).migrated;
+        const twice = migrateCycleCalls(once);
+        expect(twice.migrated).toBe(once);
+        expect(twice.callsChanged).toBe(0);
+        expect(twice.assignmentsChanged).toBe(0);
+        expect(twice.skippedVariables).toEqual([]);
+    });
+
+    test('pushes $sp into a single string source variable', () => {
         const source = `const pat = "0 2 4";\n$iCycle(pat, "C");`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `const pat = "0 2 4";\n$cycle($sp(pat, "C"));`,
+            `const pat = $sp("0 2 4", "C");\n$cycle(pat);`,
         );
         expect(result.callsChanged).toBe(1);
+        expect(result.assignmentsChanged).toBe(1);
         expect(result.skippedVariables).toEqual([]);
+    });
+
+    test('two $iCycle uses of one var with same scale share the push-down', () => {
+        const source = [
+            `let pat = "0 2";`,
+            `$iCycle(pat, "C");`,
+            `pat = "4 5";`,
+            `$iCycle(pat, "C");`,
+        ].join('\n');
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            [
+                `let pat = $sp("0 2", "C");`,
+                `$cycle(pat);`,
+                `pat = $sp("4 5", "C");`,
+                `$cycle(pat);`,
+            ].join('\n'),
+        );
+        expect(result.assignmentsChanged).toBe(2);
+        expect(result.callsChanged).toBe(2);
+    });
+
+    test('conflicting scales fall back to inline $sp at each call', () => {
+        const source = `let pat = "0 2";\n$iCycle(pat, "C");\n$iCycle(pat, "D");`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `let pat = "0 2";\n$cycle($sp(pat, "C"));\n$cycle($sp(pat, "D"));`,
+        );
+        expect(result.assignmentsChanged).toBe(0);
+        expect(result.callsChanged).toBe(2);
     });
 
     test('skips $iCycle source variable with a non-string assignment', () => {

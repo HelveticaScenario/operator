@@ -476,10 +476,11 @@ describe('sequencing', () => {
         expect(slice.includes('0 5')).toBe(true);
     });
 
-    test('$sp accepts a reassigned string variable as source (migrated $iCycle form)', () => {
-        // The $iCycle migration rewrites `$iCycle(pat, key)` to
-        // `$cycle($sp(pat, key))` while preserving the `pat` reference.
-        // $sp must consume the variable's runtime (last-assigned) value.
+    test('$sp accepts a reassigned string variable as source', () => {
+        // The inline migration form `$cycle($sp(pat, key))` (used when an
+        // $iCycle source variable feeds calls with conflicting scales) keeps
+        // `pat` a raw string, so $sp must consume the variable's runtime
+        // (last-assigned) value.
         const source =
             "const key = 'c(maj)'\n" +
             "let pat = '<0 2 4>*16'\n" +
