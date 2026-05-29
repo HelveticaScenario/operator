@@ -8,7 +8,7 @@
 // GPU Lanczos upsampler. Per-frame: a 2048×1 RGBA-float texture is uploaded
 // with the raw ring (x in .r, y in .g). Each vertex's output sample index
 // drives a 15-tap (2a-1) sinc-windowed sum to interpolate `STEPS` outputs per
-// input sample. Keeps CPU work to just an interleave + texSubImage2D.
+// input sample. CPU work stays at an interleave + texSubImage2D.
 export const vsLine = `\
 precision highp float;
 #define EPS 1E-6

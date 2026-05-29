@@ -34,6 +34,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -789,40 +790,107 @@ impl ScopeBuffer {
 /// over the most recent CAPACITY samples (~43 ms at 48 kHz).
 pub const SCOPE_XY_CAPACITY: usize = 2048;
 
-pub struct ScopeXyBuffer {
+/// Audio-thread-private write ring. Touched only by the audio thread, only
+/// through `&self` (see the `UnsafeCell` in `ScopeXyBuffer`). The main thread
+/// never reads it.
+struct ScopeXyPrivate {
   x: [f32; SCOPE_XY_CAPACITY],
   y: [f32; SCOPE_XY_CAPACITY],
   write_idx: usize,
 }
 
+/// Lock-free single-producer XY scope buffer.
+///
+/// The audio thread appends samples to the private ring every frame, then
+/// publishes the whole ring into a SeqLock-guarded region once per callback.
+/// The main thread reads the published region without taking any lock,
+/// retrying only across the microsecond window of an in-flight publish. This
+/// keeps the audio thread off any lock on the per-sample path and lets the
+/// renderer pick up a coherent frame on every poll.
+pub struct ScopeXyBuffer {
+  private: UnsafeCell<ScopeXyPrivate>,
+  /// SeqLock sequence: even = stable, odd = publish in flight.
+  seq: AtomicU32,
+  pub_x: UnsafeCell<[f32; SCOPE_XY_CAPACITY]>,
+  pub_y: UnsafeCell<[f32; SCOPE_XY_CAPACITY]>,
+  pub_head: AtomicU32,
+}
+
+// SAFETY: the audio thread is the sole writer of both the private ring and the
+// published region. The main thread only reads the published region, gated by
+// the SeqLock retry protocol in `snapshot`. No other path aliases the
+// `UnsafeCell` contents, so concurrent access is data-race free.
+unsafe impl Sync for ScopeXyBuffer {}
+
 impl ScopeXyBuffer {
   pub fn new() -> Self {
     Self {
-      x: [0.0; SCOPE_XY_CAPACITY],
-      y: [0.0; SCOPE_XY_CAPACITY],
-      write_idx: 0,
+      private: UnsafeCell::new(ScopeXyPrivate {
+        x: [0.0; SCOPE_XY_CAPACITY],
+        y: [0.0; SCOPE_XY_CAPACITY],
+        write_idx: 0,
+      }),
+      seq: AtomicU32::new(0),
+      pub_x: UnsafeCell::new([0.0; SCOPE_XY_CAPACITY]),
+      pub_y: UnsafeCell::new([0.0; SCOPE_XY_CAPACITY]),
+      pub_head: AtomicU32::new(0),
     }
   }
 
+  /// Append one sample pair to the private ring. Audio thread only.
   #[inline]
-  pub fn push(&mut self, xv: f32, yv: f32) {
-    self.x[self.write_idx] = xv;
-    self.y[self.write_idx] = yv;
-    self.write_idx = (self.write_idx + 1) % SCOPE_XY_CAPACITY;
+  pub fn push(&self, xv: f32, yv: f32) {
+    // SAFETY: the audio thread is the only accessor of `private`.
+    let p = unsafe { &mut *self.private.get() };
+    p.x[p.write_idx] = xv;
+    p.y[p.write_idx] = yv;
+    p.write_idx = (p.write_idx + 1) % SCOPE_XY_CAPACITY;
   }
 
-  /// Returns (x, y, head). x/y are CAPACITY-long, indices [0..CAPACITY) in
-  /// chronological order: element 0 is the oldest sample of the window.
-  /// Called on the main thread — Vec allocation is safe here.
-  pub fn snapshot(&self) -> (Float32Array, Float32Array, u32) {
-    let head = self.write_idx;
-    let mut x = vec![0.0; SCOPE_XY_CAPACITY];
-    let mut y = vec![0.0; SCOPE_XY_CAPACITY];
-    for i in 0..SCOPE_XY_CAPACITY {
-      let src = (head + i) % SCOPE_XY_CAPACITY;
-      x[i] = self.x[src];
-      y[i] = self.y[src];
+  /// Copy the private ring into the published region under the SeqLock. Audio
+  /// thread only, once per callback. Allocation-free.
+  pub fn publish(&self) {
+    // SAFETY: audio thread is the sole writer; the odd sequence value below
+    // tells a concurrent reader its copy is mid-update and must be retried.
+    let p = unsafe { &*self.private.get() };
+    self.seq.fetch_add(1, Ordering::Release); // -> odd: publish in flight
+    unsafe {
+      (*self.pub_x.get()).copy_from_slice(&p.x);
+      (*self.pub_y.get()).copy_from_slice(&p.y);
     }
+    self.pub_head.store(p.write_idx as u32, Ordering::Relaxed);
+    self.seq.fetch_add(1, Ordering::Release); // -> even: stable
+  }
+
+  /// Read the published ring on the main thread, retrying while a publish is
+  /// in flight. Returns (x, y, head). x/y are CAPACITY-long in chronological
+  /// order: element 0 is the oldest sample of the window. Vec allocation is
+  /// safe here (main thread).
+  pub fn snapshot(&self) -> (Float32Array, Float32Array, u32) {
+    let mut x = vec![0.0f32; SCOPE_XY_CAPACITY];
+    let mut y = vec![0.0f32; SCOPE_XY_CAPACITY];
+    let head = loop {
+      let s1 = self.seq.load(Ordering::Acquire);
+      if s1 & 1 != 0 {
+        std::hint::spin_loop();
+        continue;
+      }
+      // SAFETY: shared read of the published region. A publish concurrent
+      // with this copy bumps `seq`, so the s1 == s2 check below discards the
+      // torn copy and retries.
+      unsafe {
+        x.copy_from_slice(&*self.pub_x.get());
+        y.copy_from_slice(&*self.pub_y.get());
+      }
+      let h = self.pub_head.load(Ordering::Relaxed);
+      let s2 = self.seq.load(Ordering::Acquire);
+      if s1 == s2 {
+        break h as usize;
+      }
+    };
+    // Rotate the ring so element 0 is the oldest sample (chronological order).
+    x.rotate_left(head);
+    y.rotate_left(head);
     (Float32Array::new(x), Float32Array::new(y), head as u32)
   }
 }
@@ -892,7 +960,7 @@ pub struct AudioState {
   scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
   /// XY scope collection - shared with audio thread for UI reads.
   /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
-  scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, ScopeXyBuffer>>>,
+  scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
   /// Recording writer - shared with audio thread
   recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   /// Recording path
@@ -1104,8 +1172,21 @@ impl AudioState {
     if self.is_stopped() {
       return Vec::new();
     }
-    let Some(lock) = self.scope_xy_collection.try_lock() else {
-      return Vec::new();
+    // The collection mutex now guards only membership, which the audio thread
+    // touches solely on patch updates (microseconds). Spin try_lock instead
+    // of taking the lock so the audio thread is never blocked by this read; a
+    // patch-swap collision resolves within a few spins. The buffer contents
+    // are read lock-free via the SeqLock in `snapshot`.
+    let mut spins = 0;
+    let lock = loop {
+      if let Some(lock) = self.scope_xy_collection.try_lock() {
+        break lock;
+      }
+      spins += 1;
+      if spins >= 4096 {
+        return Vec::new();
+      }
+      std::hint::spin_loop();
     };
     let mut out = Vec::with_capacity(lock.len());
     for (key, buffer) in lock.iter() {
@@ -1210,7 +1291,7 @@ impl AudioState {
       update.scope_xy_removes = current_keys.difference(&desired_keys).cloned().collect();
       update.scope_xy_adds = desired_keys
         .difference(&current_keys)
-        .map(|key| (key.clone(), ScopeXyBuffer::new()))
+        .map(|key| (key.clone(), Arc::new(ScopeXyBuffer::new())))
         .collect();
     }
 
@@ -1361,7 +1442,7 @@ impl AudioState {
 pub struct AudioSharedState {
   pub stopped: Arc<AtomicBool>,
   pub scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
-  pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, ScopeXyBuffer>>>,
+  pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
   pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   pub audio_budget_meter: Arc<AudioBudgetMeter>,
   /// Module states (e.g., seq current step) - written by audio thread, read by main thread
@@ -1404,8 +1485,13 @@ struct AudioProcessor {
   stopped: Arc<AtomicBool>,
   /// Shared scope collection
   scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
-  /// Shared XY scope collection (single global $scopeXY at most)
-  scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, ScopeXyBuffer>>>,
+  /// Shared XY scope collection (single global $scopeXY at most). Holds the
+  /// canonical membership; co-owns each buffer with `scope_xy_audio`.
+  scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
+  /// Audio-thread-private view of the XY scope buffers. Iterated every frame
+  /// to append samples, so the per-sample path never touches the collection
+  /// mutex. Reconciled against the collection on each patch update.
+  scope_xy_audio: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
   /// Shared module states (e.g., seq current step)
   module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
   /// MIDI input manager for polling
@@ -1451,6 +1537,7 @@ impl AudioProcessor {
       stopped: shared.stopped,
       scope_collection: shared.scope_collection,
       scope_xy_collection: shared.scope_xy_collection,
+      scope_xy_audio: Vec::new(),
       module_states: shared.module_states,
       midi_manager: shared.midi_manager,
       queued_update: None,
@@ -1739,17 +1826,33 @@ impl AudioProcessor {
       }
     }
 
-    // Update XY scopes
+    // Update XY scopes. The collection holds canonical membership; the
+    // audio-private `scope_xy_audio` co-owns each buffer so the per-sample
+    // path never touches this mutex.
     {
-      let mut scope_xy_collection = self.scope_xy_collection.lock();
+      let mut m = self.scope_xy_collection.lock();
+      let garbage_tx = &mut self.garbage_tx;
+      let scope_xy_audio = &mut self.scope_xy_audio;
       for key in &scope_xy_removes {
-        if let Some(buffer) = scope_xy_collection.remove(key) {
-          let _ = self.garbage_tx.push(GarbageItem::ScopeXy(buffer));
-        }
+        // The map's Arc drops here; `scope_xy_audio` still co-owns the
+        // buffer, so this drop never frees on the audio thread.
+        m.remove(key);
       }
       for (key, buffer) in scope_xy_adds {
-        scope_xy_collection.insert(key, buffer);
+        m.insert(key.clone(), buffer.clone());
+        scope_xy_audio.push((key, buffer));
       }
+      // Reconcile the private list with the collection. Catches the removes
+      // above and any clear() done on the main thread; evicted buffers ship
+      // to the garbage queue so their final drop lands on the main thread.
+      scope_xy_audio.retain(|(k, buf)| {
+        if m.contains_key(k) {
+          true
+        } else {
+          let _ = garbage_tx.push(GarbageItem::ScopeXy(buf.clone()));
+          false
+        }
+      });
     }
   }
 
@@ -2005,7 +2108,6 @@ where
               // `FinalStateProcessor` used to provide per-frame.
               if end > audio_processor.block_pos {
                 let mut scope_guard = audio_processor.scope_collection.try_lock();
-                let mut scope_xy_guard = audio_processor.scope_xy_collection.try_lock();
                 let mut writer_guard = recording_writer.try_lock();
                 for i in audio_processor.block_pos..end {
                   let is_stopped = audio_processor.is_stopped();
@@ -2087,32 +2189,30 @@ where
                         }
                       }
                     }
-                    if let Some(xy_lock) = scope_xy_guard.as_mut() {
-                      for (key, xy_buffer) in xy_lock.iter_mut() {
-                        let (Some(x_mod), Some(y_mod)) = (
-                          audio_processor
-                            .patch
-                            .sampleables
-                            .get(&key.pair.x.module_id),
-                          audio_processor
-                            .patch
-                            .sampleables
-                            .get(&key.pair.y.module_id),
-                        ) else {
-                          continue;
-                        };
-                        let xv = x_mod.get_value_at(
-                          &key.pair.x.port_name,
-                          key.pair.x.channel as usize,
-                          i,
-                        );
-                        let yv = y_mod.get_value_at(
-                          &key.pair.y.port_name,
-                          key.pair.y.channel as usize,
-                          i,
-                        );
-                        xy_buffer.push(xv, yv);
-                      }
+                    for (key, xy_buffer) in &audio_processor.scope_xy_audio {
+                      let (Some(x_mod), Some(y_mod)) = (
+                        audio_processor
+                          .patch
+                          .sampleables
+                          .get(&key.pair.x.module_id),
+                        audio_processor
+                          .patch
+                          .sampleables
+                          .get(&key.pair.y.module_id),
+                      ) else {
+                        continue;
+                      };
+                      let xv = x_mod.get_value_at(
+                        &key.pair.x.port_name,
+                        key.pair.x.channel as usize,
+                        i,
+                      );
+                      let yv = y_mod.get_value_at(
+                        &key.pair.y.port_name,
+                        key.pair.y.channel as usize,
+                        i,
+                      );
+                      xy_buffer.push(xv, yv);
                     }
                   } else {
                     for ch in 0..num_channels {
@@ -2121,6 +2221,12 @@ where
                   }
 
                   written += 1;
+                }
+                // Publish each XY buffer's ring to its SeqLock region once per
+                // block so the main thread can read a coherent frame without a
+                // lock.
+                for (_key, xy_buffer) in &audio_processor.scope_xy_audio {
+                  xy_buffer.publish();
                 }
                 audio_processor.block_pos = end;
               }

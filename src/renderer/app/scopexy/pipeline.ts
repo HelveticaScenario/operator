@@ -87,6 +87,7 @@ export interface ScopeXY {
         background: [number, number, number],
     ): void;
     setIntensity(intensity: number): void;
+    setLineWidth(lineWidth: number): void;
     setFadeAmount(fadeAmount: number): void;
     setUpsample(enabled: boolean): void;
     dispose(): void;
@@ -199,7 +200,7 @@ export function createScopeXY(
         throw new Error('OES_texture_float not supported');
     }
 
-    const lineSize = options.beamSize ?? 0.012;
+    let lineSize = options.beamSize ?? 0.012;
     let intensity = options.intensity ?? 0.6;
     let fadeAmount = options.fadeAmount ?? 0.15;
     let upsample = options.upsample ?? true;
@@ -374,6 +375,10 @@ export function createScopeXY(
         intensity = v;
     }
 
+    function setLineWidth(v: number) {
+        lineSize = v;
+    }
+
     function setFadeAmount(v: number) {
         fadeAmount = v;
     }
@@ -465,9 +470,9 @@ export function createScopeXY(
         const uColorLoc = gl!.getUniformLocation(fadeShader, 'uColor');
         gl!.enable(gl!.BLEND);
 
-        // Subtract a small constant per frame so dim trails clear past
-        // 8-bit's 1/255 quantization floor (multiplicative decay alone
-        // rounds back to itself there).
+        // Subtract a small constant per frame to push dim trails past
+        // 8-bit's 1/255 quantization floor, where multiplicative decay
+        // rounds a value back to itself and the trail sticks.
         gl!.blendEquation(gl!.FUNC_REVERSE_SUBTRACT);
         gl!.blendFunc(gl!.ONE, gl!.ONE);
         const epsilon = 2.0 / 255.0;
@@ -503,9 +508,15 @@ export function createScopeXY(
             gl!.getUniformLocation(lineShader, 'uSize'),
             lineSize,
         );
+        // Cube the slider value so the brightness knob spans a wide
+        // perceptual range. The beam alpha accumulates additively before the
+        // exposure tonemap, so a linear multiplier barely dims a dense trace;
+        // the cubic gives near-black at the low end. Normalised by 0.36 so the
+        // 0.6 default lands at unity gain (0.6³ / 0.36 = 0.6).
+        const beamGain = (intensity * intensity * intensity) / 0.36;
         gl!.uniform1f(
             gl!.getUniformLocation(lineShader, 'uIntensity'),
-            intensity,
+            beamGain,
         );
         gl!.uniform1f(
             gl!.getUniformLocation(lineShader, 'uFadeAmount'),
@@ -673,6 +684,7 @@ export function createScopeXY(
         resize,
         setColors,
         setIntensity,
+        setLineWidth,
         setFadeAmount,
         setUpsample,
         dispose,

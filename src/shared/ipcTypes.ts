@@ -109,6 +109,8 @@ export interface AppConfig {
     xyScopePersistence?: number;
     /** XY scope GPU upscaling (clamped Lanczos). Default true. */
     xyScopeUpsample?: boolean;
+    /** XY scope beam half-width in clip-space units. Default 0.012. */
+    xyScopeLineWidth?: number;
 }
 
 /**

@@ -49,7 +49,7 @@ pub struct PatchUpdate {
   pub scope_removes: Vec<ScopeBufferKey>,
 
   /// Pre-built XY scope buffers to add (constructed on main thread)
-  pub scope_xy_adds: Vec<(ScopeXyBufferKey, ScopeXyBuffer)>,
+  pub scope_xy_adds: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
 
   /// XY scope buffers to remove
   pub scope_xy_removes: Vec<ScopeXyBufferKey>,
@@ -192,7 +192,7 @@ pub enum GarbageItem {
   /// A scope buffer removed from the collection
   Scope(ScopeBuffer),
   /// An XY scope buffer removed from the collection
-  ScopeXy(ScopeXyBuffer),
+  ScopeXy(Arc<ScopeXyBuffer>),
   /// A queued patch update that was superseded by a newer update before it fired
   PatchUpdate(PatchUpdate),
   /// Live Link resources removed from the audio thread. Drop tears down

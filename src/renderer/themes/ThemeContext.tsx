@@ -24,6 +24,7 @@ interface ThemeContextValue {
     xyScopeIntensity: number;
     xyScopePersistence: number;
     xyScopeUpsample: boolean;
+    xyScopeLineWidth: number;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -85,6 +86,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [xyScopeIntensity, setXyScopeIntensity] = useState(0.6);
     const [xyScopePersistence, setXyScopePersistence] = useState(0.6);
     const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
+    const [xyScopeLineWidth, setXyScopeLineWidth] = useState(0.012);
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -120,6 +122,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.xyScopeUpsample != null) {
                 setXyScopeUpsample(config.xyScopeUpsample);
             }
+            if (config.xyScopeLineWidth != null) {
+                setXyScopeLineWidth(config.xyScopeLineWidth);
+            }
 
             // Subscribe to config changes
             unsubscribe = electronAPI.config.onChange((newConfig) => {
@@ -149,6 +154,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 }
                 if (newConfig.xyScopeUpsample != null) {
                     setXyScopeUpsample(newConfig.xyScopeUpsample);
+                }
+                if (newConfig.xyScopeLineWidth != null) {
+                    setXyScopeLineWidth(newConfig.xyScopeLineWidth);
                 }
             });
         }
@@ -180,6 +188,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 xyScopeIntensity,
                 xyScopePersistence,
                 xyScopeUpsample,
+                xyScopeLineWidth,
             }}
         >
             {children}

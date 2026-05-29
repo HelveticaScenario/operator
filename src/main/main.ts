@@ -410,6 +410,7 @@ const AppConfigSchema = z.object({
     xyScopeIntensity: z.number().min(0).max(1).optional(),
     xyScopePersistence: z.number().min(0).max(1).optional(),
     xyScopeUpsample: z.boolean().optional(),
+    xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
 });
 
 type AppConfig = z.infer<typeof AppConfigSchema>;

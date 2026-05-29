@@ -78,6 +78,8 @@ interface ScopeXYBackgroundProps {
     persistence?: number;
     /** Toggle GPU Lanczos upscaling. */
     upsample?: boolean;
+    /** Beam half-width in clip-space units. */
+    lineWidth?: number;
 }
 
 const DEFAULT_INTENSITY = 0.6;
@@ -85,6 +87,7 @@ const DEFAULT_INTENSITY = 0.6;
 // retain trails for many frames; 0 clears every frame.
 const DEFAULT_PERSISTENCE = 0.6;
 const DEFAULT_UPSAMPLE = true;
+const DEFAULT_LINE_WIDTH = 0.012;
 
 /**
  * Full-bleed XY scope canvas that lives behind the editor. Polls
@@ -96,6 +99,7 @@ export function ScopeXYBackground({
     intensity = DEFAULT_INTENSITY,
     persistence = DEFAULT_PERSISTENCE,
     upsample = DEFAULT_UPSAMPLE,
+    lineWidth = DEFAULT_LINE_WIDTH,
 }: ScopeXYBackgroundProps = {}) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const pipelineRef = useRef<ScopeXY | null>(null);
@@ -116,6 +120,7 @@ export function ScopeXYBackground({
                 intensity,
                 fadeAmount: 1 - persistence,
                 upsample,
+                beamSize: lineWidth,
             });
         } catch (err) {
             console.warn('xy scope: failed to initialise WebGL', err);
@@ -152,15 +157,16 @@ export function ScopeXYBackground({
     }, [upsample]);
 
     useEffect(() => {
+        pipelineRef.current?.setLineWidth(lineWidth);
+    }, [lineWidth]);
+
+    useEffect(() => {
         if (paused) return;
         let cancelled = false;
         let rafId = 0;
-        // The IPC returns an empty Vec when the audio thread holds the
-        // scope_xy mutex during a poll. Treat empties as transient until
-        // a few in a row confirm the engine actually stopped or the
-        // patch dropped $scopeXY.
-        const EMPTY_FRAMES_BEFORE_CLEAR = 5;
-        let consecutiveEmpty = 0;
+        // Reads are now reliable: the audio thread publishes each buffer to a
+        // lock-free SeqLock region, so an empty result means the engine is
+        // stopped or the patch has no $scopeXY. Clear immediately on empty.
         const tick = () => {
             if (cancelled) return;
             const pipeline = pipelineRef.current;
@@ -172,21 +178,14 @@ export function ScopeXYBackground({
                 .getScopeXy()
                 .then((rows) => {
                     if (cancelled) return;
+                    const { beam, background } = readScopeColorsRgb();
+                    pipeline.setColors(beam, background);
                     if (rows.length === 0) {
-                        consecutiveEmpty++;
-                        if (consecutiveEmpty >= EMPTY_FRAMES_BEFORE_CLEAR) {
-                            const { beam, background } =
-                                readScopeColorsRgb();
-                            pipeline.setColors(beam, background);
-                            pipeline.draw([]);
-                        }
+                        pipeline.draw([]);
                     } else {
-                        consecutiveEmpty = 0;
                         const pairs: ScopeXYPairData[] = rows.map(
                             ([, x, y, head]) => ({ head, x, y }),
                         );
-                        const { beam, background } = readScopeColorsRgb();
-                        pipeline.setColors(beam, background);
                         pipeline.draw(pairs);
                     }
                     rafId = requestAnimationFrame(tick);

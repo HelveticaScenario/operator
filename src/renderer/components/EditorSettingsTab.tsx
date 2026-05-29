@@ -264,6 +264,29 @@ export function EditorSettingsTab({
                     />
                 </label>
             </div>
+
+            {/* XY Scope Line Width */}
+            <div className="settings-section">
+                <h3>XY Scope Line Width</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0.002}
+                        max={0.06}
+                        step={0.001}
+                        value={config.xyScopeLineWidth ?? 0.012}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopeLineWidth: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.xyScopeLineWidth ?? 0.012).toFixed(3)}
+                    </span>
+                </div>
+            </div>
         </div>
     );
 }
