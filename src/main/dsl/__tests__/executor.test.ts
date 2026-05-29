@@ -427,6 +427,54 @@ describe('sequencing', () => {
         const patch = execPatch('$cycle($p("0.5 c4 440hz -1")).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
     });
+
+    test('$sp(...).sub(...) wire payload preserves chain RHS argument_spans[1]', () => {
+        // Regression: the chain RHS span must be captured by the analyzer
+        // and carried through to the SpPattern wire payload as
+        // argument_spans[1], pointing at the literal '0 5' in the user
+        // source so editor highlighting can follow it.
+        const source =
+            "const pat = $sp('0 1 2 3', 'c(maj)').sub('0 5')\n" +
+            'const seq = $cycle(pat)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        // The SpPattern lives on $cycle.pattern as an opaque wire payload.
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+            ops: Array<{ op: string; mode: string }>;
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        expect(pattern.sources.length).toBe(2);
+        expect(pattern.sources[1].source).toBe('0 5');
+        expect(pattern.ops).toEqual([{ op: 'sub', mode: 'in' }]);
+
+        // argument_spans must be parallel to sources: one per source.
+        expect(pattern.argument_spans.length).toBe(2);
+
+        // argument_spans[1] should bracket the '0 5' literal in the
+        // original source string (including surrounding quotes is fine
+        // either way as long as the substring it points at contains
+        // '0 5').
+        const rhsSpan = pattern.argument_spans[1];
+        expect(rhsSpan).toBeDefined();
+        expect(typeof rhsSpan.start).toBe('number');
+        expect(typeof rhsSpan.end).toBe('number');
+        expect(rhsSpan.end).toBeGreaterThan(rhsSpan.start);
+
+        // The span must NOT be the {0, 0} fallback used when the
+        // analyzer fails to locate the chain RHS.
+        expect(rhsSpan).not.toEqual({ start: 0, end: 0 });
+
+        // The slice of the source the span points at should contain
+        // the literal RHS pattern characters '0 5'.
+        const slice = source.slice(rhsSpan.start, rhsSpan.end);
+        expect(slice.includes('0 5')).toBe(true);
+    });
 });
 
 // ─── Utilities ───────────────────────────────────────────────────────────────

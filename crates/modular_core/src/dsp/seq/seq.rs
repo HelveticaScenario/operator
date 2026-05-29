@@ -543,6 +543,32 @@ struct PendingEvent {
     value: SeqValue,
 }
 
+/// Resolve the hap in `storage` that the voice's cached scalars describe.
+///
+/// The voice's `cached.hap_index` is frozen at onset time against whatever
+/// cache geometry was current then. A live patch re-run can `std::mem::swap`
+/// an old `SeqState` into a freshly-baked module whose `get_state` reads a
+/// re-built cache; the cached index then misses or points at a hap with
+/// different geometry. This read-only resolver trusts `cached.hap_index`
+/// only when it is in range AND its `whole_begin`/`whole_end` match the
+/// voice's held scalars; otherwise it linear-scans the cycle's haps for the
+/// matching geometry. `cached.hap_index` is owned by the audio thread and is
+/// never written here.
+fn resolve_hap_index(storage: &SeqCycleStorage, cached: &CachedHap) -> Option<usize> {
+    const EPS: f64 = 1e-6;
+    let matches = |hap: &super::seq_value::SeqCycleHap| {
+        (hap.whole_begin - cached.whole_begin).abs() < EPS
+            && (hap.whole_end - cached.whole_end).abs() < EPS
+    };
+    let idx = cached.hap_index as usize;
+    if let Some(hap) = storage.haps.get(idx)
+        && matches(hap)
+    {
+        return Some(idx);
+    }
+    storage.haps.iter().position(matches)
+}
+
 impl crate::types::StatefulModule for Seq {
     fn get_state(&self) -> Option<serde_json::Value> {
         let num_channels = self.channel_count().clamp(1, PORT_MAX_CHANNELS);
@@ -560,7 +586,8 @@ impl crate::types::StatefulModule for Seq {
             {
                 any_non_rest = true;
                 if let Some(storage) = self.get_cycle_storage(cached.cached_cycle)
-                    && let Some(hap) = storage.haps.get(cached.hap_index as usize)
+                    && let Some(hap_index) = resolve_hap_index(storage, &cached)
+                    && let Some(hap) = storage.haps.get(hap_index)
                 {
                     let start = hap.span_offset as usize;
                     let end = start + hap.span_len as usize;

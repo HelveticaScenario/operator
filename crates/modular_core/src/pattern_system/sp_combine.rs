@@ -418,4 +418,86 @@ mod tests {
             assert_eq!((modifier.start, modifier.end), (10, 11));
         }
     }
+
+    // Repro for "$sp('0 1 2 3', 'c(maj)').sub('0 5')" — the renderer-side
+    // pattern that triggered the user's bug report. Mirrors the pipeline in
+    // `SeqPatternParam::from_sp_payload`: parse each source into a
+    // `Pattern<IntervalValue>`, `strip_modifier_spans` each one, then
+    // `combine_sp` with `In` + `sub_interval_values`. The right operand
+    // ("0 5") has the '5' leaf at source offsets [2, 3). After the fold,
+    // that span should land at pattern_idx == 1 (modifier_spans[0]) in
+    // every hap where the right pattern's value contributes — and across
+    // the cycle, at least one such hap must exist.
+    #[test]
+    fn test_sp_sub_right_leaf_lands_at_pattern_idx_1() {
+        use crate::dsp::seq::interval_seq::{IntervalValue, sub_interval_values};
+        use crate::pattern_system::mini;
+
+        // 1+2. Lower mini-notation to Pattern<IntervalValue>.
+        let left: Pattern<IntervalValue> =
+            mini::parse("0 1 2 3").expect("parse '0 1 2 3'");
+        let right: Pattern<IntervalValue> =
+            mini::parse("0 5").expect("parse '0 5'");
+
+        // 3. Strip modifier spans before combining (matches from_sp_payload).
+        let left = left.strip_modifier_spans();
+        let right = right.strip_modifier_spans();
+
+        // 4. Combine with In mode + sub.
+        let combined: Pattern<IntervalValue> =
+            combine_sp(&left, &right, SpAlignmentMode::In, sub_interval_values);
+
+        // 5. Query 1 cycle.
+        let haps = combined.query_arc(
+            Fraction::from_integer(0),
+            Fraction::from_integer(1),
+        );
+        assert!(!haps.is_empty(), "expected haps from sub combine over 1 cycle");
+
+        // 6. For each hap, walk the context tree and collect
+        //    (pattern_idx, (start, end)) tuples. The walk lives on
+        //    ArenaHapContext; rebuild a flat picture from the owned
+        //    HapContext that `query_arc` returns, which already groups
+        //    spans by pattern_idx.
+        //
+        //    pattern_idx 0 -> source_span + source_extra_spans
+        //    pattern_idx 1 -> modifier_spans[0] + modifier_extra_spans[0]
+        //    pattern_idx 2 -> modifier_spans[1] + modifier_extra_spans[1]
+        //    ...
+        let mut per_hap_spans: Vec<Vec<(u8, (usize, usize))>> = Vec::new();
+        for hap in &haps {
+            let mut collected: Vec<(u8, (usize, usize))> = Vec::new();
+            if let Some(s) = &hap.context.source_span {
+                collected.push((0, (s.start, s.end)));
+            }
+            for extra in &hap.context.source_extra_spans {
+                collected.push((0, (extra.start, extra.end)));
+            }
+            for (i, m) in hap.context.modifier_spans.iter().enumerate() {
+                let idx = (i as u8) + 1;
+                collected.push((idx, (m.start, m.end)));
+                if let Some(extras) = hap.context.modifier_extra_spans.get(i) {
+                    for e in extras {
+                        collected.push((idx, (e.start, e.end)));
+                    }
+                }
+            }
+            per_hap_spans.push(collected);
+        }
+
+        // 7. The '5' literal in the right pattern "0 5" lives at source
+        //    offsets [2, 3). Assert it appears at pattern_idx == 1 in at
+        //    least one hap's context across the cycle.
+        let target_span = (2usize, 3usize);
+        let found_at_pidx_1 = per_hap_spans
+            .iter()
+            .any(|spans| spans.iter().any(|(p, s)| *p == 1 && *s == target_span));
+
+        assert!(
+            found_at_pidx_1,
+            "expected the '5' leaf span (2,3) at pattern_idx == 1 in at least one hap, but \
+             collected per-hap spans were: {:#?}",
+            per_hap_spans
+        );
+    }
 }
