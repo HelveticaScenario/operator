@@ -195,8 +195,11 @@ function isPWrapped(node: Expression): boolean {
 
 /**
  * Resolve the patterns arg of `$iCycle` into an ordered list of source
- * literals (verbatim text including quotes). Returns null if the shape
- * can't be reduced statically.
+ * texts for the `$sp(...)` call. String literals and array literals are
+ * reduced to their verbatim text. A variable whose assignments are all
+ * strings is kept as its identifier — `$sp` consumes the runtime string,
+ * and a reassigned variable has no single value to inline. Returns null
+ * if the shape can't be reduced statically.
  */
 function resolveISources(
     arg: Expression,
@@ -208,14 +211,19 @@ function resolveISources(
     }
     if (Node.isIdentifier(arg)) {
         const sites = assignments.get(arg.getText());
-        if (!sites || sites.length !== 1) return null;
+        if (!sites || sites.length === 0) return null;
         if (!assignmentsVisibleAt(sites, arg)) return null;
-        const only = sites[0];
-        if (only.kind === 'string') return [only.rhsText];
-        // Array RHS texts are kind 'non-string' in the site cache but
-        // still mechanically expandable — inspect the captured init node.
-        if (Node.isArrayLiteralExpression(only.initializerNode)) {
-            return collectArrayStrings(only.initializerNode);
+        // A single array-literal assignment expands to an `.add` chain.
+        if (
+            sites.length === 1 &&
+            Node.isArrayLiteralExpression(sites[0].initializerNode)
+        ) {
+            return collectArrayStrings(sites[0].initializerNode);
+        }
+        // String-valued variable (one or many assignments): preserve the
+        // identifier reference verbatim instead of inlining a value.
+        if (sites.every((s) => s.kind === 'string')) {
+            return [arg.getText()];
         }
         return null;
     }

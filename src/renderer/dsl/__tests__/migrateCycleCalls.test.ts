@@ -229,6 +229,49 @@ $cycle($sp("0 2", scale).add("4"));`,
         expect(result.callsChanged).toBe(1);
     });
 
+    test('migrates $iCycle with a reassigned string source variable', () => {
+        const source = [
+            `const key = 'c(maj)'`,
+            ``,
+            `let pat = '<0 2 4>*16'`,
+            `pat = '<0 2 <4!2 5>>*16'`,
+            ``,
+            `const seq = $iCycle(pat, key)`,
+        ].join('\n');
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            [
+                `const key = 'c(maj)'`,
+                ``,
+                `let pat = '<0 2 4>*16'`,
+                `pat = '<0 2 <4!2 5>>*16'`,
+                ``,
+                `const seq = $cycle($sp(pat, key))`,
+            ].join('\n'),
+        );
+        expect(result.callsChanged).toBe(1);
+        expect(result.assignmentsChanged).toBe(0);
+        expect(result.skippedVariables).toEqual([]);
+    });
+
+    test('preserves single string source variable as identifier', () => {
+        const source = `const pat = "0 2 4";\n$iCycle(pat, "C");`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `const pat = "0 2 4";\n$cycle($sp(pat, "C"));`,
+        );
+        expect(result.callsChanged).toBe(1);
+        expect(result.skippedVariables).toEqual([]);
+    });
+
+    test('skips $iCycle source variable with a non-string assignment', () => {
+        const source = `let pat = "0 2";\npat = makePat();\n$iCycle(pat, "C");`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(source);
+        expect(result.callsChanged).toBe(0);
+        expect(result.skippedVariables).toEqual(['pat']);
+    });
+
     test('garbage input — best-effort, no throw', () => {
         const source = `this is not valid js {{{`;
         const result = migrateCycleCalls(source);

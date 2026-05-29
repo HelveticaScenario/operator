@@ -475,6 +475,29 @@ describe('sequencing', () => {
         const slice = source.slice(rhsSpan.start, rhsSpan.end);
         expect(slice.includes('0 5')).toBe(true);
     });
+
+    test('$sp accepts a reassigned string variable as source (migrated $iCycle form)', () => {
+        // The $iCycle migration rewrites `$iCycle(pat, key)` to
+        // `$cycle($sp(pat, key))` while preserving the `pat` reference.
+        // $sp must consume the variable's runtime (last-assigned) value.
+        const source =
+            "const key = 'c(maj)'\n" +
+            "let pat = '<0 2 4>*16'\n" +
+            "pat = '<0 2 <4!2 5>>*16'\n" +
+            'const seq = $cycle($sp(pat, key))\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        // The last assignment wins — $sp parsed the reassigned value.
+        expect(pattern.sources[0].source).toBe('<0 2 <4!2 5>>*16');
+    });
 });
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
