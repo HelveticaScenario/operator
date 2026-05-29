@@ -252,6 +252,32 @@ export function executePatchScript(
         };
     };
 
+    const $mix = userNamespaceTree['$mix'];
+    if (typeof $mix !== 'function') {
+        throw new Error(
+            'DSL execution error: "$mix" module not found in schemas',
+        );
+    }
+
+    /**
+     * Feedback delay sugar: mix `input` with a deferred feedback signal,
+     * capture the mix into a $buffer of `length` seconds, route the
+     * buffer through `feedbackCb` to produce the feedback signal, and
+     * return the wet+dry $mix output with the captured buffer attached
+     * as a `buffer` property for additional taps.
+     */
+    const $delay = (
+        input: Collection | ModuleOutput,
+        feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
+        length: number,
+    ): Collection & { buffer: BufferOutputRef } => {
+        const def = $deferred('length' in input ? input.length : 1);
+        const mixed = $mix([input, def]) as Collection;
+        const buf = $buffer(mixed, length);
+        def.set(feedbackCb(buf));
+        return Object.assign(mixed, { buffer: buf });
+    };
+
     // Slider collector — populated by $slider() calls during execution
     const sliders: SliderDefinition[] = [];
 
@@ -555,6 +581,7 @@ export function executePatchScript(
         $setTimeSignature,
         $setEndOfChainCb,
         $buffer,
+        $delay,
         // WAV sample loading
         $wavs,
         // Built-in modules

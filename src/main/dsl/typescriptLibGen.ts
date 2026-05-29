@@ -1678,6 +1678,31 @@ export function generateDSL(schemas: Schemas): string {
     lines.push(
         'export function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;',
     );
+    lines.push('');
+    lines.push('/**');
+    lines.push(' * Delay with feedback. Mixes `input` with a deferred feedback signal,');
+    lines.push(' * captures the mix into a buffer of `length` seconds, and routes the');
+    lines.push(' * buffer through `feedbackCb` to produce the feedback signal.');
+    lines.push(' *');
+    lines.push(' * Returns the wet+dry $mix output augmented with a `buffer` property');
+    lines.push(' * referencing the captured buffer for further reads.');
+    lines.push(' *');
+    lines.push(' * @example');
+    lines.push(' * ```js');
+    lines.push(" * // simple feedback delay");
+    lines.push(" * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()");
+    lines.push(' * ```');
+    lines.push(' *');
+    lines.push(' * @example');
+    lines.push(' * ```ts');
+    lines.push(' * // tap the buffer for an additional read');
+    lines.push(' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)');
+    lines.push(' * $delayRead(d.buffer, 0.75).out()');
+    lines.push(' * ```');
+    lines.push(' */');
+    lines.push(
+        'export function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): Collection & { buffer: BufferOutputRef };',
+    );
 
     return lines.join('\n') + '\n';
 }
