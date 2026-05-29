@@ -1908,7 +1908,7 @@ __metadata:
     "@playwright/test": "npm:^1.58.2"
     "@stylistic/eslint-plugin": "npm:^5.10.0"
     "@types/electron-squirrel-startup": "npm:^1.0.2"
-    "@types/react": "npm:^19.2.14"
+    "@types/react": "npm:^19.2.7"
     "@types/react-dom": "npm:^19.2.3"
     concurrently: "npm:^9.2.1"
     electron: "npm:39.2.7"
@@ -1920,9 +1920,10 @@ __metadata:
     monaco-editor: "npm:^0.55.1"
     oxlint: "npm:^1.58.0"
     oxlint-tsgolint: "npm:^0.19.0"
+    peggy: "npm:5"
     prettier: "npm:^3.4.2"
-    react: "npm:^19.2.6"
-    react-dom: "npm:^19.2.6"
+    react: "npm:^19.2.3"
+    react-dom: "npm:^19.2.3"
     react-markdown: "npm:^10.1.0"
     ts-morph: "npm:^27.0.2"
     tsx: "npm:^4.21.0"
@@ -3614,6 +3615,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@peggyjs/from-mem@npm:3.1.3":
+  version: 3.1.3
+  resolution: "@peggyjs/from-mem@npm:3.1.3"
+  dependencies:
+    semver: "npm:7.7.4"
+  checksum: 10c0/c4d876bad432a4aca7e6735ae5bcb939fc5be0300f0cf35c8791ce4df08a77fdc4b56c2b29e3374932f45bdfdf7cc602203a942bd00c488c3e4fa8bb19f682f3
+  languageName: node
+  linkType: hard
+
 "@playwright/test@npm:^1.58.2":
   version: 1.58.2
   resolution: "@playwright/test@npm:1.58.2"
@@ -4049,12 +4059,12 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:^19.2.14":
-  version: 19.2.14
-  resolution: "@types/react@npm:19.2.14"
+"@types/react@npm:^19.2.7":
+  version: 19.2.15
+  resolution: "@types/react@npm:19.2.15"
   dependencies:
     csstype: "npm:^3.2.2"
-  checksum: 10c0/7d25bf41b57719452d86d2ac0570b659210402707313a36ee612666bf11275a1c69824f8c3ee1fdca077ccfe15452f6da8f1224529b917050eb2d861e52b59b7
+  checksum: 10c0/b554eab715bb14e581f0ae60e5cefe91e1a5e06c31022b543a9806cf224aa056f21e4fb46208e46eb934d86ca0b247ebc82377192a0dead303cb28b8764c6e67
   languageName: node
   linkType: hard
 
@@ -5082,6 +5092,13 @@ __metadata:
   version: 14.0.2
   resolution: "commander@npm:14.0.2"
   checksum: 10c0/245abd1349dbad5414cb6517b7b5c584895c02c4f7836ff5395f301192b8566f9796c82d7bd6c92d07eba8775fe4df86602fca5d86d8d10bcc2aded1e21c2aeb
+  languageName: node
+  linkType: hard
+
+"commander@npm:^14.0.3":
+  version: 14.0.3
+  resolution: "commander@npm:14.0.3"
+  checksum: 10c0/755652564bbf56ff2ff083313912b326450d3f8d8c85f4b71416539c9a05c3c67dbd206821ca72635bf6b160e2afdefcb458e86b317827d5cb333b69ce7f1a24
   languageName: node
   linkType: hard
 
@@ -8656,6 +8673,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"peggy@npm:5":
+  version: 5.1.0
+  resolution: "peggy@npm:5.1.0"
+  dependencies:
+    "@peggyjs/from-mem": "npm:3.1.3"
+    commander: "npm:^14.0.3"
+    source-map-generator: "npm:2.0.6"
+  bin:
+    peggy: bin/peggy.js
+  checksum: 10c0/319aaf433289854d3080f9e4ee84b528c72d71eb53bb886c7e96cae21f06f729bfa58324eb264a068a578bfcdf8ff54528dbafedbd9e03b4951ae76836a84b12
+  languageName: node
+  linkType: hard
+
 "pend@npm:~1.2.0":
   version: 1.2.0
   resolution: "pend@npm:1.2.0"
@@ -8858,7 +8888,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-dom@npm:^19.2.6":
+"react-dom@npm:^19.2.3":
   version: 19.2.6
   resolution: "react-dom@npm:19.2.6"
   dependencies:
@@ -8891,7 +8921,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react@npm:^19.2.6":
+"react@npm:^19.2.3":
   version: 19.2.6
   resolution: "react@npm:19.2.6"
   checksum: 10c0/66afde33b9a9ee87b1e1cae39d8e7e040d1262e719524fd70660c4d4ce79929c532ac19fc3df5a911edaf02768fdf2c49de4ede1ba99bc6aad72796e0e26e798
@@ -9301,6 +9331,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"semver@npm:7.7.4":
+  version: 7.7.4
+  resolution: "semver@npm:7.7.4"
+  bin:
+    semver: bin/semver.js
+  checksum: 10c0/5215ad0234e2845d4ea5bb9d836d42b03499546ddafb12075566899fc617f68794bb6f146076b6881d755de17d6c6cc73372555879ec7dce2c2feee947866ad2
+  languageName: node
+  linkType: hard
+
 "semver@npm:^6.2.0, semver@npm:^6.3.1":
   version: 6.3.1
   resolution: "semver@npm:6.3.1"
@@ -9460,6 +9499,13 @@ __metadata:
     ip-address: "npm:^10.0.1"
     smart-buffer: "npm:^4.2.0"
   checksum: 10c0/2805a43a1c4bcf9ebf6e018268d87b32b32b06fbbc1f9282573583acc155860dc361500f89c73bfbb157caa1b4ac78059eac0ef15d1811eb0ca75e0bdadbc9d2
+  languageName: node
+  linkType: hard
+
+"source-map-generator@npm:2.0.6":
+  version: 2.0.6
+  resolution: "source-map-generator@npm:2.0.6"
+  checksum: 10c0/e3f8aa81546169125d8394a817818eeaa69a989fdb4b1a906afb629e73c13db18906c4fff68fd1ea3921b1c066458b0c1176491afd9fb43eb0b54538bd3a09e2
   languageName: node
   linkType: hard
 
