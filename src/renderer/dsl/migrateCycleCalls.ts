@@ -242,10 +242,13 @@ function resolveIScale(
 ): string | null {
     if (isStringish(arg)) return arg.getText();
     if (Node.isIdentifier(arg)) {
+        // Preserve identifier reference verbatim — don't inline the
+        // variable's value. The $sp call site should still read `scale`
+        // from the same binding the caller declared.
         const sites = assignments.get(arg.getText());
         if (!sites || sites.length !== 1) return null;
         if (sites[0].kind !== 'string') return null;
-        return sites[0].rhsText;
+        return arg.getText();
     }
     return null;
 }

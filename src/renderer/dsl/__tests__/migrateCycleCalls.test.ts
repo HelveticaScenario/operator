@@ -147,6 +147,28 @@ describe('migrateCycleCalls', () => {
         expect(result.callsChanged).toBe(0);
     });
 
+    test('preserves scale variable identifier (no inlining)', () => {
+        const source = `const scale = "C(major)";
+$iCycle("0 2 4", scale);`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `const scale = "C(major)";
+$cycle($sp("0 2 4", scale));`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('preserves scale variable in array-form $iCycle', () => {
+        const source = `const scale = "C(major)";
+$iCycle(["0 2", "4"], scale);`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `const scale = "C(major)";
+$cycle($sp("0 2", scale).add("4"));`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
     test('garbage input — best-effort, no throw', () => {
         const source = `this is not valid js {{{`;
         const result = migrateCycleCalls(source);
