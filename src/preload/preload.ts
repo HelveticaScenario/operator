@@ -57,6 +57,9 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_CHANNELS]
         >;
         getScopes: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPES]>;
+        getScopeXy: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPE_XY]
+        >;
         getModuleStates: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_MODULE_STATES]
         >;
@@ -291,6 +294,8 @@ const electronAPI: ElectronAPI = {
         getSampleRate: (...args) => invokeIPC('SYNTH_GET_SAMPLE_RATE', ...args),
 
         getScopes: (...args) => invokeIPC('SYNTH_GET_SCOPES', ...args),
+
+        getScopeXy: (...args) => invokeIPC('SYNTH_GET_SCOPE_XY', ...args),
 
         getTransportState: (...args) =>
             invokeIPC('SYNTH_GET_TRANSPORT_STATE', ...args),

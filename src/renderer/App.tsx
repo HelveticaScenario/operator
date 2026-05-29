@@ -11,6 +11,7 @@ import type { MigrationModalSummary } from './components/MigrationDiffModal';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
+import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
 import './App.css';
 // Import type { editor } from 'monaco-editor';
 import { editor } from 'monaco-editor';
@@ -39,6 +40,7 @@ import {
     scopeBufferKeyToString,
 } from './app/oscilloscope';
 import { useEditorBuffers } from './app/hooks/useEditorBuffers';
+import { useTheme } from './themes/ThemeContext';
 
 /**
  * Transform validation errors to use source line numbers instead of module IDs
@@ -89,6 +91,13 @@ function transformErrorsWithSourceLocations(
 }
 
 function App() {
+    const {
+        xyScopeIntensity,
+        xyScopePersistence,
+        xyScopeUpsample,
+        xyScopeLineWidth,
+    } = useTheme();
+
     // Workspace & filesystem
     const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
     const [fileTree, setFileTree] = useState<FileTreeEntry[]>([]);
@@ -1081,6 +1090,16 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
+                            {/* One shared canvas behind the editor. $scopeXY is
+                                global, so every buffer would render identical
+                                content; a single canvas (one WebGL context)
+                                avoids exhausting the browser's context budget. */}
+                            <ScopeXYBackground
+                                intensity={xyScopeIntensity}
+                                persistence={xyScopePersistence}
+                                upsample={xyScopeUpsample}
+                                lineWidth={xyScopeLineWidth}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}

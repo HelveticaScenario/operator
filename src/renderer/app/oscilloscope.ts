@@ -66,8 +66,12 @@ export const drawOscilloscope = (
     const mutedColor = colors.muted;
     const accentColor = colors.accent;
 
+    // Semi-transparent fill so the $scopeXY background canvas reads through.
+    ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = bgColor;
+    ctx.globalAlpha = 0.65;
     ctx.fillRect(0, 0, w, h);
+    ctx.globalAlpha = 1;
 
     const dpr = window.devicePixelRatio || 1;
     const legendWidth = 40 * dpr; // Reserve space for legend on left

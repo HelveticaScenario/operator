@@ -407,6 +407,10 @@ const AppConfigSchema = z.object({
     prettier: z.record(z.string(), z.unknown()).optional(),
     skippedUpdateVersion: z.string().optional(),
     theme: z.string().optional(),
+    xyScopeIntensity: z.number().min(0).max(1).optional(),
+    xyScopePersistence: z.number().min(0).max(1).optional(),
+    xyScopeUpsample: z.boolean().optional(),
+    xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
 });
 
 type AppConfig = z.infer<typeof AppConfigSchema>;
@@ -948,6 +952,8 @@ registerIPCHandler('SYNTH_GET_SAMPLE_RATE', () => synth.sampleRate());
 registerIPCHandler('SYNTH_GET_CHANNELS', () => synth.channels());
 
 registerIPCHandler('SYNTH_GET_SCOPES', () => synth.getScopes());
+
+registerIPCHandler('SYNTH_GET_SCOPE_XY', () => synth.getScopeXy());
 
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
