@@ -103,6 +103,14 @@ export interface AppConfig {
     lastOpenedFolder?: string;
     audioConfig?: AudioConfig;
     skippedUpdateVersion?: string;
+    /** XY scope beam intensity (0..1). Default 0.6. */
+    xyScopeIntensity?: number;
+    /** XY scope phosphor persistence (0..1). 1 = never fade. Default 0.6. */
+    xyScopePersistence?: number;
+    /** XY scope GPU upscaling (clamped Lanczos). Default true. */
+    xyScopeUpsample?: boolean;
+    /** XY scope beam half-width in clip-space units. Default 0.012. */
+    xyScopeLineWidth?: number;
 }
 
 /**
@@ -239,6 +247,7 @@ export const IPC_CHANNELS = {
     SYNTH_GET_SAMPLE_RATE: 'modular:synth:get-sample-rate',
     SYNTH_GET_CHANNELS: 'modular:synth:get-channels',
     SYNTH_GET_SCOPES: 'modular:synth:get-scopes',
+    SYNTH_GET_SCOPE_XY: 'modular:synth:get-scope-xy',
     SYNTH_UPDATE_PATCH: 'modular:synth:update-patch',
     SYNTH_START_RECORDING: 'modular:synth:start-recording',
     SYNTH_STOP_RECORDING: 'modular:synth:stop-recording',
@@ -358,6 +367,8 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_GET_CHANNELS]: typeof Synthesizer.prototype.channels;
 
     [IPC_CHANNELS.SYNTH_GET_SCOPES]: typeof Synthesizer.prototype.getScopes;
+
+    [IPC_CHANNELS.SYNTH_GET_SCOPE_XY]: typeof Synthesizer.prototype.getScopeXy;
 
     [IPC_CHANNELS.SYNTH_UPDATE_PATCH]: (
         patch: PatchGraph,

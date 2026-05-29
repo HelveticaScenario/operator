@@ -28,6 +28,13 @@ export declare class Synthesizer {
    */
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
+  /**
+   * Snapshot every active $scopeXY pair as (key, x samples, y samples,
+   * ranges). Samples are chronological — element 0 is the oldest of the
+   * window, the last element the newest — and `ranges` is the per-axis volt
+   * window the renderer maps into clip space.
+   */
+  getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges]>
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
@@ -417,6 +424,7 @@ export interface PatchGraph {
   modules: Array<ModuleState>
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
+  scopeXy?: ScopeXy
 }
 
 export interface PositionalArg {
@@ -454,6 +462,40 @@ export interface ScopeStats {
   max: number
   peakToPeak: number
   readOffset: number
+}
+
+export interface ScopeXy {
+  pairs: Array<ScopeXyPair>
+  /** (xMin, xMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
+  xRange: [number, number]
+  /** (yMin, yMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
+  yRange: [number, number]
+}
+
+export interface ScopeXyBufferKey {
+  /** Index of this pair inside the active `$scopeXY` call. */
+  index: number
+  pair: ScopeXyPair
+}
+
+export interface ScopeXyPair {
+  x: ScopeChannel
+  y: ScopeChannel
+}
+
+/**
+ * Per-axis display window shipped alongside each `$scopeXY` snapshot so the
+ * renderer maps sampled volts to the configured clip-space window.
+ */
+export interface ScopeXyRanges {
+  /** Horizontal voltage window minimum. */
+  xMin: number
+  /** Horizontal voltage window maximum. */
+  xMax: number
+  /** Vertical voltage window minimum. */
+  yMin: number
+  /** Vertical voltage window maximum. */
+  yMax: number
 }
 
 export interface SignalParamSchema {
