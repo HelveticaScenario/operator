@@ -58,6 +58,8 @@
         "@electron/notarize": "^3.1.1",
         "@electron/osx-sign": "^2.3.0",
         "@playwright/test": "^1.58.2",
+        "@strudel/core": "1.2.5",
+        "@strudel/mini": "1.2.5",
         "@stylistic/eslint-plugin": "^5.10.0",
         "@types/electron-squirrel-startup": "^1.0.2",
         "@types/react": "^19.2.7",

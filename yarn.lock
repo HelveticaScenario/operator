@@ -1906,6 +1906,8 @@ __metadata:
     "@fontsource/victor-mono": "npm:^5.2.8"
     "@monaco-editor/react": "npm:^4.7.0"
     "@playwright/test": "npm:^1.58.2"
+    "@strudel/core": "npm:1.2.5"
+    "@strudel/mini": "npm:1.2.5"
     "@stylistic/eslint-plugin": "npm:^5.10.0"
     "@types/electron-squirrel-startup": "npm:^1.0.2"
     "@types/react": "npm:^19.2.7"
@@ -3821,6 +3823,24 @@ __metadata:
   version: 1.1.0
   resolution: "@standard-schema/spec@npm:1.1.0"
   checksum: 10c0/d90f55acde4b2deb983529c87e8025fa693de1a5e8b49ecc6eb84d1fd96328add0e03d7d551442156c7432fd78165b2c26ff561b970a9a881f046abb78d6a526
+  languageName: node
+  linkType: hard
+
+"@strudel/core@npm:1.2.5":
+  version: 1.2.5
+  resolution: "@strudel/core@npm:1.2.5"
+  dependencies:
+    fraction.js: "npm:^5.2.1"
+  checksum: 10c0/b5fc9cc2fe3fb02f1a9c0246ab80dd75bfd6265205d380d9b6584f6d77a932219d5767672bb4c266ff99721d8c42bdbeb9dc3a54a389a93c2abada06c06aa957
+  languageName: node
+  linkType: hard
+
+"@strudel/mini@npm:1.2.5":
+  version: 1.2.5
+  resolution: "@strudel/mini@npm:1.2.5"
+  dependencies:
+    "@strudel/core": "npm:1.2.5"
+  checksum: 10c0/9312a2e8d951004a7e745a60112e396cfdcdaa991268998dfba15b1dece3002d009463a12596d33b77117342cddc949ede712095938082511415d340aee27923
   languageName: node
   linkType: hard
 
@@ -6099,6 +6119,13 @@ __metadata:
   bin:
     formatly: bin/index.mjs
   checksum: 10c0/ef9dbd3cdaee649e9604ea060d8d62d8131eb81117634336592ee2193fc7c98a3f1f1b5d09a045dbd36287ba88edf868ef179d39fbda2f34fbe2be70c42dd014
+  languageName: node
+  linkType: hard
+
+"fraction.js@npm:^5.2.1":
+  version: 5.3.4
+  resolution: "fraction.js@npm:5.3.4"
+  checksum: 10c0/f90079fe9bfc665e0a07079938e8ff71115bce9462f17b32fc283f163b0540ec34dc33df8ed41bb56f028316b04361b9a9995b9ee9258617f8338e0b05c5f95a
   languageName: node
   linkType: hard
 
