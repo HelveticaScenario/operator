@@ -1851,7 +1851,7 @@ const createMenu = (): void => {
                             )?.webContents.send(MENU_CHANNELS.MIGRATE_BUFFER);
                         }
                     },
-                    label: 'Migrate $cycle to $p()...',
+                    label: 'Migrate $cycle / $iCycle to $p / $sp...',
                 },
                 ...(!isMac
                     ? ([
