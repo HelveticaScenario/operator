@@ -3,7 +3,11 @@ import path from 'path';
 
 export default defineConfig({
     test: {
-        include: ['src/**/*.test.ts', 'crates/modular/__test__/**/*.test.ts'],
+        include: [
+            'src/**/*.test.ts',
+            'src/**/*.test.tsx',
+            'crates/modular/__test__/**/*.test.ts',
+        ],
         // Native N-API modules don't work with worker threads
         pool: 'forks',
         forks: {

@@ -2223,7 +2223,7 @@ mod tests {
     #[test]
     fn test_random_choice_in_sequence_has_onsets() {
         // "a b|c d" parses as a (b|c) d — all three positions should produce
-        // discrete events with onsets (previously b|c produced whole: None).
+        // discrete events with onsets.
         let ast = parse("1 2|3 4").unwrap();
         let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
 

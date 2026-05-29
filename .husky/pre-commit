@@ -1,2 +1,23 @@
 yarn knip
+
+# Regenerate the mini-notation parser when the grammar source is staged.
+# Without this, grammar.generated.ts can drift from grammar.peggy.
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if printf '%s\n' "$staged" | grep -qx 'src/main/dsl/miniNotation/grammar\.peggy'; then
+    yarn build:grammar
+    git add src/main/dsl/miniNotation/grammar.generated.ts
+fi
+
+# Regenerate the sp_combine fixtures only when the generator script itself
+# changes. Grammar edits intentionally do NOT trigger this — the fixtures are
+# ~18 MB and rebuilding them on every grammar tweak is too costly. If a grammar
+# change should land new fixture bytes, run `yarn gen:sp-fixtures` manually.
+if printf '%s\n' "$staged" | grep -qx 'scripts/gen-sp-fixture\.mjs'; then
+    yarn gen:sp-fixtures
+    git add \
+        crates/modular_core/src/pattern_system/__fixtures__/sp_combine.json \
+        crates/modular_core/src/pattern_system/__fixtures__/sp_combine_chain2.json
+fi
+
 npx lint-staged

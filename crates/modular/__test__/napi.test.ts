@@ -179,9 +179,3 @@ describe('deriveChannelCount', () => {
         expect(result.errors![0].params).toContain('input');
     });
 });
-
-// `getMiniLeafSpans` and `getPatternPolyphony` were removed when
-// mini-notation parsing moved TypeScript-side (`$p()`). The TS parser is
-// covered by `src/main/dsl/miniNotation/__tests__/parser.test.ts`;
-// pre-cached polyphony derivation is exercised through the seq/iCycle
-// deserialization tests in `crates/modular_core/src/dsp/seq/`.

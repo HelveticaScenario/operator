@@ -176,4 +176,32 @@ $cycle($sp("0 2", scale).add("4"));`,
         expect(result.migrated).toBe(source);
         expect(result.callsChanged).toBe(0);
     });
+
+    test('overlapping edits in one comment abort migration cleanly', () => {
+        // The outer $iCycle(...) edit and the inner $cycle("a") edit
+        // both fire on overlapping ranges. applyEdits must report the
+        // conflict, and the result must be source-identical with zeroed
+        // counts and an error set — never a "nonzero counts but no diff"
+        // state that would let the UI overwrite the buffer with itself.
+        const source = `// $iCycle([$cycle("a")], "C")`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(source);
+        expect(result.callsChanged).toBe(0);
+        expect(result.assignmentsChanged).toBe(0);
+        expect(result.commentsChanged).toBe(0);
+        expect(result.error).toBeDefined();
+    });
+
+    test('does not rewrite a binding that only exists in an inner scope', () => {
+        // The only `p` in source is declared inside `inner()`. The
+        // top-level `$cycle(p)` references some other (undeclared) `p`
+        // — collectAssignments must not treat the inner binding as a
+        // hit just because the name matches.
+        const source =
+            'function inner(){ const p = "c4"; return p; }\n$cycle(p);';
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(source);
+        expect(result.callsChanged).toBe(0);
+        expect(result.assignmentsChanged).toBe(0);
+    });
 });

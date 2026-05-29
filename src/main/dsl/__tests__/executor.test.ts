@@ -414,13 +414,13 @@ describe('sequencing', () => {
     test('$iCycle rejects non-integer atoms at patch-graph validation', () => {
         expect(() =>
             execPatch('$iCycle($p("1.5"), "C(major)").out()'),
-        ).toThrow();
+        ).toThrow(/IntervalValue requires integer scale degrees, got 1\.5/);
         expect(() =>
             execPatch('$iCycle($p("c4"), "C(major)").out()'),
-        ).toThrow();
+        ).toThrow(/IntervalValue does not accept note atoms/);
         expect(() =>
             execPatch('$iCycle($p("440hz"), "C(major)").out()'),
-        ).toThrow();
+        ).toThrow(/IntervalValue does not accept Hz atoms/);
     });
 
     test('$cycle accepts mixed numeric, note, and hz atoms', () => {

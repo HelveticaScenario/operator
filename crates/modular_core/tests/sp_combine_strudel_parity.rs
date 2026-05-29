@@ -89,23 +89,42 @@ fn sort_key(h: &CmpHap) -> ([[i64; 2]; 2], i32, Option<[[i64; 2]; 2]>) {
     (h.1, h.2, h.0)
 }
 
-fn extract_actual(pat: &Pattern<IntervalValue>) -> Vec<CmpHap> {
+/// Extracted parity row: the comparable hap list plus diagnostic counts
+/// for the pre-filter / Rest split.
+struct Extracted {
+    haps: Vec<CmpHap>,
+    rest_count: usize,
+    pre_filter_count: usize,
+}
+
+fn extract_actual(pat: &Pattern<IntervalValue>) -> Extracted {
     let haps =
         pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+    let pre_filter_count = haps.len();
+    let mut rest_count = 0usize;
     let mut out: Vec<CmpHap> = haps
         .iter()
-        .filter_map(|h| {
-            let d = h.value.degree()?;
-            let whole = h
-                .whole
-                .as_ref()
-                .map(|w| [frac_pair(&w.begin), frac_pair(&w.end)]);
-            let part = [frac_pair(&h.part.begin), frac_pair(&h.part.end)];
-            Some((whole, part, d))
+        .filter_map(|h| match h.value.degree() {
+            Some(d) => {
+                let whole = h
+                    .whole
+                    .as_ref()
+                    .map(|w| [frac_pair(&w.begin), frac_pair(&w.end)]);
+                let part = [frac_pair(&h.part.begin), frac_pair(&h.part.end)];
+                Some((whole, part, d))
+            }
+            None => {
+                rest_count += 1;
+                None
+            }
         })
         .collect();
     out.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
-    out
+    Extracted {
+        haps: out,
+        rest_count,
+        pre_filter_count,
+    }
 }
 
 fn extract_expected(haps: &[FixtureHap]) -> Vec<CmpHap> {
@@ -139,9 +158,38 @@ struct Row1 {
     mode: String,
     #[serde(default)]
     haps: Option<Vec<FixtureHap>>,
+    /// Strudel-side count of `~`-derived no-value haps. Strudel suppresses
+    /// rest haps at queryArc time so this is currently always 0 — but we
+    /// still emit it so the Rust side can flag any combine_sp output that
+    /// produces a Rest where strudel didn't.
+    #[serde(default)]
+    rest_count: Option<usize>,
     #[serde(default)]
     error: Option<String>,
 }
+
+/// Render a small histogram of divergences, bucketed by (op, mode), so a
+/// failed run surfaces hot-spot combinations rather than just a wall of
+/// individual failures. Sorted descending by count, ties broken
+/// alphabetically for determinism.
+fn render_histogram(buckets: &std::collections::BTreeMap<String, usize>) -> String {
+    if buckets.is_empty() {
+        return String::from("(none)");
+    }
+    let mut entries: Vec<(&String, &usize)> = buckets.iter().collect();
+    entries.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    let mut out = String::from("per-bucket divergence count:\n");
+    for (bucket, count) in entries {
+        out.push_str(&format!("  {count:>5}  {bucket}\n"));
+    }
+    out
+}
+
+/// Cap on the number of full divergence reports rendered in the panic
+/// message. Distinct from the iteration cap removed for L7 — we still
+/// collect every divergence so the histogram is complete, we only trim
+/// the prose body so the test output stays scannable.
+const FAILURE_RENDER_CAP: usize = 25;
 
 #[test]
 fn combine_sp_matches_strudel_for_full_grammar_cross() {
@@ -152,6 +200,8 @@ fn combine_sp_matches_strudel_for_full_grammar_cross() {
         serde_json::from_str(&text).expect("fixture must parse as Row1[]");
 
     let mut failures: Vec<String> = Vec::new();
+    let mut hist: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut compared = 0usize;
 
     for row in &rows {
@@ -168,8 +218,38 @@ fn combine_sp_matches_strudel_for_full_grammar_cross() {
         let actual = extract_actual(&combined);
         let expected_cmp = extract_expected(expected);
 
+        // Sanity: the Rest-filter must never enlarge the hap set.
+        assert!(
+            actual.haps.len() <= actual.pre_filter_count,
+            "filter expanded hap count: pre={pre}, post={post} for {lhs}.{op}.{mode}({rhs})",
+            pre = actual.pre_filter_count,
+            post = actual.haps.len(),
+            lhs = row.lhs,
+            op = row.op,
+            mode = row.mode,
+            rhs = row.rhs,
+        );
+
+        // Diagnostic-only: track Rest-hap divergence in the histogram
+        // without failing the build. The Rust `combine_sp` legitimately
+        // emits `IntervalValue::Rest` haps where strudel suppresses them
+        // at queryArc time (file-level comment documents this as by
+        // design), so a non-zero mismatch tally is expected today. We
+        // still surface the per-bucket count so engineers can spot
+        // regressions where the gap widens.
+        let expected_rests = row.rest_count.unwrap_or(0);
         compared += 1;
-        if actual != expected_cmp {
+        if actual.rest_count != expected_rests {
+            let bucket = format!(
+                "rest-count-diagnostic:{op}/{mode}",
+                op = row.op,
+                mode = row.mode,
+            );
+            *hist.entry(bucket).or_insert(0) += 1;
+        }
+        if actual.haps != expected_cmp {
+            let bucket = format!("hap-mismatch:{op}/{mode}", op = row.op, mode = row.mode);
+            *hist.entry(bucket).or_insert(0) += 1;
             failures.push(format!(
                 "DIVERGENCE: {lhs}({lhs_src:?}) op={op} mode={mode_s} rhs={rhs}({rhs_src:?})\n  expected ({el}): {exp:?}\n  actual   ({al}): {act:?}",
                 lhs = row.lhs,
@@ -179,22 +259,22 @@ fn combine_sp_matches_strudel_for_full_grammar_cross() {
                 op = row.op,
                 mode_s = row.mode,
                 el = expected_cmp.len(),
-                al = actual.len(),
+                al = actual.haps.len(),
                 exp = expected_cmp,
-                act = actual,
+                act = actual.haps,
             ));
-            if failures.len() >= 25 {
-                break;
-            }
+            // No iteration break — keep collecting so the histogram is
+            // complete. Rendering is capped below for output size.
         }
     }
 
     if !failures.is_empty() {
+        let total_failures = failures.len();
+        let shown = total_failures.min(FAILURE_RENDER_CAP);
+        let body = failures[..shown].join("\n\n");
         panic!(
-            "{n} of {total} rows diverged from strudel:\n{joined}",
-            n = failures.len(),
-            total = compared,
-            joined = failures.join("\n\n"),
+            "{total_failures} of {compared} rows diverged from strudel (showing {shown} of {total_failures} total)\n\n{body}\n\n{hist}",
+            hist = render_histogram(&hist),
         );
     }
     assert!(
@@ -220,6 +300,8 @@ struct Row2 {
     #[serde(default)]
     haps: Option<Vec<FixtureHap>>,
     #[serde(default)]
+    rest_count: Option<usize>,
+    #[serde(default)]
     error: Option<String>,
 }
 
@@ -232,6 +314,8 @@ fn combine_sp_chain2_matches_strudel() {
         serde_json::from_str(&text).expect("fixture must parse as Row2[]");
 
     let mut failures: Vec<String> = Vec::new();
+    let mut hist: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
     let mut compared = 0usize;
 
     for row in &rows {
@@ -258,8 +342,44 @@ fn combine_sp_chain2_matches_strudel() {
         let actual = extract_actual(&step2);
         let expected_cmp = extract_expected(expected);
 
+        // Sanity: the Rest-filter must never enlarge the hap set.
+        assert!(
+            actual.haps.len() <= actual.pre_filter_count,
+            "filter expanded hap count: pre={pre}, post={post} for {lhs}.{op1}.{mode1}({rhs1}).{op2}.{mode2}({rhs2})",
+            pre = actual.pre_filter_count,
+            post = actual.haps.len(),
+            lhs = row.lhs,
+            op1 = row.op1,
+            mode1 = row.mode1,
+            rhs1 = row.rhs1,
+            op2 = op2,
+            mode2 = row.mode2.as_deref().unwrap(),
+            rhs2 = row.rhs2,
+        );
+
+        // Diagnostic-only: see notes on single-chain test. Mismatch in
+        // the by-design Rest filter is bucketed, not failed.
+        let expected_rests = row.rest_count.unwrap_or(0);
         compared += 1;
-        if actual != expected_cmp {
+        if actual.rest_count != expected_rests {
+            let bucket = format!(
+                "rest-count-diagnostic:{op1}/{mode1}->{op2}/{mode2}",
+                op1 = row.op1,
+                mode1 = row.mode1,
+                op2 = op2,
+                mode2 = row.mode2.as_deref().unwrap(),
+            );
+            *hist.entry(bucket).or_insert(0) += 1;
+        }
+        if actual.haps != expected_cmp {
+            let bucket = format!(
+                "hap-mismatch:{op1}/{mode1}->{op2}/{mode2}",
+                op1 = row.op1,
+                mode1 = row.mode1,
+                op2 = op2,
+                mode2 = row.mode2.as_deref().unwrap(),
+            );
+            *hist.entry(bucket).or_insert(0) += 1;
             failures.push(format!(
                 "DIVERGENCE: {lhs}.{op1}.{mode1}({rhs1}).{op2}.{mode2}({rhs2})\n  expected ({el}): {exp:?}\n  actual   ({al}): {act:?}",
                 lhs = row.lhs,
@@ -270,22 +390,21 @@ fn combine_sp_chain2_matches_strudel() {
                 mode2 = row.mode2.as_deref().unwrap(),
                 rhs2 = row.rhs2,
                 el = expected_cmp.len(),
-                al = actual.len(),
+                al = actual.haps.len(),
                 exp = expected_cmp,
-                act = actual,
+                act = actual.haps,
             ));
-            if failures.len() >= 25 {
-                break;
-            }
+            // No iteration break — collect all divergences for the histogram.
         }
     }
 
     if !failures.is_empty() {
+        let total_failures = failures.len();
+        let shown = total_failures.min(FAILURE_RENDER_CAP);
+        let body = failures[..shown].join("\n\n");
         panic!(
-            "{n} of {total} chain-2 rows diverged from strudel:\n{joined}",
-            n = failures.len(),
-            total = compared,
-            joined = failures.join("\n\n"),
+            "{total_failures} of {compared} chain-2 rows diverged from strudel (showing {shown} of {total_failures} total)\n\n{body}\n\n{hist}",
+            hist = render_histogram(&hist),
         );
     }
     assert!(

@@ -166,6 +166,13 @@ pub struct IntervalPatternParam {
     /// Number of source strings that contributed to the combined pattern
     num_sources: usize,
 
+    /// Maps parsed-pattern index (position in the left-folded chain, i.e. the
+    /// `pattern_idx` emitted by the context walk) to the original payload
+    /// index in `per_source`. Differs from identity when middle payloads are
+    /// empty — `$iCycle(["0 2", "", "4"], ...)` parses 2 patterns but
+    /// per_source has 3 entries, so parsed_to_payload_idx is `[0, 2]`.
+    parsed_to_payload_idx: Vec<u8>,
+
     /// Pre-computed combined haps for cycles 0..PARAM_CACHE_CYCLES.
     cached_haps: Vec<CycleStorage>,
 
@@ -184,6 +191,7 @@ impl Default for IntervalPatternParam {
             combined_pattern: None,
             per_source: Vec::new(),
             num_sources: 0,
+            parsed_to_payload_idx: Vec::new(),
             cached_haps: Vec::new(),
             max_haps_per_cycle: 0,
             max_spans_per_cycle: 0,
@@ -219,6 +227,7 @@ impl IntervalPatternParam {
                     })
                     .collect(),
                 num_sources: payloads.len(),
+                parsed_to_payload_idx: Vec::new(),
                 source,
                 combined_pattern: None,
                 cached_haps: Vec::new(),
@@ -227,23 +236,25 @@ impl IntervalPatternParam {
             });
         }
 
-        // Lower each payload
+        // Lower each payload. `parsed` tracks only the patterns that get
+        // folded into `combined`; `per_source` mirrors the original input
+        // 1:1 so `get_state` can name `patterns.N` keys with the user's
+        // original indices. `parsed_to_payload_idx` is the remap from
+        // walk-emitted pattern_idx (positions in `parsed`) back into
+        // per_source indices.
         let mut parsed: Vec<Pattern<IntervalValue>> = Vec::new();
         let mut per_source: Vec<SourceMeta> = Vec::new();
+        let mut parsed_to_payload_idx: Vec<u8> = Vec::new();
 
-        for p in &payloads {
-            if p.source.is_empty() {
-                per_source.push(SourceMeta {
-                    source: p.source.clone(),
-                    all_spans: p.all_spans.clone(),
-                });
-            } else {
+        for (payload_idx, p) in payloads.iter().enumerate() {
+            per_source.push(SourceMeta {
+                source: p.source.clone(),
+                all_spans: p.all_spans.clone(),
+            });
+            if !p.source.is_empty() {
                 let pattern = Self::convert_one(p)?;
-                per_source.push(SourceMeta {
-                    source: p.source.clone(),
-                    all_spans: p.all_spans.clone(),
-                });
                 parsed.push(pattern);
+                parsed_to_payload_idx.push(payload_idx as u8);
             }
         }
 
@@ -265,7 +276,12 @@ impl IntervalPatternParam {
             let mut storage = CycleStorage::with_capacity(haps.len(), haps.len() * SPANS_RESERVE_PER_HAP);
             for hap in &haps {
                 let span_offset = storage.span_arena.len() as u32;
-                extract_pattern_spans_into(&hap.context, num_sources, &mut storage.span_arena);
+                extract_pattern_spans_into(
+                    &hap.context,
+                    parsed.len(),
+                    &parsed_to_payload_idx,
+                    &mut storage.span_arena,
+                );
                 let span_len = storage.span_arena.len() as u32 - span_offset;
                 storage.haps.push(CombinedHap {
                     whole_begin: hap.whole_begin,
@@ -299,6 +315,7 @@ impl IntervalPatternParam {
             combined_pattern: Some(combined),
             per_source,
             num_sources,
+            parsed_to_payload_idx,
             cached_haps,
             max_haps_per_cycle,
             max_spans_per_cycle,
@@ -326,6 +343,12 @@ impl IntervalPatternParam {
     /// Per-source metadata for span tracking.
     pub fn per_source(&self) -> &[SourceMeta] {
         &self.per_source
+    }
+
+    /// Maps the walk-emitted `pattern_idx` (position in the non-empty
+    /// `parsed` chain) back to the original payload index in `per_source`.
+    pub(crate) fn parsed_to_payload_idx(&self) -> &[u8] {
+        &self.parsed_to_payload_idx
     }
 
     /// Get the pre-computed cached storage for cycles 0..PARAM_CACHE_CYCLES.
@@ -551,23 +574,42 @@ pub(crate) fn sub_interval_values(a: &IntervalValue, b: &IntervalValue) -> Inter
 /// into a flat arena. Returns nothing — caller diffs `arena.len()` before/after
 /// to record (offset, length).
 ///
-/// After a left-fold of N patterns via `app_left`, the merged `HapContext` has:
-/// - `source_span` + `source_extra_spans` = pattern 0's spans
-/// - `modifier_spans[i]` + `modifier_extra_spans[i]` = pattern (i+1)'s spans
+/// After a left-fold of N parsed patterns via `app_left`, the merged
+/// `HapContext` has:
+/// - `source_span` + `source_extra_spans` = parsed[0]'s spans
+/// - `modifier_spans[i]` + `modifier_extra_spans[i]` = parsed[i+1]'s spans
+///
+/// `num_parsed` is the number of non-empty parsed patterns (i.e. the upper
+/// bound of walk-emitted pattern_idx values). `payload_remap` maps each
+/// parsed-position index to the original payload index in `per_source`; an
+/// empty remap is treated as identity for the all-non-empty fast path.
 fn extract_pattern_spans_into(
     context: &crate::pattern_system::HapContext,
-    num_patterns: usize,
+    num_parsed: usize,
+    payload_remap: &[u8],
     arena: &mut Vec<FlatSpan>,
 ) {
-    if num_patterns == 0 {
+    if num_parsed == 0 {
         return;
     }
 
+    let remap = |parsed_idx: u8| -> u8 {
+        if payload_remap.is_empty() {
+            parsed_idx
+        } else {
+            payload_remap
+                .get(parsed_idx as usize)
+                .copied()
+                .unwrap_or(parsed_idx)
+        }
+    };
+
     // Pattern 0: source_span + source_extra_spans
+    let p0_idx = remap(0);
     for s in context.source_span.iter() {
         let (start, end) = s.to_tuple();
         arena.push(FlatSpan {
-            pattern_idx: 0,
+            pattern_idx: p0_idx,
             start: start as u32,
             end: end as u32,
         });
@@ -575,7 +617,7 @@ fn extract_pattern_spans_into(
     for s in &context.source_extra_spans {
         let (start, end) = s.to_tuple();
         arena.push(FlatSpan {
-            pattern_idx: 0,
+            pattern_idx: p0_idx,
             start: start as u32,
             end: end as u32,
         });
@@ -585,11 +627,12 @@ fn extract_pattern_spans_into(
     let modifier_limit = context
         .modifier_spans
         .len()
-        .min(num_patterns.saturating_sub(1));
+        .min(num_parsed.saturating_sub(1));
     for i in 0..modifier_limit {
+        let pat_idx = remap((i + 1) as u8);
         let (start, end) = context.modifier_spans[i].to_tuple();
         arena.push(FlatSpan {
-            pattern_idx: (i + 1) as u8,
+            pattern_idx: pat_idx,
             start: start as u32,
             end: end as u32,
         });
@@ -597,7 +640,7 @@ fn extract_pattern_spans_into(
             for s in extras {
                 let (start, end) = s.to_tuple();
                 arena.push(FlatSpan {
-                    pattern_idx: (i + 1) as u8,
+                    pattern_idx: pat_idx,
                     start: start as u32,
                     end: end as u32,
                 });
@@ -611,24 +654,33 @@ fn extract_pattern_spans_into(
 /// `FlatSpan` per source span keyed by pattern index.
 fn extract_pattern_spans_from_arena_into(
     context: &crate::pattern_system::ArenaHapContext<'_>,
-    num_patterns: usize,
+    num_parsed: usize,
+    payload_remap: &[u8],
     arena: &mut Vec<FlatSpan>,
 ) {
-    if num_patterns == 0 {
+    if num_parsed == 0 {
         return;
     }
     // An `Empty` context has no spans to walk; short-circuit.
     if matches!(context, crate::pattern_system::ArenaHapContext::Empty) {
         return;
     }
-    let pattern_cap = num_patterns as u8;
+    let pattern_cap = num_parsed as u8;
     context.walk(&mut |pattern_idx, span| {
         if pattern_idx >= pattern_cap {
             return;
         }
+        let mapped = if payload_remap.is_empty() {
+            pattern_idx
+        } else {
+            payload_remap
+                .get(pattern_idx as usize)
+                .copied()
+                .unwrap_or(pattern_idx)
+        };
         let (start, end) = span.to_tuple();
         arena.push(FlatSpan {
-            pattern_idx,
+            pattern_idx: mapped,
             start: start as u32,
             end: end as u32,
         });
@@ -868,7 +920,15 @@ impl IntervalSeq {
         let Some(pattern) = self.params.patterns.pattern() else {
             return;
         };
-        let num_patterns = self.params.patterns.num_sources();
+        let payload_remap = self.params.patterns.parsed_to_payload_idx();
+        // `pattern_idx` walked from the arena context tops out at the number
+        // of folded (non-empty) patterns. When everything is non-empty this
+        // equals num_sources; with middle empties the remap fills the gap.
+        let num_parsed = if payload_remap.is_empty() {
+            self.params.patterns.num_sources()
+        } else {
+            payload_remap.len()
+        };
         let slot = &mut self.state.module_cache[module_idx];
         super::cache::populate_cycle_storage(
             pattern,
@@ -877,7 +937,12 @@ impl IntervalSeq {
             slot,
             |hap, haps, span_arena| {
                 let span_offset = span_arena.len() as u32;
-                extract_pattern_spans_from_arena_into(&hap.context, num_patterns, span_arena);
+                extract_pattern_spans_from_arena_into(
+                    &hap.context,
+                    num_parsed,
+                    payload_remap,
+                    span_arena,
+                );
                 let span_len = span_arena.len() as u32 - span_offset;
                 haps.push(CombinedHap {
                     whole_begin: hap.whole_begin_f64(),
@@ -1494,7 +1559,7 @@ mod tests {
         ctx.source_extra_spans.push(SourceSpan::new(5, 6));
 
         let mut arena: Vec<FlatSpan> = Vec::new();
-        extract_pattern_spans_into(&ctx, 1, &mut arena);
+        extract_pattern_spans_into(&ctx, 1, &[], &mut arena);
         assert_eq!(arena.len(), 2);
         assert_eq!(arena[0].pattern_idx, 0);
         assert_eq!((arena[0].start, arena[0].end), (0, 1));
@@ -1509,7 +1574,7 @@ mod tests {
             .push(vec![SourceSpan::new(15, 16)]);
 
         let mut arena2: Vec<FlatSpan> = Vec::new();
-        extract_pattern_spans_into(&ctx2, 2, &mut arena2);
+        extract_pattern_spans_into(&ctx2, 2, &[], &mut arena2);
         assert_eq!(arena2.len(), 4);
         // Pattern 0
         assert_eq!(arena2[0].pattern_idx, 0);
@@ -1608,6 +1673,128 @@ mod tests {
                 .unwrap_or_else(|| panic!("{key} missing spans array"));
             assert!(!spans.is_empty(), "{key} spans empty");
         }
+    }
+
+    /// Regression — middle-empty payloads must keep `per_source` aligned
+    /// with the emitted `pattern_idx`. For `$iCycle(["0 2", "", "4"], ...)`
+    /// the renderer expects pattern 1's contribution to land on
+    /// `patterns.2` (the "4" source), not `patterns.1` (the empty middle).
+    /// Before the remap fix, walk-emitted `pattern_idx=1` from parsed[1]
+    /// (which is "4") landed on per_source[1].source == "" — silently
+    /// dropping the highlight for "4".
+    #[test]
+    fn test_from_source_middle_empty_payload_alignment() {
+        use crate::types::StatefulModule;
+
+        let param = IntervalPatternParam::from_source(IntervalPatternSource::Multiple(vec![
+            "0 2".into(),
+            "".into(),
+            "4".into(),
+        ]))
+        .unwrap();
+
+        // per_source mirrors the original input — three entries, middle empty.
+        assert_eq!(param.num_sources(), 3);
+        assert_eq!(param.per_source().len(), 3);
+        assert_eq!(param.per_source()[0].source, "0 2");
+        assert_eq!(param.per_source()[1].source, "");
+        assert_eq!(param.per_source()[2].source, "4");
+
+        // Two patterns actually folded; remap skips the empty middle.
+        assert_eq!(param.parsed_to_payload_idx(), &[0u8, 2]);
+
+        // No FlatSpan in the param cache may carry pattern_idx=1 (the
+        // empty payload's slot). Spans must be tagged 0 or 2.
+        let storage = &param.cached_haps()[0];
+        assert!(!storage.haps.is_empty(), "expected onset haps in cycle 0");
+        let mut saw_p0 = false;
+        let mut saw_p2 = false;
+        for hap in &storage.haps {
+            let start = hap.span_offset as usize;
+            let end = start + hap.span_len as usize;
+            for span in &storage.span_arena[start..end] {
+                match span.pattern_idx {
+                    0 => saw_p0 = true,
+                    2 => saw_p2 = true,
+                    other => panic!(
+                        "unexpected pattern_idx {other} — middle-empty payload should remap to per_source idx 2",
+                    ),
+                }
+            }
+        }
+        assert!(saw_p0, "expected pattern_idx 0 span (pattern 0 source leaf)");
+        assert!(saw_p2, "expected pattern_idx 2 span (pattern 2 source leaf)");
+
+        // End-to-end: an active voice referencing an onset hap must surface
+        // spans under "patterns.2", not "patterns.1".
+        let mut seq = IntervalSeq::default();
+        seq.params.patterns = param;
+        seq.rebuild_module_cache();
+
+        let storage = &seq.params.patterns.cached_haps()[0];
+        let (onset_idx, onset_hap) = storage
+            .haps
+            .iter()
+            .enumerate()
+            .find(|(_, h)| h.has_onset && h.degree.is_some())
+            .expect("at least one onset hap");
+        let whole_begin = onset_hap.whole_begin;
+        let whole_end = onset_hap.whole_end;
+
+        seq.state.voices[0].active = true;
+        seq.state.voices[0].cached_hap = Some(CachedIntervalHap {
+            hap_index: onset_idx as u32,
+            cached_cycle: 0,
+            whole_begin,
+            whole_end,
+        });
+
+        let json = seq.get_state().expect("expected state with active voice");
+        let param_spans = json
+            .get("param_spans")
+            .and_then(|v| v.as_object())
+            .expect("param_spans map");
+
+        // All three keys present (per_source has 3 entries, one per input slot).
+        assert!(param_spans.contains_key("patterns.0"));
+        assert!(param_spans.contains_key("patterns.1"));
+        assert!(param_spans.contains_key("patterns.2"));
+
+        // patterns.0 and patterns.2 carry spans (they were the contributing
+        // payloads); patterns.1 is the empty slot.
+        let spans_0 = param_spans["patterns.0"]
+            .get("spans")
+            .and_then(|v| v.as_array())
+            .expect("patterns.0 spans");
+        let spans_1 = param_spans["patterns.1"]
+            .get("spans")
+            .and_then(|v| v.as_array())
+            .expect("patterns.1 spans");
+        let spans_2 = param_spans["patterns.2"]
+            .get("spans")
+            .and_then(|v| v.as_array())
+            .expect("patterns.2 spans");
+
+        assert!(!spans_0.is_empty(), "patterns.0 should carry spans");
+        assert!(
+            spans_1.is_empty(),
+            "patterns.1 (empty middle payload) must not carry spans, got {spans_1:?}",
+        );
+        assert!(
+            !spans_2.is_empty(),
+            "patterns.2 (the '4' source) must carry spans — pre-fix bug routed these to patterns.1",
+        );
+
+        // The source string echoed back for patterns.2 must be "4", not the
+        // empty middle. This is the user-visible symptom of the bug.
+        assert_eq!(
+            param_spans["patterns.2"].get("source").and_then(|v| v.as_str()),
+            Some("4"),
+        );
+        assert_eq!(
+            param_spans["patterns.1"].get("source").and_then(|v| v.as_str()),
+            Some(""),
+        );
     }
 
     /// Parse-time cost: how long does `IntervalPatternParam::from_source`
@@ -1761,7 +1948,12 @@ mod tests {
                 );
                 for hap in &haps {
                     let off = storage.span_arena.len() as u32;
-                    extract_pattern_spans_into(&hap.context, num_patterns, &mut storage.span_arena);
+                    extract_pattern_spans_into(
+                        &hap.context,
+                        num_patterns,
+                        &[],
+                        &mut storage.span_arena,
+                    );
                     let len = storage.span_arena.len() as u32 - off;
                     storage.haps.push(CombinedHap {
                         whole_begin: hap.whole_begin,
@@ -1792,6 +1984,7 @@ mod tests {
                     extract_pattern_spans_into(
                         &hap.context,
                         num_patterns,
+                        &[],
                         &mut reuse_storage.span_arena,
                     );
                     let len = reuse_storage.span_arena.len() as u32 - off;

@@ -20,6 +20,7 @@ import {
     $c,
     $r,
     $cartesian,
+    BaseCollection,
     DeferredModuleOutput,
     DeferredCollection,
     Bus,
@@ -271,7 +272,7 @@ export function executePatchScript(
         feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
         length: number,
     ): Collection & { buffer: BufferOutputRef } => {
-        const def = $deferred('length' in input ? input.length : 1);
+        const def = $deferred(input instanceof BaseCollection ? input.length : 1);
         const mixed = $mix([input, def]) as Collection;
         const buf = $buffer(mixed, length);
         def.set(feedbackCb(buf));

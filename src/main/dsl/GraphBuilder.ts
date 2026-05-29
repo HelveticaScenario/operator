@@ -849,7 +849,12 @@ export class GraphBuilder {
                 ),
         };
 
-        console.log('Built PatchGraph:', ret);
+        if (
+            process.env.MODULAR_DEBUG_LOG === '1' ||
+            process.env.MODULAR_DEBUG_LOG === 'true'
+        ) {
+            console.log('Built PatchGraph:', ret);
+        }
         return ret;
     }
 

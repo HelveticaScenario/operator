@@ -1910,7 +1910,7 @@ __metadata:
     "@strudel/mini": "npm:1.2.5"
     "@stylistic/eslint-plugin": "npm:^5.10.0"
     "@types/electron-squirrel-startup": "npm:^1.0.2"
-    "@types/react": "npm:^19.2.7"
+    "@types/react": "npm:^19.2.14"
     "@types/react-dom": "npm:^19.2.3"
     concurrently: "npm:^9.2.1"
     electron: "npm:39.2.7"
@@ -1922,10 +1922,10 @@ __metadata:
     monaco-editor: "npm:^0.55.1"
     oxlint: "npm:^1.58.0"
     oxlint-tsgolint: "npm:^0.19.0"
-    peggy: "npm:5"
+    peggy: "npm:^5.1.0"
     prettier: "npm:^3.4.2"
-    react: "npm:^19.2.3"
-    react-dom: "npm:^19.2.3"
+    react: "npm:^19.2.6"
+    react-dom: "npm:^19.2.6"
     react-markdown: "npm:^10.1.0"
     ts-morph: "npm:^27.0.2"
     tsx: "npm:^4.21.0"
@@ -4079,7 +4079,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@types/react@npm:^19.2.7":
+"@types/react@npm:^19.2.14":
   version: 19.2.15
   resolution: "@types/react@npm:19.2.15"
   dependencies:
@@ -8700,7 +8700,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"peggy@npm:5":
+"peggy@npm:^5.1.0":
   version: 5.1.0
   resolution: "peggy@npm:5.1.0"
   dependencies:
@@ -8915,7 +8915,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-dom@npm:^19.2.3":
+"react-dom@npm:^19.2.6":
   version: 19.2.6
   resolution: "react-dom@npm:19.2.6"
   dependencies:
@@ -8948,7 +8948,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react@npm:^19.2.3":
+"react@npm:^19.2.6":
   version: 19.2.6
   resolution: "react@npm:19.2.6"
   checksum: 10c0/66afde33b9a9ee87b1e1cae39d8e7e040d1262e719524fd70660c4d4ce79929c532ac19fc3df5a911edaf02768fdf2c49de4ede1ba99bc6aad72796e0e26e798

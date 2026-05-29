@@ -148,9 +148,9 @@ impl ScaleParam {
 
 /// Convert a signed scale degree to a V/Oct voltage.
 ///
-/// Shared by `IntervalSeq` (Rust audio path) and the `degrees_to_voltages`
-/// N-API helper (used by the `$sp` DSL helper). Both must produce identical
-/// voltages for the same inputs.
+/// Shared by `IntervalSeq` (Rust audio path) and `SeqValue::from_sp_payload`
+/// (resolves `$sp` DSL helper patterns into cached voltage cycles). Both call
+/// sites must produce identical voltages for the same inputs.
 ///
 /// `scale_intervals` is the list of semitone offsets per scale step (e.g.
 /// `[0, 2, 4, 5, 7, 9, 11]` for major). `tuning` is the 12-entry V/Oct table

@@ -24,6 +24,10 @@ import type {
     SourceFile,
 } from 'ts-morph';
 
+import { collectCommentEdits } from './migrateCycleCalls.comments';
+import type { Edit } from './migrateCycleCalls.shared';
+import { buildSpReplacement, wrapP } from './migrateCycleCalls.shared';
+
 export interface MigrationResult {
     migrated: string;
     callsChanged: number;
@@ -33,17 +37,15 @@ export interface MigrationResult {
     error?: string;
 }
 
-interface Edit {
-    start: number;
-    end: number;
-    replacement: string;
-}
-
 interface AssignmentSite {
     rhsStart: number;
     rhsEnd: number;
     rhsText: string;
     kind: 'string' | 'non-string';
+    /** Nearest enclosing function-like scope, or undefined for file scope. */
+    scope: Node | undefined;
+    /** Original RHS expression node (kept for downstream array inspection). */
+    initializerNode: Expression;
 }
 
 const ZERO_COUNTS = {
@@ -95,6 +97,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
                 const varName = first.getText();
                 const sites = varAssignments.get(varName);
                 if (!sites || sites.length === 0) return;
+                if (!assignmentsVisibleAt(sites, first)) return;
                 if (sites.some((s) => s.kind === 'non-string')) {
                     skippedVariables.add(varName);
                     return;
@@ -146,7 +149,16 @@ export function migrateCycleCalls(source: string): MigrationResult {
     const { commentEdits, commentsChanged } = collectCommentEdits(source);
     edits.push(...commentEdits);
 
-    const migrated = applyEdits(source, edits);
+    const { source: migrated, conflict } = applyEdits(source, edits);
+
+    if (conflict) {
+        return {
+            migrated: source,
+            ...ZERO_COUNTS,
+            skippedVariables: [],
+            error: 'edits conflict',
+        };
+    }
 
     return {
         migrated,
@@ -178,10 +190,6 @@ function isPWrapped(node: Expression): boolean {
     return Node.isIdentifier(expr) && expr.getText() === '$p';
 }
 
-function wrapP(start: number, end: number, text: string): Edit {
-    return { start, end, replacement: `$p(${text})` };
-}
-
 /**
  * Resolve the patterns arg of `$iCycle` into an ordered list of source
  * literals (verbatim text including quotes). Returns null if the shape
@@ -198,24 +206,13 @@ function resolveISources(
     if (Node.isIdentifier(arg)) {
         const sites = assignments.get(arg.getText());
         if (!sites || sites.length !== 1) return null;
+        if (!assignmentsVisibleAt(sites, arg)) return null;
         const only = sites[0];
         if (only.kind === 'string') return [only.rhsText];
-        // Find the original declaration to check whether it's an array
-        // of string literals — array RHS texts are kind 'non-string' in
-        // the site cache but still mechanically expandable.
-        const decl = arg
-            .getSourceFile()
-            .forEachDescendantAsArray()
-            .find(
-                (n) =>
-                    Node.isVariableDeclaration(n) &&
-                    n.getName() === arg.getText(),
-            );
-        if (decl && Node.isVariableDeclaration(decl)) {
-            const init = decl.getInitializer();
-            if (init && Node.isArrayLiteralExpression(init)) {
-                return collectArrayStrings(init);
-            }
+        // Array RHS texts are kind 'non-string' in the site cache but
+        // still mechanically expandable — inspect the captured init node.
+        if (Node.isArrayLiteralExpression(only.initializerNode)) {
+            return collectArrayStrings(only.initializerNode);
         }
         return null;
     }
@@ -247,16 +244,11 @@ function resolveIScale(
         // from the same binding the caller declared.
         const sites = assignments.get(arg.getText());
         if (!sites || sites.length !== 1) return null;
+        if (!assignmentsVisibleAt(sites, arg)) return null;
         if (sites[0].kind !== 'string') return null;
         return arg.getText();
     }
     return null;
-}
-
-function buildSpReplacement(sources: string[], scale: string): string {
-    const [head, ...rest] = sources;
-    const chain = rest.map((rhs) => `.add(${rhs})`).join('');
-    return `$cycle($sp(${head}, ${scale})${chain})`;
 }
 
 function collectAssignments(
@@ -291,7 +283,60 @@ function siteFromExpression(expr: Expression): AssignmentSite {
         rhsEnd: expr.getEnd(),
         rhsText: expr.getText(),
         kind: isStringish(expr) ? 'string' : 'non-string',
+        scope: enclosingFunctionScope(expr),
+        initializerNode: expr,
     };
+}
+
+/**
+ * Walk up parents until the nearest function-like ancestor. Returns
+ * undefined for nodes that live at file (module) scope.
+ */
+function enclosingFunctionScope(node: Node): Node | undefined {
+    let cur: Node | undefined = node.getParent();
+    while (cur) {
+        if (
+            Node.isFunctionDeclaration(cur) ||
+            Node.isFunctionExpression(cur) ||
+            Node.isArrowFunction(cur) ||
+            Node.isMethodDeclaration(cur) ||
+            Node.isGetAccessorDeclaration(cur) ||
+            Node.isSetAccessorDeclaration(cur) ||
+            Node.isConstructorDeclaration(cur)
+        ) {
+            return cur;
+        }
+        cur = cur.getParent();
+    }
+    return undefined;
+}
+
+/**
+ * An assignment is visible from a call site iff every site lives in a
+ * scope that contains (or equals) the call site's scope. Otherwise the
+ * `varAssignments` map is matching by name only and would rewrite a
+ * shadowed binding the call site doesn't actually reference.
+ */
+function assignmentsVisibleAt(
+    sites: AssignmentSite[],
+    callSite: Node,
+): boolean {
+    const callScope = enclosingFunctionScope(callSite);
+    return sites.every((s) => scopeContains(s.scope, callScope));
+}
+
+/** True if `outer` is `inner` or an ancestor scope of `inner`. */
+function scopeContains(
+    outer: Node | undefined,
+    inner: Node | undefined,
+): boolean {
+    if (outer === undefined) return true; // file scope contains everything
+    let cur: Node | undefined = inner;
+    while (cur) {
+        if (cur === outer) return true;
+        cur = cur.getParent();
+    }
+    return false;
 }
 
 function push(
@@ -307,98 +352,23 @@ function push(
     }
 }
 
-const COMMENT_RE = /(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)/g;
-const CYCLE_IN_COMMENT_RE =
-    /\$cycle\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\)/g;
-// Single-string $iCycle in comments: $iCycle("…", "…").
-const ICYCLE_STRING_IN_COMMENT_RE =
-    /\$iCycle\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\)/g;
-// Array-form $iCycle in comments: $iCycle([…], "…"). Captures the array
-// body so we can split on string literals inside.
-const ICYCLE_ARRAY_IN_COMMENT_RE =
-    /\$iCycle\s*\(\s*\[([^\]]*)\]\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\)/g;
-// Single string literal inside an array body.
-const ARRAY_STRING_RE =
-    /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
-
-function collectCommentEdits(source: string): {
-    commentEdits: Edit[];
-    commentsChanged: number;
-} {
-    const edits: Edit[] = [];
-    let count = 0;
-
-    for (const commentMatch of source.matchAll(COMMENT_RE)) {
-        const commentText = commentMatch[0];
-        const commentStart = commentMatch.index ?? 0;
-
-        // 1. $cycle("…") → $cycle($p("…"))
-        for (const inner of commentText.matchAll(CYCLE_IN_COMMENT_RE)) {
-            const literal = inner[1];
-            const literalRelStart =
-                (inner.index ?? 0) + inner[0].indexOf(literal);
-            const literalAbsStart = commentStart + literalRelStart;
-            const literalAbsEnd = literalAbsStart + literal.length;
-
-            const cycleAbsStart = commentStart + (inner.index ?? 0);
-            const before = source.slice(0, cycleAbsStart).trimEnd();
-            if (before.endsWith('$p(')) continue;
-
-            edits.push(wrapP(literalAbsStart, literalAbsEnd, literal));
-            count += 1;
-        }
-
-        // 2. $iCycle("p", "s") → $cycle($sp("p", "s"))
-        for (const inner of commentText.matchAll(ICYCLE_STRING_IN_COMMENT_RE)) {
-            const callAbsStart = commentStart + (inner.index ?? 0);
-            const callAbsEnd = callAbsStart + inner[0].length;
-            const replacement = buildSpReplacement([inner[1]], inner[2]);
-            edits.push({
-                start: callAbsStart,
-                end: callAbsEnd,
-                replacement,
-            });
-            count += 1;
-        }
-
-        // 3. $iCycle([s0, s1, …], scale) → $cycle($sp(s0, scale).add(s1)…)
-        for (const inner of commentText.matchAll(ICYCLE_ARRAY_IN_COMMENT_RE)) {
-            const callAbsStart = commentStart + (inner.index ?? 0);
-            const callAbsEnd = callAbsStart + inner[0].length;
-            const arrayBody = inner[1];
-            const scaleLit = inner[2];
-            const sources = Array.from(
-                arrayBody.matchAll(ARRAY_STRING_RE),
-                (m) => m[1],
-            );
-            if (sources.length === 0) continue;
-            const replacement = buildSpReplacement(sources, scaleLit);
-            edits.push({
-                start: callAbsStart,
-                end: callAbsEnd,
-                replacement,
-            });
-            count += 1;
-        }
-    }
-
-    return { commentEdits: edits, commentsChanged: count };
-}
-
-function applyEdits(source: string, edits: Edit[]): string {
-    if (edits.length === 0) return source;
+function applyEdits(
+    source: string,
+    edits: Edit[],
+): { source: string; conflict: boolean } {
+    if (edits.length === 0) return { source, conflict: false };
     const sorted = [...edits].sort((a, b) => a.start - b.start);
     let out = '';
     let cursor = 0;
     for (const edit of sorted) {
         if (edit.start < cursor) {
-            return source;
+            return { source, conflict: true };
         }
         out += source.slice(cursor, edit.start);
         out += edit.replacement;
         cursor = edit.end;
     }
     out += source.slice(cursor);
-    return out;
+    return { source: out, conflict: false };
 }
 

@@ -21,7 +21,6 @@
 // breaking package-main resolution.
 
 import * as mini from '@strudel/mini';
-import * as core from '@strudel/core';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,9 +103,19 @@ function applyOp(pat, rhsPat, opName, modeName) {
     return pat[MODE_METHOD[modeName]](rhsPat, OPS[opName]);
 }
 
+// Strudel's mini parser converts `~` rests into a no-hap gap, so a
+// strudel queryArc emits zero haps for any rest slot. We still scan the
+// raw hap list for any value-less hap to keep the "expected rest count"
+// honest in case a future strudel version starts emitting them.
+function isRestHap(h) {
+    return h.value === undefined || h.value === null;
+}
+
 function queryRow(combined) {
-    const haps = combined.queryArc(0, 1);
-    return haps.map(dumpHap);
+    const raw = combined.queryArc(0, 1);
+    const rests = raw.filter(isRestHap).length;
+    const haps = raw.filter((h) => !isRestHap(h)).map(dumpHap);
+    return { haps, rest_count: rests };
 }
 
 function genSingleChain() {
@@ -117,9 +126,9 @@ function genSingleChain() {
             const rhsPat = mini.mini(rhs.source);
             for (const opName of Object.keys(OPS)) {
                 for (const modeName of MODES) {
-                    let haps;
+                    let result;
                     try {
-                        haps = queryRow(applyOp(lhsPat, rhsPat, opName, modeName));
+                        result = queryRow(applyOp(lhsPat, rhsPat, opName, modeName));
                     } catch (err) {
                         rows.push({
                             lhs: lhs.label,
@@ -139,7 +148,8 @@ function genSingleChain() {
                         rhs_source: rhs.source,
                         op: opName,
                         mode: modeName,
-                        haps,
+                        haps: result.haps,
+                        rest_count: result.rest_count,
                     });
                 }
             }
@@ -179,9 +189,9 @@ function genChain2() {
                         }
                         for (const op2 of Object.keys(OPS)) {
                             for (const mode2 of MODES) {
-                                let haps;
+                                let result;
                                 try {
-                                    haps = queryRow(
+                                    result = queryRow(
                                         applyOp(firstPat, rhs2Pat, op2, mode2),
                                     );
                                 } catch (err) {
@@ -211,7 +221,8 @@ function genChain2() {
                                     mode1,
                                     op2,
                                     mode2,
-                                    haps,
+                                    haps: result.haps,
+                                    rest_count: result.rest_count,
                                 });
                             }
                         }

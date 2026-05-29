@@ -1,23 +1,26 @@
-//! Minimal mini-notation parser — not for production use.
+//! Minimal recursive-descent mini-notation parser for Rust test fixtures.
 //!
-//! The production parser now lives TypeScript-side (`$p()` in
-//! `src/main/dsl/miniNotation/`). Rust no longer parses mini-notation
-//! strings on the production patch-graph path. But many existing
-//! fixtures — both `#[cfg(test)]` unit tests and the integration tests
-//! in `crates/modular_core/tests/` — were written against
-//! `mini::parse(...)`, and rewriting hundreds of tests to build
-//! `MiniAST` by hand would be noisy. This module preserves a thin
-//! descent parser that covers only the subset of mini-notation
-//! exercised by those tests.
+//! The production mini-notation parser is the TypeScript `$p()` helper in
+//! `src/main/dsl/miniNotation/` (a Peggy grammar). It produces the
+//! `{ ast, source, all_spans }` payload that `$cycle` / `$iCycle` ship in
+//! the patch graph, which Rust deserializes into a [`MiniAST`] and lowers
+//! through [`super::convert`].
 //!
-//! This is left compiled in all builds (not `#[cfg(test)]`) because
-//! integration tests are a separate crate and can't see cfg-test items
-//! from this lib. Unused in production: dead-code warnings are
-//! suppressed module-wide.
+//! This module exists so Rust-side fixtures — both in-crate `#[cfg(test)]`
+//! modules and the integration tests under `crates/modular_core/tests/` —
+//! can build `MiniAST` values from compact source strings instead of
+//! hand-rolling deep enum trees. It implements only the subset of the TS
+//! grammar those fixtures exercise (e.g. for `sp_combine` parity coverage)
+//! and is not a substitute for `$p()` on the patch-graph path.
 //!
-//! **Not suitable for production use.** Grammar differences from the TS
-//! parser are possible; if you add a new feature, test it TS-side first,
-//! then (optionally) mirror it here for existing Rust test fixtures.
+//! Compiled unconditionally (not under `#[cfg(test)]`) so the integration
+//! test crate — which can't see cfg-test items from this lib — can call it.
+//! Module-wide `dead_code` is allowed because nothing here is reachable
+//! from the production runtime.
+//!
+//! Grammar differences from the TS parser are possible. New mini-notation
+//! features land TS-side first; mirror them here only when an existing
+//! Rust fixture needs them.
 //!
 //! Scope:
 //! - Sequences, stacks (`,`), fast subsequences `[...]`, slow subsequences `<...>`
@@ -724,11 +727,245 @@ impl<'a> Parser<'a> {
 }
 
 /// Parse a mini-notation string and convert it to a `Pattern<T>` in one
-/// step. Equivalent to the old `mini::parse` production entry point, now
-/// test-only. Used exclusively from `#[cfg(test)]` fixtures.
+/// step. Test-only convenience for Rust fixtures: matches the call shape
+/// `mini::parse(source)?` that in-crate `#[cfg(test)]` modules and the
+/// `crates/modular_core/tests/` integration tests use.
 pub fn parse_pattern<T: super::FromMiniAtom>(
     source: &str,
 ) -> Result<crate::pattern_system::Pattern<T>, super::ConvertError> {
     let ast = parse(source).map_err(|e| super::ConvertError::InvalidAtom(e.0))?;
     super::convert(&ast)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn num(ast: &MiniAST) -> f64 {
+        match ast {
+            MiniAST::Pure(located) => match located.node {
+                AtomValue::Number(n) => n,
+                ref other => panic!("expected number atom, got {:?}", other),
+            },
+            other => panic!("expected Pure atom, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_bare_number() {
+        let ast = parse("3").unwrap();
+        match &ast {
+            MiniAST::Pure(located) => {
+                assert!(matches!(located.node, AtomValue::Number(n) if n == 3.0));
+                assert_eq!(located.span.to_tuple(), (0, 1));
+            }
+            other => panic!("expected Pure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_rest() {
+        let ast = parse("~").unwrap();
+        match &ast {
+            MiniAST::Rest(span) => assert_eq!(span.to_tuple(), (0, 1)),
+            other => panic!("expected Rest, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_sequence_of_numbers() {
+        let ast = parse("0 1 2").unwrap();
+        match &ast {
+            MiniAST::Sequence(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(num(&items[0].0), 0.0);
+                assert_eq!(num(&items[1].0), 1.0);
+                assert_eq!(num(&items[2].0), 2.0);
+                assert!(items.iter().all(|(_, w)| w.is_none()));
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_fast_subsequence_group() {
+        let ast = parse("[1 2 3]").unwrap();
+        match &ast {
+            MiniAST::FastCat(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(num(&items[0].0), 1.0);
+                assert_eq!(num(&items[1].0), 2.0);
+                assert_eq!(num(&items[2].0), 3.0);
+            }
+            other => panic!("expected FastCat, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_slow_subsequence_choices() {
+        let ast = parse("<a b c>").unwrap();
+        match &ast {
+            MiniAST::SlowCat(items) => {
+                assert_eq!(items.len(), 3);
+                let letters: Vec<char> = items
+                    .iter()
+                    .map(|(child, _)| match child {
+                        MiniAST::Pure(located) => match located.node {
+                            AtomValue::Note { letter, .. } => letter,
+                            ref other => panic!("expected Note, got {:?}", other),
+                        },
+                        other => panic!("expected Pure, got {:?}", other),
+                    })
+                    .collect();
+                assert_eq!(letters, vec!['a', 'b', 'c']);
+            }
+            other => panic!("expected SlowCat, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_stack_with_comma() {
+        let ast = parse("0, 1").unwrap();
+        match &ast {
+            MiniAST::Stack(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(num(&items[0]), 0.0);
+                assert_eq!(num(&items[1]), 1.0);
+            }
+            other => panic!("expected Stack, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_euclidean_with_rotation() {
+        let ast = parse("0(3,8,1)").unwrap();
+        match &ast {
+            MiniAST::Euclidean {
+                pattern,
+                pulses,
+                steps,
+                rotation,
+            } => {
+                assert_eq!(num(pattern), 0.0);
+                match pulses.as_ref() {
+                    MiniASTU32::Pure(l) => assert_eq!(l.node, 3),
+                    other => panic!("expected Pure pulses, got {:?}", other),
+                }
+                match steps.as_ref() {
+                    MiniASTU32::Pure(l) => assert_eq!(l.node, 8),
+                    other => panic!("expected Pure steps, got {:?}", other),
+                }
+                match rotation.as_deref() {
+                    Some(MiniASTI32::Pure(l)) => assert_eq!(l.node, 1),
+                    other => panic!("expected Pure rotation, got {:?}", other),
+                }
+            }
+            other => panic!("expected Euclidean, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_elongation_weight() {
+        let ast = parse("a@2 b").unwrap();
+        match &ast {
+            MiniAST::Sequence(items) => {
+                assert_eq!(items.len(), 2);
+                assert_eq!(items[0].1, Some(2.0));
+                assert_eq!(items[1].1, None);
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_replication() {
+        let ast = parse("a!3").unwrap();
+        match &ast {
+            MiniAST::Replicate(inner, count) => {
+                assert_eq!(*count, 3);
+                match inner.as_ref() {
+                    MiniAST::Pure(l) => assert!(
+                        matches!(l.node, AtomValue::Note { letter: 'a', .. })
+                    ),
+                    other => panic!("expected Pure note, got {:?}", other),
+                }
+            }
+            other => panic!("expected Replicate, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_nested_groups_and_brackets() {
+        // `[0 [1 2]]` — outer FastCat with a nested FastCat as the second
+        // element. Confirms that bracket nesting builds nested FastCat
+        // nodes rather than flattening or wrapping in Stack.
+        let ast = parse("[0 [1 2]]").unwrap();
+        match &ast {
+            MiniAST::FastCat(outer) => {
+                assert_eq!(outer.len(), 2);
+                assert_eq!(num(&outer[0].0), 0.0);
+                match &outer[1].0 {
+                    MiniAST::FastCat(inner) => {
+                        assert_eq!(inner.len(), 2);
+                        assert_eq!(num(&inner[0].0), 1.0);
+                        assert_eq!(num(&inner[1].0), 2.0);
+                    }
+                    other => panic!("expected nested FastCat, got {:?}", other),
+                }
+            }
+            other => panic!("expected FastCat, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_random_choice() {
+        let ast = parse("0|1|2").unwrap();
+        match &ast {
+            MiniAST::RandomChoice(items, _seed) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(num(&items[0]), 0.0);
+                assert_eq!(num(&items[1]), 1.0);
+                assert_eq!(num(&items[2]), 2.0);
+            }
+            other => panic!("expected RandomChoice, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_single_token_note_with_accidental_and_octave() {
+        let ast = parse("d#4").unwrap();
+        match &ast {
+            MiniAST::Pure(located) => match &located.node {
+                AtomValue::Note {
+                    letter,
+                    accidental,
+                    octave,
+                } => {
+                    assert_eq!(*letter, 'd');
+                    assert_eq!(*accidental, Some('#'));
+                    assert_eq!(*octave, Some(4));
+                }
+                other => panic!("expected Note atom, got {:?}", other),
+            },
+            other => panic!("expected Pure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parses_single_token_hz_atom() {
+        let ast = parse("440hz").unwrap();
+        match &ast {
+            MiniAST::Pure(located) => match located.node {
+                AtomValue::Hz(h) => assert_eq!(h, 440.0),
+                ref other => panic!("expected Hz atom, got {:?}", other),
+            },
+            other => panic!("expected Pure, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn empty_input_is_error() {
+        assert!(parse("").is_err());
+        assert!(parse("   ").is_err());
+    }
 }

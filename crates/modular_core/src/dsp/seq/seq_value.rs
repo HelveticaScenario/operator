@@ -420,10 +420,6 @@ pub struct SeqSourceMeta {
 /// per-cycle hap storage.
 #[derive(Clone, Default, Debug)]
 pub struct SeqPatternParam {
-    /// First source string (echoed for legacy callers that ask for `.source()`).
-    #[allow(dead_code)]
-    source: String,
-
     /// Per-source metadata (always at least one entry once parsed).
     /// Chained `$sp` payloads push one entry per chained RHS.
     pub(crate) per_source: Vec<SeqSourceMeta>,
@@ -435,11 +431,6 @@ pub struct SeqPatternParam {
 
     /// The parsed pattern.
     pub(crate) pattern: Option<Pattern<SeqValue>>,
-
-    /// Leaf spans of the first source (`per_source[0]`) — kept as a
-    /// flat `(start, end)` list for back-compat with callers that don't
-    /// know about multi-source.
-    pub(crate) all_spans: Vec<(usize, usize)>,
 
     /// Pre-computed haps for cycles 0..PARAM_CACHE_CYCLES.
     pub(crate) cached_haps: Vec<SeqCycleStorage>,
@@ -469,19 +460,17 @@ impl SeqPatternParam {
             .map_err(|e| e.to_string())?;
 
         let per_source = vec![SeqSourceMeta {
-            source: payload.source.clone(),
-            all_spans: payload.all_spans.clone(),
+            source: payload.source,
+            all_spans: payload.all_spans,
         }];
 
         let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) =
             bake_cycles(&pattern);
 
         Ok(Self {
-            source: payload.source,
             per_source,
             is_multi_source: false,
             pattern: Some(pattern),
-            all_spans: payload.all_spans,
             cached_haps,
             max_haps_per_cycle,
             max_spans_per_cycle,
@@ -571,11 +560,9 @@ impl SeqPatternParam {
             bake_cycles(&voltage_pattern);
 
         Ok(Self {
-            source: payload.sources[0].source.clone(),
             per_source,
             is_multi_source: true,
             pattern: Some(voltage_pattern),
-            all_spans: payload.sources[0].all_spans.clone(),
             cached_haps,
             max_haps_per_cycle,
             max_spans_per_cycle,
@@ -585,16 +572,6 @@ impl SeqPatternParam {
     /// Get the parsed pattern.
     pub fn pattern(&self) -> Option<&Pattern<SeqValue>> {
         self.pattern.as_ref()
-    }
-
-    /// Get the source pattern string (the evaluated pattern passed to the parser).
-    pub fn source(&self) -> &str {
-        &self.source
-    }
-
-    /// Get all leaf spans in the pattern (for frontend tracked decorations).
-    pub fn all_spans(&self) -> &[(usize, usize)] {
-        &self.all_spans
     }
 
     /// Per-source metadata. Single-source legacy payloads return a

@@ -80,9 +80,9 @@ where
             // To keep value-pair ordering as `f(left, right)` regardless of
             // which side is outer, we always call `f(left_val, right_val)`.
             if !swap {
-                squeeze_into(&left, &right, state, bump, out, |l, r| f(l, r));
+                squeeze_into(&left, &right, state, bump, out, false, |l, r| f(l, r));
             } else {
-                squeeze_into(&right, &left, state, bump, out, |r, l| f(l, r));
+                squeeze_into(&right, &left, state, bump, out, true, |r, l| f(l, r));
             }
         },
     )
@@ -94,6 +94,7 @@ fn squeeze_into<'b, O, I, V, G>(
     state: &State,
     bump: &'b Bump,
     out: &mut BumpVec<'b, ArenaHap<'b, V>>,
+    swap: bool,
     combine: G,
 ) where
     O: Clone + Send + Sync + 'static,
@@ -151,8 +152,17 @@ fn squeeze_into<'b, O, I, V, G>(
             };
 
             let value = combine(&outer_hap.value, &inner_hap.value);
-            let context =
-                ArenaHapContext::combine_in(&inner_hap.context, &outer_hap.context, bump);
+            // `outer` / `inner` are flipped relative to (left, right) when
+            // `swap` is true (SqueezeOut mode). The context must always be
+            // built as (left, right) so pattern_idx 0 is the left chain
+            // operand and 1 is the right — matching app_left/app_right/
+            // app_both and combine_reset.
+            let (left_ctx, right_ctx) = if swap {
+                (&inner_hap.context, &outer_hap.context)
+            } else {
+                (&outer_hap.context, &inner_hap.context)
+            };
+            let context = ArenaHapContext::combine_in(left_ctx, right_ctx, bump);
             out.push(ArenaHap {
                 whole,
                 part,
@@ -266,7 +276,8 @@ mod tests {
     use super::*;
     use crate::pattern_system::Fraction;
     use crate::pattern_system::combinators::fastcat;
-    use crate::pattern_system::constructors::pure;
+    use crate::pattern_system::SourceSpan;
+    use crate::pattern_system::constructors::{pure, pure_with_span};
 
     fn ints(start: i64, end: i64, pat: &Pattern<i32>) -> Vec<i32> {
         pat.query_arc(Fraction::from_integer(start), Fraction::from_integer(end))
@@ -334,5 +345,77 @@ mod tests {
         let c = combine_sp(&l, &r, SpAlignmentMode::Restart, |a, b| a + b);
         let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
         assert!(!haps.is_empty());
+    }
+
+    // M1 regression: in Squeeze mode `combine_squeeze` used to pass
+    // `(inner.context, outer.context)` to `ArenaHapContext::combine_in`,
+    // mis-attributing pattern_idx 0 to the right operand and pattern_idx 1
+    // to the left. Every other combinator (app_left/app_right/app_both/
+    // combine_reset) builds the context as `(left, right)`. After the fix,
+    // the left chain operand's source span lands at pattern_idx 0
+    // (HapContext::source_span) and the right operand's at pattern_idx 1
+    // (HapContext::modifier_spans[0]).
+    #[test]
+    fn test_squeeze_context_left_is_pattern_idx_0() {
+        // A = $sp(1) at source span [0, 1); B = $sp(2) at [10, 11).
+        let a: Pattern<i32> = pure_with_span(1, SourceSpan::new(0, 1));
+        let b: Pattern<i32> = pure_with_span(2, SourceSpan::new(10, 11));
+        let c = combine_sp(&a, &b, SpAlignmentMode::Squeeze, |x, y| x + y);
+        let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+
+        assert!(!haps.is_empty(), "expected at least one hap from $sp(A).squeeze(B)");
+        for hap in &haps {
+            // Left operand A is pattern_idx 0 → ends up as source_span.
+            let source = hap
+                .context
+                .source_span
+                .as_ref()
+                .expect("source_span should be the left operand A");
+            assert_eq!(
+                (source.start, source.end),
+                (0, 1),
+                "pattern_idx 0 (source_span) should be A's span [0,1), got {:?}",
+                (source.start, source.end),
+            );
+
+            // Right operand B is pattern_idx 1 → first modifier_spans entry.
+            assert_eq!(
+                hap.context.modifier_spans.len(),
+                1,
+                "expected exactly one modifier span (B)"
+            );
+            let modifier = &hap.context.modifier_spans[0];
+            assert_eq!(
+                (modifier.start, modifier.end),
+                (10, 11),
+                "pattern_idx 1 (modifier_spans[0]) should be B's span [10,11), got {:?}",
+                (modifier.start, modifier.end),
+            );
+        }
+    }
+
+    // Companion check: SqueezeOut was correct-by-accident before the fix
+    // because outer/inner were pre-swapped upstream. The fix must preserve
+    // this — `$sp(A).squeezeOut(B)` should still land A at pattern_idx 0
+    // and B at pattern_idx 1.
+    #[test]
+    fn test_squeeze_out_context_left_is_pattern_idx_0() {
+        let a: Pattern<i32> = pure_with_span(1, SourceSpan::new(0, 1));
+        let b: Pattern<i32> = pure_with_span(2, SourceSpan::new(10, 11));
+        let c = combine_sp(&a, &b, SpAlignmentMode::SqueezeOut, |x, y| x + y);
+        let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+
+        assert!(!haps.is_empty(), "expected at least one hap from $sp(A).squeezeOut(B)");
+        for hap in &haps {
+            let source = hap
+                .context
+                .source_span
+                .as_ref()
+                .expect("source_span should be the left operand A");
+            assert_eq!((source.start, source.end), (0, 1));
+            assert_eq!(hap.context.modifier_spans.len(), 1);
+            let modifier = &hap.context.modifier_spans[0];
+            assert_eq!((modifier.start, modifier.end), (10, 11));
+        }
     }
 }
