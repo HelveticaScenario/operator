@@ -1,14 +1,13 @@
-import type { TransportSnapshot } from '../../shared/ipcTypes';
+import { useTransport } from '../app/transportStore';
 
 interface TransportDisplayProps {
-    transport: TransportSnapshot | null;
     onToggleLink?: (enabled: boolean) => void;
 }
 
-export function TransportDisplay({
-    transport,
-    onToggleLink,
-}: TransportDisplayProps) {
+export function TransportDisplay({ onToggleLink }: TransportDisplayProps) {
+    // Subscribes directly to the per-frame transport store, so only this
+    // component re-renders on each frame — not the App tree.
+    const transport = useTransport();
     if (!transport) {
         return (
             <div className="transport-display">
