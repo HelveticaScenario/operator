@@ -54,7 +54,7 @@ function isParsedPatternLike(
 }
 
 /**
- * Structural check for a chained `SpPattern` (returned by `$sp().add(...)` /
+ * Structural check for a chained `SpPattern` (returned by `$p.s().add(...)` /
  * `.sub(...)`). Each chained source has a parallel `argument_spans[i]`
  * entry used to map runtime per-source highlights back to editor literals.
  */
@@ -293,7 +293,7 @@ export class DSLContext {
             // attached through const indirections — `const p = $p(...); $cycle(p)`
             // works without the static analyzer having to reason about $p).
             //
-            // $sp(...).add(...) chains arrive as SpPattern objects whose
+            // $p.s(...).add(...) chains arrive as SpPattern objects whose
             // `argument_spans[i]` lines up with `sources[i]`. Emit those
             // as `<paramName>.0`, `<paramName>.1`, ... matching the multi-
             // source `pattern.<i>` keys the Rust side puts on `param_spans`.

@@ -9523,7 +9523,7 @@
           ]
         },
         "SeqPatternSource": {
-          "description": "Wire-level dispatch shape: either a single `ParsedPatternPayload`\n(legacy single-source path used by `$cycle($p(...))`) or a chained\n`$sp` payload with multi-source highlighting.",
+          "description": "Wire-level dispatch shape: either a single `ParsedPatternPayload`\n(legacy single-source path used by `$cycle($p(...))`) or a chained\n`$p.s` payload with multi-source highlighting.",
           "anyOf": [
             {
               "$ref": "#/$defs/SpPatternPayload"
@@ -9600,7 +9600,7 @@
           ]
         },
         "SpAlignmentMode": {
-          "description": "Strudel-style alignment mode for chained `$sp` ops. Wire form uses\nlowercase strings (`\"in\"`, `\"out\"`, `\"mix\"`, `\"squeeze\"`,\n`\"squeezeout\"`, `\"reset\"`, `\"restart\"`) to match the TS builder.\nMirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].",
+          "description": "Strudel-style alignment mode for chained `$p.s` ops. Wire form uses\nlowercase strings (`\"in\"`, `\"out\"`, `\"mix\"`, `\"squeeze\"`,\n`\"squeezeout\"`, `\"reset\"`, `\"restart\"`) to match the TS builder.\nMirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].",
           "type": "string",
           "enum": [
             "in",
@@ -9620,7 +9620,7 @@
           ]
         },
         "SpOp": {
-          "description": "One chained op in an `$sp` payload: arithmetic op + alignment mode.\nPaired positionally with `sources[i+1]` for `i = 0..ops.len()`.",
+          "description": "One chained op in an `$p.s` payload: arithmetic op + alignment mode.\nPaired positionally with `sources[i+1]` for `i = 0..ops.len()`.",
           "type": "object",
           "properties": {
             "mode": {
@@ -9636,7 +9636,7 @@
           ]
         },
         "SpOpKind": {
-          "description": "Arithmetic operation kind for chained `$sp` ops. Wire form uses\nlowercase strings (`\"add\"`, `\"sub\"`) to match the TS builder.",
+          "description": "Arithmetic operation kind for chained `$p.s` ops. Wire form uses\nlowercase strings (`\"add\"`, `\"sub\"`) to match the TS builder.",
           "type": "string",
           "enum": [
             "add",
@@ -9644,11 +9644,11 @@
           ]
         },
         "SpPatternPayload": {
-          "description": "JSON payload shape delivered for chained `$sp(...).add(...)` patterns.\nFirst entry of `sources` is the left pattern; subsequent entries are\nchained RHS patterns combined via the parallel `ops` slot.",
+          "description": "JSON payload shape delivered for chained `$p.s(...).add(...)` patterns.\nFirst entry of `sources` is the left pattern; subsequent entries are\nchained RHS patterns combined via the parallel `ops` slot.",
           "type": "object",
           "properties": {
             "__kind": {
-              "description": "Discriminator — TS-side `$sp` builds objects with this set so the\n`SeqPatternSource` untagged enum picks the `Sp` variant.",
+              "description": "Discriminator — TS-side `$p.s` builds objects with this set so the\n`SeqPatternSource` untagged enum picks the `Sp` variant.",
               "$ref": "#/$defs/SpKindTag"
             },
             "argument_spans": {

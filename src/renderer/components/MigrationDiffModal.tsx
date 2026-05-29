@@ -70,7 +70,7 @@ export function MigrationDiffModal({
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="migration-header">
-                    <h2>Migrate $cycle / $iCycle to $p / $sp</h2>
+                    <h2>Migrate $cycle / $iCycle to $p / $p.s</h2>
                     <button className="close-btn" onClick={onCancel}>
                         ×
                     </button>

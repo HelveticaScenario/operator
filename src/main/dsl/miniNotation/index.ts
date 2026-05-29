@@ -2,7 +2,7 @@
  * Public entry point for the TypeScript mini-notation implementation.
  *
  * `$p(source)` parses a mini-notation string into a serializable
- * `ParsedPattern`. `$sp(source, scale)` returns an `SpPattern` chainable
+ * `ParsedPattern`. `$p.s(source, scale)` returns an `SpPattern` chainable
  * with `.add(...)` / `.sub(...)` and seven alignment modes (`.add.in`,
  * `.add.out`, `.add.mix`, `.add.squeeze`, `.add.squeezeout`,
  * `.add.reset`, `.add.restart`, same for `.sub`). Both are consumed by
@@ -47,7 +47,7 @@ export { MiniParseError } from './parser';
  *
  * Throws `MiniParseError` if `source` is not a string or fails to parse.
  */
-export function $p(source: string): ParsedPattern {
+function $pImpl(source: string): ParsedPattern {
     if (typeof source !== 'string') {
         throw new MiniParseError(
             `$p() expects a string argument, got ${typeof source}`,
@@ -69,6 +69,17 @@ export function $p(source: string): ParsedPattern {
     return pattern;
 }
 
+/**
+ * The mini-notation factory. Callable as `$p(source)` for a plain
+ * `ParsedPattern`, and carries `$p.s(source, scale)` for scale-degree
+ * patterns (see `$spImpl`). `$spImpl` is hoisted, so the assignment can
+ * reference it here.
+ */
+export const $p: typeof $pImpl & { s: typeof $spImpl } = Object.assign(
+    $pImpl,
+    { s: $spImpl },
+);
+
 /** Type guard for runtime `ParsedPattern` checks. */
 export function isParsedPattern(value: unknown): value is ParsedPattern {
     return (
@@ -78,9 +89,9 @@ export function isParsedPattern(value: unknown): value is ParsedPattern {
     );
 }
 
-// ─── $sp chainable + alignment ──────────────────────────────────────────
+// ─── $p.s chainable + alignment ─────────────────────────────────────────
 
-/** Strudel-style alignment modes for `$sp` chain ops. */
+/** Strudel-style alignment modes for `$p.s` chain ops. */
 export type SpAlignmentMode =
     | 'in'
     | 'out'
@@ -152,11 +163,11 @@ export interface SpPattern {
 
 /**
  * Parse a scale-degree mini-notation source against `scale`, returning
- * an `SpPattern`. Chain via `.add(...)` / `.sub(...)` (defaults to
- * `.in` alignment) or any of the seven explicit modes
- * (`.add.in`, `.add.out`, `.add.mix`, `.add.squeeze`, `.add.squeezeout`,
- * `.add.reset`, `.add.restart`). Each chained RHS is itself a mini-
- * notation source of integer scale degrees.
+ * an `SpPattern`. Exposed to the DSL as `$p.s(source, scale)`. Chain via
+ * `.add(...)` / `.sub(...)` (defaults to `.in` alignment) or any of the
+ * seven explicit modes (`.add.in`, `.add.out`, `.add.mix`, `.add.squeeze`,
+ * `.add.squeezeout`, `.add.reset`, `.add.restart`). Each chained RHS is
+ * itself a mini-notation source of integer scale degrees.
  *
  * Atoms are 0-indexed scale degrees: `0` is the scale's root, `1` the
  * second tone, `2` the third, etc. Negative degrees move downward;
@@ -170,15 +181,15 @@ export interface SpPattern {
  * `"c(0 2 4 5 7 9 11)"`, just-intonation tunings `"c(just)"` /
  * `"c(pythagorean)"`, and the bare `"chromatic"` ladder.
  */
-export function $sp(source: string, scale: string): SpPattern {
+function $spImpl(source: string, scale: string): SpPattern {
     if (typeof source !== 'string') {
         throw new MiniParseError(
-            `$sp() expects a string source, got ${typeof source}`,
+            `$p.s() expects a string source, got ${typeof source}`,
         );
     }
     if (typeof scale !== 'string') {
         throw new MiniParseError(
-            `$sp() expects a string scale, got ${typeof scale}`,
+            `$p.s() expects a string scale, got ${typeof scale}`,
         );
     }
     const payload = parsePayload(source);
@@ -244,7 +255,7 @@ function makeCombineBuilder(
     const apply = (mode: SpAlignmentMode, rhs: string): SpPattern => {
         if (typeof rhs !== 'string') {
             throw new MiniParseError(
-                `$sp().${op}.${mode}() expects a string RHS, got ${typeof rhs}`,
+                `$p.s().${op}.${mode}() expects a string RHS, got ${typeof rhs}`,
             );
         }
         const payload = parsePayload(rhs);

@@ -3,15 +3,15 @@
  * new pattern API in DSL source.
  *
  * `$cycle("…")`  → `$cycle($p("…"))`
- * `$iCycle(src, scale)` → `$cycle($sp(src, scale))`
- * `$iCycle([s0, s1, s2], scale)` → `$cycle($sp(s0, scale).add(s1).add(s2))`
+ * `$iCycle(src, scale)` → `$cycle($p.s(src, scale))`
+ * `$iCycle([s0, s1, s2], scale)` → `$cycle($p.s(s0, scale).add(s1).add(s2))`
  *
- * When the `$iCycle` source is a string-valued variable, the `$sp(…, scale)`
+ * When the `$iCycle` source is a string-valued variable, the `$p.s(…, scale)`
  * wrap is pushed into the variable's assignments instead, and the call
  * collapses to `$cycle(var)` — mirroring how `$cycle("…")` wraps assignments
  * with `$p`:
  *   `let pat = '…'; pat = '…'; $iCycle(pat, key)`
- *   → `let pat = $sp('…', key); pat = $sp('…', key); $cycle(pat)`
+ *   → `let pat = $p.s('…', key); pat = $p.s('…', key); $cycle(pat)`
  *
  * While wrapping a `$cycle` pattern, legacy voltage atoms lose their `v`
  * suffix (`$cycle("5v 3v")` → `$cycle($p("5 3"))`).
@@ -65,7 +65,7 @@ interface SpVarCall {
     scaleText: string;
 }
 
-/** A leading `$p(` / `$sp(` marks an already-migrated pattern expression. */
+/** A leading `$p(` / `$p.s(` marks an already-migrated pattern expression. */
 function isPatternExpr(text: string): boolean {
     return /^\$(?:p|sp)\b/.test(text.trimStart());
 }
@@ -122,7 +122,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
                 if (!sites || sites.length === 0) return;
                 if (!assignmentsVisibleAt(sites, first)) return;
                 if (sites.some((s) => s.kind === 'non-string')) {
-                    // Already-migrated pattern variables ($p/$sp) are the
+                    // Already-migrated pattern variables ($p/$p.s) are the
                     // finished form, not "skipped"; only flag genuinely
                     // unmigratable assignments.
                     if (!sites.every((s) => isPatternExpr(s.rhsText))) {
@@ -142,7 +142,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
             const scaleArg = args[1] as Expression;
             const scale = resolveIScale(scaleArg, varAssignments);
 
-            // String-valued source variable → push `$sp(…, scale)` into its
+            // String-valued source variable → push `$p.s(…, scale)` into its
             // assignments and collapse the call to `$cycle(var)`. Deferred to
             // a post-pass so every call on the variable can agree on a scale.
             if (scale && Node.isIdentifier(patternsArg)) {
@@ -183,9 +183,9 @@ export function migrateCycleCalls(source: string): MigrationResult {
     let assignmentsChanged = 0;
 
     // Resolve $iCycle string-variable sources collected above. When every
-    // call on a variable agrees on the scale, push `$sp(…, scale)` into the
+    // call on a variable agrees on the scale, push `$p.s(…, scale)` into the
     // variable's assignments and collapse each call to `$cycle(var)`. On a
-    // scale disagreement, keep the variable as a raw string and inline `$sp`
+    // scale disagreement, keep the variable as a raw string and inline `$p.s`
     // at each call site instead.
     const spByVar = new Map<string, SpVarCall[]>();
     for (const call of spVarCalls) {
@@ -195,7 +195,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
     }
     for (const [varName, calls] of spByVar) {
         // A variable that also feeds a $cycle wants $p-wrapped assignments,
-        // which is incompatible with $sp-wrapping — leave both untouched.
+        // which is incompatible with $p.s-wrapping — leave both untouched.
         if (variablesToRewrite.has(varName)) {
             variablesToRewrite.delete(varName);
             skippedVariables.add(varName);
@@ -211,7 +211,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
                     edits.push({
                         start: site.rhsStart,
                         end: site.rhsEnd,
-                        replacement: `$sp(${site.rhsText}, ${scale})`,
+                        replacement: `$p.s(${site.rhsText}, ${scale})`,
                     });
                     assignmentsChanged += 1;
                 }
@@ -229,7 +229,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
                 edits.push({
                     start: call.node.getStart(),
                     end: call.node.getEnd(),
-                    replacement: `$cycle($sp(${varName}, ${call.scaleText}))`,
+                    replacement: `$cycle($p.s(${varName}, ${call.scaleText}))`,
                 });
                 callsChanged += 1;
             }
@@ -292,7 +292,7 @@ function isPWrapped(node: Expression): boolean {
 
 /**
  * Resolve a non-variable `$iCycle` patterns arg into an ordered list of
- * source texts for the `$sp(...)` call. String literals and array literals
+ * source texts for the `$p.s(...)` call. String literals and array literals
  * are reduced to verbatim text; a variable bound to a single array literal
  * expands to its elements. String-valued variables are handled separately
  * (pushed into their assignments), not here. Returns null otherwise.
@@ -339,7 +339,7 @@ function resolveIScale(
     if (isStringish(arg)) return arg.getText();
     if (Node.isIdentifier(arg)) {
         // Preserve identifier reference verbatim — don't inline the
-        // variable's value. The $sp call site should still read `scale`
+        // variable's value. The $p.s call site should still read `scale`
         // from the same binding the caller declared.
         const sites = assignments.get(arg.getText());
         if (!sites || sites.length !== 1) return null;

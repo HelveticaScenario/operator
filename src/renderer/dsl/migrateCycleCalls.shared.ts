@@ -28,5 +28,5 @@ export function wrapP(start: number, end: number, text: string): Edit {
 export function buildSpReplacement(sources: string[], scale: string): string {
     const [head, ...rest] = sources;
     const chain = rest.map((rhs) => `.add(${rhs})`).join('');
-    return `$cycle($sp(${head}, ${scale})${chain})`;
+    return `$cycle($p.s(${head}, ${scale})${chain})`;
 }

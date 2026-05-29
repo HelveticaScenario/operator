@@ -428,13 +428,13 @@ describe('sequencing', () => {
         expect(findModules(patch, '$cycle').length).toBe(1);
     });
 
-    test('$sp(...).sub(...) wire payload preserves chain RHS argument_spans[1]', () => {
+    test('$p.s(...).sub(...) wire payload preserves chain RHS argument_spans[1]', () => {
         // Regression: the chain RHS span must be captured by the analyzer
         // and carried through to the SpPattern wire payload as
         // argument_spans[1], pointing at the literal '0 5' in the user
         // source so editor highlighting can follow it.
         const source =
-            "const pat = $sp('0 1 2 3', 'c(maj)').sub('0 5')\n" +
+            "const pat = $p.s('0 1 2 3', 'c(maj)').sub('0 5')\n" +
             'const seq = $cycle(pat)\n' +
             'seq.out()';
         const patch = execPatch(source);
@@ -476,16 +476,16 @@ describe('sequencing', () => {
         expect(slice.includes('0 5')).toBe(true);
     });
 
-    test('$sp accepts a reassigned string variable as source', () => {
-        // The inline migration form `$cycle($sp(pat, key))` (used when an
+    test('$p.s accepts a reassigned string variable as source', () => {
+        // The inline migration form `$cycle($p.s(pat, key))` (used when an
         // $iCycle source variable feeds calls with conflicting scales) keeps
-        // `pat` a raw string, so $sp must consume the variable's runtime
+        // `pat` a raw string, so $p.s must consume the variable's runtime
         // (last-assigned) value.
         const source =
             "const key = 'c(maj)'\n" +
             "let pat = '<0 2 4>*16'\n" +
             "pat = '<0 2 <4!2 5>>*16'\n" +
-            'const seq = $cycle($sp(pat, key))\n' +
+            'const seq = $cycle($p.s(pat, key))\n' +
             'seq.out()';
         const patch = execPatch(source);
         const cycles = findModules(patch, '$cycle');
@@ -496,7 +496,7 @@ describe('sequencing', () => {
             sources: Array<{ source: string }>;
         };
         expect(pattern.__kind).toBe('SpPattern');
-        // The last assignment wins — $sp parsed the reassigned value.
+        // The last assignment wins — $p.s parsed the reassigned value.
         expect(pattern.sources[0].source).toBe('<0 2 <4!2 5>>*16');
     });
 });

@@ -972,7 +972,7 @@ impl IntervalSeq {
 
     /// Convert a scale degree to V/Oct voltage. Thin wrapper over the
     /// shared [`crate::dsp::utilities::quantizer::degree_to_voltage`] free
-    /// function so `IntervalSeq` and the `$sp` DSL helper produce
+    /// function so `IntervalSeq` and the `$p.s` DSL helper produce
     /// bit-identical voltages.
     fn degree_to_voltage(&self, degree: i32) -> f64 {
         crate::dsp::utilities::quantizer::degree_to_voltage(
@@ -1481,7 +1481,7 @@ mod tests {
     fn test_degree_to_voltage_free_fn_matches_method() {
         use crate::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
 
-        // Drive both paths from the same scale + degree set so `$sp` and
+        // Drive both paths from the same scale + degree set so `$p.s` and
         // `$iCycle` stay bit-identical. Cover positive, negative, and
         // octave-crossing degrees over a non-12-TET tuning to exercise the
         // tuning table.

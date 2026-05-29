@@ -1208,7 +1208,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
 
 // ─── Seq stale cached_hap survives transfer_state_from (highlight pin) ────────
 
-/// Build the `$sp(...)` chained payload wire shape that the TS `$sp` helper
+/// Build the `$p.s(...)` chained payload wire shape that the TS `$p.s` helper
 /// emits: `{ __kind: "SpPattern", sources, scale, ops, argument_spans }`.
 /// Each source is a `ParsedPatternPayload` (`{ ast, source, all_spans }`).
 fn sp_payload(sources: &[&str], scale: &str, ops: Vec<(&str, &str)>) -> Value {
@@ -1246,7 +1246,7 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     // Regression for the stale cached_hap highlight bug.
     //
     // On a live edit that turns `$cycle($p('[0 1 2 3 4 5 6] 5'))` into the
-    // chained `$cycle($sp('0 5').sub('2 4'))`, patchSimilarityRemap reuses the
+    // chained `$cycle($p.s('0 5').sub('2 4'))`, patchSimilarityRemap reuses the
     // Seq module. apply_patch_update rebuilds it with FRESH multi-source params
     // (is_multi_source=true, per_source=2, a freshly baked multi-source
     // cached_haps), but transfer_state_from std::mem::swaps the OLD SeqState
@@ -1312,7 +1312,7 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
         .unwrap()
         .get_value_at("cv", 0, 0);
 
-    // --- Patch B: chained $cycle($sp('0 5').sub('2 4')) in c(maj). ---
+    // --- Patch B: chained $cycle($p.s('0 5').sub('2 4')) in c(maj). ---
     // 2 steps: step0 = 0-2 = -2, step1 = 5-4 = 1 — both non-rest degrees.
     // step1's geometry (0.5..1.0) matches the held voice's scalars; its
     // storage index (1) differs from the stale transferred index.
@@ -1397,7 +1397,7 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
 
     // Audio path untouched: get_state is read-only, so the held voice's CV is
     // still the value it was producing before (and after) the highlight read.
-    // (`5` in c(maj) `$sp('0 5').sub('2 4')` step1 = degree 1; we only check
+    // (`5` in c(maj) `$p.s('0 5').sub('2 4')` step1 = degree 1; we only check
     // the CV did not collapse to 0 — the resolver must not perturb voice
     // scalars.) The pre-transfer CV is the old single-source `5` = 5 V.
     let new_cv = seq_b.get_value_at("cv", 0, 0);

@@ -611,7 +611,7 @@ impl crate::types::StatefulModule for Seq {
             }
 
             // Build param_spans keyed by "pattern" for single-source legacy
-            // payloads and "pattern.0", "pattern.1", ... for chained `$sp`
+            // payloads and "pattern.0", "pattern.1", ... for chained `$p.s`
             // payloads. The argument-span analyzer registers chain RHS
             // literals under the chain call site, so the renderer maps
             // pattern_idx > 0 to those.

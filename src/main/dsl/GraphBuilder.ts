@@ -1497,7 +1497,7 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
             return replaced;
         }
 
-        // Opaque payloads (ParsedPattern from $p(), SpPattern from $sp())
+        // Opaque payloads (ParsedPattern from $p(), SpPattern from $p.s())
         // must be preserved verbatim — walking them would collapse the
         // nulls in `accidental`/`octave`/weight slots to 0 via
         // valueToSignal, producing zero-duration haps and silence.

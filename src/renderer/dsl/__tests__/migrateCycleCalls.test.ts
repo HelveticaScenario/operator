@@ -157,11 +157,11 @@ describe('migrateCycleCalls', () => {
         expect(result.callsChanged).toBe(1);
     });
 
-    test('rewrites $iCycle(string, scale) to $cycle($sp(string, scale))', () => {
+    test('rewrites $iCycle(string, scale) to $cycle($p.s(string, scale))', () => {
         const source = `$iCycle("0 2 4", "C(major)");`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `$cycle($sp("0 2 4", "C(major)"));`,
+            `$cycle($p.s("0 2 4", "C(major)"));`,
         );
         expect(result.callsChanged).toBe(1);
     });
@@ -170,16 +170,16 @@ describe('migrateCycleCalls', () => {
         const source = `$iCycle(["0 2 4", "0,4", "5"], "C(major)");`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `$cycle($sp("0 2 4", "C(major)").add("0,4").add("5"));`,
+            `$cycle($p.s("0 2 4", "C(major)").add("0,4").add("5"));`,
         );
         expect(result.callsChanged).toBe(1);
     });
 
-    test('rewrites $iCycle(single-elem array, scale) to plain $sp', () => {
+    test('rewrites $iCycle(single-elem array, scale) to plain $p.s', () => {
         const source = `$iCycle(["0 2 4"], "C(major)");`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `$cycle($sp("0 2 4", "C(major)"));`,
+            `$cycle($p.s("0 2 4", "C(major)"));`,
         );
         expect(result.callsChanged).toBe(1);
     });
@@ -187,7 +187,7 @@ describe('migrateCycleCalls', () => {
     test('migrates $iCycle in line comment', () => {
         const source = `// $iCycle("0 2 4", "C")`;
         const result = migrateCycleCalls(source);
-        expect(result.migrated).toBe(`// $cycle($sp("0 2 4", "C"))`);
+        expect(result.migrated).toBe(`// $cycle($p.s("0 2 4", "C"))`);
         expect(result.commentsChanged).toBe(1);
     });
 
@@ -195,13 +195,13 @@ describe('migrateCycleCalls', () => {
         const source = `// $iCycle(["0 2", "4"], "C")`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `// $cycle($sp("0 2", "C").add("4"))`,
+            `// $cycle($p.s("0 2", "C").add("4"))`,
         );
         expect(result.commentsChanged).toBe(1);
     });
 
-    test('idempotent — already $sp-form $iCycle migration unchanged', () => {
-        const source = `$cycle($sp("0 2 4", "C(major)"));`;
+    test('idempotent — already $p.s-form $iCycle migration unchanged', () => {
+        const source = `$cycle($p.s("0 2 4", "C(major)"));`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(source);
         expect(result.callsChanged).toBe(0);
@@ -213,7 +213,7 @@ $iCycle("0 2 4", scale);`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
             `const scale = "C(major)";
-$cycle($sp("0 2 4", scale));`,
+$cycle($p.s("0 2 4", scale));`,
         );
         expect(result.callsChanged).toBe(1);
     });
@@ -224,12 +224,12 @@ $iCycle(["0 2", "4"], scale);`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
             `const scale = "C(major)";
-$cycle($sp("0 2", scale).add("4"));`,
+$cycle($p.s("0 2", scale).add("4"));`,
         );
         expect(result.callsChanged).toBe(1);
     });
 
-    test('pushes $sp into a reassigned string source variable', () => {
+    test('pushes $p.s into a reassigned string source variable', () => {
         const source = [
             `const key = 'c(maj)'`,
             ``,
@@ -243,8 +243,8 @@ $cycle($sp("0 2", scale).add("4"));`,
             [
                 `const key = 'c(maj)'`,
                 ``,
-                `let pat = $sp('<0 2 4>*16', key)`,
-                `pat = $sp('<0 2 <4!2 5>>*16', key)`,
+                `let pat = $p.s('<0 2 4>*16', key)`,
+                `pat = $p.s('<0 2 <4!2 5>>*16', key)`,
                 ``,
                 `const seq = $cycle(pat)`,
             ].join('\n'),
@@ -254,7 +254,7 @@ $cycle($sp("0 2", scale).add("4"));`,
         expect(result.skippedVariables).toEqual([]);
     });
 
-    test('idempotent — re-migrating pushed-down $sp output is a no-op', () => {
+    test('idempotent — re-migrating pushed-down $p.s output is a no-op', () => {
         const source = [
             `const key = 'c(maj)'`,
             `let pat = '<0 2 4>*16'`,
@@ -269,11 +269,11 @@ $cycle($sp("0 2", scale).add("4"));`,
         expect(twice.skippedVariables).toEqual([]);
     });
 
-    test('pushes $sp into a single string source variable', () => {
+    test('pushes $p.s into a single string source variable', () => {
         const source = `const pat = "0 2 4";\n$iCycle(pat, "C");`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `const pat = $sp("0 2 4", "C");\n$cycle(pat);`,
+            `const pat = $p.s("0 2 4", "C");\n$cycle(pat);`,
         );
         expect(result.callsChanged).toBe(1);
         expect(result.assignmentsChanged).toBe(1);
@@ -290,9 +290,9 @@ $cycle($sp("0 2", scale).add("4"));`,
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
             [
-                `let pat = $sp("0 2", "C");`,
+                `let pat = $p.s("0 2", "C");`,
                 `$cycle(pat);`,
-                `pat = $sp("4 5", "C");`,
+                `pat = $p.s("4 5", "C");`,
                 `$cycle(pat);`,
             ].join('\n'),
         );
@@ -300,11 +300,11 @@ $cycle($sp("0 2", scale).add("4"));`,
         expect(result.callsChanged).toBe(2);
     });
 
-    test('conflicting scales fall back to inline $sp at each call', () => {
+    test('conflicting scales fall back to inline $p.s at each call', () => {
         const source = `let pat = "0 2";\n$iCycle(pat, "C");\n$iCycle(pat, "D");`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(
-            `let pat = "0 2";\n$cycle($sp(pat, "C"));\n$cycle($sp(pat, "D"));`,
+            `let pat = "0 2";\n$cycle($p.s(pat, "C"));\n$cycle($p.s(pat, "D"));`,
         );
         expect(result.assignmentsChanged).toBe(0);
         expect(result.callsChanged).toBe(2);

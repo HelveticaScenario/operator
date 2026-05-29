@@ -32,7 +32,7 @@ import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
 import { setActiveInterpolationResolutions } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
-import { $p, $sp } from './miniNotation';
+import { $p } from './miniNotation';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -632,11 +632,10 @@ export function executePatchScript(
         $hz: hz,
         $note: note,
         // Mini-notation parser — wraps a string in a ParsedPattern that
-        // $cycle / $iCycle consume as a positional argument.
+        // $cycle / $iCycle consume as a positional argument. Carries
+        // $p.s(source, scale) for scale-degree patterns (integer degrees
+        // resolved through a scale string into voltage atoms for $cycle).
         $p,
-        // Scale-degree mini-notation parser — resolves integer degrees
-        // through a scale string into voltage atoms for $cycle.
-        $sp,
         // Phase-warp table descriptors for $wavetable
         $table,
         // Collection helpers

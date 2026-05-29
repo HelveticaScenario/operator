@@ -410,10 +410,11 @@ type ParsedPattern = {
  */
 declare function $p(source: string): ParsedPattern;
 
+declare namespace $p {
 /**
  * Parse a scale-degree mini-notation source and resolve each integer
  * degree to its V/Oct voltage against \`scale\`, returning a
- * \`ParsedPattern\` suitable for \`$cycle\`.
+ * \`ParsedPattern\` suitable for \`$cycle\`. Invoked as \`$p.s(source, scale)\`.
  *
  * Atoms are **0-indexed scale degrees** rather than absolute pitches:
  * \`0\` is the scale's root, \`1\` is the second scale tone, \`2\` the third,
@@ -422,10 +423,10 @@ declare function $p(source: string): ParsedPattern;
  * atoms are rejected.
  *
  * \`\`\`js
- * $cycle($sp("0 2 4 7", "c(major)"))       // C-major arpeggio
- * $cycle($sp("-1 0 2 4", "a3(min)"))       // negative degrees wrap below the root
- * $cycle($sp("0 1 2 3 4", "c(0 2 4 7 9)")) // custom intervals (pentatonic)
- * $cycle($sp("0 4 7", "c(just)"))          // just intonation
+ * $cycle($p.s("0 2 4 7", "c(major)"))       // C-major arpeggio
+ * $cycle($p.s("-1 0 2 4", "a3(min)"))       // negative degrees wrap below the root
+ * $cycle($p.s("0 1 2 3 4", "c(0 2 4 7 9)")) // custom intervals (pentatonic)
+ * $cycle($p.s("0 4 7", "c(just)"))          // just intonation
  * \`\`\`
  *
  * ### Atoms
@@ -493,18 +494,19 @@ declare function $p(source: string): ParsedPattern;
  * | \`.restart\` | Right pattern retriggers the left, aligned to cycle 0. |
  *
  * \`\`\`js
- * $cycle($sp("0 1 2", "c(maj)").add("0 2"))               // .add defaults to .add.in
- * $cycle($sp("0 1 2", "d#(min)").add.in("10 20"))
- * $cycle($sp("0 1 2", "c(maj)").sub.squeeze("1 2 3"))
+ * $cycle($p.s("0 1 2", "c(maj)").add("0 2"))               // .add defaults to .add.in
+ * $cycle($p.s("0 1 2", "d#(min)").add.in("10 20"))
+ * $cycle($p.s("0 1 2", "c(maj)").sub.squeeze("1 2 3"))
  * \`\`\`
  *
  * @param source - integer scale-degree mini-notation source
  * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
  */
-declare function $sp(source: string, scale: string): SpPattern;
+function s(source: string, scale: string): SpPattern;
+}
 
 /**
- * One Strudel-style alignment for an \`$sp\` chain op.
+ * One Strudel-style alignment for a \`$p.s\` chain op.
  */
 type SpAlignmentMode =
   | 'in'
@@ -524,7 +526,7 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
 };
 
 /**
- * Chainable scale-degree pattern returned by \`$sp()\`. Pass directly to
+ * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
  * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
  * and gets its own editor-highlight argument span.
  *

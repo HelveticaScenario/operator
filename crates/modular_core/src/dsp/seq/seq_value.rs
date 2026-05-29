@@ -43,7 +43,7 @@ pub(crate) struct SeqCycleHap {
 }
 
 /// Per-cycle storage for Seq. Scalar haps + flat span arena. Each
-/// `FlatSpan` carries the `pattern_idx` so a chained `$sp` payload's
+/// `FlatSpan` carries the `pattern_idx` so a chained `$p.s` payload's
 /// multi-source highlights know which input string each leaf came from.
 pub(crate) type SeqCycleStorage = CycleStorage<SeqCycleHap, super::cache::FlatSpan>;
 
@@ -306,7 +306,7 @@ impl Default for MiniAST {
     }
 }
 
-/// Arithmetic operation kind for chained `$sp` ops. Wire form uses
+/// Arithmetic operation kind for chained `$p.s` ops. Wire form uses
 /// lowercase strings (`"add"`, `"sub"`) to match the TS builder.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -315,7 +315,7 @@ pub enum SpOpKind {
     Sub,
 }
 
-/// Strudel-style alignment mode for chained `$sp` ops. Wire form uses
+/// Strudel-style alignment mode for chained `$p.s` ops. Wire form uses
 /// lowercase strings (`"in"`, `"out"`, `"mix"`, `"squeeze"`,
 /// `"squeezeout"`, `"reset"`, `"restart"`) to match the TS builder.
 /// Mirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].
@@ -346,7 +346,7 @@ impl SpAlignmentMode {
     }
 }
 
-/// One chained op in an `$sp` payload: arithmetic op + alignment mode.
+/// One chained op in an `$p.s` payload: arithmetic op + alignment mode.
 /// Paired positionally with `sources[i+1]` for `i = 0..ops.len()`.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SpOp {
@@ -361,12 +361,12 @@ pub struct ArgumentSpan {
     pub end: usize,
 }
 
-/// JSON payload shape delivered for chained `$sp(...).add(...)` patterns.
+/// JSON payload shape delivered for chained `$p.s(...).add(...)` patterns.
 /// First entry of `sources` is the left pattern; subsequent entries are
 /// chained RHS patterns combined via the parallel `ops` slot.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SpPatternPayload {
-    /// Discriminator — TS-side `$sp` builds objects with this set so the
+    /// Discriminator — TS-side `$p.s` builds objects with this set so the
     /// `SeqPatternSource` untagged enum picks the `Sp` variant.
     #[serde(rename = "__kind")]
     pub kind: SpKindTag,
@@ -387,7 +387,7 @@ pub enum SpKindTag {
 
 /// Wire-level dispatch shape: either a single `ParsedPatternPayload`
 /// (legacy single-source path used by `$cycle($p(...))`) or a chained
-/// `$sp` payload with multi-source highlighting.
+/// `$p.s` payload with multi-source highlighting.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SeqPatternSource {
@@ -415,13 +415,13 @@ pub struct SeqSourceMeta {
 /// Wire shape is [`SeqPatternSource`] — either a single
 /// [`ParsedPatternPayload`] (the existing single-source path for
 /// `$cycle($p(...))`) or an [`SpPatternPayload`] carrying multiple
-/// degree patterns + scale + chain ops for `$cycle($sp(...).add(...))`.
+/// degree patterns + scale + chain ops for `$cycle($p.s(...).add(...))`.
 /// Either way the resolved runtime is a [`Pattern<SeqValue>`] plus
 /// per-cycle hap storage.
 #[derive(Clone, Default, Debug)]
 pub struct SeqPatternParam {
     /// Per-source metadata (always at least one entry once parsed).
-    /// Chained `$sp` payloads push one entry per chained RHS.
+    /// Chained `$p.s` payloads push one entry per chained RHS.
     pub(crate) per_source: Vec<SeqSourceMeta>,
 
     /// True when the original payload was an `Sp` (chained), so
@@ -490,7 +490,7 @@ impl SeqPatternParam {
         }
         if payload.ops.len() + 1 != payload.sources.len() {
             return Err(format!(
-                "$sp payload mismatch: {} sources but {} ops (expected ops.len() == sources.len() - 1)",
+                "$p.s payload mismatch: {} sources but {} ops (expected ops.len() == sources.len() - 1)",
                 payload.sources.len(),
                 payload.ops.len()
             ));
@@ -575,7 +575,7 @@ impl SeqPatternParam {
     }
 
     /// Per-source metadata. Single-source legacy payloads return a
-    /// one-element slice; chained `$sp` payloads return one entry per
+    /// one-element slice; chained `$p.s` payloads return one entry per
     /// source string in the chain.
     pub(crate) fn per_source(&self) -> &[SeqSourceMeta] {
         &self.per_source

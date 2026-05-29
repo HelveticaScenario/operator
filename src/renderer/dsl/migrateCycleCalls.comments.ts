@@ -5,8 +5,8 @@
  * code:
  *
  * - `$cycle("…")`            → `$cycle($p("…"))`
- * - `$iCycle("p", "s")`      → `$cycle($sp("p", "s"))`
- * - `$iCycle([s0, s1], "s")` → `$cycle($sp(s0, "s").add(s1)…)`
+ * - `$iCycle("p", "s")`      → `$cycle($p.s("p", "s"))`
+ * - `$iCycle([s0, s1], "s")` → `$cycle($p.s(s0, "s").add(s1)…)`
  */
 
 import type { Edit } from './migrateCycleCalls.shared';
@@ -53,7 +53,7 @@ export function collectCommentEdits(source: string): {
             count += 1;
         }
 
-        // 2. $iCycle("p", "s") → $cycle($sp("p", "s"))
+        // 2. $iCycle("p", "s") → $cycle($p.s("p", "s"))
         for (const inner of commentText.matchAll(ICYCLE_STRING_IN_COMMENT_RE)) {
             const callAbsStart = commentStart + (inner.index ?? 0);
             const callAbsEnd = callAbsStart + inner[0].length;
@@ -66,7 +66,7 @@ export function collectCommentEdits(source: string): {
             count += 1;
         }
 
-        // 3. $iCycle([s0, s1, …], scale) → $cycle($sp(s0, scale).add(s1)…)
+        // 3. $iCycle([s0, s1, …], scale) → $cycle($p.s(s0, scale).add(s1)…)
         for (const inner of commentText.matchAll(ICYCLE_ARRAY_IN_COMMENT_RE)) {
             const callAbsStart = commentStart + (inner.index ?? 0);
             const callAbsEnd = callAbsStart + inner[0].length;

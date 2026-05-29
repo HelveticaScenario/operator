@@ -1,4 +1,4 @@
-//! Strudel-style alignment combiners for `$sp` chain ops.
+//! Strudel-style alignment combiners for `$p.s` chain ops.
 //!
 //! Direct combiner functions that take a left pattern, a right pattern, and
 //! a binary value combiner, and produce a new pattern via one of the seven
@@ -357,13 +357,13 @@ mod tests {
     // (HapContext::modifier_spans[0]).
     #[test]
     fn test_squeeze_context_left_is_pattern_idx_0() {
-        // A = $sp(1) at source span [0, 1); B = $sp(2) at [10, 11).
+        // A = $p.s(1) at source span [0, 1); B = $p.s(2) at [10, 11).
         let a: Pattern<i32> = pure_with_span(1, SourceSpan::new(0, 1));
         let b: Pattern<i32> = pure_with_span(2, SourceSpan::new(10, 11));
         let c = combine_sp(&a, &b, SpAlignmentMode::Squeeze, |x, y| x + y);
         let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
-        assert!(!haps.is_empty(), "expected at least one hap from $sp(A).squeeze(B)");
+        assert!(!haps.is_empty(), "expected at least one hap from $p.s(A).squeeze(B)");
         for hap in &haps {
             // Left operand A is pattern_idx 0 → ends up as source_span.
             let source = hap
@@ -396,7 +396,7 @@ mod tests {
 
     // Companion check: SqueezeOut was correct-by-accident before the fix
     // because outer/inner were pre-swapped upstream. The fix must preserve
-    // this — `$sp(A).squeezeOut(B)` should still land A at pattern_idx 0
+    // this — `$p.s(A).squeezeOut(B)` should still land A at pattern_idx 0
     // and B at pattern_idx 1.
     #[test]
     fn test_squeeze_out_context_left_is_pattern_idx_0() {
@@ -405,7 +405,7 @@ mod tests {
         let c = combine_sp(&a, &b, SpAlignmentMode::SqueezeOut, |x, y| x + y);
         let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
-        assert!(!haps.is_empty(), "expected at least one hap from $sp(A).squeezeOut(B)");
+        assert!(!haps.is_empty(), "expected at least one hap from $p.s(A).squeezeOut(B)");
         for hap in &haps {
             let source = hap
                 .context
@@ -419,7 +419,7 @@ mod tests {
         }
     }
 
-    // Repro for "$sp('0 1 2 3', 'c(maj)').sub('0 5')" — the renderer-side
+    // Repro for "$p.s('0 1 2 3', 'c(maj)').sub('0 5')" — the renderer-side
     // pattern that triggered the user's bug report. Mirrors the pipeline in
     // `SeqPatternParam::from_sp_payload`: parse each source into a
     // `Pattern<IntervalValue>`, `strip_modifier_spans` each one, then
