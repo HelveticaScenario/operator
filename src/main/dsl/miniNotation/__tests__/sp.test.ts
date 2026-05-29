@@ -8,6 +8,7 @@ import {
     type SpPattern,
 } from '../index';
 import type { MiniAST } from '../ast';
+import { replaceSignals } from '../../GraphBuilder';
 
 const MODES: SpAlignmentMode[] = [
     'in',
@@ -164,5 +165,29 @@ describe('$sp source string + spans', () => {
     test('all_spans count matches the number of atoms', () => {
         const r = $sp('0 2 4', 'c(maj)');
         expect(r.sources[0].all_spans.length).toBe(3);
+    });
+});
+
+describe('$sp opaque payload preservation through replaceSignals', () => {
+    test('null weights in Sequence AST survive replaceSignals (no null→0 collapse)', () => {
+        // Regression: SpPattern was not opaque-guarded in replaceValues, so
+        // walking its sources[].ast tree collapsed Sequence weights from
+        // null → 0 via valueToSignal, producing zero-duration haps and
+        // silent audio. Sources with a single atom (no Sequence wrapping)
+        // were unaffected, masking the bug as "works for '0', fails for '0 1'".
+        const pat = $sp('0 1', 'c(maj)');
+        const walked = replaceSignals(pat) as SpPattern;
+        const seq = (walked.sources[0].ast as { Sequence?: Array<[unknown, unknown]> }).Sequence;
+        expect(seq).toBeDefined();
+        expect(seq).toHaveLength(2);
+        expect(seq![0][1]).toBeNull();
+        expect(seq![1][1]).toBeNull();
+    });
+
+    test('chain ops survive replaceSignals', () => {
+        const pat = $sp('0 1', 'c(maj)').add('1');
+        const walked = replaceSignals(pat) as SpPattern;
+        expect(walked.ops).toEqual([{ op: 'add', mode: 'in' }]);
+        expect(walked.sources).toHaveLength(2);
     });
 });

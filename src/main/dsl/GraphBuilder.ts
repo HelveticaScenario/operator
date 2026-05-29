@@ -1409,14 +1409,15 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
             return replaced;
         }
 
-        // Opaque payloads (currently just ParsedPattern from $p()) must
-        // be preserved verbatim — walking them would collapse the nulls
-        // in `accidental`/`octave`/weight slots to 0 via valueToSignal.
-        if (
-            !Array.isArray(replaced) &&
-            (replaced as { __kind?: unknown }).__kind === 'ParsedPattern'
-        ) {
-            return replaced;
+        // Opaque payloads (ParsedPattern from $p(), SpPattern from $sp())
+        // must be preserved verbatim — walking them would collapse the
+        // nulls in `accidental`/`octave`/weight slots to 0 via
+        // valueToSignal, producing zero-duration haps and silence.
+        if (!Array.isArray(replaced)) {
+            const kind = (replaced as { __kind?: unknown }).__kind;
+            if (kind === 'ParsedPattern' || kind === 'SpPattern') {
+                return replaced;
+            }
         }
 
         if (Array.isArray(replaced)) {
