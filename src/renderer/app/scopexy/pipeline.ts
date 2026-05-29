@@ -226,8 +226,7 @@ export function createScopeXY(
     const upsampleKernel = buildLanczosKernel(UPSAMPLE_RADIUS, UPSAMPLE_STEPS);
 
     // aIdx: UNSIGNED_SHORT, one component, vertex index 0..nSamples*4-1.
-    // Upsampling pushes the max index past SHORT's 32k limit, so use the
-    // unsigned 16-bit variant.
+    // Upsampled max (~49k) exceeds signed SHORT range, so unsigned.
     const quadIndexData = new Uint16Array(nSamples * 4);
     for (let i = 0; i < quadIndexData.length; i++) quadIndexData[i] = i;
     const quadIndexBuf = gl.createBuffer();
@@ -466,10 +465,9 @@ export function createScopeXY(
         const uColorLoc = gl!.getUniformLocation(fadeShader, 'uColor');
         gl!.enable(gl!.BLEND);
 
-        // Subtract a small constant per frame so dim trails actually reach
-        // zero. Without this, multiplicative decay in 8-bit asymptotes at
-        // 1/255 (it rounds back to itself) and the bloom amplifies that
-        // floor into a persistent ghost.
+        // Subtract a small constant per frame so dim trails clear past
+        // 8-bit's 1/255 quantization floor (multiplicative decay alone
+        // rounds back to itself there).
         gl!.blendEquation(gl!.FUNC_REVERSE_SUBTRACT);
         gl!.blendFunc(gl!.ONE, gl!.ONE);
         const epsilon = 2.0 / 255.0;

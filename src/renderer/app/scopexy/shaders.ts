@@ -42,11 +42,10 @@ vec2 lanczosFetch(float outSampleIdx) {
         int absK = kernelPos < 0 ? -kernelPos : kernelPos;
         sum += sample * uKernel[absK];
     }
-    // Clamp to the 4-sample neighborhood hull. Lanczos' negative side
-    // lobes cause big overshoots at fast transitions, which on the XY
-    // scope read as stray straight strokes extending past the figure.
-    // Clamping preserves curvature inside the neighborhood while
-    // killing the runaway overshoots.
+    // Clamp the interpolant to the convex hull of the four nearest input
+    // samples. The sinc kernel's negative side lobes can push the sum
+    // outside the neighborhood at fast transitions; clamping keeps the
+    // curve inside the bounding box while preserving curvature within it.
     vec2 p0 = fetchSample(inPos - 1.0);
     vec2 p1 = fetchSample(inPos);
     vec2 p2 = fetchSample(inPos + 1.0);
@@ -79,8 +78,8 @@ void main () {
     vec2 norm = vec2(-dir.y, dir.x);
 
     // uvl.xy carries signed distances in clip-space units (x along the
-    // segment, y perpendicular). fsLine plugs them straight into the
-    // gaussian-line integral without further remapping.
+    // segment, y perpendicular). fsLine consumes them directly as the
+    // gaussian-line integral's input coordinates.
     float tang;
     vec2 current;
     if (idx >= 2.0) {
@@ -95,10 +94,9 @@ void main () {
     float side = (mod(idx, 2.0) - 0.5) * 2.0;
     uvl.y = side * uSize;
     uvl.z = len;
-    // Per-vertex brightness baked here so the fragment shader only needs
-    // to multiply, not recompute the ramp per pixel. Oldest sample in the
-    // ring is dimmed to (1 - uFadeAmount) of full intensity; newest is
-    // full.
+    // Per-vertex brightness baked here so the fragment shader can apply
+    // it with a single multiply. Oldest sample in the ring receives
+    // (1 - uFadeAmount) of full intensity, newest receives full.
     uvl.w = uIntensity * mix(1.0 - uFadeAmount, 1.0, outIdx / uNumSamples);
 
     gl_Position = vec4(current + (tang * dir + norm * side) * uSize, 0.0, 1.0);
@@ -125,9 +123,8 @@ void main (void)
     // y perpendicular).
     vec2 xy = uvl.xy;
     float alpha;
-    // sigma = uSize/5 keeps the beam tight enough that junction overlaps
-    // between consecutive quads don't pile excess energy on top of each
-    // other; wider sigma reads as a fat smudge.
+    // Beam half-width: sigma = uSize/5. Tight enough that adjacent
+    // segment quads share little energy at their junction.
     float sigma = uSize / 5.0;
     if (len < EPS) {
         alpha = exp(-dot(xy, xy) / (2.0 * sigma * sigma)) / (2.0 * sqrt(uSize));
@@ -177,9 +174,8 @@ void main (void) {
 }
 `;
 
-// 17-tap separable gaussian blur (sigma ≈ 3). Real gaussian weights so the
-// bloom halo has circular iso-contours; triangle weights would give the
-// halo square corners.
+// 17-tap separable gaussian blur (sigma ≈ 3). Real gaussian weights give
+// the bloom halo circular iso-contours.
 export const fsBlur = `\
 precision highp float;
 uniform sampler2D uTexture;

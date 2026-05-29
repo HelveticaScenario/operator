@@ -155,12 +155,10 @@ export function ScopeXYBackground({
         if (paused) return;
         let cancelled = false;
         let rafId = 0;
-        // Audio thread holds the scope_xy mutex briefly each callback. When
-        // the renderer polls during that window try_lock fails and the IPC
-        // returns an empty Vec — drawing that as []-data clears the canvas
-        // to background and produces a single-frame flicker. Skip transient
-        // empties; only clear after a few consecutive empty frames (real
-        // engine stop or patch removal of $scopeXY).
+        // The IPC returns an empty Vec when the audio thread holds the
+        // scope_xy mutex during a poll. Treat empties as transient until
+        // a few in a row confirm the engine actually stopped or the
+        // patch dropped $scopeXY.
         const EMPTY_FRAMES_BEFORE_CLEAR = 5;
         let consecutiveEmpty = 0;
         const tick = () => {
