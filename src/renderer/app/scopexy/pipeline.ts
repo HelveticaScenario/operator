@@ -314,10 +314,12 @@ export function createScopeXY(
         gl!.deleteProgram(copyShader);
         gl!.deleteProgram(blurShader);
         gl!.deleteProgram(compositeShader);
-        // Release the context's slot deterministically rather than waiting for
-        // the detached canvas to be GC'd — keeps us clear of the browser's
-        // live-WebGL-context budget across mount/unmount churn.
-        gl!.getExtension('WEBGL_lose_context')?.loseContext();
+        // Note: deliberately NOT calling WEBGL_lose_context.loseContext() here.
+        // With a single shared canvas there is no per-buffer context churn to
+        // guard against, and force-losing the context on a dev StrictMode/HMR
+        // remount wedges the GPU process (later contexts come up degraded —
+        // missing extensions, failing shader compiles). The detached canvas's
+        // context is reclaimed by GC.
     }
 
     return {
