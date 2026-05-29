@@ -1,18 +1,28 @@
 /**
- * Migrate `$cycle("…")` calls to `$cycle($p("…"))` in DSL source.
+ * Migrate legacy `$cycle("…")` and `$iCycle(…, scale)` calls to the
+ * new pattern API in DSL source.
  *
- * Three kinds of rewrites:
- * - Direct call sites: `$cycle(<literal>)` → `$cycle($p(<literal>))`
- * - Variable assignments: if a variable passed to `$cycle` is assigned only
- *   string literals in this source, wrap each assignment RHS instead.
- * - Comments: same shape, found by regex on the raw text.
+ * `$cycle("…")`  → `$cycle($p("…"))`
+ * `$iCycle(src, scale)` → `$cycle($sp(src, scale))`
+ * `$iCycle([s0, s1, s2], scale)` → `$cycle($sp(s0, scale).add(s1).add(s2))`
+ *
+ * Three kinds of rewrites for each:
+ * - Direct call sites: wrap / transform the literal arguments.
+ * - Variable assignments: if a variable passed to `$cycle` is assigned
+ *   only string literals in this source, wrap each assignment RHS
+ *   instead of the call site.
+ * - Comments: same shapes, found by regex on the raw text.
  *
  * Idempotent — running on a migrated buffer is a no-op.
- * `$iCycle` is intentionally not touched.
  */
 
 import { Node, Project } from 'ts-morph';
-import type { CallExpression, Expression, SourceFile } from 'ts-morph';
+import type {
+    ArrayLiteralExpression,
+    CallExpression,
+    Expression,
+    SourceFile,
+} from 'ts-morph';
 
 export interface MigrationResult {
     migrated: string;
@@ -68,28 +78,57 @@ export function migrateCycleCalls(source: string): MigrationResult {
     sourceFile.forEachDescendant((node) => {
         if (!Node.isCallExpression(node)) return;
         const name = getCalledName(node);
-        if (name !== '$cycle') return;
-        const args = node.getArguments();
-        if (args.length === 0) return;
-        const first = args[0] as Expression;
 
-        if (isAlreadyWrapped(first)) return;
-
-        if (isStringish(first)) {
-            edits.push(wrap(first.getStart(), first.getEnd(), first.getText()));
-            callsChanged += 1;
+        if (name === '$cycle') {
+            const args = node.getArguments();
+            if (args.length === 0) return;
+            const first = args[0] as Expression;
+            if (isPWrapped(first)) return;
+            if (isStringish(first)) {
+                edits.push(
+                    wrapP(first.getStart(), first.getEnd(), first.getText()),
+                );
+                callsChanged += 1;
+                return;
+            }
+            if (Node.isIdentifier(first)) {
+                const varName = first.getText();
+                const sites = varAssignments.get(varName);
+                if (!sites || sites.length === 0) return;
+                if (sites.some((s) => s.kind === 'non-string')) {
+                    skippedVariables.add(varName);
+                    return;
+                }
+                variablesToRewrite.add(varName);
+            }
             return;
         }
 
-        if (Node.isIdentifier(first)) {
-            const varName = first.getText();
-            const sites = varAssignments.get(varName);
-            if (!sites || sites.length === 0) return;
-            if (sites.some((s) => s.kind === 'non-string')) {
-                skippedVariables.add(varName);
+        if (name === '$iCycle') {
+            const args = node.getArguments();
+            if (args.length < 2) return;
+            const patternsArg = args[0] as Expression;
+            const scaleArg = args[1] as Expression;
+
+            const sources = resolveISources(patternsArg, varAssignments);
+            const scale = resolveIScale(scaleArg, varAssignments);
+            if (!sources || !scale) {
+                if (Node.isIdentifier(patternsArg)) {
+                    skippedVariables.add(patternsArg.getText());
+                }
+                if (Node.isIdentifier(scaleArg)) {
+                    skippedVariables.add(scaleArg.getText());
+                }
                 return;
             }
-            variablesToRewrite.add(varName);
+
+            const replacement = buildSpReplacement(sources, scale);
+            edits.push({
+                start: node.getStart(),
+                end: node.getEnd(),
+                replacement,
+            });
+            callsChanged += 1;
         }
     });
 
@@ -99,7 +138,7 @@ export function migrateCycleCalls(source: string): MigrationResult {
         if (!sites) continue;
         for (const site of sites) {
             if (site.rhsText.trimStart().startsWith('$p(')) continue;
-            edits.push(wrap(site.rhsStart, site.rhsEnd, site.rhsText));
+            edits.push(wrapP(site.rhsStart, site.rhsEnd, site.rhsText));
             assignmentsChanged += 1;
         }
     }
@@ -133,14 +172,88 @@ function isStringish(node: Expression): boolean {
     );
 }
 
-function isAlreadyWrapped(node: Expression): boolean {
+function isPWrapped(node: Expression): boolean {
     if (!Node.isCallExpression(node)) return false;
     const expr = node.getExpression();
     return Node.isIdentifier(expr) && expr.getText() === '$p';
 }
 
-function wrap(start: number, end: number, text: string): Edit {
+function wrapP(start: number, end: number, text: string): Edit {
     return { start, end, replacement: `$p(${text})` };
+}
+
+/**
+ * Resolve the patterns arg of `$iCycle` into an ordered list of source
+ * literals (verbatim text including quotes). Returns null if the shape
+ * can't be reduced statically.
+ */
+function resolveISources(
+    arg: Expression,
+    assignments: Map<string, AssignmentSite[]>,
+): string[] | null {
+    if (isStringish(arg)) return [arg.getText()];
+    if (Node.isArrayLiteralExpression(arg)) {
+        return collectArrayStrings(arg);
+    }
+    if (Node.isIdentifier(arg)) {
+        const sites = assignments.get(arg.getText());
+        if (!sites || sites.length !== 1) return null;
+        const only = sites[0];
+        if (only.kind === 'string') return [only.rhsText];
+        // Find the original declaration to check whether it's an array
+        // of string literals — array RHS texts are kind 'non-string' in
+        // the site cache but still mechanically expandable.
+        const decl = arg
+            .getSourceFile()
+            .forEachDescendantAsArray()
+            .find(
+                (n) =>
+                    Node.isVariableDeclaration(n) &&
+                    n.getName() === arg.getText(),
+            );
+        if (decl && Node.isVariableDeclaration(decl)) {
+            const init = decl.getInitializer();
+            if (init && Node.isArrayLiteralExpression(init)) {
+                return collectArrayStrings(init);
+            }
+        }
+        return null;
+    }
+    return null;
+}
+
+function collectArrayStrings(
+    arr: ArrayLiteralExpression,
+): string[] | null {
+    const out: string[] = [];
+    for (const elem of arr.getElements()) {
+        if (isStringish(elem)) {
+            out.push(elem.getText());
+            continue;
+        }
+        return null;
+    }
+    return out.length > 0 ? out : null;
+}
+
+function resolveIScale(
+    arg: Expression,
+    assignments: Map<string, AssignmentSite[]>,
+): string | null {
+    if (isStringish(arg)) return arg.getText();
+    if (Node.isIdentifier(arg)) {
+        const sites = assignments.get(arg.getText());
+        if (!sites || sites.length !== 1) return null;
+        if (sites[0].kind !== 'string') return null;
+        return sites[0].rhsText;
+    }
+    return null;
+}
+
+function buildSpReplacement(sources: string[], scale: string): string {
+    const [head, ...rest] = sources;
+    const chain = rest.map((rhs) => `.add(${rhs})`).join('');
+    return `$cycle($sp(${head}, ${scale})${chain})`;
 }
 
 function collectAssignments(
@@ -194,6 +307,16 @@ function push(
 const COMMENT_RE = /(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)/g;
 const CYCLE_IN_COMMENT_RE =
     /\$cycle\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\)/g;
+// Single-string $iCycle in comments: $iCycle("…", "…").
+const ICYCLE_STRING_IN_COMMENT_RE =
+    /\$iCycle\s*\(\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\)/g;
+// Array-form $iCycle in comments: $iCycle([…], "…"). Captures the array
+// body so we can split on string literals inside.
+const ICYCLE_ARRAY_IN_COMMENT_RE =
+    /\$iCycle\s*\(\s*\[([^\]]*)\]\s*,\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*\)/g;
+// Single string literal inside an array body.
+const ARRAY_STRING_RE =
+    /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
 
 function collectCommentEdits(source: string): {
     commentEdits: Edit[];
@@ -206,6 +329,7 @@ function collectCommentEdits(source: string): {
         const commentText = commentMatch[0];
         const commentStart = commentMatch.index ?? 0;
 
+        // 1. $cycle("…") → $cycle($p("…"))
         for (const inner of commentText.matchAll(CYCLE_IN_COMMENT_RE)) {
             const literal = inner[1];
             const literalRelStart =
@@ -213,13 +337,44 @@ function collectCommentEdits(source: string): {
             const literalAbsStart = commentStart + literalRelStart;
             const literalAbsEnd = literalAbsStart + literal.length;
 
-            // Guard against `$p($cycle("…"))` shapes inside comments — only
-            // skip if a `$p(` immediately precedes the `$cycle` token.
             const cycleAbsStart = commentStart + (inner.index ?? 0);
             const before = source.slice(0, cycleAbsStart).trimEnd();
             if (before.endsWith('$p(')) continue;
 
-            edits.push(wrap(literalAbsStart, literalAbsEnd, literal));
+            edits.push(wrapP(literalAbsStart, literalAbsEnd, literal));
+            count += 1;
+        }
+
+        // 2. $iCycle("p", "s") → $cycle($sp("p", "s"))
+        for (const inner of commentText.matchAll(ICYCLE_STRING_IN_COMMENT_RE)) {
+            const callAbsStart = commentStart + (inner.index ?? 0);
+            const callAbsEnd = callAbsStart + inner[0].length;
+            const replacement = buildSpReplacement([inner[1]], inner[2]);
+            edits.push({
+                start: callAbsStart,
+                end: callAbsEnd,
+                replacement,
+            });
+            count += 1;
+        }
+
+        // 3. $iCycle([s0, s1, …], scale) → $cycle($sp(s0, scale).add(s1)…)
+        for (const inner of commentText.matchAll(ICYCLE_ARRAY_IN_COMMENT_RE)) {
+            const callAbsStart = commentStart + (inner.index ?? 0);
+            const callAbsEnd = callAbsStart + inner[0].length;
+            const arrayBody = inner[1];
+            const scaleLit = inner[2];
+            const sources = Array.from(
+                arrayBody.matchAll(ARRAY_STRING_RE),
+                (m) => m[1],
+            );
+            if (sources.length === 0) continue;
+            const replacement = buildSpReplacement(sources, scaleLit);
+            edits.push({
+                start: callAbsStart,
+                end: callAbsEnd,
+                replacement,
+            });
             count += 1;
         }
     }
@@ -234,8 +389,6 @@ function applyEdits(source: string, edits: Edit[]): string {
     let cursor = 0;
     for (const edit of sorted) {
         if (edit.start < cursor) {
-            // Overlapping edits — bail out and return original. Defensive;
-            // the passes above shouldn't produce overlap.
             return source;
         }
         out += source.slice(cursor, edit.start);
@@ -245,3 +398,4 @@ function applyEdits(source: string, edits: Edit[]): string {
     out += source.slice(cursor);
     return out;
 }
+

@@ -97,18 +97,54 @@ describe('migrateCycleCalls', () => {
         expect(result.callsChanged).toBe(1);
     });
 
-    test('does not touch $iCycle', () => {
+    test('rewrites $iCycle(string, scale) to $cycle($sp(string, scale))', () => {
         const source = `$iCycle("0 2 4", "C(major)");`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `$cycle($sp("0 2 4", "C(major)"));`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('rewrites $iCycle(array, scale) — chain via .add', () => {
+        const source = `$iCycle(["0 2 4", "0,4", "5"], "C(major)");`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `$cycle($sp("0 2 4", "C(major)").add("0,4").add("5"));`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('rewrites $iCycle(single-elem array, scale) to plain $sp', () => {
+        const source = `$iCycle(["0 2 4"], "C(major)");`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `$cycle($sp("0 2 4", "C(major)"));`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('migrates $iCycle in line comment', () => {
+        const source = `// $iCycle("0 2 4", "C")`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(`// $cycle($sp("0 2 4", "C"))`);
+        expect(result.commentsChanged).toBe(1);
+    });
+
+    test('migrates $iCycle array form in comment', () => {
+        const source = `// $iCycle(["0 2", "4"], "C")`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `// $cycle($sp("0 2", "C").add("4"))`,
+        );
+        expect(result.commentsChanged).toBe(1);
+    });
+
+    test('idempotent — already $sp-form $iCycle migration unchanged', () => {
+        const source = `$cycle($sp("0 2 4", "C(major)"));`;
         const result = migrateCycleCalls(source);
         expect(result.migrated).toBe(source);
         expect(result.callsChanged).toBe(0);
-        expect(result.commentsChanged).toBe(0);
-    });
-
-    test('does not touch $iCycle in comments', () => {
-        const source = `// $iCycle("0 2 4", "C")`;
-        const result = migrateCycleCalls(source);
-        expect(result.migrated).toBe(source);
     });
 
     test('garbage input — best-effort, no throw', () => {
