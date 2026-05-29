@@ -22,7 +22,6 @@ import type { QueuedTrigger } from '@modular/core';
 import type {
     FileTreeEntry,
     SourceLocationInfo,
-    TransportSnapshot,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
@@ -37,6 +36,11 @@ import {
     scopeBufferKeyToString,
 } from './app/oscilloscope';
 import { useEditorBuffers } from './app/hooks/useEditorBuffers';
+import {
+    setTransport,
+    updateTransport,
+    useTransportLinkEnabled,
+} from './app/transportStore';
 import { useTheme } from './themes/ThemeContext';
 
 /**
@@ -141,8 +145,12 @@ function App() {
     const [scopeViews, setScopeViews] = useState<ScopeView[]>([]);
     const [runningBufferId, setRunningBufferId] = useState<string | null>(null);
     const [sliderDefs, setSliderDefs] = useState<SliderDefinition[]>([]);
-    const [transportState, setTransportState] =
-        useState<TransportSnapshot | null>(null);
+    // Per-frame transport lives in an external store (see transportStore) so
+    // updating it ~60×/s does not re-render the whole App tree — only the
+    // transport display, which subscribes directly. App only needs to know
+    // whether Link is enabled (to drive the Link-only poll loop below); that
+    // selector re-renders App only when the flag flips.
+    const linkEnabled = useTransportLinkEnabled();
 
     const [updateState, setUpdateState] = useState<UpdateNotificationState>({
         status: 'idle',
@@ -546,7 +554,7 @@ function App() {
                         }
                     }
 
-                    setTransportState(transport);
+                    setTransport(transport);
 
                     // Check if a pending UI state should be committed
                     const pending = pendingUIStateRef.current;
@@ -589,7 +597,6 @@ function App() {
     // The main tick loop only runs when isClockRunning; this fills the gap so
     // the phase indicator stays animated even before the user presses play.
     useEffect(() => {
-        const linkEnabled = transportState?.linkEnabled ?? false;
         if (!linkEnabled || isClockRunning) return;
         let cancelled = false;
         let rafId = 0;
@@ -597,7 +604,7 @@ function App() {
             if (cancelled) return;
             void electronAPI.synthesizer.getTransportState().then((t) => {
                 if (cancelled) return;
-                setTransportState(t);
+                setTransport(t);
                 rafId = requestAnimationFrame(tick);
             });
         };
@@ -606,7 +613,7 @@ function App() {
             cancelled = true;
             cancelAnimationFrame(rafId);
         };
-    }, [transportState?.linkEnabled, isClockRunning]);
+    }, [linkEnabled, isClockRunning]);
 
     const handleSaveFile = useCallback(
         async (id?: string) => {
@@ -933,19 +940,14 @@ function App() {
         <div className="app">
             <header className="app-header">
                 <TransportDisplay
-                    transport={transportState}
                     onToggleLink={(enabled) => {
                         void electronAPI.synthesizer.enableLink(enabled);
                         // Optimistically update UI — polling only runs while playing
-                        setTransportState((prev) =>
-                            prev
-                                ? {
-                                      ...prev,
-                                      linkEnabled: enabled,
-                                      linkPeers: enabled ? prev.linkPeers : 0,
-                                  }
-                                : prev,
-                        );
+                        updateTransport((prev) => ({
+                            ...prev,
+                            linkEnabled: enabled,
+                            linkPeers: enabled ? prev.linkPeers : 0,
+                        }));
                     }}
                 />
                 <AudioControls
