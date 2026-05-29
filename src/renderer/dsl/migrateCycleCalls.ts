@@ -6,6 +6,9 @@
  * `$iCycle(src, scale)` → `$cycle($sp(src, scale))`
  * `$iCycle([s0, s1, s2], scale)` → `$cycle($sp(s0, scale).add(s1).add(s2))`
  *
+ * While wrapping a `$cycle` pattern, legacy voltage atoms lose their `v`
+ * suffix (`$cycle("5v 3v")` → `$cycle($p("5 3"))`).
+ *
  * Three kinds of rewrites for each:
  * - Direct call sites: wrap / transform the literal arguments.
  * - Variable assignments: if a variable passed to `$cycle` is assigned

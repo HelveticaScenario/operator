@@ -19,6 +19,66 @@ describe('migrateCycleCalls', () => {
         expect(result.callsChanged).toBe(0);
     });
 
+    test('strips voltage suffix while wrapping', () => {
+        const result = migrateCycleCalls(`$cycle("5v 3v");`);
+        expect(result.migrated).toBe(`$cycle($p("5 3"));`);
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('strips decimal and negative voltage atoms', () => {
+        const result = migrateCycleCalls(`$cycle("0.5v -3v 12v");`);
+        expect(result.migrated).toBe(`$cycle($p("0.5 -3 12"));`);
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('voltage suffix is case-insensitive', () => {
+        const result = migrateCycleCalls(`$cycle("5V 2v");`);
+        expect(result.migrated).toBe(`$cycle($p("5 2"));`);
+    });
+
+    test('leaves note octaves and identifiers intact', () => {
+        // c5 is a note (untouched); 5v is a voltage atom (stripped);
+        // 5val is an identifier-ish token (untouched).
+        const result = migrateCycleCalls(`$cycle("c5 5v 5val");`);
+        expect(result.migrated).toBe(`$cycle($p("c5 5 5val"));`);
+    });
+
+    test('strips voltage in traced variable assignment', () => {
+        const source = `const pat = "5v 7v";\n$cycle(pat);`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            `const pat = $p("5 7");\n$cycle(pat);`,
+        );
+        expect(result.assignmentsChanged).toBe(1);
+    });
+
+    test('strips voltage in comment $cycle', () => {
+        const result = migrateCycleCalls(`// old: $cycle("5v")`);
+        expect(result.migrated).toBe(`// old: $cycle($p("5"))`);
+        expect(result.commentsChanged).toBe(1);
+    });
+
+    test('strips voltage inside template literal', () => {
+        const result = migrateCycleCalls('$cycle(`${root} 5v`);');
+        expect(result.migrated).toBe('$cycle($p(`${root} 5`));');
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('leaves already $p()-wrapped voltage atoms untouched', () => {
+        // Out of scope: only the calls being wrapped are normalized.
+        const source = `$cycle($p("5v 3v"));`;
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(source);
+        expect(result.callsChanged).toBe(0);
+    });
+
+    test('idempotent across a second migration of stripped output', () => {
+        const once = migrateCycleCalls(`$cycle("5v 3v");`).migrated;
+        const twice = migrateCycleCalls(once);
+        expect(twice.migrated).toBe(once);
+        expect(twice.callsChanged).toBe(0);
+    });
+
     test('traces variable with single string assignment', () => {
         const source = `const pat = "c4 e4";\n$cycle(pat);`;
         const result = migrateCycleCalls(source);
