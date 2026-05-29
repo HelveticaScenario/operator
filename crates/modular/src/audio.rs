@@ -40,7 +40,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use modular_core::patch::Patch;
-use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey};
+use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges};
 use std::time::Instant;
 
 use crate::commands::{
@@ -797,6 +797,9 @@ struct ScopeXyPrivate {
   x: [f32; SCOPE_XY_CAPACITY],
   y: [f32; SCOPE_XY_CAPACITY],
   write_idx: usize,
+  /// Samples written so far, saturating at CAPACITY. Lets `snapshot` return
+  /// only valid samples before the ring first fills (no leading zeros).
+  filled: usize,
 }
 
 /// Lock-free single-producer XY scope buffer.
@@ -814,6 +817,8 @@ pub struct ScopeXyBuffer {
   pub_x: UnsafeCell<[f32; SCOPE_XY_CAPACITY]>,
   pub_y: UnsafeCell<[f32; SCOPE_XY_CAPACITY]>,
   pub_head: AtomicU32,
+  /// Published count of valid samples (saturates at CAPACITY).
+  pub_filled: AtomicU32,
 }
 
 // SAFETY: the audio thread is the sole writer of both the private ring and the
@@ -829,11 +834,13 @@ impl ScopeXyBuffer {
         x: [0.0; SCOPE_XY_CAPACITY],
         y: [0.0; SCOPE_XY_CAPACITY],
         write_idx: 0,
+        filled: 0,
       }),
       seq: AtomicU32::new(0),
       pub_x: UnsafeCell::new([0.0; SCOPE_XY_CAPACITY]),
       pub_y: UnsafeCell::new([0.0; SCOPE_XY_CAPACITY]),
       pub_head: AtomicU32::new(0),
+      pub_filled: AtomicU32::new(0),
     }
   }
 
@@ -845,6 +852,9 @@ impl ScopeXyBuffer {
     p.x[p.write_idx] = xv;
     p.y[p.write_idx] = yv;
     p.write_idx = (p.write_idx + 1) % SCOPE_XY_CAPACITY;
+    if p.filled < SCOPE_XY_CAPACITY {
+      p.filled += 1;
+    }
   }
 
   /// Copy the private ring into the published region under the SeqLock. Audio
@@ -853,23 +863,31 @@ impl ScopeXyBuffer {
     // SAFETY: audio thread is the sole writer; the odd sequence value below
     // tells a concurrent reader its copy is mid-update and must be retried.
     let p = unsafe { &*self.private.get() };
-    self.seq.fetch_add(1, Ordering::Release); // -> odd: publish in flight
+    // Mark the publish in flight (odd), then a release fence so the data
+    // writes below cannot be reordered ahead of the marker. A plain Release on
+    // the increment would only bound prior accesses, not the following copy;
+    // the fence is what guarantees a reader observing even→even saw a complete
+    // frame. The closing Release increment bounds the data writes from below.
+    self.seq.fetch_add(1, Ordering::Relaxed); // -> odd: publish in flight
+    std::sync::atomic::fence(Ordering::Release);
     unsafe {
       (*self.pub_x.get()).copy_from_slice(&p.x);
       (*self.pub_y.get()).copy_from_slice(&p.y);
     }
     self.pub_head.store(p.write_idx as u32, Ordering::Relaxed);
+    self.pub_filled.store(p.filled as u32, Ordering::Relaxed);
     self.seq.fetch_add(1, Ordering::Release); // -> even: stable
   }
 
   /// Read the published ring on the main thread, retrying while a publish is
-  /// in flight. Returns (x, y, head). x/y are CAPACITY-long in chronological
-  /// order: element 0 is the oldest sample of the window. Vec allocation is
+  /// in flight. Returns (x, y) in chronological order: element 0 is the oldest
+  /// sample of the window, the last element the newest. Before the ring first
+  /// fills, only the samples written so far are returned. Vec allocation is
   /// safe here (main thread).
-  pub fn snapshot(&self) -> (Float32Array, Float32Array, u32) {
+  pub fn snapshot(&self) -> (Float32Array, Float32Array) {
     let mut x = vec![0.0f32; SCOPE_XY_CAPACITY];
     let mut y = vec![0.0f32; SCOPE_XY_CAPACITY];
-    let head = loop {
+    let (head, filled) = loop {
       let s1 = self.seq.load(Ordering::Acquire);
       if s1 & 1 != 0 {
         std::hint::spin_loop();
@@ -883,15 +901,29 @@ impl ScopeXyBuffer {
         y.copy_from_slice(&*self.pub_y.get());
       }
       let h = self.pub_head.load(Ordering::Relaxed);
-      let s2 = self.seq.load(Ordering::Acquire);
+      let f = self.pub_filled.load(Ordering::Relaxed);
+      // Acquire fence so the data reads above complete before the second
+      // sequence load; pairs with the writer's release fence so a publish that
+      // starts mid-read is reliably caught by the s1 == s2 check below.
+      std::sync::atomic::fence(Ordering::Acquire);
+      let s2 = self.seq.load(Ordering::Relaxed);
       if s1 == s2 {
-        break h as usize;
+        break (h as usize, f as usize);
       }
     };
-    // Rotate the ring so element 0 is the oldest sample (chronological order).
-    x.rotate_left(head);
-    y.rotate_left(head);
-    (Float32Array::new(x), Float32Array::new(y), head as u32)
+    if filled >= SCOPE_XY_CAPACITY {
+      // Full ring: `head` (write_idx) points at the oldest slot; rotate it to
+      // the front so element 0 is the oldest sample.
+      x.rotate_left(head);
+      y.rotate_left(head);
+    } else {
+      // Partially filled: slots 0..filled are already chronological (no
+      // wraparound yet); drop the zero-initialized tail so the renderer never
+      // draws a phantom stroke through the leading zeros.
+      x.truncate(filled);
+      y.truncate(filled);
+    }
+    (Float32Array::new(x), Float32Array::new(y))
   }
 }
 
@@ -961,6 +993,11 @@ pub struct AudioState {
   /// XY scope collection - shared with audio thread for UI reads.
   /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
   scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
+  /// Display ranges for the active $scopeXY (global, last-call-wins). Set on
+  /// each patch update from `ScopeXy.x_range`/`y_range`; read on the main
+  /// thread by `get_scope_xy_buffers` to ship the volt→clip window. Main-thread
+  /// only, never shared with the audio thread.
+  scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   /// Recording writer - shared with audio thread
   recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   /// Recording path
@@ -1018,6 +1055,7 @@ impl AudioState {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
       scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_ranges: Arc::new(Mutex::new(None)),
       recording_writer: Arc::new(Mutex::new(None)),
       recording_path: Arc::new(Mutex::new(None)),
       sample_rate,
@@ -1163,16 +1201,16 @@ impl AudioState {
       .collect()
   }
 
-  /// Snapshot every active $scopeXY pair as (key, xSamples, ySamples, head).
+  /// Snapshot every active $scopeXY pair as (key, xSamples, ySamples, ranges).
   /// Mirrors `get_audio_buffers` — skipped while stopped, never blocks on
   /// the audio-thread mutex.
   pub fn get_scope_xy_buffers(
     &self,
-  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, u32)> {
+  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
     if self.is_stopped() {
       return Vec::new();
     }
-    // The collection mutex now guards only membership, which the audio thread
+    // The collection mutex guards only membership, which the audio thread
     // touches solely on patch updates (microseconds). Spin try_lock instead
     // of taking the lock so the audio thread is never blocked by this read; a
     // patch-swap collision resolves within a few spins. The buffer contents
@@ -1188,10 +1226,17 @@ impl AudioState {
       }
       std::hint::spin_loop();
     };
+    // The active display window applies to every pair (global $scopeXY).
+    let ranges = self.scope_xy_ranges.lock().unwrap_or(ScopeXyRanges {
+      x_min: -5.0,
+      x_max: 5.0,
+      y_min: -5.0,
+      y_max: 5.0,
+    });
     let mut out = Vec::with_capacity(lock.len());
     for (key, buffer) in lock.iter() {
-      let (x, y, head) = buffer.snapshot();
-      out.push((key.clone(), x, y, head));
+      let (x, y) = buffer.snapshot();
+      out.push((key.clone(), x, y, ranges));
     }
     out
   }
@@ -1294,6 +1339,16 @@ impl AudioState {
         .map(|key| (key.clone(), Arc::new(ScopeXyBuffer::new())))
         .collect();
     }
+
+    // Publish the active display window (global, last-call-wins). Updated every
+    // patch update — including range-only changes that leave the pair keys
+    // untouched — so a renderer poll always sees the current volt→clip mapping.
+    *self.scope_xy_ranges.lock() = scope_xy.as_ref().map(|sx| ScopeXyRanges {
+      x_min: sx.x_range.0,
+      x_max: sx.x_range.1,
+      y_min: sx.y_range.0,
+      y_max: sx.y_range.1,
+    });
 
     // Pass 1 — deserialize every module's params and collect the cable
     // adjacency. Keep the deserialized params alongside the module type so
@@ -1667,6 +1722,23 @@ impl AudioProcessor {
               let _ = self.garbage_tx.push(GarbageItem::Module(module));
             }
           }
+          // Drop the audio-private XY scope mirror to match the main thread's
+          // `scope_xy_collection.clear()` on stop. Without this, a stopped
+          // rerun re-adds each pair against the cleared collection while these
+          // stale entries remain, duplicating the per-sample writes and pinning
+          // the orphaned buffers. Ship them to the garbage queue so their final
+          // drop lands on the main thread; on a full queue keep the buffer
+          // (don't drop the last ref here) and let the next reconcile retry.
+          {
+            let garbage_tx = &mut self.garbage_tx;
+            let scope_xy_audio = &mut self.scope_xy_audio;
+            scope_xy_audio.retain(
+              |(_k, buf)| match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
+                Ok(()) => false,
+                Err(_) => true,
+              },
+            );
+          }
           self.patch.insert_audio_in();
           self.patch.rebuild_message_listeners();
         }
@@ -1849,8 +1921,14 @@ impl AudioProcessor {
         if m.contains_key(k) {
           true
         } else {
-          let _ = garbage_tx.push(GarbageItem::ScopeXy(buf.clone()));
-          false
+          // Evict — but only if the garbage queue accepts it. On a full queue
+          // `push` hands the item back; dropping it here would free the
+          // buffer's last strong ref on the audio thread. Keep it instead and
+          // retry on the next reconcile so the final drop stays off this thread.
+          match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
+            Ok(()) => false,
+            Err(_) => true,
+          }
         }
       });
     }
@@ -2719,6 +2797,48 @@ mod tests {
   use modular_core::types::ModuleIdRemap;
   use modular_core::types::{Message, MessageHandler, MessageTag, MidiNoteOn};
   use std::sync::atomic::AtomicUsize;
+
+  // ============================================================================
+  // ScopeXyBuffer tests
+  // ============================================================================
+
+  #[test]
+  fn test_scope_xy_snapshot_partial_fill_trims_zeros() {
+    let buf = ScopeXyBuffer::new();
+    buf.push(1.0, 10.0);
+    buf.push(2.0, 20.0);
+    buf.push(3.0, 30.0);
+    buf.publish();
+    let (x, y) = buf.snapshot();
+    // Only the written samples are returned, chronological, no zero padding.
+    assert_eq!(&x[..], &[1.0, 2.0, 3.0]);
+    assert_eq!(&y[..], &[10.0, 20.0, 30.0]);
+  }
+
+  #[test]
+  fn test_scope_xy_snapshot_full_ring_is_chronological() {
+    let buf = ScopeXyBuffer::new();
+    // Overflow the ring so it wraps; the newest CAPACITY samples are retained.
+    let total = SCOPE_XY_CAPACITY + 5;
+    for i in 0..total {
+      buf.push(i as f32, 0.0);
+    }
+    buf.publish();
+    let (x, _y) = buf.snapshot();
+    assert_eq!(x.len(), SCOPE_XY_CAPACITY);
+    // Element 0 is the oldest retained sample, last element the newest.
+    assert_eq!(x[0], (total - SCOPE_XY_CAPACITY) as f32);
+    assert_eq!(x[SCOPE_XY_CAPACITY - 1], (total - 1) as f32);
+  }
+
+  #[test]
+  fn test_scope_xy_snapshot_empty() {
+    let buf = ScopeXyBuffer::new();
+    buf.publish();
+    let (x, y) = buf.snapshot();
+    assert!(x.is_empty());
+    assert!(y.is_empty());
+  }
 
   // ============================================================================
   // AudioProcessor + command queue tests

@@ -995,16 +995,16 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
-                            {buffers.map((b) => (
-                                <ScopeXYBackground
-                                    key={b.id}
-                                    paused={b.id !== activeBufferId}
-                                    intensity={xyScopeIntensity}
-                                    persistence={xyScopePersistence}
-                                    upsample={xyScopeUpsample}
-                                    lineWidth={xyScopeLineWidth}
-                                />
-                            ))}
+                            {/* One shared canvas behind the editor. $scopeXY is
+                                global, so every buffer would render identical
+                                content; a single canvas (one WebGL context)
+                                avoids exhausting the browser's context budget. */}
+                            <ScopeXYBackground
+                                intensity={xyScopeIntensity}
+                                persistence={xyScopePersistence}
+                                upsample={xyScopeUpsample}
+                                lineWidth={xyScopeLineWidth}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}

@@ -18,7 +18,7 @@ use std::{collections::HashMap, sync::Arc};
 use modular_core::{
   PatchGraph,
   dsp::schema,
-  types::{ROOT_CLOCK_ID, ScopeBufferKey, ScopeStats, ScopeXyBufferKey},
+  types::{ROOT_CLOCK_ID, ScopeBufferKey, ScopeStats, ScopeXyBufferKey, ScopeXyRanges},
 };
 use napi::Result;
 use napi_derive::napi;
@@ -1050,12 +1050,14 @@ impl Synthesizer {
     self.state.get_audio_buffers()
   }
 
-  /// Snapshot every active $scopeXY pair as (key, x samples, y samples, head).
-  /// `head` is the write index — the renderer can use it to find the newest sample.
+  /// Snapshot every active $scopeXY pair as (key, x samples, y samples,
+  /// ranges). Samples are chronological — element 0 is the oldest of the
+  /// window, the last element the newest — and `ranges` is the per-axis volt
+  /// window the renderer maps into clip space.
   #[napi]
   pub fn get_scope_xy(
     &self,
-  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, u32)> {
+  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
     self.state.get_scope_xy_buffers()
   }
 

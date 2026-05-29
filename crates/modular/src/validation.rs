@@ -535,6 +535,69 @@ mod tests {
     assert!(validate_patch(&patch, &schemas).is_ok());
   }
 
+  fn patch_with_scope_xy(x_port: &str, x_module: &str) -> PatchGraph {
+    use modular_core::types::{ScopeChannel, ScopeXy, ScopeXyPair};
+    PatchGraph {
+      modules: vec![ModuleState {
+        id: "sine-1".to_string(),
+        module_type: "$sine".to_string(),
+        id_is_explicit: None,
+        params: json!({ "freq": 4.0 }),
+      }],
+      module_id_remaps: None,
+      scopes: vec![],
+      scope_xy: Some(ScopeXy {
+        pairs: vec![ScopeXyPair {
+          x: ScopeChannel {
+            module_id: x_module.to_string(),
+            port_name: x_port.to_string(),
+            channel: 0,
+          },
+          y: ScopeChannel {
+            module_id: "sine-1".to_string(),
+            port_name: "output".to_string(),
+            channel: 0,
+          },
+        }],
+        x_range: (-5.0, 5.0),
+        y_range: (-5.0, 5.0),
+      }),
+    }
+  }
+
+  #[test]
+  fn test_scope_xy_valid() {
+    let schemas = schemas();
+    let patch = patch_with_scope_xy("output", "sine-1");
+    assert!(validate_patch(&patch, &schemas).is_ok());
+  }
+
+  #[test]
+  fn test_scope_xy_missing_module() {
+    let schemas = schemas();
+    let patch = patch_with_scope_xy("output", "ghost");
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+      errors
+        .iter()
+        .any(|e| e.field == "scopeXY" && e.message.contains("missing module")),
+      "expected a missing-module scopeXY error, got {errors:?}"
+    );
+  }
+
+  #[test]
+  fn test_scope_xy_missing_port() {
+    let schemas = schemas();
+    let patch = patch_with_scope_xy("nope", "sine-1");
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+      errors
+        .iter()
+        .any(|e| e.field == "scopeXY" && e.message.contains("missing output port")),
+      "expected a missing-output-port scopeXY error, got {errors:?}"
+    );
+  }
+
   #[test]
   fn test_unknown_module_type() {
     let schemas = schemas();

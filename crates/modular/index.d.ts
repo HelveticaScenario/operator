@@ -29,10 +29,12 @@ export declare class Synthesizer {
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
   /**
-   * Snapshot every active $scopeXY pair as (key, x samples, y samples, head).
-   * `head` is the write index — the renderer can use it to find the newest sample.
+   * Snapshot every active $scopeXY pair as (key, x samples, y samples,
+   * ranges). Samples are chronological — element 0 is the oldest of the
+   * window, the last element the newest — and `ranges` is the per-axis volt
+   * window the renderer maps into clip space.
    */
-  getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, number]>
+  getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges]>
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
@@ -479,6 +481,21 @@ export interface ScopeXyBufferKey {
 export interface ScopeXyPair {
   x: ScopeChannel
   y: ScopeChannel
+}
+
+/**
+ * Per-axis display window shipped alongside each `$scopeXY` snapshot so the
+ * renderer maps sampled volts to the configured clip-space window.
+ */
+export interface ScopeXyRanges {
+  /** Horizontal voltage window minimum. */
+  xMin: number
+  /** Horizontal voltage window maximum. */
+  xMax: number
+  /** Vertical voltage window minimum. */
+  yMin: number
+  /** Vertical voltage window maximum. */
+  yMax: number
 }
 
 export interface SignalParamSchema {

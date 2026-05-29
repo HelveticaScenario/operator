@@ -205,7 +205,19 @@ export function executePatchScript(
         const xRange = validateRange(config?.xRange, 'x');
         const yRange = validateRange(config?.yRange, 'y');
 
-        const n = Math.max(xs.length, ys.length);
+        // Cap traces to what the renderer actually draws (MAX_TRACES in
+        // scopexy/pipeline.ts). Each pair allocates a sample-rate ring buffer
+        // and costs a per-sample read on the audio thread, so an uncapped
+        // max(len(x), len(y)) would let user input balloon audio-thread work
+        // for traces that are never shown.
+        const MAX_SCOPE_XY_TRACES = 16;
+        const requested = Math.max(xs.length, ys.length);
+        const n = Math.min(requested, MAX_SCOPE_XY_TRACES);
+        if (requested > MAX_SCOPE_XY_TRACES) {
+            console.warn(
+                `$scopeXY: ${requested} traces requested; drawing the first ${MAX_SCOPE_XY_TRACES}.`,
+            );
+        }
         const pairs: { x: ModuleOutput; y: ModuleOutput }[] = [];
         for (let i = 0; i < n; i++) {
             pairs.push({ x: xs[i % xs.length], y: ys[i % ys.length] });

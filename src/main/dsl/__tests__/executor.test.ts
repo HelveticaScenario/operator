@@ -1401,4 +1401,24 @@ describe('$scopeXY', () => {
             `),
         ).toThrow(/xRange/);
     });
+
+    test('bad yRange throws', () => {
+        expect(() =>
+            execPatch(`
+                const a = $sine($hz(440))
+                $scopeXY(a, a, { yRange: [10, 0] })
+                a.out()
+            `),
+        ).toThrow(/yRange/);
+    });
+
+    test('non-finite range throws', () => {
+        expect(() =>
+            execPatch(`
+                const a = $sine($hz(440))
+                $scopeXY(a, a, { yRange: [0, Infinity] })
+                a.out()
+            `),
+        ).toThrow(/yRange/);
+    });
 });

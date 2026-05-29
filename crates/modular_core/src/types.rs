@@ -2686,6 +2686,21 @@ pub struct ScopeXy {
     pub y_range: (f64, f64),
 }
 
+/// Per-axis display window shipped alongside each `$scopeXY` snapshot so the
+/// renderer maps sampled volts to the configured clip-space window.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[napi(object)]
+pub struct ScopeXyRanges {
+    /// Horizontal voltage window minimum.
+    pub x_min: f64,
+    /// Horizontal voltage window maximum.
+    pub x_max: f64,
+    /// Vertical voltage window minimum.
+    pub y_min: f64,
+    /// Vertical voltage window maximum.
+    pub y_max: f64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]

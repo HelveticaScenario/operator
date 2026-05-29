@@ -63,12 +63,6 @@ function readScopeColorsRgb(): { beam: Rgb; background: Rgb } {
 }
 
 interface ScopeXYBackgroundProps {
-    /**
-     * When true, the RAF loop pauses and the canvas retains whatever was last
-     * drawn. Used to keep one canvas per editor buffer alive while only the
-     * active buffer's canvas updates.
-     */
-    paused?: boolean;
     /** Beam intensity multiplier (0..1). */
     intensity?: number;
     /**
@@ -95,7 +89,6 @@ const DEFAULT_LINE_WIDTH = 0.012;
  * pipeline.ts for the pass-by-pass breakdown.
  */
 export function ScopeXYBackground({
-    paused = false,
     intensity = DEFAULT_INTENSITY,
     persistence = DEFAULT_PERSISTENCE,
     upsample = DEFAULT_UPSAMPLE,
@@ -161,12 +154,11 @@ export function ScopeXYBackground({
     }, [lineWidth]);
 
     useEffect(() => {
-        if (paused) return;
         let cancelled = false;
         let rafId = 0;
-        // Reads are now reliable: the audio thread publishes each buffer to a
-        // lock-free SeqLock region, so an empty result means the engine is
-        // stopped or the patch has no $scopeXY. Clear immediately on empty.
+        // The audio thread publishes each buffer to a lock-free SeqLock region,
+        // so an empty result means the engine is stopped or the patch has no
+        // $scopeXY. Clear immediately on empty.
         const tick = () => {
             if (cancelled) return;
             const pipeline = pipelineRef.current;
@@ -184,7 +176,12 @@ export function ScopeXYBackground({
                         pipeline.draw([]);
                     } else {
                         const pairs: ScopeXYPairData[] = rows.map(
-                            ([, x, y, head]) => ({ head, x, y }),
+                            ([, x, y, ranges]) => ({
+                                x,
+                                y,
+                                xRange: [ranges.xMin, ranges.xMax],
+                                yRange: [ranges.yMin, ranges.yMax],
+                            }),
                         );
                         pipeline.draw(pairs);
                     }
@@ -201,16 +198,7 @@ export function ScopeXYBackground({
             cancelled = true;
             cancelAnimationFrame(rafId);
         };
-    }, [paused]);
+    }, []);
 
-    return (
-        <canvas
-            ref={canvasRef}
-            className={
-                paused
-                    ? 'scope-xy-background scope-xy-background--paused'
-                    : 'scope-xy-background'
-            }
-        />
-    );
+    return <canvas ref={canvasRef} className="scope-xy-background" />;
 }

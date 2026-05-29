@@ -68,12 +68,6 @@
     pointer-events: none;
 }
 
-/* Inactive per-buffer canvases stay mounted (GL state preserved) but
-   are hidden from compositing and skip their RAF loop. */
-.scope-xy-background--paused {
-    visibility: hidden;
-}
-
 .patch-editor {
     flex: 1;
     overflow: visible;
