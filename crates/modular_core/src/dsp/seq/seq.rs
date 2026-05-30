@@ -556,17 +556,31 @@ struct PendingEvent {
 /// never written here.
 fn resolve_hap_index(storage: &SeqCycleStorage, cached: &CachedHap) -> Option<usize> {
     const EPS: f64 = 1e-6;
-    let matches = |hap: &super::seq_value::SeqCycleHap| {
+    let geometry_matches = |hap: &super::seq_value::SeqCycleHap| {
         (hap.whole_begin - cached.whole_begin).abs() < EPS
             && (hap.whole_end - cached.whole_end).abs() < EPS
     };
+    // Held value disambiguates two simultaneous same-geometry haps (a chord /
+    // stacked source) that would otherwise alias onto the same index. It is a
+    // tie-breaker, not a requirement: a live state transfer onto a pattern
+    // with different values must still re-resolve by geometry alone.
+    let value_matches = |value: &SeqValue| match (value, &cached.value) {
+        (SeqValue::Voltage(a), SeqValue::Voltage(b)) => (a - b).abs() < EPS,
+        (SeqValue::Rest, SeqValue::Rest) => true,
+        _ => false,
+    };
     let idx = cached.hap_index as usize;
     if let Some(hap) = storage.haps.get(idx)
-        && matches(hap)
+        && geometry_matches(hap)
+        && value_matches(&hap.value)
     {
         return Some(idx);
     }
-    storage.haps.iter().position(matches)
+    storage
+        .haps
+        .iter()
+        .position(|h| geometry_matches(h) && value_matches(&h.value))
+        .or_else(|| storage.haps.iter().position(geometry_matches))
 }
 
 impl crate::types::StatefulModule for Seq {
@@ -617,8 +631,7 @@ impl crate::types::StatefulModule for Seq {
             // pattern_idx > 0 to those.
             let is_multi = self.params.pattern.is_multi_source();
             let mut param_spans = serde_json::Map::new();
-            if !is_multi && num_sources == 1 {
-                let meta = &per_source[0];
+            if !is_multi && num_sources == 1 && let Some(meta) = per_source.first() {
                 param_spans.insert(
                     "pattern".to_string(),
                     serde_json::json!({

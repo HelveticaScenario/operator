@@ -55,7 +55,7 @@ export type MiniAST =
     | { Stack: MiniAST[] }
     | { RandomChoice: [MiniAST[], number] }
     | { Fast: [MiniAST, MiniASTF64] }
-    | { Slow: [MiniAST, MiniAST] }
+    | { Slow: [MiniAST, MiniASTF64] }
     | { Replicate: [MiniAST, number] }
     | { Degrade: [MiniAST, number | null, number] }
     | {

@@ -237,7 +237,7 @@ pub enum MiniAST {
     Fast(Box<MiniAST>, Box<MiniASTF64>),
 
     /// Slow modifier: pattern / factor.
-    Slow(Box<MiniAST>, Box<MiniAST>),
+    Slow(Box<MiniAST>, Box<MiniASTF64>),
 
     /// Replicate: pattern ! n (repeat n times).
     /// Count is a plain u32 since Strudel doesn't support patterned replicate counts.
@@ -459,8 +459,7 @@ fn collect_leaf_spans_recursive(ast: &MiniAST, spans: &mut Vec<(usize, usize)>) 
         }
         MiniAST::Slow(pattern, factor) => {
             collect_leaf_spans_recursive(pattern, spans);
-            // Slow's factor is MiniAST, not MiniASTF64
-            collect_leaf_spans_recursive(factor, spans);
+            collect_f64_spans(factor, spans);
         }
         MiniAST::Replicate(pattern, _count) => {
             collect_leaf_spans_recursive(pattern, spans);
@@ -834,9 +833,8 @@ pub(crate) fn assign_seeds(ast: &mut MiniAST, counter: &mut u64) {
         MiniAST::Fast(pattern, _factor) => {
             assign_seeds(pattern, counter);
         }
-        MiniAST::Slow(pattern, factor) => {
+        MiniAST::Slow(pattern, _factor) => {
             assign_seeds(pattern, counter);
-            assign_seeds(factor, counter);
         }
         MiniAST::Replicate(pattern, _) => {
             assign_seeds(pattern, counter);

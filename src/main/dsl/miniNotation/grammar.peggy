@@ -85,16 +85,18 @@ Start
   = _ s:StackExpr _ { return s; }
 
 // Stack: comma-separated patterns play simultaneously.
-// Each element may itself be a feet-separated chain (`a b . c d`) which
-// fastcats its dot-separated sub-sequences as nested elements.
+// Each element may itself be a feet-separated chain (`a b . c d`), wrapped
+// in a Sequence node whose entries each take an equal slice of the cycle.
 StackExpr
   = head:FeetExpr tail:(_ "," _ @FeetExpr)* {
       if (tail.length === 0) return head;
       return { Stack: [head, ...tail] };
     }
 
-// Feet separator: `a b . c d` = sequence of [a b] then [c d], each taking
-// half the cycle. Matches strudel's `dot_tail` → `feet` alignment.
+// Feet separator: `a b . c d` wraps the dot-separated sub-sequences [a b]
+// and [c d] in a Sequence node (which convert.rs lowers identically to a
+// fastcat), each taking an equal slice of the cycle. Mirrors strudel's
+// `dot_tail` → `feet` alignment.
 FeetExpr
   = head:SequenceExpr tail:(_ "." _ @SequenceExpr)* {
       if (tail.length === 0) return head;
@@ -287,13 +289,14 @@ FastMod
     }
 
 SlowMod
-  = "/" op:ModOperand {
+  = "/" op:ModOperandF64 {
       return (ast, _c) => ({ Slow: [ast, op] });
     }
 
 Replicate
   = "!" n:Integer? {
       const count = n === null ? 2 : n;
+      if (count < 0) error("Replicate count must be a non-negative integer");
       return (ast, _c) => ({ Replicate: [ast, count] });
     }
 
@@ -316,14 +319,6 @@ Euclidean
 
 // Modifier operand is a number, a fast subsequence, or a slow subsequence,
 // each projected into the modifier's expected AST type.
-
-ModOperand
-  = r:OperandRandomChoice { return r; }
-  / n:Number {
-      return { Pure: located({ Number: n }, location()) };
-    }
-  / "[" _ s:OperandStackExpr _ "]" { return s.fast; }
-  / "<" _ s:OperandStackExpr _ ">" { return s.slow; }
 
 ModOperandF64
   = r:OperandRandomChoiceF64 { return r; }
@@ -353,47 +348,6 @@ ModOperandI32
 // Operand subsequence parsing — much simpler than full StackExpr since
 // modifier operands only carry numeric values. Each operand type has its
 // own thin expansion.
-
-OperandStackExpr
-  = first:OperandSequence tail:(_ "," _ @OperandSequence)* {
-      if (tail.length === 0) {
-        return { fast: { FastCat: first.asCat }, slow: { SlowCat: first.asCat } };
-      }
-      const all = [first, ...tail];
-      return {
-        fast: { Stack: all.map(s => ({ FastCat: s.asCat })) },
-        slow: { Stack: all.map(s => ({ SlowCat: s.asCat })) },
-      };
-    }
-
-OperandSequence
-  = elems:(_ @OperandSeqEntry)+ {
-      return { asCat: applyElongation(elems) };
-    }
-
-OperandSeqEntry
-  = "_" !IdentCont { return { kind: 'elongation' }; }
-  / e:OperandElement { return { kind: 'element', entry: e }; }
-
-OperandElement
-  = r:OperandRandomChoice weight:Weight? { return [r, weight]; }
-  / base:OperandBase weight:Weight? { return [base, weight]; }
-
-OperandRandomChoice
-  = first:OperandChoice rest:(_ "|" _ @OperandChoice)+ {
-      const seed = ctx.nextSeed();
-      return { RandomChoice: [[first, ...rest], seed] };
-    }
-
-OperandChoice
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
-  / n:Number { return { Pure: located({ Number: n }, location()) }; }
-
-OperandBase
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
-  / n:Number { return { Pure: located({ Number: n }, location()) }; }
-  / "[" _ s:OperandStackExpr _ "]" { return s.fast; }
-  / "<" _ s:OperandStackExpr _ ">" { return s.slow; }
 
 // ------ f64 operand subtree ------
 

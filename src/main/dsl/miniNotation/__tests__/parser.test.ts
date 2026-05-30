@@ -399,5 +399,18 @@ describe('feet `.`', () => {
         const r = $p('{c4 . e4 g4, f4 a4 . b4}');
         expect('Polymeter' in r.ast).toBe(true);
     });
+
+    test('bare feet wrap dot-separated sub-sequences in a Sequence node', () => {
+        // Pins the AST shape convert.rs lowers identically to a fastcat — a
+        // future FastCat-vs-Sequence change here would silently mis-render
+        // feet (the Rust descent parser cannot parse `.`, so the parity gate
+        // does not cover this construct).
+        const r = $p('0 1 . 2 3');
+        expect('Sequence' in r.ast).toBe(true);
+        if ('Sequence' in r.ast) {
+            expect(r.ast.Sequence).toHaveLength(2);
+            expect(r.ast.Sequence.every(([, w]) => w === null)).toBe(true);
+        }
+    });
 });
 

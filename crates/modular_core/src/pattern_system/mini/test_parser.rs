@@ -179,7 +179,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(b'/') => {
                     self.pos += 1;
-                    let op = self.mod_operand()?;
+                    let op = self.mod_operand_f64()?;
                     ast = MiniAST::Slow(Box::new(ast), Box::new(op));
                 }
                 Some(b'!') => {
@@ -458,25 +458,6 @@ impl<'a> Parser<'a> {
     }
 
     // ------ modifier operand parsers ------
-
-    fn mod_operand(&mut self) -> ParseResult<MiniAST> {
-        match self.peek() {
-            Some(b'[') | Some(b'<') => {
-                // Full stack expr — reuse element_base.
-                self.element_base()
-            }
-            _ => {
-                let start = self.pos;
-                let n = self.number()?;
-                let end = self.pos;
-                Ok(MiniAST::Pure(Located::new(
-                    AtomValue::Number(n),
-                    start,
-                    end,
-                )))
-            }
-        }
-    }
 
     fn mod_operand_f64(&mut self) -> ParseResult<MiniASTF64> {
         match self.peek() {
@@ -761,6 +742,32 @@ mod tests {
             }
             other => panic!("expected Pure, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn patterned_slow_factor_is_applied_not_collapsed() {
+        use crate::pattern_system::Fraction;
+
+        let onsets = |source: &str| -> usize {
+            parse_pattern::<f64>(source)
+                .unwrap()
+                .query_arc(Fraction::from_integer(0), Fraction::from_integer(2))
+                .iter()
+                .filter(|h| h.has_onset())
+                .count()
+        };
+
+        // Regression: a patterned slow factor (`/[..]`, `/<..>`) used to be
+        // scalarized and fall back to slow(1), leaving the pattern un-slowed.
+        // A factor of `[2 2]` is 2 everywhere, so `0/[2 2]` must slow exactly
+        // like the scalar `0/2` and halve the onset density of bare `0`.
+        assert_eq!(onsets("0"), 2);
+        assert_eq!(onsets("0/2"), 1);
+        assert_eq!(onsets("0/[2 2]"), onsets("0/2"));
+        assert!(
+            onsets("0/[2 2]") < onsets("0"),
+            "patterned slow factor must actually slow the pattern",
+        );
     }
 
     #[test]

@@ -108,8 +108,7 @@ function walkMini(ast: MiniAST, out: Span[]): void {
     if ('Slow' in ast) {
         const [pattern, factor] = ast.Slow;
         walkMini(pattern, out);
-        // Slow's factor is MiniAST, not MiniASTF64 (matches the Rust type).
-        walkMini(factor, out);
+        walkF64(factor, out);
         return;
     }
     if ('Euclidean' in ast) {

@@ -52,8 +52,9 @@ interface AssignmentSite {
     rhsEnd: number;
     rhsText: string;
     kind: 'string' | 'non-string';
-    /** Nearest enclosing function-like scope, or undefined for file scope. */
-    scope: Node | undefined;
+    /** Identifier node being declared/assigned — resolves the binding so a
+     *  rewrite never touches a different declaration that shares the name. */
+    nameNode: Node;
     /** Original RHS expression node (kept for downstream array inspection). */
     initializerNode: Expression;
 }
@@ -152,7 +153,13 @@ export function migrateCycleCalls(source: string): MigrationResult {
                     sites &&
                     sites.length > 0 &&
                     assignmentsVisibleAt(sites, patternsArg) &&
-                    sites.every((s) => s.kind === 'string')
+                    // Raw strings still need wrapping; already-`$p.s`-wrapped
+                    // sites are the finished form (skipped in the push-down
+                    // loop). A half-migrated variable mixing the two completes
+                    // rather than being reported as unmigratable.
+                    sites.every(
+                        (s) => s.kind === 'string' || isPatternExpr(s.rhsText),
+                    )
                 ) {
                     spVarCalls.push({ node, varName, scaleText: scale });
                     return;
@@ -361,7 +368,7 @@ function collectAssignments(
             if (!Node.isIdentifier(nameNode)) return;
             const init = node.getInitializer();
             if (!init) return;
-            push(map, nameNode.getText(), siteFromExpression(init));
+            push(map, nameNode.getText(), siteFromExpression(nameNode, init));
             return;
         }
 
@@ -369,73 +376,44 @@ function collectAssignments(
             if (node.getOperatorToken().getText() !== '=') return;
             const left = node.getLeft();
             if (!Node.isIdentifier(left)) return;
-            push(map, left.getText(), siteFromExpression(node.getRight()));
+            push(map, left.getText(), siteFromExpression(left, node.getRight()));
         }
     });
 
     return map;
 }
 
-function siteFromExpression(expr: Expression): AssignmentSite {
+function siteFromExpression(
+    nameNode: Node,
+    expr: Expression,
+): AssignmentSite {
     return {
         rhsStart: expr.getStart(),
         rhsEnd: expr.getEnd(),
         rhsText: expr.getText(),
         kind: isStringish(expr) ? 'string' : 'non-string',
-        scope: enclosingFunctionScope(expr),
+        nameNode,
         initializerNode: expr,
     };
 }
 
 /**
- * Walk up parents until the nearest function-like ancestor. Returns
- * undefined for nodes that live at file (module) scope.
- */
-function enclosingFunctionScope(node: Node): Node | undefined {
-    let cur: Node | undefined = node.getParent();
-    while (cur) {
-        if (
-            Node.isFunctionDeclaration(cur) ||
-            Node.isFunctionExpression(cur) ||
-            Node.isArrowFunction(cur) ||
-            Node.isMethodDeclaration(cur) ||
-            Node.isGetAccessorDeclaration(cur) ||
-            Node.isSetAccessorDeclaration(cur) ||
-            Node.isConstructorDeclaration(cur)
-        ) {
-            return cur;
-        }
-        cur = cur.getParent();
-    }
-    return undefined;
-}
-
-/**
- * An assignment is visible from a call site iff every site lives in a
- * scope that contains (or equals) the call site's scope. Otherwise the
- * `varAssignments` map is matching by name only and would rewrite a
- * shadowed binding the call site doesn't actually reference.
+ * The `varAssignments` map keys assignment sites by name only, so a name
+ * shadowed by a different lexical binding (a block-scoped `let`, an inner
+ * function parameter/declaration) would collect sites from unrelated
+ * bindings. Resolve the call's referenced identifier to its declaration
+ * symbol and require every site to resolve to that same symbol; if any
+ * site binds elsewhere — or resolution fails — the name is ambiguous and
+ * the caller must not rewrite it. This guarantees a rewrite only ever
+ * touches the exact binding the call references.
  */
 function assignmentsVisibleAt(
     sites: AssignmentSite[],
     callSite: Node,
 ): boolean {
-    const callScope = enclosingFunctionScope(callSite);
-    return sites.every((s) => scopeContains(s.scope, callScope));
-}
-
-/** True if `outer` is `inner` or an ancestor scope of `inner`. */
-function scopeContains(
-    outer: Node | undefined,
-    inner: Node | undefined,
-): boolean {
-    if (outer === undefined) return true; // file scope contains everything
-    let cur: Node | undefined = inner;
-    while (cur) {
-        if (cur === outer) return true;
-        cur = cur.getParent();
-    }
-    return false;
+    const callSym = callSite.getSymbol()?.compilerSymbol;
+    if (!callSym) return false;
+    return sites.every((s) => s.nameNode.getSymbol()?.compilerSymbol === callSym);
 }
 
 function push(

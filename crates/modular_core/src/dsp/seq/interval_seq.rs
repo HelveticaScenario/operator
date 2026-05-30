@@ -411,6 +411,10 @@ struct CachedIntervalHap {
     whole_begin: f64,
     /// Cached `whole_end` for the release check.
     whole_end: f64,
+    /// Cached combined degree used to disambiguate simultaneous same-geometry
+    /// haps when re-resolving the highlight index. Onset events are always
+    /// non-rest, so this is the resolved degree.
+    degree: i32,
 }
 
 impl CachedIntervalHap {
@@ -1038,6 +1042,7 @@ impl IntervalSeq {
                 cached_cycle: current_cycle,
                 whole_begin: event.whole_begin,
                 whole_end: event.whole_end,
+                degree: event.degree,
             });
             voice.cached_voltage = voltage;
             voice.active = true;
@@ -1106,17 +1111,26 @@ impl IntervalSeq {
 /// never written here.
 fn resolve_hap_index(storage: &CycleStorage, cached: &CachedIntervalHap) -> Option<usize> {
     const EPS: f64 = 1e-6;
-    let matches = |hap: &CombinedHap| {
+    let geometry_matches = |hap: &CombinedHap| {
         (hap.whole_begin - cached.whole_begin).abs() < EPS
             && (hap.whole_end - cached.whole_end).abs() < EPS
     };
+    // Combined degree disambiguates two simultaneous same-geometry haps (a
+    // chord / stacked source) that would otherwise alias onto the same index.
+    // It is a tie-breaker, not a requirement: a live state transfer onto a
+    // pattern with different degrees must still re-resolve by geometry alone.
     let idx = cached.hap_index as usize;
     if let Some(hap) = storage.haps.get(idx)
-        && matches(hap)
+        && geometry_matches(hap)
+        && hap.degree == Some(cached.degree)
     {
         return Some(idx);
     }
-    storage.haps.iter().position(matches)
+    storage
+        .haps
+        .iter()
+        .position(|h| geometry_matches(h) && h.degree == Some(cached.degree))
+        .or_else(|| storage.haps.iter().position(geometry_matches))
 }
 
 impl crate::types::StatefulModule for IntervalSeq {
@@ -1633,6 +1647,7 @@ mod tests {
             cached_cycle: 0,
             whole_begin,
             whole_end,
+            degree: onset_hap.degree.expect("onset hap has a degree"),
         });
 
         let json = seq.get_state().expect("expected state with active voice");

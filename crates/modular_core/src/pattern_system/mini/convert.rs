@@ -929,12 +929,8 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
 
         MiniAST::Slow(pattern, factor) => {
             let pat = convert_inner(pattern)?;
-            // Slow uses MiniAST, not MiniASTF64 — extract a numeric value.
-            let factor_val = match factor.as_ref() {
-                MiniAST::Pure(Located { node, .. }) => node.to_f64().unwrap_or(1.0),
-                _ => 1.0,
-            };
-            Ok(pat.slow(crate::pattern_system::pure(Fraction::from(factor_val))))
+            let factor_pat = convert_f64_pattern(factor);
+            Ok(pat.slow(factor_pat))
         }
 
         MiniAST::Replicate(pattern, count) => {

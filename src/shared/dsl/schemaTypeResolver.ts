@@ -64,7 +64,8 @@ export function resolveRef(
     | 'Mono<Signal>'
     | 'Buffer'
     | 'Table'
-    | 'ParsedPattern' {
+    | 'ParsedPattern'
+    | 'SpPattern' {
     if (ref === 'Signal') {
         return 'Signal';
     }
@@ -76,6 +77,9 @@ export function resolveRef(
     }
     if (ref === 'ParsedPatternPayload') {
         return 'ParsedPattern';
+    }
+    if (ref === 'SpPatternPayload') {
+        return 'SpPattern';
     }
 
     const defsPrefix = '#/$defs/';
@@ -105,6 +109,12 @@ export function resolveRef(
     if (defName === 'ParsedPatternPayload') {
         return 'ParsedPattern';
     }
+    // SpPatternPayload is the chained `$p.s(...).add(...)` shape; the DSL
+    // exposes it as the named `SpPattern` type rather than an inlined
+    // structural literal.
+    if (defName === 'SpPatternPayload') {
+        return 'SpPattern';
+    }
 
     const defs = rootSchema?.$defs;
     if (!defs || typeof defs !== 'object') {
@@ -133,6 +143,9 @@ export function resolveRef(
     }
     if (resolved?.title === 'ParsedPatternPayload') {
         return 'ParsedPattern';
+    }
+    if (resolved?.title === 'SpPatternPayload') {
+        return 'SpPattern';
     }
     return resolved;
 }
@@ -312,6 +325,9 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'ParsedPattern') {
             return 'ParsedPattern';
+        }
+        if (resolved === 'SpPattern') {
+            return 'SpPattern';
         }
         return schemaToTypeExpr(resolved, rootSchema);
     }

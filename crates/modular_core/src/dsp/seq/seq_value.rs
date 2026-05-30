@@ -377,6 +377,10 @@ pub struct SpPatternPayload {
     pub sources: Vec<ParsedPatternPayload>,
     pub scale: String,
     pub ops: Vec<SpOp>,
+    /// Per-source editor argument spans. Consumed entirely TS-side (merged
+    /// into the params' `__argument_spans` before IPC) and never read here;
+    /// optional on the wire so a hand-built payload may omit it.
+    #[serde(default)]
     pub argument_spans: Vec<ArgumentSpan>,
 }
 
@@ -490,7 +494,7 @@ impl SeqPatternParam {
         use crate::pattern_system::sp_combine::combine_sp;
 
         if payload.sources.is_empty() {
-            return Ok(Self::default());
+            return Err(crate::dsp::seq::interval_seq::EMPTY_PATTERN_SOURCE_ERR.to_string());
         }
         if payload.ops.len() + 1 != payload.sources.len() {
             return Err(format!(

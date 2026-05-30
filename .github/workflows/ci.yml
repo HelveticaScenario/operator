@@ -27,8 +27,18 @@ jobs:
             - name: Install dependencies
               run: yarn install --frozen-lockfile
 
+            - name: Verify generated grammar is in sync
+              run: |
+                  yarn build:grammar
+                  git diff --exit-code src/main/dsl/miniNotation/grammar.generated.ts
+
             - name: Unit tests (vitest)
-              run: yarn test:unit
+              run: yarn test:unit:ci
+
+            # The vitest run above regenerates the committed Peggy↔Rust parity
+            # fixture; fail if the checked-in copy drifted from the grammar.
+            - name: Verify committed parser-parity fixture is in sync
+              run: git diff --exit-code crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
 
             # Generate the strudel-parity fixtures (not committed), then run the
             # pure-DSP crate tests. Scoped to modular_core so CI needs no napi

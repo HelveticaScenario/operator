@@ -8265,7 +8265,7 @@
                       "$ref": "#/$defs/MiniAST"
                     },
                     {
-                      "$ref": "#/$defs/MiniAST"
+                      "$ref": "#/$defs/MiniASTF64"
                     }
                   ]
                 }
@@ -9652,7 +9652,9 @@
               "$ref": "#/$defs/SpKindTag"
             },
             "argument_spans": {
+              "description": "Per-source editor argument spans. Consumed entirely TS-side (merged\ninto the params' `__argument_spans` before IPC) and never read here;\noptional on the wire so a hand-built payload may omit it.",
               "type": "array",
+              "default": [],
               "items": {
                 "$ref": "#/$defs/ArgumentSpan"
               }
@@ -9677,8 +9679,7 @@
             "__kind",
             "sources",
             "scale",
-            "ops",
-            "argument_spans"
+            "ops"
           ]
         }
       }
@@ -10379,7 +10380,7 @@
                       "$ref": "#/$defs/MiniAST"
                     },
                     {
-                      "$ref": "#/$defs/MiniAST"
+                      "$ref": "#/$defs/MiniASTF64"
                     }
                   ]
                 }

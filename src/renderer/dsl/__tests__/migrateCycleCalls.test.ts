@@ -353,4 +353,40 @@ $cycle($p.s("0 2", scale).add("4"));`,
         expect(result.callsChanged).toBe(0);
         expect(result.assignmentsChanged).toBe(0);
     });
+
+    test('does not rewrite a block-scoped shadow of a $cycle source variable', () => {
+        // The block-scoped `let p` is a different binding from the outer
+        // `p` the call references; name-only resolution would wrongly wrap
+        // it. Binding-symbol resolution must leave both untouched.
+        const source =
+            'let p = "c4";\nif (cond) { let p = "99"; sideEffect(p); }\n$cycle(p);';
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(source);
+        expect(result.assignmentsChanged).toBe(0);
+    });
+
+    test('an inner-function $cycle does not wrap an outer same-named binding', () => {
+        // The inner `$cycle(p)` references the inner shadow; the outer `p`
+        // (only ever passed to consumeRawString) must not be wrapped.
+        const source =
+            'let p = "outer-string";\nconsumeRawString(p);\nfunction inner(){ let p = "9 9"; $cycle(p); return p; }';
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(source);
+        expect(result.assignmentsChanged).toBe(0);
+    });
+
+    test('completes a half-migrated $iCycle source variable (mixed $p.s + string)', () => {
+        // One assignment is already `$p.s(...)`, the other is still a raw
+        // string. The migration wraps the remaining string and collapses
+        // the call rather than reporting the variable as unmigratable.
+        const source =
+            'let pat = $p.s("0 2", "C");\npat = "4 5";\n$iCycle(pat, "C");';
+        const result = migrateCycleCalls(source);
+        expect(result.migrated).toBe(
+            'let pat = $p.s("0 2", "C");\npat = $p.s("4 5", "C");\n$cycle(pat);',
+        );
+        expect(result.skippedVariables).toEqual([]);
+        expect(result.assignmentsChanged).toBe(1);
+        expect(result.callsChanged).toBe(1);
+    });
 });

@@ -19,6 +19,7 @@
         "deploy": "./release.sh",
         "test": "yarn test:unit",
         "test:unit": "vitest run",
+        "test:unit:ci": "vitest run --exclude '**/node_modules/**' --exclude '**/dist/**' --exclude '**/crates/modular/__test__/**'",
         "test:rust": "yarn gen:sp-fixtures && cargo test",
         "test:e2e": "playwright test",
         "test:e2e:update": "playwright test --update-snapshots",

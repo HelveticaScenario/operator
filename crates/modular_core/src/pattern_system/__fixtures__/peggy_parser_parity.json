@@ -472,9 +472,7 @@
         },
         {
           "Pure": {
-            "node": {
-              "Number": 2
-            },
+            "node": 2,
             "span": {
               "start": 2,
               "end": 3
@@ -688,6 +686,147 @@
               {
                 "Pure": {
                   "node": 2,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "slow factor as fast subsequence",
+    "input": "0/[2 3]",
+    "peggy_ast": {
+      "Slow": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "FastCat": [
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 3,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "fast factor as slow subsequence",
+    "input": "0*<2 3>",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "SlowCat": [
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 3,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "slow factor as slow subsequence",
+    "input": "0/<2 3>",
+    "peggy_ast": {
+      "Slow": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "SlowCat": [
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 3,
                   "span": {
                     "start": 5,
                     "end": 6

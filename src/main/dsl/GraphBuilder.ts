@@ -1624,6 +1624,15 @@ export function replaceDeferredStrings(
     }
 
     if (typeof input === 'object' && input !== null) {
+        // Opaque pattern payloads (ParsedPattern from $p(), SpPattern from
+        // $p.s()) are JSON-only data with no deferred-output strings; mirror
+        // the replaceValues short-circuit and return them verbatim instead of
+        // deep-walking their mini-notation AST sub-tree.
+        const kind = (input as { __kind?: unknown }).__kind;
+        if (kind === 'ParsedPattern' || kind === 'SpPattern') {
+            return input;
+        }
+
         const result: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(input)) {
             result[key] = replaceDeferredStrings(value, deferredStringMap);
