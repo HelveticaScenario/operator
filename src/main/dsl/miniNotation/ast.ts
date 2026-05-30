@@ -4,7 +4,7 @@
  *
  * The JSON shape matches serde's default (externally-tagged) representation
  * so the Rust side can `Deserialize` these objects directly from the
- * `$cycle` / `$iCycle` params carried in the patch graph.
+ * `$cycle` / `$p.s` params carried in the patch graph.
  *
  * Tuple variants like `Pure(Located<AtomValue>)` serialize as
  * `{ "Pure": { "node": ..., "span": ... } }`. Struct variants like

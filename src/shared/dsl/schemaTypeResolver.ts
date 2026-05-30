@@ -105,7 +105,7 @@ export function resolveRef(
     }
     // ParsedPatternPayload is recursive (MiniAST references itself via
     // List/Sequence/...); the DSL exposes it as an opaque `ParsedPattern`
-    // named type, constructed by `$p(...)` and consumed by $cycle/$iCycle.
+    // named type, constructed by `$p(...)` and consumed by $cycle/$p.s.
     if (defName === 'ParsedPatternPayload') {
         return 'ParsedPattern';
     }

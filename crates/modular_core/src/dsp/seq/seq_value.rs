@@ -197,7 +197,7 @@ impl HasRest for SeqValue {
 }
 
 /// JSON payload shape delivered in the patch graph for
-/// `SeqPatternParam` / `IntervalPatternParam`. Produced client-side by
+/// `SeqPatternParam`. Produced client-side by
 /// the TypeScript `$p(...)` helper in `src/main/dsl/miniNotation/`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ParsedPatternPayload {
@@ -409,8 +409,8 @@ impl Default for SeqPatternSource {
     }
 }
 
-/// Per-source metadata retained for span tracking. Mirrors
-/// `IntervalPatternParam::SourceMeta` (`interval_seq.rs:130-138`).
+/// Per-source metadata retained for span tracking — one entry per source in
+/// a chained `$p.s(...)` payload, used to highlight each input pattern string.
 #[derive(Clone, Debug, Default)]
 pub struct SeqSourceMeta {
     pub source: String,
@@ -462,7 +462,7 @@ impl JsonSchema for SeqPatternParam {
 impl SeqPatternParam {
     fn from_payload(payload: ParsedPatternPayload) -> Result<Self, String> {
         if payload.source.trim().is_empty() {
-            return Err(crate::dsp::seq::interval_seq::EMPTY_PATTERN_SOURCE_ERR.to_string());
+            return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
         }
         let pattern = crate::pattern_system::mini::convert::<SeqValue>(&payload.ast)
             .map_err(|e| e.to_string())?;
@@ -486,14 +486,14 @@ impl SeqPatternParam {
 
     #[doc(hidden)]
     pub fn from_sp_payload(payload: SpPatternPayload) -> Result<Self, String> {
-        use crate::dsp::seq::interval_seq::{
+        use crate::dsp::seq::interval_value::{
             IntervalValue, add_interval_values, sub_interval_values,
         };
         use crate::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
         use crate::pattern_system::sp_combine::combine_sp;
 
         if payload.sources.is_empty() {
-            return Err(crate::dsp::seq::interval_seq::EMPTY_PATTERN_SOURCE_ERR.to_string());
+            return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
         }
         if payload.ops.len() + 1 != payload.sources.len() {
             return Err(format!(
@@ -508,7 +508,7 @@ impl SeqPatternParam {
         // counts). This covers the leftmost source and every chained RHS.
         for src in &payload.sources {
             if src.source.trim().is_empty() {
-                return Err(crate::dsp::seq::interval_seq::EMPTY_PATTERN_SOURCE_ERR.to_string());
+                return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
             }
         }
 

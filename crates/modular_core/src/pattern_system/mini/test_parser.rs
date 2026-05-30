@@ -2,7 +2,7 @@
 //!
 //! The production mini-notation parser is the TypeScript `$p()` helper in
 //! `src/main/dsl/miniNotation/` (a Peggy grammar). It produces the
-//! `{ ast, source, all_spans }` payload that `$cycle` / `$iCycle` ship in
+//! `{ ast, source, all_spans }` payload that `$cycle` / `$p.s` ship in
 //! the patch graph, which Rust deserializes into a [`MiniAST`] and lowers
 //! through [`super::convert`].
 //!

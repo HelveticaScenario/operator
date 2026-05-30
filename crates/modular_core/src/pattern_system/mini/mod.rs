@@ -2,7 +2,7 @@
 //!
 //! Parsing (strings → `MiniAST`) now lives TypeScript-side in
 //! `src/main/dsl/miniNotation/`. The DSL's `$p(source)` helper parses the
-//! mini-notation string, then `$cycle` / `$iCycle` serialize the resulting
+//! mini-notation string, then `$cycle` / `$p.s` serialize the resulting
 //! `{ ast, source, all_spans }` payload in the patch graph. Rust receives
 //! that payload and lowers the AST to a `Pattern<T>` via [`convert`].
 //!

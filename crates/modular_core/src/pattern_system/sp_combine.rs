@@ -430,7 +430,7 @@ mod tests {
     // the cycle, at least one such hap must exist.
     #[test]
     fn test_sp_sub_right_leaf_lands_at_pattern_idx_1() {
-        use crate::dsp::seq::interval_seq::{IntervalValue, sub_interval_values};
+        use crate::dsp::seq::interval_value::{IntervalValue, sub_interval_values};
         use crate::pattern_system::mini;
 
         // 1+2. Lower mini-notation to Pattern<IntervalValue>.

@@ -795,7 +795,7 @@ export function executePatchScript(
         $hz: hz,
         $note: note,
         // Mini-notation parser — wraps a string in a ParsedPattern that
-        // $cycle / $iCycle consume as a positional argument. Carries
+        // $cycle consumes as a positional argument. Carries
         // $p.s(source, scale) for scale-degree patterns (integer degrees
         // resolved through a scale string into voltage atoms for $cycle).
         $p,
