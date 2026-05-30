@@ -102,7 +102,7 @@ jobs:
               if: startsWith(github.ref, 'refs/tags/')
               run: yarn forge-publish
               env:
-                  NODE_OPTIONS: '--max-old-space-size=4096'
+                  NODE_OPTIONS: '--max-old-space-size=6144'
                   NO_COLOR: 1
                   CARGO_TERM_COLOR: never
                   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
