@@ -217,10 +217,14 @@ impl ParsedPatternPayload {
     /// only so existing Rust fixtures don't need to hand-build ASTs.
     #[doc(hidden)]
     pub fn parse_for_test(source: &str) -> Self {
-        if source.is_empty() {
+        // An empty or whitespace-only source has no atoms to parse. Build a
+        // payload that preserves the original string so the `from_*`
+        // ingestion paths can reject it via their `trim().is_empty()` guard
+        // (the production parser rejects such input outright).
+        if source.trim().is_empty() {
             return Self {
                 ast: MiniAST::Sequence(Vec::new()),
-                source: String::new(),
+                source: source.to_string(),
                 all_spans: Vec::new(),
             };
         }
@@ -453,8 +457,8 @@ impl JsonSchema for SeqPatternParam {
 
 impl SeqPatternParam {
     fn from_payload(payload: ParsedPatternPayload) -> Result<Self, String> {
-        if payload.source.is_empty() {
-            return Ok(Self::default());
+        if payload.source.trim().is_empty() {
+            return Err(crate::dsp::seq::interval_seq::EMPTY_PATTERN_SOURCE_ERR.to_string());
         }
         let pattern = crate::pattern_system::mini::convert::<SeqValue>(&payload.ast)
             .map_err(|e| e.to_string())?;
@@ -496,10 +500,13 @@ impl SeqPatternParam {
             ));
         }
 
-        // Empty leftmost source short-circuits to silence — matches the
-        // single-source convention above.
-        if payload.sources[0].source.is_empty() {
-            return Ok(Self::default());
+        // An empty or whitespace-only source anywhere in the chain is a hard
+        // error — a pattern string must contain at least one atom (a rest `~`
+        // counts). This covers the leftmost source and every chained RHS.
+        for src in &payload.sources {
+            if src.source.trim().is_empty() {
+                return Err(crate::dsp::seq::interval_seq::EMPTY_PATTERN_SOURCE_ERR.to_string());
+            }
         }
 
         // Parse scale up front so a bad scale string fails before we do
@@ -727,6 +734,83 @@ mod tests {
         let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
         assert!((v[0] - 2.0 / 12.0).abs() < 1e-9, "v[0]={}", v[0]);
         assert!((v[1] - 4.0 / 12.0).abs() < 1e-9, "v[1]={}", v[1]);
+    }
+
+    #[test]
+    fn test_from_payload_rejects_empty() {
+        // Single-source $cycle($p("")) — empty string is a hard error.
+        assert!(
+            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("")).is_err()
+        );
+        // Whitespace-only is rejected the same way.
+        assert!(
+            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("   ")).is_err()
+        );
+    }
+
+    #[test]
+    fn test_from_payload_rest_is_accepted() {
+        // A rest `~` is a real atom, not empty — must parse fine.
+        let parsed =
+            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("~")).unwrap();
+        assert!(parsed.pattern().is_some());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rejects_empty_leftmost() {
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("")],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rejects_empty_chained_rhs() {
+        // An empty source in a non-leftmost chain slot must error too.
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![
+                ParsedPatternPayload::parse_for_test("0 1"),
+                ParsedPatternPayload::parse_for_test(""),
+            ],
+            scale: "c(maj)".to_string(),
+            ops: vec![SpOp {
+                op: SpOpKind::Add,
+                mode: SpAlignmentMode::In,
+            }],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rejects_whitespace_source() {
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("   ")],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rest_is_accepted() {
+        // A rest `~` source is valid (not empty).
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("~")],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+        assert!(parsed.pattern().is_some());
     }
 
     #[test]

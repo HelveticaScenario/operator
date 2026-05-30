@@ -46,6 +46,32 @@ describe('$p.s builder', () => {
     });
 });
 
+describe('$p.s empty/whitespace source rejection', () => {
+    test('empty source throws MiniParseError', () => {
+        expect(() => $p.s('', 'c(maj)')).toThrow(MiniParseError);
+    });
+
+    test('whitespace-only source throws MiniParseError', () => {
+        expect(() => $p.s('   ', 'c(maj)')).toThrow(MiniParseError);
+    });
+
+    test('empty chained .add(rhs) throws MiniParseError', () => {
+        expect(() => $p.s('0 2', 'c(maj)').add('')).toThrow(MiniParseError);
+    });
+
+    test('whitespace-only chained .add(rhs) throws MiniParseError', () => {
+        expect(() => $p.s('0 2', 'c(maj)').add('   ')).toThrow(MiniParseError);
+    });
+
+    test('empty chained .sub(rhs) throws MiniParseError', () => {
+        expect(() => $p.s('0 2', 'c(maj)').sub('')).toThrow(MiniParseError);
+    });
+
+    test('a rest "~" source does NOT throw — it is a real atom', () => {
+        expect(() => $p.s('~', 'c(maj)')).not.toThrow();
+    });
+});
+
 describe('$p.s chain methods', () => {
     test('.add(rhs) appends source + op with default mode "in"', () => {
         const r = $p.s('0 2 4', 'c(maj)').add('0 2');

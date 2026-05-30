@@ -310,6 +310,10 @@ describe('whitespace and edge cases', () => {
         expect(() => $p('')).toThrow(MiniParseError);
     });
 
+    test('whitespace-only source is rejected', () => {
+        expect(() => $p('   ')).toThrow(MiniParseError);
+    });
+
     test('unclosed bracket is rejected', () => {
         expect(() => $p('[0 1')).toThrow(MiniParseError);
     });
