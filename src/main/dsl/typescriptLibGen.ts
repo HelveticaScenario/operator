@@ -565,6 +565,8 @@ type WavHandle = {
     readonly num: number;
     readonly den: number;
   };
+  /** Number of bars the sample spans, computed from BPM and time signature. E.g. an exact 2-bar loop is \`2.0\`; a 2.64-bar buffer is \`2.64\`. Absent when no BPM could be derived. */
+  readonly barCount?: number;
   readonly loops: ReadonlyArray<{
     readonly type: 'forward' | 'pingpong' | 'backward';
     readonly start: number;
@@ -637,6 +639,26 @@ interface ModuleOutput {
    * @example lfo.shift(2.5)  // Shift to 0-5V range
    */
   shift(offset: Poly<Signal>): Collection;
+
+  /**
+   * Offset this pitch by an absolute frequency amount, in Hz. The V/Oct signal
+   * is converted to Hz, the offset added, then converted back. Creates an
+   * $addHz module internally.
+   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @returns The retuned {@link Collection} for chaining
+   * @example $saw('C4').addHz(0.5)  // slight detune
+   */
+  addHz(offset: Poly<Signal>): Collection;
+
+  /**
+   * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
+   * The V/Oct signal is converted to Hz, multiplied, then converted back.
+   * Creates a $mulHz module internally.
+   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @returns The retuned {@link Collection} for chaining
+   * @example $saw('C4').mulHz(1.5)  // up a just fifth
+   */
+  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale the signal by a factor with a perceptual (audio taper) curve
@@ -831,6 +853,20 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @see {@link ModuleOutput.shift}
    */
   shift(offset: Poly<Signal>): Collection;
+
+  /**
+   * Offset all pitches by an absolute frequency amount, in Hz.
+   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @see {@link ModuleOutput.addHz}
+   */
+  addHz(offset: Poly<Signal>): Collection;
+
+  /**
+   * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
+   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @see {@link ModuleOutput.mulHz}
+   */
+  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale all signals by a factor with a perceptual (audio taper) curve
@@ -1195,6 +1231,77 @@ function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection |
  * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
+
+/**
+ * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
+ *
+ * Splits the input into low / mid / high via \`$xover\`, then runs each band
+ * through \`$comp\` with both upward and downward compression engaged at fast
+ * attack/release ballistics. Bands are summed and crossfaded against the
+ * original input via \`depth\`.
+ *
+ * Per-band trim (\`lowGain\` / \`midGain\` / \`highGain\`) follows the
+ * \`$scaleAndShift\` convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
+ *
+ * \`\`\`js
+ * $ott(drums).out()
+ * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
+ * \`\`\`
+ */
+function $ott(input: Collection | ModuleOutput, config?: {
+    /**
+     * Optional side-chain detector signal. The same crossover network splits
+     * the sidechain into low/mid/high and each band's compressor keys off the
+     * matching band — the gain is still applied to \`input\`.
+     */
+    sidechain?: Collection | ModuleOutput;
+    /** wet/dry blend, 0–5 (default 5 = fully wet) */
+    depth?: Poly<Signal>;
+    /** low/mid crossover (V/Oct, default ~120 Hz) */
+    lowMidFreq?: Poly<Signal>;
+    /** mid/high crossover (V/Oct, default ~2500 Hz) */
+    midHighFreq?: Poly<Signal>;
+    /** downward stage threshold in volts (default 1.0) */
+    threshold?: Poly<Signal>;
+    /** downward stage ratio: > 1 compresses, < 1 expands (boosts loud), 1 = passthrough. Default 4 */
+    ratio?: Poly<Signal>;
+    /** upward stage threshold in volts (default 0.5) */
+    upwardThreshold?: Poly<Signal>;
+    /** upward stage ratio: > 1 boosts quiet, < 1 gates quiet, 1 = passthrough. Default 4 */
+    upwardRatio?: Poly<Signal>;
+    /** envelope attack in seconds (default 0.003) */
+    attack?: Poly<Signal>;
+    /** envelope release in seconds (default 0.05) */
+    release?: Poly<Signal>;
+    /** per-band makeup gain as dB-voltage (-5V = -24dB, 0V = unity, +5V = +24dB, default 1V ≈ +4.8dB) */
+    makeup?: Poly<Signal>;
+    /** low-band trim — 5 = unity (default 5) */
+    lowGain?: Poly<Signal>;
+    /** mid-band trim — 5 = unity (default 5) */
+    midGain?: Poly<Signal>;
+    /** high-band trim — 5 = unity (default 5) */
+    highGain?: Poly<Signal>;
+    id?: string;
+}): Collection;
+
+/**
+ * @param count - Size of the output
+ * @param playhead - 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
+ * @param range - \`[off, on]\` weight pair (default \`[0, 1]\`)
+ * @param interpolationType - Easing between keyframes (default linear)
+ *
+ * @example
+ * // Crossfade the amplitude of the different voices
+ * const osc = $sine(['c', 'e', 'g'])
+ * const weights = $cross(osc.length, $sine('0.25hz').range(0, 1));
+ * osc.amp(weights).out();
+ */
+function $cross(
+    count: number,
+    playhead: Mono<Signal>,
+    range?: [number, number],
+    interpolationType?: Parameters<typeof $track>[1]['interpolationType'],
+): Collection;
 
 /**
  * Phase-warp table descriptors for modules that accept a {@link Table}
