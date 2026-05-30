@@ -114,13 +114,11 @@ export function createScopeViewZones({
         canvas.dataset.scopeRangeMax = String(view.range[1]);
         canvas.dataset.scopeChannelKeys = JSON.stringify(view.channelKeys);
 
-        const pixelWidth = Math.max(
-            1,
-            Math.floor(layoutInfo.contentWidth * dpr),
-        );
-        const pixelHeight = Math.floor(scopeHeight * dpr);
-        canvas.width = pixelWidth;
-        canvas.height = pixelHeight;
+        // Seed the backing store from the editor content width; the canvas is
+        // still detached here so its own clientWidth is 0. resizeCanvases()
+        // below re-syncs it to the real display size once attached.
+        canvas.width = Math.max(1, Math.floor(layoutInfo.contentWidth * dpr));
+        canvas.height = Math.max(1, Math.floor(scopeHeight * dpr));
 
         container.appendChild(canvas);
 
@@ -202,14 +200,27 @@ export function createScopeViewZones({
     };
 
     const resizeCanvases = () => {
-        const info = editor.getLayoutInfo();
         const nextDpr =
             typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
         scopeCanvasMap.forEach((canvas) => {
-            canvas.width = Math.max(1, Math.floor(info.contentWidth * nextDpr));
-            canvas.height = Math.floor(scopeHeight * nextDpr);
+            // Match the backing store to the canvas's actual displayed size so
+            // the waveform keeps its aspect ratio. Reassigning canvas.width
+            // clears the canvas, so only do it when a dimension truly changed —
+            // otherwise every scroll-driven layout event wipes the last frame.
+            const displayWidth = canvas.clientWidth || canvas.width / nextDpr;
+            const nextWidth = Math.max(1, Math.floor(displayWidth * nextDpr));
+            const nextHeight = Math.max(1, Math.floor(scopeHeight * nextDpr));
+            if (canvas.width !== nextWidth) {
+                canvas.width = nextWidth;
+            }
+            if (canvas.height !== nextHeight) {
+                canvas.height = nextHeight;
+            }
         });
     };
+
+    // Sync once now that the zones are attached and have a real display width.
+    resizeCanvases();
 
     layoutListener = editor.onDidLayoutChange(resizeCanvases);
 
