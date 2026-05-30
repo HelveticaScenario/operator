@@ -464,8 +464,15 @@ impl SeqPatternParam {
         if payload.source.trim().is_empty() {
             return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
         }
+        // Strip modifier spans so intra-pattern modifier spans (euclidean
+        // operands, patterned `*`/`/` factors) fold into the source's
+        // primary chain at pattern_idx 0. Without this they keep pattern_idx
+        // >= 1 and `Seq::get_state`'s `idx < num_sources` filter discards them
+        // for a single source, so they never highlight. Mirrors the per-source
+        // strip in `from_sp_payload`.
         let pattern = crate::pattern_system::mini::convert::<SeqValue>(&payload.ast)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| e.to_string())?
+            .strip_modifier_spans();
 
         let per_source = vec![SeqSourceMeta {
             source: payload.source,
@@ -944,6 +951,55 @@ mod tests {
 
         assert_eq!(notes.len(), 2, "Should have 2 note haps");
         assert_eq!(rests.len(), 2, "Should have 2 rest haps");
+    }
+
+    #[test]
+    fn single_source_euclidean_highlights_operand_spans() {
+        use crate::pattern_system::Fraction;
+        use crate::pattern_system::mini::{collect_leaf_spans, parse_ast};
+
+        // Regression: the single-source `$p()` path must strip modifier spans
+        // so euclidean operand spans (the pulses/steps inside the parens)
+        // report at pattern_idx 0. Otherwise `Seq::get_state`'s
+        // `idx < num_sources` filter drops every span at pattern_idx >= 1 for a
+        // single-source pattern, and the operands never highlight.
+        //
+        // `0(3,8)`: base atom `0` at span 0..1, pulses `3` at 2..3, steps `8`
+        // at 4..5.
+        let ast = parse_ast("0(3,8)").expect("parse euclidean");
+        let all_spans = collect_leaf_spans(&ast);
+        let payload = ParsedPatternPayload {
+            ast,
+            source: "0(3,8)".to_string(),
+            all_spans,
+        };
+        let param = SeqPatternParam::from_payload(payload).expect("from_payload");
+        let pattern = param.pattern.as_ref().expect("pattern");
+        let haps = pattern.query_arc(Fraction::from(0), Fraction::from(1));
+        let ctx = &haps[0].context;
+
+        // Every source span (base + operands) must live at pattern_idx 0:
+        // in source_span / source_extra_spans, with nothing left in
+        // modifier_spans (which the highlight filter discards).
+        assert!(
+            ctx.modifier_spans.is_empty(),
+            "operand spans must not sit at pattern_idx >= 1: {:?}",
+            ctx.modifier_spans
+        );
+        let idx0: Vec<(usize, usize)> = ctx
+            .source_span
+            .iter()
+            .chain(ctx.source_extra_spans.iter())
+            .map(|s| (s.start, s.end))
+            .collect();
+        assert!(
+            idx0.contains(&(2, 3)),
+            "pulses operand span missing from pattern_idx 0: {idx0:?}"
+        );
+        assert!(
+            idx0.contains(&(4, 5)),
+            "steps operand span missing from pattern_idx 0: {idx0:?}"
+        );
     }
 
     #[test]

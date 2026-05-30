@@ -370,9 +370,23 @@ OperandSeqEntryF64
   = "_" !IdentCont { return { kind: 'elongation' }; }
   / e:OperandElementF64 { return { kind: 'element', entry: e }; }
 
+// Operand elements carry the same `@weight` + modifier chain as top-level
+// elements (`ElementWithWeight`), so `<16!2 12>` etc. work inside euclidean /
+// fast / slow operand subsequences. Weight is positional metadata on the
+// sequence entry; non-weight modifiers wrap the AST in order.
 OperandElementF64
-  = r:OperandRandomChoiceF64 weight:Weight? { return [r, weight]; }
-  / base:OperandBaseF64 weight:Weight? { return [base, weight]; }
+  = base:(OperandRandomChoiceF64 / OperandBaseF64) parts:ElementPart* {
+      let ast = base;
+      let weight = null;
+      for (const part of parts) {
+        if (part.kind === 'weight') {
+          weight = part.value;
+        } else {
+          ast = part.apply(ast, ctx);
+        }
+      }
+      return [ast, weight];
+    }
 
 OperandRandomChoiceF64
   = first:OperandChoiceF64 rest:(_ "|" _ @OperandChoiceF64)+ {
@@ -412,8 +426,18 @@ OperandSeqEntryU32
   / e:OperandElementU32 { return { kind: 'element', entry: e }; }
 
 OperandElementU32
-  = r:OperandRandomChoiceU32 weight:Weight? { return [r, weight]; }
-  / base:OperandBaseU32 weight:Weight? { return [base, weight]; }
+  = base:(OperandRandomChoiceU32 / OperandBaseU32) parts:ElementPart* {
+      let ast = base;
+      let weight = null;
+      for (const part of parts) {
+        if (part.kind === 'weight') {
+          weight = part.value;
+        } else {
+          ast = part.apply(ast, ctx);
+        }
+      }
+      return [ast, weight];
+    }
 
 OperandRandomChoiceU32
   = first:OperandChoiceU32 rest:(_ "|" _ @OperandChoiceU32)+ {
@@ -459,8 +483,18 @@ OperandSeqEntryI32
   / e:OperandElementI32 { return { kind: 'element', entry: e }; }
 
 OperandElementI32
-  = r:OperandRandomChoiceI32 weight:Weight? { return [r, weight]; }
-  / base:OperandBaseI32 weight:Weight? { return [base, weight]; }
+  = base:(OperandRandomChoiceI32 / OperandBaseI32) parts:ElementPart* {
+      let ast = base;
+      let weight = null;
+      for (const part of parts) {
+        if (part.kind === 'weight') {
+          weight = part.value;
+        } else {
+          ast = part.apply(ast, ctx);
+        }
+      }
+      return [ast, weight];
+    }
 
 OperandRandomChoiceI32
   = first:OperandChoiceI32 rest:(_ "|" _ @OperandChoiceI32)+ {

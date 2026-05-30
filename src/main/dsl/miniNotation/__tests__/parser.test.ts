@@ -228,6 +228,26 @@ describe('modifiers', () => {
     });
 });
 
+describe('modifiers inside operand subsequences', () => {
+    test('replicate !n inside a euclidean pulses subsequence', () => {
+        const r = $p('0(<16!2 12>,8)');
+        if (!('Euclidean' in r.ast)) return expect.fail('expected Euclidean');
+        const pulses = r.ast.Euclidean.pulses;
+        if (!('SlowCat' in pulses)) return expect.fail('expected SlowCat pulses');
+        const first = pulses.SlowCat[0][0];
+        expect('Replicate' in first).toBe(true);
+        if ('Replicate' in first) {
+            expect(first.Replicate[1]).toBe(2);
+        }
+    });
+
+    test('full reported pattern parses', () => {
+        expect(() =>
+            $p('0(<16!2 12>,[16 <8 12> 16])'),
+        ).not.toThrow();
+    });
+});
+
 describe('random choice', () => {
     test('|-separated choices collapse into RandomChoice', () => {
         const r = $p('0|1|2');
