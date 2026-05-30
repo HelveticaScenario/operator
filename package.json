@@ -19,7 +19,7 @@
         "deploy": "./release.sh",
         "test": "yarn test:unit",
         "test:unit": "vitest run",
-        "test:rust": "cargo test",
+        "test:rust": "yarn gen:sp-fixtures && cargo test",
         "test:e2e": "playwright test",
         "test:e2e:update": "playwright test --update-snapshots",
         "test:all": "yarn test:unit && yarn test:rust && yarn test:e2e",

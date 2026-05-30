@@ -1,0 +1,42 @@
+name: CI
+on:
+    pull_request:
+    push:
+        branches:
+            - master
+
+jobs:
+    test:
+        name: Unit + Rust tests
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: 'yarn'
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install dependencies
+              run: yarn install --frozen-lockfile
+
+            - name: Unit tests (vitest)
+              run: yarn test:unit
+
+            # Generate the strudel-parity fixtures (not committed), then run the
+            # pure-DSP crate tests. Scoped to modular_core so CI needs no napi
+            # build or audio system deps (libasound/jack).
+            - name: Rust tests (modular_core)
+              run: |
+                  yarn gen:sp-fixtures
+                  cargo test -p modular_core
+              env:
+                  NO_COLOR: 1
+                  CARGO_TERM_COLOR: never

@@ -9,15 +9,8 @@ if printf '%s\n' "$staged" | grep -qx 'src/main/dsl/miniNotation/grammar\.peggy'
     git add src/main/dsl/miniNotation/grammar.generated.ts
 fi
 
-# Regenerate the sp_combine fixtures only when the generator script itself
-# changes. Grammar edits intentionally do NOT trigger this — the fixtures are
-# ~18 MB and rebuilding them on every grammar tweak is too costly. If a grammar
-# change should land new fixture bytes, run `yarn gen:sp-fixtures` manually.
-if printf '%s\n' "$staged" | grep -qx 'scripts/gen-sp-fixture\.mjs'; then
-    yarn gen:sp-fixtures
-    git add \
-        crates/modular_core/src/pattern_system/__fixtures__/sp_combine.json \
-        crates/modular_core/src/pattern_system/__fixtures__/sp_combine_chain2.json
-fi
+# The sp_combine parity fixtures (~20 MB, deterministic) are NOT committed —
+# they regenerate on demand via scripts/gen-sp-fixture.mjs and the sp_combine
+# parity test. Nothing to stage here.
 
 npx lint-staged

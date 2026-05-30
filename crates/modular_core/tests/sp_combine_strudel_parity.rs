@@ -18,6 +18,8 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
+use std::sync::OnceLock;
 
 use modular_core::dsp::seq::IntervalValue;
 use modular_core::pattern_system::sp_combine::{SpAlignmentMode, combine_sp};
@@ -146,6 +148,43 @@ fn fixture_path(name: &str) -> PathBuf {
     .collect()
 }
 
+/// Repo root — two levels up from this crate (`crates/modular_core`).
+fn repo_root() -> PathBuf {
+    [env!("CARGO_MANIFEST_DIR"), "..", ".."].iter().collect()
+}
+
+/// The `sp_combine` fixtures are large (~20 MB), deterministic strudel
+/// ground-truth and are intentionally NOT committed — they regenerate from
+/// `scripts/gen-sp-fixture.mjs`. Generate them on first use if absent, at
+/// most once per test binary (parallel test threads share the guard).
+fn ensure_fixtures() {
+    static GEN: OnceLock<()> = OnceLock::new();
+    GEN.get_or_init(|| {
+        let present = ["sp_combine.json", "sp_combine_chain2.json"]
+            .iter()
+            .all(|n| fixture_path(n).exists());
+        if present {
+            return;
+        }
+        let root = repo_root();
+        match Command::new("node")
+            .arg("scripts/gen-sp-fixture.mjs")
+            .current_dir(&root)
+            .status()
+        {
+            Ok(s) if s.success() => {}
+            Ok(s) => panic!(
+                "sp_combine fixtures missing and `node scripts/gen-sp-fixture.mjs` \
+                 exited with {s}. Run `yarn install` then `yarn gen:sp-fixtures`.",
+            ),
+            Err(e) => panic!(
+                "sp_combine fixtures missing and `node scripts/gen-sp-fixture.mjs` \
+                 could not be run ({e}). Run `yarn install` then `yarn gen:sp-fixtures`.",
+            ),
+        }
+    });
+}
+
 // ─── 1-op chain (full grammar surface) ─────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -193,6 +232,7 @@ const FAILURE_RENDER_CAP: usize = 25;
 
 #[test]
 fn combine_sp_matches_strudel_for_full_grammar_cross() {
+    ensure_fixtures();
     let path = fixture_path("sp_combine.json");
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("missing fixture at {path:?}: {e}"));
@@ -307,6 +347,7 @@ struct Row2 {
 
 #[test]
 fn combine_sp_chain2_matches_strudel() {
+    ensure_fixtures();
     let path = fixture_path("sp_combine_chain2.json");
     let text = fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("missing fixture at {path:?}: {e}"));
