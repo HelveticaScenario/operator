@@ -15,10 +15,6 @@ pub enum IntervalValue {
 }
 
 impl IntervalValue {
-    pub fn is_rest(&self) -> bool {
-        matches!(self, IntervalValue::Rest)
-    }
-
     pub fn degree(&self) -> Option<i32> {
         match self {
             IntervalValue::Degree(d) => Some(*d),

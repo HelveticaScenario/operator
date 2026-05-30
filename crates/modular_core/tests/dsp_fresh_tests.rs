@@ -1112,6 +1112,96 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 }
 
+// ─── $cycle($p.s) CV hold during rest after state transfer ───────────────────
+
+#[test]
+fn cycle_ps_cv_holds_during_rest_after_state_transfer() {
+    // Regression (ported from the deleted `$iCycle` test, now lowered through
+    // `$cycle($p.s(...))`): after a patch update (state transfer), a
+    // scale-degree sequencer's CV output must HOLD the last active voltage
+    // during a rest instead of dropping to 0 V. The `Seq` runtime keeps
+    // `last_cv` per channel and only overwrites it while a voice is active;
+    // `transfer_state_from` swaps the whole `SeqState`, so the held voltage
+    // carries across the rebuild.
+    //
+    // Pattern `<0 ~>` in d#(min) alternates per cycle: degree 0 (D#4 = 0.25 V)
+    // on cycle 0, a rest on cycle 1. At 48000 BPM / 4/4, one bar = 240 samples
+    // at 48 kHz:
+    //   Cycle 0 (samples 0..239):   degree 0, CV = 0.25 V (D#4)
+    //   Cycle 1 (samples 240..479): rest, CV must HOLD at 0.25 V
+    // Transfer state during cycle 1 (rest), run one frame, assert CV != 0.
+
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": sp_payload(&["<0 ~>"], "d#(min)", vec![]) }),
+        ),
+    ]);
+
+    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    // Advance through cycle 0 (degree 0) into the start of cycle 1 (rest).
+    // One bar = 240 samples; process 260 to sit well inside cycle 1.
+    for _ in 0..260 {
+        process_frame(&old_patch);
+    }
+
+    // D#4 in V/Oct: (63 - 60) / 12 = 0.25 V.
+    let expected_voltage = 0.25f32;
+
+    let old_cv = old_patch
+        .sampleables
+        .get("seq")
+        .unwrap()
+        .get_value_at("cv", 0, 0);
+
+    // Sanity: the OLD module holds the last active voltage during the rest.
+    assert!(
+        (old_cv - expected_voltage).abs() < 0.01,
+        "old module CV should hold {expected_voltage} V during rest, got {old_cv}"
+    );
+
+    // Replicate apply_patch_update's reuse path: build a fresh patch, transfer
+    // state, reconnect, on_patch_update. NO ClearPatch / transport reset.
+    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    for (id, new_module) in &new_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    for module in new_patch.sampleables.values() {
+        module.connect(&new_patch);
+    }
+    for module in new_patch.sampleables.values() {
+        module.on_patch_update();
+    }
+
+    // Run ONE frame on the new patch — still in the rest period.
+    process_frame(&new_patch);
+
+    let new_cv = new_patch
+        .sampleables
+        .get("seq")
+        .unwrap()
+        .get_value_at("cv", 0, 0);
+
+    // CV must still hold the previous active voltage, not collapse to 0.
+    assert!(
+        (new_cv - expected_voltage).abs() < 0.01,
+        "after state transfer during rest, CV should hold {expected_voltage} V, got {new_cv}\n\
+         (0.0 means last_cv was not preserved across state transfer)"
+    );
+}
+
 // ─── Seq stale cached_hap survives transfer_state_from (highlight pin) ────────
 
 /// Build the `$p.s(...)` chained payload wire shape that the TS `$p.s` helper
