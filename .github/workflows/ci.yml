@@ -24,8 +24,19 @@ jobs:
             - name: Setup Rust
               uses: dtolnay/rust-toolchain@stable
 
+            # The vitest suite loads the N-API binding at import time
+            # (factories.ts -> @modular/core), so CI must build the native
+            # module — which links cpal (ALSA + JACK) and udev on Linux.
+            - name: Install audio system deps (cpal — ALSA/JACK)
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libasound2-dev libudev-dev libjack-jackd2-dev
+
             - name: Install dependencies
               run: yarn install --frozen-lockfile
+
+            - name: Build native module
+              run: yarn build-native
 
             - name: Verify generated grammar is in sync
               run: |
@@ -33,7 +44,7 @@ jobs:
                   git diff --exit-code src/main/dsl/miniNotation/grammar.generated.ts
 
             - name: Unit tests (vitest)
-              run: yarn test:unit:ci
+              run: yarn test:unit
 
             # The vitest run above regenerates the committed Peggy↔Rust parity
             # fixture; fail if the checked-in copy drifted from the grammar.
@@ -41,8 +52,7 @@ jobs:
               run: git diff --exit-code crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
 
             # Generate the strudel-parity fixtures (not committed), then run the
-            # pure-DSP crate tests. Scoped to modular_core so CI needs no napi
-            # build or audio system deps (libasound/jack).
+            # pure-DSP crate tests.
             - name: Rust tests (modular_core)
               run: |
                   yarn gen:sp-fixtures
