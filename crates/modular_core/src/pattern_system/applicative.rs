@@ -3,6 +3,7 @@
 //! These operations combine two patterns using a function:
 //! - `app_left` - structure from the left (function) pattern
 //! - `app_right` - structure from the right (value) pattern
+//! - `app_both` - structure from both (intersection of wholes); strudel's `mix`
 
 use super::{ArenaHap, ArenaHapContext, Pattern, State};
 use bumpalo::Bump;
@@ -144,6 +145,57 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         )
     }
 
+    /// Combine patterns preserving structure from both sides.
+    ///
+    /// Output haps are emitted at every intersection of left and right haps.
+    /// The new `whole` is the intersection of the two wholes (drops the hap
+    /// if either whole exists and they don't intersect). Models strudel's
+    /// `appBoth` — the `mix` alignment mode.
+    pub fn app_both<U, V, F>(&self, pat_val: &Pattern<U>, f: F) -> Pattern<V>
+    where
+        U: Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        F: Fn(&T, &U) -> V + Send + Sync + 'static,
+    {
+        let pat_fn = self.clone();
+        let pat_val = pat_val.clone();
+        let f = Arc::new(f);
+
+        Pattern::new_into(
+            move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, V>>| {
+                let mut haps_fn: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                pat_fn.query_into(state, bump, &mut haps_fn);
+                let mut haps_val: BumpVec<'_, ArenaHap<'_, U>> = BumpVec::new_in(bump);
+                pat_val.query_into(state, bump, &mut haps_val);
+
+                for hap_fn in &haps_fn {
+                    for hap_val in haps_val.iter() {
+                        let new_whole = match (&hap_fn.whole, &hap_val.whole) {
+                            (Some(a), Some(b)) => match a.intersection(b) {
+                                Some(s) => Some(s),
+                                None => continue,
+                            },
+                            (None, w) | (w, None) => w.clone(),
+                        };
+                        if let Some(part) = hap_fn.part.intersection(&hap_val.part) {
+                            let value = f(&hap_fn.value, &hap_val.value);
+                            let context = ArenaHapContext::combine_in(
+                                &hap_fn.context,
+                                &hap_val.context,
+                                bump,
+                            );
+                            out.push(ArenaHap {
+                                whole: new_whole,
+                                part,
+                                value,
+                                context,
+                            });
+                        }
+                    }
+                }
+            },
+        )
+    }
 }
 
 #[cfg(test)]

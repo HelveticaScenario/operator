@@ -2,11 +2,22 @@
 //!
 //! These types represent the parsed structure of a mini notation pattern,
 //! including source span information for editor highlighting.
+//!
+//! Parsing itself lives TypeScript-side (`src/main/dsl/miniNotation/`). The
+//! DSL ships each `$cycle` / `$iCycle` pattern as a JSON `{ ast, source,
+//! all_spans }` payload built by `$p(...)`; the Rust side deserializes it
+//! here and forwards the `MiniAST` to `convert::convert` to build the
+//! `Pattern<T>`.
 
 use crate::pattern_system::SourceSpan;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 /// Source location in the original pattern string.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// Serialized as `{ "node": ..., "span": {...} }` to match the TS
+/// `Located<T>` shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Located<T> {
     pub node: T,
     pub span: SourceSpan,
@@ -22,7 +33,7 @@ impl<T> Located<T> {
 }
 
 /// AST for signed integer patterns (used for euclidean rotation).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum MiniASTI32 {
     /// A single value atom.
     Pure(Located<i32>),
@@ -67,10 +78,19 @@ pub enum MiniASTI32 {
         steps: Box<MiniASTU32>,
         rotation: Option<Box<MiniASTI32>>,
     },
+
+    /// Polymeter: `{a b, c d e}` or `{...}%n`. Each child sequence is scaled
+    /// so that all children fit into `steps_per_cycle` steps per cycle, then
+    /// stacked. Default `steps_per_cycle` is the step-count of the first
+    /// child.
+    Polymeter {
+        children: Vec<MiniASTI32>,
+        steps_per_cycle: Option<Box<MiniASTF64>>,
+    },
 }
 
 /// AST for unsigned integer patterns (used for euclidean pulses/steps).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum MiniASTU32 {
     /// A single value atom.
     Pure(Located<u32>),
@@ -117,9 +137,16 @@ pub enum MiniASTU32 {
         steps: Box<MiniASTU32>,
         rotation: Option<Box<MiniASTI32>>,
     },
+
+    /// Polymeter: `{...}` with optional `%n`. See `MiniAST::Polymeter`.
+    Polymeter {
+        children: Vec<MiniASTU32>,
+        steps_per_cycle: Option<Box<MiniASTF64>>,
+    },
 }
-/// The main AST node type.
-#[derive(Clone, Debug, PartialEq)]
+
+/// AST for f64-valued patterns (used for fast/slow factors).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum MiniASTF64 {
     /// A single value atom.
     Pure(Located<f64>),
@@ -166,9 +193,16 @@ pub enum MiniASTF64 {
         steps: Box<MiniASTU32>,
         rotation: Option<Box<MiniASTI32>>,
     },
+
+    /// Polymeter: `{...}` with optional `%n`. See `MiniAST::Polymeter`.
+    Polymeter {
+        children: Vec<MiniASTF64>,
+        steps_per_cycle: Option<Box<MiniASTF64>>,
+    },
 }
+
 /// The main AST node type.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum MiniAST {
     /// A single value atom.
     Pure(Located<AtomValue>),
@@ -203,7 +237,7 @@ pub enum MiniAST {
     Fast(Box<MiniAST>, Box<MiniASTF64>),
 
     /// Slow modifier: pattern / factor.
-    Slow(Box<MiniAST>, Box<MiniAST>),
+    Slow(Box<MiniAST>, Box<MiniASTF64>),
 
     /// Replicate: pattern ! n (repeat n times).
     /// Count is a plain u32 since Strudel doesn't support patterned replicate counts.
@@ -219,46 +253,55 @@ pub enum MiniAST {
         steps: Box<MiniASTU32>,
         rotation: Option<Box<MiniASTI32>>,
     },
+
+    /// Polymeter: `{a b, c d e}` with optional `%n` steps-per-cycle override.
+    /// Each child pattern is scaled so its step count maps to
+    /// `steps_per_cycle`; all scaled children are stacked. Default
+    /// `steps_per_cycle` is the step-count of the first child sequence.
+    /// Adapted from strudel's `polymeter` alignment in `packages/mini/mini.mjs`.
+    Polymeter {
+        children: Vec<MiniAST>,
+        steps_per_cycle: Option<Box<MiniASTF64>>,
+    },
 }
 
-/// Atomic value types.
-#[derive(Clone, Debug, PartialEq)]
+/// Atomic value types produced by the `$p()` DSL parser.
+///
+/// The reduced set from strudel's krill grammar: `Number` covers bare
+/// numeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), and
+/// `Note` covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`).
+/// Every other atom form (`m60` midi shorthand, sample-name identifiers,
+/// `2v` voltage, module references, quoted strings) has been removed from
+/// the grammar and is not representable here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum AtomValue {
-    /// Numeric value.
+    /// Numeric value. Module-level semantics decide the interpretation:
+    /// `$cycle` maps a bare `Number` to volts (1V/oct); `$iCycle` maps it
+    /// to an integer scale degree.
     Number(f64),
-
-    /// MIDI note number.
-    Midi(i32),
 
     /// Frequency in Hz.
     Hz(f64),
 
-    /// Voltage (for modular synth).
-    Volts(f64),
-
     /// Musical note (e.g., c4, a#3, bb5).
     Note {
         letter: char,
-        /// Accidental: '#' for sharp, 'b' for flat
+        /// Accidental: '#' for sharp, 'b' for flat.
         accidental: Option<char>,
         octave: Option<i32>,
     },
-
-    /// String identifier (for scale names, sample names, etc.).
-    Identifier(String),
-
-    /// Quoted string.
-    String(String),
 }
 
 impl AtomValue {
-    /// Convert to f64 if possible.
+    /// Convert to f64 (MIDI note number) if possible.
+    ///
+    /// Used by generic numeric converters; `SeqValue` and `IntervalValue`
+    /// handle each variant directly in their own `from_atom` to avoid the
+    /// loss of precision this method carries for `Hz`.
     pub fn to_f64(&self) -> Option<f64> {
         match self {
             AtomValue::Number(n) => Some(*n),
-            AtomValue::Midi(m) => Some(*m as f64),
             AtomValue::Hz(h) => Some(*h),
-            AtomValue::Volts(v) => Some(*v),
             AtomValue::Note {
                 letter,
                 accidental,
@@ -285,72 +328,92 @@ impl AtomValue {
                 let oct = octave.unwrap_or(4);
                 Some(((oct + 1) * 12 + base + acc_offset) as f64)
             }
-            AtomValue::Identifier(_) => None,
-            AtomValue::String(_) => None,
         }
     }
-
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_builders {
+    //! `#[cfg(test)]`-only helpers for constructing `MiniAST` nodes
+    //! programmatically. These replace the Pest parser in existing Rust
+    //! tests — see `pattern_system::mini::tests` / convert tests.
 
-    #[test]
-    fn test_note_to_f64() {
-        let c4 = AtomValue::Note {
-            letter: 'c',
-            accidental: None,
-            octave: Some(4),
-        };
-        assert_eq!(c4.to_f64(), Some(60.0)); // Middle C
+    use super::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
+    use crate::pattern_system::SourceSpan;
 
-        let a4 = AtomValue::Note {
-            letter: 'a',
-            accidental: None,
-            octave: Some(4),
-        };
-        assert_eq!(a4.to_f64(), Some(69.0)); // A440
+    pub fn span(start: usize, end: usize) -> SourceSpan {
+        SourceSpan::new(start, end)
     }
 
-    #[test]
-    fn test_collect_leaf_spans_includes_modifiers() {
-        use super::super::parser::parse;
+    pub fn pure_number(n: f64, start: usize, end: usize) -> MiniAST {
+        MiniAST::Pure(Located::new(AtomValue::Number(n), start, end))
+    }
 
-        // Pattern: "c*[1 2]" - both 'c' and '1', '2' should have spans
-        // "c*[1 2]" positions:
-        //  c at 0-1
-        //  * at 1
-        //  [ at 2
-        //  1 at 3-4
-        //  space at 4
-        //  2 at 5-6
-        //  ] at 6
-        let ast = parse("c*[1 2]").unwrap();
-        let spans = collect_leaf_spans(&ast);
+    pub fn pure_note(letter: char, octave: i32, start: usize, end: usize) -> MiniAST {
+        MiniAST::Pure(Located::new(
+            AtomValue::Note {
+                letter: letter.to_ascii_lowercase(),
+                accidental: None,
+                octave: Some(octave),
+            },
+            start,
+            end,
+        ))
+    }
 
-        // Should have 3 spans: c, 1, and 2
-        assert_eq!(
-            spans.len(),
-            3,
-            "Expected 3 spans (c, 1, 2), got {:?}",
-            spans
-        );
-        assert!(
-            spans.contains(&(0, 1)),
-            "Missing span for 'c' at 0-1: {:?}",
-            spans
-        );
-        assert!(
-            spans.contains(&(3, 4)),
-            "Missing span for '1' at 3-4: {:?}",
-            spans
-        );
-        assert!(
-            spans.contains(&(5, 6)),
-            "Missing span for '2' at 5-6: {:?}",
-            spans
-        );
+    pub fn rest(start: usize, end: usize) -> MiniAST {
+        MiniAST::Rest(span(start, end))
+    }
+
+    pub fn seq(items: Vec<(MiniAST, Option<f64>)>) -> MiniAST {
+        MiniAST::Sequence(items)
+    }
+
+    pub fn fastcat(items: Vec<(MiniAST, Option<f64>)>) -> MiniAST {
+        MiniAST::FastCat(items)
+    }
+
+    pub fn slowcat(items: Vec<(MiniAST, Option<f64>)>) -> MiniAST {
+        MiniAST::SlowCat(items)
+    }
+
+    pub fn fast_f64(pattern: MiniAST, factor: f64, start: usize, end: usize) -> MiniAST {
+        MiniAST::Fast(
+            Box::new(pattern),
+            Box::new(MiniASTF64::Pure(Located::new(factor, start, end))),
+        )
+    }
+
+    pub fn euclidean(pattern: MiniAST, pulses: u32, steps: u32) -> MiniAST {
+        MiniAST::Euclidean {
+            pattern: Box::new(pattern),
+            pulses: Box::new(MiniASTU32::Pure(Located::new(pulses, 0, 0))),
+            steps: Box::new(MiniASTU32::Pure(Located::new(steps, 0, 0))),
+            rotation: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn euclidean_with_rotation(
+        pattern: MiniAST,
+        pulses: u32,
+        steps: u32,
+        rotation: i32,
+    ) -> MiniAST {
+        MiniAST::Euclidean {
+            pattern: Box::new(pattern),
+            pulses: Box::new(MiniASTU32::Pure(Located::new(pulses, 0, 0))),
+            steps: Box::new(MiniASTU32::Pure(Located::new(steps, 0, 0))),
+            rotation: Some(Box::new(MiniASTI32::Pure(Located::new(rotation, 0, 0)))),
+        }
+    }
+
+    pub fn replicate(pattern: MiniAST, count: u32) -> MiniAST {
+        MiniAST::Replicate(Box::new(pattern), count)
+    }
+
+    pub fn degrade(pattern: MiniAST, prob: Option<f64>, seed: u64) -> MiniAST {
+        MiniAST::Degrade(Box::new(pattern), prob, seed)
     }
 }
 
@@ -396,8 +459,7 @@ fn collect_leaf_spans_recursive(ast: &MiniAST, spans: &mut Vec<(usize, usize)>) 
         }
         MiniAST::Slow(pattern, factor) => {
             collect_leaf_spans_recursive(pattern, spans);
-            // Slow's factor is MiniAST, not MiniASTF64
-            collect_leaf_spans_recursive(factor, spans);
+            collect_f64_spans(factor, spans);
         }
         MiniAST::Replicate(pattern, _count) => {
             collect_leaf_spans_recursive(pattern, spans);
@@ -416,6 +478,17 @@ fn collect_leaf_spans_recursive(ast: &MiniAST, spans: &mut Vec<(usize, usize)>) 
             collect_u32_spans(steps, spans);
             if let Some(rot) = rotation {
                 collect_i32_spans(rot, spans);
+            }
+        }
+        MiniAST::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            for child in children {
+                collect_leaf_spans_recursive(child, spans);
+            }
+            if let Some(spc) = steps_per_cycle {
+                collect_f64_spans(spc, spans);
             }
         }
     }
@@ -477,6 +550,17 @@ fn collect_f64_spans(ast: &MiniASTF64, spans: &mut Vec<(usize, usize)>) {
                 collect_i32_spans(rot, spans);
             }
         }
+        MiniASTF64::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            for child in children {
+                collect_f64_spans(child, spans);
+            }
+            if let Some(spc) = steps_per_cycle {
+                collect_f64_spans(spc, spans);
+            }
+        }
     }
 }
 
@@ -534,6 +618,17 @@ fn collect_u32_spans(ast: &MiniASTU32, spans: &mut Vec<(usize, usize)>) {
             collect_u32_spans(steps, spans);
             if let Some(rot) = rotation {
                 collect_i32_spans(rot, spans);
+            }
+        }
+        MiniASTU32::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            for child in children {
+                collect_u32_spans(child, spans);
+            }
+            if let Some(spc) = steps_per_cycle {
+                collect_f64_spans(spc, spans);
             }
         }
     }
@@ -595,6 +690,107 @@ fn collect_i32_spans(ast: &MiniASTI32, spans: &mut Vec<(usize, usize)>) {
                 collect_i32_spans(rot, spans);
             }
         }
+        MiniASTI32::Polymeter {
+            children,
+            steps_per_cycle,
+        } => {
+            for child in children {
+                collect_i32_spans(child, spans);
+            }
+            if let Some(spc) = steps_per_cycle {
+                collect_f64_spans(spc, spans);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_builders::*;
+    use super::*;
+
+    #[test]
+    fn test_collect_leaf_spans_basic() {
+        // Sequence of three Pure atoms: "0 1 2" -> spans (0,1), (2,3), (4,5).
+        let ast = seq(vec![
+            (pure_number(0.0, 0, 1), None),
+            (pure_number(1.0, 2, 3), None),
+            (pure_number(2.0, 4, 5), None),
+        ]);
+        let spans = collect_leaf_spans(&ast);
+        assert_eq!(spans, vec![(0, 1), (2, 3), (4, 5)]);
+    }
+
+    #[test]
+    fn test_collect_leaf_spans_includes_modifier_factors() {
+        // "c*[1 2]" — collector should include c, 1, 2 spans.
+        let ast = MiniAST::Fast(
+            Box::new(pure_note('c', 4, 0, 1)),
+            Box::new(MiniASTF64::FastCat(vec![
+                (MiniASTF64::Pure(Located::new(1.0, 3, 4)), None),
+                (MiniASTF64::Pure(Located::new(2.0, 5, 6)), None),
+            ])),
+        );
+        let spans = collect_leaf_spans(&ast);
+        assert_eq!(spans.len(), 3);
+        assert!(spans.contains(&(0, 1)));
+        assert!(spans.contains(&(3, 4)));
+        assert!(spans.contains(&(5, 6)));
+    }
+
+    #[test]
+    fn test_atom_value_to_f64() {
+        assert_eq!(AtomValue::Number(42.0).to_f64(), Some(42.0));
+        assert_eq!(AtomValue::Hz(440.0).to_f64(), Some(440.0));
+
+        let c4 = AtomValue::Note {
+            letter: 'c',
+            accidental: None,
+            octave: Some(4),
+        };
+        assert_eq!(c4.to_f64(), Some(60.0));
+
+        let a4 = AtomValue::Note {
+            letter: 'a',
+            accidental: None,
+            octave: Some(4),
+        };
+        assert_eq!(a4.to_f64(), Some(69.0));
+    }
+
+    #[test]
+    fn test_roundtrip_serde_number() {
+        let ast = pure_number(1.5, 0, 3);
+        let json = serde_json::to_value(&ast).unwrap();
+        let decoded: MiniAST = serde_json::from_value(json).unwrap();
+        assert_eq!(ast, decoded);
+    }
+
+    #[test]
+    fn test_roundtrip_serde_rest() {
+        let ast = rest(5, 6);
+        let json = serde_json::to_value(&ast).unwrap();
+        let decoded: MiniAST = serde_json::from_value(json).unwrap();
+        assert_eq!(ast, decoded);
+    }
+
+    #[test]
+    fn test_roundtrip_serde_sequence_with_weight() {
+        let ast = seq(vec![
+            (pure_number(0.0, 0, 1), Some(3.0)),
+            (pure_number(1.0, 3, 4), None),
+        ]);
+        let json = serde_json::to_value(&ast).unwrap();
+        let decoded: MiniAST = serde_json::from_value(json).unwrap();
+        assert_eq!(ast, decoded);
+    }
+
+    #[test]
+    fn test_roundtrip_serde_euclidean() {
+        let ast = euclidean(pure_number(1.0, 0, 1), 3, 8);
+        let json = serde_json::to_value(&ast).unwrap();
+        let decoded: MiniAST = serde_json::from_value(json).unwrap();
+        assert_eq!(ast, decoded);
     }
 }
 
@@ -604,7 +800,12 @@ fn collect_i32_spans(ast: &MiniASTI32, spans: &mut Vec<(usize, usize)>) {
 /// the same seed assignments, regardless of construction order or concurrent
 /// parses. The counter is incremented depth-first, matching the left-to-right
 /// source order of `?` and `|` operators (like Strudel's `var seed = 0`).
-pub fn assign_seeds(ast: &mut MiniAST, counter: &mut u64) {
+///
+/// Now that parsing lives TypeScript-side, seeds are assigned there and this
+/// function is retained only for any test-only AST fixtures that need it.
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn assign_seeds(ast: &mut MiniAST, counter: &mut u64) {
     match ast {
         MiniAST::Pure(_) | MiniAST::Rest(_) => {}
         MiniAST::List(located) => {
@@ -629,13 +830,11 @@ pub fn assign_seeds(ast: &mut MiniAST, counter: &mut u64) {
                 assign_seeds(child, counter);
             }
         }
-        MiniAST::Fast(pattern, factor) => {
+        MiniAST::Fast(pattern, _factor) => {
             assign_seeds(pattern, counter);
-            assign_seeds_f64(factor, counter);
         }
-        MiniAST::Slow(pattern, factor) => {
+        MiniAST::Slow(pattern, _factor) => {
             assign_seeds(pattern, counter);
-            assign_seeds(factor, counter);
         }
         MiniAST::Replicate(pattern, _) => {
             assign_seeds(pattern, counter);
@@ -645,179 +844,12 @@ pub fn assign_seeds(ast: &mut MiniAST, counter: &mut u64) {
             *counter += 1;
             assign_seeds(pattern, counter);
         }
-        MiniAST::Euclidean {
-            pattern,
-            pulses,
-            steps,
-            rotation,
-        } => {
+        MiniAST::Euclidean { pattern, .. } => {
             assign_seeds(pattern, counter);
-            assign_seeds_u32(pulses, counter);
-            assign_seeds_u32(steps, counter);
-            if let Some(rot) = rotation {
-                assign_seeds_i32(rot, counter);
-            }
         }
-    }
-}
-
-/// Assign deterministic seeds to `RandomChoice`/`Degrade` nodes in an f64 AST.
-fn assign_seeds_f64(ast: &mut MiniASTF64, counter: &mut u64) {
-    match ast {
-        MiniASTF64::Pure(_) | MiniASTF64::Rest(_) => {}
-        MiniASTF64::List(located) => {
-            for child in &mut located.node {
-                assign_seeds_f64(child, counter);
-            }
-        }
-        MiniASTF64::Sequence(items) | MiniASTF64::FastCat(items) | MiniASTF64::SlowCat(items) => {
-            for (child, _) in items {
-                assign_seeds_f64(child, counter);
-            }
-        }
-        MiniASTF64::Stack(items) => {
-            for child in items {
-                assign_seeds_f64(child, counter);
-            }
-        }
-        MiniASTF64::RandomChoice(items, seed) => {
-            *seed = *counter;
-            *counter += 1;
-            for child in items {
-                assign_seeds_f64(child, counter);
-            }
-        }
-        MiniASTF64::Fast(pattern, factor) | MiniASTF64::Slow(pattern, factor) => {
-            assign_seeds_f64(pattern, counter);
-            assign_seeds_f64(factor, counter);
-        }
-        MiniASTF64::Replicate(pattern, _) => {
-            assign_seeds_f64(pattern, counter);
-        }
-        MiniASTF64::Degrade(pattern, _, seed) => {
-            *seed = *counter;
-            *counter += 1;
-            assign_seeds_f64(pattern, counter);
-        }
-        MiniASTF64::Euclidean {
-            pattern,
-            pulses,
-            steps,
-            rotation,
-        } => {
-            assign_seeds_f64(pattern, counter);
-            assign_seeds_u32(pulses, counter);
-            assign_seeds_u32(steps, counter);
-            if let Some(rot) = rotation {
-                assign_seeds_i32(rot, counter);
-            }
-        }
-    }
-}
-
-/// Assign deterministic seeds to `RandomChoice`/`Degrade` nodes in a u32 AST.
-fn assign_seeds_u32(ast: &mut MiniASTU32, counter: &mut u64) {
-    match ast {
-        MiniASTU32::Pure(_) | MiniASTU32::Rest(_) => {}
-        MiniASTU32::List(located) => {
-            for child in &mut located.node {
-                assign_seeds_u32(child, counter);
-            }
-        }
-        MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
-            for (child, _) in items {
-                assign_seeds_u32(child, counter);
-            }
-        }
-        MiniASTU32::Stack(items) => {
-            for child in items {
-                assign_seeds_u32(child, counter);
-            }
-        }
-        MiniASTU32::RandomChoice(items, seed) => {
-            *seed = *counter;
-            *counter += 1;
-            for child in items {
-                assign_seeds_u32(child, counter);
-            }
-        }
-        MiniASTU32::Fast(pattern, factor) | MiniASTU32::Slow(pattern, factor) => {
-            assign_seeds_u32(pattern, counter);
-            assign_seeds_f64(factor, counter);
-        }
-        MiniASTU32::Replicate(pattern, _) => {
-            assign_seeds_u32(pattern, counter);
-        }
-        MiniASTU32::Degrade(pattern, _, seed) => {
-            *seed = *counter;
-            *counter += 1;
-            assign_seeds_u32(pattern, counter);
-        }
-        MiniASTU32::Euclidean {
-            pattern,
-            pulses,
-            steps,
-            rotation,
-        } => {
-            assign_seeds_u32(pattern, counter);
-            assign_seeds_u32(pulses, counter);
-            assign_seeds_u32(steps, counter);
-            if let Some(rot) = rotation {
-                assign_seeds_i32(rot, counter);
-            }
-        }
-    }
-}
-
-/// Assign deterministic seeds to `RandomChoice`/`Degrade` nodes in an i32 AST.
-fn assign_seeds_i32(ast: &mut MiniASTI32, counter: &mut u64) {
-    match ast {
-        MiniASTI32::Pure(_) | MiniASTI32::Rest(_) => {}
-        MiniASTI32::List(located) => {
-            for child in &mut located.node {
-                assign_seeds_i32(child, counter);
-            }
-        }
-        MiniASTI32::Sequence(items) | MiniASTI32::FastCat(items) | MiniASTI32::SlowCat(items) => {
-            for (child, _) in items {
-                assign_seeds_i32(child, counter);
-            }
-        }
-        MiniASTI32::Stack(items) => {
-            for child in items {
-                assign_seeds_i32(child, counter);
-            }
-        }
-        MiniASTI32::RandomChoice(items, seed) => {
-            *seed = *counter;
-            *counter += 1;
-            for child in items {
-                assign_seeds_i32(child, counter);
-            }
-        }
-        MiniASTI32::Fast(pattern, factor) | MiniASTI32::Slow(pattern, factor) => {
-            assign_seeds_i32(pattern, counter);
-            assign_seeds_f64(factor, counter);
-        }
-        MiniASTI32::Replicate(pattern, _) => {
-            assign_seeds_i32(pattern, counter);
-        }
-        MiniASTI32::Degrade(pattern, _, seed) => {
-            *seed = *counter;
-            *counter += 1;
-            assign_seeds_i32(pattern, counter);
-        }
-        MiniASTI32::Euclidean {
-            pattern,
-            pulses,
-            steps,
-            rotation,
-        } => {
-            assign_seeds_i32(pattern, counter);
-            assign_seeds_u32(pulses, counter);
-            assign_seeds_u32(steps, counter);
-            if let Some(rot) = rotation {
-                assign_seeds_i32(rot, counter);
+        MiniAST::Polymeter { children, .. } => {
+            for child in children {
+                assign_seeds(child, counter);
             }
         }
     }

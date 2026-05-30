@@ -10,7 +10,7 @@ import {
     shell,
 } from 'electron';
 import type { PatchGraph, AudioConfigOptions } from '@modular/core';
-import { getMiniLeafSpans, Synthesizer } from '@modular/core';
+import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import type {
     IPCHandlers,
@@ -992,8 +992,6 @@ registerIPCHandler('SYNTH_GET_SCOPE_XY', () => synth.getScopeXy());
 
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
-registerIPCHandler('GET_MINI_LEAF_SPANS', (source) => getMiniLeafSpans(source));
-
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     // Requirement: assume a full change when a different file/buffer is evaluated.
     const shouldReconcile =
@@ -1887,22 +1885,34 @@ const createMenu = (): void => {
         {
             role: 'windowMenu',
         },
-        // Help menu (non-macOS: includes Check for Updates)
-        ...(!isMac
-            ? ([
-                  {
-                      label: 'Help',
-                      submenu: [
+        // Help menu — Migrate is cross-platform; Check for Updates is
+        // already in the App menu on macOS, so only add it elsewhere.
+        {
+            role: 'help',
+            submenu: [
+                {
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(MENU_CHANNELS.MIGRATE_BUFFER);
+                        }
+                    },
+                    label: 'Migrate $cycle / $iCycle to $p / $p.s...',
+                },
+                ...(!isMac
+                    ? ([
+                          { type: 'separator' },
                           {
                               click: async () => {
                                   await checkForUpdateAvailability();
                               },
                               label: 'Check for Updates...',
                           },
-                      ],
-                  },
-              ] satisfies Electron.MenuItemConstructorOptions[])
-            : []),
+                      ] satisfies Electron.MenuItemConstructorOptions[])
+                    : []),
+            ],
+        },
     ];
 
     const menu = Menu.buildFromTemplate(template);

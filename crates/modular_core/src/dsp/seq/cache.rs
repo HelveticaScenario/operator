@@ -32,6 +32,17 @@ pub(crate) const MIN_SPANS_CAP_HINT: usize = 32;
 /// Initial span_arena sizing per cached cycle.
 pub(crate) const SPANS_RESERVE_PER_HAP: usize = 4;
 
+/// Flat span entry tagged with the source pattern it belongs to. Shared
+/// between `Seq`'s `SpPattern` payloads and `IntervalSeq`'s combined
+/// `$iCycle` patterns — both need per-source highlighting when one runtime
+/// hap was produced from multiple input pattern strings.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FlatSpan {
+    pub pattern_idx: u8,
+    pub start: u32,
+    pub end: u32,
+}
+
 /// Per-cycle storage: parallel hap + span arena. Pre-allocated so the
 /// audio thread can `push` into both vectors alloc-free as long as the
 /// pre-sized capacity holds.

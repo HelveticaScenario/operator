@@ -37,6 +37,7 @@ pub mod euclidean;
 pub mod mini;
 pub mod monadic;
 pub mod random;
+pub mod sp_combine;
 
 pub use fraction::Fraction;
 pub use hap::{ArenaHap, ArenaHapContext, DspHap, Hap, HapContext, SourceSpan};

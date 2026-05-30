@@ -10,7 +10,15 @@ use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
 use modular_core::types::{ModuleState, PatchGraph, Sampleable};
-use serde_json::json;
+use serde_json::{Value, json};
+
+/// Helper — build a mini-notation payload shaped like what `$p(source)`
+/// would emit on the DSL side. `$cycle` / `$iCycle` no longer accept bare
+/// strings; the wire shape is `{ ast, source, all_spans }`.
+fn mini_payload(source: &str) -> Value {
+    let parsed = modular_core::dsp::seq::seq_value::ParsedPatternPayload::parse_for_test(source);
+    serde_json::to_value(&parsed).expect("payload should serialize")
+}
 
 const SAMPLE_RATE: f32 = 48000.0;
 const DEFAULT_PORT: &str = "output";
@@ -306,9 +314,11 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$xover" => json!({ "input": 0.0, "lowMidFreq": 0.0, "midHighFreq": 0.0 }),
         "$comp" => json!({ "input": 0.0, "threshold": 0.0 }),
         "$wrap" | "$clamp" => json!({ "input": 0.0, "min": -5.0, "max": 5.0 }),
+        "$addHz" => json!({ "input": 0.0, "offset": 0.0 }),
+        "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
         "$curve" => json!({ "input": 0.0, "exp": 1.0 }),
-        "$cycle" | "$intervalSeq" => json!({ "pattern": "0" }),
-        "$iCycle" => json!({ "patterns": "0", "scale": "c(major)" }),
+        "$cycle" | "$intervalSeq" => json!({ "pattern": mini_payload("0") }),
+        "$iCycle" => json!({ "patterns": mini_payload("0"), "scale": "c(major)" }),
         "$slew" | "$quantizer" | "$unison" | "$crush" | "$feedback" | "$pulsar" | "$rising"
         | "$falling" | "$stereoMix" => json!({ "input": 0.0 }),
         "$track" => json!({ "keyframes": [] }),
@@ -1132,7 +1142,7 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         (
             "seq",
             "$iCycle",
-            json!({ "patterns": "<0 ~>", "scale": "d#(min)" }),
+            json!({ "patterns": mini_payload("<0 ~>"), "scale": "d#(min)" }),
         ),
     ]);
 
@@ -1193,6 +1203,245 @@ fn interval_seq_cv_holds_during_rest_after_state_transfer() {
         (new_cv - expected_voltage).abs() < 0.01,
         "after state transfer during rest, CV should hold {expected_voltage}V, got {new_cv}\n\
          (0.0 means inner outputs were not preserved across state transfer)"
+    );
+}
+
+// ─── Seq stale cached_hap survives transfer_state_from (highlight pin) ────────
+
+/// Build the `$p.s(...)` chained payload wire shape that the TS `$p.s` helper
+/// emits: `{ __kind: "SpPattern", sources, scale, ops, argument_spans }`.
+/// Each source is a `ParsedPatternPayload` (`{ ast, source, all_spans }`).
+fn sp_payload(sources: &[&str], scale: &str, ops: Vec<(&str, &str)>) -> Value {
+    let srcs: Vec<Value> = sources.iter().map(|s| mini_payload(s)).collect();
+    let ops_json: Vec<Value> = ops
+        .into_iter()
+        .map(|(op, mode)| json!({ "op": op, "mode": mode }))
+        .collect();
+    json!({
+        "__kind": "SpPattern",
+        "sources": srcs,
+        "scale": scale,
+        "ops": ops_json,
+        "argument_spans": [],
+    })
+}
+
+/// Sum the number of highlight spans across every `pattern.*` (or `pattern`)
+/// key in a `get_state()` param_spans object. Returns `None` if the module
+/// produced no state at all.
+fn total_highlight_spans(state: &Option<Value>) -> Option<usize> {
+    let state = state.as_ref()?;
+    let param_spans = state.get("param_spans")?.as_object()?;
+    let mut total = 0;
+    for (_key, entry) in param_spans {
+        if let Some(spans) = entry.get("spans").and_then(|s| s.as_array()) {
+            total += spans.len();
+        }
+    }
+    Some(total)
+}
+
+#[test]
+fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
+    // Regression for the stale cached_hap highlight bug.
+    //
+    // On a live edit that turns `$cycle($p('[0 1 2 3 4 5 6] 5'))` into the
+    // chained `$cycle($p.s('0 5').sub('2 4'))`, patchSimilarityRemap reuses the
+    // Seq module. apply_patch_update rebuilds it with FRESH multi-source params
+    // (is_multi_source=true, per_source=2, a freshly baked multi-source
+    // cached_haps), but transfer_state_from std::mem::swaps the OLD SeqState
+    // (voices[].cached_hap holding a hap_index computed against the OLD
+    // single-source pattern) into the new module. on_patch_update clears
+    // current_cycle + module_cache but NOT voices[].cached_hap.
+    //
+    // The held voice still satisfies cached.contains(playhead) off its scalar
+    // whole_begin/whole_end, so it is not released and no fresh onset fires
+    // mid-step. The OLD pattern packed 7 sub-haps into the left half, so the
+    // voice latched on the trailing `5` carries a hap_index (>= 2) that is OUT
+    // OF RANGE in the new 2-hap multi-source storage — exactly the stale-index
+    // symptom. But the held note's geometry (whole_begin=0.5, whole_end=1.0)
+    // IS present in the new pattern: it's step 1 (`5 - 4 = 1`), now at a
+    // different index. The fix self-heals the highlight read by re-resolving
+    // the hap via geometry instead of trusting the stale index.
+    //
+    // Desired behaviour (this test asserts it): immediately after transfer +
+    // on_patch_update — with no ClearPatch / transport restart and a voice
+    // still held — get_state yields NON-EMPTY pattern.0 AND pattern.1 spans
+    // matching the step the voice is actually playing. No re-latch needed.
+    // The equal-geometry single-source case is kept as a negative control.
+
+    // --- Patch A: single-source $cycle($p('[0 1 2 3 4 5 6] 5')). ---
+    // The left group packs 7 sub-haps into 0.0..0.5; the trailing `5` occupies
+    // 0.5..1.0. Latching on `5` gives a hap_index well past the 2 haps the new
+    // multi-source pattern will hold, so the transferred index is out of range.
+    let graph_a = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[0 1 2 3 4 5 6] 5") }),
+        ),
+    ]);
+    let old_patch =
+        Patch::from_graph(&graph_a, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("A from_graph failed");
+
+    // One bar = 240 samples. The trailing `5` covers 0.5..1.0 (samples
+    // 120..240). Advance ~180 samples so the playhead sits at ~0.75, latching
+    // the `5` hap (geometry whole_begin=0.5, whole_end=1.0).
+    for _ in 0..180 {
+        process_frame(&old_patch);
+    }
+
+    // Sanity: the OLD single-source module reports a non-empty highlight.
+    let old_state = old_patch.sampleables.get("seq").unwrap().get_state();
+    let old_spans = total_highlight_spans(&old_state);
+    assert!(
+        matches!(old_spans, Some(n) if n > 0),
+        "old single-source module should highlight the held `5` step; got state={old_state:?}"
+    );
+
+    // CV the held voice is producing. `5` is bare-number degree 5 → 5 V/oct.
+    // We later confirm the read-only highlight resolver leaves it untouched.
+    let old_cv = old_patch
+        .sampleables
+        .get("seq")
+        .unwrap()
+        .get_value_at("cv", 0, 0);
+
+    // --- Patch B: chained $cycle($p.s('0 5').sub('2 4')) in c(maj). ---
+    // 2 steps: step0 = 0-2 = -2, step1 = 5-4 = 1 — both non-rest degrees.
+    // step1's geometry (0.5..1.0) matches the held voice's scalars; its
+    // storage index (1) differs from the stale transferred index.
+    let graph_b = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": sp_payload(&["0 5", "2 4"], "c(maj)", vec![("sub", "in")]) }),
+        ),
+    ]);
+    let new_patch =
+        Patch::from_graph(&graph_b, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("B from_graph failed");
+
+    // Replicate apply_patch_update's reuse path: transfer state, reconnect,
+    // on_patch_update. NO ClearPatch / transport reset.
+    for (id, new_module) in &new_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    for module in new_patch.sampleables.values() {
+        module.connect(&new_patch);
+    }
+    for module in new_patch.sampleables.values() {
+        module.on_patch_update();
+    }
+
+    // Run ONE frame on B — still mid-step (playhead ~0.75 in step 1), the
+    // swapped voice is held off its scalar whole_begin/whole_end, so no fresh
+    // onset fires this frame.
+    process_frame(&new_patch);
+
+    let seq_b = new_patch.sampleables.get("seq").unwrap();
+    let healed_state = seq_b.get_state();
+    let healed_spans = total_highlight_spans(&healed_state);
+    let healed_keys: Vec<String> = healed_state
+        .as_ref()
+        .and_then(|s| s.get("param_spans"))
+        .and_then(|p| p.as_object())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+
+    eprintln!("--- seq highlight transfer (self-heal) ---");
+    eprintln!("old (single-source) total spans = {old_spans:?}");
+    eprintln!("after transfer, param_spans keys = {healed_keys:?}");
+    eprintln!("after transfer, total spans      = {healed_spans:?}");
+    eprintln!("healed state = {healed_state:?}");
+
+    // The fix: immediately after transfer (no restart), with a voice still
+    // held off a stale/out-of-range hap_index, the highlight read self-heals
+    // by geometry and surfaces the spans for the step actually playing.
+    assert!(
+        matches!(healed_spans, Some(n) if n > 0),
+        "after state transfer with a held voice, the highlight should self-heal \
+         (re-resolve the stale hap_index by geometry) and be NON-EMPTY. \
+         Got total={healed_spans:?}, keys={healed_keys:?}, state={healed_state:?}"
+    );
+
+    // Multi-source: both pattern.0 (`5`) and pattern.1 (`4`) contributed to the
+    // held step, so both keys must carry spans.
+    let param_spans = healed_state
+        .as_ref()
+        .and_then(|s| s.get("param_spans"))
+        .and_then(|p| p.as_object())
+        .expect("param_spans map present");
+    for key in ["pattern.0", "pattern.1"] {
+        let spans = param_spans
+            .get(key)
+            .and_then(|e| e.get("spans"))
+            .and_then(|v| v.as_array())
+            .unwrap_or_else(|| panic!("missing {key} spans: {param_spans:?}"));
+        assert!(
+            !spans.is_empty(),
+            "{key} should carry spans for the held step after self-heal: {param_spans:?}"
+        );
+    }
+
+    // Audio path untouched: get_state is read-only, so the held voice's CV is
+    // still the value it was producing before (and after) the highlight read.
+    // (`5` in c(maj) `$p.s('0 5').sub('2 4')` step1 = degree 1; we only check
+    // the CV did not collapse to 0 — the resolver must not perturb voice
+    // scalars.) The pre-transfer CV is the old single-source `5` = 5 V.
+    let new_cv = seq_b.get_value_at("cv", 0, 0);
+    assert!(
+        new_cv.abs() > f32::EPSILON,
+        "held voice CV should remain non-zero across the read-only highlight \
+         resolve (audio path must be untouched); old_cv={old_cv}, new_cv={new_cv}"
+    );
+
+    // Negative control: an equal-geometry single-source re-run never had the
+    // stale-index problem. Transferring into the SAME single-source pattern
+    // keeps hap_index valid and highlight present — verifies the resolver's
+    // trust-the-index fast path still works.
+    let graph_c = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[0 1 2 3 4 5 6] 5") }),
+        ),
+    ]);
+    let ctrl_patch =
+        Patch::from_graph(&graph_c, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("C from_graph failed");
+    for (id, new_module) in &ctrl_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    for module in ctrl_patch.sampleables.values() {
+        module.connect(&ctrl_patch);
+    }
+    for module in ctrl_patch.sampleables.values() {
+        module.on_patch_update();
+    }
+    process_frame(&ctrl_patch);
+    let ctrl_spans = total_highlight_spans(&ctrl_patch.sampleables.get("seq").unwrap().get_state());
+    assert!(
+        matches!(ctrl_spans, Some(n) if n > 0),
+        "equal-geometry single-source re-run should keep highlight (index still \
+         valid, fast path); got {ctrl_spans:?}"
     );
 }
 

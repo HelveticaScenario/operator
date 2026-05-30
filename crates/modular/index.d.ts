@@ -215,22 +215,6 @@ export interface DeviceCacheSnapshot {
 }
 
 /**
- * Parse a mini notation pattern and return all leaf spans.
- *
- * This is used by the Monaco editor to create tracked decorations
- * that move with text edits.
- */
-export declare function getMiniLeafSpans(source: string): Array<Array<number>>
-
-/**
- * Analyze a mini notation pattern and return the maximum polyphony needed.
- *
- * Queries 90 cycles (3 min at 120 BPM) and counts the maximum number of simultaneous haps,
- * capping at 16 (the poly voice limit). Logs timing for profiling.
- */
-export declare function getPatternPolyphony(source: string): number
-
-/**
  * Returns the list of reserved output names that cannot be used as module output port names.
  * These are names that conflict with built-in properties/methods on ModuleOutput, Collection, etc.
  */

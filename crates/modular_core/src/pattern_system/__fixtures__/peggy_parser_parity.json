@@ -1,0 +1,962 @@
+[
+  {
+    "label": "pure number",
+    "input": "0",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Number": 0
+        },
+        "span": {
+          "start": 0,
+          "end": 1
+        }
+      }
+    }
+  },
+  {
+    "label": "pure negative number",
+    "input": "-3",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Number": -3
+        },
+        "span": {
+          "start": 0,
+          "end": 2
+        }
+      }
+    }
+  },
+  {
+    "label": "pure Hz",
+    "input": "440hz",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Hz": 440
+        },
+        "span": {
+          "start": 0,
+          "end": 5
+        }
+      }
+    }
+  },
+  {
+    "label": "note with octave",
+    "input": "c4",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "c",
+            "accidental": null,
+            "octave": 4
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 2
+        }
+      }
+    }
+  },
+  {
+    "label": "note bare letter (octave null)",
+    "input": "c",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "c",
+            "accidental": null,
+            "octave": null
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 1
+        }
+      }
+    }
+  },
+  {
+    "label": "note sharp",
+    "input": "c#4",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "c",
+            "accidental": "#",
+            "octave": 4
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 3
+        }
+      }
+    }
+  },
+  {
+    "label": "note flat",
+    "input": "eb3",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "e",
+            "accidental": "b",
+            "octave": 3
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 3
+        }
+      }
+    }
+  },
+  {
+    "label": "note s-alias sharp",
+    "input": "cs4",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "c",
+            "accidental": "#",
+            "octave": 4
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 3
+        }
+      }
+    }
+  },
+  {
+    "label": "rest tilde",
+    "input": "~",
+    "peggy_ast": {
+      "Rest": {
+        "start": 0,
+        "end": 1
+      }
+    }
+  },
+  {
+    "label": "sequence (null weights)",
+    "input": "0 1 2",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 2,
+                "end": 3
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 4,
+                "end": 5
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "fast subsequence []",
+    "input": "[0 1] 2",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "FastCat": [
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 0
+                    },
+                    "span": {
+                      "start": 1,
+                      "end": 2
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 1
+                    },
+                    "span": {
+                      "start": 3,
+                      "end": 4
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 6,
+                "end": 7
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "slow subsequence <>",
+    "input": "<0 1 2>",
+    "peggy_ast": {
+      "SlowCat": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 3,
+                "end": 4
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 5,
+                "end": 6
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "stack via comma",
+    "input": "0,1,2",
+    "peggy_ast": {
+      "Stack": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Pure": {
+            "node": {
+              "Number": 1
+            },
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        },
+        {
+          "Pure": {
+            "node": {
+              "Number": 2
+            },
+            "span": {
+              "start": 4,
+              "end": 5
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "nested stack inside []",
+    "input": "[0 1, 2 3]",
+    "peggy_ast": {
+      "FastCat": [
+        [
+          {
+            "Stack": [
+              {
+                "Sequence": [
+                  [
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 0
+                        },
+                        "span": {
+                          "start": 1,
+                          "end": 2
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 1
+                        },
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              },
+              {
+                "Sequence": [
+                  [
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 2
+                        },
+                        "span": {
+                          "start": 6,
+                          "end": 7
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 3
+                        },
+                        "span": {
+                          "start": 8,
+                          "end": 9
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ]
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "fast modifier *n",
+    "input": "0*2",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Pure": {
+            "node": 2,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "slow modifier /n",
+    "input": "0/2",
+    "peggy_ast": {
+      "Slow": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Pure": {
+            "node": 2,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "replicate !n",
+    "input": "0!3",
+    "peggy_ast": {
+      "Replicate": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        3
+      ]
+    }
+  },
+  {
+    "label": "replicate ! default",
+    "input": "0!",
+    "peggy_ast": {
+      "Replicate": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        2
+      ]
+    }
+  },
+  {
+    "label": "degrade ? with prob",
+    "input": "0?0.5",
+    "peggy_ast": {
+      "Degrade": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        0.5,
+        0
+      ]
+    }
+  },
+  {
+    "label": "degrade ? default prob (null)",
+    "input": "0?",
+    "peggy_ast": {
+      "Degrade": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        null,
+        0
+      ]
+    }
+  },
+  {
+    "label": "euclidean (k,n) no rotation",
+    "input": "0(3,8)",
+    "peggy_ast": {
+      "Euclidean": {
+        "pattern": {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        "pulses": {
+          "Pure": {
+            "node": 3,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        },
+        "steps": {
+          "Pure": {
+            "node": 8,
+            "span": {
+              "start": 4,
+              "end": 5
+            }
+          }
+        },
+        "rotation": null
+      }
+    }
+  },
+  {
+    "label": "euclidean with rotation",
+    "input": "0(3,8,1)",
+    "peggy_ast": {
+      "Euclidean": {
+        "pattern": {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        "pulses": {
+          "Pure": {
+            "node": 3,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        },
+        "steps": {
+          "Pure": {
+            "node": 8,
+            "span": {
+              "start": 4,
+              "end": 5
+            }
+          }
+        },
+        "rotation": {
+          "Pure": {
+            "node": 1,
+            "span": {
+              "start": 6,
+              "end": 7
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "label": "fast factor as subsequence",
+    "input": "c*[1 2]",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": {
+              "Note": {
+                "letter": "c",
+                "accidental": null,
+                "octave": null
+              }
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "FastCat": [
+            [
+              {
+                "Pure": {
+                  "node": 1,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "slow factor as fast subsequence",
+    "input": "0/[2 3]",
+    "peggy_ast": {
+      "Slow": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "FastCat": [
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 3,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "fast factor as slow subsequence",
+    "input": "0*<2 3>",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "SlowCat": [
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 3,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "slow factor as slow subsequence",
+    "input": "0/<2 3>",
+    "peggy_ast": {
+      "Slow": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "SlowCat": [
+            [
+              {
+                "Pure": {
+                  "node": 2,
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": 3,
+                  "span": {
+                    "start": 5,
+                    "end": 6
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "label": "weight @n positional",
+    "input": "0@2 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          2
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 4,
+                "end": 5
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "random choice |",
+    "input": "0|1|2",
+    "peggy_ast": {
+      "RandomChoice": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 2,
+                "end": 3
+              }
+            }
+          },
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 4,
+                "end": 5
+              }
+            }
+          }
+        ],
+        0
+      ]
+    }
+  },
+  {
+    "label": "rest inside choice",
+    "input": "0|~|2",
+    "peggy_ast": {
+      "RandomChoice": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          {
+            "Rest": {
+              "start": 2,
+              "end": 3
+            }
+          },
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 4,
+                "end": 5
+              }
+            }
+          }
+        ],
+        0
+      ]
+    }
+  }
+]

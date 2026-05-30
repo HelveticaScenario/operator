@@ -94,6 +94,93 @@ function getCalledFunctionName(call: CallExpression): string | null {
 }
 
 /**
+ * Identify a direct `$p.s(source, scale)` call: callee = `$p.s`, where
+ * `$p` is the bare mini-notation factory identifier.
+ */
+function isPsCall(call: CallExpression): boolean {
+    const expr = call.getExpression();
+    if (!Node.isPropertyAccessExpression(expr)) return false;
+    if (expr.getName() !== 's') return false;
+    const receiver = expr.getExpression();
+    return Node.isIdentifier(receiver) && receiver.getText() === '$p';
+}
+
+/**
+ * Identify `$p.s(...).add(...)`, `.sub(...)`, `.add.in(...)`,
+ * `.sub.squeeze(...)` and friends. Returns true when the chain root is
+ * `$p.s(...)`.
+ *
+ * Shapes covered:
+ * - `$p.s(...).add(rhs)` — callee = `<call>.add`
+ * - `$p.s(...).add.in(rhs)` — callee = `<call>.add.in`
+ * - longer chains: `.add(rhs).sub.squeeze(rhs2)` — each call's chain
+ *   root recurses through the receiver
+ */
+const SP_OPS = new Set(['add', 'sub']);
+const SP_MODES = new Set([
+    'in',
+    'out',
+    'mix',
+    'squeeze',
+    'squeezeout',
+    'reset',
+    'restart',
+]);
+
+function isSpChainCall(call: CallExpression): boolean {
+    const expr = call.getExpression();
+    if (!Node.isPropertyAccessExpression(expr)) return false;
+    const methodName = expr.getName();
+
+    // Two forms:
+    //   <receiver>.<op>(rhs)         where op ∈ {add, sub}
+    //   <receiver>.<op>.<mode>(rhs)  where op ∈ {add, sub}, mode ∈ MODES
+    let receiver = expr.getExpression();
+    if (SP_MODES.has(methodName)) {
+        if (!Node.isPropertyAccessExpression(receiver)) return false;
+        const innerName = receiver.getName();
+        if (!SP_OPS.has(innerName)) return false;
+        receiver = receiver.getExpression();
+    } else if (!SP_OPS.has(methodName)) {
+        return false;
+    }
+
+    return chainRootIsPs(receiver);
+}
+
+function chainRootIsPs(node: import('ts-morph').Node): boolean {
+    // Walk back through nested `.add(...).sub.x(...)` chains until we
+    // either reach the `$p.s(...)` root or something else.
+    let n: import('ts-morph').Node = node;
+    while (true) {
+        if (Node.isCallExpression(n)) {
+            const inner = n.getExpression();
+            if (Node.isPropertyAccessExpression(inner)) {
+                // `$p.s(...)` is the chain root.
+                const recv = inner.getExpression();
+                if (
+                    inner.getName() === 's' &&
+                    Node.isIdentifier(recv) &&
+                    recv.getText() === '$p'
+                ) {
+                    return true;
+                }
+                // Another chain link — recurse into its receiver.
+                n = recv;
+                continue;
+            }
+            // A bare-identifier call can never be the `$p.s` root.
+            return false;
+        }
+        if (Node.isPropertyAccessExpression(n)) {
+            n = n.getExpression();
+            continue;
+        }
+        return false;
+    }
+}
+
+/**
  * Get the full dotted path for a property access call.
  * e.g., "$.iCycle" for $.iCycle()
  */
@@ -466,6 +553,95 @@ export function analyzeArgumentSpans(
                 );
             }
             return; // $slider is not a module factory, skip further processing
+        }
+
+        // Track $p(literal) and $p.s(literal, scale) calls: register the
+        // source-literal span under the call site so the helper can embed
+        // its argument_span in the returned pattern at runtime. Factories
+        // that receive the pattern read that span as the argument_span for
+        // their pattern param. $p.s's second arg (scale) is config-only —
+        // not tracked for highlighting.
+        //
+        // $p.s is a property-access call, so V8 reports its call site at
+        // the `s` name position; key it there (the bare `$p` call keys at
+        // its own start).
+        const isPs = isPsCall(call);
+        if (funcName === '$p' || isPs) {
+            const pArgs = call.getArguments();
+            if (pArgs.length < 1) return;
+            const span = getTrackableSpan(pArgs[0], constMap);
+            if (!span) return;
+            const callExpr = call.getExpression();
+            const callStartPos =
+                isPs && Node.isPropertyAccessExpression(callExpr)
+                    ? callExpr.getNameNode().getStart()
+                    : call.getStart();
+            const { line, column } =
+                sourceFile.getLineAndColumnAtPos(callStartPos);
+            const columnOffset = line === 1 ? firstLineColumnOffset : 0;
+            const callKey: CallSiteKey = `${line + lineOffset}:${column + columnOffset}`;
+            const argsMap = new Map<string, SourceSpan>();
+            argsMap.set('source', span);
+            registry.set(callKey, {
+                args: argsMap,
+                moduleType: isPs ? '$p.s' : '$p',
+            });
+            // Resolve interpolations for template expressions passed as source
+            const innerNode = getTrackableNode(pArgs[0], constNodeMap);
+            if (innerNode) {
+                const resolutions = resolveInterpolations(
+                    innerNode,
+                    constNodeMap,
+                    constMap,
+                );
+                if (resolutions) {
+                    const spanKey = `${span.start}:${span.end}`;
+                    interpolationResolutions.set(spanKey, resolutions);
+                }
+            }
+            return;
+        }
+
+        // Track $p.s(...).add(...) / .sub(...) / .add.in(...) chain method
+        // calls: register the RHS string literal span under the chain
+        // method's call site so the TS chain method can capture it via
+        // captureSourceLocation()+lookupArgumentSpan(loc, 'rhs').
+        //
+        // V8 reports the call site for property-access calls at the method
+        // name's position, not at the start of the receiver chain. Use the
+        // PropertyAccess name's start to match what the runtime sees.
+        if (isSpChainCall(call)) {
+            const pArgs = call.getArguments();
+            if (pArgs.length < 1) return;
+            const span = getTrackableSpan(pArgs[0], constMap);
+            if (!span) return;
+            const callExpr = call.getExpression();
+            const callStartPos = Node.isPropertyAccessExpression(callExpr)
+                ? callExpr.getNameNode().getStart()
+                : call.getStart();
+            const { line, column } =
+                sourceFile.getLineAndColumnAtPos(callStartPos);
+            const columnOffset = line === 1 ? firstLineColumnOffset : 0;
+            const callKey: CallSiteKey = `${line + lineOffset}:${column + columnOffset}`;
+            const argsMap = new Map<string, SourceSpan>();
+            argsMap.set('rhs', span);
+            registry.set(callKey, {
+                args: argsMap,
+                moduleType: '$p.s.chain',
+            });
+            const innerNode = getTrackableNode(pArgs[0], constNodeMap);
+            if (innerNode) {
+                const resolutions = resolveInterpolations(
+                    innerNode,
+                    constNodeMap,
+                    constMap,
+                );
+                if (resolutions) {
+                    const spanKey = `${span.start}:${span.end}`;
+                    interpolationResolutions.set(spanKey, resolutions);
+                }
+            }
+            return;
         }
 
         // Skip if not a tracked factory

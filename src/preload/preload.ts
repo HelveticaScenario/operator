@@ -39,9 +39,6 @@ export interface ElectronAPI {
 
     // Schema operations
     getSchemas: Promisify<IPCHandlers[typeof IPC_CHANNELS.GET_SCHEMAS]>;
-    getMiniLeafSpans: Promisify<
-        IPCHandlers[typeof IPC_CHANNELS.GET_MINI_LEAF_SPANS]
-    >;
 
     // DSL operations
     executeDSL: (
@@ -191,6 +188,7 @@ export interface ElectronAPI {
     onMenuToggleRecording: (callback: () => void) => () => void;
     onMenuOpenSettings: (callback: () => void) => () => void;
     onMenuOpenEngineHealth: (callback: () => void) => () => void;
+    onMenuMigrateBuffer: (callback: () => void) => () => void;
     /**
      * Trigger a menu action programmatically (e.g., from Monaco keybindings).
      * This emits the same IPC event that the Electron menu would send.
@@ -256,7 +254,6 @@ const electronAPI: ElectronAPI = {
 
     // Schema operations
     getSchemas: (...args) => invokeIPC('GET_SCHEMAS', ...args),
-    getMiniLeafSpans: (...args) => invokeIPC('GET_MINI_LEAF_SPANS', ...args),
 
     // DSL operations
     executeDSL: (source, sourceId, trigger) =>
@@ -427,6 +424,7 @@ const electronAPI: ElectronAPI = {
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
+    onMenuMigrateBuffer: menuEventHandler(MENU_CHANNELS.MIGRATE_BUFFER),
     // Programmatically trigger a menu action (for Monaco keybindings on Windows)
     triggerMenuAction: (action: keyof typeof MENU_CHANNELS) => {
         const channel = MENU_CHANNELS[action];

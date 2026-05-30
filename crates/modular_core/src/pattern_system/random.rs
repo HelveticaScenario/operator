@@ -223,10 +223,10 @@ mod tests {
     fn test_deterministic_seeds_from_parse() {
         // Verify that parsing the same pattern twice produces identical
         // seed assignments, and that different patterns get different seeds.
-        use crate::pattern_system::mini::parser::parse;
+        use crate::pattern_system::mini::parse_ast;
 
-        let ast1 = parse("a? b?").unwrap();
-        let ast2 = parse("a? b?").unwrap();
+        let ast1 = parse_ast("a? b?").unwrap();
+        let ast2 = parse_ast("a? b?").unwrap();
         // Same input → identical AST (including seeds)
         assert_eq!(ast1, ast2, "Same pattern should produce identical ASTs");
 

@@ -899,7 +899,12 @@ export class GraphBuilder {
             scopeXy: this.resolveScopeXY(),
         };
 
-        console.log('Built PatchGraph:', ret);
+        if (
+            process.env.MODULAR_DEBUG_LOG === '1' ||
+            process.env.MODULAR_DEBUG_LOG === 'true'
+        ) {
+            console.log('Built PatchGraph:', ret);
+        }
         return ret;
     }
 
@@ -1405,7 +1410,7 @@ export class ModuleOutput {
     }
 
     toString(): string {
-        return `<ModuleOutput ${this.moduleId}:${this.portName}:${this.channel}>`;
+        return `module(${this.moduleId}:${this.portName}:${this.channel})`;
     }
 }
 
@@ -1544,6 +1549,17 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
             return replaced;
         }
 
+        // Opaque payloads (ParsedPattern from $p(), SpPattern from $p.s())
+        // must be preserved verbatim — walking them would collapse the
+        // nulls in `accidental`/`octave`/weight slots to 0 via
+        // valueToSignal, producing zero-duration haps and silence.
+        if (!Array.isArray(replaced)) {
+            const kind = (replaced as { __kind?: unknown }).__kind;
+            if (kind === 'ParsedPattern' || kind === 'SpPattern') {
+                return replaced;
+            }
+        }
+
         if (Array.isArray(replaced)) {
             return replaced
                 .map((v, i) => walk(String(i), v))
@@ -1608,6 +1624,15 @@ export function replaceDeferredStrings(
     }
 
     if (typeof input === 'object' && input !== null) {
+        // Opaque pattern payloads (ParsedPattern from $p(), SpPattern from
+        // $p.s()) are JSON-only data with no deferred-output strings; mirror
+        // the replaceValues short-circuit and return them verbatim instead of
+        // deep-walking their mini-notation AST sub-tree.
+        const kind = (input as { __kind?: unknown }).__kind;
+        if (kind === 'ParsedPattern' || kind === 'SpPattern') {
+            return input;
+        }
+
         const result: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(input)) {
             result[key] = replaceDeferredStrings(value, deferredStringMap);

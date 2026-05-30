@@ -19,7 +19,6 @@ import type {
     QueuedTrigger,
     Synthesizer,
     TransportSnapshot,
-    getMiniLeafSpans,
 } from '@modular/core';
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
@@ -254,7 +253,6 @@ export const IPC_CHANNELS = {
     SYNTH_IS_RECORDING: 'modular:synth:is-recording',
     SYNTH_GET_HEALTH: 'modular:synth:get-health',
     SYNTH_GET_MODULE_STATES: 'modular:synth:get-module-states',
-    GET_MINI_LEAF_SPANS: 'modular:get-mini-leaf-spans',
     SYNTH_STOP: 'modular:synth:stop',
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',
     SYNTH_SET_MODULE_PARAM: 'modular:synth:set-module-param',
@@ -336,6 +334,7 @@ export const IPC_CHANNELS = {
 
 export const MENU_CHANNELS = {
     CLOSE_BUFFER: 'modular:menu:close-buffer',
+    MIGRATE_BUFFER: 'modular:menu:migrate-buffer',
     NEW_FILE: 'modular:menu:new-file',
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
     OPEN_SETTINGS: 'modular:menu:open-settings',
@@ -386,8 +385,6 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_GET_HEALTH]: typeof Synthesizer.prototype.getHealth;
 
     [IPC_CHANNELS.SYNTH_GET_MODULE_STATES]: typeof Synthesizer.prototype.getModuleStates;
-
-    [IPC_CHANNELS.GET_MINI_LEAF_SPANS]: typeof getMiniLeafSpans;
 
     [IPC_CHANNELS.SYNTH_STOP]: typeof Synthesizer.prototype.stop;
 

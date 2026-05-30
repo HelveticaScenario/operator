@@ -341,6 +341,210 @@ type BufferOutputRef = {
 };
 
 /**
+ * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
+ * \`$cycle\` / \`$iCycle\` as their pattern argument. Opaque to user code;
+ * the shape is \`{ __kind, ast, source, all_spans }\`. Construct with
+ * \`$p(...)\`; never build one by hand.
+ */
+type ParsedPattern = {
+  readonly __kind: 'ParsedPattern';
+  readonly ast: unknown;
+  readonly source: string;
+  readonly all_spans: ReadonlyArray<readonly [number, number]>;
+};
+
+/**
+ * Parse a mini-notation source string into a \`ParsedPattern\` suitable
+ * for \`$cycle\`. Every mini-notation literal in the DSL flows through
+ * \`$p()\` — \`$cycle\` accepts a \`ParsedPattern\`, not a raw string.
+ *
+ * \`\`\`js
+ * $cycle($p("c4 e4 g4"))                    // basic sequence
+ * const bass = $p("c2 [c2 g2] c2 e2");      // reuse a parsed pattern
+ * $cycle(bass)
+ * \`\`\`
+ *
+ * The returned object is opaque (JSON-serializable; carries source +
+ * span info for editor highlighting). Binding to a \`const\` preserves
+ * highlighting through the indirection. Throws if \`source\` is not a
+ * string or fails to parse.
+ *
+ * ### Atoms
+ *
+ * | Form | Meaning | Example |
+ * |------|---------|---------|
+ * | Bare number | Direct V/Oct voltage (1 V/oct CV) | \`0\`, \`1.5\`, \`-0.25\` |
+ * | \`<n>hz\` | Frequency in Hz (converted to V/Oct) | \`440hz\`, \`220hz\` |
+ * | Note letter (+ accidental, + octave) | Pitched note | \`c4\`, \`d#3\`, \`eb5\` |
+ * | \`~\` or \`-\` | Rest (gate low) | \`'c4 ~ e4'\`, \`'c4 - e4'\` |
+ *
+ * ### Mini-notation
+ *
+ * | Syntax | Meaning | Example |
+ * |--------|---------|---------|
+ * | \`a b c\` | Sequence — one element per time slot | \`'c4 e4 g4'\` |
+ * | \`[a b c]\` | Fast subsequence — subdivides parent slot | \`'c4 [e4 g4]'\` |
+ * | \`<a b c>\` | Slow / alternating — one element per cycle | \`'<c4 e4 g4>'\` |
+ * | \`a|b|c\` | Random choice each time the slot is reached | \`'c4|e4|g4'\` |
+ * | \`a, b\` | Stack — comma-separated patterns play simultaneously | \`'c4 e4, g4 b4'\` |
+ * | \`{a b, c d e}\` | Polymeter — children scaled to a shared step count, then stacked. \`%n\` overrides the step count: \`{a b c}%4\` | \`'{c4 e4, g4 b4 d5}'\` |
+ * | \`a . b c\` | Feet — split the slot at \`.\` boundaries (useful for aligning polymeter children) | \`'{c4 . e4 g4, f4 a4 . b4}'\` |
+ *
+ * Grouping, stacks, polymeter, and random choice nest arbitrarily.
+ *
+ * ### Per-element modifiers
+ *
+ * Modifiers attach directly to an element (no spaces) and chain in any order.
+ *
+ * | Modifier | Syntax | Meaning |
+ * |----------|--------|---------|
+ * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'c4 _ _'\` is the same as \`'c4@3'\` |
+ * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
+ * | Slow down | \`/n\` | Stretch over \`n\` cycles |
+ * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
+ * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * @param source - mini-notation source string
+ */
+declare function $p(source: string): ParsedPattern;
+
+declare namespace $p {
+/**
+ * Parse a scale-degree mini-notation source and resolve each integer
+ * degree to its V/Oct voltage against \`scale\`, returning a
+ * \`ParsedPattern\` suitable for \`$cycle\`. Invoked as \`$p.s(source, scale)\`.
+ *
+ * Atoms are **0-indexed scale degrees** rather than absolute pitches:
+ * \`0\` is the scale's root, \`1\` is the second scale tone, \`2\` the third,
+ * and so on. Negative values move downward. Values beyond the scale
+ * length wrap into higher/lower octaves automatically. Hz and note
+ * atoms are rejected.
+ *
+ * \`\`\`js
+ * $cycle($p.s("0 2 4 7", "c(major)"))       // C-major arpeggio
+ * $cycle($p.s("-1 0 2 4", "a3(min)"))       // negative degrees wrap below the root
+ * $cycle($p.s("0 1 2 3 4", "c(0 2 4 7 9)")) // custom intervals (pentatonic)
+ * $cycle($p.s("0 4 7", "c(just)"))          // just intonation
+ * \`\`\`
+ *
+ * ### Atoms
+ *
+ * | Form | Meaning | Example |
+ * |------|---------|---------|
+ * | Bare integer | Scale degree (0-indexed) | \`0\`, \`2\`, \`-1\` |
+ * | \`~\` or \`-\` | Rest (gate low, no pitch change) | \`'0 ~ 2 ~'\`, \`'0 - 2 -'\` |
+ *
+ * ### Mini-notation
+ *
+ * | Syntax | Meaning | Example |
+ * |--------|---------|---------|
+ * | \`a b c\` | Sequence — one degree per time slot | \`'0 2 4'\` |
+ * | \`[a b c]\` | Fast subsequence — subdivides parent slot | \`'0 [2 4]'\` |
+ * | \`<a b c>\` | Slow / alternating — one element per cycle | \`'<0 4 7>'\` |
+ * | \`a|b|c\` | Random choice each time the slot is reached | \`'0|2|4'\` |
+ * | \`a, b\` | Stack — comma-separated patterns play simultaneously | \`'0 2, 4 7'\` |
+ * | \`{a b, c d e}\` | Polymeter — children scaled to a shared step count, then stacked. \`%n\` overrides the step count: \`{a b c}%4\` | \`'{0 2, 4 5 7}'\` |
+ * | \`a . b c\` | Feet — split the slot at \`.\` boundaries (useful for aligning polymeter children) | \`'{0 . 2 4, 5 7 . 9}'\` |
+ *
+ * Grouping, stacks, polymeter, and random choice nest arbitrarily.
+ * Modifiers attach directly to an element (no spaces) and chain in any
+ * order:
+ *
+ * | Modifier | Syntax | Meaning |
+ * |----------|--------|---------|
+ * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'0 _ _'\` is the same as \`'0@3'\` |
+ * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
+ * | Slow down | \`/n\` | Stretch over \`n\` cycles |
+ * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
+ * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * ### Scale strings
+ *
+ * | Form | Example | Meaning |
+ * |------|---------|---------|
+ * | \`tonic(name)\` | \`"c(major)"\`, \`"d#(min)"\`, \`"f(dorian)"\` | Named scale type rooted at the tonic |
+ * | \`tonic<octave>(name)\` | \`"c3(major)"\`, \`"D#4(min)"\` | Same with an explicit octave (default 4 → root = C4 = 0 V) |
+ * | \`tonic(custom intervals)\` | \`"c(0 2 4 5 7 9 11)"\` | Custom semitone offsets from the tonic |
+ * | \`tonic(just)\` / \`tonic(pythagorean)\` | \`"c(just)"\`, \`"a(pythag)"\` | Non-equal 12-tone tunings |
+ * | \`chromatic\` | \`"chromatic"\` | All 12 semitones, 12-TET |
+ *
+ * Recognized scale names include major, minor, ionian, dorian, phrygian,
+ * lydian, mixolydian, aeolian, locrian, harmonic/melodic minor,
+ * pentatonic major/minor, blues, whole tone.
+ *
+ * ### Chaining
+ *
+ * The returned \`SpPattern\` is chainable with \`.add(...)\` and \`.sub(...)\`.
+ * Each accepts another scale-degree mini-notation string and combines
+ * the two patterns. Bare \`.add(x)\` defaults to \`.add.in(x)\`; explicit
+ * mode methods cover all seven Strudel alignments:
+ *
+ * | Mode | Behaviour |
+ * |------|-----------|
+ * | \`.in\` (default) | Left pattern's onsets drive timing; right is sampled at each left event. |
+ * | \`.out\` | Right pattern's onsets drive timing; left is sampled at each right event. |
+ * | \`.mix\` | Output events at every intersection of left + right onsets. |
+ * | \`.squeeze\` | Each left event nests a full cycle of the right pattern. |
+ * | \`.squeezeout\` | Each right event nests a full cycle of the left pattern. |
+ * | \`.reset\` | Right pattern retriggers the left, aligned to cycle position. |
+ * | \`.restart\` | Right pattern retriggers the left, aligned to cycle 0. |
+ *
+ * \`\`\`js
+ * $cycle($p.s("0 1 2", "c(maj)").add("0 2"))               // .add defaults to .add.in
+ * $cycle($p.s("0 1 2", "d#(min)").add.in("10 20"))
+ * $cycle($p.s("0 1 2", "c(maj)").sub.squeeze("1 2 3"))
+ * \`\`\`
+ *
+ * @param source - integer scale-degree mini-notation source
+ * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
+ */
+function s(source: string, scale: string): SpPattern;
+}
+
+/**
+ * One Strudel-style alignment for a \`$p.s\` chain op.
+ */
+type SpAlignmentMode =
+  | 'in'
+  | 'out'
+  | 'mix'
+  | 'squeeze'
+  | 'squeezeout'
+  | 'reset'
+  | 'restart';
+
+/**
+ * Callable + method-bag returned by \`.add\` / \`.sub\` on an \`SpPattern\`.
+ * Bare invocation aliases the \`.in\` method.
+ */
+type SpCombineBuilder = ((rhs: string) => SpPattern) & {
+  readonly [M in SpAlignmentMode]: (rhs: string) => SpPattern;
+};
+
+/**
+ * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
+ * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
+ * and gets its own editor-highlight argument span.
+ *
+ * Arrays declared mutable (rather than readonly) to line up with the
+ * schema-generated factory param types. Treat as immutable by
+ * convention — chain methods return fresh objects.
+ */
+type SpPattern = {
+  __kind: 'SpPattern';
+  sources: ParsedPattern[];
+  scale: string;
+  ops: { op: 'add' | 'sub'; mode: SpAlignmentMode }[];
+  argument_spans: { start: number; end: number }[];
+  add: SpCombineBuilder;
+  sub: SpCombineBuilder;
+};
+
+/**
  * A loaded WAV sample handle — returned by \`$wavs()\`, passed to \`$sampler()\` as the \`wav\` param.
  */
 type WavHandle = {
@@ -1007,35 +1211,26 @@ function $bus(cb: (mixed: Collection) => unknown): Bus;
  */
 function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection | CollectionWithRange): void;
 
-/** Create a buffer module that captures an input signal into a circular audio buffer. */
-function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;
-
 /**
- * Delay with feedback. Mixes \`input\` with a deferred feedback signal,
- * captures the mix into a buffer of \`length\` seconds, and routes the
- * buffer through \`feedbackCb\` to produce the feedback signal.
+ * Compute the Cartesian product of the given arrays.
  *
- * Returns the wet+dry \\$mix output (same shape as \\$mix) augmented with a
- * \`buffer\` property referencing the captured buffer for further reads.
+ * Returns every possible combination of one element from each array,
+ * as a typed tuple array. Pairs well with the array overload of \`.pipe()\`
+ * to fan a signal across multiple parameter dimensions.
  *
- * @param input - Dry signal collection. Channel count of the feedback path
- *                matches \`input.length\` or 1 if input is a ModuleOutput.
- * @param feedbackCb - Receives the captured buffer ref and returns the
- *                     feedback signal mixed back into the input.
- * @param length - Buffer length in seconds.
+ * @param arrays - Zero or more arrays to combine
+ * @returns Array of typed tuples, one per combination
  *
- * \`\`\`
- *   // simple feedback delay
- *   $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()
- * \`\`\`
+ * @example
+ * // Fan an oscillator across every combination of frequency and waveform
+ * $cartesian([220, 440, 880], ['sine', 'saw']).pipe(
+ *   (osc, [freq, shape]) => $oscillator({ freq, shape }).out(),
+ * ).out();
  *
- * \`\`\`ts
- *   // tap the buffer for an additional read
- *   const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)
- *   $delayRead(d.buffer, 0.75).out()
- * \`\`\`
+ * @example $cartesian([1, 2], ['a', 'b'])
+ * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
-function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): ReturnType<typeof $mix> & { buffer: BufferOutputRef };
+function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
 
 /**
  * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
@@ -1088,27 +1283,6 @@ function $ott(input: Collection | ModuleOutput, config?: {
     highGain?: Poly<Signal>;
     id?: string;
 }): Collection;
-
-/**
- * Compute the Cartesian product of the given arrays.
- *
- * Returns every possible combination of one element from each array,
- * as a typed tuple array. Pairs well with the array overload of \`.pipe()\`
- * to fan a signal across multiple parameter dimensions.
- *
- * @param arrays - Zero or more arrays to combine
- * @returns Array of typed tuples, one per combination
- *
- * @example
- * // Fan an oscillator across every combination of frequency and waveform
- * $cartesian([220, 440, 880], ['sine', 'saw']).pipe(
- *   (osc, [freq, shape]) => $oscillator({ freq, shape }).out(),
- * ).out();
- *
- * @example $cartesian([1, 2], ['a', 'b'])
- * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
- */
-function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
 
 /**
  * @param count - Size of the output
@@ -1208,7 +1382,7 @@ export function buildLibSource(
 ): string {
     const schemaLib = generateDSL(schemas);
     const wavsDecl = generateWavsTypeDeclaration(wavsFolderTree ?? null);
-    return `declare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
+    return `/* oxlint-disable */\ndeclare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
 }
 
 interface NamespaceNode {
@@ -1591,8 +1765,7 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (declared in BASE_LIB_SOURCE
-    // with a custom BufferOutputRef return type)
+    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
     const userFacingSchemas = schemas.filter(
         (s) => s.name !== '_clock' && s.name !== '$buffer',
     );
@@ -1623,6 +1796,39 @@ export function generateDSL(schemas: Schemas): string {
         const signalReturnType = getFactoryReturnType(signalSchema);
         lines.push(`export const $input: Readonly<${signalReturnType}>;`);
     }
+
+    lines.push('');
+    lines.push(
+        '/** Create a buffer module that captures an input signal into a circular audio buffer. */',
+    );
+    lines.push(
+        'export function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;',
+    );
+    lines.push('');
+    lines.push('/**');
+    lines.push(' * Delay with feedback. Mixes `input` with a deferred feedback signal,');
+    lines.push(' * captures the mix into a buffer of `length` seconds, and routes the');
+    lines.push(' * buffer through `feedbackCb` to produce the feedback signal.');
+    lines.push(' *');
+    lines.push(' * Returns the wet+dry $mix output augmented with a `buffer` property');
+    lines.push(' * referencing the captured buffer for further reads.');
+    lines.push(' *');
+    lines.push(' * @example');
+    lines.push(' * ```js');
+    lines.push(" * // simple feedback delay");
+    lines.push(" * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()");
+    lines.push(' * ```');
+    lines.push(' *');
+    lines.push(' * @example');
+    lines.push(' * ```ts');
+    lines.push(' * // tap the buffer for an additional read');
+    lines.push(' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)');
+    lines.push(' * $delayRead(d.buffer, 0.75).out()');
+    lines.push(' * ```');
+    lines.push(' */');
+    lines.push(
+        'export function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): Collection & { buffer: BufferOutputRef };',
+    );
 
     return lines.join('\n') + '\n';
 }

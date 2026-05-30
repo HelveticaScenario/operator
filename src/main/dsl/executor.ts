@@ -32,6 +32,7 @@ import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
 import { setActiveInterpolationResolutions } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
+import { $p } from './miniNotation';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -333,12 +334,19 @@ export function executePatchScript(
         );
     }
 
+    /**
+     * Feedback delay sugar: mix `input` with a deferred feedback signal,
+     * capture the mix into a $buffer of `length` seconds, route the
+     * buffer through `feedbackCb` to produce the feedback signal, and
+     * return the wet+dry $mix output with the captured buffer attached
+     * as a `buffer` property for additional taps.
+     */
     const $delay = (
         input: Collection | ModuleOutput,
         feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
         length: number,
     ): Collection & { buffer: BufferOutputRef } => {
-        const def = $deferred('length' in input ? input.length : 1);
+        const def = $deferred(input instanceof BaseCollection ? input.length : 1);
         const mixed = $mix([input, def]) as Collection;
         const buf = $buffer(mixed, length);
         def.set(feedbackCb(buf));
@@ -786,6 +794,11 @@ export function executePatchScript(
         // Helper functions with $ prefix
         $hz: hz,
         $note: note,
+        // Mini-notation parser — wraps a string in a ParsedPattern that
+        // $cycle / $iCycle consume as a positional argument. Carries
+        // $p.s(source, scale) for scale-degree patterns (integer degrees
+        // resolved through a scale string into voltage atoms for $cycle).
+        $p,
         // Phase-warp table descriptors for $wavetable
         $table,
         // Collection helpers

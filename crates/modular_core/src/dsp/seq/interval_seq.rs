@@ -20,7 +20,7 @@ use crate::{
     MonoSignal, Patch,
     dsp::{
         utilities::quantizer::ScaleParam,
-        utils::{TempGate, TempGateState, midi_to_voct_f64, min_gate_samples},
+        utils::{TempGate, TempGateState, min_gate_samples},
     },
     pattern_system::Pattern,
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
@@ -53,18 +53,23 @@ impl crate::pattern_system::mini::convert::FromMiniAtom for IntervalValue {
     fn from_atom(
         atom: &crate::pattern_system::mini::ast::AtomValue,
     ) -> Result<Self, crate::pattern_system::mini::convert::ConvertError> {
+        use crate::pattern_system::mini::ast::AtomValue;
+        use crate::pattern_system::mini::convert::ConvertError;
         match atom {
-            crate::pattern_system::mini::ast::AtomValue::Number(n) => {
+            AtomValue::Number(n) => {
+                if !n.is_finite() || n.fract() != 0.0 {
+                    return Err(ConvertError::InvalidAtom(format!(
+                        "IntervalValue requires integer scale degrees, got {n}"
+                    )));
+                }
                 Ok(IntervalValue::Degree(*n as i32))
             }
-            crate::pattern_system::mini::ast::AtomValue::Midi(m) => {
-                Ok(IntervalValue::Degree(*m as i32))
-            }
-            _ => Err(
-                crate::pattern_system::mini::convert::ConvertError::InvalidAtom(
-                    "IntervalValue only supports integers".to_string(),
-                ),
-            ),
+            AtomValue::Hz(_) => Err(ConvertError::InvalidAtom(
+                "IntervalValue does not accept Hz atoms; $iCycle interprets atoms as scale-degree integers (use $cycle for unquantized pitch)".into(),
+            )),
+            AtomValue::Note { .. } => Err(ConvertError::InvalidAtom(
+                "IntervalValue does not accept note atoms; $iCycle interprets atoms as scale-degree integers (use $cycle for unquantized pitch)".into(),
+            )),
         }
     }
 
@@ -100,27 +105,36 @@ impl crate::pattern_system::mini::convert::HasRest for IntervalValue {
     }
 }
 
-/// Source representation for interval patterns: either a single pattern
-/// string or an array of strings that get combined via `app_left` addition.
+/// Error returned when a pattern source string is empty or whitespace-only.
+/// A rest (`~`) is a real atom and stays valid.
+pub(crate) const EMPTY_PATTERN_SOURCE_ERR: &str =
+    "empty pattern source: a pattern string must contain at least one atom";
+
+/// Source representation for interval patterns: either a single parsed
+/// payload or an array of payloads combined via `app_left` addition.
+///
+/// The wire shape is the `ParsedPatternPayload` `{ ast, source, all_spans }`
+/// emitted by the TypeScript `$p(...)` helper, or an array of those for
+/// `$iCycle([$p(...), $p(...)])`.
 #[derive(Clone, Debug, JsonSchema)]
 #[serde(untagged)]
 pub enum IntervalPatternSource {
-    Single(String),
-    Multiple(Vec<String>),
+    Single(crate::dsp::seq::seq_value::ParsedPatternPayload),
+    Multiple(Vec<crate::dsp::seq::seq_value::ParsedPatternPayload>),
 }
 
 impl Default for IntervalPatternSource {
     fn default() -> Self {
-        Self::Single(String::new())
+        Self::Single(crate::dsp::seq::seq_value::ParsedPatternPayload::default())
     }
 }
 
 impl IntervalPatternSource {
-    /// Get the individual source strings.
-    fn sources(&self) -> Vec<&str> {
+    /// Get the individual payloads.
+    fn payloads(&self) -> Vec<&crate::dsp::seq::seq_value::ParsedPatternPayload> {
         match self {
-            Self::Single(s) => vec![s.as_str()],
-            Self::Multiple(v) => v.iter().map(|s| s.as_str()).collect(),
+            Self::Single(p) => vec![p],
+            Self::Multiple(v) => v.iter().collect(),
         }
     }
 }
@@ -132,14 +146,7 @@ pub struct SourceMeta {
     all_spans: Vec<(usize, usize)>,
 }
 
-/// Flat span entry — encodes (pattern_idx, start, end) without nested Vecs.
-/// Stored in a per-cycle arena (`CycleStorage::span_arena`).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct FlatSpan {
-    pub pattern_idx: u8,
-    pub start: u32,
-    pub end: u32,
-}
+pub(crate) use super::cache::FlatSpan;
 
 /// Per-cycle storage for IntervalSeq. Combined-degree haps + flat span arena.
 pub(crate) type CycleStorage = super::cache::CycleStorage<CombinedHap, FlatSpan>;
@@ -190,58 +197,44 @@ impl Default for IntervalPatternParam {
 }
 
 impl IntervalPatternParam {
-    /// Parse a single pattern string into a `Pattern<IntervalValue>` and collect leaf spans.
-    fn parse_one(source: &str) -> Result<(Pattern<IntervalValue>, Vec<(usize, usize)>), String> {
-        let ast = crate::pattern_system::mini::parse_ast(source).map_err(|e| e.to_string())?;
-        let all_spans = crate::pattern_system::mini::collect_leaf_spans(&ast);
-        let pattern = crate::pattern_system::mini::convert::<IntervalValue>(&ast)
-            .map_err(|e| e.to_string())?;
-        Ok((pattern, all_spans))
+    /// Lower a parsed payload to a `Pattern<IntervalValue>`. Spans
+    /// already collected client-side; just pass them through.
+    fn convert_one(
+        payload: &crate::dsp::seq::seq_value::ParsedPatternPayload,
+    ) -> Result<Pattern<IntervalValue>, String> {
+        crate::pattern_system::mini::convert::<IntervalValue>(&payload.ast)
+            .map_err(|e| e.to_string())
     }
 
-    /// Build from an `IntervalPatternSource`, parsing and combining patterns.
+    /// Build from an `IntervalPatternSource`, lowering and combining patterns.
     fn from_source(source: IntervalPatternSource) -> Result<Self, String> {
-        let sources = source.sources();
+        let payloads = source.payloads();
 
-        // Filter out empty strings
-        let non_empty: Vec<&str> = sources.iter().copied().filter(|s| !s.is_empty()).collect();
-
-        if non_empty.is_empty() {
-            return Ok(Self {
-                per_source: sources
-                    .iter()
-                    .map(|s| SourceMeta {
-                        source: s.to_string(),
-                        all_spans: Vec::new(),
-                    })
-                    .collect(),
-                num_sources: sources.len(),
-                source,
-                combined_pattern: None,
-                cached_haps: Vec::new(),
-                max_haps_per_cycle: 0,
-                max_spans_per_cycle: 0,
-            });
+        // An empty or whitespace-only pattern source is a hard error: a
+        // pattern string must contain at least one atom (a rest `~` counts).
+        if payloads.is_empty() {
+            return Err(EMPTY_PATTERN_SOURCE_ERR.to_string());
+        }
+        for p in &payloads {
+            if p.source.trim().is_empty() {
+                return Err(EMPTY_PATTERN_SOURCE_ERR.to_string());
+            }
         }
 
-        // Parse each source string
+        // Lower each payload. Every payload is non-empty, so `parsed` and
+        // `per_source` move 1:1 — the walk-emitted `pattern_idx` indexes
+        // `per_source` directly and `get_state` names `patterns.N` keys with
+        // the user's original indices.
         let mut parsed: Vec<Pattern<IntervalValue>> = Vec::new();
         let mut per_source: Vec<SourceMeta> = Vec::new();
 
-        for s in &sources {
-            if s.is_empty() {
-                per_source.push(SourceMeta {
-                    source: s.to_string(),
-                    all_spans: Vec::new(),
-                });
-            } else {
-                let (pattern, all_spans) = Self::parse_one(s)?;
-                per_source.push(SourceMeta {
-                    source: s.to_string(),
-                    all_spans,
-                });
-                parsed.push(pattern);
-            }
+        for p in &payloads {
+            per_source.push(SourceMeta {
+                source: p.source.clone(),
+                all_spans: p.all_spans.clone(),
+            });
+            let pattern = Self::convert_one(p)?;
+            parsed.push(pattern);
         }
 
         // Left-fold the parsed patterns with app_left + add_interval_values.
@@ -253,7 +246,7 @@ impl IntervalPatternParam {
             combined = combined.app_left(&p.strip_modifier_spans(), add_interval_values);
         }
 
-        let num_sources = sources.len();
+        let num_sources = payloads.len();
 
         // Pre-compute and cache combined haps for cycles 0..PARAM_CACHE_CYCLES.
         let mut cached_haps: Vec<CycleStorage> = Vec::with_capacity(PARAM_CACHE_CYCLES);
@@ -262,7 +255,11 @@ impl IntervalPatternParam {
             let mut storage = CycleStorage::with_capacity(haps.len(), haps.len() * SPANS_RESERVE_PER_HAP);
             for hap in &haps {
                 let span_offset = storage.span_arena.len() as u32;
-                extract_pattern_spans_into(&hap.context, num_sources, &mut storage.span_arena);
+                extract_pattern_spans_into(
+                    &hap.context,
+                    parsed.len(),
+                    &mut storage.span_arena,
+                );
                 let span_len = storage.span_arena.len() as u32 - span_offset;
                 storage.haps.push(CombinedHap {
                     whole_begin: hap.whole_begin,
@@ -363,19 +360,21 @@ impl<E: deserr::DeserializeError> deserr::Deserr<E> for IntervalPatternSource {
         location: deserr::ValuePointerRef<'_>,
     ) -> std::result::Result<Self, E> {
         match &value {
-            deserr::Value::String(_) => {
-                let s = String::deserialize_from_value(value, location)?;
-                Ok(IntervalPatternSource::Single(s))
+            deserr::Value::Map(_) => {
+                let p = crate::dsp::seq::seq_value::ParsedPatternPayload::deserialize_from_value(
+                    value, location,
+                )?;
+                Ok(IntervalPatternSource::Single(p))
             }
             deserr::Value::Sequence(_) => {
-                let v = Vec::<String>::deserialize_from_value(value, location)?;
+                let v = Vec::<crate::dsp::seq::seq_value::ParsedPatternPayload>::deserialize_from_value(value, location)?;
                 Ok(IntervalPatternSource::Multiple(v))
             }
             _ => Err(deserr::take_cf_content(E::error::<V>(
                 None,
                 deserr::ErrorKind::IncorrectValueKind {
                     actual: value,
-                    accepted: &[deserr::ValueKind::String, deserr::ValueKind::Sequence],
+                    accepted: &[deserr::ValueKind::Map, deserr::ValueKind::Sequence],
                 },
                 location,
             ))),
@@ -412,6 +411,10 @@ struct CachedIntervalHap {
     whole_begin: f64,
     /// Cached `whole_end` for the release check.
     whole_end: f64,
+    /// Cached combined degree used to disambiguate simultaneous same-geometry
+    /// haps when re-resolving the highlight index. Onset events are always
+    /// non-rest, so this is the resolved degree.
+    degree: i32,
 }
 
 impl CachedIntervalHap {
@@ -527,9 +530,17 @@ fn derive_combined_polyphony(param: &IntervalPatternParam) -> usize {
 }
 
 /// Add two `IntervalValue`s. Rest + anything = Rest.
-fn add_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
+pub(crate) fn add_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
     match (a.degree(), b.degree()) {
         (Some(da), Some(db)) => IntervalValue::Degree(da + db),
+        _ => IntervalValue::Rest,
+    }
+}
+
+/// Subtract two `IntervalValue`s. Rest - anything (or anything - Rest) = Rest.
+pub(crate) fn sub_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
+    match (a.degree(), b.degree()) {
+        (Some(da), Some(db)) => IntervalValue::Degree(da - db),
         _ => IntervalValue::Rest,
     }
 }
@@ -538,15 +549,20 @@ fn add_interval_values(a: &IntervalValue, b: &IntervalValue) -> IntervalValue {
 /// into a flat arena. Returns nothing — caller diffs `arena.len()` before/after
 /// to record (offset, length).
 ///
-/// After a left-fold of N patterns via `app_left`, the merged `HapContext` has:
-/// - `source_span` + `source_extra_spans` = pattern 0's spans
-/// - `modifier_spans[i]` + `modifier_extra_spans[i]` = pattern (i+1)'s spans
+/// After a left-fold of N parsed patterns via `app_left`, the merged
+/// `HapContext` has:
+/// - `source_span` + `source_extra_spans` = parsed[0]'s spans
+/// - `modifier_spans[i]` + `modifier_extra_spans[i]` = parsed[i+1]'s spans
+///
+/// `num_parsed` is the number of parsed patterns (i.e. the upper bound of
+/// walk-emitted pattern_idx values). Each parsed position maps 1:1 to its
+/// `per_source` index, so the pattern index is used directly.
 fn extract_pattern_spans_into(
     context: &crate::pattern_system::HapContext,
-    num_patterns: usize,
+    num_parsed: usize,
     arena: &mut Vec<FlatSpan>,
 ) {
-    if num_patterns == 0 {
+    if num_parsed == 0 {
         return;
     }
 
@@ -572,11 +588,12 @@ fn extract_pattern_spans_into(
     let modifier_limit = context
         .modifier_spans
         .len()
-        .min(num_patterns.saturating_sub(1));
+        .min(num_parsed.saturating_sub(1));
     for i in 0..modifier_limit {
+        let pat_idx = (i + 1) as u8;
         let (start, end) = context.modifier_spans[i].to_tuple();
         arena.push(FlatSpan {
-            pattern_idx: (i + 1) as u8,
+            pattern_idx: pat_idx,
             start: start as u32,
             end: end as u32,
         });
@@ -584,7 +601,7 @@ fn extract_pattern_spans_into(
             for s in extras {
                 let (start, end) = s.to_tuple();
                 arena.push(FlatSpan {
-                    pattern_idx: (i + 1) as u8,
+                    pattern_idx: pat_idx,
                     start: start as u32,
                     end: end as u32,
                 });
@@ -598,17 +615,17 @@ fn extract_pattern_spans_into(
 /// `FlatSpan` per source span keyed by pattern index.
 fn extract_pattern_spans_from_arena_into(
     context: &crate::pattern_system::ArenaHapContext<'_>,
-    num_patterns: usize,
+    num_parsed: usize,
     arena: &mut Vec<FlatSpan>,
 ) {
-    if num_patterns == 0 {
+    if num_parsed == 0 {
         return;
     }
     // An `Empty` context has no spans to walk; short-circuit.
     if matches!(context, crate::pattern_system::ArenaHapContext::Empty) {
         return;
     }
-    let pattern_cap = num_patterns as u8;
+    let pattern_cap = num_parsed as u8;
     context.walk(&mut |pattern_idx, span| {
         if pattern_idx >= pattern_cap {
             return;
@@ -855,7 +872,9 @@ impl IntervalSeq {
         let Some(pattern) = self.params.patterns.pattern() else {
             return;
         };
-        let num_patterns = self.params.patterns.num_sources();
+        // Every payload is non-empty, so the walk-emitted `pattern_idx` indexes
+        // `per_source` directly and tops out at num_sources.
+        let num_parsed = self.params.patterns.num_sources();
         let slot = &mut self.state.module_cache[module_idx];
         super::cache::populate_cycle_storage(
             pattern,
@@ -864,7 +883,11 @@ impl IntervalSeq {
             slot,
             |hap, haps, span_arena| {
                 let span_offset = span_arena.len() as u32;
-                extract_pattern_spans_from_arena_into(&hap.context, num_patterns, span_arena);
+                extract_pattern_spans_from_arena_into(
+                    &hap.context,
+                    num_parsed,
+                    span_arena,
+                );
                 let span_len = span_arena.len() as u32 - span_offset;
                 haps.push(CombinedHap {
                     whole_begin: hap.whole_begin_f64(),
@@ -892,46 +915,17 @@ impl IntervalSeq {
         )
     }
 
-    /// Convert a scale degree to V/Oct voltage.
+    /// Convert a scale degree to V/Oct voltage. Thin wrapper over the
+    /// shared [`crate::dsp::utilities::quantizer::degree_to_voltage`] free
+    /// function so `IntervalSeq` and the `$p.s` DSL helper produce
+    /// bit-identical voltages.
     fn degree_to_voltage(&self, degree: i32) -> f64 {
-        if self.state.scale_intervals.is_empty() {
-            // Chromatic fallback
-            return midi_to_voct_f64(60.0 + degree as f64);
-        }
-
-        let scale_len = self.state.scale_intervals.len() as i32;
-
-        // Handle negative degrees with proper wrapping
-        let (octave, wrapped_degree) = if degree >= 0 {
-            (degree / scale_len, (degree % scale_len) as usize)
-        } else {
-            // For negative: -1 in 7-note scale is degree 6 in octave -1
-            let adj_degree = degree + 1;
-            let octave = (adj_degree / scale_len) - 1;
-            let wrapped = ((degree % scale_len) + scale_len) % scale_len;
-            (octave, wrapped as usize)
-        };
-
-        // Get semitone offset within octave from scale intervals
-        let semitone_in_scale = self
-            .state
-            .scale_intervals
-            .get(wrapped_degree)
-            .copied()
-            .unwrap_or(0) as i32;
-
-        // Voltage = root + degree octave + the tuning table's offset for this step.
-        // Under 12-TET this is identical to midi_to_voct_f64(base_midi + octave*12 + step).
-        // `semitone_in_scale` is always 0..11 (normalized scale intervals); `get`
-        // keeps a stray value from panicking on the audio thread.
-        let root_v = (self.state.base_midi - 60) as f64 / 12.0;
-        let step_v = self
-            .state
-            .tuning
-            .get(semitone_in_scale as usize)
-            .copied()
-            .unwrap_or(0.0);
-        root_v + octave as f64 + step_v
+        crate::dsp::utilities::quantizer::degree_to_voltage(
+            degree,
+            self.state.base_midi,
+            &self.state.scale_intervals,
+            &self.state.tuning,
+        )
     }
 
     /// Update cached scale info from params.
@@ -1048,6 +1042,7 @@ impl IntervalSeq {
                 cached_cycle: current_cycle,
                 whole_begin: event.whole_begin,
                 whole_end: event.whole_end,
+                degree: event.degree,
             });
             voice.cached_voltage = voltage;
             voice.active = true;
@@ -1102,6 +1097,42 @@ impl IntervalSeq {
     }
 }
 
+/// Resolve the combined hap in `storage` that the voice's cached scalars
+/// describe.
+///
+/// The voice's `cached.hap_index` is frozen at onset time against whatever
+/// cache geometry was current then. A live patch re-run can `std::mem::swap`
+/// an old `IntervalSeqState` into a freshly-baked module whose `get_state`
+/// reads a re-built cache; the cached index then misses or points at a hap
+/// with different geometry. This read-only resolver trusts `cached.hap_index`
+/// only when it is in range AND its `whole_begin`/`whole_end` match the
+/// voice's held scalars; otherwise it linear-scans the cycle's haps for the
+/// matching geometry. `cached.hap_index` is owned by the audio thread and is
+/// never written here.
+fn resolve_hap_index(storage: &CycleStorage, cached: &CachedIntervalHap) -> Option<usize> {
+    const EPS: f64 = 1e-6;
+    let geometry_matches = |hap: &CombinedHap| {
+        (hap.whole_begin - cached.whole_begin).abs() < EPS
+            && (hap.whole_end - cached.whole_end).abs() < EPS
+    };
+    // Combined degree disambiguates two simultaneous same-geometry haps (a
+    // chord / stacked source) that would otherwise alias onto the same index.
+    // It is a tie-breaker, not a requirement: a live state transfer onto a
+    // pattern with different degrees must still re-resolve by geometry alone.
+    let idx = cached.hap_index as usize;
+    if let Some(hap) = storage.haps.get(idx)
+        && geometry_matches(hap)
+        && hap.degree == Some(cached.degree)
+    {
+        return Some(idx);
+    }
+    storage
+        .haps
+        .iter()
+        .position(|h| geometry_matches(h) && h.degree == Some(cached.degree))
+        .or_else(|| storage.haps.iter().position(geometry_matches))
+}
+
 impl crate::types::StatefulModule for IntervalSeq {
     fn get_state(&self) -> Option<serde_json::Value> {
         let num_channels = self.channel_count().clamp(1, PORT_MAX_CHANNELS);
@@ -1122,7 +1153,10 @@ impl crate::types::StatefulModule for IntervalSeq {
             let Some(storage) = self.get_cycle_storage(cached.cached_cycle) else {
                 continue;
             };
-            let Some(hap) = storage.haps.get(cached.hap_index as usize) else {
+            let Some(hap_index) = resolve_hap_index(storage, &cached) else {
+                continue;
+            };
+            let Some(hap) = storage.haps.get(hap_index) else {
                 continue;
             };
             any_active = true;
@@ -1223,8 +1257,11 @@ mod tests {
         let v = IntervalValue::from_atom(&AtomValue::Number(5.0)).unwrap();
         assert!(matches!(v, IntervalValue::Degree(5)));
 
-        let v = IntervalValue::from_atom(&AtomValue::Midi(3)).unwrap();
-        assert!(matches!(v, IntervalValue::Degree(3)));
+        // Non-integer numbers rejected.
+        assert!(IntervalValue::from_atom(&AtomValue::Number(1.5)).is_err());
+
+        // Hz / Note rejected — $iCycle only accepts integer scale degrees.
+        assert!(IntervalValue::from_atom(&AtomValue::Hz(440.0)).is_err());
     }
 
     #[test]
@@ -1240,9 +1277,23 @@ mod tests {
 
     #[test]
     fn test_from_source_empty_string() {
+        // An empty source is a hard error — a pattern string must contain at
+        // least one atom.
+        assert!(
+            IntervalPatternParam::from_source(IntervalPatternSource::Single("".into())).is_err()
+        );
+        // Whitespace-only is rejected the same way.
+        assert!(
+            IntervalPatternParam::from_source(IntervalPatternSource::Single("   ".into())).is_err()
+        );
+    }
+
+    #[test]
+    fn test_from_source_rest_is_accepted() {
+        // A rest `~` is a real atom — not empty, must parse fine.
         let param =
-            IntervalPatternParam::from_source(IntervalPatternSource::Single("".into())).unwrap();
-        assert!(param.pattern().is_none());
+            IntervalPatternParam::from_source(IntervalPatternSource::Single("~".into())).unwrap();
+        assert!(param.pattern().is_some());
         assert_eq!(param.num_sources(), 1);
     }
 
@@ -1396,6 +1447,36 @@ mod tests {
     }
 
     #[test]
+    fn test_degree_to_voltage_free_fn_matches_method() {
+        use crate::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
+
+        // Drive both paths from the same scale + degree set so `$p.s` and
+        // `$iCycle` stay bit-identical. Cover positive, negative, and
+        // octave-crossing degrees over a non-12-TET tuning to exercise the
+        // tuning table.
+        for scale_str in ["C(major)", "D#3(min)", "C(just)", "A(0 2 4 5 7 9 11)"] {
+            let scale = ScaleParam::parse(scale_str).unwrap();
+            let snapper = scale.snapper().unwrap();
+            let intervals: Vec<i8> = snapper.scale_intervals().iter().copied().collect();
+            let tuning = snapper.tuning();
+
+            let mut seq = IntervalSeq::default();
+            seq.state.scale_intervals = snapper.scale_intervals().clone();
+            seq.state.tuning = *tuning;
+            seq.state.base_midi = scale.base_midi();
+
+            for d in [-12, -7, -1, 0, 1, 3, 7, 12] {
+                let via_method = seq.degree_to_voltage(d);
+                let via_free = degree_to_voltage(d, scale.base_midi(), &intervals, tuning);
+                assert!(
+                    (via_method - via_free).abs() < 1e-12,
+                    "mismatch for scale={scale_str} degree={d}: method={via_method} free={via_free}",
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_add_interval_values() {
         let a = IntervalValue::Degree(3);
         let b = IntervalValue::Degree(4);
@@ -1433,8 +1514,12 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_patterns_from_string() {
-        let json = serde_json::json!({ "patterns": "0 2 4", "scale": "c(major)" });
+    fn test_deserialize_patterns_from_payload() {
+        let payload = serde_json::to_value(
+            crate::dsp::seq::seq_value::ParsedPatternPayload::parse_for_test("0 2 4"),
+        )
+        .unwrap();
+        let json = serde_json::json!({ "patterns": payload, "scale": "c(major)" });
         let params: IntervalSeqParams =
             deserr::deserialize::<IntervalSeqParams, _, crate::param_errors::ModuleParamErrors>(
                 json,
@@ -1446,7 +1531,15 @@ mod tests {
 
     #[test]
     fn test_deserialize_patterns_from_array() {
-        let json = serde_json::json!({ "patterns": ["0 2 4", "0 3"], "scale": "c(major)" });
+        let p1 = serde_json::to_value(
+            crate::dsp::seq::seq_value::ParsedPatternPayload::parse_for_test("0 2 4"),
+        )
+        .unwrap();
+        let p2 = serde_json::to_value(
+            crate::dsp::seq::seq_value::ParsedPatternPayload::parse_for_test("0 3"),
+        )
+        .unwrap();
+        let json = serde_json::json!({ "patterns": [p1, p2], "scale": "c(major)" });
         let params: IntervalSeqParams =
             deserr::deserialize::<IntervalSeqParams, _, crate::param_errors::ModuleParamErrors>(
                 json,
@@ -1554,6 +1647,7 @@ mod tests {
             cached_cycle: 0,
             whole_begin,
             whole_end,
+            degree: onset_hap.degree.expect("onset hap has a degree"),
         });
 
         let json = seq.get_state().expect("expected state with active voice");
@@ -1579,6 +1673,21 @@ mod tests {
                 .unwrap_or_else(|| panic!("{key} missing spans array"));
             assert!(!spans.is_empty(), "{key} spans empty");
         }
+    }
+
+    /// An empty middle payload is a hard error: `$iCycle(["0 2", "", "4"], ...)`
+    /// must be rejected, not silently dropped. A pattern string must contain
+    /// at least one atom.
+    #[test]
+    fn test_from_source_middle_empty_rejected() {
+        assert!(
+            IntervalPatternParam::from_source(IntervalPatternSource::Multiple(vec![
+                "0 2".into(),
+                "".into(),
+                "4".into(),
+            ]))
+            .is_err()
+        );
     }
 
     /// Parse-time cost: how long does `IntervalPatternParam::from_source`
@@ -1732,7 +1841,11 @@ mod tests {
                 );
                 for hap in &haps {
                     let off = storage.span_arena.len() as u32;
-                    extract_pattern_spans_into(&hap.context, num_patterns, &mut storage.span_arena);
+                    extract_pattern_spans_into(
+                        &hap.context,
+                        num_patterns,
+                        &mut storage.span_arena,
+                    );
                     let len = storage.span_arena.len() as u32 - off;
                     storage.haps.push(CombinedHap {
                         whole_begin: hap.whole_begin,

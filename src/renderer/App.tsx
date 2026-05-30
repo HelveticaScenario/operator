@@ -6,6 +6,9 @@ import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
 import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
+import { MigrationDiffModal } from './components/MigrationDiffModal';
+import type { MigrationModalSummary } from './components/MigrationDiffModal';
+import { migrateCycleCalls } from './dsl/migrateCycleCalls';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
 import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
@@ -137,6 +140,12 @@ function App() {
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+    const [migrationState, setMigrationState] = useState<{
+        bufferId: string;
+        original: string;
+        migrated: string;
+        summary: MigrationModalSummary;
+    } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
         ValidationError[] | null
@@ -850,10 +859,25 @@ function App() {
 
     const handleCloseBuffer = useCallback(
         async (id: string) => {
+            setMigrationState(null);
             await closeBuffer(id);
         },
         [closeBuffer],
     );
+
+    const handleSelectBuffer = useCallback(
+        (id: string) => {
+            setMigrationState(null);
+            setActiveBufferId(id);
+        },
+        [setActiveBufferId],
+    );
+
+    useEffect(() => {
+        setMigrationState((prev) =>
+            prev && prev.bufferId !== activeBufferId ? null : prev,
+        );
+    }, [activeBufferId]);
 
     useEffect(() => {
         const cleanupNewFile = electronAPI.onMenuNewFile(() => {
@@ -878,6 +902,7 @@ function App() {
         });
         const cleanupCloseBuffer = electronAPI.onMenuCloseBuffer(() => {
             if (activeBufferId) {
+                setMigrationState(null);
                 void handleCloseBuffer(activeBufferId);
             }
         });
@@ -900,6 +925,39 @@ function App() {
                 setIsEngineHealthOpen(true);
             },
         );
+        const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
+            const ed = editorRef.current;
+            if (!ed || !activeBufferId) {
+                console.warn('Migrate buffer: no editor available');
+                setMigrationState({
+                    bufferId: activeBufferId ?? '',
+                    original: '',
+                    migrated: '',
+                    summary: {
+                        callsChanged: 0,
+                        assignmentsChanged: 0,
+                        commentsChanged: 0,
+                        skippedVariables: [],
+                        error: 'No editor available',
+                    },
+                });
+                return;
+            }
+            const original = ed.getValue();
+            const result = migrateCycleCalls(original);
+            setMigrationState({
+                bufferId: activeBufferId,
+                original,
+                migrated: result.migrated,
+                summary: {
+                    callsChanged: result.callsChanged,
+                    assignmentsChanged: result.assignmentsChanged,
+                    commentsChanged: result.commentsChanged,
+                    skippedVariables: result.skippedVariables,
+                    error: result.error,
+                },
+            });
+        });
 
         return () => {
             cleanupNewFile();
@@ -912,6 +970,7 @@ function App() {
             cleanupToggleRecording();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
+            cleanupMigrateBuffer();
         };
     }, [
         activeBufferId,
@@ -991,6 +1050,42 @@ function App() {
 
             <AudioPanicDialog />
 
+            {migrationState && (
+                <MigrationDiffModal
+                    isOpen
+                    original={migrationState.original}
+                    migrated={migrationState.migrated}
+                    summary={migrationState.summary}
+                    onCancel={() => setMigrationState(null)}
+                    onApply={() => {
+                        const ed = editorRef.current;
+                        const model = ed?.getModel();
+                        if (!ed || !model) {
+                            setMigrationState(null);
+                            return;
+                        }
+                        if (migrationState.bufferId !== activeBufferId) {
+                            console.warn(
+                                'Migrate apply: active buffer changed since modal opened; aborting',
+                            );
+                            setMigrationState(null);
+                            return;
+                        }
+                        model.pushEditOperations(
+                            [],
+                            [
+                                {
+                                    range: model.getFullModelRange(),
+                                    text: migrationState.migrated,
+                                },
+                            ],
+                            () => null,
+                        );
+                        setMigrationState(null);
+                    }}
+                />
+            )}
+
             <main className="app-main">
                 {!workspaceRoot ? (
                     <div className="empty-state">
@@ -1038,7 +1133,7 @@ function App() {
                                     runningBufferId={runningBufferId}
                                     renamingPath={renamingPath}
                                     formatLabel={formatLabel}
-                                    onSelectBuffer={setActiveBufferId}
+                                    onSelectBuffer={handleSelectBuffer}
                                     onOpenFile={handleOpenFile}
                                     onCreateFile={createUntitledFile}
                                     onSaveFile={handleSaveFileStable}
