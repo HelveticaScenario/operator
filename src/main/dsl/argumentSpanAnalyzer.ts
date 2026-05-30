@@ -74,7 +74,7 @@ function buildSchemaMap(schemas: ModuleSchema[]): Map<string, ModuleSchema> {
 
 /**
  * Extract the function name being called from a CallExpression.
- * Handles both simple calls (foo()) and property access calls (seq.iCycle()).
+ * Handles both simple calls (foo()) and property access calls ($p.s()).
  */
 function getCalledFunctionName(call: CallExpression): string | null {
     const expression = call.getExpression();
@@ -182,7 +182,7 @@ function chainRootIsPs(node: import('ts-morph').Node): boolean {
 
 /**
  * Get the full dotted path for a property access call.
- * e.g., "$.iCycle" for $.iCycle()
+ * e.g., "$p.s" for $p.s()
  */
 function getFullCallPath(call: CallExpression): string | null {
     const expression = call.getExpression();
@@ -794,14 +794,14 @@ export function analyzeArgumentSpans(
         }
 
         // Get the call site position
-        // For property access calls like `seq.iCycle()`, V8 stack traces point to the
+        // For property access calls like `$p.s()`, V8 stack traces point to the
         // Opening parenthesis, not the start of the expression. So we need to find
         // The position of the `(` in the call.
         const callExpression = call.getExpression();
         let callStartPos: number;
 
         if (Node.isPropertyAccessExpression(callExpression)) {
-            // For `seq.iCycle()`, get the position of `iCycle`
+            // For `$p.s()`, get the position of the `s` name node
             // The opening paren follows immediately after the method name
             callStartPos = callExpression.getNameNode().getStart();
         } else {

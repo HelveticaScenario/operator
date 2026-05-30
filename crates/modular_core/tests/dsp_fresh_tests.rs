@@ -13,8 +13,8 @@ use modular_core::types::{ModuleState, PatchGraph, Sampleable};
 use serde_json::{Value, json};
 
 /// Helper — build a mini-notation payload shaped like what `$p(source)`
-/// would emit on the DSL side. `$cycle` / `$iCycle` no longer accept bare
-/// strings; the wire shape is `{ ast, source, all_spans }`.
+/// would emit on the DSL side. `$cycle` no longer accepts bare strings; the
+/// wire shape is `{ ast, source, all_spans }`.
 fn mini_payload(source: &str) -> Value {
     let parsed = modular_core::dsp::seq::seq_value::ParsedPatternPayload::parse_for_test(source);
     serde_json::to_value(&parsed).expect("payload should serialize")
@@ -317,8 +317,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$addHz" => json!({ "input": 0.0, "offset": 0.0 }),
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
         "$curve" => json!({ "input": 0.0, "exp": 1.0 }),
-        "$cycle" | "$intervalSeq" => json!({ "pattern": mini_payload("0") }),
-        "$iCycle" => json!({ "patterns": mini_payload("0"), "scale": "c(major)" }),
+        "$cycle" => json!({ "pattern": mini_payload("0") }),
         "$slew" | "$quantizer" | "$unison" | "$crush" | "$feedback" | "$pulsar" | "$rising"
         | "$falling" | "$stereoMix" => json!({ "input": 0.0 }),
         "$track" => json!({ "keyframes": [] }),
@@ -1110,99 +1109,6 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         "module B output should be continuous across transfer.\n\
          Before: {old_b_output}, after: {new_b_output}, delta: {b_delta}\n\
          (large delta suggests wrapper outputs were not transferred)"
-    );
-}
-
-// ─── IntervalSeq CV hold during rest after state transfer ────────────────────
-
-#[test]
-fn interval_seq_cv_holds_during_rest_after_state_transfer() {
-    // Bug: After patch update (state transfer), $iCycle CV output drops to 0V
-    // during rest periods. The sequencer only writes CV when a voice is active.
-    // After reconstruction, the inner outputs default to 0.0. During a rest
-    // cycle, no voice is active, so CV is never written and stays at 0.0 instead
-    // of holding the last active note's voltage.
-    //
-    // Setup: $iCycle with pattern '<0 ~>' in d#(min) — alternates between
-    // degree 0 (D#4 = 0.25V) and rest every cycle. Connect to a ROOT_CLOCK
-    // with a high tempo so we can advance cycles quickly.
-    //
-    // At 48000 BPM with 4/4 time: one bar = 240 samples at 48kHz.
-    //   Cycle 0 (samples 0-239): degree 0, CV = 0.25V (D#4)
-    //   Cycle 1 (samples 240-479): rest, CV should HOLD at 0.25V
-    //
-    // Transfer state during cycle 1 (rest period), run one frame, verify CV != 0.
-
-    let graph = make_graph(vec![
-        (
-            "ROOT_CLOCK",
-            "_clock",
-            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
-        ),
-        (
-            "seq",
-            "$iCycle",
-            json!({ "patterns": mini_payload("<0 ~>"), "scale": "d#(min)" }),
-        ),
-    ]);
-
-    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
-
-    // Advance through cycle 0 (degree 0) into the start of cycle 1 (rest).
-    // One bar = 240 samples. Process 260 samples to be well into cycle 1.
-    for _ in 0..260 {
-        process_frame(&old_patch);
-    }
-
-    // Check that the CV output holds the last active voltage (not zero).
-    // D#4 in V/Oct: (63 - 60) / 12 = 0.25V
-    let expected_voltage = 0.25f32;
-
-    let old_cv = old_patch
-        .sampleables
-        .get("seq")
-        .unwrap()
-        .get_value_at("cv", 0, 0);
-
-    // During rest, the old module should still hold the last active voltage.
-    // (This verifies the test setup is correct — the old module works fine.)
-    assert!(
-        (old_cv - expected_voltage).abs() < 0.01,
-        "old module CV should hold {expected_voltage}V during rest, got {old_cv}"
-    );
-
-    // Now simulate a force update: build new patch, transfer state, connect.
-    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
-
-    for (id, new_module) in &new_patch.sampleables {
-        if let Some(old_module) = old_patch.sampleables.get(id) {
-            new_module.transfer_state_from(old_module.as_ref());
-        }
-    }
-
-    for module in new_patch.sampleables.values() {
-        module.connect(&new_patch);
-    }
-
-    // Call on_patch_update (as apply_patch_update does)
-    for module in new_patch.sampleables.values() {
-        module.on_patch_update();
-    }
-
-    // Run ONE frame on the new patch — still in the rest period.
-    process_frame(&new_patch);
-
-    let new_cv = new_patch
-        .sampleables
-        .get("seq")
-        .unwrap()
-        .get_value_at("cv", 0, 0);
-
-    // The CV should still hold the previous active voltage, not drop to 0.
-    assert!(
-        (new_cv - expected_voltage).abs() < 0.01,
-        "after state transfer during rest, CV should hold {expected_voltage}V, got {new_cv}\n\
-         (0.0 means inner outputs were not preserved across state transfer)"
     );
 }
 

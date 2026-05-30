@@ -342,7 +342,7 @@ type BufferOutputRef = {
 
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
- * \`$cycle\` / \`$iCycle\` as their pattern argument. Opaque to user code;
+ * \`$cycle\` as its pattern argument. Opaque to user code;
  * the shape is \`{ __kind, ast, source, all_spans }\`. Construct with
  * \`$p(...)\`; never build one by hand.
  */

@@ -387,21 +387,14 @@ describe('sequencing', () => {
         expect(findModules(patch, '$track').length).toBe(1);
     });
 
-    test('$iCycle with single $p() pattern wrapped in array', () => {
-        const patch = execPatch('$iCycle([$p("0 2 4 5 7")], "C(major)").out()');
-        expect(findModules(patch, '$iCycle').length).toBe(1);
-    });
-
-    test('$iCycle with single $p() pattern', () => {
-        const patch = execPatch('$iCycle($p("0 2 4 5 7"), "C(major)").out()');
-        expect(findModules(patch, '$iCycle').length).toBe(1);
-    });
-
-    test('$iCycle with multiple $p() patterns folded additively', () => {
-        const patch = execPatch(
-            '$iCycle([$p("0 2 4"), $p("0 3")], "C(major)").out()',
+    test('$cycle($p.s(...)) builds a scale-degree pattern', () => {
+        const single = execPatch('$cycle($p.s("0 2 4 5 7", "C(major)")).out()');
+        expect(findModules(single, '$cycle').length).toBe(1);
+        // Chained .add folds a second source additively.
+        const chained = execPatch(
+            '$cycle($p.s("0 2 4", "C(major)").add("0 3")).out()',
         );
-        expect(findModules(patch, '$iCycle').length).toBe(1);
+        expect(findModules(chained, '$cycle').length).toBe(1);
     });
 
     test('$p rejects dropped atom kinds', () => {
@@ -411,15 +404,15 @@ describe('sequencing', () => {
         expect(() => execPatch('$p("2v")')).toThrow();
     });
 
-    test('$iCycle rejects non-integer atoms at patch-graph validation', () => {
+    test('$p.s rejects non-integer atoms at patch-graph validation', () => {
         expect(() =>
-            execPatch('$iCycle($p("1.5"), "C(major)").out()'),
+            execPatch('$cycle($p.s("1.5", "C(major)")).out()'),
         ).toThrow(/IntervalValue requires integer scale degrees, got 1\.5/);
         expect(() =>
-            execPatch('$iCycle($p("c4"), "C(major)").out()'),
+            execPatch('$cycle($p.s("c4", "C(major)")).out()'),
         ).toThrow(/IntervalValue does not accept note atoms/);
         expect(() =>
-            execPatch('$iCycle($p("440hz"), "C(major)").out()'),
+            execPatch('$cycle($p.s("440hz", "C(major)")).out()'),
         ).toThrow(/IntervalValue does not accept Hz atoms/);
     });
 

@@ -1,6 +1,6 @@
 //! Shared cycle-cache primitives for the pattern-based sequencer modules.
 //!
-//! Both `Seq` and `IntervalSeq` cache pre-computed hap data in two tiers:
+//! `Seq` caches pre-computed hap data in two tiers:
 //! the param cache (cycles `0..PARAM_CACHE_CYCLES`, built at parse time on
 //! the main thread) and the audio-thread module cache (cycles past the
 //! param cache horizon, up to `MAX_MODULE_CYCLES` slots, populated lazily).
@@ -32,10 +32,10 @@ pub(crate) const MIN_SPANS_CAP_HINT: usize = 32;
 /// Initial span_arena sizing per cached cycle.
 pub(crate) const SPANS_RESERVE_PER_HAP: usize = 4;
 
-/// Flat span entry tagged with the source pattern it belongs to. Shared
-/// between `Seq`'s `SpPattern` payloads and `IntervalSeq`'s combined
-/// `$iCycle` patterns — both need per-source highlighting when one runtime
-/// hap was produced from multiple input pattern strings.
+/// Flat span entry tagged with the source pattern it belongs to. Used by
+/// `Seq`'s chained `$p.s` (`SpPattern`) payloads, which need per-source
+/// highlighting when one runtime hap was produced from multiple input
+/// pattern strings.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FlatSpan {
     pub pattern_idx: u8,
