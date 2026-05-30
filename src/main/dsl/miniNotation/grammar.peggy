@@ -138,9 +138,14 @@ ElementWithWeight
       return [ast, weight];
     }
 
+// Leading `_` mirrors pest's implicit WHITESPACE between an element_base and
+// its modifier chain (and between successive modifiers). The repetition that
+// drives this rule backtracks a failed attempt, so whitespace is only
+// committed when a real modifier sigil follows — `a b` still parses as two
+// elements, `a / 2` as one slowed element.
 ElementPart
-  = w:Weight { return { kind: 'weight', value: w }; }
-  / m:Modifier { return { kind: 'mod', apply: m }; }
+  = _ w:Weight { return { kind: 'weight', value: w }; }
+  / _ m:Modifier { return { kind: 'mod', apply: m }; }
 
 ElementBase
   = FastSub
@@ -280,28 +285,31 @@ Modifier
 
 // Weight is captured at ElementWithWeight level as positional metadata
 // on the sequence entry — never mixed into a modifier chain.
+// The `_` after each sigil mirrors pest's implicit WHITESPACE between a
+// modifier operator and its operand (`/ 4`, `* 2`, `@ 3` all parsed in the
+// Rust grammar). Euclidean already spells its inner whitespace explicitly.
 Weight
-  = "@" n:Number? { return n === null ? 1 : n; }
+  = "@" _ n:Number? { return n === null ? 1 : n; }
 
 FastMod
-  = "*" op:ModOperandF64 {
+  = "*" _ op:ModOperandF64 {
       return (ast, _c) => ({ Fast: [ast, op] });
     }
 
 SlowMod
-  = "/" op:ModOperandF64 {
+  = "/" _ op:ModOperandF64 {
       return (ast, _c) => ({ Slow: [ast, op] });
     }
 
 Replicate
-  = "!" n:Integer? {
+  = "!" _ n:Integer? {
       const count = n === null ? 2 : n;
       if (count < 0) error("Replicate count must be a non-negative integer");
       return (ast, _c) => ({ Replicate: [ast, count] });
     }
 
 Degrade
-  = "?" p:Number? {
+  = "?" _ p:Number? {
       return (ast, c) => ({ Degrade: [ast, p, c.nextSeed()] });
     }
 

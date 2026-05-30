@@ -228,6 +228,59 @@ describe('modifiers', () => {
     });
 });
 
+// The Rust pest grammar's element/modifier rules are non-atomic, so pest
+// inserts implicit WHITESPACE between an element_base and its modifiers and
+// between a modifier sigil and its operand. The Peggy port must accept the
+// same whitespace or otherwise-valid patterns regress to syntax errors —
+// e.g. `<...> / 4`, which the Rust parser accepted as a Slow modifier.
+describe('whitespace around modifiers (Rust pest parity)', () => {
+    test('space before and after the slow sigil attaches to preceding element', () => {
+        for (const src of ['0/2', '0 /2', '0/ 2', '0 / 2']) {
+            const r = $p(src);
+            if (!('Slow' in r.ast)) return expect.fail(`expected Slow for "${src}"`);
+            expect(r.ast.Slow[1]).toEqual({
+                Pure: { node: 2, span: expect.anything() },
+            });
+        }
+    });
+
+    test('slow modifier applies to a slowcat group with surrounding spaces', () => {
+        const r = $p('<1 -1> / 4');
+        if (!('Slow' in r.ast)) return expect.fail('expected Slow');
+        expect('SlowCat' in r.ast.Slow[0]).toBe(true);
+        expect(r.ast.Slow[1]).toEqual({
+            Pure: { node: 4, span: expect.anything() },
+        });
+    });
+
+    test('fast *n tolerates whitespace', () => {
+        for (const src of ['0 *4', '0* 4', '0 * 4']) {
+            expect('Fast' in $p(src).ast).toBe(true);
+        }
+    });
+
+    test('weight @n tolerates whitespace', () => {
+        const r = $p('0 @ 3 1');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence[0][1]).toBeCloseTo(3);
+        expect(r.ast.Sequence[1][1]).toBeNull();
+    });
+
+    test('replicate / degrade / euclidean tolerate whitespace', () => {
+        expect('Replicate' in $p('0 ! 3').ast).toBe(true);
+        expect('Degrade' in $p('0 ? 0.3').ast).toBe(true);
+        expect('Euclidean' in $p('0 (3,8)').ast).toBe(true);
+    });
+
+    test('reported regression: slowcat group divided by 4', () => {
+        const src =
+            '<[[1,-1,-4]@7 [[1,-1,-4] [1,-3,-4]@3]] [[1,-3,-4]@7 [[1,-3,-4] [1,-1,-4]@3]]> / 4';
+        const r = $p(src);
+        if (!('Slow' in r.ast)) return expect.fail('expected top-level Slow');
+        expect('SlowCat' in r.ast.Slow[0]).toBe(true);
+    });
+});
+
 describe('modifiers inside operand subsequences', () => {
     test('replicate !n inside a euclidean pulses subsequence', () => {
         const r = $p('0(<16!2 12>,8)');
