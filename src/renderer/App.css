@@ -90,6 +90,14 @@
     background: transparent !important;
 }
 
+/* The hidden edit-context input carries a focus outline that Monaco omits to
+ * suppress (unlike the legacy .ime-text-area). When the cursor line scrolls
+ * above the viewport Monaco clamps this element to a 1px strip at the top,
+ * painting its outline as a stray line over the transparent background. */
+.editor-panel .monaco-editor .native-edit-context {
+    outline: none !important;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Audio Controls - compact terminal style
    ═══════════════════════════════════════════════════════════════════════════ */
