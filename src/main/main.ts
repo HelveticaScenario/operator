@@ -279,6 +279,21 @@ async function checkForUpdateAvailability(): Promise<void> {
 }
 
 /**
+ * The GitHub API availability check (checkForUpdateAvailability) is uncached
+ * and sees a new release instantly, but the Squirrel feed
+ * (update.electronjs.org) caches releases for several minutes. During that
+ * window the feed still reports the old version, so autoUpdater fires
+ * `update-not-available` even though the user accepted a real update. Retry
+ * the feed until it catches up before surfacing anything, and only then show a
+ * transient (not error) message.
+ */
+const UPDATE_FEED_RETRY_DELAY_MS = 60_000;
+const UPDATE_FEED_MAX_RETRIES = 10;
+let updateDownloadActive = false;
+let updateFeedRetries = 0;
+let updateRetryTimer: NodeJS.Timeout | null = null;
+
+/**
  * Initialise the autoUpdater feed URL and event listeners.
  * Called once, after app.ready, only in packaged builds on supported platforms.
  */
@@ -298,17 +313,37 @@ function initAutoUpdater(): void {
     });
 
     autoUpdater.on('update-downloaded', () => {
+        updateDownloadActive = false;
         sendUpdateEvent(IPC_CHANNELS.UPDATE_DOWNLOADED);
     });
 
     autoUpdater.on('update-not-available', () => {
+        // checkForUpdates() only runs after the user accepted an update the
+        // GitHub API reported, so reaching here means the Squirrel feed is
+        // lagging behind that release. Retry until it catches up, then fall
+        // back to a transient message rather than a hard error.
+        if (!updateDownloadActive) {
+            return;
+        }
+        if (updateFeedRetries < UPDATE_FEED_MAX_RETRIES) {
+            updateFeedRetries += 1;
+            sendUpdateEvent(IPC_CHANNELS.UPDATE_PREPARING);
+            updateRetryTimer = setTimeout(() => {
+                if (updateDownloadActive) {
+                    autoUpdater.checkForUpdates();
+                }
+            }, UPDATE_FEED_RETRY_DELAY_MS);
+            return;
+        }
+        updateDownloadActive = false;
         sendUpdateEvent(
             IPC_CHANNELS.UPDATE_ERROR,
-            'Update no longer available',
+            'The new release is still propagating from the update service and is not downloadable yet. Try again in a few minutes.',
         );
     });
 
     autoUpdater.on('error', (err: Error) => {
+        updateDownloadActive = false;
         console.error('[update] autoUpdater error:', err.message);
         sendUpdateEvent(IPC_CHANNELS.UPDATE_ERROR, err.message);
     });
@@ -1573,6 +1608,12 @@ ipcMain.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, () => {
         }
         return;
     }
+    if (updateRetryTimer) {
+        clearTimeout(updateRetryTimer);
+        updateRetryTimer = null;
+    }
+    updateDownloadActive = true;
+    updateFeedRetries = 0;
     sendUpdateEvent(IPC_CHANNELS.UPDATE_DOWNLOADING);
     autoUpdater.checkForUpdates();
 });

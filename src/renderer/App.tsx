@@ -411,6 +411,12 @@ function App() {
                 version: pendingUpdateVersion.current,
             });
         });
+        const unsubPreparing = electronAPI.update.onPreparing(() => {
+            setUpdateState({
+                status: 'preparing',
+                version: pendingUpdateVersion.current,
+            });
+        });
         const unsubDownloaded = electronAPI.update.onDownloaded(() => {
             setUpdateState({ status: 'ready' });
         });
@@ -421,6 +427,7 @@ function App() {
         return () => {
             unsubAvailable();
             unsubDownloading();
+            unsubPreparing();
             unsubDownloaded();
             unsubError();
         };

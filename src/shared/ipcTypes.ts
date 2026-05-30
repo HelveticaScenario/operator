@@ -329,6 +329,7 @@ export const IPC_CHANNELS = {
     UPDATE_INSTALL: 'modular:update:install',
     UPDATE_AVAILABLE: 'modular:update:available',
     UPDATE_DOWNLOADING: 'modular:update:downloading',
+    UPDATE_PREPARING: 'modular:update:preparing',
     UPDATE_DOWNLOADED: 'modular:update:downloaded',
     UPDATE_ERROR: 'modular:update:error',
 } as const;
@@ -493,6 +494,7 @@ export interface IPCHandlers {
     // Update operations (push from main to renderer)
     [IPC_CHANNELS.UPDATE_AVAILABLE]: (info: UpdateAvailableInfo) => void;
     [IPC_CHANNELS.UPDATE_DOWNLOADING]: () => void;
+    [IPC_CHANNELS.UPDATE_PREPARING]: () => void;
     [IPC_CHANNELS.UPDATE_DOWNLOADED]: () => void;
     [IPC_CHANNELS.UPDATE_ERROR]: (message: string) => void;
 }

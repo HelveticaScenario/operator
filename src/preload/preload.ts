@@ -244,6 +244,7 @@ export interface ElectronAPI {
             callback: (info: UpdateAvailableInfo) => void,
         ) => () => void;
         onDownloading: (callback: () => void) => () => void;
+        onPreparing: (callback: () => void) => () => void;
         onDownloaded: (callback: () => void) => () => void;
         onError: (callback: (message: string) => void) => () => void;
     };
@@ -472,6 +473,7 @@ const electronAPI: ElectronAPI = {
         ),
         onDownloaded: menuEventHandler(IPC_CHANNELS.UPDATE_DOWNLOADED),
         onDownloading: menuEventHandler(IPC_CHANNELS.UPDATE_DOWNLOADING),
+        onPreparing: menuEventHandler(IPC_CHANNELS.UPDATE_PREPARING),
         onError: menuEventHandler<[string]>(IPC_CHANNELS.UPDATE_ERROR),
     },
 };
