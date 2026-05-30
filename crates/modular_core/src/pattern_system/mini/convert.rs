@@ -216,9 +216,7 @@ fn eval_f64(ast: &MiniASTF64) -> f64 {
         MiniASTF64::Replicate(pattern, _) => eval_f64(pattern),
         MiniASTF64::Degrade(pattern, _, _) => eval_f64(pattern),
         MiniASTF64::Euclidean { pattern, .. } => eval_f64(pattern),
-        MiniASTF64::Polymeter { children, .. } => {
-            children.first().map(eval_f64).unwrap_or(0.0)
-        }
+        MiniASTF64::Polymeter { children, .. } => children.first().map(eval_f64).unwrap_or(0.0),
     }
 }
 
@@ -326,22 +324,30 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
                 return constructors::pure(Fraction::from_integer(0));
             }
 
-            // Check if any elements have weights
-            let has_weights = elements.iter().any(|(_, w)| w.is_some());
+            // Expand Replicate into sibling steps (see MiniAST::Sequence).
+            let expanded: Vec<(&MiniASTF64, Option<f64>)> = elements
+                .iter()
+                .flat_map(|(p, w)| match p {
+                    MiniASTF64::Replicate(inner, count) => {
+                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
+                            .collect::<Vec<_>>()
+                    }
+                    other => vec![(other, *w)],
+                })
+                .collect();
+
+            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
                 // Use timecat for weighted sequences
-                let weighted: Vec<(Fraction, Pattern<Fraction>)> = elements
+                let weighted: Vec<(Fraction, Pattern<Fraction>)> = expanded
                     .iter()
-                    .map(|(e, w)| {
-                        let weight = w.unwrap_or(1.0);
-                        (Fraction::from(weight), convert_f64_pattern(e))
-                    })
+                    .map(|(e, w)| (Fraction::from(w.unwrap_or(1.0)), convert_f64_pattern(e)))
                     .collect();
                 timecat(weighted)
             } else {
                 // Use fastcat for unweighted sequences
-                let pats: Vec<Pattern<Fraction>> = elements
+                let pats: Vec<Pattern<Fraction>> = expanded
                     .iter()
                     .map(|(e, _)| convert_f64_pattern(e))
                     .collect();
@@ -464,19 +470,28 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
                 return pure(0);
             }
 
-            let has_weights = elements.iter().any(|(_, w)| w.is_some());
+            // Expand Replicate into sibling steps (see MiniAST::Sequence).
+            let expanded: Vec<(&MiniASTU32, Option<f64>)> = elements
+                .iter()
+                .flat_map(|(p, w)| match p {
+                    MiniASTU32::Replicate(inner, count) => {
+                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
+                            .collect::<Vec<_>>()
+                    }
+                    other => vec![(other, *w)],
+                })
+                .collect();
+
+            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
-                let weighted: Vec<(Fraction, Pattern<u32>)> = elements
+                let weighted: Vec<(Fraction, Pattern<u32>)> = expanded
                     .iter()
-                    .map(|(e, w)| {
-                        let weight = w.unwrap_or(1.0);
-                        (Fraction::from(weight), convert_u32_pattern(e))
-                    })
+                    .map(|(e, w)| (Fraction::from(w.unwrap_or(1.0)), convert_u32_pattern(e)))
                     .collect();
                 timecat(weighted)
             } else {
-                let pats: Vec<Pattern<u32>> = elements
+                let pats: Vec<Pattern<u32>> = expanded
                     .iter()
                     .map(|(e, _)| convert_u32_pattern(e))
                     .collect();
@@ -594,19 +609,28 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
                 return pure(0);
             }
 
-            let has_weights = elements.iter().any(|(_, w)| w.is_some());
+            // Expand Replicate into sibling steps (see MiniAST::Sequence).
+            let expanded: Vec<(&MiniASTI32, Option<f64>)> = elements
+                .iter()
+                .flat_map(|(p, w)| match p {
+                    MiniASTI32::Replicate(inner, count) => {
+                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
+                            .collect::<Vec<_>>()
+                    }
+                    other => vec![(other, *w)],
+                })
+                .collect();
+
+            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
-                let weighted: Vec<(Fraction, Pattern<i32>)> = elements
+                let weighted: Vec<(Fraction, Pattern<i32>)> = expanded
                     .iter()
-                    .map(|(e, w)| {
-                        let weight = w.unwrap_or(1.0);
-                        (Fraction::from(weight), convert_i32_pattern(e))
-                    })
+                    .map(|(e, w)| (Fraction::from(w.unwrap_or(1.0)), convert_i32_pattern(e)))
                     .collect();
                 timecat(weighted)
             } else {
-                let pats: Vec<Pattern<i32>> = elements
+                let pats: Vec<Pattern<i32>> = expanded
                     .iter()
                     .map(|(e, _)| convert_i32_pattern(e))
                     .collect();
@@ -719,9 +743,7 @@ fn eval_u32(ast: &MiniASTU32) -> u32 {
         MiniASTU32::Replicate(pattern, _count) => eval_u32(pattern),
         MiniASTU32::Degrade(pattern, _, _) => eval_u32(pattern),
         MiniASTU32::Euclidean { pattern, .. } => eval_u32(pattern),
-        MiniASTU32::Polymeter { children, .. } => {
-            children.first().map(eval_u32).unwrap_or(0)
-        }
+        MiniASTU32::Polymeter { children, .. } => children.first().map(eval_u32).unwrap_or(0),
     }
 }
 
@@ -744,9 +766,7 @@ fn eval_i32(ast: &MiniASTI32) -> i32 {
         MiniASTI32::Replicate(pattern, _count) => eval_i32(pattern),
         MiniASTI32::Degrade(pattern, _, _) => eval_i32(pattern),
         MiniASTI32::Euclidean { pattern, .. } => eval_i32(pattern),
-        MiniASTI32::Polymeter { children, .. } => {
-            children.first().map(eval_i32).unwrap_or(0)
-        }
+        MiniASTI32::Polymeter { children, .. } => children.first().map(eval_i32).unwrap_or(0),
     }
 }
 
@@ -841,25 +861,35 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::Sequence(elements) | MiniAST::FastCat(elements) => {
-            let mut patterns = Vec::new();
-            let mut weights = Vec::new();
-            let mut has_weights = false;
+            // Expand Replicate nodes into sibling steps. In Strudel `[a b!2 c]`
+            // is `[a b b c]`: `!n` adds `n` sibling steps that share the
+            // parent's stepping, not one step holding a fastcat of `n` copies.
+            // (Mirrors the same expansion in MiniAST::SlowCat below.)
+            let expanded: Vec<(&MiniAST, Option<f64>)> = elements
+                .iter()
+                .flat_map(|(p, w)| match p {
+                    MiniAST::Replicate(inner, count) => {
+                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
+                            .collect::<Vec<_>>()
+                    }
+                    other => vec![(other, *w)],
+                })
+                .collect();
 
-            for (ast, weight) in elements {
-                patterns.push(convert_inner(ast)?);
-                if let Some(w) = weight {
-                    weights.push(Fraction::from(*w));
-                    has_weights = true;
-                } else {
-                    weights.push(Fraction::from_integer(1));
-                }
-            }
+            let has_weights = expanded.iter().any(|(_, w)| w.is_some());
 
             if has_weights {
-                // timecat expects (Fraction, Pattern) pairs
-                Ok(timecat(weights.into_iter().zip(patterns).collect()))
+                let weighted: Vec<(Fraction, Pattern<T>)> = expanded
+                    .iter()
+                    .map(|(p, w)| Ok((Fraction::from(w.unwrap_or(1.0)), convert_inner(p)?)))
+                    .collect::<Result<_, ConvertError>>()?;
+                Ok(timecat(weighted))
             } else {
-                Ok(fastcat(patterns))
+                let pats: Vec<Pattern<T>> = expanded
+                    .iter()
+                    .map(|(p, _)| convert_inner(p))
+                    .collect::<Result<_, _>>()?;
+                Ok(fastcat(pats))
             }
         }
 

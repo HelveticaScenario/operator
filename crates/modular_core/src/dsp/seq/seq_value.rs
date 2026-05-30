@@ -472,8 +472,7 @@ impl SeqPatternParam {
             all_spans: payload.all_spans,
         }];
 
-        let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) =
-            bake_cycles(&pattern);
+        let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) = bake_cycles(&pattern);
 
         Ok(Self {
             per_source,
@@ -520,7 +519,10 @@ impl SeqPatternParam {
         let base_midi = scale.base_midi();
         let (intervals, tuning): (Vec<i8>, [f64; 12]) = match scale.snapper() {
             Some(s) => (s.scale_intervals().iter().copied().collect(), *s.tuning()),
-            None => ((0i8..12).collect(), std::array::from_fn(|i| i as f64 / 12.0)),
+            None => (
+                (0i8..12).collect(),
+                std::array::from_fn(|i| i as f64 / 12.0),
+            ),
         };
 
         // Lower each source AST into a Pattern<IntervalValue>. Strip
@@ -548,12 +550,9 @@ impl SeqPatternParam {
 
         // Resolve degrees -> SeqValue voltages, then cache cycles.
         let resolver = move |v: &IntervalValue| match v {
-            IntervalValue::Degree(d) => SeqValue::Voltage(degree_to_voltage(
-                *d,
-                base_midi,
-                &intervals,
-                &tuning,
-            )),
+            IntervalValue::Degree(d) => {
+                SeqValue::Voltage(degree_to_voltage(*d, base_midi, &intervals, &tuning))
+            }
             IntervalValue::Rest => SeqValue::Rest,
         };
         let voltage_pattern = combined.fmap(resolver);
@@ -567,8 +566,7 @@ impl SeqPatternParam {
             })
             .collect();
 
-        let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) =
-            bake_cycles(&voltage_pattern);
+        let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) = bake_cycles(&voltage_pattern);
 
         Ok(Self {
             per_source,
@@ -743,9 +741,7 @@ mod tests {
     #[test]
     fn test_from_payload_rejects_empty() {
         // Single-source $cycle($p("")) — empty string is a hard error.
-        assert!(
-            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("")).is_err()
-        );
+        assert!(SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("")).is_err());
         // Whitespace-only is rejected the same way.
         assert!(
             SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("   ")).is_err()
@@ -1004,5 +1000,118 @@ mod tests {
         // Count pulses (non-rests)
         let pulse_count = haps.iter().filter(|h| !h.value.is_rest()).count();
         assert_eq!(pulse_count, 3, "Should have 3 pulses");
+    }
+
+    #[test]
+    fn replicate_in_sequence_expands_to_siblings() {
+        use crate::pattern_system::Fraction;
+        use crate::pattern_system::mini::parse;
+
+        // Strudel semantics: `!n` inside a sequence replicates the element into
+        // `n` sibling steps that share the parent's stepping, NOT one step
+        // crammed with a fastcat. So `[c5@1.5 c5!2]` == `[c5@1.5 c5 c5]`
+        // (total weight 3.5): c5 at [0,3/7), [3/7,5/7), [5/7,1).
+        let pat: crate::pattern_system::Pattern<SeqValue> =
+            parse("[c5@1.5 c5!2]").expect("should parse");
+        let haps = pat.query_arc(Fraction::from(0), Fraction::from_integer(1));
+        let spans: Vec<(String, String)> = haps
+            .iter()
+            .map(|h| (h.part.begin.to_string(), h.part.end.to_string()))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                ("0".to_string(), "3/7".to_string()),
+                ("3/7".to_string(), "5/7".to_string()),
+                ("5/7".to_string(), "1".to_string()),
+            ],
+            "[c5@1.5 c5!2] should split 1.5:1:1 (total 3.5)"
+        );
+
+        // Unweighted: `[0 1!2 2]` == `[0 1 1 2]` — four equal quarter steps.
+        let pat2: crate::pattern_system::Pattern<SeqValue> =
+            parse("[0 1!2 2]").expect("should parse");
+        let haps2 = pat2.query_arc(Fraction::from(0), Fraction::from_integer(1));
+        assert_eq!(haps2.len(), 4, "[0 1!2 2] should produce four steps");
+        assert!(
+            haps2
+                .iter()
+                .all(|h| h.part.duration() == Fraction::new(1, 4)),
+            "all four steps should be 1/4 wide"
+        );
+    }
+
+    #[test]
+    fn nested_slowcat_fastcat_matches_strudel() {
+        use crate::pattern_system::Fraction;
+        use crate::pattern_system::mini::parse;
+
+        fn note_name(v: f64) -> String {
+            let midi = (v * 12.0 + 60.0).round() as i64;
+            let names = [
+                "c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b",
+            ];
+            format!("{}{}", names[midi.rem_euclid(12) as usize], midi / 12 - 1)
+        }
+
+        // Captured verbatim from Strudel (`@strudel/mini`) for this exact
+        // source over [0, 5/2) — one full period. `~` produces silence in
+        // Strudel, so rests are absent here (the local engine emits explicit
+        // gate-low Rest haps, filtered out below before comparing).
+        let src = "<\n  [c5, e, c]@1.5\n  [c5, e, c]!2\n  [c5, f, c#]!2\n  [c5, g, d#]\n  [\n    [c5@1.5 c5!2],\n    [g!2  a#@1.5],\n    [d#@2 ~@1.5]\n  ]@3.5\n  >*4";
+        let expected: &[(&str, &str, &str)] = &[
+            ("0", "3/8", "c5"),
+            ("0", "3/8", "e4"),
+            ("0", "3/8", "c4"),
+            ("3/8", "5/8", "c5"),
+            ("3/8", "5/8", "e4"),
+            ("3/8", "5/8", "c4"),
+            ("5/8", "7/8", "c5"),
+            ("5/8", "7/8", "e4"),
+            ("5/8", "7/8", "c4"),
+            ("7/8", "9/8", "c5"),
+            ("7/8", "9/8", "f4"),
+            ("7/8", "9/8", "c#4"),
+            ("9/8", "11/8", "c5"),
+            ("9/8", "11/8", "f4"),
+            ("9/8", "11/8", "c#4"),
+            ("11/8", "13/8", "c5"),
+            ("11/8", "13/8", "g4"),
+            ("11/8", "13/8", "d#4"),
+            ("13/8", "15/8", "g4"),
+            ("13/8", "2", "c5"),
+            ("13/8", "17/8", "d#4"),
+            ("15/8", "17/8", "g4"),
+            ("2", "9/4", "c5"),
+            ("17/8", "5/2", "a#4"),
+            ("9/4", "5/2", "c5"),
+        ];
+
+        // Compare onset haps by their `whole` span. The engine is consumed
+        // one cycle at a time (`query_cycle_all_into`), so a hap whose `whole`
+        // crosses an integer boundary is returned as `part` fragments with a
+        // shared `whole`; only the onset fragment carries the note. Strudel's
+        // one-shot arc query returns those same notes unsplit — matching the
+        // onset `whole`s here.
+        let pattern: crate::pattern_system::Pattern<SeqValue> = parse(src).expect("should parse");
+        let mut actual: Vec<(String, String, String)> = pattern
+            .query_arc(Fraction::from(0), Fraction::new(5, 2))
+            .into_iter()
+            .filter(|h| h.has_onset() && !h.value.is_rest())
+            .map(|h| {
+                let whole = h.whole.as_ref().unwrap();
+                let v = h.value.to_voltage().unwrap();
+                (whole.begin.to_string(), whole.end.to_string(), note_name(v))
+            })
+            .collect();
+        actual.sort();
+
+        let mut expected_sorted: Vec<(String, String, String)> = expected
+            .iter()
+            .map(|(b, e, n)| (b.to_string(), e.to_string(), n.to_string()))
+            .collect();
+        expected_sorted.sort();
+
+        assert_eq!(actual, expected_sorted);
     }
 }
