@@ -102,6 +102,7 @@ import cssWorker from 'monaco-editor/esm/vs/language/css/css.worker?worker';
 };
 
 import * as monaco from 'monaco-editor';
+import { installHoverDelegateAnchor } from './components/monaco/hoverDelegateAnchor';
 
 // Suppress Monaco Editor's harmless "Canceled" errors that occur during
 // Normal operations like dismissing the "Go to Symbol" dialog with Escape.
@@ -132,6 +133,12 @@ window.addEventListener(
 
 // Make monaco available globally
 (window as any).monaco = monaco;
+
+// Pin monaco's process-global hover-delegate factory to an immortal anchor
+// editor so transient editors (the migration DiffEditor) can't dangle it on
+// dispose, which otherwise throws "InstantiationService has been disposed" on
+// the next suggest/hover. monaco-editor#4612.
+installHoverDelegateAnchor(monaco);
 
 // Set up main process log forwarding to renderer console
 // This allows viewing main process logs in the renderer's DevTools
