@@ -127,7 +127,10 @@ const SP_MODES = new Set([
     'restart',
 ]);
 
-function isSpChainCall(call: CallExpression): boolean {
+function isSpChainCall(
+    call: CallExpression,
+    constInitMap: Map<string, Node>,
+): boolean {
     const expr = call.getExpression();
     if (!Node.isPropertyAccessExpression(expr)) return false;
     const methodName = expr.getName();
@@ -145,12 +148,20 @@ function isSpChainCall(call: CallExpression): boolean {
         return false;
     }
 
-    return chainRootIsPs(receiver);
+    return chainRootIsPs(receiver, constInitMap);
 }
 
-function chainRootIsPs(node: import('ts-morph').Node): boolean {
+function chainRootIsPs(
+    node: import('ts-morph').Node,
+    constInitMap: Map<string, Node>,
+    visited = new Set<string>(),
+): boolean {
     // Walk back through nested `.add(...).sub.x(...)` chains until we
-    // either reach the `$p.s(...)` root or something else.
+    // either reach the `$p.s(...)` root or something else. An identifier
+    // receiver is resolved to its `const` initializer so chains rooted in a
+    // const-bound pattern (`const p = $p.s(...); p.add('0 5')`, and
+    // const-of-const hops) are recognised, not just inline `$p.s(...)`
+    // chains.
     let n: import('ts-morph').Node = node;
     while (true) {
         if (Node.isCallExpression(n)) {
@@ -174,6 +185,17 @@ function chainRootIsPs(node: import('ts-morph').Node): boolean {
         }
         if (Node.isPropertyAccessExpression(n)) {
             n = n.getExpression();
+            continue;
+        }
+        if (Node.isIdentifier(n)) {
+            // Resolve the const this identifier binds and keep walking its
+            // initializer. The visited set guards circular const references.
+            const name = n.getText();
+            if (visited.has(name)) return false;
+            const init = constInitMap.get(name);
+            if (!init) return false;
+            visited.add(name);
+            n = init;
             continue;
         }
         return false;
@@ -267,6 +289,38 @@ function buildConstNodeMap(sourceFile: SourceFile): Map<string, Node> {
         for (const decl of declList.getDeclarations()) {
             const initializer = decl.getInitializer();
             if (initializer && isTrackableLiteral(initializer)) {
+                map.set(decl.getName(), initializer);
+            }
+        }
+    }
+
+    return map;
+}
+
+/**
+ * Pre-build a map of const-declared variable names to their initializer
+ * nodes, regardless of initializer kind. Unlike `buildConstNodeMap` (which
+ * keeps only trackable literals), this includes pattern-producing
+ * initializers like `$p.s(...)` and chain calls so `chainRootIsPs` can
+ * resolve a const-bound pattern back to its `$p.s(...)` root.
+ * Scans top-level statements only (sufficient for flat DSL scripts).
+ */
+function buildConstInitializerMap(sourceFile: SourceFile): Map<string, Node> {
+    const map = new Map<string, Node>();
+
+    for (const statement of sourceFile.getStatements()) {
+        if (!Node.isVariableStatement(statement)) {
+            continue;
+        }
+
+        const declList = statement.getDeclarationList();
+        if (declList.getDeclarationKind() !== VariableDeclarationKind.Const) {
+            continue;
+        }
+
+        for (const decl of declList.getDeclarations()) {
+            const initializer = decl.getInitializer();
+            if (initializer) {
                 map.set(decl.getName(), initializer);
             }
         }
@@ -519,6 +573,9 @@ export function analyzeArgumentSpans(
     // Pre-build const literal map for resolving variable references
     const constMap = buildConstLiteralMap(sourceFile);
     const constNodeMap = buildConstNodeMap(sourceFile);
+    // All const initializers (any kind) — used to resolve chain roots that
+    // reference a const-bound `$p.s(...)` pattern.
+    const constInitMap = buildConstInitializerMap(sourceFile);
 
     // Walk all call expressions
     sourceFile.forEachDescendant((node: Node) => {
@@ -610,7 +667,7 @@ export function analyzeArgumentSpans(
         // V8 reports the call site for property-access calls at the method
         // name's position, not at the start of the receiver chain. Use the
         // PropertyAccess name's start to match what the runtime sees.
-        if (isSpChainCall(call)) {
+        if (isSpChainCall(call, constInitMap)) {
             const pArgs = call.getArguments();
             if (pArgs.length < 1) return;
             const span = getTrackableSpan(pArgs[0], constMap);

@@ -469,6 +469,134 @@ describe('sequencing', () => {
         expect(slice.includes('0 5')).toBe(true);
     });
 
+    test('$p.s chain on a const-bound pattern captures RHS argument_spans', () => {
+        // Regression: chain ops (.add/.sub/...) applied to a pattern stored
+        // in a const variable must still resolve their chain root back to
+        // `$p.s(...)` so the analyzer registers the RHS literal span. Before
+        // the fix only inline `$p.s(...).add(...)` chains were tracked; a
+        // `const p = $p.s(...)` followed by `p.add('0 5')` fell back to the
+        // {0,0} sentinel and produced no editor highlight.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const p2 = p1.add('0,2')\n" +
+            'const seq = $cycle(p2)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        expect(pattern.sources.length).toBe(2);
+        expect(pattern.argument_spans.length).toBe(2);
+
+        const rhsSpan = pattern.argument_spans[1];
+        expect(rhsSpan).not.toEqual({ start: 0, end: 0 });
+        expect(rhsSpan.end).toBeGreaterThan(rhsSpan.start);
+        expect(source.slice(rhsSpan.start, rhsSpan.end).includes('0,2')).toBe(
+            true,
+        );
+    });
+
+    test('$p.s nested chain on a const-bound pattern captures every RHS span', () => {
+        // Multi-link chain (`.sub(...).add.squeeze(...)`) rooted at a const
+        // pattern, applied inline inside `$cycle`. Every chained RHS literal
+        // must get a real span, not the {0,0} fallback.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const seq = $cycle(p1.sub('7').add.squeeze('{0 1 2 3}%2'))\n" +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        expect(pattern.sources.length).toBe(3);
+        expect(pattern.argument_spans.length).toBe(3);
+
+        const subSpan = pattern.argument_spans[1];
+        const squeezeSpan = pattern.argument_spans[2];
+        for (const span of [subSpan, squeezeSpan]) {
+            expect(span).not.toEqual({ start: 0, end: 0 });
+            expect(span.end).toBeGreaterThan(span.start);
+        }
+        expect(source.slice(subSpan.start, subSpan.end).includes('7')).toBe(
+            true,
+        );
+        expect(
+            source
+                .slice(squeezeSpan.start, squeezeSpan.end)
+                .includes('{0 1 2 3}%2'),
+        ).toBe(true);
+    });
+
+    test('$p.s chain rooted in a const-of-const resolves through both', () => {
+        // The chain root walk must recurse through multiple const hops:
+        // p2 derives from p1, p3 chains off p2.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const p2 = p1.add('0,2')\n" +
+            "const p3 = p2.sub('1')\n" +
+            'const seq = $cycle(p3)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.argument_spans.length).toBe(3);
+        const lastSpan = pattern.argument_spans[2];
+        expect(lastSpan).not.toEqual({ start: 0, end: 0 });
+        expect(source.slice(lastSpan.start, lastSpan.end).includes('1')).toBe(
+            true,
+        );
+    });
+
+    test('const-bound chain populates $cycle __argument_spans per source', () => {
+        // End-to-end: the renderer highlights by combining the module's
+        // `__argument_spans['pattern.<i>']` (document offsets) with the
+        // Rust-emitted `param_spans['pattern.<i>']`. Before the fix, only
+        // `pattern.0` was emitted for a const-bound chain, so only the first
+        // source highlighted. Assert every source's offset is present and
+        // brackets the right literal.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const seq = $cycle(p1.sub('7').add.squeeze('{0 1 2 3}%2'))\n" +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycle = findModules(patch, '$cycle')[0];
+        const argSpans = (
+            cycle.params as {
+                __argument_spans?: Record<string, { start: number; end: number }>;
+            }
+        ).__argument_spans;
+        expect(argSpans).toBeDefined();
+
+        const expected: Record<string, string> = {
+            'pattern.0': '0 1 2 3',
+            'pattern.1': '7',
+            'pattern.2': '{0 1 2 3}%2',
+        };
+        for (const [key, literal] of Object.entries(expected)) {
+            const span = argSpans?.[key];
+            expect(span, `missing ${key}`).toBeDefined();
+            expect(source.slice(span!.start, span!.end).includes(literal)).toBe(
+                true,
+            );
+        }
+    });
+
     test('$p.s accepts a reassigned string variable as source', () => {
         // The inline migration form `$cycle($p.s(pat, key))` (used when an
         // $iCycle source variable feeds calls with conflicting scales) keeps
