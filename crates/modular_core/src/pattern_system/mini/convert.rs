@@ -220,12 +220,13 @@ fn eval_f64(ast: &MiniASTF64) -> f64 {
     }
 }
 
-/// Best-effort structural step count of a `MiniAST`. Used to derive the
-/// default `steps_per_cycle` for a `Polymeter` when no `%n` override was
-/// given. Matches strudel's `__weight` fallback in `packages/mini/mini.mjs`:
-/// sequences sum their entry weights, explicit `FastCat`/`SlowCat` behave the
-/// same, and everything else (bare atoms, stacks, choice, polymeters) count
-/// as one step unless the polymeter carried its own `%n`.
+/// Structural step count of a `MiniAST`, used as the per-child weight and
+/// default `steps_per_cycle` in `Polymeter` lowering. Sequences (and explicit
+/// `FastCat`/`SlowCat`) sum their entry weights; a `Replicate` multiplies its
+/// inner count by the replication factor. Everything else counts as a single
+/// step. A nested `Polymeter` is one step in its parent's grid (matching
+/// strudel, where a polymeter result carries no `__weight`) unless it has an
+/// explicit `%n` override, which is used verbatim.
 fn step_count_main(ast: &MiniAST) -> f64 {
     match ast {
         MiniAST::Sequence(items) | MiniAST::FastCat(items) | MiniAST::SlowCat(items) => {
@@ -234,12 +235,8 @@ fn step_count_main(ast: &MiniAST) -> f64 {
         }
         MiniAST::Replicate(inner, count) => step_count_main(inner) * (*count as f64),
         MiniAST::Polymeter {
-            children,
-            steps_per_cycle,
-        } => steps_per_cycle
-            .as_deref()
-            .map(eval_f64)
-            .unwrap_or_else(|| children.first().map(step_count_main).unwrap_or(1.0)),
+            steps_per_cycle, ..
+        } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
         _ => 1.0,
     }
 }
@@ -252,12 +249,8 @@ fn step_count_f64(ast: &MiniASTF64) -> f64 {
         }
         MiniASTF64::Replicate(inner, count) => step_count_f64(inner) * (*count as f64),
         MiniASTF64::Polymeter {
-            children,
-            steps_per_cycle,
-        } => steps_per_cycle
-            .as_deref()
-            .map(eval_f64)
-            .unwrap_or_else(|| children.first().map(step_count_f64).unwrap_or(1.0)),
+            steps_per_cycle, ..
+        } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
         _ => 1.0,
     }
 }
@@ -270,12 +263,8 @@ fn step_count_u32(ast: &MiniASTU32) -> f64 {
         }
         MiniASTU32::Replicate(inner, count) => step_count_u32(inner) * (*count as f64),
         MiniASTU32::Polymeter {
-            children,
-            steps_per_cycle,
-        } => steps_per_cycle
-            .as_deref()
-            .map(eval_f64)
-            .unwrap_or_else(|| children.first().map(step_count_u32).unwrap_or(1.0)),
+            steps_per_cycle, ..
+        } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
         _ => 1.0,
     }
 }
@@ -288,12 +277,8 @@ fn step_count_i32(ast: &MiniASTI32) -> f64 {
         }
         MiniASTI32::Replicate(inner, count) => step_count_i32(inner) * (*count as f64),
         MiniASTI32::Polymeter {
-            children,
-            steps_per_cycle,
-        } => steps_per_cycle
-            .as_deref()
-            .map(eval_f64)
-            .unwrap_or_else(|| children.first().map(step_count_i32).unwrap_or(1.0)),
+            steps_per_cycle, ..
+        } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
         _ => 1.0,
     }
 }
