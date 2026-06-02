@@ -322,6 +322,49 @@ export function MonacoPatchEditor({
         return 'javascript';
     }, [currentFile]);
 
+    // Memoize options so the @monaco-editor/react wrapper's [options] effect
+    // does not fire on every parent render (App.tsx re-renders at ~60Hz via
+    // the scope-polling RAF loop, which would otherwise cause a constant
+    // editor.updateOptions storm). Also: fixedOverflowWidgets lets the
+    // suggest widget escape the .app-main { overflow: hidden } clipping
+    // ancestor by reparenting to document.body.
+    const editorOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(
+        () => ({
+            minimap: { enabled: false },
+            // The transparent editor background lets the scrolled lines bleed
+            // through a pinned sticky header as a ghosted duplicate, so the
+            // sticky-scroll feature is disabled here.
+            stickyScroll: { enabled: false },
+            lineNumbers: 'on',
+            folding: false,
+            matchBrackets: 'always',
+            automaticLayout: true,
+            fontFamily: `${font}, monospace`,
+            fontLigatures: fontLigatures,
+            fontSize: fontSize,
+            // LineHeight: 1.6,
+            padding: { bottom: 8, top: 8 },
+            renderLineHighlight: 'line',
+            cursorBlinking: 'solid',
+            cursorStyle: cursorStyle,
+            scrollbar: {
+                horizontal: 'auto',
+                horizontalScrollbarSize: 8,
+                vertical: 'auto',
+                verticalScrollbarSize: 8,
+            },
+            overviewRulerBorder: false,
+            hideCursorInOverviewRuler: true,
+            renderLineHighlightOnlyWhenFocus: false,
+            guides: {
+                bracketPairs: false,
+                indentation: true,
+            },
+            fixedOverflowWidgets: true,
+        }),
+        [font, fontLigatures, fontSize, cursorStyle],
+    );
+
     return (
         <div className="patch-editor" style={{ height: '100%' }}>
             {currentFile && (
@@ -335,34 +378,8 @@ export function MonacoPatchEditor({
                         onChange(val ?? '');
                     }}
                     onMount={handleMount}
-                    options={{
-                        minimap: { enabled: false },
-                        lineNumbers: 'on',
-                        folding: false,
-                        matchBrackets: 'always',
-                        automaticLayout: true,
-                        fontFamily: `${font}, monospace`,
-                        fontLigatures: fontLigatures,
-                        fontSize: fontSize,
-                        // LineHeight: 1.6,
-                        padding: { bottom: 8, top: 8 },
-                        renderLineHighlight: 'line',
-                        cursorBlinking: 'solid',
-                        cursorStyle: cursorStyle,
-                        scrollbar: {
-                            horizontal: 'auto',
-                            horizontalScrollbarSize: 8,
-                            vertical: 'auto',
-                            verticalScrollbarSize: 8,
-                        },
-                        overviewRulerBorder: false,
-                        hideCursorInOverviewRuler: true,
-                        renderLineHighlightOnlyWhenFocus: false,
-                        guides: {
-                            bracketPairs: false,
-                            indentation: true,
-                        },
-                    }}
+                    keepCurrentModel
+                    options={editorOptions}
                 />
             )}
         </div>

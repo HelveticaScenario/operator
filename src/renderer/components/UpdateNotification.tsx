@@ -9,6 +9,7 @@ export type UpdateNotificationState =
           supportsInAppUpdate: boolean;
       }
     | { status: 'downloading'; version: string }
+    | { status: 'preparing'; version: string }
     | { status: 'ready' }
     | { status: 'error'; message: string };
 
@@ -51,6 +52,10 @@ export function UpdateNotification({
             break;
         case 'downloading':
             message = `Downloading ${state.version}…`;
+            break;
+        case 'preparing':
+            message = `Update ${state.version} just published and is still propagating — preparing download…`;
+            secondaryActions = [{ label: 'Dismiss', onClick: onDismiss }];
             break;
         case 'ready':
             message = 'Update ready. Restart to install.';

@@ -14,16 +14,17 @@ import type {
     PolySignal,
     SourceLocation,
     Collection,
-    ModuleOutput,
     CollectionWithRange,
 } from './GraphBuilder';
 import {
     $c,
     $r,
     $cartesian,
+    BaseCollection,
     DeferredModuleOutput,
     DeferredCollection,
     Bus,
+    ModuleOutput,
     replaceSignals,
 } from './GraphBuilder';
 import { analyzeSourceSpans } from './analyzeSource';
@@ -31,6 +32,7 @@ import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
 import { setActiveInterpolationResolutions } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
+import { $p } from './miniNotation';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -151,6 +153,78 @@ export function executePatchScript(
     const $setOutputGain = (gain: Signal) => {
         builder.setOutputGain(gain);
     };
+
+    interface ScopeXYConfig {
+        /** Horizontal voltage window. Default [-5, 5]. */
+        xRange?: [number, number];
+        /** Vertical voltage window. Default [-5, 5]. */
+        yRange?: [number, number];
+    }
+
+    /**
+     * Render a Lissajous-style XY oscilloscope as the editor background.
+     * `x` and `y` are flattened to `ModuleOutput[]` (matching `$c`), then
+     * cycled to the longer arity so `max(len(x), len(y))` traces overlay.
+     * Last call wins.
+     */
+    const $scopeXY = (
+        x: PolySignal,
+        y: PolySignal,
+        config?: ScopeXYConfig,
+    ): void => {
+        const flatten = (v: unknown): ModuleOutput[] => {
+            if (v instanceof ModuleOutput) return [v];
+            if (v instanceof BaseCollection) return [...v];
+            if (Array.isArray(v))
+                return v.flatMap((e: unknown) => flatten(e));
+            throw new Error(
+                '$scopeXY: arguments must be a ModuleOutput, Collection, or array thereof',
+            );
+        };
+        const xs = flatten(x);
+        const ys = flatten(y);
+        if (xs.length === 0 || ys.length === 0) return;
+
+        const validateRange = (
+            r: [number, number] | undefined,
+            axis: 'x' | 'y',
+        ): [number, number] => {
+            if (r === undefined) return [-5, 5];
+            if (
+                !Array.isArray(r) ||
+                r.length !== 2 ||
+                !Number.isFinite(r[0]) ||
+                !Number.isFinite(r[1]) ||
+                r[0] >= r[1]
+            ) {
+                throw new Error(
+                    `$scopeXY: ${axis}Range must be [min, max] with min < max`,
+                );
+            }
+            return [r[0], r[1]];
+        };
+        const xRange = validateRange(config?.xRange, 'x');
+        const yRange = validateRange(config?.yRange, 'y');
+
+        // Cap traces to what the renderer actually draws (MAX_TRACES in
+        // scopexy/pipeline.ts). Each pair allocates a sample-rate ring buffer
+        // and costs a per-sample read on the audio thread, so an uncapped
+        // max(len(x), len(y)) would let user input balloon audio-thread work
+        // for traces that are never shown.
+        const MAX_SCOPE_XY_TRACES = 16;
+        const requested = Math.max(xs.length, ys.length);
+        const n = Math.min(requested, MAX_SCOPE_XY_TRACES);
+        if (requested > MAX_SCOPE_XY_TRACES) {
+            console.warn(
+                `$scopeXY: ${requested} traces requested; drawing the first ${MAX_SCOPE_XY_TRACES}.`,
+            );
+        }
+        const pairs: { x: ModuleOutput; y: ModuleOutput }[] = [];
+        for (let i = 0; i < n; i++) {
+            pairs.push({ x: xs[i % xs.length], y: ys[i % ys.length] });
+        }
+        builder.setScopeXY(pairs, xRange, yRange, captureSourceLocation());
+    };
     const $setTimeSignature = (numerator: number, denominator: number) => {
         if (!Number.isInteger(numerator) || numerator < 1) {
             throw new Error(
@@ -260,12 +334,19 @@ export function executePatchScript(
         );
     }
 
+    /**
+     * Feedback delay sugar: mix `input` with a deferred feedback signal,
+     * capture the mix into a $buffer of `length` seconds, route the
+     * buffer through `feedbackCb` to produce the feedback signal, and
+     * return the wet+dry $mix output with the captured buffer attached
+     * as a `buffer` property for additional taps.
+     */
     const $delay = (
         input: Collection | ModuleOutput,
         feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
         length: number,
     ): Collection & { buffer: BufferOutputRef } => {
-        const def = $deferred('length' in input ? input.length : 1);
+        const def = $deferred(input instanceof BaseCollection ? input.length : 1);
         const mixed = $mix([input, def]) as Collection;
         const buf = $buffer(mixed, length);
         def.set(feedbackCb(buf));
@@ -713,6 +794,11 @@ export function executePatchScript(
         // Helper functions with $ prefix
         $hz: hz,
         $note: note,
+        // Mini-notation parser — wraps a string in a ParsedPattern that
+        // $cycle consumes as a positional argument. Carries
+        // $p.s(source, scale) for scale-degree patterns (integer degrees
+        // resolved through a scale string into voltage atoms for $cycle).
+        $p,
         // Phase-warp table descriptors for $wavetable
         $table,
         // Collection helpers
@@ -730,6 +816,8 @@ export function executePatchScript(
         $setOutputGain,
         $setTimeSignature,
         $setEndOfChainCb,
+        // XY background oscilloscope
+        $scopeXY,
         $buffer,
         $delay,
         $ott,

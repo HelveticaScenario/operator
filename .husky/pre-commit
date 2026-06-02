@@ -1,2 +1,18 @@
 yarn knip
+
+# Regenerate the mini-notation parser when the grammar source is staged.
+# Without this, grammar.generated.ts can drift from grammar.peggy.
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+
+if printf '%s\n' "$staged" | grep -qx 'src/main/dsl/miniNotation/grammar\.peggy'; then
+    yarn build:grammar
+    git add src/main/dsl/miniNotation/grammar.generated.ts
+    yarn gen:parser-parity-fixture
+    git add crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
+fi
+
+# The sp_combine parity fixtures (~20 MB, deterministic) are NOT committed —
+# they regenerate on demand via scripts/gen-sp-fixture.mjs and the sp_combine
+# parity test. Nothing to stage here.
+
 npx lint-staged

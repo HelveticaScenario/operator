@@ -429,8 +429,8 @@ describe('modulation routing', () => {
 // ─── Sequencing & patterns ───────────────────────────────────────────────────
 
 describe('sequencing', () => {
-    test('$cycle with pattern string', () => {
-        const patch = execPatch('$cycle("C4 E4 G4 B4").out()');
+    test('$cycle with $p() pattern', () => {
+        const patch = execPatch('$cycle($p("c4 e4 g4 b4")).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
     });
 
@@ -439,14 +439,238 @@ describe('sequencing', () => {
         expect(findModules(patch, '$track').length).toBe(1);
     });
 
-    test('$iCycle with interval pattern (array)', () => {
-        const patch = execPatch('$iCycle(["0 2 4 5 7"], "C(major)").out()');
-        expect(findModules(patch, '$iCycle').length).toBe(1);
+    test('$cycle($p.s(...)) builds a scale-degree pattern', () => {
+        const single = execPatch('$cycle($p.s("0 2 4 5 7", "C(major)")).out()');
+        expect(findModules(single, '$cycle').length).toBe(1);
+        // Chained .add folds a second source additively.
+        const chained = execPatch(
+            '$cycle($p.s("0 2 4", "C(major)").add("0 3")).out()',
+        );
+        expect(findModules(chained, '$cycle').length).toBe(1);
     });
 
-    test('$iCycle with interval pattern (string)', () => {
-        const patch = execPatch('$iCycle("0 2 4 5 7", "C(major)").out()');
-        expect(findModules(patch, '$iCycle').length).toBe(1);
+    test('$p rejects dropped atom kinds', () => {
+        expect(() => execPatch('$p("m60")')).toThrow();
+        expect(() => execPatch('$p("bd sd")')).toThrow();
+        expect(() => execPatch('$p("module(osc1:out:0)")')).toThrow();
+        expect(() => execPatch('$p("2v")')).toThrow();
+    });
+
+    test('$p.s rejects non-integer atoms at patch-graph validation', () => {
+        expect(() =>
+            execPatch('$cycle($p.s("1.5", "C(major)")).out()'),
+        ).toThrow(/IntervalValue requires integer scale degrees, got 1\.5/);
+        expect(() =>
+            execPatch('$cycle($p.s("c4", "C(major)")).out()'),
+        ).toThrow(/IntervalValue does not accept note atoms/);
+        expect(() =>
+            execPatch('$cycle($p.s("440hz", "C(major)")).out()'),
+        ).toThrow(/IntervalValue does not accept Hz atoms/);
+    });
+
+    test('$cycle accepts mixed numeric, note, and hz atoms', () => {
+        const patch = execPatch('$cycle($p("0.5 c4 440hz -1")).out()');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+    });
+
+    test('$p.s(...).sub(...) wire payload preserves chain RHS argument_spans[1]', () => {
+        // Regression: the chain RHS span must be captured by the analyzer
+        // and carried through to the SpPattern wire payload as
+        // argument_spans[1], pointing at the literal '0 5' in the user
+        // source so editor highlighting can follow it.
+        const source =
+            "const pat = $p.s('0 1 2 3', 'c(maj)').sub('0 5')\n" +
+            'const seq = $cycle(pat)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        // The SpPattern lives on $cycle.pattern as an opaque wire payload.
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+            ops: Array<{ op: string; mode: string }>;
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        expect(pattern.sources.length).toBe(2);
+        expect(pattern.sources[1].source).toBe('0 5');
+        expect(pattern.ops).toEqual([{ op: 'sub', mode: 'in' }]);
+
+        // argument_spans must be parallel to sources: one per source.
+        expect(pattern.argument_spans.length).toBe(2);
+
+        // argument_spans[1] should bracket the '0 5' literal in the
+        // original source string (including surrounding quotes is fine
+        // either way as long as the substring it points at contains
+        // '0 5').
+        const rhsSpan = pattern.argument_spans[1];
+        expect(rhsSpan).toBeDefined();
+        expect(typeof rhsSpan.start).toBe('number');
+        expect(typeof rhsSpan.end).toBe('number');
+        expect(rhsSpan.end).toBeGreaterThan(rhsSpan.start);
+
+        // The span must NOT be the {0, 0} fallback used when the
+        // analyzer fails to locate the chain RHS.
+        expect(rhsSpan).not.toEqual({ start: 0, end: 0 });
+
+        // The slice of the source the span points at should contain
+        // the literal RHS pattern characters '0 5'.
+        const slice = source.slice(rhsSpan.start, rhsSpan.end);
+        expect(slice.includes('0 5')).toBe(true);
+    });
+
+    test('$p.s chain on a const-bound pattern captures RHS argument_spans', () => {
+        // Regression: chain ops (.add/.sub/...) applied to a pattern stored
+        // in a const variable must still resolve their chain root back to
+        // `$p.s(...)` so the analyzer registers the RHS literal span. Before
+        // the fix only inline `$p.s(...).add(...)` chains were tracked; a
+        // `const p = $p.s(...)` followed by `p.add('0 5')` fell back to the
+        // {0,0} sentinel and produced no editor highlight.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const p2 = p1.add('0,2')\n" +
+            'const seq = $cycle(p2)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        expect(pattern.sources.length).toBe(2);
+        expect(pattern.argument_spans.length).toBe(2);
+
+        const rhsSpan = pattern.argument_spans[1];
+        expect(rhsSpan).not.toEqual({ start: 0, end: 0 });
+        expect(rhsSpan.end).toBeGreaterThan(rhsSpan.start);
+        expect(source.slice(rhsSpan.start, rhsSpan.end).includes('0,2')).toBe(
+            true,
+        );
+    });
+
+    test('$p.s nested chain on a const-bound pattern captures every RHS span', () => {
+        // Multi-link chain (`.sub(...).add.squeeze(...)`) rooted at a const
+        // pattern, applied inline inside `$cycle`. Every chained RHS literal
+        // must get a real span, not the {0,0} fallback.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const seq = $cycle(p1.sub('7').add.squeeze('{0 1 2 3}%2'))\n" +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        expect(pattern.sources.length).toBe(3);
+        expect(pattern.argument_spans.length).toBe(3);
+
+        const subSpan = pattern.argument_spans[1];
+        const squeezeSpan = pattern.argument_spans[2];
+        for (const span of [subSpan, squeezeSpan]) {
+            expect(span).not.toEqual({ start: 0, end: 0 });
+            expect(span.end).toBeGreaterThan(span.start);
+        }
+        expect(source.slice(subSpan.start, subSpan.end).includes('7')).toBe(
+            true,
+        );
+        expect(
+            source
+                .slice(squeezeSpan.start, squeezeSpan.end)
+                .includes('{0 1 2 3}%2'),
+        ).toBe(true);
+    });
+
+    test('$p.s chain rooted in a const-of-const resolves through both', () => {
+        // The chain root walk must recurse through multiple const hops:
+        // p2 derives from p1, p3 chains off p2.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const p2 = p1.add('0,2')\n" +
+            "const p3 = p2.sub('1')\n" +
+            'const seq = $cycle(p3)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            argument_spans: Array<{ start: number; end: number }>;
+        };
+        expect(pattern.argument_spans.length).toBe(3);
+        const lastSpan = pattern.argument_spans[2];
+        expect(lastSpan).not.toEqual({ start: 0, end: 0 });
+        expect(source.slice(lastSpan.start, lastSpan.end).includes('1')).toBe(
+            true,
+        );
+    });
+
+    test('const-bound chain populates $cycle __argument_spans per source', () => {
+        // End-to-end: the renderer highlights by combining the module's
+        // `__argument_spans['pattern.<i>']` (document offsets) with the
+        // Rust-emitted `param_spans['pattern.<i>']`. Before the fix, only
+        // `pattern.0` was emitted for a const-bound chain, so only the first
+        // source highlighted. Assert every source's offset is present and
+        // brackets the right literal.
+        const source =
+            "const p1 = $p.s('0 1 2 3', 'c(maj)')\n" +
+            "const seq = $cycle(p1.sub('7').add.squeeze('{0 1 2 3}%2'))\n" +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycle = findModules(patch, '$cycle')[0];
+        const argSpans = (
+            cycle.params as {
+                __argument_spans?: Record<string, { start: number; end: number }>;
+            }
+        ).__argument_spans;
+        expect(argSpans).toBeDefined();
+
+        const expected: Record<string, string> = {
+            'pattern.0': '0 1 2 3',
+            'pattern.1': '7',
+            'pattern.2': '{0 1 2 3}%2',
+        };
+        for (const [key, literal] of Object.entries(expected)) {
+            const span = argSpans?.[key];
+            expect(span, `missing ${key}`).toBeDefined();
+            expect(source.slice(span!.start, span!.end).includes(literal)).toBe(
+                true,
+            );
+        }
+    });
+
+    test('$p.s accepts a reassigned string variable as source', () => {
+        // The inline migration form `$cycle($p.s(pat, key))` (used when an
+        // $iCycle source variable feeds calls with conflicting scales) keeps
+        // `pat` a raw string, so $p.s must consume the variable's runtime
+        // (last-assigned) value.
+        const source =
+            "const key = 'c(maj)'\n" +
+            "let pat = '<0 2 4>*16'\n" +
+            "pat = '<0 2 <4!2 5>>*16'\n" +
+            'const seq = $cycle($p.s(pat, key))\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sources: Array<{ source: string }>;
+        };
+        expect(pattern.__kind).toBe('SpPattern');
+        // The last assignment wins — $p.s parsed the reassigned value.
+        expect(pattern.sources[0].source).toBe('<0 2 <4!2 5>>*16');
     });
 });
 
@@ -700,7 +924,7 @@ describe('complex patches', () => {
 
     test('sequenced subtractive synth', () => {
         const source = `
-            const seq = $cycle("C3 E3 G3 B3")
+            const seq = $cycle($p("c3 e3 g3 b3"))
             const osc = $saw(seq)
             const env = $adsr($clock.beatTrigger, { attack: 0.01, decay: 0.2, sustain: 2, release: 0.3 })
             $lpf(osc, env.range("C3", "C6")).out()
@@ -1180,7 +1404,6 @@ describe('$wavs() and $sampler', () => {
             bpm: 120.0,
             beats: 4,
             timeSignature: { num: 4, den: 4 },
-            barCount: 2.0,
             loops: [
                 { loopType: 'forward', start: 0.0, end: 0.5 },
                 { loopType: 'pingpong', start: 0.25, end: 0.75 },
@@ -1355,5 +1578,122 @@ describe('$table helpers', () => {
             first: { type: 'bend', amount: 0.3 },
             second: { type: 'mirror', amount: 0.5 },
         });
+    });
+});
+
+// ─── $scopeXY (background Lissajous) ─────────────────────────────────────────
+
+describe('$scopeXY', () => {
+    test('records a single (x, y) pair with default range', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(440))
+            const b = $sine($hz(330))
+            $scopeXY(a, b)
+            a.out()
+        `);
+        expect(patch.scopeXy).toBeDefined();
+        expect(patch.scopeXy!.pairs).toHaveLength(1);
+        expect(patch.scopeXy!.pairs[0].x.portName).toBe('output');
+        expect(patch.scopeXy!.pairs[0].y.portName).toBe('output');
+        expect(patch.scopeXy!.xRange).toEqual([-5, 5]);
+        expect(patch.scopeXy!.yRange).toEqual([-5, 5]);
+    });
+
+    test('cycles the shorter axis to match the longer one', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(110))
+            const b = $sine($hz(220))
+            const c = $sine($hz(440))
+            $scopeXY($c(a, b), c)
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(2);
+        // Both pairs share the same y module (cycling c with len 1)
+        const yModules = patch.scopeXy!.pairs.map((p) => p.y.moduleId);
+        expect(new Set(yModules).size).toBe(1);
+    });
+
+    test('cycles both ways when neither length divides the other', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(110))
+            const b = $sine($hz(220))
+            const p = $sine($hz(330))
+            const q = $sine($hz(440))
+            const r = $sine($hz(550))
+            $scopeXY($c(a, b), $c(p, q, r))
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(3);
+        // x: [a, b, a] (cycle), y: [p, q, r]
+        const xs = patch.scopeXy!.pairs.map((p) => p.x.moduleId);
+        const ys = patch.scopeXy!.pairs.map((p) => p.y.moduleId);
+        expect(xs[0]).toBe(xs[2]);
+        expect(xs[0]).not.toBe(xs[1]);
+        expect(new Set(ys).size).toBe(3);
+    });
+
+    test('last call wins', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(110))
+            const b = $sine($hz(220))
+            const c = $sine($hz(330))
+            $scopeXY(a, b)
+            $scopeXY(b, c)
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(1);
+        // second call's pair must be the visible one
+        expect(patch.scopeXy!.pairs[0].x.moduleId).not.toBe(
+            patch.scopeXy!.pairs[0].y.moduleId,
+        );
+    });
+
+    test('custom xRange / yRange flow through to the patch', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(440))
+            $scopeXY(a, a, { xRange: [-1, 1], yRange: [0, 10] })
+            a.out()
+        `);
+        expect(patch.scopeXy!.xRange).toEqual([-1, 1]);
+        expect(patch.scopeXy!.yRange).toEqual([0, 10]);
+    });
+
+    test('empty x or y is a no-op', () => {
+        const patch = execPatch(`
+            const a = $sine($hz(440))
+            $scopeXY([], a)
+            a.out()
+        `);
+        expect(patch.scopeXy).toBeUndefined();
+    });
+
+    test('bad range throws', () => {
+        expect(() =>
+            execPatch(`
+                const a = $sine($hz(440))
+                $scopeXY(a, a, { xRange: [5, -5] })
+                a.out()
+            `),
+        ).toThrow(/xRange/);
+    });
+
+    test('bad yRange throws', () => {
+        expect(() =>
+            execPatch(`
+                const a = $sine($hz(440))
+                $scopeXY(a, a, { yRange: [10, 0] })
+                a.out()
+            `),
+        ).toThrow(/yRange/);
+    });
+
+    test('non-finite range throws', () => {
+        expect(() =>
+            execPatch(`
+                const a = $sine($hz(440))
+                $scopeXY(a, a, { yRange: [0, Infinity] })
+                a.out()
+            `),
+        ).toThrow(/yRange/);
     });
 });

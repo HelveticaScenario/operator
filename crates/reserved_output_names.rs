@@ -21,6 +21,8 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     "exp",
     "gain",
     "shift",
+    "addHz",
+    "mulHz",
     "scope",
     "out",
     "outMono",

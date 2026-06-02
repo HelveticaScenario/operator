@@ -4,7 +4,7 @@
 //! based on time. The same query at the same time always returns the
 //! same value, enabling reproducible randomness in patterns.
 
-use super::{Fraction, Pattern, constructors::signal_with_controls};
+use super::{Fraction, Pattern, constructors::signal};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -28,176 +28,38 @@ fn cycle_hash(time: &Fraction, seed: u64) -> u64 {
     time_hash(&cycle, seed)
 }
 
-/// A continuous random signal in [0, 1).
-///
-/// The value changes continuously with time, producing different values
-/// at different query times within the same cycle.
-///
-/// # Example
-/// ```ignore
-/// let r = rand();
-/// // Query at different times gives different values
-/// ```
-pub fn rand() -> Pattern<f64> {
-    rand_with_offset(0)
+/// Continuous random signal in [0, 1) keyed by query time and `seed`.
+/// Independent seeds produce independent streams.
+pub fn rand_with_offset(seed: u64) -> Pattern<f64> {
+    signal(move |t| hash_to_float(time_hash(t, seed)))
 }
 
-/// Like `rand()`, but with an additional offset mixed into the seed so that
-/// two patterns created with different offsets produce independent streams.
-pub fn rand_with_offset(offset: u64) -> Pattern<f64> {
-    signal_with_controls(move |t, controls| {
-        let hash = time_hash(t, controls.rand_seed.wrapping_add(offset));
-        hash_to_float(hash)
-    })
+/// Random signal that holds one value per cycle, keyed by `seed`.
+pub fn rand_cycle_with_offset(seed: u64) -> Pattern<f64> {
+    signal(move |t| hash_to_float(cycle_hash(t, seed)))
 }
 
-/// A random signal that changes once per cycle.
-///
-/// All queries within the same cycle return the same random value.
-pub fn rand_cycle() -> Pattern<f64> {
-    rand_cycle_with_offset(0)
-}
-
-/// Like `rand_cycle()`, but with an additional offset mixed into the seed.
-pub fn rand_cycle_with_offset(offset: u64) -> Pattern<f64> {
-    signal_with_controls(move |t, controls| {
-        let hash = cycle_hash(t, controls.rand_seed.wrapping_add(offset));
-        hash_to_float(hash)
-    })
-}
-
-/// Choose randomly from a list of values (changes per cycle).
-///
-/// Uses seed 0. For independent streams in mini-notation, use `choose_with_seed`.
-pub fn choose<T: Clone + Send + Sync + 'static>(values: Vec<T>) -> Pattern<T> {
-    choose_with_seed(values, 0)
-}
-
-/// Choose randomly from a list of values with a specific seed offset.
-///
-/// Different seeds produce independent random streams, ensuring that multiple
-/// `|` operators in a pattern don't correlate.
+/// Choose randomly from `values` per cycle, keyed by `seed`.
 pub fn choose_with_seed<T: Clone + Send + Sync + 'static>(values: Vec<T>, seed: u64) -> Pattern<T> {
     if values.is_empty() {
         panic!("choose requires at least one value");
     }
     let len = values.len();
-    let rand_pat = rand_cycle_with_offset(seed);
-    rand_pat.fmap(move |r| {
+    rand_cycle_with_offset(seed).fmap(move |r| {
         let idx = (r * len as f64).floor() as usize;
         values[idx.min(len - 1)].clone()
     })
 }
 
-/// Choose randomly with weights.
-///
-/// Uses seed 0. For independent streams in mini-notation, use `wchoose_with_seed`.
-pub fn wchoose<T: Clone + Send + Sync + 'static>(weighted: Vec<(T, f64)>) -> Pattern<T> {
-    wchoose_with_seed(weighted, 0)
-}
-
-/// Choose randomly with weights and a specific seed offset.
-pub fn wchoose_with_seed<T: Clone + Send + Sync + 'static>(
-    weighted: Vec<(T, f64)>,
-    seed: u64,
-) -> Pattern<T> {
-    if weighted.is_empty() {
-        panic!("wchoose requires at least one value");
-    }
-
-    let total_weight: f64 = weighted.iter().map(|(_, w)| w).sum();
-    let values: Vec<T> = weighted.iter().map(|(v, _)| v.clone()).collect();
-    let weights: Vec<f64> = weighted.iter().map(|(_, w)| *w).collect();
-
-    rand_cycle_with_offset(seed).fmap(move |r| {
-        let target = r * total_weight;
-        let mut acc = 0.0;
-        for (i, &w) in weights.iter().enumerate() {
-            acc += w;
-            if target < acc {
-                return values[i].clone();
-            }
-        }
-        values.last().unwrap().clone()
-    })
-}
-
 impl<T: Clone + Send + Sync + 'static> Pattern<T> {
-    /// Randomly drop events with given probability.
-    ///
-    /// Uses seed 0. For independent streams in mini-notation, use `degrade_by_with_seed`.
-    ///
-    /// # Arguments
-    /// * `prob` - Probability of keeping an event (0.0 to 1.0)
-    pub fn degrade_by(&self, prob: f64) -> Pattern<T> {
-        self.degrade_by_with_seed(prob, 0)
-    }
-
-    /// Randomly drop events with given probability and a specific seed offset.
-    pub fn degrade_by_with_seed(&self, prob: f64, seed: u64) -> Pattern<T> {
-        let pat = self.clone();
-        let rand_pat = rand_with_offset(seed);
-
-        // Use app_left to preserve structure from self
-        pat.app_left(
-            &rand_pat,
-            move |val, r| {
-                if *r < prob { Some(val.clone()) } else { None }
-            },
-        )
-        .filter_values(|v| v.is_some())
-        .fmap(|v| v.clone().unwrap())
-    }
-
-    /// Randomly replace events with a rest value based on probability.
-    ///
-    /// Uses seed 0. For independent streams in mini-notation, use
-    /// `degrade_by_with_rest_seeded`.
-    ///
-    /// Unlike `degrade_by` which filters out events entirely, this method
-    /// replaces degraded events with the provided rest value, preserving the
-    /// time slot. This is important for sequencers where we want the degraded
-    /// slot to be cached rather than re-querying the pattern every tick.
-    ///
-    /// # Arguments
-    /// * `prob` - Probability of keeping the original event (0.0 to 1.0)
-    /// * `rest` - Value to use when the event is degraded
-    pub fn degrade_by_with_rest(&self, prob: f64, rest: T) -> Pattern<T> {
-        self.degrade_by_with_rest_seeded(prob, rest, 0)
-    }
-
-    /// Randomly replace events with a rest value, using a specific seed offset.
-    ///
-    /// Different seeds produce independent random streams, ensuring that multiple
-    /// `?` operators in a pattern don't correlate.
+    /// Replace events with `rest` based on probability `1 - prob`, keyed by
+    /// `seed`. Preserves time slots so callers can cache by slot.
     pub fn degrade_by_with_rest_seeded(&self, prob: f64, rest: T, seed: u64) -> Pattern<T> {
         let pat = self.clone();
         let rand_pat = rand_with_offset(seed);
-
-        // Use app_left to preserve structure from self
         pat.app_left(&rand_pat, move |val, r| {
             if *r < prob { val.clone() } else { rest.clone() }
         })
-    }
-
-    /// Randomly drop events with 50% probability.
-    pub fn degrade(&self) -> Pattern<T> {
-        self.degrade_by(0.5)
-    }
-
-    /// Randomly replace events with a rest value with 50% probability.
-    ///
-    /// See `degrade_by_with_rest` for details on why this preserves time slots.
-    pub fn degrade_with_rest(&self, rest: T) -> Pattern<T> {
-        self.degrade_by_with_rest(0.5, rest)
-    }
-
-    /// Randomly remove events, opposite of degrade_by.
-    ///
-    /// # Arguments
-    /// * `prob` - Probability of removing an event (0.0 to 1.0)
-    pub fn undegrade_by(&self, prob: f64) -> Pattern<T> {
-        self.degrade_by(1.0 - prob)
     }
 }
 
@@ -208,9 +70,8 @@ mod tests {
 
     #[test]
     fn test_rand_deterministic() {
-        let pat = rand();
+        let pat = rand_with_offset(0);
 
-        // Same query should return same value
         let haps1 = pat.query_arc(Fraction::from_integer(0), Fraction::new(1, 100));
         let haps2 = pat.query_arc(Fraction::from_integer(0), Fraction::new(1, 100));
 
@@ -221,19 +82,17 @@ mod tests {
 
     #[test]
     fn test_rand_different_times() {
-        let pat = rand();
+        let pat = rand_with_offset(0);
 
         let haps1 = pat.query_arc(Fraction::from_integer(0), Fraction::new(1, 100));
         let haps2 = pat.query_arc(Fraction::new(1, 2), Fraction::new(51, 100));
 
-        // Different times should (usually) give different values
-        // Note: there's a tiny chance they could be equal, but extremely unlikely
         assert_ne!(haps1[0].value, haps2[0].value);
     }
 
     #[test]
     fn test_rand_in_range() {
-        let pat = rand();
+        let pat = rand_with_offset(0);
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::new(1, 100));
 
         assert!(haps[0].value >= 0.0);
@@ -242,9 +101,8 @@ mod tests {
 
     #[test]
     fn test_choose() {
-        let pat = choose(vec!["a", "b", "c"]);
+        let pat = choose_with_seed(vec!["a", "b", "c"], 0);
 
-        // Multiple queries in different cycles
         let mut found = std::collections::HashSet::new();
         for i in 0..20 {
             let haps = pat.query_arc(
@@ -256,75 +114,38 @@ mod tests {
             }
         }
 
-        // Should eventually find multiple values
         assert!(found.len() > 1, "Choose should produce different values");
     }
 
     #[test]
-    fn test_degrade() {
-        let pat = pure(42);
-
-        // Over many cycles, degrade should drop some events
-        let mut present_count = 0;
-        for i in 0..100 {
-            let degraded = pat.degrade();
-            let haps = degraded.query_arc(Fraction::from_integer(i), Fraction::from_integer(i + 1));
-            if !haps.is_empty() {
-                present_count += 1;
-            }
-        }
-
-        // With 50% probability, should have roughly 50% present
-        // Allow wide margin for randomness
-        assert!(present_count > 20);
-        assert!(present_count < 80);
-    }
-
-    #[test]
-    fn test_degrade_by_with_rest() {
+    fn test_degrade_by_with_rest_seeded() {
         let pat = pure(42i32);
         let rest_value = -1i32;
 
-        // With prob=0.0, all events should become rest
-        let degraded = pat.degrade_by_with_rest(0.0, rest_value);
+        let degraded = pat.degrade_by_with_rest_seeded(0.0, rest_value, 0);
         for i in 0..10 {
             let haps = degraded.query_arc(Fraction::from_integer(i), Fraction::from_integer(i + 1));
-            // Should always have exactly one hap (the rest)
-            assert_eq!(
-                haps.len(),
-                1,
-                "Should have a hap (rest value) at cycle {}",
-                i
-            );
-            assert_eq!(haps[0].value, rest_value, "Value should be the rest value");
+            assert_eq!(haps.len(), 1);
+            assert_eq!(haps[0].value, rest_value);
         }
 
-        // With prob=1.0, all events should be kept
-        let kept = pat.degrade_by_with_rest(1.0, rest_value);
+        let kept = pat.degrade_by_with_rest_seeded(1.0, rest_value, 0);
         for i in 0..10 {
             let haps = kept.query_arc(Fraction::from_integer(i), Fraction::from_integer(i + 1));
-            assert_eq!(haps.len(), 1, "Should have a hap at cycle {}", i);
-            assert_eq!(haps[0].value, 42, "Value should be the original");
+            assert_eq!(haps.len(), 1);
+            assert_eq!(haps[0].value, 42);
         }
 
-        // With prob=0.5, should get a mix (and always have a hap)
-        let mixed = pat.degrade_by_with_rest(0.5, rest_value);
+        let mixed = pat.degrade_by_with_rest_seeded(0.5, rest_value, 0);
         let mut kept_count = 0;
         for i in 0..100 {
             let haps = mixed.query_arc(Fraction::from_integer(i), Fraction::from_integer(i + 1));
-            // Should always have exactly one hap
-            assert_eq!(
-                haps.len(),
-                1,
-                "Should always have a hap (either value or rest)"
-            );
+            assert_eq!(haps.len(), 1);
             if haps[0].value == 42 {
                 kept_count += 1;
             }
         }
-        // With 50% probability, should have roughly 50% kept
-        assert!(kept_count > 20, "Should have some kept values");
-        assert!(kept_count < 80, "Should have some rest values");
+        assert!(kept_count > 20 && kept_count < 80);
     }
 
     #[test]
@@ -402,10 +223,10 @@ mod tests {
     fn test_deterministic_seeds_from_parse() {
         // Verify that parsing the same pattern twice produces identical
         // seed assignments, and that different patterns get different seeds.
-        use crate::pattern_system::mini::parser::parse;
+        use crate::pattern_system::mini::parse_ast;
 
-        let ast1 = parse("a? b?").unwrap();
-        let ast2 = parse("a? b?").unwrap();
+        let ast1 = parse_ast("a? b?").unwrap();
+        let ast2 = parse_ast("a? b?").unwrap();
         // Same input → identical AST (including seeds)
         assert_eq!(ast1, ast2, "Same pattern should produce identical ASTs");
 

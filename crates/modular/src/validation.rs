@@ -401,6 +401,54 @@ pub fn validate_patch(
     }
   }
 
+  // === Scope XY validation ===
+  if let Some(scope_xy) = patch.scope_xy.as_ref() {
+    for (idx, pair) in scope_xy.pairs.iter().enumerate() {
+      for (axis, ch) in [("x", &pair.x), ("y", &pair.y)] {
+        let Some(module) = module_by_id.get(ch.module_id.as_str()).copied() else {
+          errors.push(ValidationError {
+            field: "scopeXY".to_string(),
+            message: format!(
+              "$scopeXY pair {} ({}) references missing module '{}'",
+              idx, axis, ch.module_id
+            ),
+            location: None,
+            expected_type: None,
+            actual_value: None,
+          });
+          continue;
+        };
+
+        let Some(schema) = schema_map.get(module.module_type.as_str()).copied() else {
+          errors.push(ValidationError {
+            field: "scopeXY".to_string(),
+            message: format!(
+              "$scopeXY pair {} ({}) references module '{}' with unknown type '{}'",
+              idx, axis, ch.module_id, module.module_type
+            ),
+            location: None,
+            expected_type: None,
+            actual_value: None,
+          });
+          continue;
+        };
+
+        if !schema.outputs.iter().any(|o| o.name == *ch.port_name) {
+          errors.push(ValidationError {
+            field: "scopeXY".to_string(),
+            message: format!(
+              "$scopeXY pair {} ({}) references missing output port '{}' on module '{}'",
+              idx, axis, ch.port_name, ch.module_id
+            ),
+            location: None,
+            expected_type: None,
+            actual_value: None,
+          });
+        }
+      }
+    }
+  }
+
   // === Scope validation ===
   for scope in &patch.scopes {
     if scope.channels.is_empty() {
@@ -499,9 +547,73 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
+  }
+
+  fn patch_with_scope_xy(x_port: &str, x_module: &str) -> PatchGraph {
+    use modular_core::types::{ScopeChannel, ScopeXy, ScopeXyPair};
+    PatchGraph {
+      modules: vec![ModuleState {
+        id: "sine-1".to_string(),
+        module_type: "$sine".to_string(),
+        id_is_explicit: None,
+        params: json!({ "freq": 4.0 }),
+      }],
+      module_id_remaps: None,
+      scopes: vec![],
+      scope_xy: Some(ScopeXy {
+        pairs: vec![ScopeXyPair {
+          x: ScopeChannel {
+            module_id: x_module.to_string(),
+            port_name: x_port.to_string(),
+            channel: 0,
+          },
+          y: ScopeChannel {
+            module_id: "sine-1".to_string(),
+            port_name: "output".to_string(),
+            channel: 0,
+          },
+        }],
+        x_range: (-5.0, 5.0),
+        y_range: (-5.0, 5.0),
+      }),
+    }
+  }
+
+  #[test]
+  fn test_scope_xy_valid() {
+    let schemas = schemas();
+    let patch = patch_with_scope_xy("output", "sine-1");
+    assert!(validate_patch(&patch, &schemas).is_ok());
+  }
+
+  #[test]
+  fn test_scope_xy_missing_module() {
+    let schemas = schemas();
+    let patch = patch_with_scope_xy("output", "ghost");
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+      errors
+        .iter()
+        .any(|e| e.field == "scopeXY" && e.message.contains("missing module")),
+      "expected a missing-module scopeXY error, got {errors:?}"
+    );
+  }
+
+  #[test]
+  fn test_scope_xy_missing_port() {
+    let schemas = schemas();
+    let patch = patch_with_scope_xy("nope", "sine-1");
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+      errors
+        .iter()
+        .any(|e| e.field == "scopeXY" && e.message.contains("missing output port")),
+      "expected a missing-output-port scopeXY error, got {errors:?}"
+    );
   }
 
   #[test]
@@ -517,6 +629,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -557,6 +670,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -591,6 +705,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -621,6 +736,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -661,6 +777,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
@@ -691,6 +808,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
@@ -720,6 +838,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
@@ -741,6 +860,7 @@ mod tests {
       module_id_remaps: None,
 
       scopes: vec![],
+      scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());

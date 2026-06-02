@@ -28,14 +28,13 @@ schemars = "1.1.0"
 deserr = { version = "0.6", features = ["serde-json"] }
 simple-easing = "1.0.1"
 napi-derive = "3.4.1"
-pest = "2.8.0"
-pest_derive = "2.8.0"
 regex = "1.12.2"
 fasteval = "0.2.4"
 rust-music-theory = { version = "*", path = "../rust-music-theory" }
 paste = "1.0"
 profiling = { workspace = true }
 rustfft = "6.2"
+bumpalo = { version = "3.16", features = ["collections"] }
 
 [dependencies.napi]
 version = "3.7.1"

@@ -6,7 +6,8 @@
 //! - `fastcat` - Concatenate patterns within one cycle
 //! - `timecat` - Concatenate patterns with explicit weights
 
-use super::{Fraction, Hap, Pattern, State, TimeSpan};
+use super::{ArenaHap, Fraction, Pattern, State};
+use bumpalo::collections::Vec as BumpVec;
 
 /// Play multiple patterns simultaneously.
 ///
@@ -31,14 +32,7 @@ pub fn stack<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Pattern
             Some(a) => Some(lcm(&a, s)),
         });
 
-    let mut result =
-        Pattern::new(move |state: &State| pats.iter().flat_map(|pat| pat.query(state)).collect());
-
-    if let Some(s) = steps {
-        result.set_steps(s);
-    }
-
-    result
+    Pattern::new_stack(pats, steps)
 }
 
 /// Concatenate patterns, one pattern per cycle (slowcat).
@@ -58,38 +52,7 @@ pub fn slowcat<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Patte
     if pats.is_empty() {
         return super::constructors::silence();
     }
-
-    let n = pats.len();
-
-    Pattern::new(move |state: &State| {
-        // Split the query at cycle boundaries first
-        state
-            .span
-            .span_cycles()
-            .into_iter()
-            .flat_map(|subspan| {
-                // Which pattern for this cycle?
-                let cycle_num = subspan.begin.sam().to_f64() as i64;
-                let pat_idx = ((cycle_num % n as i64) + n as i64) as usize % n;
-                let pat = &pats[pat_idx];
-
-                // Calculate offset to adjust times
-                // Each pattern should see its own cycle count: floor(global_cycle / n)
-                // So we offset by: global_cycle - floor(global_cycle / n)
-                let n_frac = Fraction::from_integer(n as i64);
-                let offset = subspan.begin.floor() - (&subspan.begin / &n_frac).floor();
-
-                // Query with adjusted time
-                let query_span = subspan.with_time(|t| t - &offset);
-                let haps = pat.query(&state.set_span(query_span));
-
-                // Adjust result times back
-                haps.into_iter()
-                    .map(|hap| hap.with_span_transform(|span| span.with_time(|t| t + &offset)))
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    })
+    Pattern::new_slowcat(pats)
 }
 
 /// Concatenate patterns within one cycle (fastcat/sequence).
@@ -115,67 +78,11 @@ pub fn fastcat<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Patte
     }
 
     let n = pats.len();
-    let n_frac = Fraction::from_integer(n as i64);
-    let steps = n_frac.clone();
+    let steps = Fraction::from_integer(n as i64);
 
-    // Direct implementation: each pattern takes 1/n of each cycle
-    // This avoids the time distortion issues with slowcat + fast
-    let mut result = Pattern::new(move |state: &State| {
-        state
-            .span
-            .span_cycles()
-            .into_iter()
-            .flat_map(|cycle_span| {
-                // For each cycle, split into n equal parts
-                (0..n)
-                    .flat_map(|i| {
-                        let i_frac = Fraction::from_integer(i as i64);
-                        let cycle_start = cycle_span.begin.floor();
-
-                        // This pattern's portion: [cycle + i/n, cycle + (i+1)/n)
-                        let part_begin = &cycle_start + &i_frac / &n_frac;
-                        let part_end =
-                            &cycle_start + (&i_frac + Fraction::from_integer(1)) / &n_frac;
-                        let part_span = TimeSpan {
-                            begin: part_begin.clone(),
-                            end: part_end.clone(),
-                        };
-
-                        // Intersect with the query span
-                        if let Some(query_part) = cycle_span.intersection(&part_span) {
-                            // Transform times so pattern sees [cycle, cycle+1)
-                            // i.e., stretch by n and shift
-                            let query_transformed = query_part.with_time(|t| {
-                                (t - &cycle_start) * &n_frac - &i_frac + &cycle_start
-                            });
-
-                            let haps = pats[i].query(&state.set_span(query_transformed));
-
-                            // Transform results back
-                            haps.into_iter()
-                                .map(|hap| {
-                                    hap.with_span_transform(|span| {
-                                        span.with_time(|t| {
-                                            (t - &cycle_start + &i_frac) / &n_frac + &cycle_start
-                                        })
-                                    })
-                                })
-                                .collect::<Vec<_>>()
-                        } else {
-                            Vec::new()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    });
-    result.set_steps(steps);
-    result
-}
-
-/// Alias for fastcat (Tidal/Strudel naming).
-pub fn sequence<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Pattern<T> {
-    fastcat(pats)
+    // Each pattern occupies 1/n of the cycle directly. Composing
+    // slowcat + fast for the same effect would warp event times.
+    Pattern::new_fastcat(pats, steps)
 }
 
 /// Concatenate patterns with explicit weights (timeCat).
@@ -219,9 +126,11 @@ pub fn timecat<T: Clone + Send + Sync + 'static>(
         let start_frac = &begin / &total;
         let end_frac = &end / &total;
 
+        if start_frac >= end_frac {
+            continue;
+        }
         // Compress this pattern to fit in its time slot
-        let compressed_pat = pat.compress(&start_frac, &end_frac);
-        compressed.push(compressed_pat);
+        compressed.push(Pattern::new_compress(pat, start_frac, end_frac));
 
         begin = end;
     }
@@ -232,51 +141,56 @@ pub fn timecat<T: Clone + Send + Sync + 'static>(
 // ===== Helper implementations on Pattern =====
 
 impl<T: Clone + Send + Sync + 'static> Pattern<T> {
-    /// Speed up the pattern by a factor.
-    ///
-    /// Accepts both constant values and patterns:
-    /// - `pattern.fast(2)` - constant 2x speed
-    /// - `pattern.fast(Fraction::from(2))` - constant 2x speed
-    /// - `pattern.fast(some_pattern)` - patterned speed factor
-    pub fn fast<F: super::IntoPattern<Fraction> + 'static>(&self, factor: F) -> Pattern<T> {
-        let factor_pat = factor.into_pattern();
+    /// Speed up the pattern by a `Pattern<Fraction>` factor.
+    pub fn fast(&self, factor_pat: Pattern<Fraction>) -> Pattern<T> {
         let pat = self.clone();
 
-        factor_pat.inner_join(move |f| pat._fast(f.clone()))
-    }
-
-    /// Internal constant-factor fast (no pattern overhead).
-    pub(crate) fn _fast(&self, factor: Fraction) -> Pattern<T> {
-        if factor.is_zero() {
-            return super::constructors::silence();
-        }
-
-        let query = self.query.clone();
-        let factor_clone = factor.clone();
-
-        Pattern::new(move |state: &State| {
-            // Speed up queries
+        factor_pat.inner_join_into(move |f, state, bump, out| {
+            if f.is_zero() {
+                return;
+            }
+            let factor_clone = f.clone();
             let new_span = state.span.with_time(|t| t * &factor_clone);
-            let haps = query(&state.set_span(new_span));
-
-            // Slow down results
-            haps.into_iter()
-                .map(|hap| hap.with_span_transform(|span| span.with_time(|t| t / &factor_clone)))
-                .collect()
+            let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+            pat.query_into(&State::new(new_span), bump, &mut scratch);
+            out.reserve(scratch.len());
+            for hap in scratch {
+                let new_part = hap.part.with_time(|t| t / &factor_clone);
+                let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t / &factor_clone));
+                out.push(crate::pattern_system::ArenaHap {
+                    whole: new_whole,
+                    part: new_part,
+                    value: hap.value,
+                    context: hap.context,
+                });
+            }
         })
     }
 
-    /// Slow down the pattern by a factor.
-    ///
-    /// Accepts both constant values and patterns:
-    /// - `pattern.slow(2)` - constant half speed
-    /// - `pattern.slow(Fraction::from(2))` - constant half speed
-    /// - `pattern.slow(some_pattern)` - patterned slow factor
-    pub fn slow<F: super::IntoPattern<Fraction> + 'static>(&self, factor: F) -> Pattern<T> {
-        let factor_pat = factor.into_pattern();
+    /// Slow down the pattern by a `Pattern<Fraction>` factor.
+    pub fn slow(&self, factor_pat: Pattern<Fraction>) -> Pattern<T> {
         let pat = self.clone();
 
-        factor_pat.inner_join(move |f| pat._slow(f.clone()))
+        factor_pat.inner_join_into(move |f, state, bump, out| {
+            if f.is_zero() {
+                return;
+            }
+            let inv = Fraction::from_integer(1) / f.clone();
+            let new_span = state.span.with_time(|t| t * &inv);
+            let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+            pat.query_into(&State::new(new_span), bump, &mut scratch);
+            out.reserve(scratch.len());
+            for hap in scratch {
+                let new_part = hap.part.with_time(|t| t / &inv);
+                let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t / &inv));
+                out.push(crate::pattern_system::ArenaHap {
+                    whole: new_whole,
+                    part: new_part,
+                    value: hap.value,
+                    context: hap.context,
+                });
+            }
+        })
     }
 
     /// Internal constant-factor slow (no pattern overhead).
@@ -284,82 +198,9 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         if factor.is_zero() {
             return super::constructors::silence();
         }
-
-        self._fast(Fraction::from_integer(1) / factor)
+        Pattern::new_fast_const(self.clone(), Fraction::from_integer(1) / factor)
     }
 
-    /// Compress a pattern to fit within a portion of each cycle.
-    ///
-    /// The pattern's first cycle is squeezed into the range [begin, end) of each cycle.
-    pub fn compress(&self, begin: &Fraction, end: &Fraction) -> Pattern<T> {
-        if begin >= end {
-            return super::constructors::silence();
-        }
-
-        let duration = end - begin;
-        let begin_clone = begin.clone();
-        let end_clone = end.clone();
-        let query = self.query.clone();
-
-        Pattern::new(move |state: &State| {
-            // For each cycle in the query
-            state
-                .span
-                .span_cycles()
-                .into_iter()
-                .flat_map(|cycle_span| {
-                    let cycle = cycle_span.begin.sam();
-
-                    // Calculate the compressed span within this cycle
-                    let compressed_begin = &cycle + &begin_clone;
-                    let compressed_end = &cycle + &end_clone;
-                    let compressed_span = TimeSpan::new(compressed_begin.clone(), compressed_end);
-
-                    // Intersect with the query span
-                    if let Some(intersect) = cycle_span.intersection(&compressed_span) {
-                        // Transform to query the inner pattern
-                        let inner_begin =
-                            (&intersect.begin - &compressed_begin) / &duration + &cycle;
-                        let inner_end = (&intersect.end - &compressed_begin) / &duration + &cycle;
-                        let inner_span = TimeSpan::new(inner_begin, inner_end);
-
-                        let haps = query(&state.set_span(inner_span));
-
-                        // Transform results back
-                        haps.into_iter()
-                            .filter_map(|hap| {
-                                let new_part = TimeSpan::new(
-                                    (&hap.part.begin - &cycle) * &duration + &compressed_begin,
-                                    (&hap.part.end - &cycle) * &duration + &compressed_begin,
-                                );
-
-                                let new_whole = hap.whole.map(|w| {
-                                    TimeSpan::new(
-                                        (&w.begin - &cycle) * &duration + &compressed_begin,
-                                        (&w.end - &cycle) * &duration + &compressed_begin,
-                                    )
-                                });
-
-                                // Only include if part intersects original query
-                                if let Some(final_part) = new_part.intersection(&cycle_span) {
-                                    Some(Hap::with_context(
-                                        new_whole,
-                                        final_part,
-                                        hap.value.clone(),
-                                        hap.context.clone(),
-                                    ))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    }
-                })
-                .collect()
-        })
-    }
 }
 
 /// Compute the least common multiple of two fractions.
@@ -455,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_fast() {
-        let pat = pure(42).fast(Fraction::from_integer(2));
+        let pat = pure(42).fast(pure(Fraction::from_integer(2)));
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
         // Should get 2 events in one cycle
@@ -464,7 +305,7 @@ mod tests {
 
     #[test]
     fn test_slow() {
-        let pat = pure(42).slow(Fraction::from_integer(2));
+        let pat = pure(42).slow(pure(Fraction::from_integer(2)));
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
         // Event should span 2 cycles, so querying 1 cycle should give 1 partial event

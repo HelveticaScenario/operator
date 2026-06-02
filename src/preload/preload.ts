@@ -39,9 +39,6 @@ export interface ElectronAPI {
 
     // Schema operations
     getSchemas: Promisify<IPCHandlers[typeof IPC_CHANNELS.GET_SCHEMAS]>;
-    getMiniLeafSpans: Promisify<
-        IPCHandlers[typeof IPC_CHANNELS.GET_MINI_LEAF_SPANS]
-    >;
 
     // DSL operations
     executeDSL: (
@@ -60,6 +57,9 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_CHANNELS]
         >;
         getScopes: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPES]>;
+        getScopeXy: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPE_XY]
+        >;
         getModuleStates: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_MODULE_STATES]
         >;
@@ -188,6 +188,7 @@ export interface ElectronAPI {
     onMenuToggleRecording: (callback: () => void) => () => void;
     onMenuOpenSettings: (callback: () => void) => () => void;
     onMenuOpenEngineHealth: (callback: () => void) => () => void;
+    onMenuMigrateBuffer: (callback: () => void) => () => void;
     /**
      * Trigger a menu action programmatically (e.g., from Monaco keybindings).
      * This emits the same IPC event that the Electron menu would send.
@@ -241,6 +242,7 @@ export interface ElectronAPI {
             callback: (info: UpdateAvailableInfo) => void,
         ) => () => void;
         onDownloading: (callback: () => void) => () => void;
+        onPreparing: (callback: () => void) => () => void;
         onDownloaded: (callback: () => void) => () => void;
         onError: (callback: (message: string) => void) => () => void;
     };
@@ -252,7 +254,6 @@ const electronAPI: ElectronAPI = {
 
     // Schema operations
     getSchemas: (...args) => invokeIPC('GET_SCHEMAS', ...args),
-    getMiniLeafSpans: (...args) => invokeIPC('GET_MINI_LEAF_SPANS', ...args),
 
     // DSL operations
     executeDSL: (source, sourceId, trigger) =>
@@ -294,6 +295,8 @@ const electronAPI: ElectronAPI = {
         getSampleRate: (...args) => invokeIPC('SYNTH_GET_SAMPLE_RATE', ...args),
 
         getScopes: (...args) => invokeIPC('SYNTH_GET_SCOPES', ...args),
+
+        getScopeXy: (...args) => invokeIPC('SYNTH_GET_SCOPE_XY', ...args),
 
         getTransportState: (...args) =>
             invokeIPC('SYNTH_GET_TRANSPORT_STATE', ...args),
@@ -421,6 +424,7 @@ const electronAPI: ElectronAPI = {
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
+    onMenuMigrateBuffer: menuEventHandler(MENU_CHANNELS.MIGRATE_BUFFER),
     // Programmatically trigger a menu action (for Monaco keybindings on Windows)
     triggerMenuAction: (action: keyof typeof MENU_CHANNELS) => {
         const channel = MENU_CHANNELS[action];
@@ -467,6 +471,7 @@ const electronAPI: ElectronAPI = {
         ),
         onDownloaded: menuEventHandler(IPC_CHANNELS.UPDATE_DOWNLOADED),
         onDownloading: menuEventHandler(IPC_CHANNELS.UPDATE_DOWNLOADING),
+        onPreparing: menuEventHandler(IPC_CHANNELS.UPDATE_PREPARING),
         onError: menuEventHandler<[string]>(IPC_CHANNELS.UPDATE_ERROR),
     },
 };
