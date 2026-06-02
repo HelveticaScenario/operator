@@ -5053,7 +5053,8 @@
         "name": "output",
         "description": "V/Oct pitch output",
         "polyphonic": true,
-        "default": true
+        "default": true,
+        "dynamicRange": false
       }
     ],
     "signalParams": [
@@ -6598,7 +6599,8 @@
         "name": "output",
         "description": "V/Oct pitch output",
         "polyphonic": true,
-        "default": true
+        "default": true,
+        "dynamicRange": false
       }
     ],
     "signalParams": [
@@ -9973,168 +9975,6 @@
     "positionalArgs": [
       {
         "name": "keyframes"
-      }
-    ]
-  },
-  {
-    "name": "$iCycle",
-    "documentation": "Scale-degree sequencer using a compact text syntax ported\nfrom TidalCycles/Strudel.\n\nWorks with **scale degree numbers** instead of note names. One or more\n**patterns** are combined by recursively folding the patterns into each other.\nThis is adapted from the default way that patterns are combined in Strudel:\n2 patterns are aligned in a cycle and the events of the second pattern are applied to the first.\nHere this happens recursively (where n pattern is applied to n-1), adding\nthe values of those patterns' events together. The result is a single combined\npattern of scale degrees that can be sampled at the current playhead position to produce output CV/gate/trig.\nScale degrees outside the configured **scale** are automatically wrapped into the appropriate octave.\n\n## Cycles\n\nA **cycle** is one full traversal of a pattern. The playhead position\ndetermines timing: its integer part selects the current cycle number and\nthe fractional part selects the position within that cycle.\nAll patterns share the same cycle clock.\n\n## Scale degrees\n\nValues are **0-indexed** degrees of the chosen scale. `0` is the root,\n`1` is the second scale tone, `2` the third, and so on. Negative values\nmove downward; values beyond the scale length wrap into higher/lower\noctaves automatically.\n\n## Mini-notation\n\n| Syntax | Meaning | Example |\n|--------|---------|---------|\n| Bare number | Scale degree (0-indexed) | `0`, `2`, `4` |\n| `~` | Rest (gate low, no change in pitch) | `'0 ~ 2 ~'` |\n| `[a b c]` | Fast subsequence — subdivides parent time slot | `'[0 2 4]'` |\n| `<a b c>` | Slow / alternating — one element per cycle | `'<0 4 7>'` |\n| `a\\|b\\|c` | Random choice each time the slot is reached | `'0\\|2\\|4'` |\n| `a, b` | Stack — comma-separated patterns play simultaneously | `'0 2, 4 7'` |\n\nGrouping, stacks, and random choice nest arbitrarily.\n\n## Per-element modifiers\n\nModifiers attach directly to an element (no spaces). Multiple modifiers\ncan be chained in any order.\n\n| Modifier | Syntax | Meaning |\n|----------|--------|---------|\n| Weight | `@n` | Relative duration within a sequence (default 1). `0@2 2` gives `0` twice the time. |\n| Speed up | `*n` | Repeat/subdivide `n` times within the slot. `0*3` plays degree 0 three times. |\n| Slow down | `/n` | Stretch over `n` cycles. `0/2` plays every other cycle. |\n| Replicate | `!n` | Duplicate the element `n` times (default 2). `0!3` is equivalent to `0 0 0`. |\n| Degrade | `?` or `?n` | Randomly drop the element. `0?` drops ~50 % of the time; `0?0.8` drops 80 %. |\n| Euclidean | `(k,n)` or `(k,n,offset)` | Distribute `k` pulses over `n` steps (Bjorklund algorithm). |\n\nModifier operands can also be subpatterns: `0*[2 3]` alternates between\ndoubling and tripling each slot.\n\n## Polyphony\n\nThe first pattern's structure is preserved. When subsequent patterns\ncontain stacks (simultaneous events), one combined\nevent is created per left×right pair, all sharing the first pattern's timing. This\ncan create polyphonic output.\n\n```js\n// first pattern: one note per slot\n// second pattern: two simultaneous offsets → two voices per slot\n$iCycle([\"0 2 4\", \"0,4\"], \"c4(major)\")\n```\n\n```js\n// slow alternation in second pattern shifts the chord each cycle\n$iCycle([\"0,2,4\", \"<0 3>\"], \"c4(major)\")\n```\n\n## Outputs\n\n- **cv** — V/Oct pitch quantized to the scale (C4 = 0 V).\n- **gate** — 5 V while a note is active, 0 V otherwise.\n- **trig** — single-sample 5 V pulse at each note onset.",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "IntervalSeqParams",
-      "type": "object",
-      "properties": {
-        "channels": {
-          "description": "number of polyphonic voices (1–16)",
-          "type": "integer",
-          "format": "uint",
-          "default": 4,
-          "minimum": 0
-        },
-        "patterns": {
-          "description": "patterns to combine (left-fold with appLeft addition); accepts a single\npattern string or an array of pattern strings",
-          "$ref": "#/$defs/IntervalPatternSource"
-        },
-        "playhead": {
-          "description": "playhead position",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MonoSignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "scale": {
-          "description": "scale for quantizing degrees to pitches (supports optional octave, e.g. \"c3(major)\")",
-          "$ref": "#/$defs/IntervalScaleParam"
-        }
-      },
-      "required": [
-        "patterns",
-        "scale"
-      ],
-      "$defs": {
-        "IntervalPatternSource": {
-          "description": "Source representation for interval patterns: either a single pattern\nstring or an array of strings that get combined via `app_left` addition.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ]
-        },
-        "IntervalScaleParam": {
-          "type": "string"
-        },
-        "MonoSignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-            }
-          ]
-        },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "outputs": [
-      {
-        "name": "cv",
-        "description": "pitch output in V/Oct (quantized to scale)",
-        "polyphonic": true,
-        "default": true,
-        "dynamicRange": false
-      },
-      {
-        "name": "gate",
-        "description": "high (5 V) while a note is active, low (0 V) otherwise",
-        "polyphonic": true,
-        "default": false,
-        "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
-      },
-      {
-        "name": "trig",
-        "description": "short pulse (5 V) at the start of each note",
-        "polyphonic": true,
-        "default": false,
-        "minValue": 0.0,
-        "maxValue": 5.0,
-        "dynamicRange": false
-      }
-    ],
-    "signalParams": [
-      {
-        "name": "playhead",
-        "description": "playhead position",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 1.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "patterns"
-      },
-      {
-        "name": "scale"
       }
     ]
   },
