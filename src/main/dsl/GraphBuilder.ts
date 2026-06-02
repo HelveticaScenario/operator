@@ -3,7 +3,10 @@ import type {
     ModuleState,
     PatchGraph,
     Scope,
+    ScopeChannel,
     ScopeMode,
+    ScopeXy,
+    ScopeXyPair,
 } from '@modular/core';
 import type { ProcessedModuleSchema } from './paramsSchema';
 import { processSchemas } from './paramsSchema';
@@ -22,6 +25,17 @@ const GAIN_CURVE_EXP = 3;
  * ignored by Rust but flows through to the renderer via IPC.
  */
 export type ScopeWithLocation = Scope & {
+    sourceLocation?: { line: number; column: number };
+};
+
+/**
+ * Per-call $scopeXY state with an optional source location. Lives on
+ * GraphBuilder until `toPatch` resolves the deferred outputs.
+ */
+export type ScopeXYWithLocation = {
+    pairs: ScopeXyPair[];
+    xRange: [number, number];
+    yRange: [number, number];
     sourceLocation?: { line: number; column: number };
 };
 
@@ -231,6 +245,36 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
             throw new Error('Factory for util.scaleAndShift not registered');
         }
         return factory(this.items, undefined, offset) as Collection;
+    }
+
+    /**
+     * Offset all pitches by an absolute frequency amount, in Hz.
+     * Creates an $addHz module internally.
+     */
+    addHz(offset: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        const factory = this.items[0].builder.getFactory('$addHz');
+        if (!factory) {
+            throw new Error('Factory for util.addHz not registered');
+        }
+        return factory(this.items, offset) as Collection;
+    }
+
+    /**
+     * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
+     * Creates a $mulHz module internally.
+     */
+    mulHz(factor: PolySignal): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        const factory = this.items[0].builder.getFactory('$mulHz');
+        if (!factory) {
+            throw new Error('Factory for util.mulHz not registered');
+        }
+        return factory(this.items, factor) as Collection;
     }
 
     /**
@@ -493,6 +537,11 @@ export class GraphBuilder {
     private schemas: ProcessedModuleSchema[] = [];
     private schemaByName = new Map<string, ProcessedModuleSchema>();
     private scopes: ScopeWithLocation[] = [];
+    /**
+     * Latest call to `$scopeXY` — last-call-wins (only one global XY scope
+     * at a time). Resolved during `toPatch` like deferred outputs in scopes.
+     */
+    private scopeXY: ScopeXYWithLocation | null = null;
     /** Output groups keyed by baseChannel */
     private outGroups = new Map<number, OutGroup[]>();
     private factoryRegistry = new Map<string, FactoryFunction>();
@@ -847,9 +896,15 @@ export class GraphBuilder {
                     (s: ScopeWithLocation | null): s is ScopeWithLocation =>
                         s !== null,
                 ),
+            scopeXy: this.resolveScopeXY(),
         };
 
-        console.log('Built PatchGraph:', ret);
+        if (
+            process.env.MODULAR_DEBUG_LOG === '1' ||
+            process.env.MODULAR_DEBUG_LOG === 'true'
+        ) {
+            console.log('Built PatchGraph:', ret);
+        }
         return ret;
     }
 
@@ -859,6 +914,7 @@ export class GraphBuilder {
     reset(): void {
         this.modules.clear();
         this.scopes = [];
+        this.scopeXY = null;
         this.counters.clear();
         this.outGroups.clear();
         this.sourceLocationMap.clear();
@@ -996,6 +1052,68 @@ export class GraphBuilder {
             sourceLocation,
             triggerThreshold: thresh,
         });
+    }
+
+    /**
+     * Resolve the current $scopeXY's channel refs against deferred outputs.
+     * Returns undefined if no scope is registered or any leg fails to resolve
+     * (matches the per-scope skip behaviour for the multi-channel scope path).
+     */
+    private resolveScopeXY(): ScopeXy | undefined {
+        if (this.scopeXY === null) return undefined;
+        const resolveChannel = (ch: ScopeChannel): ScopeChannel | null => {
+            const deferred = this.deferredOutputs.get(ch.moduleId);
+            if (!deferred) return ch;
+            const resolved = deferred.resolve();
+            if (!resolved) return null;
+            return {
+                channel: ch.channel,
+                moduleId: resolved.moduleId,
+                portName: resolved.portName,
+            };
+        };
+        const resolvedPairs: ScopeXyPair[] = [];
+        for (const pair of this.scopeXY.pairs) {
+            const x = resolveChannel(pair.x);
+            const y = resolveChannel(pair.y);
+            if (!x || !y) return undefined;
+            resolvedPairs.push({ x, y });
+        }
+        return {
+            pairs: resolvedPairs,
+            xRange: this.scopeXY.xRange,
+            yRange: this.scopeXY.yRange,
+        };
+    }
+
+    /**
+     * Replace the current $scopeXY (last-call-wins). Pairs are already
+     * cycled to a common arity by the caller; this just records the channel
+     * refs and per-axis display range. Resolved in `toPatch`.
+     */
+    setScopeXY(
+        pairs: { x: ModuleOutput; y: ModuleOutput }[],
+        xRange: [number, number],
+        yRange: [number, number],
+        sourceLocation?: { line: number; column: number },
+    ) {
+        this.scopeXY = {
+            pairs: pairs.map((p) => ({
+                x: {
+                    channel: p.x.channel,
+                    moduleId: p.x.moduleId,
+                    portName: p.x.portName,
+                },
+                y: {
+                    channel: p.y.channel,
+                    moduleId: p.y.moduleId,
+                    portName: p.y.portName,
+                },
+            })),
+            xRange,
+            yRange,
+            sourceLocation,
+        };
     }
 }
 
@@ -1158,6 +1276,28 @@ export class ModuleOutput {
     }
 
     /**
+     * Offset this pitch by an absolute frequency amount, in Hz.
+     *
+     * The V/Oct signal is converted to Hz, the offset is added, then the
+     * result is converted back to V/Oct. Creates an $addHz module.
+     */
+    addHz(offset: PolySignal): Collection {
+        const factory = this.builder.getFactory('$addHz');
+        return factory(this, offset) as Collection;
+    }
+
+    /**
+     * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
+     *
+     * The V/Oct signal is converted to Hz, multiplied, then converted back
+     * to V/Oct. Creates a $mulHz module.
+     */
+    mulHz(factor: PolySignal): Collection {
+        const factory = this.builder.getFactory('$mulHz');
+        return factory(this, factor) as Collection;
+    }
+
+    /**
      * Scale this output by a factor with a perceptual (audio taper) curve
      * (5 = unity, 0 = silence). Chains $curve → $scaleAndShift with exponent 3.
      *
@@ -1270,7 +1410,7 @@ export class ModuleOutput {
     }
 
     toString(): string {
-        return `<ModuleOutput ${this.moduleId}:${this.portName}:${this.channel}>`;
+        return `module(${this.moduleId}:${this.portName}:${this.channel})`;
     }
 }
 
@@ -1409,6 +1549,17 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
             return replaced;
         }
 
+        // Opaque payloads (ParsedPattern from $p(), SpPattern from $p.s())
+        // must be preserved verbatim — walking them would collapse the
+        // nulls in `accidental`/`octave`/weight slots to 0 via
+        // valueToSignal, producing zero-duration haps and silence.
+        if (!Array.isArray(replaced)) {
+            const kind = (replaced as { __kind?: unknown }).__kind;
+            if (kind === 'ParsedPattern' || kind === 'SpPattern') {
+                return replaced;
+            }
+        }
+
         if (Array.isArray(replaced)) {
             return replaced
                 .map((v, i) => walk(String(i), v))
@@ -1473,6 +1624,15 @@ export function replaceDeferredStrings(
     }
 
     if (typeof input === 'object' && input !== null) {
+        // Opaque pattern payloads (ParsedPattern from $p(), SpPattern from
+        // $p.s()) are JSON-only data with no deferred-output strings; mirror
+        // the replaceValues short-circuit and return them verbatim instead of
+        // deep-walking their mini-notation AST sub-tree.
+        const kind = (input as { __kind?: unknown }).__kind;
+        if (kind === 'ParsedPattern' || kind === 'SpPattern') {
+            return input;
+        }
+
         const result: Record<string, unknown> = {};
         for (const [key, value] of Object.entries(input)) {
             result[key] = replaceDeferredStrings(value, deferredStringMap);

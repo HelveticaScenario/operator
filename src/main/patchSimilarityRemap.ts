@@ -598,6 +598,19 @@ function _remapGraph(
         }
     }
 
+    if (applied.scopeXy) {
+        for (const pair of applied.scopeXy.pairs) {
+            const nextX = idMap.get(pair.x.moduleId);
+            if (nextX) {
+                pair.x.moduleId = nextX;
+            }
+            const nextY = idMap.get(pair.y.moduleId);
+            if (nextY) {
+                pair.y.moduleId = nextY;
+            }
+        }
+    }
+
     return applied;
 }
 

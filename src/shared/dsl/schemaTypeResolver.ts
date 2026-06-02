@@ -63,7 +63,9 @@ export function resolveRef(
     | 'Poly<Signal>'
     | 'Mono<Signal>'
     | 'Buffer'
-    | 'Table' {
+    | 'Table'
+    | 'ParsedPattern'
+    | 'SpPattern' {
     if (ref === 'Signal') {
         return 'Signal';
     }
@@ -72,6 +74,12 @@ export function resolveRef(
     }
     if (ref === 'Table') {
         return 'Table';
+    }
+    if (ref === 'ParsedPatternPayload') {
+        return 'ParsedPattern';
+    }
+    if (ref === 'SpPatternPayload') {
+        return 'SpPattern';
     }
 
     const defsPrefix = '#/$defs/';
@@ -94,6 +102,18 @@ export function resolveRef(
     }
     if (defName === 'Table') {
         return 'Table';
+    }
+    // ParsedPatternPayload is recursive (MiniAST references itself via
+    // List/Sequence/...); the DSL exposes it as an opaque `ParsedPattern`
+    // named type, constructed by `$p(...)` and consumed by $cycle/$p.s.
+    if (defName === 'ParsedPatternPayload') {
+        return 'ParsedPattern';
+    }
+    // SpPatternPayload is the chained `$p.s(...).add(...)` shape; the DSL
+    // exposes it as the named `SpPattern` type rather than an inlined
+    // structural literal.
+    if (defName === 'SpPatternPayload') {
+        return 'SpPattern';
     }
 
     const defs = rootSchema?.$defs;
@@ -120,6 +140,12 @@ export function resolveRef(
     }
     if (resolved?.title === 'Table') {
         return 'Table';
+    }
+    if (resolved?.title === 'ParsedPatternPayload') {
+        return 'ParsedPattern';
+    }
+    if (resolved?.title === 'SpPatternPayload') {
+        return 'SpPattern';
     }
     return resolved;
 }
@@ -296,6 +322,12 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'Table') {
             return 'Table';
+        }
+        if (resolved === 'ParsedPattern') {
+            return 'ParsedPattern';
+        }
+        if (resolved === 'SpPattern') {
+            return 'SpPattern';
         }
         return schemaToTypeExpr(resolved, rootSchema);
     }

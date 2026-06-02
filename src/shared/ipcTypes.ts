@@ -19,7 +19,6 @@ import type {
     QueuedTrigger,
     Synthesizer,
     TransportSnapshot,
-    getMiniLeafSpans,
 } from '@modular/core';
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
@@ -103,6 +102,14 @@ export interface AppConfig {
     lastOpenedFolder?: string;
     audioConfig?: AudioConfig;
     skippedUpdateVersion?: string;
+    /** XY scope beam intensity (0..1). Default 0.6. */
+    xyScopeIntensity?: number;
+    /** XY scope phosphor persistence (0..1). 1 = never fade. Default 0.6. */
+    xyScopePersistence?: number;
+    /** XY scope GPU upscaling (clamped Lanczos). Default true. */
+    xyScopeUpsample?: boolean;
+    /** XY scope beam half-width in clip-space units. Default 0.012. */
+    xyScopeLineWidth?: number;
 }
 
 /**
@@ -239,6 +246,7 @@ export const IPC_CHANNELS = {
     SYNTH_GET_SAMPLE_RATE: 'modular:synth:get-sample-rate',
     SYNTH_GET_CHANNELS: 'modular:synth:get-channels',
     SYNTH_GET_SCOPES: 'modular:synth:get-scopes',
+    SYNTH_GET_SCOPE_XY: 'modular:synth:get-scope-xy',
     SYNTH_UPDATE_PATCH: 'modular:synth:update-patch',
     SYNTH_START_RECORDING: 'modular:synth:start-recording',
     SYNTH_STOP_RECORDING: 'modular:synth:stop-recording',
@@ -248,7 +256,6 @@ export const IPC_CHANNELS = {
     SYNTH_SET_MODULE_PROFILING_ENABLED: 'modular:synth:set-module-profiling-enabled',
     SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE: 'modular:synth:set-module-profiling-sample-rate',
     SYNTH_GET_MODULE_STATES: 'modular:synth:get-module-states',
-    GET_MINI_LEAF_SPANS: 'modular:get-mini-leaf-spans',
     SYNTH_STOP: 'modular:synth:stop',
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',
     SYNTH_SET_MODULE_PARAM: 'modular:synth:set-module-param',
@@ -323,12 +330,14 @@ export const IPC_CHANNELS = {
     UPDATE_INSTALL: 'modular:update:install',
     UPDATE_AVAILABLE: 'modular:update:available',
     UPDATE_DOWNLOADING: 'modular:update:downloading',
+    UPDATE_PREPARING: 'modular:update:preparing',
     UPDATE_DOWNLOADED: 'modular:update:downloaded',
     UPDATE_ERROR: 'modular:update:error',
 } as const;
 
 export const MENU_CHANNELS = {
     CLOSE_BUFFER: 'modular:menu:close-buffer',
+    MIGRATE_BUFFER: 'modular:menu:migrate-buffer',
     NEW_FILE: 'modular:menu:new-file',
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
     OPEN_MODULE_PROFILE: 'modular:menu:open-module-profile',
@@ -363,6 +372,8 @@ export interface IPCHandlers {
 
     [IPC_CHANNELS.SYNTH_GET_SCOPES]: typeof Synthesizer.prototype.getScopes;
 
+    [IPC_CHANNELS.SYNTH_GET_SCOPE_XY]: typeof Synthesizer.prototype.getScopeXy;
+
     [IPC_CHANNELS.SYNTH_UPDATE_PATCH]: (
         patch: PatchGraph,
         sourceId?: string,
@@ -384,8 +395,6 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE]: typeof Synthesizer.prototype.setModuleProfilingSampleRate;
 
     [IPC_CHANNELS.SYNTH_GET_MODULE_STATES]: typeof Synthesizer.prototype.getModuleStates;
-
-    [IPC_CHANNELS.GET_MINI_LEAF_SPANS]: typeof getMiniLeafSpans;
 
     [IPC_CHANNELS.SYNTH_STOP]: typeof Synthesizer.prototype.stop;
 
@@ -492,6 +501,7 @@ export interface IPCHandlers {
     // Update operations (push from main to renderer)
     [IPC_CHANNELS.UPDATE_AVAILABLE]: (info: UpdateAvailableInfo) => void;
     [IPC_CHANNELS.UPDATE_DOWNLOADING]: () => void;
+    [IPC_CHANNELS.UPDATE_PREPARING]: () => void;
     [IPC_CHANNELS.UPDATE_DOWNLOADED]: () => void;
     [IPC_CHANNELS.UPDATE_ERROR]: (message: string) => void;
 }

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::params::ParamsDeserializer;
 use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
+pub mod add_hz;
 pub mod adsr;
 pub mod buffer;
 pub mod clamp;
@@ -12,6 +13,7 @@ pub mod delay;
 pub mod lag;
 pub mod logic;
 pub mod math;
+pub mod mul_hz;
 pub mod percussion_envelope;
 pub mod quantizer;
 pub mod remap;
@@ -27,6 +29,7 @@ pub use crate::dsp::utils::SchmittTrigger;
 pub use scale::{FixedRoot, ScaleSnapper, validate_scale_type};
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
+    add_hz::AddHz::install_constructor(map);
     adsr::Adsr::install_constructor(map);
     buffer::BufRead::install_constructor(map);
     buffer::BufferWrite::install_constructor(map);
@@ -38,6 +41,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     logic::RisingEdgeDetector::install_constructor(map);
     logic::FallingEdgeDetector::install_constructor(map);
     math::Math::install_constructor(map);
+    mul_hz::MulHz::install_constructor(map);
     remap::Remap::install_constructor(map);
     sample_and_hold::SampleAndHold::install_constructor(map);
     sample_and_hold::TrackAndHold::install_constructor(map);
@@ -50,6 +54,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
 }
 
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
+    add_hz::AddHz::install_params_deserializer(map);
     adsr::Adsr::install_params_deserializer(map);
     buffer::BufRead::install_params_deserializer(map);
     buffer::BufferWrite::install_params_deserializer(map);
@@ -61,6 +66,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     logic::RisingEdgeDetector::install_params_deserializer(map);
     logic::FallingEdgeDetector::install_params_deserializer(map);
     math::Math::install_params_deserializer(map);
+    mul_hz::MulHz::install_params_deserializer(map);
     remap::Remap::install_params_deserializer(map);
     sample_and_hold::SampleAndHold::install_params_deserializer(map);
     sample_and_hold::TrackAndHold::install_params_deserializer(map);
@@ -74,6 +80,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
 
 pub fn schemas() -> Vec<ModuleSchema> {
     vec![
+        add_hz::AddHz::get_schema(),
         adsr::Adsr::get_schema(),
         buffer::BufRead::get_schema(),
         buffer::BufferWrite::get_schema(),
@@ -85,6 +92,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         logic::RisingEdgeDetector::get_schema(),
         logic::FallingEdgeDetector::get_schema(),
         math::Math::get_schema(),
+        mul_hz::MulHz::get_schema(),
         remap::Remap::get_schema(),
         sample_and_hold::SampleAndHold::get_schema(),
         sample_and_hold::TrackAndHold::get_schema(),

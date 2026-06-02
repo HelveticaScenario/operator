@@ -21,6 +21,10 @@ interface ThemeContextValue {
     fontLigatures: boolean;
     fontSize: number;
     prettierConfig: PrettierConfig;
+    xyScopeIntensity: number;
+    xyScopePersistence: number;
+    xyScopeUpsample: boolean;
+    xyScopeLineWidth: number;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -79,6 +83,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [fontLigatures, setFontLigatures] = useState(true);
     const [fontSize, setFontSize] = useState(17);
     const [prettierConfig, setPrettierConfig] = useState<PrettierConfig>({});
+    const [xyScopeIntensity, setXyScopeIntensity] = useState(0.6);
+    const [xyScopePersistence, setXyScopePersistence] = useState(0.6);
+    const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
+    const [xyScopeLineWidth, setXyScopeLineWidth] = useState(0.012);
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -105,6 +113,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.prettier) {
                 setPrettierConfig(config.prettier);
             }
+            if (config.xyScopeIntensity != null) {
+                setXyScopeIntensity(config.xyScopeIntensity);
+            }
+            if (config.xyScopePersistence != null) {
+                setXyScopePersistence(config.xyScopePersistence);
+            }
+            if (config.xyScopeUpsample != null) {
+                setXyScopeUpsample(config.xyScopeUpsample);
+            }
+            if (config.xyScopeLineWidth != null) {
+                setXyScopeLineWidth(config.xyScopeLineWidth);
+            }
 
             // Subscribe to config changes
             unsubscribe = electronAPI.config.onChange((newConfig) => {
@@ -125,6 +145,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 }
                 if (newConfig.prettier) {
                     setPrettierConfig(newConfig.prettier);
+                }
+                if (newConfig.xyScopeIntensity != null) {
+                    setXyScopeIntensity(newConfig.xyScopeIntensity);
+                }
+                if (newConfig.xyScopePersistence != null) {
+                    setXyScopePersistence(newConfig.xyScopePersistence);
+                }
+                if (newConfig.xyScopeUpsample != null) {
+                    setXyScopeUpsample(newConfig.xyScopeUpsample);
+                }
+                if (newConfig.xyScopeLineWidth != null) {
+                    setXyScopeLineWidth(newConfig.xyScopeLineWidth);
                 }
             });
         }
@@ -153,6 +185,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 prettierConfig,
                 theme,
                 themes,
+                xyScopeIntensity,
+                xyScopePersistence,
+                xyScopeUpsample,
+                xyScopeLineWidth,
             }}
         >
             {children}

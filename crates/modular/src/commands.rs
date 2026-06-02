@@ -4,12 +4,14 @@
 //! and the errors reported back from the audio thread.
 
 use modular_core::profiling::ModuleProfileAccum;
-use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey, WavData};
+use modular_core::types::{
+  Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, WavData,
+};
 use napi_derive::napi;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::audio::ScopeBuffer;
+use crate::audio::{ScopeBuffer, ScopeXyBuffer};
 use crate::link::LinkResources;
 
 /// When a queued patch update should be applied.
@@ -47,6 +49,12 @@ pub struct PatchUpdate {
   /// Scopes to remove
   pub scope_removes: Vec<ScopeBufferKey>,
 
+  /// Pre-built XY scope buffers to add (constructed on main thread)
+  pub scope_xy_adds: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
+
+  /// XY scope buffers to remove
+  pub scope_xy_removes: Vec<ScopeXyBufferKey>,
+
   /// WAV data cache — cloned Arc<WavData> entries from the main-thread WavCache.
   /// Swapped into the Patch on the audio thread so Wav params can resolve during connect().
   pub wav_data: HashMap<String, Arc<WavData>>,
@@ -81,6 +89,8 @@ impl PatchUpdate {
       remaps: Vec::new(),
       scope_adds: Vec::new(),
       scope_removes: Vec::new(),
+      scope_xy_adds: Vec::new(),
+      scope_xy_removes: Vec::new(),
       wav_data: HashMap::new(),
       sample_rate,
       tempo_override: None,
@@ -96,6 +106,8 @@ impl PatchUpdate {
       && self.remaps.is_empty()
       && self.scope_adds.is_empty()
       && self.scope_removes.is_empty()
+      && self.scope_xy_adds.is_empty()
+      && self.scope_xy_removes.is_empty()
   }
 }
 
@@ -195,6 +207,8 @@ pub enum GarbageItem {
   Module(Box<dyn Sampleable>),
   /// A scope buffer removed from the collection
   Scope(ScopeBuffer),
+  /// An XY scope buffer removed from the collection
+  ScopeXy(Arc<ScopeXyBuffer>),
   /// A queued patch update that was superseded by a newer update before it fired
   PatchUpdate(PatchUpdate),
   /// Live Link resources removed from the audio thread. Drop tears down

@@ -1,0 +1,62 @@
+name: CI
+on:
+    pull_request:
+    push:
+        branches:
+            - master
+
+jobs:
+    test:
+        name: Unit + Rust tests
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: 'yarn'
+
+            - name: Setup Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            # The vitest suite loads the N-API binding at import time
+            # (factories.ts -> @modular/core), so CI must build the native
+            # module — which links cpal (ALSA + JACK) and udev on Linux.
+            - name: Install audio system deps (cpal — ALSA/JACK)
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y libasound2-dev libudev-dev libjack-jackd2-dev
+
+            - name: Install dependencies
+              run: yarn install --frozen-lockfile
+
+            - name: Build native module
+              run: yarn build-native
+
+            - name: Verify generated grammar is in sync
+              run: |
+                  yarn build:grammar
+                  git diff --exit-code src/main/dsl/miniNotation/grammar.generated.ts
+
+            - name: Unit tests (vitest)
+              run: yarn test:unit
+
+            # The vitest run above regenerates the committed Peggy↔Rust parity
+            # fixture; fail if the checked-in copy drifted from the grammar.
+            - name: Verify committed parser-parity fixture is in sync
+              run: git diff --exit-code crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
+
+            # Generate the strudel-parity fixtures (not committed), then run the
+            # pure-DSP crate tests.
+            - name: Rust tests (modular_core)
+              run: |
+                  yarn gen:sp-fixtures
+                  cargo test -p modular_core
+              env:
+                  NO_COLOR: 1
+                  CARGO_TERM_COLOR: never
