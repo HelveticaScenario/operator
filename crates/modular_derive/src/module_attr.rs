@@ -326,10 +326,7 @@ fn impl_module_macro_attr(
                     format!("{name}BlockOutputs")
                 };
                 last.ident = Ident::new(&new_name, last.ident.span());
-                Ok(Type::Path(syn::TypePath {
-                    qself: None,
-                    path,
-                }))
+                Ok(Type::Path(syn::TypePath { qself: None, path }))
             }
             _ => Err(syn::Error::new(
                 Span::call_site(),
@@ -390,9 +387,7 @@ fn impl_module_macro_attr(
                                 "_channel_count" => {
                                     Ok(quote! { _channel_count: deserialized.channel_count })
                                 }
-                                "_block_index" => {
-                                    Ok(quote! { _block_index: Default::default() })
-                                }
+                                "_block_index" => Ok(quote! { _block_index: Default::default() }),
                                 "outputs" | "state" => {
                                     Ok(quote! { #field_name: Default::default() })
                                 }
@@ -971,7 +966,7 @@ fn impl_module_macro_attr(
             fn get_schema() -> crate::types::ModuleSchema {
                 let params_schema = schemars::schema_for!(#params_struct_name);
                 let outputs = <#outputs_ty as crate::types::OutputStruct>::schemas();
-           
+
                 crate::types::ModuleSchema {
                     name: #module_name.to_string(),
                     documentation: #module_documentation_token,

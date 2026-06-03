@@ -76,12 +76,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     pub fn inner_join_into<U, F>(&self, f: F) -> Pattern<U>
     where
         U: Clone + Send + Sync + 'static,
-        F: for<'b> Fn(
-                &T,
-                &State,
-                &'b Bump,
-                &mut BumpVec<'b, ArenaHap<'b, U>>,
-            )
+        F: for<'b> Fn(&T, &State, &'b Bump, &mut BumpVec<'b, ArenaHap<'b, U>>)
             + Send
             + Sync
             + 'static,
@@ -118,7 +113,6 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
             },
         )
     }
-
 }
 
 #[cfg(test)]

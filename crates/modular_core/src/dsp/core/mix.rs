@@ -172,8 +172,7 @@ impl Mix {
                         sum += input.get_value(channel);
                         count += 1;
                     }
-                    pre_gain_values[channel] =
-                        if count > 0 { sum / count as f32 } else { 0.0 };
+                    pre_gain_values[channel] = if count > 0 { sum / count as f32 } else { 0.0 };
                 }
             }
             MixMode::Max => {
@@ -215,8 +214,7 @@ impl Mix {
                             best_val = v;
                         }
                     }
-                    pre_gain_values[channel] =
-                        if best_abs.is_finite() { best_val } else { 0.0 };
+                    pre_gain_values[channel] = if best_abs.is_finite() { best_val } else { 0.0 };
                 }
             }
         }

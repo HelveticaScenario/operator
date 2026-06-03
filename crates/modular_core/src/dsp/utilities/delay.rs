@@ -47,8 +47,7 @@ impl DelayRead {
         // Without the per-slot offset every slot in the block would read
         // the same delay position — 64× sample-and-hold artefact at
         // `block_size = 64`.
-        let write_index =
-            (self.params.buffer.read_write_index() as f64) + (slot as f64);
+        let write_index = (self.params.buffer.read_write_index() as f64) + (slot as f64);
         let frame_count = self.params.buffer.frame_count();
         let channels = self.channel_count();
 

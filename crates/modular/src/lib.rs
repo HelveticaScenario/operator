@@ -1061,9 +1061,7 @@ impl Synthesizer {
   /// - Windows: `%APPDATA%\Operator\logs\`
   #[napi]
   pub fn panic_log_dir(&self) -> String {
-    panic_log::panic_log_dir()
-      .to_string_lossy()
-      .into_owned()
+    panic_log::panic_log_dir().to_string_lossy().into_owned()
   }
 
   #[napi]
@@ -1118,9 +1116,7 @@ impl Synthesizer {
   /// window, the last element the newest — and `ranges` is the per-axis volt
   /// window the renderer maps into clip space.
   #[napi]
-  pub fn get_scope_xy(
-    &self,
-  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
+  pub fn get_scope_xy(&self) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
     self.state.get_scope_xy_buffers()
   }
 

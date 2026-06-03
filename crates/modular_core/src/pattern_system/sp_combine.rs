@@ -134,10 +134,7 @@ fn squeeze_into<'b, O, I, V, G>(
             // Map inner_hap's part/whole from inner cycle space back into
             // the outer target span.
             let mapped_part = map_span(&inner_hap.part, &target, &dur);
-            let mapped_whole = inner_hap
-                .whole
-                .as_ref()
-                .map(|w| map_span(w, &target, &dur));
+            let mapped_whole = inner_hap.whole.as_ref().map(|w| map_span(w, &target, &dur));
 
             let part = match mapped_part.intersection(&outer_hap.part) {
                 Some(p) => p,
@@ -223,23 +220,20 @@ where
 
                 // We want inner shifted later by `shift`. Query inner at
                 // state.span - shift, then re-add shift to result haps.
-                let inner_state_span = TimeSpan::new(
-                    &state.span.begin - &shift,
-                    &state.span.end - &shift,
-                );
+                let inner_state_span =
+                    TimeSpan::new(&state.span.begin - &shift, &state.span.end - &shift);
                 let inner_state = State::new(inner_state_span);
 
                 let mut inner_haps: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
                 left.query_into(&inner_state, bump, &mut inner_haps);
 
                 for inner_hap in &inner_haps {
-                    let shifted_part = TimeSpan::new(
-                        &inner_hap.part.begin + &shift,
-                        &inner_hap.part.end + &shift,
-                    );
-                    let shifted_whole = inner_hap.whole.as_ref().map(|w| {
-                        TimeSpan::new(&w.begin + &shift, &w.end + &shift)
-                    });
+                    let shifted_part =
+                        TimeSpan::new(&inner_hap.part.begin + &shift, &inner_hap.part.end + &shift);
+                    let shifted_whole = inner_hap
+                        .whole
+                        .as_ref()
+                        .map(|w| TimeSpan::new(&w.begin + &shift, &w.end + &shift));
 
                     let part = match shifted_part.intersection(&outer_hap.part) {
                         Some(p) => p,
@@ -254,11 +248,8 @@ where
                     };
 
                     let value = f(&inner_hap.value, &outer_hap.value);
-                    let context = ArenaHapContext::combine_in(
-                        &inner_hap.context,
-                        &outer_hap.context,
-                        bump,
-                    );
+                    let context =
+                        ArenaHapContext::combine_in(&inner_hap.context, &outer_hap.context, bump);
                     out.push(ArenaHap {
                         whole,
                         part,
@@ -275,8 +266,8 @@ where
 mod tests {
     use super::*;
     use crate::pattern_system::Fraction;
-    use crate::pattern_system::combinators::fastcat;
     use crate::pattern_system::SourceSpan;
+    use crate::pattern_system::combinators::fastcat;
     use crate::pattern_system::constructors::{pure, pure_with_span};
 
     fn ints(start: i64, end: i64, pat: &Pattern<i32>) -> Vec<i32> {
@@ -363,7 +354,10 @@ mod tests {
         let c = combine_sp(&a, &b, SpAlignmentMode::Squeeze, |x, y| x + y);
         let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
-        assert!(!haps.is_empty(), "expected at least one hap from $p.s(A).squeeze(B)");
+        assert!(
+            !haps.is_empty(),
+            "expected at least one hap from $p.s(A).squeeze(B)"
+        );
         for hap in &haps {
             // Left operand A is pattern_idx 0 → ends up as source_span.
             let source = hap
@@ -405,7 +399,10 @@ mod tests {
         let c = combine_sp(&a, &b, SpAlignmentMode::SqueezeOut, |x, y| x + y);
         let haps = c.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
-        assert!(!haps.is_empty(), "expected at least one hap from $p.s(A).squeezeOut(B)");
+        assert!(
+            !haps.is_empty(),
+            "expected at least one hap from $p.s(A).squeezeOut(B)"
+        );
         for hap in &haps {
             let source = hap
                 .context
@@ -434,10 +431,8 @@ mod tests {
         use crate::pattern_system::mini;
 
         // 1+2. Lower mini-notation to Pattern<IntervalValue>.
-        let left: Pattern<IntervalValue> =
-            mini::parse("0 1 2 3").expect("parse '0 1 2 3'");
-        let right: Pattern<IntervalValue> =
-            mini::parse("0 5").expect("parse '0 5'");
+        let left: Pattern<IntervalValue> = mini::parse("0 1 2 3").expect("parse '0 1 2 3'");
+        let right: Pattern<IntervalValue> = mini::parse("0 5").expect("parse '0 5'");
 
         // 3. Strip modifier spans before combining (matches from_sp_payload).
         let left = left.strip_modifier_spans();
@@ -448,11 +443,11 @@ mod tests {
             combine_sp(&left, &right, SpAlignmentMode::In, sub_interval_values);
 
         // 5. Query 1 cycle.
-        let haps = combined.query_arc(
-            Fraction::from_integer(0),
-            Fraction::from_integer(1),
+        let haps = combined.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert!(
+            !haps.is_empty(),
+            "expected haps from sub combine over 1 cycle"
         );
-        assert!(!haps.is_empty(), "expected haps from sub combine over 1 cycle");
 
         // 6. For each hap, walk the context tree and collect
         //    (pattern_idx, (start, end)) tuples. The walk lives on

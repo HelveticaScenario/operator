@@ -27,6 +27,7 @@ use ringbuf::{
   traits::{Consumer, Producer, Split},
 };
 use rtrb::{Consumer as RtrbConsumer, Producer as RtrbProducer, RingBuffer};
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
@@ -35,7 +36,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1369,8 +1369,7 @@ impl AudioState {
     // are sample-rate ring buffers that would smear if reused).
     {
       let scope_xy_collection = self.scope_xy_collection.lock();
-      let current_keys: HashSet<ScopeXyBufferKey> =
-        scope_xy_collection.keys().cloned().collect();
+      let current_keys: HashSet<ScopeXyBufferKey> = scope_xy_collection.keys().cloned().collect();
 
       let desired_keys: HashSet<ScopeXyBufferKey> = match scope_xy.as_ref() {
         Some(sx) => sx
@@ -1878,12 +1877,12 @@ impl AudioProcessor {
           {
             let garbage_tx = &mut self.garbage_tx;
             let scope_xy_audio = &mut self.scope_xy_audio;
-            scope_xy_audio.retain(
-              |(_k, buf)| match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
+            scope_xy_audio.retain(|(_k, buf)| {
+              match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
                 Ok(()) => false,
                 Err(_) => true,
-              },
-            );
+              }
+            });
           }
           self.patch.insert_audio_in();
           self.patch.rebuild_message_listeners();
@@ -2156,7 +2155,11 @@ impl AudioProcessor {
         slot[ch] = frame[ch] * AUDIO_INPUT_GAIN;
       }
     }
-    if let Some(audio_in) = self.patch.sampleables.get(WellKnownModule::HiddenAudioIn.id()) {
+    if let Some(audio_in) = self
+      .patch
+      .sampleables
+      .get(WellKnownModule::HiddenAudioIn.id())
+    {
       audio_in.inject_audio_in_block(&self.input_block_scratch);
     }
   }
@@ -2396,11 +2399,7 @@ where
 
           {
             let eager_end = block_size.min(audio_processor.block_pos + num_frames);
-            audio_processor.eager_fill_clock(
-              audio_processor.block_pos,
-              eager_end,
-              written,
-            );
+            audio_processor.eager_fill_clock(audio_processor.block_pos, eager_end, written);
           }
 
           {
@@ -2417,28 +2416,20 @@ where
                 audio_processor.eager_fill_clock(0, eager_end, written);
               }
 
-              let scan_end =
-                block_size.min(audio_processor.block_pos + (num_frames - written));
+              let scan_end = block_size.min(audio_processor.block_pos + (num_frames - written));
 
               // Resolve trigger sample for queued patch swap.
-              let trigger_sample: Option<usize> = match audio_processor
-                .queued_update
-                .as_ref()
-                .map(|(_, t)| t)
-              {
-                Some(QueuedTrigger::Immediate) => Some(audio_processor.block_pos),
-                Some(QueuedTrigger::NextBar) => audio_processor.scan_trigger(
-                  "barTrigger",
-                  audio_processor.block_pos,
-                  scan_end,
-                ),
-                Some(QueuedTrigger::NextBeat) => audio_processor.scan_trigger(
-                  "beatTrigger",
-                  audio_processor.block_pos,
-                  scan_end,
-                ),
-                None => None,
-              };
+              let trigger_sample: Option<usize> =
+                match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
+                  Some(QueuedTrigger::Immediate) => Some(audio_processor.block_pos),
+                  Some(QueuedTrigger::NextBar) => {
+                    audio_processor.scan_trigger("barTrigger", audio_processor.block_pos, scan_end)
+                  }
+                  Some(QueuedTrigger::NextBeat) => {
+                    audio_processor.scan_trigger("beatTrigger", audio_processor.block_pos, scan_end)
+                  }
+                  None => None,
+                };
 
               let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
 
@@ -2489,16 +2480,13 @@ where
                     continue;
                   }
 
-                  if let Some(root) =
-                    audio_processor.patch.sampleables.get(&*ROOT_ID)
-                  {
+                  if let Some(root) = audio_processor.patch.sampleables.get(&*ROOT_ID) {
                     let mut any_audible = false;
                     let mut samples = [0.0f32; PORT_MAX_CHANNELS];
                     for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                      let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i)
-                        * AUDIO_OUTPUT_ATTENUATION;
-                      let sample =
-                        safety_soft_clip(raw * final_state_processor.attenuation_factor);
+                      let raw =
+                        root.get_value_at(&ROOT_OUTPUT_PORT, ch, i) * AUDIO_OUTPUT_ATTENUATION;
+                      let sample = safety_soft_clip(raw * final_state_processor.attenuation_factor);
                       samples[ch] = sample;
                       if sample.abs() >= 0.0005 {
                         any_audible = true;
@@ -2512,7 +2500,11 @@ where
                       }
                     } else {
                       for ch in 0..num_channels {
-                        let v = if ch < PORT_MAX_CHANNELS { samples[ch] } else { 0.0 };
+                        let v = if ch < PORT_MAX_CHANNELS {
+                          samples[ch]
+                        } else {
+                          0.0
+                        };
                         output[frame_start + ch] = T::from_sample(v);
                       }
                     }
@@ -2526,41 +2518,24 @@ where
                     }
                     if let Some(scope_lock) = scope_guard.as_mut() {
                       for (key, scope_buffer) in scope_lock.iter_mut() {
-                        if let Some(module) =
-                          audio_processor.patch.sampleables.get(&key.module_id)
+                        if let Some(module) = audio_processor.patch.sampleables.get(&key.module_id)
                         {
-                          let s = module.get_value_at(
-                            &key.port_name,
-                            key.channel as usize,
-                            i,
-                          );
+                          let s = module.get_value_at(&key.port_name, key.channel as usize, i);
                           scope_buffer.push(s);
                         }
                       }
                     }
                     for (key, xy_buffer) in &audio_processor.scope_xy_audio {
                       let (Some(x_mod), Some(y_mod)) = (
-                        audio_processor
-                          .patch
-                          .sampleables
-                          .get(&key.pair.x.module_id),
-                        audio_processor
-                          .patch
-                          .sampleables
-                          .get(&key.pair.y.module_id),
+                        audio_processor.patch.sampleables.get(&key.pair.x.module_id),
+                        audio_processor.patch.sampleables.get(&key.pair.y.module_id),
                       ) else {
                         continue;
                       };
-                      let xv = x_mod.get_value_at(
-                        &key.pair.x.port_name,
-                        key.pair.x.channel as usize,
-                        i,
-                      );
-                      let yv = y_mod.get_value_at(
-                        &key.pair.y.port_name,
-                        key.pair.y.channel as usize,
-                        i,
-                      );
+                      let xv =
+                        x_mod.get_value_at(&key.pair.x.port_name, key.pair.x.channel as usize, i);
+                      let yv =
+                        y_mod.get_value_at(&key.pair.y.port_name, key.pair.y.channel as usize, i);
                       xy_buffer.push(xv, yv);
                     }
                   } else {
@@ -2595,13 +2570,10 @@ where
                 // `[swap_pos, block_size)` was filled under the OLD params;
                 // refill the remainder of this callback's range from
                 // `swap_pos` forward under the NEW patch.
-                if let Some(root_clock) =
-                  audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
-                {
+                if let Some(root_clock) = audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID) {
                   root_clock.set_initial_index(swap_pos);
                 }
-                let eager_end =
-                  block_size.min(audio_processor.block_pos + (num_frames - written));
+                let eager_end = block_size.min(audio_processor.block_pos + (num_frames - written));
                 audio_processor.eager_fill_clock(swap_pos, eager_end, written);
               }
             }

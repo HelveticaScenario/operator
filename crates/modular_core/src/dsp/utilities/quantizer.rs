@@ -115,8 +115,9 @@ impl ScaleParam {
                 None => et_tuning(),
             };
 
-            let intervals: Vec<i8> =
-                tokens.map(|s| s.parse::<i8>().ok()).collect::<Option<_>>()?;
+            let intervals: Vec<i8> = tokens
+                .map(|s| s.parse::<i8>().ok())
+                .collect::<Option<_>>()?;
             if intervals.is_empty() {
                 return None;
             }
@@ -177,10 +178,7 @@ pub fn degree_to_voltage(
         (octave, wrapped as usize)
     };
 
-    let semitone_in_scale = scale_intervals
-        .get(wrapped_degree)
-        .copied()
-        .unwrap_or(0) as i32;
+    let semitone_in_scale = scale_intervals.get(wrapped_degree).copied().unwrap_or(0) as i32;
 
     let root_v = (base_midi - 60) as f64 / 12.0;
     let step_v = tuning

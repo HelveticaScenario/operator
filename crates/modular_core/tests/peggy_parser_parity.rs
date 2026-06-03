@@ -132,8 +132,8 @@ fn rust_descent_parser_matches_peggy_for_overlapping_grammar() {
              regenerate with: yarn gen:parser-parity-fixture",
         )
     });
-    let rows: Vec<ParityRow> = serde_json::from_str(&text)
-        .expect("peggy_parser_parity.json must parse as ParityRow[]");
+    let rows: Vec<ParityRow> =
+        serde_json::from_str(&text).expect("peggy_parser_parity.json must parse as ParityRow[]");
 
     assert!(
         rows.len() >= 20,
@@ -155,8 +155,7 @@ fn rust_descent_parser_matches_peggy_for_overlapping_grammar() {
                 continue;
             }
         };
-        let rust_json = serde_json::to_value(&rust_ast)
-            .expect("MiniAST must serialize to JSON");
+        let rust_json = serde_json::to_value(&rust_ast).expect("MiniAST must serialize to JSON");
         let rust_canonical = normalize(&rust_json);
         let peggy_canonical = normalize(&row.peggy_ast);
 
