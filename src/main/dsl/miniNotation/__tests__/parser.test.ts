@@ -108,6 +108,50 @@ describe('atom kinds', () => {
         });
     });
 
+    test('Note with flat, no octave', () => {
+        const r = $p('eb');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'e', accidental: 'b', octave: null } },
+                span: { start: 0, end: 2 },
+            },
+        });
+    });
+
+    test('Note b-flat, no octave (b-letter / b-accidental collision)', () => {
+        const r = $p('bb');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'b', accidental: 'b', octave: null } },
+                span: { start: 0, end: 2 },
+            },
+        });
+    });
+
+    test('Note with f-alias flat, no octave', () => {
+        const r = $p('cf');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'c', accidental: 'b', octave: null } },
+                span: { start: 0, end: 2 },
+            },
+        });
+    });
+
+    test('bare note letter b stays a plain note (no accidental)', () => {
+        const r = $p('b');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'b', accidental: null, octave: null } },
+                span: { start: 0, end: 1 },
+            },
+        });
+    });
+
     test('Rest', () => {
         const r = $p('~');
         expect(r.ast).toEqual({ Rest: { start: 0, end: 1 } });

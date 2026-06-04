@@ -121,6 +121,63 @@
     }
   },
   {
+    "label": "note flat no octave",
+    "input": "eb",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "e",
+            "accidental": "b",
+            "octave": null
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 2
+        }
+      }
+    }
+  },
+  {
+    "label": "note b-flat no octave",
+    "input": "bb",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "b",
+            "accidental": "b",
+            "octave": null
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 2
+        }
+      }
+    }
+  },
+  {
+    "label": "note f-alias flat no octave",
+    "input": "cf",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Note": {
+            "letter": "c",
+            "accidental": "b",
+            "octave": null
+          }
+        },
+        "span": {
+          "start": 0,
+          "end": 2
+        }
+      }
+    }
+  },
+  {
     "label": "note s-alias sharp",
     "input": "cs4",
     "peggy_ast": {

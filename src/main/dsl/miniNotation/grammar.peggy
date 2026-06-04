@@ -230,11 +230,10 @@ NumberValue
       return { Pure: located({ Number: n }, location()) };
     }
 
-// Notes like c4, c#4, cb4, c (no octave).
-// Accidental is one of: # s (sharp) or b f (flat). We only store '#' / 'b'
-// in the AST. The note letter must NOT be followed by another letter or
-// digit that would make it part of an identifier — guarded by negative
-// lookahead on alphanumerics after the note.
+// A note is a letter (a-g), an optional accidental, and an optional octave:
+// c, c4, c#, c#4, cb, eb3. Sharp is # or s; flat is b or f; the AST stores
+// only '#' or 'b'. The trailing !IdentCont stops a note from matching the
+// start of a longer alphanumeric run, so `cb` is c-flat but `cba` is not a note.
 NoteValue
   = letter:$[a-gA-G] acc:Accidental? oct:Octave? !IdentCont {
       return {
@@ -254,19 +253,13 @@ NoteValue
 Accidental
   = "#" { return "#"; }
   / "s" { return "#"; }
-  / "b" &IntOrDigit { return "b"; }
-  / "f" &IntOrDigit { return "b"; }
+  / "b" { return "b"; }
+  / "f" { return "b"; }
 
 Octave
   = sign:"-"? digits:$[0-9]+ {
       return parseInt((sign || "") + digits, 10);
     }
-
-// Lookahead used to disambiguate a trailing flat accidental from a bare note
-// followed by whitespace. "cb4" -> c flat 4; "cb" alone -> identifier (not a
-// valid atom in the reduced grammar) so falls through to parse failure.
-IntOrDigit
-  = "-"? [0-9]
 
 // Identifier continuation — any letter/digit/underscore.
 IdentCont
