@@ -1676,11 +1676,105 @@ function buildConfigArg(moduleSchema: Schema): {
 }
 
 /**
+ * Build the parameter list and JSDoc lines shared by the factory-function and
+ * `.$.`-method renderers. `positionalStart` drops leading positionals (1 for
+ * `.$.`, whose receiver is injected as the first argument); `leadParams` are
+ * prepended to the parameter list (the `.$m.` `mix` crossfade); `leadDocLines`
+ * are prepended before the module's own documentation. The module's full
+ * documentation and every `@param` are always included, so the factory and
+ * `.$.` surfaces carry identical docs and cannot drift.
+ */
+function buildSignature(
+    moduleSchema: Schema,
+    opts: {
+        positionalStart: number;
+        leadParams?: { decl: string; doc: string }[];
+        leadDocLines?: string[];
+    },
+): { args: string[]; docLines: string[] } {
+    const { paramsSchema } = moduleSchema;
+    const schemaProperties = paramsSchema.properties as
+        | Record<string, JSONSchema | undefined>
+        | undefined;
+    const schemaRequired: readonly string[] = paramsSchema.required || [];
+    const positionals = (moduleSchema.positionalArgs || []).slice(
+        opts.positionalStart,
+    );
+    const requiredness = positionals.map((a) =>
+        schemaRequired.includes(a.name),
+    );
+
+    const args: string[] = [];
+    const docLines: string[] = [...(opts.leadDocLines ?? [])];
+    if (moduleSchema.documentation) {
+        docLines.push(...moduleSchema.documentation.split(/\r?\n/));
+    }
+
+    for (const lead of opts.leadParams ?? []) {
+        args.push(lead.decl);
+        docLines.push(lead.doc);
+    }
+
+    for (let i = 0; i < positionals.length; i++) {
+        const arg = positionals[i];
+        const propSchema = schemaProperties?.[arg.name];
+        const type = propSchema
+            ? schemaToTypeExpr(propSchema, paramsSchema)
+            : 'any';
+
+        if (requiredness[i]) {
+            args.push(`${arg.name}: ${type}`);
+        } else {
+            // Stay before any required arg: emit `| undefined` rather than `?`.
+            const allSubsequentOptional = requiredness
+                .slice(i + 1)
+                .every((r) => !r);
+            args.push(
+                allSubsequentOptional
+                    ? `${arg.name}?: ${type}`
+                    : `${arg.name}: ${type} | undefined`,
+            );
+        }
+
+        const description = propSchema?.description;
+        if (description) {
+            const firstLine = description.split(/\r?\n/)[0];
+            docLines.push(`@param ${arg.name} - ${firstLine}`);
+        } else {
+            docLines.push(`@param ${arg.name}`);
+        }
+
+        if (propSchema) {
+            const variants = getEnumVariants(propSchema, paramsSchema);
+            if (variants && variants.some((v) => v.description)) {
+                for (const v of variants) {
+                    const desc = v.description ? ` — ${v.description}` : '';
+                    docLines.push(`  - \`${v.value}\`${desc}`);
+                }
+            }
+        }
+    }
+
+    const { arg: configArg, paramDocs } = buildConfigArg(moduleSchema);
+    args.push(configArg);
+    if (paramDocs.length > 0) {
+        docLines.push(`@param config - Configuration object`);
+        for (const doc of paramDocs) {
+            docLines.push(`  - ${doc}`);
+        }
+    } else {
+        docLines.push(`@param config - Configuration object`);
+    }
+
+    return { args, docLines };
+}
+
+/**
  * Render one method of the `.$.` (or `.$m.` when `withMix`) chainable namespace
  * for `moduleSchema`: the module's factory with its first positional dropped
  * (it becomes the chained signal receiver). For `.$m.`, a required leading
  * `mix` signal crossfades dry/wet and the return type collapses to
- * `Collection`. Mirrors {@link renderFactoryFunction}'s argument shape.
+ * `Collection`. Carries the module's full documentation, like the factory.
  *
  * Only called on schemas passing `qualifiesForDollarChain`, which guarantees
  * `dollarMethodName` yields a valid TS identifier for the interface member.
@@ -1693,57 +1787,46 @@ function renderDollarMethod(
     const rawName = moduleSchema.name.split('.').pop()!;
     const methodName = dollarMethodName(moduleSchema.name);
 
-    const { paramsSchema } = moduleSchema;
-    const schemaProperties = paramsSchema.properties as
-        | Record<string, JSONSchema | undefined>
-        | undefined;
-    const schemaRequired: readonly string[] = paramsSchema.required || [];
+    const leadDocLines = withMix
+        ? [
+              `Chain through \`${rawName}\`, crossfading the dry input against`,
+              'the wet result by a leading `mix` signal (0 = dry, 5 = wet,',
+              '2.5 = equal). Equivalent to `.pipeMix(s => ' +
+                  `${rawName}(s, ...), mix)\`.`,
+              '',
+          ]
+        : [
+              `Chain through \`${rawName}\` with this signal as its first`,
+              `argument. Equivalent to \`${rawName}(this, ...)\`.`,
+              '',
+          ];
 
-    // Drop the first positional — the chained output is injected there.
-    const positionals = (moduleSchema.positionalArgs || []).slice(1);
-    const requiredness = positionals.map((a) =>
-        schemaRequired.includes(a.name),
-    );
+    const leadParams = withMix
+        ? [
+              {
+                  decl: 'mix: Poly<Signal>',
+                  doc: '@param mix - Dry/wet crossfade as {@link Poly<Signal>}. 0 = dry input only, 5 = wet result only, 2.5 = equal.',
+              },
+          ]
+        : [];
 
-    const args: string[] = [];
-    if (withMix) {
-        args.push('mix: Poly<Signal>');
-    }
-    for (let i = 0; i < positionals.length; i++) {
-        const arg = positionals[i];
-        const propSchema = schemaProperties?.[arg.name];
-        const type = propSchema
-            ? schemaToTypeExpr(propSchema, paramsSchema)
-            : 'any';
-        if (requiredness[i]) {
-            args.push(`${arg.name}: ${type}`);
-        } else {
-            const allSubsequentOptional = requiredness
-                .slice(i + 1)
-                .every((r) => !r);
-            args.push(
-                allSubsequentOptional
-                    ? `${arg.name}?: ${type}`
-                    : `${arg.name}: ${type} | undefined`,
-            );
-        }
-    }
-    args.push(buildConfigArg(moduleSchema).arg);
+    const { args, docLines } = buildSignature(moduleSchema, {
+        positionalStart: 1,
+        leadParams,
+        leadDocLines,
+    });
 
     const returnType = withMix
         ? 'Collection'
         : getFactoryReturnType(moduleSchema);
 
-    const summary = moduleSchema.documentation?.split(/\r?\n/)[0]?.trim();
-    const base = withMix
-        ? `\`${rawName}\` with a leading \`mix\` crossfade (dry/wet).`
-        : `\`${rawName}\` with this signal as its first argument.`;
-    const jsdoc = summary ? `${base} ${summary}` : base;
-
-    return [
-        `${indent}/** ${jsdoc} */`,
-        `${indent}${methodName}(${args.join(', ')}): ${returnType};`,
-    ];
+    const lines: string[] = [`${indent}/**`];
+    for (const line of docLines) {
+        lines.push(`${indent} * ${line}`);
+    }
+    lines.push(`${indent} */`);
+    lines.push(`${indent}${methodName}(${args.join(', ')}): ${returnType};`);
+    return lines;
 }
 
 function renderFactoryFunction(
@@ -1752,83 +1835,9 @@ function renderFactoryFunction(
     indent: string,
 ): string[] {
     const functionName = moduleSchema.name.split('.').pop()!;
-    const { paramsSchema } = moduleSchema;
-    const schemaProperties = paramsSchema.properties as
-        | Record<string, JSONSchema | undefined>
-        | undefined;
-
-    const args: string[] = [];
-    const positionalArgs = moduleSchema.positionalArgs || [];
-    const schemaRequired: readonly string[] = paramsSchema.required || [];
-    // Build docstring lines
-    const docLines: string[] = [];
-    if (moduleSchema.documentation) {
-        docLines.push(...moduleSchema.documentation.split(/\r?\n/));
-    }
-
-    const positionalRequiredness = positionalArgs.map((a) =>
-        schemaRequired.includes(a.name),
-    );
-
-    for (let i = 0; i < positionalArgs.length; i++) {
-        const arg = positionalArgs[i];
-        const propSchema = schemaProperties?.[arg.name];
-        const type = propSchema
-            ? schemaToTypeExpr(propSchema, paramsSchema)
-            : 'any';
-
-        const isRequired = positionalRequiredness[i];
-
-        if (isRequired) {
-            args.push(`${arg.name}: ${type}`);
-        } else {
-            // Check if all subsequent positional args are also optional
-            const allSubsequentOptional = positionalRequiredness
-                .slice(i + 1)
-                .every((r: boolean) => !r);
-            if (allSubsequentOptional) {
-                args.push(`${arg.name}?: ${type}`);
-            } else {
-                args.push(`${arg.name}: ${type} | undefined`);
-            }
-        }
-
-        // Add @param for positional arg
-        const description = propSchema?.description;
-        if (description) {
-            const firstLine = description.split(/\r?\n/)[0];
-            docLines.push(`@param ${arg.name} - ${firstLine}`);
-        } else {
-            docLines.push(`@param ${arg.name}`);
-        }
-
-        // Append enum variant descriptions as sub-bullets
-        if (propSchema) {
-            const variants = getEnumVariants(propSchema, paramsSchema);
-            if (variants && variants.some((v) => v.description)) {
-                for (const v of variants) {
-                    const desc = v.description ? ` — ${v.description}` : '';
-                    docLines.push(`  - \`${v.value}\`${desc}`);
-                }
-            }
-        }
-    }
-
-    const { arg: configArg, paramDocs: configParamDocs } =
-        buildConfigArg(moduleSchema);
-    args.push(configArg);
-
-    // Add @param config with nested property descriptions
-    if (configParamDocs.length > 0) {
-        docLines.push(`@param config - Configuration object`);
-        for (const doc of configParamDocs) {
-            docLines.push(`  - ${doc}`);
-        }
-    } else {
-        docLines.push(`@param config - Configuration object`);
-    }
-
-    // Get return type based on outputs
+    const { args, docLines } = buildSignature(moduleSchema, {
+        positionalStart: 0,
+    });
     const returnType = getFactoryReturnType(moduleSchema);
 
     const lines: string[] = [];
