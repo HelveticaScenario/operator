@@ -243,6 +243,146 @@
     ]
   },
   {
+    "name": "$mixDown",
+    "documentation": "Folds a polyphonic input down to an arbitrary target channel count.\n\nUnlike `$mix` (which mixes channel `n` of every input into output channel\n`n`), `$mixDown` takes a single poly signal and distributes its `N` channels\nacross `M` output channels by panning them evenly over the output field with\nan equal-power crossfade. With the default `channels = 1` it is a plain mono\nsum; `channels = 2` produces an equal-power stereo fold-down. When the target\nexceeds the input channel count, the input is instead spread to fill every\noutput channel (equal-power interpolation) so no channel is left silent.\n\n- **channels** — target output channel count (1–16, default 1)\n- **mode** — how channels landing on the same output combine (sum / average /\n  max / min); applies only when folding down (target ≤ input channels)\n\n## Example\n\n```js\n// Fold a 3-voice spread down to stereo\n$saw($spread(0, 5, 3)).mix(2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MixDownParams",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "description": "Target output channel count (1–16). Defaults to 1 (mono).",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "input": {
+          "description": "Polyphonic input whose channels are folded down.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "How channels that land on the same output channel are combined.",
+          "$ref": "#/$defs/MixMode"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MixMode": {
+          "description": "Mixing mode for combining input signals.",
+          "oneOf": [
+            {
+              "description": "Sum all inputs.",
+              "type": "string",
+              "const": "sum"
+            },
+            {
+              "description": "Average all inputs.",
+              "type": "string",
+              "const": "average"
+            },
+            {
+              "description": "Keep the strongest input.",
+              "type": "string",
+              "const": "max"
+            },
+            {
+              "description": "Keep the weakest non-zero input.",
+              "type": "string",
+              "const": "min"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "fold-down output: input channels panned evenly across the output channels",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "Polyphonic input whose channels are folded down.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "channels"
+      }
+    ],
+    "channelsParam": "channels"
+  },
+  {
     "name": "$stereoMix",
     "documentation": "Pan and spread a signal into stereo.",
     "paramsSchema": {
@@ -266,7 +406,7 @@
           ]
         },
         "width": {
-          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position.",
+          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 5\n(widest spread) when omitted.",
           "anyOf": [
             {
               "$ref": "#/$defs/MonoSignal"
@@ -380,7 +520,7 @@
       },
       {
         "name": "width",
-        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position.",
+        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 5\n(widest spread) when omitted.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -3196,8 +3336,8 @@
     },
     "outputs": [
       {
-        "name": "mix",
-        "description": "mixed synthesis output",
+        "name": "output",
+        "description": "mixed synthesis output (main/aux crossfade)",
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,

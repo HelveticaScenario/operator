@@ -183,7 +183,7 @@ struct PlaitsParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PlaitsOutputs {
-    #[output("mix", "mixed synthesis output", default, range = (-5.0, 5.0))]
+    #[output("output", "mixed synthesis output (main/aux crossfade)", default, range = (-5.0, 5.0))]
     mix: PolyOutput,
 
     #[output("main", "main synthesis output", range = (-5.0, 5.0))]
