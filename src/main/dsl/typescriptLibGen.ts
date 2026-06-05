@@ -769,10 +769,10 @@ interface ModuleOutput {
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @param inMin - Input minimum as {@link Poly<Signal>}
    * @param inMax - Input maximum as {@link Poly<Signal>}
-   * @returns A {@link ModuleOutput} with the remapped signal
+   * @returns A {@link Collection} with the remapped signal
    * @example $sine('c4').range(0, 1, -5, 5)
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): ModuleOutput;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): Collection;
 
   /**
    * Register this output as a send to a bus, with optional gain.
