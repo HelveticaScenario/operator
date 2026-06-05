@@ -834,7 +834,8 @@ interface ModuleOutputWithRange extends ModuleOutput {
    * @param inMax - Optional input maximum; overrides the declared input bound.
    * @returns A {@link CollectionWithRange} whose own range tracks the remapped
    *   bounds, so further \`.range(...)\` calls chain off it
-   * @example lfo.range(note("C3"), note("C5"))
+   * @example lfo.range(note("C3"), note("C5"))   // input range inferred from the output
+   * @example lfo.range(0, 1, -2, 2)              // override the input bounds with -2..2
    */
   range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin?: Poly<Signal>, inMax?: Poly<Signal>): CollectionWithRange;
 }
@@ -1044,6 +1045,8 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    *   bound. Per-bound and nullish, so an explicit \`0\` is honored.
    * @param inMax - Optional input maximum; overrides each output's declared bound.
    * @see {@link Collection.range} - for explicit input range
+   * @example $r(lfo1, lfo2).range(0, 5)          // input range inferred from each output
+   * @example $r(lfo1, lfo2).range(0, 1, -2, 2)   // override the input bounds with -2..2
    */
   override range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin?: Poly<Signal>, inMax?: Poly<Signal>): CollectionWithRange;
 }

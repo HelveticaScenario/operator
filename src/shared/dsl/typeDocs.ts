@@ -175,7 +175,9 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
                     "Uses each output's stored minValue/maxValue. " +
                     'Optional inMin/inMax override the declared input bounds per-bound (nullish, so an explicit 0 is honored). ' +
                     'Returns a CollectionWithRange whose own range tracks the remapped bounds, so further .range(...) calls chain off it.',
-                example: '$r(lfo1, lfo2).range(200, 2000)',
+                example:
+                    '$r(lfo1, lfo2).range(200, 2000)            // input range inferred\n' +
+                    '$r(lfo1, lfo2).range(0, 1, -2, 2)          // override input bounds with -2..2',
             },
         ],
         name: 'CollectionWithRange',
@@ -346,7 +348,8 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
                     'Optional inMin/inMax override the declared input bounds per-bound (nullish, so an explicit 0 is honored). ' +
                     'Returns a CollectionWithRange whose own range tracks the remapped bounds, so further .range(...) calls chain off it.',
                 example:
-                    'lfo.range(note("c3"), note("c5"))  // Remap LFO to pitch range',
+                    'lfo.range(note("c3"), note("c5"))  // input range inferred from minValue/maxValue\n' +
+                    'lfo.range(0, 1, -2, 2)             // override the input bounds with -2..2',
             },
         ],
         name: 'ModuleOutputWithRange',
