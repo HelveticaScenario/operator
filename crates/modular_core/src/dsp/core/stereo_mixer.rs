@@ -16,7 +16,8 @@ struct StereoMixerParams {
     #[deserr(default)]
     pan: Option<PolySignal>,
     /// Stereo spread across channels (0 = no spread, 5 = widest spread).
-    /// Width offsets each channel around its base pan position.
+    /// Width offsets each channel around its base pan position. Defaults to 0
+    /// (no spread) when omitted.
     #[signal(range = (0.0, 5.0))]
     #[deserr(default)]
     width: Option<MonoSignal>,
@@ -65,7 +66,8 @@ impl StereoMixer {
         let input_channels = self.params.input.channels();
         let state = &mut self.state;
 
-        // Width: 0 = no spread, 5 = full ±5V spread across voices
+        // Width: 0 = no spread, 5 = full ±5V spread across voices. Defaults to
+        // 0 (no spread) when no width signal is connected.
         state
             .width_buffer
             .update(self.params.width.value_or(0.0).clamp(0.0, 5.0));
@@ -113,3 +115,46 @@ impl StereoMixer {
 }
 
 message_handlers!(impl StereoMixer {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::poly::PolySignal;
+    use crate::types::{OutputStruct, Signal};
+
+    /// Build a StereoMixer directly, initializing the output channels the way the
+    /// module macro would (fixed 2-channel stereo). `Clickless` snaps to its
+    /// target on the first `update`, so a single call shows the full pan/width.
+    fn make_stereo(params: StereoMixerParams) -> StereoMixer {
+        let mut outputs = StereoMixerOutputs::default();
+        outputs.set_all_channels(2);
+        StereoMixer {
+            params,
+            outputs,
+            _channel_count: 2,
+            _block_index: Default::default(),
+            state: StereoMixerState::default(),
+        }
+    }
+
+    fn approx(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-5, "expected {b}, got {a}");
+    }
+
+    #[test]
+    fn test_default_width_is_no_spread() {
+        // With no width signal connected, width defaults to 0 (no spread):
+        // every voice stays centered, so a 2-voice input sums equally to both
+        // channels at the equal-power center gain sqrt(0.5). (A width of 5
+        // would instead hard-pan voice 0 left and voice 1 right.)
+        let mut m = make_stereo(StereoMixerParams {
+            input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(0.0)]),
+            pan: None,
+            width: None,
+        });
+        m.update(48000.0);
+        let center = 0.5f32.sqrt();
+        approx(m.outputs.sample.get(0), center); // left  = voice 0 centered
+        approx(m.outputs.sample.get(1), center); // right = voice 0 centered
+    }
+}

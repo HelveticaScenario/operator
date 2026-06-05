@@ -769,6 +769,21 @@ interface ModuleOutput {
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
 
   /**
+   * Fold this output's channels down to a target channel count by panning them
+   * evenly across the output field with an equal-power law. Creates a \\$mixDown
+   * module internally.
+   *
+   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @returns A Collection from the \\$mixDown output
+   *
+   * @example
+   * // Fold a 3-voice spread down to stereo
+   * $saw($spread(0, 5, 3)).mix(2).out()
+   */
+  mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection;
+
+  /**
    * Remap this output from an explicit input range to a new output range.
    * Creates a $remap module internally.
    * @param outMin - New minimum as {@link Poly<Signal>}
@@ -998,6 +1013,21 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * $c(osc1, osc2).pipeMix(s => $lpf(s, '1000hz'), 1).out()
    */
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
+
+  /**
+   * Fold this collection's channels down to a target channel count by panning
+   * them evenly across the output field with an equal-power law. Creates a
+   * \\$mixDown module internally.
+   *
+   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @returns A Collection from the \\$mixDown output
+   *
+   * @example
+   * // Fold a 3-voice spread down to stereo
+   * $saw($spread(0, 5, 3)).mix(2).out()
+   */
+  mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection;
 
   /**
    * Register all outputs in this collection as a send to a bus, with optional gain.

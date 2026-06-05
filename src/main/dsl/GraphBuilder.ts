@@ -347,7 +347,7 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
      * @param options.baseChannel - Base output channel (0-15, default 0)
      * @param options.gain - Output gain
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
-     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread)
+     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
      */
     out(options: StereoOutOptions = {}): this {
         if (this.items.length > 0) {
@@ -442,6 +442,29 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
         return builder
             ? builder.makeDollarChain(this, true)
             : emptyDollarChain();
+    }
+
+    /**
+     * Fold this collection's channels down to `channels` output channels by
+     * panning them evenly across the output field (equal-power). Builds a
+     * \$mixDown module. Defaults to mono.
+     */
+    mix(
+        channels?: number,
+        mode?: 'sum' | 'average' | 'max' | 'min',
+    ): Collection {
+        if (this.items.length === 0) {
+            return new Collection();
+        }
+        const factory = this.items[0].builder.getFactory('$mixDown');
+        if (!factory) {
+            throw new Error('Factory for $mixDown not registered');
+        }
+        return factory(
+            this.items,
+            channels,
+            mode !== undefined ? { mode } : undefined,
+        ) as Collection;
     }
 
     toString(): string {
@@ -1392,7 +1415,7 @@ export class ModuleOutput {
      * @param options.baseChannel - Base output channel (0-15, default 0)
      * @param options.gain - Output gain (adds util.scaleAndShift after stereo mix)
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
-     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread)
+     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
      */
     out(options: StereoOutOptions = {}): this {
         this.builder.addOut(this, { baseChannel: 0, ...options });
@@ -1471,6 +1494,26 @@ export class ModuleOutput {
      */
     get $m(): DollarChainProxy {
         return this.builder.makeDollarChain(this, true);
+    }
+
+    /**
+     * Fold this output's channels down to `channels` output channels by panning
+     * them evenly across the output field (equal-power). Builds a \$mixDown
+     * module. Defaults to mono.
+     */
+    mix(
+        channels?: number,
+        mode?: 'sum' | 'average' | 'max' | 'min',
+    ): Collection {
+        const factory = this.builder.getFactory('$mixDown');
+        if (!factory) {
+            throw new Error('Factory for $mixDown not registered');
+        }
+        return factory(
+            this,
+            channels,
+            mode !== undefined ? { mode } : undefined,
+        ) as Collection;
     }
 
     /**
