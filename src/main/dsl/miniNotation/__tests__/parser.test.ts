@@ -222,6 +222,26 @@ describe('modifiers', () => {
         }
     });
 
+    test('replicate !! accumulates to 3 (one flat Replicate, not nested)', () => {
+        // Tidal `pRepeat = 1 + sum es` / krill: `0!!` is 3 copies, not 4.
+        const r = $p('0!!');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(r.ast.Replicate[1]).toBe(3);
+        expect('Replicate' in r.ast.Replicate[0]).toBe(false);
+    });
+
+    test('replicate `! !` with spaces also accumulates to 3', () => {
+        const r = $p('0 ! !');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(r.ast.Replicate[1]).toBe(3);
+    });
+
+    test('replicate !2!3 accumulates to 4', () => {
+        const r = $p('0!2!3');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(r.ast.Replicate[1]).toBe(4);
+    });
+
     test('degrade ? with probability', () => {
         const r = $p('0?0.3');
         expect('Degrade' in r.ast).toBe(true);
@@ -269,6 +289,14 @@ describe('modifiers', () => {
         expect(entries.length).toBe(2);
         expect(entries[0][1]).toBeCloseTo(3);
         expect(entries[1][1]).toBeNull();
+    });
+
+    test('bare `@` defaults weight to 2', () => {
+        // Matches Tidal `pElongate = 1 + sum` / krill, and `_` elongation.
+        const r = $p('0@');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence).toHaveLength(1);
+        expect(r.ast.Sequence[0][1]).toBe(2);
     });
 });
 
@@ -557,6 +585,31 @@ describe('feet `.`', () => {
             expect(r.ast.Sequence).toHaveLength(2);
             expect(r.ast.Sequence.every(([, w]) => w === null)).toBe(true);
         }
+    });
+});
+
+// Top-level `,` (stack) and `|` (choice) are mutually exclusive, with feet
+// (`.`) living inside each operand — matching Tidal stackTail/chooseTail and
+// krill. `<...>`/`{...}` are comma-only voices.
+describe('separator model (Tidal/krill parity)', () => {
+    test('`|` binds looser than feet: `0 | 1 . 2` is choose(0, feet(1,2))', () => {
+        const r = $p('0 | 1 . 2');
+        if (!('RandomChoice' in r.ast))
+            return expect.fail('expected RandomChoice');
+        const [choices] = r.ast.RandomChoice;
+        expect(choices.length).toBe(2);
+        // The second choice is the feet sub-sequence `1 . 2`, not a bare atom.
+        if (!('Sequence' in choices[1]))
+            return expect.fail('second choice should be a feet Sequence');
+        expect(choices[1].Sequence).toHaveLength(2);
+    });
+
+    test('mixing `,` and `|` at the top level is a parse error', () => {
+        expect(() => $p('0 , 1 | 2')).toThrow(MiniParseError);
+    });
+
+    test('`|` inside `<...>` is a parse error (comma-only voices)', () => {
+        expect(() => $p('<0 | 1>')).toThrow(MiniParseError);
     });
 });
 

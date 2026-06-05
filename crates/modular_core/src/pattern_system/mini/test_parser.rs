@@ -202,7 +202,8 @@ impl<'a> Parser<'a> {
                 Some(b'@') => {
                     self.pos += 1;
                     let n = self.maybe_number()?;
-                    weight = Some(n.unwrap_or(1.0));
+                    // Bare `@` is weight 2 (matches Tidal/krill and `_`).
+                    weight = Some(n.unwrap_or(2.0));
                 }
                 Some(b'*') => {
                     self.pos += 1;
@@ -215,12 +216,19 @@ impl<'a> Parser<'a> {
                     ast = MiniAST::Slow(Box::new(ast), Box::new(op));
                 }
                 Some(b'!') => {
-                    self.pos += 1;
-                    let count = self.maybe_integer()?.unwrap_or(2);
-                    if count < 0 {
+                    // Accumulate consecutive `!`/`!n` into one Replicate:
+                    // total copies = 1 + Σ(value - 1), bare `!` = 2, `!n` = n.
+                    // Matches Tidal's `pRepeat = 1 + sum es` and krill. No
+                    // whitespace handling — the twin only sees adjacent `!`.
+                    let mut total: i64 = 1;
+                    while self.peek() == Some(b'!') {
+                        self.pos += 1;
+                        total += self.maybe_integer()?.unwrap_or(2) - 1;
+                    }
+                    if total < 0 {
                         return Err(ParseError("negative replicate count".into()));
                     }
-                    ast = MiniAST::Replicate(Box::new(ast), count as u32);
+                    ast = MiniAST::Replicate(Box::new(ast), total as u32);
                 }
                 Some(b'?') => {
                     self.pos += 1;

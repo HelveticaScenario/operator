@@ -86,6 +86,8 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     { label: 'choice of space-separated sequences', input: '0 1 | 2 3' },
     { label: 'choice of fast subsequences', input: '[0 1] | [2 3]' },
     { label: 'choice of comma-chord subsequences', input: '[0,0,0] | [0,-7,0]' },
+    { label: 'replicate !! accumulates to 3', input: '0!!' },
+    { label: 'weight bare @ defaults to 2', input: '0@' },
 ];
 
 /**
