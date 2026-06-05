@@ -123,14 +123,14 @@ impl<'a> Parser<'a> {
     }
 
     fn stack_expr(&mut self) -> ParseResult<MiniAST> {
-        let head = self.sequence_expr()?;
+        let head = self.choice_expr()?;
         let mut items = vec![head];
         loop {
             self.skip_ws();
             if self.peek() == Some(b',') {
                 self.pos += 1;
                 self.skip_ws();
-                items.push(self.sequence_expr()?);
+                items.push(self.choice_expr()?);
             } else {
                 break;
             }
@@ -142,11 +142,43 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Random choice: `a b | c d` picks one whole sequence per cycle.
+    /// Operands are full sequences (space-separated), so `|` binds looser
+    /// than a sequence but tighter than stack (`,`). Mirrors the grammar's
+    /// `ChoiceExpr` rule.
+    fn choice_expr(&mut self) -> ParseResult<MiniAST> {
+        let head = self.sequence_expr()?;
+        let mut choices = vec![head];
+        loop {
+            self.skip_ws();
+            if self.peek() == Some(b'|') {
+                self.pos += 1;
+                self.skip_ws();
+                choices.push(self.sequence_expr()?);
+            } else {
+                break;
+            }
+        }
+        if choices.len() == 1 {
+            Ok(choices.pop().unwrap())
+        } else {
+            let seed = self.next_seed();
+            Ok(MiniAST::RandomChoice(choices, seed))
+        }
+    }
+
     fn sequence_expr(&mut self) -> ParseResult<MiniAST> {
         let mut elems: Vec<(MiniAST, Option<f64>)> = Vec::new();
         loop {
             self.skip_ws();
-            if self.at_end() || matches!(self.peek(), Some(b']') | Some(b'>') | Some(b')') | Some(b',')) {
+            // `|` ends a sequence so the enclosing `choice_expr` can pick it
+            // up as a random-choice separator between whole sequences.
+            if self.at_end()
+                || matches!(
+                    self.peek(),
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',') | Some(b'|')
+                )
+            {
                 break;
             }
             let (base, weight) = self.element_with_weight()?;
@@ -236,7 +268,7 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Some(b'[') => self.fast_sub(),
             Some(b'<') => self.slow_sub(),
-            _ => self.atom_or_choice(),
+            _ => self.atom(),
         }
     }
 
@@ -270,28 +302,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn atom_or_choice(&mut self) -> ParseResult<MiniAST> {
-        let first = self.choice_element()?;
-        let mut choices = vec![first];
-        loop {
-            self.skip_ws();
-            if self.peek() == Some(b'|') {
-                self.pos += 1;
-                self.skip_ws();
-                choices.push(self.choice_element()?);
-            } else {
-                break;
-            }
-        }
-        if choices.len() == 1 {
-            Ok(choices.pop().unwrap())
-        } else {
-            let seed = self.next_seed();
-            Ok(MiniAST::RandomChoice(choices, seed))
-        }
-    }
-
-    fn choice_element(&mut self) -> ParseResult<MiniAST> {
+    fn atom(&mut self) -> ParseResult<MiniAST> {
         self.skip_ws();
         match self.peek() {
             Some(b'~') => {

@@ -362,14 +362,43 @@ describe('random choice', () => {
         expect('Rest' in r.ast.RandomChoice[0][1]).toBe(true);
     });
 
+    test('| chooses between whole bracketed subsequences', () => {
+        // Regression: `|` must alternate whole subsequences, not bind to a
+        // single neighbouring atom. `[0,0,0]` / `[0,-7,0]` are comma-chords.
+        const r = $p('[0,0,0] | [0,-7,0]');
+        if (!('RandomChoice' in r.ast))
+            return expect.fail('expected RandomChoice');
+        const [choices] = r.ast.RandomChoice;
+        expect(choices.length).toBe(2);
+        for (const c of choices) {
+            if (!('FastCat' in c))
+                return expect.fail('each choice should be a FastCat');
+            expect('Stack' in c.FastCat[0][0]).toBe(true);
+        }
+    });
+
+    test('| chooses between whole space-separated sequences', () => {
+        const r = $p('0 1 | 2 3');
+        if (!('RandomChoice' in r.ast))
+            return expect.fail('expected RandomChoice');
+        const [choices] = r.ast.RandomChoice;
+        expect(choices.length).toBe(2);
+        expect('Sequence' in choices[0]).toBe(true);
+        expect('Sequence' in choices[1]).toBe(true);
+    });
+
     test('seeds are assigned depth-first, left-to-right', () => {
-        const r = $p('0|1 2?');
-        // Walk the tree to collect seeds; expect RandomChoice first (0), Degrade second (1).
+        // `[0|1]` is parsed before `2?`, so the choice gets seed 0 and the
+        // degrade gets seed 1.
+        const r = $p('[0|1] 2?');
         if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
         const [first, second] = r.ast.Sequence;
-        if (!('RandomChoice' in first[0]))
-            return expect.fail('first element should be RandomChoice');
-        expect(first[0].RandomChoice[1]).toBe(0);
+        if (!('FastCat' in first[0]))
+            return expect.fail('first element should be FastCat');
+        const inner = first[0].FastCat[0][0];
+        if (!('RandomChoice' in inner))
+            return expect.fail('FastCat should wrap a RandomChoice');
+        expect(inner.RandomChoice[1]).toBe(0);
         if (!('Degrade' in second[0]))
             return expect.fail('second element should be Degrade');
         expect(second[0].Degrade[2]).toBe(1);

@@ -98,9 +98,22 @@ StackExpr
 // fastcat), each taking an equal slice of the cycle. Mirrors strudel's
 // `dot_tail` → `feet` alignment.
 FeetExpr
-  = head:SequenceExpr tail:(_ "." _ @SequenceExpr)* {
+  = head:ChoiceExpr tail:(_ "." _ @ChoiceExpr)* {
       if (tail.length === 0) return head;
       return { Sequence: [head, ...tail].map(s => [s, null]) };
+    }
+
+// Random choice: `a b | c d` picks one whole sequence at random each
+// cycle. Mirrors strudel krill's `choose_tail`, whose operands are full
+// `sequence`s — so `|` binds looser than a space-separated sequence but
+// tighter than feet (`.`) and stack (`,`). Handling it here (rather than at
+// the atom level) is what lets `[0,0,0] | [0,-7,0]` and `0 1 | 2 3` choose
+// between whole subsequences instead of mis-binding to a single atom.
+ChoiceExpr
+  = head:SequenceExpr tail:(_ "|" _ @SequenceExpr)* {
+      if (tail.length === 0) return head;
+      const seed = ctx.nextSeed();
+      return { RandomChoice: [[head, ...tail], seed] };
     }
 
 // Sequence: space-separated elements. Bare `_` tokens after an element act
@@ -191,20 +204,9 @@ SlowSub
       return { SlowCat: [[s, null]] };
     }
 
-// Atoms: random-choice group, a rest, or a concrete value.
+// Atoms: a rest or a concrete value. Random choice (`|`) is handled higher
+// up at the ChoiceExpr level so it can alternate whole sequences.
 Atom
-  = RandomChoice
-  / Rest
-  / Value
-
-// Random choice: a|b|c (at least one `|` present).
-RandomChoice
-  = first:ChoiceElement rest:(_ "|" _ @ChoiceElement)+ {
-      const seed = ctx.nextSeed();
-      return { RandomChoice: [[first, ...rest], seed] };
-    }
-
-ChoiceElement
   = Rest
   / Value
 
