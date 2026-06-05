@@ -192,7 +192,7 @@ struct CrossoverState {
 ///
 /// ```js
 /// // Split into 3 bands and process each independently
-/// let bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })
+/// let bands = $xover($saw('C3'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })
 /// let low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })
 /// let mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })
 /// let high = $comp(bands.high, { threshold: 2,   ratio: 6 })

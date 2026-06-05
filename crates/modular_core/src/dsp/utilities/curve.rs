@@ -31,8 +31,7 @@ struct CurveOutputs {
 /// - **exp = 0** — step function (any nonzero → ±5 V)
 ///
 /// ```js
-/// $curve(lfo, 2)       // quadratic curve
-/// $curve(signal, 3)    // cubic curve (audio taper)
+/// $curve($sine('1hz'), 2).out()       // quadratic curve
 /// ```
 #[module(name = "$curve", args(input, exp))]
 pub struct Curve {

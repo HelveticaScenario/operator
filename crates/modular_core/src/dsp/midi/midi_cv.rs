@@ -163,13 +163,8 @@ struct MidiCvOutputs {
 /// ## Example
 ///
 /// ```js
-/// // 4-voice polyphonic MIDI synth
-/// const midi = $midiCV({ channels: 4 });
-/// $sine(midi.pitch).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();
-///
-/// // Mono lead with pitch bend
-/// const lead = $midiCV({ channels: 1, pitchBendRange: 12 });
-/// $saw(lead.pitch).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();
+/// // Mono lead synth with MIDI input
+/// $midiCV({ channels: 1, monoMode: 'last' });
 /// ```
 #[module(name = "$midiCV", channels_param = "channels", args())]
 pub struct MidiCv {

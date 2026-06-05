@@ -51,7 +51,7 @@ struct TrackOutputs {
 ///
 /// ```js
 /// // automate filter cutoff over one cycle
-/// $lpf(osc, $track([['c2', 0], ['c5', 0.5], ['c3', 1]]))
+/// $lpf($saw('C3'), $track([['c2', 0], ['c5', 0.5], ['c3', 1]])).out()
 /// ```
 #[module(name = "$track", args(keyframes), channels_derive = derive_track_channel_count)]
 pub struct Track {

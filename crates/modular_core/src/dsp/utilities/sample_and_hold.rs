@@ -45,12 +45,11 @@ struct SampleAndHoldState {
 /// ```js
 /// // stepped random melody
 /// $sine(
-///  $quantizer(
-///    $sah($noise('white').range(0, 1), $pulse('2hz')),
-///    0,
-///    'c(maj)',
-///  ),
-/// )
+///   $quantizer(
+///     $sah($noise('white'), $pulse('2hz')),
+///     'c(maj)',
+///   ),
+/// ).out()
 /// ```
 #[module(name = "$sah", args(input, trigger))]
 pub struct SampleAndHold {
@@ -121,7 +120,7 @@ struct TrackAndHoldState {
 ///
 /// ```js
 /// // hold a slow sine value while the gate is high
-/// $tah($sine('2hz'), gate)
+/// $tah($sine('2hz'), $clock.beatTrigger).out()
 /// ```
 #[module(name = "$tah", args(input, gate))]
 pub struct TrackAndHold {
