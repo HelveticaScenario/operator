@@ -493,7 +493,8 @@ fn from_graph_creates_patch_with_modules() {
         ("osc1", "$sine", json!({ "freq": 0.0 })),
         ("osc2", "$saw", json!({ "freq": 1.0 })),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Both oscillators plus the hidden AudioIn
     assert!(patch.sampleables.contains_key("osc1"));
@@ -524,7 +525,8 @@ fn from_graph_params_are_applied() {
         "$scaleAndShift",
         json!({ "input": 2.0, "scale": 5.0, "shift": 1.0 }),
     )]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Let param smoothing converge
     for _ in 0..500 {
@@ -553,7 +555,8 @@ fn from_graph_cable_routing_sine_to_signal() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Collect samples from the $signal module — it should reproduce the sine output
     let sig_module = patch.sampleables.get("sig").unwrap();
@@ -605,7 +608,8 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Also build a direct (unfiltered) patch for comparison
     let direct_graph = make_graph(vec![
@@ -620,7 +624,9 @@ fn from_graph_multi_module_osc_to_filter_to_mix() {
             }),
         ),
     ]);
-    let direct_patch = Patch::from_graph(&direct_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let direct_patch =
+        Patch::from_graph(&direct_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+            .expect("from_graph failed");
 
     // Let filter settle
     for _ in 0..500 {
@@ -665,7 +671,8 @@ fn from_graph_process_frame_advances_all_modules() {
         ("fast", "$sine", json!({ "freq": 3.0 })),
         ("slow", "$sine", json!({ "freq": -3.0 })),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     for _ in 0..500 {
         process_frame(&patch);
@@ -720,7 +727,6 @@ fn step_rejects_empty_steps() {
         }
     }
 }
-
 
 // ─── Curve ───────────────────────────────────────────────────────────────────
 
@@ -824,7 +830,8 @@ fn buffer_and_delay_read_pipeline() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // 0.001s delay at 48 kHz = 48 frames.
     // Process 500 frames so param smoothing converges and the buffer is well-filled.
@@ -895,7 +902,8 @@ fn buffer_feedback_cycle_propagates_through_delay_read() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     for _ in 0..20_000 {
         process_frame(&patch);
@@ -940,7 +948,8 @@ fn delay_read_output_lags_behind_buffer_passthrough() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Let oscillator and buffer settle for 500 frames
     for _ in 0..500 {
@@ -1027,7 +1036,8 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
         ),
     ]);
 
-    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let old_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Run 200 frames to reach steady state
     // With gain=0.5 and shift=1.0:
@@ -1060,7 +1070,8 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 
     // Build a new patch with identical graph and transfer state
-    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("from_graph failed");
+    let new_patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
 
     // Transfer state from old modules to new modules
     for (id, new_module) in &new_patch.sampleables {
@@ -1247,11 +1258,10 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     // (is_multi_source=true, per_source=2, a freshly baked multi-source
     // cached_haps), but transfer_state_from std::mem::swaps the OLD SeqState
     // (voices[].cached_hap holding a hap_index computed against the OLD
-    // single-source pattern) into the new module. on_patch_update clears
-    // current_cycle + module_cache but NOT voices[].cached_hap.
+    // single-source pattern) into the new module.
     //
-    // The held voice still satisfies cached.contains(playhead) off its scalar
-    // whole_begin/whole_end, so it is not released and no fresh onset fires
+    // The held voice still satisfies cached.contains(raw) off its scalar
+    // raw_begin/raw_end window, so it is not released and no fresh onset fires
     // mid-step. The OLD pattern packed 7 sub-haps into the left half, so the
     // voice latched on the trailing `5` carries a hap_index (>= 2) that is OUT
     // OF RANGE in the new 2-hap multi-source storage — exactly the stale-index
@@ -1282,8 +1292,8 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
             json!({ "pattern": mini_payload("[0 1 2 3 4 5 6] 5") }),
         ),
     ]);
-    let old_patch =
-        Patch::from_graph(&graph_a, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("A from_graph failed");
+    let old_patch = Patch::from_graph(&graph_a, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("A from_graph failed");
 
     // One bar = 240 samples. The trailing `5` covers 0.5..1.0 (samples
     // 120..240). Advance ~180 samples so the playhead sits at ~0.75, latching
@@ -1324,8 +1334,8 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
             json!({ "pattern": sp_payload(&["0 5", "2 4"], "c(maj)", vec![("sub", "in")]) }),
         ),
     ]);
-    let new_patch =
-        Patch::from_graph(&graph_b, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("B from_graph failed");
+    let new_patch = Patch::from_graph(&graph_b, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("B from_graph failed");
 
     // Replicate apply_patch_update's reuse path: transfer state, reconnect,
     // on_patch_update. NO ClearPatch / transport reset.
@@ -1419,8 +1429,8 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
             json!({ "pattern": mini_payload("[0 1 2 3 4 5 6] 5") }),
         ),
     ]);
-    let ctrl_patch =
-        Patch::from_graph(&graph_c, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("C from_graph failed");
+    let ctrl_patch = Patch::from_graph(&graph_c, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("C from_graph failed");
     for (id, new_module) in &ctrl_patch.sampleables {
         if let Some(old_module) = old_patch.sampleables.get(id) {
             new_module.transfer_state_from(old_module.as_ref());
@@ -1483,4 +1493,257 @@ fn track_clamps_playhead_above_one() {
 fn track_clamps_playhead_below_zero() {
     let v = track_value_at(-0.1, json!([[1.0, 0.0], [5.0, 1.0]]));
     assert!(approx_eq(v, 1.0, 0.01), "expected 1.0 (clamped), got {v}");
+}
+
+// ─── $cycle ribbon loop window ────────────────────────────────────────────────
+
+/// Build a `$cycle` patch clocked at 48000 BPM 4/4 (240 samples per cycle),
+/// optionally with a `ribbon: [offset, length]` window.
+fn make_cycle_patch(pattern: Value, ribbon: Option<[u64; 2]>) -> Patch {
+    let mut params = serde_json::Map::new();
+    params.insert("pattern".to_string(), pattern);
+    if let Some([offset, length]) = ribbon {
+        params.insert("ribbon".to_string(), json!([offset, length]));
+    }
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+        ),
+        ("seq", "$cycle", Value::Object(params)),
+    ]);
+    Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed")
+}
+
+/// Sample `port` at the midpoint of cycles `0..num_cycles` (240 samples/cycle).
+fn cycle_midpoint_values(patch: &Patch, port: &str, num_cycles: usize) -> Vec<f32> {
+    const SPC: usize = 240;
+    let targets: Vec<usize> = (0..num_cycles).map(|c| c * SPC + SPC / 2).collect();
+    let total = *targets.last().unwrap();
+    let mut out = Vec::with_capacity(num_cycles);
+    let mut ti = 0;
+    for s in 1..=total {
+        process_frame(patch);
+        if ti < targets.len() && targets[ti] == s {
+            out.push(
+                patch
+                    .sampleables
+                    .get("seq")
+                    .unwrap()
+                    .get_value_at(port, 0, 0),
+            );
+            ti += 1;
+        }
+    }
+    out
+}
+
+/// Per-sample trace of `port` over `total_samples` frames.
+fn cycle_port_trace(patch: &Patch, port: &str, total_samples: usize) -> Vec<f32> {
+    let mut out = Vec::with_capacity(total_samples);
+    for _ in 0..total_samples {
+        process_frame(patch);
+        out.push(
+            patch
+                .sampleables
+                .get("seq")
+                .unwrap()
+                .get_value_at(port, 0, 0),
+        );
+    }
+    out
+}
+
+#[test]
+fn seq_ribbon_default_window_plays_pattern_through() {
+    // Default ribbon [0, 1024]: the slowcat `<c4 e4 g4 b4>` advances every
+    // cycle for the first 4 cycles (far inside the window), so all four
+    // differ — identical to a direct pattern query, no early looping.
+    let patch = make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), None);
+    let cv = cycle_midpoint_values(&patch, "cv", 4);
+    for i in 0..4 {
+        for j in (i + 1)..4 {
+            assert!(
+                (cv[i] - cv[j]).abs() > 0.05,
+                "default window should play 4 distinct cycles; cv[{i}]={} cv[{j}]={}",
+                cv[i],
+                cv[j]
+            );
+        }
+    }
+}
+
+#[test]
+fn seq_ribbon_loops_window() {
+    // ribbon [0, 2] bakes only cycles 0,1 of `<c4 e4 g4 b4>`, then loops them:
+    // clock cycles 2,3 replay baked cycles 0,1 instead of advancing to g4,b4.
+    let looped = cycle_midpoint_values(
+        &make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), Some([0, 2])),
+        "cv",
+        4,
+    );
+    assert!(
+        (looped[0] - looped[1]).abs() > 0.05,
+        "the window's two cycles differ: {} vs {}",
+        looped[0],
+        looped[1]
+    );
+    assert!(
+        approx_eq(looped[2], looped[0], 0.01),
+        "cycle 2 loops back to cycle 0: {} vs {}",
+        looped[2],
+        looped[0]
+    );
+    assert!(
+        approx_eq(looped[3], looped[1], 0.01),
+        "cycle 3 loops back to cycle 1: {} vs {}",
+        looped[3],
+        looped[1]
+    );
+
+    // Without the ribbon the same clock cycle 2 advances to a different note,
+    // proving the ribbon — not the pattern — drives the loop.
+    let unlooped = cycle_midpoint_values(
+        &make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), None),
+        "cv",
+        4,
+    );
+    assert!(
+        (looped[2] - unlooped[2]).abs() > 0.05,
+        "ribbon changes cycle-2 output: looped {} vs default {}",
+        looped[2],
+        unlooped[2]
+    );
+}
+
+#[test]
+fn seq_ribbon_offset_window_plays_and_loops() {
+    // ribbon [2, 2] bakes cycles 2,3 and loops them: clock cycle 0 plays the
+    // pattern's cycle 2, clock cycle 1 plays cycle 3, then it repeats.
+    let reference = cycle_midpoint_values(
+        &make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), None),
+        "cv",
+        4,
+    );
+    let offset = cycle_midpoint_values(
+        &make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), Some([2, 2])),
+        "cv",
+        4,
+    );
+    assert!(
+        approx_eq(offset[0], reference[2], 0.01),
+        "offset cycle 0 == pattern cycle 2: {} vs {}",
+        offset[0],
+        reference[2]
+    );
+    assert!(
+        approx_eq(offset[1], reference[3], 0.01),
+        "offset cycle 1 == pattern cycle 3: {} vs {}",
+        offset[1],
+        reference[3]
+    );
+    assert!(
+        approx_eq(offset[2], offset[0], 0.01),
+        "offset window loops: cycle 2 == cycle 0"
+    );
+    assert!(
+        approx_eq(offset[3], offset[1], 0.01),
+        "offset window loops: cycle 3 == cycle 1"
+    );
+}
+
+#[test]
+fn seq_ribbon_wrap_note_plays_full_length_then_releases_once() {
+    // `c4/3` slows c4 over 3 cycles: onset at cycle 0, whole span [0, 3].
+    // ribbon [0, 2] bakes cycles 0,1 only, so the note straddles the loop seam
+    // at the start of clock cycle 2. It must keep sounding through cycle 2
+    // (its full 3-cycle length, past the wrap), then release exactly once at
+    // cycle 3 — never cut early, never stuck.
+    let gate = cycle_port_trace(
+        &make_cycle_patch(mini_payload("c4/3"), Some([0, 2])),
+        "gate",
+        4 * 240,
+    );
+    for (cyc, s) in [(0usize, 120usize), (1, 360), (2, 600)] {
+        assert!(
+            gate[s] > 2.5,
+            "gate should be HIGH mid-cycle {cyc} (sample {s}) — note plays past the wrap, got {}",
+            gate[s]
+        );
+    }
+    assert!(
+        gate[840] < 2.5,
+        "gate should be LOW mid-cycle 3 — the note released, got {}",
+        gate[840]
+    );
+
+    // The looped slot re-presents the same onset hap at the seam (clock cycle
+    // 2 maps back to baked cycle 0), but a note longer than the window must
+    // NOT re-trigger while it is still sounding: exactly one onset over the
+    // three cycles it plays.
+    let trig = cycle_port_trace(
+        &make_cycle_patch(mini_payload("c4/3"), Some([0, 2])),
+        "trig",
+        3 * 240,
+    );
+    let mut onsets = 0;
+    let mut prev_high = false;
+    for &v in &trig {
+        let high = v > 2.5;
+        if high && !prev_high {
+            onsets += 1;
+        }
+        prev_high = high;
+    }
+    assert_eq!(
+        onsets, 1,
+        "a note longer than the window fires exactly one onset while sounding (no seam re-trigger)"
+    );
+}
+
+#[test]
+fn seq_ribbon_rejects_invalid_bounds() {
+    let attempt = |ribbon: Value| {
+        let graph = make_graph(vec![
+            (
+                "ROOT_CLOCK",
+                "_clock",
+                json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+            ),
+            (
+                "seq",
+                "$cycle",
+                json!({ "pattern": mini_payload("c4 e4"), "ribbon": ribbon }),
+            ),
+        ]);
+        Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+    };
+
+    match attempt(json!([0, 0])) {
+        Err(msg) => assert!(
+            msg.contains("ribbon loop length must be greater than 0"),
+            "got: {msg}"
+        ),
+        Ok(_) => panic!("expected error for zero ribbon length"),
+    }
+    match attempt(json!([0, 9000])) {
+        Err(msg) => assert!(msg.contains("8192 cycles or fewer"), "got: {msg}"),
+        Ok(_) => panic!("expected error for over-cap ribbon length"),
+    }
+    match attempt(json!([2_000_000, 4])) {
+        Err(msg) => assert!(msg.contains("ribbon offset must be"), "got: {msg}"),
+        Ok(_) => panic!("expected error for over-cap ribbon offset"),
+    }
+    // Structural: `u64` rejects a negative offset and a fractional value at
+    // parse time, before the bounds hook runs.
+    assert!(
+        attempt(json!([-1, 4])).is_err(),
+        "negative offset must be rejected"
+    );
+    assert!(
+        attempt(json!([0.5, 4])).is_err(),
+        "fractional value must be rejected"
+    );
 }

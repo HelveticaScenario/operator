@@ -18,6 +18,7 @@ use arrayvec::ArrayVec;
 use crate::{
     MonoSignal,
     dsp::utils::{TempGate, TempGateState, min_gate_samples},
+    param_errors::ModuleParamErrors,
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
@@ -29,19 +30,27 @@ use super::seq_value::{SeqCycleStorage, SeqPatternParam, SeqValue};
 struct CachedHap {
     /// Index of this hap within the owning cycle's `haps` vector.
     hap_index: u32,
-    /// The cycle this hap belongs to.
+    /// The baked cycle this hap belongs to, in `[offset, offset+length)`.
     cached_cycle: i64,
-    /// Cached `whole_begin` for the release check.
+    /// `whole_begin` in the pattern's logical (cycle) frame. Kept for
+    /// `get_state` highlight geometry; NOT used for release, since the
+    /// logical frame wraps at the ribbon seam.
     whole_begin: f64,
-    /// Cached `whole_end` for the release check.
+    /// `whole_end` in the logical frame (see `whole_begin`).
     whole_end: f64,
+    /// Note onset in the monotonic clock (`raw`) frame.
+    raw_begin: f64,
+    /// Note end in the monotonic clock (`raw`) frame. Release keys off `raw`
+    /// so a note plays its full length across the ribbon wrap, where the
+    /// logical frame is non-monotonic.
+    raw_end: f64,
     /// Cached value for CV/rest detection.
     value: SeqValue,
 }
 
 impl CachedHap {
-    fn contains(&self, playhead: f64) -> bool {
-        playhead >= self.whole_begin && playhead < self.whole_end
+    fn contains(&self, raw: f64) -> bool {
+        raw >= self.raw_begin && raw < self.raw_end
     }
 
     fn get_cv(&self) -> Option<f64> {
@@ -87,9 +96,25 @@ fn default_channels() -> usize {
     4
 }
 
+/// Default ribbon loop length in cycles. Same memory/cost as the old
+/// param cache (cycles `0..1024` baked at parse time).
+const DEFAULT_RIBBON_LENGTH: u64 = 1024;
+
+/// Largest ribbon loop length. The whole window bakes synchronously on the
+/// main thread on every pattern/ribbon edit, so it is capped.
+const MAX_RIBBON_LENGTH: u64 = 8192;
+
+/// Largest ribbon offset. Generous, and keeps `offset + length` exact in
+/// `f64` (well under 2^53).
+const MAX_RIBBON_OFFSET: u64 = 1_000_000;
+
+fn default_ribbon() -> (u64, u64) {
+    (0, DEFAULT_RIBBON_LENGTH)
+}
+
 #[derive(Clone, Deserr, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
 #[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
+#[deserr(rename_all = camelCase, deny_unknown_fields, validate = seq_bake_ribbon -> ModuleParamErrors)]
 pub struct SeqParams {
     /// pattern string in mini-notation
     pattern: SeqPatternParam,
@@ -101,11 +126,52 @@ pub struct SeqParams {
     /// Number of polyphonic voices (1-16)
     #[deserr(default)]
     pub channels: Option<usize>,
+    /// loop window [offset, length] in cycles
+    #[serde(default = "default_ribbon")]
+    #[deserr(default = default_ribbon())]
+    ribbon: (u64, u64),
     /// The pattern string (used for serialization)
     #[serde(skip)]
     #[deserr(skip)]
     #[schemars(skip)]
     pub pattern_source: String,
+}
+
+/// Struct-level `deserr` validate hook. Runs after every field (and its
+/// default) is deserialized but before channel-count derivation, so both
+/// `pattern` and `ribbon` are present. Validates the ribbon bounds, then
+/// bakes the pattern's haps for the loop window `[offset, offset+length)`.
+fn seq_bake_ribbon(
+    mut params: SeqParams,
+    _location: deserr::ValuePointerRef,
+) -> Result<SeqParams, ModuleParamErrors> {
+    let (offset, length) = params.ribbon;
+    if length == 0 {
+        let mut err = ModuleParamErrors::default();
+        err.add(
+            "ribbon".to_string(),
+            "ribbon loop length must be greater than 0".to_string(),
+        );
+        return Err(err);
+    }
+    if length > MAX_RIBBON_LENGTH {
+        let mut err = ModuleParamErrors::default();
+        err.add(
+            "ribbon".to_string(),
+            format!("ribbon loop length must be {MAX_RIBBON_LENGTH} cycles or fewer"),
+        );
+        return Err(err);
+    }
+    if offset > MAX_RIBBON_OFFSET {
+        let mut err = ModuleParamErrors::default();
+        err.add(
+            "ribbon".to_string(),
+            format!("ribbon offset must be {MAX_RIBBON_OFFSET} cycles or fewer"),
+        );
+        return Err(err);
+    }
+    params.pattern.bake(offset, length);
+    Ok(params)
 }
 
 /// Channel count derivation for Seq.
@@ -280,7 +346,6 @@ struct SeqOutputs {
     channels_derive = seq_derive_channel_count,
     args(pattern),
     stateful,
-    patch_update,
 )]
 pub struct Seq {
     outputs: SeqOutputs,
@@ -288,34 +353,18 @@ pub struct Seq {
     state: SeqState,
 }
 
-/// Number of cycles pre-computed at parse time on the main thread.
-/// Cycles beyond this fall through to module_cache on the audio thread.
-use super::cache::PARAM_CACHE_CYCLES;
-
 /// State for the Seq module.
 struct SeqState {
     /// Per-voice state array
     voices: [VoiceState; PORT_MAX_CHANNELS],
     /// Round-robin voice index for allocation
     next_voice: usize,
-    /// Current cycle number (integer part of playhead)
-    current_cycle: Option<i64>,
-    /// Module-level cache for cycles >= PARAM_CACHE_CYCLES. Pre-allocated to
-    /// MAX_MODULE_CYCLES slots at patch update time.
-    module_cache: Vec<SeqCycleStorage>,
-    /// Parallel `populated[i] == true` iff `module_cache[i]` was filled for
-    /// cycle `PARAM_CACHE_CYCLES + i`.
-    module_cache_populated: Vec<bool>,
     /// Last CV voltage per channel — holds through rest periods and state transfers
     last_cv: [f32; PORT_MAX_CHANNELS],
     /// Scratch buffer for voice release — reused each frame to avoid heap alloc
     voices_to_release: ArrayVec<usize, PORT_MAX_CHANNELS>,
     /// Scratch buffer for onset events awaiting voice allocation.
     events_to_process: ArrayVec<PendingEvent, PORT_MAX_CHANNELS>,
-    /// Bumpalo arena reused across `ensure_cycle_cached` calls. Reset before
-    /// each miss-path query so the pattern_system combinator chain allocates
-    /// intermediates from a single chunk.
-    query_arena: bumpalo::Bump,
 }
 
 impl Default for SeqState {
@@ -323,94 +372,53 @@ impl Default for SeqState {
         Self {
             voices: std::array::from_fn(|_| VoiceState::default()),
             next_voice: 0,
-            current_cycle: None,
-            module_cache: Vec::new(),
-            module_cache_populated: Vec::new(),
             last_cv: [0.0; PORT_MAX_CHANNELS],
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
-            query_arena: bumpalo::Bump::new(),
         }
     }
 }
 
 impl Seq {
-    /// Invalidate the cycle cache. Keeps allocated Vec capacities so the
-    /// audio thread can re-fill without reallocation.
-    fn invalidate_cache(&mut self) {
-        self.state.current_cycle = None;
-        super::cache::invalidate_module_cache(
-            &mut self.state.module_cache,
-            &mut self.state.module_cache_populated,
-        );
-    }
-
-    /// Resize the module_cache to MAX_MODULE_CYCLES with each slot pre-sized
-    /// to the param's capacity hints. Called on patch update.
-    fn rebuild_module_cache(&mut self) {
-        super::cache::rebuild_module_cache(
-            &mut self.state.module_cache,
-            &mut self.state.module_cache_populated,
-            self.params.pattern.max_haps_per_cycle(),
-            self.params.pattern.max_spans_per_cycle(),
-        );
-    }
-
-    /// Ensure that the given cycle's haps are available. For cycles
-    /// `0..PARAM_CACHE_CYCLES` the param cache already has them. For cycles
-    /// in the audio-thread cache range, fill the slot in place using the
-    /// reusable bumpalo arena.
-    fn ensure_cycle_cached(&mut self, cycle: i64) {
-        if cycle < PARAM_CACHE_CYCLES as i64 {
-            return;
-        }
-        let module_idx = (cycle - PARAM_CACHE_CYCLES as i64) as usize;
-        if module_idx >= self.state.module_cache.len() {
-            return; // Beyond cache horizon
-        }
-        if self.state.module_cache_populated[module_idx] {
-            return;
-        }
-        let Some(pattern) = self.params.pattern.pattern() else {
-            return;
-        };
-        let slot = &mut self.state.module_cache[module_idx];
-        super::seq_value::populate_cycle_storage(
-            pattern,
-            cycle,
-            &mut self.state.query_arena,
-            slot,
-        );
-        self.state.module_cache_populated[module_idx] = true;
-    }
-
-    /// Look up the storage for `cycle` from param cache or module cache.
+    /// Look up the storage for `cycle` in the baked ribbon window.
     fn get_cycle_storage(&self, cycle: i64) -> Option<&SeqCycleStorage> {
         super::cache::get_cycle_storage(
             cycle,
+            self.params.ribbon.0,
             self.params.pattern.cached_haps(),
-            &self.state.module_cache,
-            &self.state.module_cache_populated,
         )
     }
 
     fn update(&mut self, sample_rate: f32) {
-        let playhead = self.params.playhead.value_or_zero() as f64;
+        // `raw` is the monotonic clock playhead (cycles, fractional). The
+        // ribbon folds it into the baked window with an unsigned modulo:
+        // clock cycle 0 maps to baked cycle `offset`, and the window loops
+        // forever, phase-locked to the clock.
+        let raw = self.params.playhead.value_or_zero() as f64;
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
-        let current_cycle = playhead.floor() as i64;
 
-        // On a new cycle, populate the module cache slot if needed.
-        if self.state.current_cycle != Some(current_cycle) {
-            self.ensure_cycle_cached(current_cycle);
-            self.state.current_cycle = Some(current_cycle);
-        }
+        let (offset, length) = self.params.ribbon; // length > 0 (validated)
+        // Fold the clock into the baked window. Clamp once for the window math
+        // so a (deliberately wired) negative playhead pins to the cycle start
+        // rather than producing a spurious mid-cycle phase. Release below keys
+        // off the unclamped monotonic `raw`, tracking each note's true span.
+        let raw_clamped = raw.max(0.0);
+        let raw_cycle = raw_clamped.floor() as u64;
+        let slot = raw_cycle % length; // 0..length
+        let current_cycle = (offset + slot) as i64; // baked cycle ∈ [offset, offset+length)
+        // Playhead in the baked cycle's logical frame — the same absolute
+        // frame the cycle's haps live in, so onset / `already_assigned`
+        // checks work exactly as before.
+        let logical = current_cycle as f64 + (raw_clamped - raw_clamped.floor());
 
-        // Release voices whose haps have ended.
+        // Release voices whose notes have ended. A note's life is tracked in
+        // the monotonic `raw` frame (two-sided, so a backward scrub also
+        // frees), because `logical` wraps at the ribbon seam.
         self.state.voices_to_release.clear();
         for i in 0..num_channels {
             if let Some(cached) = self.state.voices[i].cached_hap {
-                if !cached.contains(playhead) {
+                if !cached.contains(raw) {
                     self.state.voices_to_release.push(i);
                 }
             }
@@ -442,24 +450,13 @@ impl Seq {
         let SeqState {
             voices,
             events_to_process,
-            module_cache,
-            module_cache_populated,
             ..
         } = &mut self.state;
         events_to_process.clear();
-        let storage_opt: Option<&SeqCycleStorage> = if current_cycle < PARAM_CACHE_CYCLES as i64 {
-            self.params.pattern.cached_haps().get(current_cycle as usize)
-        } else {
-            let module_idx = (current_cycle - PARAM_CACHE_CYCLES as i64) as usize;
-            if module_idx < module_cache.len() && module_cache_populated[module_idx] {
-                Some(&module_cache[module_idx])
-            } else {
-                None
-            }
-        };
+        let storage_opt = self.params.pattern.cached_haps().get(slot as usize);
         if let Some(storage) = storage_opt {
             for (hap_index, hap) in storage.haps.iter().enumerate() {
-                if !hap.has_onset || playhead < hap.part_begin || playhead >= hap.part_end {
+                if !hap.has_onset || logical < hap.part_begin || logical >= hap.part_end {
                     continue;
                 }
                 if hap.value.is_rest() {
@@ -497,18 +494,23 @@ impl Seq {
                 let idx = (state.next_voice + i) % num_channels;
                 if !state.voices[idx].active {
                     state.next_voice = (idx + 1) % num_channels;
-                    state.voices[idx].last_assigned = playhead;
+                    state.voices[idx].last_assigned = raw;
                     found = Some(idx);
                     break;
                 }
             }
             let Some(voice_idx) = found else { continue };
             let voice = &mut state.voices[voice_idx];
+            // Map the note's logical span onto the current absolute lap so
+            // release keys off the monotonic `raw` clock and the note plays
+            // its full length even across the ribbon wrap.
             voice.cached_hap = Some(CachedHap {
                 hap_index: event.hap_index,
                 cached_cycle: current_cycle,
                 whole_begin: event.whole_begin,
                 whole_end: event.whole_end,
+                raw_begin: raw - (logical - event.whole_begin),
+                raw_end: raw + (event.whole_end - logical),
                 value: event.value,
             });
             voice.active = true;
@@ -590,8 +592,7 @@ impl crate::types::StatefulModule for Seq {
         let num_sources = per_source.len().max(1);
 
         // Per-pattern active spans from all active voices.
-        let mut per_pattern_spans: Vec<Vec<(usize, usize)>> =
-            vec![Vec::new(); num_sources];
+        let mut per_pattern_spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_sources];
         let mut any_non_rest = false;
 
         for voice in self.state.voices.iter().take(num_channels) {
@@ -608,8 +609,7 @@ impl crate::types::StatefulModule for Seq {
                     for span in &storage.span_arena[start..end] {
                         let idx = span.pattern_idx as usize;
                         if idx < num_sources {
-                            per_pattern_spans[idx]
-                                .push((span.start as usize, span.end as usize));
+                            per_pattern_spans[idx].push((span.start as usize, span.end as usize));
                         }
                     }
                 }
@@ -631,7 +631,10 @@ impl crate::types::StatefulModule for Seq {
             // pattern_idx > 0 to those.
             let is_multi = self.params.pattern.is_multi_source();
             let mut param_spans = serde_json::Map::new();
-            if !is_multi && num_sources == 1 && let Some(meta) = per_source.first() {
+            if !is_multi
+                && num_sources == 1
+                && let Some(meta) = per_source.first()
+            {
                 param_spans.insert(
                     "pattern".to_string(),
                     serde_json::json!({
@@ -661,13 +664,6 @@ impl crate::types::StatefulModule for Seq {
                 "num_channels": num_channels,
             }))
         }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Seq {
-    fn on_patch_update(&mut self) {
-        self.rebuild_module_cache();
-        self.invalidate_cache();
     }
 }
 

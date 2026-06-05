@@ -7811,6 +7811,28 @@
               "type": "null"
             }
           ]
+        },
+        "ribbon": {
+          "description": "loop window [offset, length] in cycles",
+          "type": "array",
+          "default": [
+            0,
+            1024
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          ]
         }
       },
       "required": [
