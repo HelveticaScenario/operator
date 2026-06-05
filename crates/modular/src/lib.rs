@@ -1547,6 +1547,11 @@ impl Synthesizer {
     self._output_stream = setup_result.output_stream;
     self._input_stream = setup_result.input_stream;
     self.state = setup_result.state;
+    // The fresh AudioState starts with a zero profiling refcount, so reset
+    // the process-global profiling flag to match. Otherwise switching audio
+    // devices while profiling is enabled leaves the global stuck on with no
+    // refcount able to clear it; the UI panel re-enables on its next open.
+    modular_core::profiling::set_enabled(false);
     self.sample_rate = setup_result.sample_rate;
     self.buffer_size = buffer_size;
     self.channels = setup_result.channels;

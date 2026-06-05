@@ -222,7 +222,10 @@ pub fn push_frame(id: &str, mode: ProcessingMode) -> bool {
         let mut prof = p.borrow_mut();
         // Bounds check: pushes past `STACK_CAPACITY` are dropped so the
         // inline stack never overflows. Caller treats `false` as "frame
-        // not profiled" and skips its matching `pop_frame`.
+        // not profiled" and skips its matching `pop_frame`. A dropped
+        // frame's subtree time then folds into the nearest profiled
+        // ancestor's `self_ns` (the parent boundary is not frozen here),
+        // a measurement bias only reachable past 32 levels of nesting.
         if prof.depth >= STACK_CAPACITY {
             return false;
         }

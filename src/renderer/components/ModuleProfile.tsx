@@ -104,20 +104,16 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                 .catch(console.error);
         };
 
-        // Sequence enable → set-rate → poll so a stale sample-rate update
-        // can't land after the disable on a rapid open/close. The enable
-        // refcounts on the Rust side (AudioState), so concurrent consumers
-        // remain safe even if this effect re-runs.
+        // Enable, then poll. Keyed on `isOpen` only so a sample-rate change
+        // (a display-only control, handled in the effect below) doesn't tear
+        // down and re-enable profiling. The enable refcounts on the Rust side
+        // (AudioState), so concurrent consumers remain safe if this re-runs.
         void (async () => {
             try {
                 await electronAPI.synthesizer.setModuleProfilingEnabled(true);
                 // The cleanup always issues the balancing disable, so just
                 // bail here. Disabling again would double-decrement the
                 // refcounted enable on the Rust side.
-                if (cancelled) return;
-                await electronAPI.synthesizer.setModuleProfilingSampleRate(
-                    sampleRate,
-                );
                 if (cancelled) return;
                 poll();
                 intervalId = setInterval(poll, 1000);
@@ -134,6 +130,16 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                 .catch(console.error);
             setRows(null);
         };
+    }, [isOpen]);
+
+    // Push sample-rate changes without disturbing the enable refcount or the
+    // polling loop — the dropdown is display-only, so it must not toggle
+    // profiling off/on (which would blip the global and flash "Loading…").
+    useEffect(() => {
+        if (!isOpen) return;
+        electronAPI.synthesizer
+            .setModuleProfilingSampleRate(sampleRate)
+            .catch(console.error);
     }, [isOpen, sampleRate]);
 
     useEffect(() => {

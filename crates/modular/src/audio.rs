@@ -1676,6 +1676,17 @@ impl AudioProcessor {
     }
   }
 
+  /// Route an evicted profiler map to the garbage queue for drop on the
+  /// main thread. On a saturated queue the map drops here on the audio
+  /// thread instead (memory-safe but undesirable), so log its size to make
+  /// that diagnosable, mirroring the PatchUpdate eviction path.
+  fn drop_profile_map(&mut self, map: HashMap<String, ModuleProfileAccum>) {
+    let len = map.len();
+    if self.garbage_tx.push(GarbageItem::ProfileMap(map)).is_err() {
+      println!("Profiler map ({len} entries) dropped on audio thread: garbage queue full");
+    }
+  }
+
   /// Retry a deferred profiler shared-map swap. A swap is deferred when
   /// [`modular_core::profiling::try_swap_shared`] loses the `try_lock` race
   /// with the main-thread drain; retrying here keeps the audio thread from
@@ -1685,9 +1696,7 @@ impl AudioProcessor {
       return;
     };
     match modular_core::profiling::try_swap_shared(&self.module_profile_collection, seed) {
-      Ok(old) => {
-        let _ = self.garbage_tx.push(GarbageItem::ProfileMap(old));
-      }
+      Ok(old) => self.drop_profile_map(old),
       Err(seed) => {
         self.pending_profile_shared_seed = Some(seed);
       }
@@ -1998,7 +2007,7 @@ impl AudioProcessor {
     // comparable to post-swap ones.
     {
       let old_records = modular_core::profiling::swap_records(profile_records_seed);
-      let _ = self.garbage_tx.push(GarbageItem::ProfileMap(old_records));
+      self.drop_profile_map(old_records);
       // Non-blocking shared-map swap. On `try_lock` contention with the
       // main-thread drain, stash the seed and retry on a later callback
       // (see `retry_pending_profile_seed`) so the audio thread never blocks.
@@ -2006,12 +2015,10 @@ impl AudioProcessor {
         &self.module_profile_collection,
         profile_shared_seed,
       ) {
-        Ok(old_shared) => {
-          let _ = self.garbage_tx.push(GarbageItem::ProfileMap(old_shared));
-        }
+        Ok(old_shared) => self.drop_profile_map(old_shared),
         Err(seed) => {
           if let Some(superseded) = self.pending_profile_shared_seed.replace(seed) {
-            let _ = self.garbage_tx.push(GarbageItem::ProfileMap(superseded));
+            self.drop_profile_map(superseded);
           }
         }
       }
