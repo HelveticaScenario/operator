@@ -785,7 +785,13 @@ fn impl_module_macro_attr(
                 if self.computing.get() {
                     return;
                 }
+                let _prof_active = crate::profiling::push_frame(&self.id, self.mode);
                 self.computing.set(true);
+                // Keep adjacent to the loop below — `pop_frame` reports
+                // `index - start_index` as samples processed, so any code
+                // added between this read and the loop would corrupt the
+                // sample count without a compiler diagnostic.
+                let start_index = self.index.get();
                 while self.index.get() < target {
                     let i = self.index.get();
                     unsafe {
@@ -803,6 +809,9 @@ fn impl_module_macro_attr(
                     self.index.set(i + 1);
                 }
                 self.computing.set(false);
+                if _prof_active {
+                    crate::profiling::pop_frame((target - start_index) as u32);
+                }
             }
 
             fn ensure_processed(&self) {

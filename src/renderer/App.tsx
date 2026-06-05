@@ -6,6 +6,7 @@ import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
 import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
+import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
 import type { MigrationModalSummary } from './components/MigrationDiffModal';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
@@ -140,6 +141,7 @@ function App() {
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+    const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
     const [migrationState, setMigrationState] = useState<{
         bufferId: string;
         original: string;
@@ -835,6 +837,7 @@ function App() {
             getScopeData: () => electronAPI.synthesizer.getScopes(),
             isClockRunning: () => isClockRunningRef.current,
             openEngineHealth: () => setIsEngineHealthOpen(true),
+            openModuleProfile: () => setIsModuleProfileOpen(true),
             setEditorValue: (code: string) => editorRef.current?.setValue(code),
         };
         return () => {
@@ -925,6 +928,11 @@ function App() {
                 setIsEngineHealthOpen(true);
             },
         );
+        const cleanupOpenModuleProfile = electronAPI.onMenuOpenModuleProfile(
+            () => {
+                setIsModuleProfileOpen(true);
+            },
+        );
         const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
             const ed = editorRef.current;
             if (!ed || !activeBufferId) {
@@ -970,6 +978,7 @@ function App() {
             cleanupToggleRecording();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
+            cleanupOpenModuleProfile();
             cleanupMigrateBuffer();
         };
     }, [
@@ -1046,6 +1055,11 @@ function App() {
             <EngineHealth
                 isOpen={isEngineHealthOpen}
                 onClose={() => setIsEngineHealthOpen(false)}
+            />
+
+            <ModuleProfile
+                isOpen={isModuleProfileOpen}
+                onClose={() => setIsModuleProfileOpen(false)}
             />
 
             <AudioPanicDialog />

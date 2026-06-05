@@ -76,6 +76,15 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_IS_RECORDING]
         >;
         getHealth: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_HEALTH]>;
+        getModuleProfile: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_MODULE_PROFILE]
+        >;
+        setModuleProfilingEnabled: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_ENABLED]
+        >;
+        setModuleProfilingSampleRate: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE]
+        >;
         stop: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_STOP]>;
         isStopped: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_IS_STOPPED]>;
         setModuleParam: Promisify<
@@ -188,6 +197,7 @@ export interface ElectronAPI {
     onMenuToggleRecording: (callback: () => void) => () => void;
     onMenuOpenSettings: (callback: () => void) => () => void;
     onMenuOpenEngineHealth: (callback: () => void) => () => void;
+    onMenuOpenModuleProfile: (callback: () => void) => () => void;
     onMenuMigrateBuffer: (callback: () => void) => () => void;
     /**
      * Trigger a menu action programmatically (e.g., from Monaco keybindings).
@@ -288,6 +298,15 @@ const electronAPI: ElectronAPI = {
         getChannels: (...args) => invokeIPC('SYNTH_GET_CHANNELS', ...args),
 
         getHealth: (...args) => invokeIPC('SYNTH_GET_HEALTH', ...args),
+
+        getModuleProfile: (...args) =>
+            invokeIPC('SYNTH_GET_MODULE_PROFILE', ...args),
+
+        setModuleProfilingEnabled: (...args) =>
+            invokeIPC('SYNTH_SET_MODULE_PROFILING_ENABLED', ...args),
+
+        setModuleProfilingSampleRate: (...args) =>
+            invokeIPC('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', ...args),
 
         getModuleStates: (...args) =>
             invokeIPC('SYNTH_GET_MODULE_STATES', ...args),
@@ -424,6 +443,9 @@ const electronAPI: ElectronAPI = {
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
+    onMenuOpenModuleProfile: menuEventHandler(
+        MENU_CHANNELS.OPEN_MODULE_PROFILE,
+    ),
     onMenuMigrateBuffer: menuEventHandler(MENU_CHANNELS.MIGRATE_BUFFER),
     // Programmatically trigger a menu action (for Monaco keybindings on Windows)
     triggerMenuAction: (action: keyof typeof MENU_CHANNELS) => {

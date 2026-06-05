@@ -31,21 +31,21 @@ pub enum OverdriveMode {
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct OverdriveParams {
+pub struct OverdriveParams {
     /// input signal to overdrive (bipolar, typically -5 to 5)
-    input: PolySignal,
+    pub input: PolySignal,
     /// drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)
     #[signal(default = 0.0, range = (0.0, 5.0))]
-    drive: PolySignal,
+    pub drive: PolySignal,
     /// tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into
     /// the shaper at positive values and de-emphasises them after, and vice versa.
     #[signal(default = 0.0, range = (-5.0, 5.0))]
     #[deserr(default)]
-    tone: Option<PolySignal>,
+    pub tone: Option<PolySignal>,
     /// saturation mode (defaults to soft)
     #[serde(default)]
     #[deserr(default)]
-    mode: Option<OverdriveMode>,
+    pub mode: Option<OverdriveMode>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -210,6 +210,29 @@ fn process_one(
 }
 
 message_handlers!(impl Overdrive {});
+
+#[doc(hidden)]
+pub fn __bench_make_overdrive(params: OverdriveParams) -> Overdrive {
+    use crate::types::OutputStruct;
+    let mut outputs = OverdriveOutputs::default();
+    outputs.set_all_channels(1);
+    let mut od = Overdrive {
+        params,
+        outputs,
+        _channel_count: 1,
+        _block_index: Default::default(),
+        state: OverdriveState::default(),
+    };
+    od.init(48000.0);
+    od
+}
+
+impl Overdrive {
+    #[doc(hidden)]
+    pub fn __bench_update(&mut self, sample_rate: f32) {
+        self.update(sample_rate);
+    }
+}
 
 #[cfg(test)]
 mod tests {

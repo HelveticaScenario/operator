@@ -11,6 +11,7 @@ use modular_core::PatchGraph;
 use modular_core::dsp::get_constructors;
 use modular_core::dsp::schema;
 use modular_core::dsp::utils::SchmittTrigger;
+use modular_core::profiling::{ModuleProfileAccum, ModuleProfileCollection};
 
 use modular_core::types::ClockMessages;
 use modular_core::types::Message;
@@ -1024,6 +1025,14 @@ pub struct AudioState {
   /// Plumbed through `make_stream` so the audio thread can be flipped to
   /// a real block size without touching every constructor call site.
   pub block_size: usize,
+  /// Per-module profile snapshot. Audio thread writes via try_lock at
+  /// callback end (see `modular_core::profiling::flush_into`); main thread
+  /// drains via `get_module_profile`.
+  module_profile_collection: ModuleProfileCollection,
+  /// Refcount of enable requests. The underlying profiling global is on
+  /// iff this is > 0. Lets multiple consumers (UI panel, future telemetry
+  /// hooks) coexist without one clobbering another's enable state.
+  module_profiling_enable_count: Arc<AtomicU32>,
 }
 
 #[derive(Default)]
@@ -1066,6 +1075,8 @@ impl AudioState {
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
       block_size,
+      module_profile_collection: modular_core::profiling::new_collection(),
+      module_profiling_enable_count: Arc::new(AtomicU32::new(0)),
     }
   }
 
@@ -1146,7 +1157,47 @@ impl AudioState {
       midi_manager: self.midi_manager.clone(),
       transport_meter: self.transport_meter.clone(),
       audio_thread_panicked: self.audio_thread_panicked.clone(),
+      module_profile_collection: self.module_profile_collection.clone(),
     }
+  }
+
+  /// Enable / disable per-module profiling. Refcounted: each `true` must
+  /// be balanced by a `false`. The underlying profiling global is on iff
+  /// the refcount is > 0, so multiple consumers (UI panel + future
+  /// telemetry, etc.) can coexist without one clobbering another's state.
+  pub fn set_module_profiling_enabled(&self, on: bool) {
+    if on {
+      let prev = self
+        .module_profiling_enable_count
+        .fetch_add(1, Ordering::Relaxed);
+      if prev == 0 {
+        modular_core::profiling::set_enabled(true);
+      }
+    } else {
+      let prev = self
+        .module_profiling_enable_count
+        .fetch_sub(1, Ordering::Relaxed);
+      if prev == 1 {
+        modular_core::profiling::set_enabled(false);
+      } else if prev == 0 {
+        // Unbalanced disable — restore the counter and ignore so callers
+        // who forget a prior enable don't underflow the global.
+        self
+          .module_profiling_enable_count
+          .store(0, Ordering::Relaxed);
+      }
+    }
+  }
+
+  /// Profile 1-of-N audio callbacks. 1 = every callback.
+  pub fn set_module_profiling_sample_rate(&self, rate: u32) {
+    modular_core::profiling::set_sample_rate(rate);
+  }
+
+  /// Drain the accumulated per-module profile data. Returns one entry per
+  /// module that had activity since the last drain.
+  pub fn get_module_profile(&self) -> Vec<(String, ModuleProfileAccum)> {
+    modular_core::profiling::drain_collection(&self.module_profile_collection)
   }
 
   pub fn start_recording(&self, filename: Option<String>) -> Result<String> {
@@ -1427,6 +1478,14 @@ impl AudioState {
     // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread
     update.desired_ids = update.inserts.iter().map(|(id, _)| id.clone()).collect();
 
+    // Profiler seed maps for the audio thread's TLS records and shared
+    // map. One entry per inserted id, two maps because each `swap_*`
+    // consumes its operand.
+    update.profile_records_seed =
+      modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+    update.profile_shared_seed =
+      modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+
     // Run main-thread resource preparation (e.g. FFT-based mipmap generation for
     // wavetable oscillators). Called here because allocation and file-backed
     // data access must not happen on the audio thread.
@@ -1509,6 +1568,9 @@ pub struct AudioSharedState {
   /// Set by the audio callback after catching a panic. The callback then
   /// writes silence forever; the stream must be torn down to recover.
   pub audio_thread_panicked: Arc<AtomicBool>,
+  /// Per-module profiler snapshot — audio thread flushes here via try_lock
+  /// at the end of every callback.
+  pub module_profile_collection: ModuleProfileCollection,
 }
 
 fn chrono_simple_timestamp() -> String {
@@ -1573,6 +1635,13 @@ struct AudioProcessor {
   /// Ableton Link integration (audio-thread side). Owns the live
   /// `rusty_link` resources when active and exposes only RT-safe operations.
   link: crate::link::LinkState,
+  /// Shared per-module profile snapshot — flushed at end of each callback.
+  module_profile_collection: ModuleProfileCollection,
+  /// Profiler shared-map seed whose swap lost the `try_lock` race with the
+  /// main-thread drain. Retried on a later callback (see
+  /// `retry_pending_profile_seed`) so the audio thread never blocks on the
+  /// profiler mutex. Normally `None`.
+  pending_profile_shared_seed: Option<HashMap<String, ModuleProfileAccum>>,
 }
 
 impl AudioProcessor {
@@ -1602,6 +1671,35 @@ impl AudioProcessor {
       block_pos: block_size,
       input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
       link: crate::link::LinkState::new(),
+      module_profile_collection: shared.module_profile_collection,
+      pending_profile_shared_seed: None,
+    }
+  }
+
+  /// Route an evicted profiler map to the garbage queue for drop on the
+  /// main thread. On a saturated queue the map drops here on the audio
+  /// thread instead (memory-safe but undesirable), so log its size to make
+  /// that diagnosable, mirroring the PatchUpdate eviction path.
+  fn drop_profile_map(&mut self, map: HashMap<String, ModuleProfileAccum>) {
+    let len = map.len();
+    if self.garbage_tx.push(GarbageItem::ProfileMap(map)).is_err() {
+      println!("Profiler map ({len} entries) dropped on audio thread: garbage queue full");
+    }
+  }
+
+  /// Retry a deferred profiler shared-map swap. A swap is deferred when
+  /// [`modular_core::profiling::try_swap_shared`] loses the `try_lock` race
+  /// with the main-thread drain; retrying here keeps the audio thread from
+  /// ever blocking on the profiler mutex. No-op when nothing is pending.
+  fn retry_pending_profile_seed(&mut self) {
+    let Some(seed) = self.pending_profile_shared_seed.take() else {
+      return;
+    };
+    match modular_core::profiling::try_swap_shared(&self.module_profile_collection, seed) {
+      Ok(old) => self.drop_profile_map(old),
+      Err(seed) => {
+        self.pending_profile_shared_seed = Some(seed);
+      }
     }
   }
 
@@ -1785,6 +1883,8 @@ impl AudioProcessor {
       scope_xy_adds,
       scope_xy_removes,
       wav_data,
+      profile_records_seed,
+      profile_shared_seed,
       ..
     } = update;
 
@@ -1895,6 +1995,32 @@ impl AudioProcessor {
       // Add new scopes
       for (key, buffer) in scope_adds {
         scope_collection.insert(key, buffer);
+      }
+    }
+
+    // Profiler-map swap: `swap_records` updates the audio thread's TLS
+    // records, `try_swap_shared` updates the cross-thread snapshot. Both
+    // operands were allocated on the main thread; the evicted maps drop
+    // on the main thread via `GarbageItem::ProfileMap`. Counters
+    // accumulated since the last UI drain do not survive the swap — a
+    // patch swap is a graph discontinuity, and pre-swap stats are not
+    // comparable to post-swap ones.
+    {
+      let old_records = modular_core::profiling::swap_records(profile_records_seed);
+      self.drop_profile_map(old_records);
+      // Non-blocking shared-map swap. On `try_lock` contention with the
+      // main-thread drain, stash the seed and retry on a later callback
+      // (see `retry_pending_profile_seed`) so the audio thread never blocks.
+      match modular_core::profiling::try_swap_shared(
+        &self.module_profile_collection,
+        profile_shared_seed,
+      ) {
+        Ok(old_shared) => self.drop_profile_map(old_shared),
+        Err(seed) => {
+          if let Some(superseded) = self.pending_profile_shared_seed.replace(seed) {
+            self.drop_profile_map(superseded);
+          }
+        }
       }
     }
 
@@ -2085,6 +2211,10 @@ where
           profiling::scope!("audio_callback");
 
           let callback_start = Instant::now();
+
+          // Mirror the main-thread enable atomic into the audio thread's
+          // profiler TLS. Cheap relaxed load once per callback.
+          modular_core::profiling::refresh_enabled();
 
           // Process any pending commands from the main thread
           {
@@ -2368,6 +2498,13 @@ where
             profiling::scope!("collect_module_states");
             audio_processor.collect_module_states();
           }
+
+          // Retry any deferred profiler shared-map swap, then flush this
+          // callback's per-module profile data into the cross-thread
+          // snapshot. Both are no-ops when nothing is pending / profiling
+          // is disabled (early-out inside the calls).
+          audio_processor.retry_pending_profile_seed();
+          modular_core::profiling::flush_into(&audio_processor.module_profile_collection);
 
           let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
 
@@ -2882,6 +3019,7 @@ mod tests {
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      module_profile_collection: modular_core::profiling::new_collection(),
     };
 
     let processor = AudioProcessor::new(
@@ -3081,6 +3219,7 @@ mod tests {
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      module_profile_collection: modular_core::profiling::new_collection(),
     };
 
     let processor = AudioProcessor::new(

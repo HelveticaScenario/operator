@@ -33,7 +33,7 @@ pub struct MixParams {
     /// How inputs are combined.
     #[serde(default)]
     #[deserr(default)]
-    mode: MixMode,
+    pub mode: MixMode,
     /// Final output level (perceptual curve, exponent 3).
     #[signal(default = 5.0, range = (0.0, 10.0))]
     #[deserr(default)]
@@ -98,7 +98,27 @@ struct MixState {
 
 message_handlers!(impl Mix {});
 
+#[doc(hidden)]
+pub fn __bench_make_mix(params: MixParams) -> Mix {
+    use crate::types::OutputStruct;
+    let channels = mix_derive_channel_count(&params);
+    let mut outputs = MixOutputs::default();
+    outputs.set_all_channels(channels);
+    Mix {
+        params,
+        outputs,
+        _channel_count: channels,
+        _block_index: Default::default(),
+        state: MixState::default(),
+    }
+}
+
 impl Mix {
+    #[doc(hidden)]
+    pub fn __bench_update(&mut self, sample_rate: f32) {
+        self.update(sample_rate);
+    }
+
     fn update(&mut self, _sample_rate: f32) {
         let inputs = &self.params.inputs;
         let gain = &self.params.gain;

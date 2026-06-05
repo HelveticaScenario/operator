@@ -1067,6 +1067,16 @@ registerIPCHandler('SYNTH_IS_RECORDING', () => synth.isRecording());
 
 registerIPCHandler('SYNTH_GET_HEALTH', () => synth.getHealth());
 
+registerIPCHandler('SYNTH_GET_MODULE_PROFILE', () => synth.getModuleProfile());
+
+registerIPCHandler('SYNTH_SET_MODULE_PROFILING_ENABLED', (enabled: boolean) => {
+    synth.setModuleProfilingEnabled(enabled);
+});
+
+registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
+    synth.setModuleProfilingSampleRate(rate);
+});
+
 registerIPCHandler('SYNTH_STOP', () => {
     synth.stop();
 });
@@ -1831,6 +1841,16 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Engine Health...',
+                },
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.OPEN_MODULE_PROFILE,
+                            );
+                        }
+                    },
+                    label: 'Module Profile...',
                 },
             ],
         },

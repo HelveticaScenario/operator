@@ -23,6 +23,7 @@ pub mod params;
 pub mod patch;
 pub mod pattern_system;
 pub mod poly;
+pub mod profiling;
 pub mod types;
 
 // Re-export commonly used items
