@@ -46,6 +46,7 @@ const CASES = [
     { label: 'fast_2', source: '0*2' },
     { label: 'slow_2', source: '0/2' },
     { label: 'replicate_3', source: '0!3' },
+    { label: 'replicate_double', source: '0!!' },
     { label: 'euclidean_3_8', source: '0(3,8)' },
 ];
 

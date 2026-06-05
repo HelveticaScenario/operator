@@ -1015,5 +1015,296 @@
         0
       ]
     }
+  },
+  {
+    "label": "choice of space-separated sequences",
+    "input": "0 1 | 2 3",
+    "peggy_ast": {
+      "RandomChoice": [
+        [
+          {
+            "Sequence": [
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 0
+                    },
+                    "span": {
+                      "start": 0,
+                      "end": 1
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 1
+                    },
+                    "span": {
+                      "start": 2,
+                      "end": 3
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          },
+          {
+            "Sequence": [
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 2
+                    },
+                    "span": {
+                      "start": 6,
+                      "end": 7
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 3
+                    },
+                    "span": {
+                      "start": 8,
+                      "end": 9
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        0
+      ]
+    }
+  },
+  {
+    "label": "choice of fast subsequences",
+    "input": "[0 1] | [2 3]",
+    "peggy_ast": {
+      "RandomChoice": [
+        [
+          {
+            "FastCat": [
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 0
+                    },
+                    "span": {
+                      "start": 1,
+                      "end": 2
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 1
+                    },
+                    "span": {
+                      "start": 3,
+                      "end": 4
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          },
+          {
+            "FastCat": [
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 2
+                    },
+                    "span": {
+                      "start": 9,
+                      "end": 10
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": {
+                      "Number": 3
+                    },
+                    "span": {
+                      "start": 11,
+                      "end": 12
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        0
+      ]
+    }
+  },
+  {
+    "label": "choice of comma-chord subsequences",
+    "input": "[0,0,0] | [0,-7,0]",
+    "peggy_ast": {
+      "RandomChoice": [
+        [
+          {
+            "FastCat": [
+              [
+                {
+                  "Stack": [
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 0
+                        },
+                        "span": {
+                          "start": 1,
+                          "end": 2
+                        }
+                      }
+                    },
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 0
+                        },
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 0
+                        },
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    }
+                  ]
+                },
+                null
+              ]
+            ]
+          },
+          {
+            "FastCat": [
+              [
+                {
+                  "Stack": [
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 0
+                        },
+                        "span": {
+                          "start": 11,
+                          "end": 12
+                        }
+                      }
+                    },
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": -7
+                        },
+                        "span": {
+                          "start": 13,
+                          "end": 15
+                        }
+                      }
+                    },
+                    {
+                      "Pure": {
+                        "node": {
+                          "Number": 0
+                        },
+                        "span": {
+                          "start": 16,
+                          "end": 17
+                        }
+                      }
+                    }
+                  ]
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        0
+      ]
+    }
+  },
+  {
+    "label": "replicate !! accumulates to 3",
+    "input": "0!!",
+    "peggy_ast": {
+      "Replicate": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        3
+      ]
+    }
+  },
+  {
+    "label": "weight bare @ defaults to 2",
+    "input": "0@",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          2
+        ]
+      ]
+    }
   }
 ]

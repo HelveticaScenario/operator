@@ -17,8 +17,14 @@
  *   - Modifier operands reuse the same AST typing as the Rust parser
  *     (MiniASTF64 for fast/slow factors and degrade probabilities,
  *     MiniASTU32 for euclidean pulses/steps, MiniASTI32 for rotation).
- *   - No polymeter, $-operator chain, struct/target/scale/etc. high-level
- *     statements, no `cat(...)` / `slow(...)` / `fast(...)` commands.
+ *   - No $-operator chain, struct/target/scale/etc. high-level statements,
+ *     no `cat(...)` / `slow(...)` / `fast(...)` commands.
+ *   - Replicate (`!`) accumulates: `x!!` / `x!2!3` sum into a single
+ *     Replicate count (1 + Σ(value - 1)), and bare `@` weight defaults to 2 —
+ *     both matching Tidal/krill (and `@` is then consistent with `_`).
+ *   - Separator model matches Tidal/krill: top-level `,` and `|` are mutually
+ *     exclusive (commit to one, never mix), feet (`.`) live inside each
+ *     operand, and `<...>` / `{...}` are comma-only voices (no `|`).
  *
  * Seed assignment for RandomChoice / Degrade nodes is left-to-right,
  * depth-first: matches Rust's `assign_seeds` pass so equivalent pattern
@@ -82,22 +88,37 @@
 // ---------------------------------------------------------------------------
 
 Start
-  = _ s:StackExpr _ { return s; }
+  = _ s:Group _ { return s; }
 
-// Stack: comma-separated patterns play simultaneously.
-// Each element may itself be a feet-separated chain (`a b . c d`), wrapped
-// in a Sequence node whose entries each take an equal slice of the cycle.
-StackExpr
-  = head:FeetExpr tail:(_ "," _ @FeetExpr)* {
-      if (tail.length === 0) return head;
-      return { Stack: [head, ...tail] };
+// Top-level separators `,` (stack) and `|` (random choice) are mutually
+// exclusive: a group commits to one tail and never mixes them, so `a , b , c`
+// stacks, `a | b | c` chooses, and `a , b | c` is a parse error. Matches
+// Tidal's stackTail/chooseTail and krill's single stack_or_choose tail. Feet
+// (`.`) live one level down, inside each `,`/`|` operand.
+Group
+  = head:FeetSeq tail:(CommaTail / PipeTail)? {
+      if (!tail) return head;
+      if (tail.kind === 'stack') return { Stack: [head, ...tail.items] };
+      return { RandomChoice: [[head, ...tail.items], ctx.nextSeed()] };
     }
+
+// Stack tail: `, b , c` — comma-separated voices that play simultaneously.
+CommaTail
+  = items:(_ "," _ @FeetSeq)+ { return { kind: 'stack', items }; }
+
+// Choice tail: `| b | c` — picks one whole operand at random each cycle.
+// Mirrors strudel krill's `choose_tail`; the seed is taken in the Group
+// action (after the operands) so seeding stays left-to-right depth-first,
+// matching Rust's assign_seeds.
+PipeTail
+  = items:(_ "|" _ @FeetSeq)+ { return { kind: 'rand', items }; }
 
 // Feet separator: `a b . c d` wraps the dot-separated sub-sequences [a b]
 // and [c d] in a Sequence node (which convert.rs lowers identically to a
-// fastcat), each taking an equal slice of the cycle. Mirrors strudel's
-// `dot_tail` → `feet` alignment.
-FeetExpr
+// fastcat), each taking an equal slice of the cycle. Feet bind tighter than
+// the `,`/`|` tails but looser than a space-separated sequence. Mirrors
+// strudel's `dot_tail` → `feet` alignment.
+FeetSeq
   = head:SequenceExpr tail:(_ "." _ @SequenceExpr)* {
       if (tail.length === 0) return head;
       return { Sequence: [head, ...tail].map(s => [s, null]) };
@@ -157,7 +178,7 @@ ElementBase
 // Each comma-separated child sequence gets stacked, scaled so its step
 // count maps to `steps_per_cycle`. Matches strudel's `polymeter`.
 Polymeter
-  = "{" _ head:FeetExpr tail:(_ "," _ @FeetExpr)* _ "}" steps:PolymeterSteps? {
+  = "{" _ head:FeetSeq tail:(_ "," _ @FeetSeq)* _ "}" steps:PolymeterSteps? {
       const children = [head, ...tail];
       return { Polymeter: { children, steps_per_cycle: steps } };
     }
@@ -166,22 +187,27 @@ PolymeterSteps
   = "%" op:ModOperandF64 { return op; }
 
 FastSub
-  = "[" _ s:StackExpr _ "]" {
+  = "[" _ s:Group _ "]" {
       // Keep `[...]` as FastCat (explicit fast subsequence) rather than
-      // letting StackExpr flatten. When `s` is a Stack, wrap it as a
-      // single-element FastCat so nesting semantics match the Rust parser.
+      // letting the inner Group flatten. The Group body allows `,` XOR `|`
+      // with feet inside; a Stack/RandomChoice is wrapped as a single-element
+      // FastCat so nesting semantics match the Rust parser.
       if (s && s.Stack) {
         return { FastCat: [[s, null]] };
       }
       if (s && s.Sequence) {
         return { FastCat: s.Sequence };
       }
-      // Single element: wrap in FastCat with one entry.
+      // Single element (atom, or a `|` choice voice): wrap in one entry.
       return { FastCat: [[s, null]] };
     }
 
+// `<...>` is comma-only (voices), feet allowed, no `|` — matches Tidal/krill
+// (`<0|1>` is a parse error). Build the same Stack/Sequence intermediate a
+// comma group would, then wrap as SlowCat exactly as before.
 SlowSub
-  = "<" _ s:StackExpr _ ">" {
+  = "<" _ head:FeetSeq tail:(_ "," _ @FeetSeq)* _ ">" {
+      const s = tail.length === 0 ? head : { Stack: [head, ...tail] };
       if (s && s.Stack) {
         return { SlowCat: [[s, null]] };
       }
@@ -191,20 +217,9 @@ SlowSub
       return { SlowCat: [[s, null]] };
     }
 
-// Atoms: random-choice group, a rest, or a concrete value.
+// Atoms: a rest or a concrete value. Random choice (`|`) is handled higher
+// up at the ChoiceExpr level so it can alternate whole sequences.
 Atom
-  = RandomChoice
-  / Rest
-  / Value
-
-// Random choice: a|b|c (at least one `|` present).
-RandomChoice
-  = first:ChoiceElement rest:(_ "|" _ @ChoiceElement)+ {
-      const seed = ctx.nextSeed();
-      return { RandomChoice: [[first, ...rest], seed] };
-    }
-
-ChoiceElement
   = Rest
   / Value
 
@@ -281,8 +296,10 @@ Modifier
 // The `_` after each sigil mirrors pest's implicit WHITESPACE between a
 // modifier operator and its operand (`/ 4`, `* 2`, `@ 3` all parsed in the
 // Rust grammar). Euclidean already spells its inner whitespace explicitly.
+// Bare `@` (no number) is weight 2 — matching Tidal's `pElongate = 1 + sum`
+// and krill, and consistent with `_` elongation.
 Weight
-  = "@" _ n:Number? { return n === null ? 1 : n; }
+  = "@" _ n:Number? { return n === null ? 2 : n; }
 
 FastMod
   = "*" _ op:ModOperandF64 {
@@ -294,11 +311,14 @@ SlowMod
       return (ast, _c) => ({ Slow: [ast, op] });
     }
 
+// Replicate accumulates: consecutive `!`/`!n` sum into a single Replicate, so
+// `x!` = 2 copies, `x!3` = 3, `x!!` = 3, `x!2!3` = 4 — matching Tidal's
+// `pRepeat = 1 + sum es` and krill. Total copies = 1 + Σ(value - 1).
 Replicate
-  = "!" _ n:Integer? {
-      const count = n === null ? 2 : n;
-      if (count < 0) error("Replicate count must be a non-negative integer");
-      return (ast, _c) => ({ Replicate: [ast, count] });
+  = parts:(_ "!" _ n:Integer? { return n === null ? 2 : n; })+ {
+      const total = parts.reduce((acc, v) => acc + (v - 1), 1);
+      if (total < 0) error("Replicate count must be a non-negative integer");
+      return (ast, _c) => ({ Replicate: [ast, total] });
     }
 
 Degrade

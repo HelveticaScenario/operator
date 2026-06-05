@@ -2233,18 +2233,22 @@ mod tests {
 
     #[test]
     fn test_random_choice_in_sequence_has_onsets() {
-        // "a b|c d" parses as a (b|c) d — all three positions should produce
-        // discrete events with onsets.
+        // "1 2|3 4" chooses between the whole sequences `1 2` and `3 4` each
+        // cycle (`|` binds looser than the space-separated sequence). Each
+        // chosen sequence yields two discrete, onset-bearing events.
         let ast = parse("1 2|3 4").unwrap();
         let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
 
-        for cycle in 0..20 {
+        let mut saw_first = false;
+        let mut saw_second = false;
+
+        for cycle in 0..40 {
             let haps = pat.query_arc(
                 Fraction::from_integer(cycle),
                 Fraction::from_integer(cycle + 1),
             );
 
-            // All haps should be discrete
+            // All haps should be discrete.
             for (i, hap) in haps.iter().enumerate() {
                 assert!(
                     hap.whole.is_some(),
@@ -2254,25 +2258,29 @@ mod tests {
                 );
             }
 
-            // Should have 3 onset-bearing haps per cycle
+            // Whichever sequence is chosen, it contributes two onsets.
             let onsets: Vec<_> = haps.iter().filter(|h| h.has_onset()).collect();
             assert_eq!(
                 onsets.len(),
-                3,
-                "cycle {}: expected 3 onsets, got {}",
+                2,
+                "cycle {}: expected 2 onsets, got {}",
                 cycle,
                 onsets.len()
             );
 
-            // First and third should be 1.0 and 4.0; middle is 2.0 or 3.0
-            assert_eq!(onsets[0].value, Some(1.0));
+            let values: Vec<_> = onsets.iter().map(|h| h.value).collect();
             assert!(
-                onsets[1].value == Some(2.0) || onsets[1].value == Some(3.0),
-                "middle value should be 2 or 3, got {:?}",
-                onsets[1].value
+                values == vec![Some(1.0), Some(2.0)] || values == vec![Some(3.0), Some(4.0)],
+                "cycle {}: expected `1 2` or `3 4`, got {:?}",
+                cycle,
+                values
             );
-            assert_eq!(onsets[2].value, Some(4.0));
+            saw_first |= values == vec![Some(1.0), Some(2.0)];
+            saw_second |= values == vec![Some(3.0), Some(4.0)];
         }
+
+        assert!(saw_first, "should choose `1 2` over 40 cycles");
+        assert!(saw_second, "should choose `3 4` over 40 cycles");
     }
 
     #[test]
