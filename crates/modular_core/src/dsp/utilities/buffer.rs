@@ -60,6 +60,7 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
             default: true,
             min_value: None,
             max_value: None,
+            dynamic_range: false,
         }]
     }
 
@@ -125,6 +126,13 @@ impl BufferWriteBlockOutputs {
         for ch in 0..crate::poly::PORT_MAX_CHANNELS {
             self.sample.set(slot, ch, inner.sample.get_cycling(ch));
         }
+    }
+
+    /// `$buffer.output` has no declared range. Mirrors the derive-generated
+    /// no-range case so the wrapper's `Sampleable::get_range` returns `None`.
+    #[inline]
+    pub fn get_range(&self, _port: &str, _ch: usize, _index: usize) -> Option<(f32, f32)> {
+        None
     }
 }
 

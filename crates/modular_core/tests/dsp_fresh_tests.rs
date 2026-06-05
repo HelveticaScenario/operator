@@ -1484,3 +1484,486 @@ fn track_clamps_playhead_below_zero() {
     let v = track_value_at(-0.1, json!([[1.0, 0.0], [5.0, 1.0]]));
     assert!(approx_eq(v, 1.0, 0.01), "expected 1.0 (clamped), got {v}");
 }
+
+// ─── Pulse DC offset ─────────────────────────────────────────────────────────
+
+/// Helper: compute the mean (DC component) of a sample buffer.
+fn dc_offset(samples: &[f32]) -> f32 {
+    samples.iter().sum::<f32>() / samples.len() as f32
+}
+
+#[test]
+fn pulse_square_wave_has_zero_dc() {
+    // Width 2.5 = 50% duty cycle => DC should be ~0 even without DC subtraction
+    let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 2.5 }));
+    let samples = collect_samples(&*osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.1,
+        "square wave (width=2.5) should have near-zero DC, got {dc}V"
+    );
+}
+
+#[test]
+fn pulse_narrow_width_has_zero_dc() {
+    // Width 1.25 = 25% duty cycle: without DC subtraction would sit at -2.5V.
+    // After analytic DC subtraction, mean should land near 0V.
+    let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 1.25 }));
+    let samples = collect_samples(&*osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.2,
+        "pulse at 25% width should have near-zero DC after compensation, got {dc}V"
+    );
+}
+
+#[test]
+fn pulse_wide_width_has_zero_dc() {
+    // Width 3.75 = 75% duty cycle: without DC subtraction would sit at +2.5V.
+    let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": 3.75 }));
+    let samples = collect_samples(&*osc, 10000);
+    let dc = dc_offset(&samples);
+    assert!(
+        dc.abs() < 0.2,
+        "pulse at 75% width should have near-zero DC after compensation, got {dc}V"
+    );
+}
+
+#[test]
+fn pulse_extreme_widths_have_zero_dc() {
+    // Near-extreme duty cycles (5% and 95%) — DC subtraction still centers the mean.
+    for width in [0.25, 4.75] {
+        let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": width }));
+        let samples = collect_samples(&*osc, 10000);
+        let dc = dc_offset(&samples);
+        assert!(
+            dc.abs() < 0.3,
+            "pulse at width={width} should have near-zero DC, got {dc}V"
+        );
+    }
+}
+
+#[test]
+fn pulse_preserves_amplitude_after_dc_fix() {
+    // Peak-to-peak amplitude stays 10V; only the center is shifted to 0V.
+    for width in [1.25, 2.5, 3.75] {
+        let osc = make_module("$pulse", "pulse-1", json!({ "freq": 0.0, "width": width }));
+        let samples = collect_samples(&*osc, 10000);
+        let (mn, mx) = min_max(&samples);
+        let pp = mx - mn;
+        assert!(
+            pp > 9.0,
+            "pulse at width={width} should have ~10V peak-to-peak, got {pp}V (min={mn}, max={mx})"
+        );
+    }
+}
+
+// ─── Virtual range ports + dynamic_range ─────────────────────────────────────
+
+#[test]
+fn pulse_output_schema_has_dynamic_range() {
+    use modular_core::dsp::schema;
+    let schemas = schema();
+    let pulse = schemas
+        .iter()
+        .find(|s| s.name == "$pulse")
+        .expect("$pulse schema not found");
+    let output = pulse
+        .outputs
+        .iter()
+        .find(|o| o.name == "output")
+        .expect("output not found in $pulse schema");
+    assert!(output.dynamic_range, "$pulse output should be dynamic_range");
+}
+
+#[test]
+fn utility_modules_have_dynamic_range_in_schema() {
+    use modular_core::dsp::schema;
+    let schemas = schema();
+    for module_name in ["$remap", "$wrap", "$spread", "$scaleAndShift", "$clamp"] {
+        let s = schemas
+            .iter()
+            .find(|s| s.name == module_name)
+            .unwrap_or_else(|| panic!("missing schema for {module_name}"));
+        let output = s
+            .outputs
+            .iter()
+            .find(|o| o.default)
+            .unwrap_or_else(|| panic!("{module_name} has no default output"));
+        assert!(
+            output.dynamic_range,
+            "{module_name} default output should be dynamic_range"
+        );
+    }
+}
+
+#[test]
+fn pulse_virtual_range_ports_at_50_percent() {
+    // 50% duty (width=2.5): DC = 0, range stays [-5, 5].
+    let osc = make_module("$pulse", "pulse-rp", json!({ "freq": 0.0, "width": 2.5 }));
+    // Step a few blocks so Clickless settles.
+    for _ in 0..1000 {
+        Stepper::new().tick(&*osc);
+    }
+    osc.start_block();
+    osc.ensure_processed();
+    let min = osc.get_value_at("output.rangeMin", 0, 0);
+    let max = osc.get_value_at("output.rangeMax", 0, 0);
+    assert!((min - (-5.0)).abs() < 0.01, "rangeMin at 50% should be -5, got {min}");
+    assert!((max - 5.0).abs() < 0.01, "rangeMax at 50% should be 5, got {max}");
+}
+
+#[test]
+fn pulse_virtual_range_ports_at_25_percent() {
+    // 25% duty (width=1.25): DC = -2.5, range = [-2.5, 7.5].
+    let osc = make_module("$pulse", "pulse-rp2", json!({ "freq": 0.0, "width": 1.25 }));
+    for _ in 0..1000 {
+        Stepper::new().tick(&*osc);
+    }
+    osc.start_block();
+    osc.ensure_processed();
+    let min = osc.get_value_at("output.rangeMin", 0, 0);
+    let max = osc.get_value_at("output.rangeMax", 0, 0);
+    assert!((min - (-2.5)).abs() < 0.1, "rangeMin at 25% should be ~-2.5, got {min}");
+    assert!((max - 7.5).abs() < 0.1, "rangeMax at 25% should be ~7.5, got {max}");
+}
+
+#[test]
+fn static_range_output_exposes_virtual_range_ports() {
+    // $sine has static range = (-5, 5). Virtual ports must still resolve and
+    // return the compile-time constants, even though no `dynamic_range`
+    // BlockPort is allocated.
+    let osc = make_module("$sine", "sine", json!({ "freq": 440.0 }));
+    osc.start_block();
+    osc.ensure_processed();
+    let min = osc.get_value_at("output.rangeMin", 0, 0);
+    let max = osc.get_value_at("output.rangeMax", 0, 0);
+    assert!((min - (-5.0)).abs() < 0.01, "static rangeMin should be -5, got {min}");
+    assert!((max - 5.0).abs() < 0.01, "static rangeMax should be 5, got {max}");
+}
+
+#[test]
+fn sampleable_get_range_returns_constants_for_static_range() {
+    let osc = make_module("$sine", "sine", json!({ "freq": 0.0 }));
+    osc.start_block();
+    osc.ensure_processed();
+    let r = osc.get_range("output", 0, 0);
+    assert!(r.is_some(), "static-range output should expose get_range");
+    let (min, max) = r.unwrap();
+    assert!((min - (-5.0)).abs() < 0.01, "rangeMin should be -5, got {min}");
+    assert!((max - 5.0).abs() < 0.01, "rangeMax should be 5, got {max}");
+}
+
+#[test]
+fn sampleable_get_range_returns_dynamic_bounds_for_pulse() {
+    // 25% duty: published range [-2.5, 7.5].
+    let osc = make_module("$pulse", "pulse", json!({ "freq": 0.0, "width": 1.25 }));
+    for _ in 0..1000 {
+        Stepper::new().tick(&*osc);
+    }
+    let (min, max) = osc.get_range("output", 0, 0).expect("dynamic_range should expose get_range");
+    assert!((min - (-2.5)).abs() < 0.1, "rangeMin should be ~-2.5, got {min}");
+    assert!((max - 7.5).abs() < 0.1, "rangeMax should be ~7.5, got {max}");
+}
+
+#[test]
+fn signal_get_range_returns_none_for_volts() {
+    use modular_core::types::Signal;
+    assert!(Signal::Volts(3.0).get_range().is_none());
+}
+
+#[test]
+fn remap_dynamic_range_tracks_outMin_outMax() {
+    let m = make_module(
+        "$remap",
+        "remap",
+        json!({ "input": 0.0, "inMin": -5.0, "inMax": 5.0, "outMin": -3.0, "outMax": 7.0 }),
+    );
+    for _ in 0..1000 {
+        Stepper::new().tick(&*m);
+    }
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
+    assert!((min - (-3.0)).abs() < 0.1, "remap rangeMin should be ~-3, got {min}");
+    assert!((max - 7.0).abs() < 0.1, "remap rangeMax should be ~7, got {max}");
+}
+
+#[test]
+fn wrap_dynamic_range_uses_min_max() {
+    let m = make_module(
+        "$wrap",
+        "wrap",
+        json!({ "input": 6.0, "min": 1.0, "max": 4.0 }),
+    );
+    m.start_block();
+    m.ensure_processed();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
+    assert!((min - 1.0).abs() < 0.01, "wrap rangeMin should be 1, got {min}");
+    assert!((max - 4.0).abs() < 0.01, "wrap rangeMax should be 4, got {max}");
+}
+
+#[test]
+fn wrap_dynamic_range_swaps_when_max_lt_min() {
+    let m = make_module(
+        "$wrap",
+        "wrap",
+        json!({ "input": 0.0, "min": 5.0, "max": 0.0 }),
+    );
+    m.start_block();
+    m.ensure_processed();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
+    assert!((min - 0.0).abs() < 0.01, "wrap rangeMin should be 0 (swapped), got {min}");
+    assert!((max - 5.0).abs() < 0.01, "wrap rangeMax should be 5 (swapped), got {max}");
+}
+
+#[test]
+fn spread_dynamic_range_uses_min_max() {
+    let m = make_module(
+        "$spread",
+        "spread",
+        json!({ "min": 2.0, "max": 8.0, "count": 4 }),
+    );
+    m.start_block();
+    m.ensure_processed();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
+    assert!((min - 2.0).abs() < 0.01, "spread rangeMin should be 2, got {min}");
+    assert!((max - 8.0).abs() < 0.01, "spread rangeMax should be 8, got {max}");
+}
+
+#[test]
+fn scale_and_shift_dynamic_range_from_input() {
+    // $sine([-5,5]) → $scaleAndShift(scale=5, shift=1):
+    // unity gain + 1V offset → range [-4, 6].
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "scale": 5.0,
+                "shift": 1.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let sas = patch.sampleables.get("sas").unwrap();
+    let (min, max) = sas.get_range("output", 0, 0).unwrap();
+    assert!((min - (-4.0)).abs() < 0.1, "rangeMin should be ~-4, got {min}");
+    assert!((max - 6.0).abs() < 0.1, "rangeMax should be ~6, got {max}");
+}
+
+#[test]
+fn clamp_dynamic_range_intersects_with_input() {
+    // $sine([-5,5]) → $clamp(min=-2, max=3): intersection [-2, 3].
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": -2.0,
+                "max": 3.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let (min, max) = cl.get_range("output", 0, 0).unwrap();
+    assert!((min - (-2.0)).abs() < 0.1, "rangeMin should be ~-2, got {min}");
+    assert!((max - 3.0).abs() < 0.1, "rangeMax should be ~3, got {max}");
+}
+
+#[test]
+fn remap_dynamic_range_swaps_when_out_min_gt_out_max() {
+    // An inverted remap (`outMin > outMax`) is a legitimate inversion that
+    // map_range handles. The published range must still be ordered
+    // (rangeMin <= rangeMax), matching $wrap / $spread / $scaleAndShift.
+    let m = make_module(
+        "$remap",
+        "remap",
+        json!({ "input": 0.0, "inMin": -5.0, "inMax": 5.0, "outMin": 5.0, "outMax": -5.0 }),
+    );
+    for _ in 0..1000 {
+        Stepper::new().tick(&*m);
+    }
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
+    assert!((min - (-5.0)).abs() < 0.1, "remap rangeMin should be -5 (ordered), got {min}");
+    assert!((max - 5.0).abs() < 0.1, "remap rangeMax should be 5 (ordered), got {max}");
+}
+
+#[test]
+fn scale_and_shift_dynamic_range_negative_gain() {
+    // $sine([-5,5]) → $scaleAndShift(scale=-5, shift=0): g=-1 flips the
+    // bounds, so the published range must be reordered to [-5, 5], not [5, -5].
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "scale": -5.0,
+                "shift": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let sas = patch.sampleables.get("sas").unwrap();
+    let (min, max) = sas.get_range("output", 0, 0).unwrap();
+    assert!((min - (-5.0)).abs() < 0.1, "rangeMin should be ~-5 (reordered), got {min}");
+    assert!((max - 5.0).abs() < 0.1, "rangeMax should be ~5 (reordered), got {max}");
+}
+
+#[test]
+fn clamp_dynamic_range_orders_inverted_bounds() {
+    // $sine([-5,5]) → $clamp(min=3, max=-2): the clamp value path orders the
+    // bounds to [-2, 3], and the composed range must order them the same way
+    // instead of computing lo=3 > hi=-2 and silently dropping the publish
+    // (which would leave the static fallback (-5, 5)).
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": 3.0,
+                "max": -2.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let (min, max) = cl.get_range("output", 0, 0).unwrap();
+    assert!((min - (-2.0)).abs() < 0.1, "clamp rangeMin should be ~-2 (ordered), got {min}");
+    assert!((max - 3.0).abs() < 0.1, "clamp rangeMax should be ~3 (ordered), got {max}");
+}
+
+#[test]
+fn dynamic_range_is_read_at_the_consumer_sample_slot() {
+    // At block_size > 1 a consumer must read an upstream range at ITS sample
+    // slot, not the producer's latest slot. Drive $scaleAndShift's `scale`
+    // with a per-sample-varying $saw so the composed output range differs
+    // between slots 0 and 1, then assert each slot reads its own range. The
+    // old block-granular read returned the last slot for both, so it would
+    // see slot 1's range at slot 0 and fail.
+    const BS: usize = 2;
+    let graph = make_graph(vec![
+        // Static range [-5, 5], slot-independent — isolates the variation to `scale`.
+        ("in", "$sine", json!({ "freq": 0.0 })),
+        // ~4.2 kHz saw (freq is V/Oct, 0 V = C4) advances ~0.087 cycle/sample,
+        // so slot 0 and slot 1 carry distinct values.
+        ("mod", "$saw", json!({ "freq": 4.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "in", "port": "output", "channel": 0 },
+                "scale": { "type": "cable", "module": "mod", "port": "output", "channel": 0 },
+                "shift": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, BS, &HashMap::new()).expect("from_graph failed");
+
+    // Process one full BS-sample block.
+    for m in patch.sampleables.values() {
+        m.start_block();
+    }
+    for m in patch.sampleables.values() {
+        m.ensure_processed();
+    }
+
+    let modu = patch.sampleables.get("mod").unwrap();
+    let sas = patch.sampleables.get("sas").unwrap();
+
+    // Expected composed range at a slot: input [-5, 5] scaled by g = scale/5
+    // (reordered when g < 0), derived from the scale value actually produced.
+    let expect = |slot: usize| {
+        let g = modu.get_value_at("output", 0, slot) / 5.0;
+        let (a, b) = (-5.0 * g, 5.0 * g);
+        if a <= b { (a, b) } else { (b, a) }
+    };
+    let (e0min, e0max) = expect(0);
+    let (e1min, e1max) = expect(1);
+
+    let (r0min, r0max) = sas.get_range("output", 0, 0).expect("range at slot 0");
+    let (r1min, r1max) = sas.get_range("output", 0, 1).expect("range at slot 1");
+
+    assert!(
+        (r0min - e0min).abs() < 1e-3 && (r0max - e0max).abs() < 1e-3,
+        "slot 0 range {:?} should match scale@0 → {:?}",
+        (r0min, r0max),
+        (e0min, e0max)
+    );
+    assert!(
+        (r1min - e1min).abs() < 1e-3 && (r1max - e1max).abs() < 1e-3,
+        "slot 1 range {:?} should match scale@1 → {:?}",
+        (r1min, r1max),
+        (e1min, e1max)
+    );
+    // Guard: the two slots must actually differ, otherwise the assertions
+    // above would pass even under the old block-granular read.
+    assert!(
+        (r0min - r1min).abs() > 1e-4 || (r0max - r1max).abs() > 1e-4,
+        "per-slot ranges should differ; scale@0={}, scale@1={}",
+        modu.get_value_at("output", 0, 0),
+        modu.get_value_at("output", 0, 1)
+    );
+}
+
+#[test]
+fn pulse_remap_via_virtual_range_ports_end_to_end() {
+    // The cable-driven mirror of `$pulse(width=1.25).range(0, 1)`:
+    //   $remap(input=pulse.output, outMin=0, outMax=1,
+    //          inMin=pulse.output.rangeMin, inMax=pulse.output.rangeMax)
+    // At 25% duty, pulse range = [-2.5, 7.5], so the remap should land
+    // in [0, 1].
+    let graph = make_graph(vec![
+        ("pulse", "$pulse", json!({ "freq": 0.0, "width": 1.25 })),
+        (
+            "remap",
+            "$remap",
+            json!({
+                "input":  { "type": "cable", "module": "pulse", "port": "output", "channel": 0 },
+                "outMin": 0.0,
+                "outMax": 1.0,
+                "inMin":  { "type": "cable", "module": "pulse", "port": "output.rangeMin", "channel": 0 },
+                "inMax":  { "type": "cable", "module": "pulse", "port": "output.rangeMax", "channel": 0 }
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..2000 {
+        process_frame(&patch);
+    }
+    let remap = patch.sampleables.get("remap").unwrap();
+    let mut samples = Vec::new();
+    for _ in 0..5000 {
+        process_frame(&patch);
+        samples.push(remap.get_value_at("output", 0, 0));
+    }
+    let (mn, mx) = min_max(&samples);
+    assert!(mn >= -0.05, "remap output min should be >= 0, got {mn}");
+    assert!(mx <= 1.05, "remap output max should be <= 1, got {mx}");
+    assert!(mn < 0.15, "remap output should reach near 0, got {mn}");
+    assert!(mx > 0.85, "remap output should reach near 1, got {mx}");
+}

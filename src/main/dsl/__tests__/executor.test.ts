@@ -7,10 +7,11 @@
  * No Electron, no audio hardware needed — runs in plain Node.js via Vitest.
  */
 
-import { describe, expect, test } from 'vitest';
+import { describe, expect, expectTypeOf, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
+import type { CollectionWithRange, ModuleOutputWithRange } from '../GraphBuilder';
 
 const DEFAULT_EXECUTION_OPTIONS = {
     sampleRate: 48_000,
@@ -345,6 +346,103 @@ describe('chaining methods', () => {
         // Range() on a ModuleOutputWithRange creates a remap module
         expect(findModules(patch, '$sine').length).toBe(1);
         expect(findModules(patch, '$remap').length).toBeGreaterThan(0);
+    });
+
+    test('dynamicRange output wires .range() through virtual rangeMin / rangeMax cables', () => {
+        // $pulse declares dynamic_range, so .range(0, 5) should bind the
+        // remap's inMin / inMax to the upstream's virtual range ports rather
+        // than baking in the static [-5, 5].
+        const patch = execPatch(
+            '$pulse("C4", { width: 1 }).range(0, 5).out()',
+        );
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBeGreaterThan(0);
+
+        const params = remaps[0].params as Record<string, unknown>;
+
+        const cableOf = (v: unknown): Record<string, unknown> | undefined => {
+            if (Array.isArray(v)) {
+                return v[0] as Record<string, unknown>;
+            }
+            if (v && typeof v === 'object') {
+                return v as Record<string, unknown>;
+            }
+            return undefined;
+        };
+
+        const inMin = cableOf(params.inMin);
+        const inMax = cableOf(params.inMax);
+        expect(inMin).toBeDefined();
+        expect(inMax).toBeDefined();
+        expect(inMin?.type).toBe('cable');
+        expect(inMax?.type).toBe('cable');
+        expect(inMin?.port).toBe('output.rangeMin');
+        expect(inMax?.port).toBe('output.rangeMax');
+    });
+
+    test('static-range output keeps numeric inMin / inMax on .range()', () => {
+        // $sine has a static range — no dynamic_range, so .range() should
+        // still pass numeric bounds straight into the remap.
+        const patch = execPatch('$sine("C4").range(0, 1).out()');
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBeGreaterThan(0);
+        const params = remaps[0].params as Record<string, unknown>;
+        // Numeric (or constant Volts wrapped) — definitely not a cable to a
+        // rangeMin / rangeMax port.
+        const inMin = params.inMin;
+        const inMax = params.inMax;
+        const looksLikeCable = (v: unknown) =>
+            v &&
+            typeof v === 'object' &&
+            !Array.isArray(v) &&
+            (v as Record<string, unknown>).type === 'cable';
+        expect(looksLikeCable(inMin)).toBe(false);
+        expect(looksLikeCable(inMax)).toBe(false);
+    });
+
+    test('.range() return type is CollectionWithRange (type-level)', () => {
+        // The remap produced by .range() is itself range-aware, so both
+        // .range() overloads must declare CollectionWithRange as their return
+        // type. Enforced by `tsc`; a no-op at runtime.
+        expectTypeOf<
+            ReturnType<ModuleOutputWithRange['range']>
+        >().toEqualTypeOf<CollectionWithRange>();
+        expectTypeOf<
+            ReturnType<CollectionWithRange['range']>
+        >().toEqualTypeOf<CollectionWithRange>();
+    });
+
+    test('.range() returns a range-aware collection: chaining .range().range() wires the second remap to the first remap virtual range ports', () => {
+        // $remap's output is itself a dynamic_range output, so the result of
+        // .range(...) must be a CollectionWithRange whose .range(outMin, outMax)
+        // re-binds to the upstream remap's virtual range ports — not the 4-arg
+        // Collection.range that would leave inMin / inMax unset.
+        const patch = execPatch('$pulse("C4", { width: 1 }).range(0, 5).range(0, 1).out()');
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBe(2);
+
+        const remapIds = new Set(remaps.map((m) => m.id));
+        const cableOf = (v: unknown): Record<string, unknown> | undefined => {
+            if (Array.isArray(v)) return v[0] as Record<string, unknown>;
+            if (v && typeof v === 'object') return v as Record<string, unknown>;
+            return undefined;
+        };
+
+        // The chained (outer) remap is the one whose inMin / inMax cables point
+        // at the other remap's virtual range ports.
+        const chained = remaps.find((m) => {
+            const p = m.params as Record<string, unknown>;
+            const inMin = cableOf(p.inMin);
+            return (
+                inMin?.type === 'cable' &&
+                inMin?.port === 'output.rangeMin' &&
+                remapIds.has(inMin?.module as string)
+            );
+        });
+        expect(chained).toBeDefined();
+        const cp = chained!.params as Record<string, unknown>;
+        expect(cableOf(cp.inMax)?.port).toBe('output.rangeMax');
+        expect(remapIds.has(cableOf(cp.inMax)?.module as string)).toBe(true);
     });
 });
 
@@ -726,6 +824,111 @@ describe('sliders', () => {
                 $slider("Freq", 880, 20, 20000)
             `),
         ).toThrow('unique');
+    });
+
+    test('$slider().range(outMin, outMax) infers input bounds from the slider', () => {
+        // $slider carries a static [min, max] range, so the 2-arg .range()
+        // should bake the slider's own 0 / 1 into the remap as the input
+        // bounds — as constants, never as cables to virtual range ports.
+        const patch = execPatch('$slider("X", 0.5, 0, 1).range(0, 100).out()');
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBe(1);
+
+        const params = remaps[0].params as Record<string, unknown>;
+        const isCable = (v: unknown) =>
+            !!v &&
+            typeof v === 'object' &&
+            !Array.isArray(v) &&
+            (v as Record<string, unknown>).type === 'cable';
+        const scalarOf = (v: unknown): unknown =>
+            Array.isArray(v) ? v[0] : v;
+
+        expect(isCable(params.inMin)).toBe(false);
+        expect(isCable(params.inMax)).toBe(false);
+        expect(scalarOf(params.inMin)).toBe(0); // slider min
+        expect(scalarOf(params.inMax)).toBe(1); // slider max
+    });
+
+    test('$slider().range(outMin, outMax, inMin, inMax) override beats the declared bounds', () => {
+        // The 4-arg form must override the slider's declared 0 / 10 input
+        // bounds with the supplied 2 / 8.
+        const patch = execPatch(
+            '$slider("Y", 5, 0, 10).range(0, 1, 2, 8).out()',
+        );
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBe(1);
+
+        const params = remaps[0].params as Record<string, unknown>;
+        const scalarOf = (v: unknown): unknown =>
+            Array.isArray(v) ? v[0] : v;
+
+        expect(scalarOf(params.inMin)).toBe(2); // override, not 0
+        expect(scalarOf(params.inMax)).toBe(8); // override, not 10
+    });
+
+    test('$slider().range() override honors an explicit 0 (nullish, not falsy)', () => {
+        // The override is nullish (`??`), so passing inMin = 0 must be honored
+        // rather than falling back to the slider's declared min of 1. Under a
+        // `||` fallback this would wrongly resolve to 1.
+        const patch = execPatch(
+            '$slider("Z", 5, 1, 10).range(0, 1, 0, 8).out()',
+        );
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBe(1);
+
+        const params = remaps[0].params as Record<string, unknown>;
+        const scalarOf = (v: unknown): unknown => (Array.isArray(v) ? v[0] : v);
+
+        expect(scalarOf(params.inMin)).toBe(0); // explicit 0 honored, not slider min 1
+        expect(scalarOf(params.inMax)).toBe(8); // override
+    });
+});
+
+// ─── Dynamic-range .range() wiring ────────────────────────────────────────────
+
+describe('dynamic-range .range()', () => {
+    // A dynamic-range bound is wired as a cable to a virtual range port and may
+    // arrive array-wrapped (`[cable]`) from the polyphonic remap; unwrap first.
+    const cableOf = (v: unknown): Record<string, unknown> | undefined => {
+        const inner = Array.isArray(v) ? v[0] : v;
+        return inner && typeof inner === 'object'
+            ? (inner as Record<string, unknown>)
+            : undefined;
+    };
+    const isCableVal = (v: unknown): boolean => cableOf(v)?.type === 'cable';
+    const scalarOf = (v: unknown): unknown => (Array.isArray(v) ? v[0] : v);
+
+    test('a dynamic-range output wires virtual rangeMin/rangeMax cables into $remap', () => {
+        // $pulse declares dynamic_range, so the 2-arg .range() must wire cables
+        // to its virtual output.rangeMin / output.rangeMax ports rather than
+        // bake in the static -5 / 5 fallback constants.
+        const patch = execPatch(
+            "$pulse('c3', { width: 1.25 }).range(0, 1).out()",
+        );
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBe(1);
+
+        const params = remaps[0].params as Record<string, unknown>;
+        expect(isCableVal(params.inMin)).toBe(true);
+        expect(isCableVal(params.inMax)).toBe(true);
+        expect(cableOf(params.inMin)?.port).toBe('output.rangeMin');
+        expect(cableOf(params.inMax)?.port).toBe('output.rangeMax');
+    });
+
+    test('a single-bound override replaces only that bound; the other stays a virtual-port cable', () => {
+        // .range(0, 1, 0) overrides inMin with the explicit scalar 0 (nullish,
+        // so honored) while inMax keeps wiring the live output.rangeMax cable.
+        const patch = execPatch(
+            "$pulse('c3', { width: 1.25 }).range(0, 1, 0).out()",
+        );
+        const remaps = findModules(patch, '$remap');
+        expect(remaps.length).toBe(1);
+
+        const params = remaps[0].params as Record<string, unknown>;
+        expect(isCableVal(params.inMin)).toBe(false);
+        expect(scalarOf(params.inMin)).toBe(0); // explicit 0 honored
+        expect(isCableVal(params.inMax)).toBe(true);
+        expect(cableOf(params.inMax)?.port).toBe('output.rangeMax');
     });
 });
 

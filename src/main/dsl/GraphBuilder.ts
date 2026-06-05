@@ -50,6 +50,14 @@ export interface OutputSchemaWithRange {
     polyphonic?: boolean;
     minValue?: number;
     maxValue?: number;
+    /**
+     * When true the module computes per-channel range bounds at runtime
+     * and exposes them as `<port>.rangeMin` / `<port>.rangeMax` virtual
+     * ports. `.range(...)` wiring routes through those cables so the
+     * downstream `$remap` adapts to the live bounds (e.g. `$pulse` whose
+     * range depends on `width`).
+     */
+    dynamicRange?: boolean;
 }
 
 const ResolvedModuleOutput = z.object({
@@ -480,23 +488,62 @@ export class Collection extends BaseCollection<ModuleOutput> {
  */
 export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
     /**
-     * Remap outputs from their known range to a new output range
+     * Remap outputs from their known range to a new output range.
+     *
+     * Outputs marked `dynamicRange` wire cables to the upstream module's
+     * virtual `<port>.rangeMin` / `<port>.rangeMax` ports so the
+     * downstream `$remap` tracks the live bounds (e.g. `$pulse` whose range
+     * depends on `width`). Static-range outputs pass their compile-time
+     * `minValue` / `maxValue` directly.
+     *
+     * Passing `inMin` / `inMax` overrides the declared input bounds. The
+     * override is per-bound and nullish (`??`), so either bound can be
+     * overridden independently and an explicit `0` is honored.
      */
-    range(outMin: PolySignal, outMax: PolySignal): Collection {
+    range(
+        outMin: PolySignal,
+        outMax: PolySignal,
+        inMin?: PolySignal,
+        inMax?: PolySignal,
+    ): CollectionWithRange {
         if (this.items.length === 0) {
-            return new Collection();
+            return new CollectionWithRange();
         }
         const factory = this.items[0].builder.getFactory('$remap');
         if (!factory) {
             throw new Error('Factory for util.remap not registered');
         }
+        const resolvedInMin =
+            inMin ??
+            this.items.map((o) =>
+                o.dynamicRange
+                    ? new ModuleOutput(
+                          o.builder,
+                          o.moduleId,
+                          `${o.portName}.rangeMin`,
+                          o.channel,
+                      )
+                    : o.minValue,
+            );
+        const resolvedInMax =
+            inMax ??
+            this.items.map((o) =>
+                o.dynamicRange
+                    ? new ModuleOutput(
+                          o.builder,
+                          o.moduleId,
+                          `${o.portName}.rangeMax`,
+                          o.channel,
+                      )
+                    : o.maxValue,
+            );
         return factory(
             this.items,
             outMin,
             outMax,
-            this.items.map((o) => o.minValue),
-            this.items.map((o) => o.maxValue),
-        ) as Collection;
+            resolvedInMin,
+            resolvedInMax,
+        ) as CollectionWithRange;
     }
 }
 
@@ -1261,6 +1308,7 @@ export class ModuleNode {
                             i,
                             outputSchema.minValue!,
                             outputSchema.maxValue!,
+                            outputSchema.dynamicRange ?? false,
                         ),
                     );
                 }
@@ -1283,6 +1331,7 @@ export class ModuleNode {
                 0,
                 outputSchema.minValue!,
                 outputSchema.maxValue!,
+                outputSchema.dynamicRange ?? false,
             );
         }
         return new ModuleOutput(this.builder, this.id, portName);
@@ -1498,6 +1547,7 @@ export class ModuleOutput {
 export class ModuleOutputWithRange extends ModuleOutput {
     readonly minValue: number;
     readonly maxValue: number;
+    readonly dynamicRange: boolean;
 
     constructor(
         builder: GraphBuilder,
@@ -1506,25 +1556,57 @@ export class ModuleOutputWithRange extends ModuleOutput {
         channel: number = 0,
         minValue: number,
         maxValue: number,
+        dynamicRange: boolean = false,
     ) {
         super(builder, moduleId, portName, channel);
         this.minValue = minValue;
         this.maxValue = maxValue;
+        this.dynamicRange = dynamicRange;
     }
 
     /**
-     * Remap this output from its known range to a new range.
-     * Creates a remap module internally.
+     * Remap this output from its known range to a new range. Dynamic-range
+     * outputs route through the virtual `<port>.rangeMin` /
+     * `<port>.rangeMax` cables so the remap tracks the live bounds.
+     *
+     * Passing `inMin` / `inMax` overrides the declared (static or dynamic)
+     * input bounds. The override is per-bound and nullish (`??`), so either
+     * bound can be overridden independently and an explicit `0` is honored.
      */
-    range(outMin: PolySignal, outMax: PolySignal): Collection {
+    range(
+        outMin: PolySignal,
+        outMax: PolySignal,
+        inMin?: PolySignal,
+        inMax?: PolySignal,
+    ): CollectionWithRange {
         const factory = this.builder.getFactory('$remap');
+        const resolvedInMin =
+            inMin ??
+            (this.dynamicRange
+                ? new ModuleOutput(
+                      this.builder,
+                      this.moduleId,
+                      `${this.portName}.rangeMin`,
+                      this.channel,
+                  )
+                : this.minValue);
+        const resolvedInMax =
+            inMax ??
+            (this.dynamicRange
+                ? new ModuleOutput(
+                      this.builder,
+                      this.moduleId,
+                      `${this.portName}.rangeMax`,
+                      this.channel,
+                  )
+                : this.maxValue);
         return factory(
             this,
             outMin,
             outMax,
-            this.minValue,
-            this.maxValue,
-        ) as Collection;
+            resolvedInMin,
+            resolvedInMax,
+        ) as CollectionWithRange;
     }
 }
 

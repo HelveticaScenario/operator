@@ -833,6 +833,32 @@ fn impl_module_macro_attr(
                 outputs.get_at(port_idx, ch, index)
             }
 
+            fn get_range(&self, port: &str, ch: usize, index: usize) -> Option<(f32, f32)> {
+                // Mirrors `get_value_at`: read the producer's range at the
+                // consumer's sample slot `index`. Under re-entrancy (the
+                // wrapper's own update loop reads a peer) the current slot
+                // isn't written yet, so fall back to the previous slot
+                // (wrapping at the block boundary) to preserve the 1-sample
+                // feedback delay invariant.
+                if self.computing.get() {
+                    let prev = if index == 0 {
+                        self.block_size.saturating_sub(1)
+                    } else {
+                        index - 1
+                    };
+                    let outputs = unsafe { &*self.block_outputs.get() };
+                    return outputs.get_range(port, ch, prev);
+                }
+                let target = match self.mode {
+                    crate::types::ProcessingMode::Block => self.block_size,
+                    // Inclusive — process up through the requested slot.
+                    crate::types::ProcessingMode::Sample => index + 1,
+                };
+                self.ensure_processed_to(target);
+                let outputs = unsafe { &*self.block_outputs.get() };
+                outputs.get_range(port, ch, index)
+            }
+
             fn get_module_type(&self) -> &str {
                 #module_name
             }

@@ -169,11 +169,15 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>): Collection',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin?: Poly<Signal>, inMax?: Poly<Signal>): CollectionWithRange',
                 description:
                     'Remap all outputs from their native ranges to a new range. ' +
-                    "Uses each output's stored minValue/maxValue.",
-                example: '$r(lfo1, lfo2).range(200, 2000)',
+                    "Uses each output's stored minValue/maxValue. " +
+                    'Optional inMin/inMax override the declared input bounds per-bound (nullish, so an explicit 0 is honored). ' +
+                    'Returns a CollectionWithRange whose own range tracks the remapped bounds, so further .range(...) calls chain off it.',
+                example:
+                    '$r(lfo1, lfo2).range(200, 2000)            // input range inferred\n' +
+                    '$r(lfo1, lfo2).range(0, 1, -2, 2)          // override input bounds with -2..2',
             },
         ],
         name: 'CollectionWithRange',
@@ -313,7 +317,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): ModuleOutput',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): Collection',
                 description:
                     'Remap this output from an explicit input range to a new output range. Creates a $remap module internally.',
                 example: "$sine('c4').range(0, 1, -5, 5)",
@@ -325,7 +329,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
 
     ModuleOutputWithRange: {
         definition:
-            'interface extends ModuleOutput { minValue: number; maxValue: number; range(...): ModuleOutput }',
+            'interface extends ModuleOutput { minValue: number; maxValue: number; range(...): CollectionWithRange }',
         description:
             'An extension of ModuleOutput that knows its output value range (minValue, maxValue). ' +
             'Typically returned by LFOs, envelopes, and other modulation sources. ' +
@@ -337,12 +341,15 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>): ModuleOutput',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin?: Poly<Signal>, inMax?: Poly<Signal>): CollectionWithRange',
                 description:
                     'Remap the output from its native range (minValue, maxValue) to a new range (outMin, outMax). ' +
-                    'Unlike Collection.range(), this uses the stored min/max values automatically.',
+                    'Unlike Collection.range(), this uses the stored min/max values automatically. ' +
+                    'Optional inMin/inMax override the declared input bounds per-bound (nullish, so an explicit 0 is honored). ' +
+                    'Returns a CollectionWithRange whose own range tracks the remapped bounds, so further .range(...) calls chain off it.',
                 example:
-                    'lfo.range(note("c3"), note("c5"))  // Remap LFO to pitch range',
+                    'lfo.range(note("c3"), note("c5"))  // input range inferred from minValue/maxValue\n' +
+                    'lfo.range(0, 1, -2, 2)             // override the input bounds with -2..2',
             },
         ],
         name: 'ModuleOutputWithRange',
@@ -616,9 +623,9 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             { name: 'min', type: 'number', description: 'Minimum value' },
             { name: 'max', type: 'number', description: 'Maximum value' },
         ],
-        returns: 'ModuleOutput carrying the current slider value',
+        returns: 'CollectionWithRange carrying the current slider value, with a static [min, max] range so .range(outMin, outMax) infers the input bounds',
         signature:
-            '$slider(label: string, value: number, min: number, max: number): ModuleOutput',
+            '$slider(label: string, value: number, min: number, max: number): CollectionWithRange',
     },
     // ---- Advanced ----
     {

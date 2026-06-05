@@ -402,6 +402,14 @@ export interface OutputSchema {
   minValue?: number
   /** The maximum value of the raw output range (before any remapping) */
   maxValue?: number
+  /**
+   * Whether the module computes per-channel range bounds at runtime
+   * (via `PolyOutput::set_range`). When true, consumers can read the
+   * runtime bounds via the virtual `<port>.rangeMin` / `<port>.rangeMax`
+   * ports — useful for DSL `.range(...)` chains where the actual output
+   * range depends on params or an upstream signal.
+   */
+  dynamicRange: boolean
 }
 
 export interface PatchGraph {

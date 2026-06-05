@@ -29,6 +29,11 @@ pub struct PolyOutput {
     voltages: [f32; PORT_MAX_CHANNELS],
     /// Number of active channels: 0 = disconnected, 1 = mono, 2-16 = poly
     channels: usize,
+    /// Per-channel minimum output range. NaN = unknown (no range metadata).
+    /// Only meaningful on outputs declared with `dynamic_range`.
+    range_min: [f32; PORT_MAX_CHANNELS],
+    /// Per-channel maximum output range. NaN = unknown (no range metadata).
+    range_max: [f32; PORT_MAX_CHANNELS],
 }
 
 impl Default for PolyOutput {
@@ -36,10 +41,15 @@ impl Default for PolyOutput {
         Self {
             voltages: [0.0; PORT_MAX_CHANNELS],
             channels: 0, // Disconnected
+            range_min: [f32::NAN; PORT_MAX_CHANNELS],
+            range_max: [f32::NAN; PORT_MAX_CHANNELS],
         }
     }
 }
 
+/// Range metadata (`range_min`, `range_max`) is intentionally excluded from
+/// equality: range is ephemeral runtime metadata describing the signal's
+/// bounds, not part of the signal value itself.
 impl PartialEq for PolyOutput {
     fn eq(&self, other: &Self) -> bool {
         if self.channels != other.channels {
@@ -109,6 +119,31 @@ impl PolyOutput {
 
     pub fn set_all(&mut self, voltages: &[f32; PORT_MAX_CHANNELS]) {
         self.voltages = *voltages;
+    }
+
+    // === Dynamic range metadata ===
+    // Only meaningful on outputs declared with `dynamic_range` on `#[output(...)]`.
+    // The `Outputs` derive copies these into per-channel rangeMin / rangeMax
+    // `BlockPort` virtual ports on every slot via `copy_from_inner`.
+
+    /// Record the runtime range bounds for a channel.
+    pub fn set_range(&mut self, channel: usize, min: f32, max: f32) {
+        if channel < PORT_MAX_CHANNELS {
+            self.range_min[channel] = min;
+            self.range_max[channel] = max;
+        }
+    }
+
+    /// Read the minimum range bound for a channel. Returns `NaN` when unset.
+    #[inline]
+    pub fn get_range_min(&self, channel: usize) -> f32 {
+        self.range_min[channel % PORT_MAX_CHANNELS]
+    }
+
+    /// Read the maximum range bound for a channel. Returns `NaN` when unset.
+    #[inline]
+    pub fn get_range_max(&self, channel: usize) -> f32 {
+        self.range_max[channel % PORT_MAX_CHANNELS]
     }
 }
 
@@ -256,6 +291,15 @@ impl PolySignal {
     /// Get the f32 value at a channel with cycling
     pub fn get_value(&self, channel: usize) -> f32 {
         self.channels[channel % self.channels.len()].get_value()
+    }
+
+    /// Read the per-channel range of the contained signal at `channel`,
+    /// cycling through the channel array. Returns `Some((min, max))` when
+    /// the underlying signal is a Cable to an output with declared range
+    /// (static or `dynamic_range`), and `None` for `Volts` constants and
+    /// unconnected cables.
+    pub fn get_range(&self, channel: usize) -> Option<(f32, f32)> {
+        self.channels[channel % self.channels.len()].get_range()
     }
 
     /// Calculate the maximum channel count across multiple PolySignals
