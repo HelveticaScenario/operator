@@ -168,8 +168,9 @@ struct DattorroState {
     dc_prev_out_r: f32,
     dc_block_coeff: f32,
 
-    // Cached sample rate for parameter mapping
-    sample_rate: f32,
+    // Per-volt modulation excursion in samples. Constant for the module's
+    // lifetime (depends only on sample rate); multiplied by the live mod input.
+    mod_excursion_scale: f32,
 }
 
 // ─── Module ──────────────────────────────────────────────────────────────────
@@ -195,7 +196,7 @@ impl Dattorro {
     /// Allocate all delay lines based on the sample rate.
     /// Called once at construction time on the main thread.
     fn init(&mut self, sample_rate: f32) {
-        self.state.sample_rate = sample_rate;
+        self.state.mod_excursion_scale = (REF_MOD_EXCURSION * sample_rate / REF_SAMPLE_RATE) / 5.0;
 
         // Use a generous size multiplier for allocation so that the size
         // param can scale delay lengths up at runtime without exceeding capacity.
@@ -252,8 +253,7 @@ impl Dattorro {
         self.state.dc_block_coeff = 1.0 - (std::f32::consts::TAU * dc_fc / sample_rate);
     }
 
-    fn update(&mut self, _sample_rate: f32) {
-        let sample_rate = self.state.sample_rate;
+    fn update(&mut self, sample_rate: f32) {
         let num_input_channels = self.params.input.channels();
 
         // ── Read parameters ──────────────────────────────────────────────
@@ -297,7 +297,7 @@ impl Dattorro {
         // Same excursion applied to both L/R decay diffusion — the user can wire
         // different LFOs to separate $dattorro instances for quadrature stereo effects.
         let mod_v = self.params.modulation.value_or(0.0);
-        let mod_excursion = mod_v * (REF_MOD_EXCURSION * sample_rate / REF_SAMPLE_RATE) / 5.0;
+        let mod_excursion = mod_v * self.state.mod_excursion_scale;
 
         // ── Sum input channels to stereo ─────────────────────────────────
 

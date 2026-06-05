@@ -65,7 +65,7 @@ pub fn supersaw_derive_channel_count(params: &SupersawParams) -> usize {
 /// $supersaw('c3').out()
 /// $supersaw('c3', { voices: 7, detune: 0.3 }).out()
 /// ```
-#[module(name = "$supersaw", channels_derive = supersaw_derive_channel_count, has_init, args(freq))]
+#[module(name = "$supersaw", channels_derive = supersaw_derive_channel_count, has_init, patch_update, args(freq))]
 pub struct Supersaw {
     outputs: SupersawOutputs,
     params: SupersawParams,
@@ -77,6 +77,16 @@ struct SupersawState {
     /// Phase state for matrix mixing: indexed as [input_ch * PORT_MAX_CHANNELS + voice]
     osc_states: [f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
     rng_state: u32,
+    /// Voice count clamped to [1, PORT_MAX_CHANNELS]. Derived from params.
+    voices: usize,
+    /// Channel count of the freq input. Derived from params.
+    input_channels: usize,
+    /// Reciprocal of the sample rate.
+    inv_sample_rate: f32,
+    /// Output gain, compensated for input channel count.
+    gain: f32,
+    /// Per-voice interpolation factor for symmetric detuning.
+    voice_t: [f32; PORT_MAX_CHANNELS],
 }
 
 impl Default for SupersawState {
@@ -84,6 +94,11 @@ impl Default for SupersawState {
         Self {
             osc_states: [0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
             rng_state: 0,
+            voices: 1,
+            input_channels: 1,
+            inv_sample_rate: 0.0,
+            gain: 0.0,
+            voice_t: [0.0; PORT_MAX_CHANNELS],
         }
     }
 }
@@ -123,21 +138,32 @@ fn rand_phase(state: &mut u32) -> f32 {
 }
 
 impl Supersaw {
-    fn init(&mut self, _sample_rate: f32) {
+    fn init(&mut self, sample_rate: f32) {
+        // Sample-rate-derived: safe in init because the rate never changes across
+        // a patch transfer (a rate change rebuilds the processor, not a transfer).
+        self.state.inv_sample_rate = 1.0 / sample_rate;
+
+        // Seed per-oscillator phases once. This runtime state is preserved across
+        // patch updates by transfer_state_from, so it must not be re-seeded in
+        // configure().
         self.state.rng_state = self as *const Self as usize as u32;
         for i in 0..self.state.osc_states.len() {
             self.state.osc_states[i] = rand_phase(&mut self.state.rng_state);
         }
     }
 
-    fn update(&mut self, sample_rate: f32) {
+    /// Recompute param- and sample-rate-derived constants. Invoked from
+    /// `on_patch_update`, which runs after `transfer_state_from` swaps `state`,
+    /// so these reflect the current params — not a transferred predecessor's.
+    fn configure(&mut self) {
         let voices = self.params.voices.clamp(1, PORT_MAX_CHANNELS);
         let input_channels = self.params.freq.channels().max(1);
 
-        let inv_sample_rate = 1.0 / sample_rate;
+        self.state.voices = voices;
+        self.state.input_channels = input_channels;
 
         // Gain: 5V range, compensated for input channel count
-        let gain = 5.0 / (input_channels as f32).sqrt();
+        self.state.gain = 5.0 / (input_channels as f32).sqrt();
 
         // Voice interpolation factor (precompute per voice)
         // Interleaved ordering: first half of voices gets even detune positions,
@@ -145,19 +171,23 @@ impl Supersaw {
         // balanced spread across the full detune range, so splitting voices
         // into two groups (e.g. for stereo panning) gives symmetric detuning
         // on each side — matching Strudel's alternating L/R distribution.
-        let voice_t: [f32; PORT_MAX_CHANNELS] = {
-            let mut t = [0.0f32; PORT_MAX_CHANNELS];
-            let half = (voices + 1) / 2;
-            for v in 0..voices {
-                let linear_pos = if v < half { v * 2 } else { (v - half) * 2 + 1 };
-                t[v] = if voices > 1 {
-                    linear_pos as f32 / (voices - 1) as f32
-                } else {
-                    0.5 // centered, offset will be 0
-                };
-            }
-            t
-        };
+        let half = (voices + 1) / 2;
+        for v in 0..voices {
+            let linear_pos = if v < half { v * 2 } else { (v - half) * 2 + 1 };
+            self.state.voice_t[v] = if voices > 1 {
+                linear_pos as f32 / (voices - 1) as f32
+            } else {
+                0.5 // centered, offset will be 0
+            };
+        }
+    }
+
+    fn update(&mut self, _sample_rate: f32) {
+        let voices = self.state.voices;
+        let input_channels = self.state.input_channels;
+        let inv_sample_rate = self.state.inv_sample_rate;
+        let gain = self.state.gain;
+        let voice_t = &self.state.voice_t;
 
         for voice in 0..voices {
             let mut accum = 0.0f32;
@@ -199,6 +229,12 @@ impl Supersaw {
     }
 }
 
+impl crate::types::PatchUpdateHandler for Supersaw {
+    fn on_patch_update(&mut self) {
+        self.configure();
+    }
+}
+
 message_handlers!(impl Supersaw {});
 
 #[cfg(test)]
@@ -207,17 +243,24 @@ mod tests {
     use crate::types::{OutputStruct, Signal};
 
     /// Create a Supersaw with params and properly initialize channel count and output channels.
+    /// Mirrors the production lifecycle: `init` (seeds phases, captures sample rate)
+    /// then `on_patch_update` (computes param-derived constants), both of which the
+    /// `#[module]` macro invokes in production.
     fn make_supersaw(params: SupersawParams) -> Supersaw {
+        use crate::types::PatchUpdateHandler;
         let channels = supersaw_derive_channel_count(&params);
         let mut outputs = SupersawOutputs::default();
         outputs.set_all_channels(channels);
-        Supersaw {
+        let mut s = Supersaw {
             params,
             outputs,
             _channel_count: channels,
             _block_index: Default::default(),
             state: SupersawState::default(),
-        }
+        };
+        s.init(48000.0);
+        s.on_patch_update();
+        s
     }
 
     #[test]

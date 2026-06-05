@@ -1645,3 +1645,46 @@ describe('$scopeXY', () => {
         ).toThrow(/yRange/);
     });
 });
+
+// ─── $mixDown / .mix() fold-down ───────────────────────────────────────────────
+
+describe('$mixDown and Collection.mix()', () => {
+    test('.mix(2) on a 3-voice spread builds one $mixDown folding 3→2', () => {
+        const patch = execPatch('$saw($spread(0, 5, 3)).mix(2).scope().out()');
+        const mixDowns = findModules(patch, '$mixDown');
+        expect(mixDowns.length).toBe(1);
+        expect(mixDowns[0].params.channels).toBe(2);
+        // The collection's 3 channels arrive as the single poly `input`.
+        expect(Array.isArray(mixDowns[0].params.input)).toBe(true);
+        expect((mixDowns[0].params.input as unknown[]).length).toBe(3);
+        // Output channel count is the fold-down target.
+        expect(patch.scopes[0].channels.length).toBe(2);
+    });
+
+    test('$mixDown(src, 2) factory form matches the .mix() shorthand', () => {
+        const patch = execPatch(
+            '$mixDown($saw($spread(0, 5, 3)), 2).scope().out()',
+        );
+        expect(findModules(patch, '$mixDown').length).toBe(1);
+        expect(patch.scopes[0].channels.length).toBe(2);
+    });
+
+    test('.mix() defaults to mono', () => {
+        const patch = execPatch('$saw($spread(0, 5, 3)).mix().scope().out()');
+        expect(findModules(patch, '$mixDown').length).toBe(1);
+        expect(patch.scopes[0].channels.length).toBe(1);
+    });
+
+    test('.mix(2, "average") rides mode through the config object', () => {
+        const patch = execPatch(
+            '$saw($spread(0, 5, 3)).mix(2, "average").scope().out()',
+        );
+        expect(findModules(patch, '$mixDown')[0].params.mode).toBe('average');
+    });
+
+    test('ModuleOutput.mix(2) pans a single channel to stereo center', () => {
+        const patch = execPatch('$saw("c4").mix(2).scope().out()');
+        expect(findModules(patch, '$mixDown').length).toBe(1);
+        expect(patch.scopes[0].channels.length).toBe(2);
+    });
+});
