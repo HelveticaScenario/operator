@@ -208,8 +208,6 @@ struct MidiCvState {
 
     /// Retrigger pulse gates (multi-sample duration via TempGate)
     retrigger_gates: [TempGate; PORT_MAX_CHANNELS],
-
-    last_channel_count: usize,
 }
 
 impl Default for MidiCvState {
@@ -225,7 +223,6 @@ impl Default for MidiCvState {
             global_mod_wheel: 0,
             global_aftertouch: 0,
             retrigger_gates: [TempGate::default(); PORT_MAX_CHANNELS],
-            last_channel_count: 0,
         }
     }
 }
@@ -604,10 +601,6 @@ impl MidiCv {
         self.state.sample_rate = sample_rate;
 
         let num_voices = self.channel_count();
-        if self.state.last_channel_count != num_voices {
-            self.state.last_channel_count = num_voices;
-            println!("MIDI CV: updating to {} voices", num_voices);
-        }
 
         // Update outputs for each voice
         for i in 0..num_voices as usize {

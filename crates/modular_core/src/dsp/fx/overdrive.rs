@@ -110,12 +110,17 @@ impl Overdrive {
 
         // DC blocker runs at the base rate before the upsampler.
         let base_rate = sample_rate.max(1.0);
-        self.state.dc_block_coeff =
-            (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
+        self.state.dc_block_coeff = (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
+
+        // Tilt-EQ coefficient is constant for the module's lifetime, so seed
+        // every channel's filters once here instead of per sample.
+        for channel in self.state.channels.iter_mut() {
+            channel.tilt_pre.set_coeff(self.state.tilt_coeff);
+            channel.tilt_post.set_coeff(self.state.tilt_coeff);
+        }
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let tilt_coeff = self.state.tilt_coeff;
         let dc_coeff = self.state.dc_block_coeff;
         let mode = self.params.mode.unwrap_or_default();
         let num_channels = self.channel_count();
@@ -140,9 +145,6 @@ impl Overdrive {
             let amount = tone * 0.2;
             let pre_high_gain = TONE_RANGE.powf(amount);
             let post_high_gain = TONE_RANGE.powf(-amount);
-
-            state.tilt_pre.set_coeff(tilt_coeff);
-            state.tilt_post.set_coeff(tilt_coeff);
 
             // DC-block the input at base rate before upsampling.
             let x_norm = input / 5.0;
@@ -258,7 +260,10 @@ mod tests {
         for _ in 0..1000 {
             od.update(48000.0);
             let y = od.outputs.sample.get(0);
-            assert!(y.abs() <= 5.05, "soft-clip output should be bounded, got {y}");
+            assert!(
+                y.abs() <= 5.05,
+                "soft-clip output should be bounded, got {y}"
+            );
         }
     }
 
@@ -271,7 +276,10 @@ mod tests {
         for _ in 0..1000 {
             od.update(48000.0);
             let y = od.outputs.sample.get(0);
-            assert!(y.abs() <= 5.05, "hard-clip output should be bounded, got {y}");
+            assert!(
+                y.abs() <= 5.05,
+                "hard-clip output should be bounded, got {y}"
+            );
         }
     }
 

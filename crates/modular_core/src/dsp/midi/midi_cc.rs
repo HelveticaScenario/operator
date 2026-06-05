@@ -45,7 +45,6 @@ struct MidiCcOutputs {
 /// State for the MidiCc module.
 #[derive(Default)]
 struct MidiCcState {
-    sample_rate: f32,
     /// Current CC value (normalized 0.0-1.0, supports both 7-bit and 14-bit)
     current_value: f32,
     /// Smoothed output value
@@ -131,8 +130,6 @@ impl MidiCc {
     }
 
     fn update(&mut self, sample_rate: f32) {
-        self.state.sample_rate = sample_rate;
-
         // Calculate target voltage from normalized value
         let target = self.state.current_value * 5.0;
 
