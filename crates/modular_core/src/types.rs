@@ -2599,7 +2599,7 @@ pub struct ModuleSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[napi(object)]
-pub struct ModuleState {
+pub struct ModuleSpec {
     pub id: String,
     pub module_type: String,
     pub id_is_explicit: Option<bool>,
@@ -2707,7 +2707,7 @@ pub struct ScopeXyRanges {
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]
 pub struct PatchGraph {
-    pub modules: Vec<ModuleState>,
+    pub modules: Vec<ModuleSpec>,
     pub module_id_remaps: Option<Vec<ModuleIdRemap>>,
     // #[serde(default)]
     pub scopes: Vec<Scope>,

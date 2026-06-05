@@ -20,7 +20,7 @@ use std::sync::Arc;
 use crate::{
     dsp::oscillators::{FmMode, apply_fm, wavetable_prep::PreparedWavetable},
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
-    types::{Connect, Table, Wav, WavData},
+    types::{Table, Wav, WavData},
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -76,11 +76,6 @@ impl Default for ChannelState {
     }
 }
 
-#[derive(Default)]
-struct WavetableOscState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Derive the channel count from the maximum of `pitch` and (optional)
 /// `position`. Clamped to `[1, PORT_MAX_CHANNELS]`.
 #[allow(private_interfaces)]
@@ -114,12 +109,12 @@ pub fn wavetable_derive_channel_count(params: &WavetableOscParams) -> usize {
     name = "$wavetable",
     channels_derive = wavetable_derive_channel_count,
     args(wav, pitch, position),
-    has_prepare_resources
+    has_prepare_resources,
 )]
 pub struct WavetableOsc {
     params: WavetableOscParams,
     outputs: WavetableOscOutputs,
-    state: WavetableOscState,
+    channel_state: Box<[ChannelState]>,
 }
 
 impl WavetableOsc {
@@ -148,7 +143,7 @@ impl WavetableOsc {
         };
 
         for ch in 0..channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let pitch_v = self.params.pitch.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
@@ -240,13 +235,14 @@ mod tests {
         let channels = wavetable_derive_channel_count(&params);
         let mut outputs = WavetableOscOutputs::default();
         outputs.set_all_channels(channels);
-        WavetableOsc {
+        let osc = WavetableOsc {
             params,
             outputs,
-            state: WavetableOscState::default(),
+            channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
             _channel_count: channels,
             _block_index: Default::default(),
-        }
+        };
+        osc
     }
 
     fn base_params() -> WavetableOscParams {

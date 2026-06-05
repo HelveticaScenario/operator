@@ -2,7 +2,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -94,13 +93,12 @@ fn compute_hpf_biquad(cutoff: f32, resonance: f32, sample_rate: f32) -> BiquadCo
 pub struct HighpassFilter {
     outputs: HighpassFilterOutputs,
     state: HighpassFilterState,
+    channel_state: Box<[HpfChannelState]>,
     params: HighpassFilterParams,
 }
 
 /// State for the HighpassFilter module.
 struct HighpassFilterState {
-    /// Per-channel state
-    channels: [HpfChannelState; PORT_MAX_CHANNELS],
     /// Mono optimization
     coeffs_mono: BiquadCoeffs,
     last_cutoff_mono: f32,
@@ -112,7 +110,6 @@ struct HighpassFilterState {
 impl Default for HighpassFilterState {
     fn default() -> Self {
         Self {
-            channels: [HpfChannelState::default(); PORT_MAX_CHANNELS],
             coeffs_mono: BiquadCoeffs::default(),
             last_cutoff_mono: f32::NAN,
             last_resonance_mono: f32::NAN,
@@ -152,21 +149,21 @@ impl HighpassFilter {
             }
         } else {
             for i in 0..num_channels {
-                state.channels[i]
+                self.channel_state[i]
                     .smooth_cutoff
                     .update(self.params.cutoff.get_value(i));
-                state.channels[i]
+                self.channel_state[i]
                     .smooth_resonance
                     .update(self.params.resonance.value_or(i, 0.0));
-                let c = *state.channels[i].smooth_cutoff;
-                let r = *state.channels[i].smooth_resonance;
+                let c = *self.channel_state[i].smooth_cutoff;
+                let r = *self.channel_state[i].smooth_resonance;
 
-                if changed(c, state.channels[i].last_cutoff)
-                    || changed(r, state.channels[i].last_resonance)
+                if changed(c, self.channel_state[i].last_cutoff)
+                    || changed(r, self.channel_state[i].last_resonance)
                 {
-                    state.channels[i].coeffs = compute_hpf_biquad(c, r, sample_rate);
-                    state.channels[i].last_cutoff = c;
-                    state.channels[i].last_resonance = r;
+                    self.channel_state[i].coeffs = compute_hpf_biquad(c, r, sample_rate);
+                    self.channel_state[i].last_cutoff = c;
+                    self.channel_state[i].last_resonance = r;
                 }
             }
         }
@@ -177,10 +174,10 @@ impl HighpassFilter {
             let c = if cutoff_mono && resonance_mono {
                 state.coeffs_mono
             } else {
-                state.channels[i].coeffs
+                self.channel_state[i].coeffs
             };
 
-            let ch_state = &mut state.channels[i];
+            let ch_state = &mut self.channel_state[i];
             let w = input - c.a1 * ch_state.z1 - c.a2 * ch_state.z2;
             let w = sanitize(w);
             let y = c.b0 * w + c.b1 * ch_state.z1 + c.b2 * ch_state.z2;

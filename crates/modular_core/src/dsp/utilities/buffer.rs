@@ -99,9 +99,9 @@ struct BufferWriteBlockOutputs {
 }
 
 impl BufferWriteBlockOutputs {
-    pub fn new(block_size: usize) -> Self {
+    pub fn new(block_size: usize, channel_count: usize) -> Self {
         Self {
-            sample: crate::block_port::BlockPort::new(block_size),
+            sample: crate::block_port::BlockPort::new(block_size, channel_count),
         }
     }
 
@@ -122,7 +122,7 @@ impl BufferWriteBlockOutputs {
     }
 
     pub fn copy_from_inner(&mut self, inner: &BufferWriteOutputs, slot: usize) {
-        for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+        for ch in 0..self.sample.channels() {
             self.sample.set(slot, ch, inner.sample.get_cycling(ch));
         }
     }

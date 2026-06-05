@@ -425,7 +425,7 @@ export interface ModuleSchema {
   channelsParamDefault?: number
 }
 
-export interface ModuleState {
+export interface ModuleSpec {
   id: string
   moduleType: string
   idIsExplicit?: boolean
@@ -446,7 +446,7 @@ export interface OutputSchema {
 }
 
 export interface PatchGraph {
-  modules: Array<ModuleState>
+  modules: Array<ModuleSpec>
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
   scopeXy?: ScopeXy

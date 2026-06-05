@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::{
     Patch,
     dsp::utils::{TempGate, TempGateState, min_gate_samples},
-    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Connect,
 };
 
@@ -253,7 +253,7 @@ struct QuantizerOutputs {
 }
 
 /// Per-channel state for tracking note changes.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct ChannelState {
     /// Previous quantized voltage (None if first sample)
     prev_quantized: Option<f64>,
@@ -261,19 +261,11 @@ struct ChannelState {
     trigger: TempGate,
 }
 
-/// State for the Quantizer module.
-struct QuantizerState {
-    /// Per-channel state for tracking note changes
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
-impl Default for QuantizerState {
+impl Default for ChannelState {
     fn default() -> Self {
         Self {
-            channels: std::array::from_fn(|_| ChannelState {
-                prev_quantized: None,
-                trigger: TempGate::new_gate(TempGateState::Low),
-            }),
+            prev_quantized: None,
+            trigger: TempGate::new_gate(TempGateState::Low),
         }
     }
 }
@@ -300,7 +292,7 @@ impl Default for QuantizerState {
 pub struct Quantizer {
     outputs: QuantizerOutputs,
     params: QuantizerParams,
-    state: QuantizerState,
+    channel_state: Box<[ChannelState]>,
 }
 
 impl Quantizer {
@@ -316,7 +308,7 @@ impl Quantizer {
 
             let quantized = if let Some(snapper) = self.params.scale.snapper() {
                 let raw_quantized = snapper.snap_voct(combined);
-                let state = &self.state.channels[ch];
+                let state = &self.channel_state[ch];
 
                 // Apply hysteresis: only change note if input overshoots the
                 // snap boundary by at least HYSTERESIS_VOCT.
@@ -348,7 +340,7 @@ impl Quantizer {
             };
 
             // Check if the note changed
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
             let note_changed = match state.prev_quantized {
                 Some(prev) => (quantized - prev).abs() > 1e-6,
                 None => true, // First sample counts as a change

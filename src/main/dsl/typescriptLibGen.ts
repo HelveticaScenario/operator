@@ -1289,7 +1289,7 @@ function $setTimeSignature(numerator: number, denominator: number): void;
 /**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
  * Useful for feedback loops and forward references.
- * @param channels - Number of deferred outputs (1-16, default 1)
+ * @param channels - Number of deferred outputs (1-64, default 1)
  * @example
  * const feedback = $deferred();
  * const delayed = $delay(osc.out, feedback[0]);
