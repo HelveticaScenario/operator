@@ -144,12 +144,11 @@ impl Overdrive {
             let tone = (*state.tone).clamp(-5.0, 5.0);
 
             let g = 1.0 + drive * DRIVE_SLOPE;
-            // tone in [-5, 5] maps to symmetric high-band gain pair via
+            // tone in [-5, 5] maps to a symmetric high-band gain pair via
             // 3^(tone/5): tone=-5 → pre=1/3, post=3; tone=0 → 1, 1;
-            // tone=+5 → pre=3, post=1/3. Since pre · post = 1 by
-            // construction (linear cascade is unity for all tone settings),
-            // we compute one powf and derive the other via reciprocal —
-            // ~2× cheaper than two powf calls on M-series.
+            // tone=+5 → pre=3, post=1/3. pre · post = 1 by construction
+            // (the linear cascade is unity at every tone setting), so the
+            // post gain is the reciprocal of the pre gain.
             let amount = tone * 0.2;
             let pre_high_gain = TONE_RANGE.powf(amount);
             let post_high_gain = 1.0 / pre_high_gain;

@@ -24,7 +24,6 @@ interface DisplayRow {
     selfNsPerSample: number;
     paramsNsPerSample: number;
     totalNsPerSample: number;
-    samplesProcessed: number;
 }
 
 function nsPerSample(ns: number, samples: number): number {
@@ -35,14 +34,14 @@ function formatValue(
     valueNsPerSample: number,
     unit: Unit,
     sampleRateHz: number,
-    bufferSize: number,
 ): string {
     const v = valueNsPerSample;
     if (unit === 'pct') {
-        if (sampleRateHz <= 0 || bufferSize <= 0) return '—';
-        const callbackBudgetNs = (bufferSize * 1e9) / sampleRateHz;
-        const moduleCallbackNs = v * bufferSize;
-        const pct = (moduleCallbackNs / callbackBudgetNs) * 100;
+        if (sampleRateHz <= 0) return '—';
+        // Share of the per-sample real-time budget (1e9 / sampleRateHz ns
+        // per sample). Buffer size cancels out of the callback-level ratio,
+        // so it has no effect here.
+        const pct = ((v * sampleRateHz) / 1e9) * 100;
         if (pct >= 10) return `${pct.toFixed(1)}%`;
         if (pct >= 0.01) return `${pct.toFixed(2)}%`;
         return pct === 0 ? '0%' : '<0.01%';
@@ -112,12 +111,10 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
         void (async () => {
             try {
                 await electronAPI.synthesizer.setModuleProfilingEnabled(true);
-                if (cancelled) {
-                    await electronAPI.synthesizer.setModuleProfilingEnabled(
-                        false,
-                    );
-                    return;
-                }
+                // The cleanup always issues the balancing disable, so just
+                // bail here. Disabling again would double-decrement the
+                // refcounted enable on the Rust side.
+                if (cancelled) return;
                 await electronAPI.synthesizer.setModuleProfilingSampleRate(
                     sampleRate,
                 );
@@ -170,7 +167,6 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                 selfNsPerSample: self,
                 paramsNsPerSample: params,
                 totalNsPerSample: total,
-                samplesProcessed: r.samplesProcessed,
             };
         });
     }, [rows]);
@@ -238,7 +234,6 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                                     v,
                                     unit,
                                     sampleRateHz,
-                                    bufferSize,
                                 )}
                             </span>
                         </div>
@@ -255,7 +250,6 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                         info.getValue(),
                         unit,
                         sampleRateHz,
-                        bufferSize,
                     ),
                 sortingFn: (a, b) =>
                     a.original.paramsNsPerSample -
@@ -269,13 +263,12 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                         info.getValue(),
                         unit,
                         sampleRateHz,
-                        bufferSize,
                     ),
                 sortingFn: (a, b) =>
                     a.original.totalNsPerSample - b.original.totalNsPerSample,
             }),
         ],
-        [maxSelfNsPerSample, unit, sampleRateHz, bufferSize],
+        [maxSelfNsPerSample, unit, sampleRateHz],
     );
 
     const table = useReactTable({

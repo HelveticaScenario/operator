@@ -25,7 +25,7 @@
 //!
 //! - The TLS `records` map and the shared cross-thread map are
 //!   pre-allocated on the main thread at patch-swap time, with one entry
-//!   per desired module id. [`swap_records`] and [`swap_shared`] swap
+//!   per desired module id. [`swap_records`] and [`try_swap_shared`] swap
 //!   them in via `mem::replace`; the old maps are returned and routed
 //!   through the command-queue garbage path for drop on the main thread.
 //! - [`pop_frame`] writes through `get_mut` only. A pop with an id
@@ -39,21 +39,23 @@
 //! - [`drain_collection`] (main-thread reader) iterates + clones keys +
 //!   zeros values in place. The audio thread keeps its bucket capacity
 //!   across UI drains.
-//! - The stack is bounded by [`STACK_CAPACITY`]; pushes beyond that cap
-//!   return `false`, so the underlying `Vec` never reallocates.
+//! - The call stack is a fixed inline `[MaybeUninit<Frame>; STACK_CAPACITY]`
+//!   array, never heap-backed, so the lazy thread-local initializer that
+//!   first touches it on the audio thread allocates nothing. Pushes beyond
+//!   the cap return `false`, so the inline stack never overflows.
 
 use crate::types::ProcessingMode;
 use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::mem::MaybeUninit;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 
 /// Maximum profiled call-stack depth. Real graphs nest a few levels
 /// (root → mix → osc/fx); 32 leaves headroom for pathological patches.
-/// Pushes past this are dropped to keep the underlying `Vec` from ever
-/// reallocating on the audio thread.
+/// Pushes past this are dropped so the fixed inline stack never overflows.
 pub const STACK_CAPACITY: usize = 32;
 
 /// Snapshot of one module's cumulative stats since the last UI drain.
@@ -98,7 +100,7 @@ pub fn new_collection() -> ModuleProfileCollection {
 /// `ModuleProfileAccum` per id. Allocates on the caller thread (always
 /// the main thread). The result is handed to the audio thread via the
 /// command queue and swapped into TLS / the shared map via
-/// [`swap_records`] / [`swap_shared`].
+/// [`swap_records`] / [`try_swap_shared`].
 pub fn build_seed<I, S>(ids: I) -> HashMap<String, ModuleProfileAccum>
 where
     I: IntoIterator<Item = S>,
@@ -153,14 +155,24 @@ struct Frame {
 }
 
 struct Profiler {
-    stack: Vec<Frame>,
+    /// Fixed inline call-stack. Never heap-backed, so the lazy thread-local
+    /// initializer that first touches `PROFILER` on the audio thread does no
+    /// allocation. `depth` is the live length; slots `[0, depth)` hold
+    /// initialized frames. `Frame` is plain data with no `Drop`, so
+    /// unwinding the stack is just resetting `depth`.
+    stack: [MaybeUninit<Frame>; STACK_CAPACITY],
+    depth: usize,
     records: HashMap<String, ModuleProfileAccum>,
 }
 
 impl Profiler {
     fn new() -> Self {
         Self {
-            stack: Vec::with_capacity(STACK_CAPACITY),
+            stack: [const { MaybeUninit::uninit() }; STACK_CAPACITY],
+            depth: 0,
+            // `HashMap::new` does not allocate until the first insert, so
+            // this initializer stays allocation-free; the records map is
+            // seeded from the main thread via `swap_records`.
             records: HashMap::new(),
         }
     }
@@ -187,15 +199,12 @@ pub fn refresh_enabled() {
     ENABLED_TLS.with(|c| c.set(on));
     // Stack residue clearance for the unwind case: a panic inside
     // `inner.update` skips the wrapper's matching `pop_frame`, leaving
-    // stale frames and a stale `last_resume` on the parent. The next
-    // callback's clearance gives the next active window a clean start.
-    // No-op when push/pop are balanced. `truncate(0)` keeps the `Vec`'s
-    // backing allocation.
+    // stale frames and a stale `last_resume` on the parent. Resetting
+    // `depth` to 0 gives the next active window a clean start; `Frame` has
+    // no `Drop`, so the abandoned inline slots are simply overwritten by
+    // later pushes. No-op when push/pop are balanced.
     PROFILER.with(|p| {
-        let mut prof = p.borrow_mut();
-        if !prof.stack.is_empty() {
-            prof.stack.truncate(0);
-        }
+        p.borrow_mut().depth = 0;
     });
 }
 
@@ -212,17 +221,23 @@ pub fn push_frame(id: &str, mode: ProcessingMode) -> bool {
     PROFILER.with(|p| {
         let mut prof = p.borrow_mut();
         // Bounds check: pushes past `STACK_CAPACITY` are dropped so the
-        // `Vec`'s allocation stays fixed. Caller treats `false` as
-        // "frame not profiled" and skips its matching `pop_frame`.
-        if prof.stack.len() >= STACK_CAPACITY {
+        // inline stack never overflows. Caller treats `false` as "frame
+        // not profiled" and skips its matching `pop_frame`.
+        if prof.depth >= STACK_CAPACITY {
             return false;
         }
-        if let Some(parent) = prof.stack.last_mut() {
+        if prof.depth > 0 {
+            let parent_idx = prof.depth - 1;
+            // SAFETY: `depth > 0` so slot `depth - 1` holds a live frame
+            // (strict LIFO; every slot below `depth` was written by a
+            // matching `push_frame` and not yet read by `pop_frame`).
+            let parent = unsafe { prof.stack[parent_idx].assume_init_mut() };
             parent.self_accum_ns = parent
                 .self_accum_ns
                 .saturating_add((now - parent.last_resume).as_nanos() as u64);
         }
-        prof.stack.push(Frame {
+        let depth = prof.depth;
+        prof.stack[depth].write(Frame {
             id_ptr: id.as_ptr(),
             id_len: id.len(),
             mode,
@@ -230,6 +245,7 @@ pub fn push_frame(id: &str, mode: ProcessingMode) -> bool {
             last_resume: now,
             self_accum_ns: 0,
         });
+        prof.depth += 1;
         true
     })
 }
@@ -241,9 +257,15 @@ pub fn pop_frame(samples_processed: u32) {
     let now = Instant::now();
     PROFILER.with(|p| {
         let mut prof = p.borrow_mut();
-        let Some(frame) = prof.stack.pop() else {
+        if prof.depth == 0 {
             return;
-        };
+        }
+        prof.depth -= 1;
+        let depth = prof.depth;
+        // SAFETY: slot `depth` was initialized by the matching `push_frame`
+        // and not yet read (strict LIFO). `Frame` has no `Drop`, so moving
+        // it out leaves an inert slot to be overwritten by the next push.
+        let frame = unsafe { prof.stack[depth].assume_init_read() };
         let self_ns = frame
             .self_accum_ns
             .saturating_add((now - frame.last_resume).as_nanos() as u64);
@@ -268,7 +290,10 @@ pub fn pop_frame(samples_processed: u32) {
             rec.mode = frame.mode;
         }
 
-        if let Some(parent) = prof.stack.last_mut() {
+        if prof.depth > 0 {
+            let parent_idx = prof.depth - 1;
+            // SAFETY: `depth > 0` so slot `depth - 1` holds a live frame.
+            let parent = unsafe { prof.stack[parent_idx].assume_init_mut() };
             parent.last_resume = now;
         }
     });
@@ -308,8 +333,10 @@ pub fn flush_into(dst: &ModuleProfileCollection) {
 ///
 /// Iterates + clones keys + zeros values in place, preserving the
 /// shared map's bucket allocation for the audio thread's `flush_into`.
-/// Blocks on `lock()`; contention is bounded by `flush_into`'s in-place
-/// merge, which is the only writer.
+/// Runs on the main thread and blocks on `lock()`, holding the lock across
+/// the per-key clones. The audio-thread writers ([`flush_into`] and
+/// [`try_swap_shared`]) both use `try_lock` and skip/defer on contention,
+/// so this blocking acquisition never stalls the audio callback.
 pub fn drain_collection(src: &ModuleProfileCollection) -> Vec<(String, ModuleProfileAccum)> {
     let mut guard = src.lock();
     let mut out = Vec::with_capacity(guard.len());
@@ -340,15 +367,22 @@ pub fn swap_records(
     })
 }
 
-/// Replace the shared cross-thread map's contents with `new`. Returns
-/// the previous contents for routing through the garbage queue. Holds
-/// the shared `Mutex` for the duration of one `mem::replace`.
-pub fn swap_shared(
+/// Try to replace the shared cross-thread map's contents with `new`.
+///
+/// Non-blocking: this runs on the audio thread, so it must never wait on
+/// the shared `Mutex`. On success returns `Ok(previous_contents)` for
+/// routing through the garbage queue. On lock contention with the
+/// main-thread [`drain_collection`] it returns `Err(new)` unchanged, so the
+/// caller can retry on a later callback instead of blocking the audio
+/// thread.
+pub fn try_swap_shared(
     dst: &ModuleProfileCollection,
     new: HashMap<String, ModuleProfileAccum>,
-) -> HashMap<String, ModuleProfileAccum> {
-    let mut guard = dst.lock();
-    std::mem::replace(&mut *guard, new)
+) -> Result<HashMap<String, ModuleProfileAccum>, HashMap<String, ModuleProfileAccum>> {
+    match dst.try_lock() {
+        Some(mut guard) => Ok(std::mem::replace(&mut *guard, new)),
+        None => Err(new),
+    }
 }
 
 #[cfg(test)]
@@ -367,7 +401,7 @@ mod tests {
         refresh_enabled();
         PROFILER.with(|p| {
             let mut prof = p.borrow_mut();
-            prof.stack.clear();
+            prof.depth = 0;
             prof.records.clear();
         });
     }
@@ -391,7 +425,7 @@ mod tests {
 
         let collection = new_collection();
         // Seed shared map too so flush_into has a slot to write to.
-        let _ = swap_shared(&collection, build_seed(["a".to_string()]));
+        let _ = try_swap_shared(&collection, build_seed(["a".to_string()]));
         flush_into(&collection);
 
         let snap = drain_collection(&collection);
@@ -421,7 +455,7 @@ mod tests {
         pop_frame(4);
 
         let collection = new_collection();
-        let _ = swap_shared(
+        let _ = try_swap_shared(
             &collection,
             build_seed(["parent".to_string(), "child".to_string()]),
         );
@@ -505,10 +539,10 @@ mod tests {
         }
         assert_eq!(pushed, STACK_CAPACITY);
 
-        // Capacity preserved — Vec did not grow.
+        // The inline stack is full at the cap; pushes past it were dropped
+        // (`push_frame` returned false) rather than overflowing.
         PROFILER.with(|p| {
-            let prof = p.borrow();
-            assert_eq!(prof.stack.capacity(), STACK_CAPACITY);
+            assert_eq!(p.borrow().depth, STACK_CAPACITY);
         });
 
         // Drain the stack: only the pushes that succeeded matter.

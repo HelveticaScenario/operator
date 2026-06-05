@@ -73,7 +73,7 @@ pub struct PatchUpdate {
   pub profile_records_seed: HashMap<String, ModuleProfileAccum>,
 
   /// Pre-allocated map for the cross-thread `ModuleProfileCollection`,
-  /// consumed by `profiling::swap_shared`. Same key set as
+  /// consumed by `profiling::try_swap_shared`. Same key set as
   /// `profile_records_seed`; held separately because each swap consumes
   /// its operand.
   pub profile_shared_seed: HashMap<String, ModuleProfileAccum>,
@@ -214,7 +214,7 @@ pub enum GarbageItem {
   /// Live Link resources removed from the audio thread. Drop tears down
   /// internal networking threads and sockets — must happen on the main thread.
   Link(Box<LinkResources>),
-  /// Profiler records map evicted by `swap_records` / `swap_shared`.
+  /// Profiler records map evicted by `swap_records` / `try_swap_shared`.
   /// Drops on the main thread so the `HashMap`'s bucket deallocation
   /// stays off the audio thread.
   ProfileMap(HashMap<String, ModuleProfileAccum>),

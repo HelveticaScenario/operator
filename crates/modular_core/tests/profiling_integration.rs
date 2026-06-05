@@ -6,12 +6,10 @@
 
 use std::collections::HashMap;
 
-use modular_core::dsp::{get_constructors, get_params_deserializers};
-use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
 use modular_core::profiling::{
     self, ModuleProfileAccum, build_seed, drain_collection, new_collection, swap_records,
-    swap_shared,
+    try_swap_shared,
 };
 use modular_core::types::{ModuleState, PatchGraph};
 use serde_json::json;
@@ -45,15 +43,6 @@ fn process_frame(patch: &Patch) {
     }
 }
 
-// Silence the unused-import diagnostics when the `get_*` registries aren't
-// used directly in this file — they are pulled in implicitly via Patch.
-#[allow(dead_code)]
-fn _force_registry_link() {
-    let _ = get_constructors();
-    let _ = get_params_deserializers();
-    let _: Option<DeserializedParams> = None;
-}
-
 #[test]
 fn profiler_attributes_work_to_both_modules() {
     // Cable an oscillator into a signal pass-through. Each `process_frame`
@@ -81,10 +70,10 @@ fn profiler_attributes_work_to_both_modules() {
     let collection = new_collection();
     // Patch::from_graph bypasses the audio-thread patch-swap path, so seed
     // the profiler maps directly. Equivalent to what apply_patch_update
-    // does via `swap_records` / `swap_shared` in production.
+    // does via `swap_records` / `try_swap_shared` in production.
     let ids = ["osc".to_string(), "sig".to_string()];
     let _ = swap_records(build_seed(ids.iter().cloned()));
-    let _ = swap_shared(&collection, build_seed(ids.iter().cloned()));
+    let _ = try_swap_shared(&collection, build_seed(ids.iter().cloned()));
 
     profiling::set_enabled(true);
     profiling::refresh_enabled();

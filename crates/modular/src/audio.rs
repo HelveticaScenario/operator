@@ -1637,6 +1637,11 @@ struct AudioProcessor {
   link: crate::link::LinkState,
   /// Shared per-module profile snapshot — flushed at end of each callback.
   module_profile_collection: ModuleProfileCollection,
+  /// Profiler shared-map seed whose swap lost the `try_lock` race with the
+  /// main-thread drain. Retried on a later callback (see
+  /// `retry_pending_profile_seed`) so the audio thread never blocks on the
+  /// profiler mutex. Normally `None`.
+  pending_profile_shared_seed: Option<HashMap<String, ModuleProfileAccum>>,
 }
 
 impl AudioProcessor {
@@ -1667,6 +1672,25 @@ impl AudioProcessor {
       input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
       link: crate::link::LinkState::new(),
       module_profile_collection: shared.module_profile_collection,
+      pending_profile_shared_seed: None,
+    }
+  }
+
+  /// Retry a deferred profiler shared-map swap. A swap is deferred when
+  /// [`modular_core::profiling::try_swap_shared`] loses the `try_lock` race
+  /// with the main-thread drain; retrying here keeps the audio thread from
+  /// ever blocking on the profiler mutex. No-op when nothing is pending.
+  fn retry_pending_profile_seed(&mut self) {
+    let Some(seed) = self.pending_profile_shared_seed.take() else {
+      return;
+    };
+    match modular_core::profiling::try_swap_shared(&self.module_profile_collection, seed) {
+      Ok(old) => {
+        let _ = self.garbage_tx.push(GarbageItem::ProfileMap(old));
+      }
+      Err(seed) => {
+        self.pending_profile_shared_seed = Some(seed);
+      }
     }
   }
 
@@ -1966,7 +1990,7 @@ impl AudioProcessor {
     }
 
     // Profiler-map swap: `swap_records` updates the audio thread's TLS
-    // records, `swap_shared` updates the cross-thread snapshot. Both
+    // records, `try_swap_shared` updates the cross-thread snapshot. Both
     // operands were allocated on the main thread; the evicted maps drop
     // on the main thread via `GarbageItem::ProfileMap`. Counters
     // accumulated since the last UI drain do not survive the swap — a
@@ -1974,20 +1998,23 @@ impl AudioProcessor {
     // comparable to post-swap ones.
     {
       let old_records = modular_core::profiling::swap_records(profile_records_seed);
-      if self
-        .garbage_tx
-        .push(GarbageItem::ProfileMap(old_records))
-        .is_err()
-      {}
-      let old_shared = modular_core::profiling::swap_shared(
+      let _ = self.garbage_tx.push(GarbageItem::ProfileMap(old_records));
+      // Non-blocking shared-map swap. On `try_lock` contention with the
+      // main-thread drain, stash the seed and retry on a later callback
+      // (see `retry_pending_profile_seed`) so the audio thread never blocks.
+      match modular_core::profiling::try_swap_shared(
         &self.module_profile_collection,
         profile_shared_seed,
-      );
-      if self
-        .garbage_tx
-        .push(GarbageItem::ProfileMap(old_shared))
-        .is_err()
-      {}
+      ) {
+        Ok(old_shared) => {
+          let _ = self.garbage_tx.push(GarbageItem::ProfileMap(old_shared));
+        }
+        Err(seed) => {
+          if let Some(superseded) = self.pending_profile_shared_seed.replace(seed) {
+            let _ = self.garbage_tx.push(GarbageItem::ProfileMap(superseded));
+          }
+        }
+      }
     }
 
     // Update XY scopes. The collection holds canonical membership; the
@@ -2465,8 +2492,11 @@ where
             audio_processor.collect_module_states();
           }
 
-          // Flush per-module profile data into the cross-thread snapshot.
-          // No-op when profiling is disabled (early-out inside the call).
+          // Retry any deferred profiler shared-map swap, then flush this
+          // callback's per-module profile data into the cross-thread
+          // snapshot. Both are no-ops when nothing is pending / profiling
+          // is disabled (early-out inside the calls).
+          audio_processor.retry_pending_profile_seed();
           modular_core::profiling::flush_into(&audio_processor.module_profile_collection);
 
           let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
