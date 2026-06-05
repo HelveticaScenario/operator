@@ -57,7 +57,12 @@ struct MixDownOutputs {
 /// // Fold a 3-voice spread down to stereo
 /// $saw($spread(0, 5, 3)).mix(2).out()
 /// ```
-#[module(name = "$mixDown", channels_param = "channels", args(input, channels))]
+#[module(
+    name = "$mixDown",
+    channels_param = "channels",
+    args(input, channels),
+    patch_update,
+)]
 pub struct MixDown {
     outputs: MixDownOutputs,
     params: MixDownParams,
@@ -68,19 +73,12 @@ pub struct MixDown {
 ///
 /// `gains[i][j]` is the equal-power pan gain from input channel `i` to output
 /// channel `j`. It depends only on the input/output channel counts, both fixed
-/// once the patch is built, so it is computed once (loop-invariant — avoids a
-/// per-sample `sqrt`) and cached.
-///
-/// `built_for` records the `(in_channels, out_channels)` the matrix was built
-/// for. The audio thread rebuilds when it changes. This matters because the
-/// module macro's `transfer_state_from` swaps `state` into a freshly built
-/// module on a patch update: a bare "initialized" flag would carry a stale
-/// matrix across a channel-count change, so we key the cache on the topology
-/// instead.
+/// for the patch's lifetime, so it is built once per patch-apply in
+/// `on_patch_update` (loop-invariant — keeps the per-sample `sqrt` out of
+/// `update`) and read unchanged on the audio thread.
 #[derive(Default)]
 struct MixDownState {
     gains: [[f32; PORT_MAX_CHANNELS]; PORT_MAX_CHANNELS],
-    built_for: Option<(usize, usize)>,
 }
 
 message_handlers!(impl MixDown {});
@@ -163,11 +161,6 @@ impl MixDown {
     fn update(&mut self, _sample_rate: f32) {
         let in_ch = self.params.input.channels().min(PORT_MAX_CHANNELS);
         let out_ch = self.channel_count();
-
-        if self.state.built_for != Some((in_ch, out_ch)) {
-            Self::build_gains(&mut self.state.gains, in_ch, out_ch);
-            self.state.built_for = Some((in_ch, out_ch));
-        }
 
         // Snapshot input channel values once (stack, no allocation).
         let mut in_vals = [0.0f32; PORT_MAX_CHANNELS];
@@ -266,6 +259,19 @@ impl MixDown {
     }
 }
 
+impl crate::types::PatchUpdateHandler for MixDown {
+    /// Build the equal-power gain matrix once per patch-apply. Both channel
+    /// counts are fixed for the patch's lifetime, and this runs after the
+    /// connect pass (so `input.channels()` is resolved) and after any
+    /// `transfer_state_from`, so the unconditional rebuild overwrites a stale
+    /// swapped-in matrix. Allocation-free — safe on the audio thread.
+    fn on_patch_update(&mut self) {
+        let in_ch = self.params.input.channels().min(PORT_MAX_CHANNELS);
+        let out_ch = self.channel_count();
+        Self::build_gains(&mut self.state.gains, in_ch, out_ch);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,13 +285,17 @@ mod tests {
         let channels = params.channels.clamp(1, PORT_MAX_CHANNELS);
         let mut outputs = MixDownOutputs::default();
         outputs.set_all_channels(channels);
-        MixDown {
+        let mut m = MixDown {
             params,
             outputs,
             _channel_count: channels,
             _block_index: Default::default(),
             state: MixDownState::default(),
-        }
+        };
+        // Production constructs → connects → on_patch_update → process; mirror
+        // that order here so the gain matrix is built before update() reads it.
+        crate::types::PatchUpdateHandler::on_patch_update(&mut m);
+        m
     }
 
     fn approx(a: f32, b: f32) {
