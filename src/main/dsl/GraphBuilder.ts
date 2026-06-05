@@ -124,7 +124,7 @@ export interface StereoOutOptions {
     gain?: PolySignal;
     /** Pan position (-5 = left, 0 = center, +5 = right). Default 0 */
     pan?: PolySignal;
-    /** Stereo width/spread (0 = no spread, 5 = full spread). Default 5 */
+    /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
     width?: Signal;
 }
 
@@ -347,7 +347,7 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
      * @param options.baseChannel - Base output channel (0-15, default 0)
      * @param options.gain - Output gain
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
-     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 5)
+     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
      */
     out(options: StereoOutOptions = {}): this {
         if (this.items.length > 0) {
@@ -834,7 +834,7 @@ export class GraphBuilder {
                         // Create stereoMixer with the outputs
                         const stereoOut = stereoMixerFactory(group.outputs, {
                             pan: group.pan ?? 0,
-                            width: group.width ?? 5,
+                            width: group.width ?? 0,
                         }) as Collection;
 
                         // Apply gain if specified
@@ -1415,7 +1415,7 @@ export class ModuleOutput {
      * @param options.baseChannel - Base output channel (0-15, default 0)
      * @param options.gain - Output gain (adds util.scaleAndShift after stereo mix)
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
-     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 5)
+     * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
      */
     out(options: StereoOutOptions = {}): this {
         this.builder.addOut(this, { baseChannel: 0, ...options });

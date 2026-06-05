@@ -406,7 +406,7 @@
           ]
         },
         "width": {
-          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 5\n(widest spread) when omitted.",
+          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
           "anyOf": [
             {
               "$ref": "#/$defs/MonoSignal"
@@ -520,7 +520,7 @@
       },
       {
         "name": "width",
-        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 5\n(widest spread) when omitted.",
+        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,

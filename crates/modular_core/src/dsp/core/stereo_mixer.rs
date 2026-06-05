@@ -16,8 +16,8 @@ struct StereoMixerParams {
     #[deserr(default)]
     pan: Option<PolySignal>,
     /// Stereo spread across channels (0 = no spread, 5 = widest spread).
-    /// Width offsets each channel around its base pan position. Defaults to 5
-    /// (widest spread) when omitted.
+    /// Width offsets each channel around its base pan position. Defaults to 0
+    /// (no spread) when omitted.
     #[signal(range = (0.0, 5.0))]
     #[deserr(default)]
     width: Option<MonoSignal>,
@@ -67,10 +67,10 @@ impl StereoMixer {
         let state = &mut self.state;
 
         // Width: 0 = no spread, 5 = full ±5V spread across voices. Defaults to
-        // 5 (widest) when no width signal is connected.
+        // 0 (no spread) when no width signal is connected.
         state
             .width_buffer
-            .update(self.params.width.value_or(5.0).clamp(0.0, 5.0));
+            .update(self.params.width.value_or(0.0).clamp(0.0, 5.0));
 
         let mut left_sum = 0.0f32;
         let mut right_sum = 0.0f32;
@@ -142,17 +142,19 @@ mod tests {
     }
 
     #[test]
-    fn test_default_width_is_widest_spread() {
-        // With no width signal connected, width defaults to 5 (widest spread):
-        // a 2-voice input is hard-panned — voice 0 full left, voice 1 full
-        // right. (A width of 0 would instead center both at sqrt(0.5).)
+    fn test_default_width_is_no_spread() {
+        // With no width signal connected, width defaults to 0 (no spread):
+        // every voice stays centered, so a 2-voice input sums equally to both
+        // channels at the equal-power center gain sqrt(0.5). (A width of 5
+        // would instead hard-pan voice 0 left and voice 1 right.)
         let mut m = make_stereo(StereoMixerParams {
             input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(0.0)]),
             pan: None,
             width: None,
         });
         m.update(48000.0);
-        approx(m.outputs.sample.get(0), 1.0); // left  = voice 0
-        approx(m.outputs.sample.get(1), 0.0); // right = voice 1
+        let center = 0.5f32.sqrt();
+        approx(m.outputs.sample.get(0), center); // left  = voice 0 centered
+        approx(m.outputs.sample.get(1), center); // right = voice 0 centered
     }
 }
