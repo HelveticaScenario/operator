@@ -1747,3 +1747,89 @@ fn seq_ribbon_rejects_invalid_bounds() {
         "fractional value must be rejected"
     );
 }
+
+/// Count low→high transitions in a port trace.
+fn rising_edges(trace: &[f32]) -> usize {
+    let mut n = 0;
+    let mut prev = false;
+    for &v in trace {
+        let high = v > 2.5;
+        if high && !prev {
+            n += 1;
+        }
+        prev = high;
+    }
+    n
+}
+
+/// For a `$cycle` patch: gate state at each cycle midpoint (`true` = sounding)
+/// and the trig onset count over `cycles`. (A trig onset leads its gate rising
+/// edge by the min-gate hold, so terminate the trace in a silent stretch to
+/// keep the onset count free of boundary-straddle artifacts.)
+fn cycle_gate_and_onsets(pattern: &str, ribbon: [u64; 2], cycles: usize) -> (Vec<bool>, usize) {
+    const SPC: usize = 240;
+    let gate = cycle_port_trace(
+        &make_cycle_patch(mini_payload(pattern), Some(ribbon)),
+        "gate",
+        cycles * SPC,
+    );
+    let trig = cycle_port_trace(
+        &make_cycle_patch(mini_payload(pattern), Some(ribbon)),
+        "trig",
+        cycles * SPC,
+    );
+    let mids = (0..cycles).map(|c| gate[c * SPC + SPC / 2] > 2.5).collect();
+    (mids, rising_edges(&trig))
+}
+
+/// A note LONGER than the ribbon window plays its full length, then goes
+/// silent until the window's loop point realigns with the onset — a
+/// deterministic gap, never a stuck note, a double-trigger, or an early cut.
+///
+/// The onset hap lives only at baked cycle `offset` (slot 0), which recurs
+/// every `length` clock cycles. `c4/3` (3-cycle note) in a 2-cycle window
+/// releases at clock cycle 3, but slot 0 next comes around at clock cycle 4,
+/// so it re-onsets there: 3 cycles sounding + 1 cycle gap, period 4.
+#[test]
+fn seq_ribbon_note_longer_than_window_plays_full_then_gaps() {
+    // Trace 11 cycles — ends in the third gap, so the next group's onset is
+    // outside the window and the onset count is exactly one-per-group.
+    let (mids, onsets) = cycle_gate_and_onsets("c4/3", [0, 2], 11);
+    let expected = [
+        true, true, true, false, // sound 0,1,2; gap 3
+        true, true, true, false, // sound 4,5,6; gap 7
+        true, true, true, // sound 8,9,10  (gap 11 not traced)
+    ];
+    assert_eq!(
+        mids, expected,
+        "3-cycle note in a 2-cycle window: 3 sounding + 1 gap, period 4"
+    );
+    // Three sounding groups, one onset each — no seam re-trigger while a note
+    // is still sounding, no double-fire.
+    assert_eq!(onsets, 3, "exactly one onset per sounding group");
+}
+
+/// A note whose length divides the ribbon window loops with NO gap: it
+/// re-articulates exactly at the loop point (a fresh trig each lap), and the
+/// gate is continuous across cycle midpoints. `c4/2` (2-cycle note, window 2)
+/// and `c4/4` (4-cycle note, window 2 — 4 % 2 == 0) both loop seamlessly.
+#[test]
+fn seq_ribbon_note_dividing_window_loops_seamlessly() {
+    let (mids2, onsets2) = cycle_gate_and_onsets("c4/2", [0, 2], 8);
+    assert!(
+        mids2.iter().all(|&g| g),
+        "2-cycle note in a 2-cycle window sounds at every cycle midpoint (no gap): {mids2:?}"
+    );
+    // Re-articulates each lap (a fresh trig per loop) rather than holding one
+    // gate forever — looping a held note re-triggers it.
+    assert!(
+        onsets2 >= 3,
+        "re-triggers once per 2-cycle loop over 8 cycles: {onsets2}"
+    );
+
+    let (mids4, _) = cycle_gate_and_onsets("c4/4", [0, 2], 8);
+    assert!(
+        mids4.iter().all(|&g| g),
+        "4-cycle note (4 % 2 == 0) also loops with no gap: {mids4:?}"
+    );
+}
