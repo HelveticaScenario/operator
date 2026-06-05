@@ -1647,7 +1647,7 @@ fn sampleable_get_range_returns_constants_for_static_range() {
     let osc = make_module("$sine", "sine", json!({ "freq": 0.0 }));
     osc.start_block();
     osc.ensure_processed();
-    let r = osc.get_range("output", 0);
+    let r = osc.get_range("output", 0, 0);
     assert!(r.is_some(), "static-range output should expose get_range");
     let (min, max) = r.unwrap();
     assert!((min - (-5.0)).abs() < 0.01, "rangeMin should be -5, got {min}");
@@ -1661,7 +1661,7 @@ fn sampleable_get_range_returns_dynamic_bounds_for_pulse() {
     for _ in 0..1000 {
         Stepper::new().tick(&*osc);
     }
-    let (min, max) = osc.get_range("output", 0).expect("dynamic_range should expose get_range");
+    let (min, max) = osc.get_range("output", 0, 0).expect("dynamic_range should expose get_range");
     assert!((min - (-2.5)).abs() < 0.1, "rangeMin should be ~-2.5, got {min}");
     assert!((max - 7.5).abs() < 0.1, "rangeMax should be ~7.5, got {max}");
 }
@@ -1682,7 +1682,7 @@ fn remap_dynamic_range_tracks_outMin_outMax() {
     for _ in 0..1000 {
         Stepper::new().tick(&*m);
     }
-    let (min, max) = m.get_range("output", 0).unwrap();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
     assert!((min - (-3.0)).abs() < 0.1, "remap rangeMin should be ~-3, got {min}");
     assert!((max - 7.0).abs() < 0.1, "remap rangeMax should be ~7, got {max}");
 }
@@ -1696,7 +1696,7 @@ fn wrap_dynamic_range_uses_min_max() {
     );
     m.start_block();
     m.ensure_processed();
-    let (min, max) = m.get_range("output", 0).unwrap();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
     assert!((min - 1.0).abs() < 0.01, "wrap rangeMin should be 1, got {min}");
     assert!((max - 4.0).abs() < 0.01, "wrap rangeMax should be 4, got {max}");
 }
@@ -1710,7 +1710,7 @@ fn wrap_dynamic_range_swaps_when_max_lt_min() {
     );
     m.start_block();
     m.ensure_processed();
-    let (min, max) = m.get_range("output", 0).unwrap();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
     assert!((min - 0.0).abs() < 0.01, "wrap rangeMin should be 0 (swapped), got {min}");
     assert!((max - 5.0).abs() < 0.01, "wrap rangeMax should be 5 (swapped), got {max}");
 }
@@ -1724,7 +1724,7 @@ fn spread_dynamic_range_uses_min_max() {
     );
     m.start_block();
     m.ensure_processed();
-    let (min, max) = m.get_range("output", 0).unwrap();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
     assert!((min - 2.0).abs() < 0.01, "spread rangeMin should be 2, got {min}");
     assert!((max - 8.0).abs() < 0.01, "spread rangeMax should be 8, got {max}");
 }
@@ -1751,7 +1751,7 @@ fn scale_and_shift_dynamic_range_from_input() {
         process_frame(&patch);
     }
     let sas = patch.sampleables.get("sas").unwrap();
-    let (min, max) = sas.get_range("output", 0).unwrap();
+    let (min, max) = sas.get_range("output", 0, 0).unwrap();
     assert!((min - (-4.0)).abs() < 0.1, "rangeMin should be ~-4, got {min}");
     assert!((max - 6.0).abs() < 0.1, "rangeMax should be ~6, got {max}");
 }
@@ -1777,7 +1777,7 @@ fn clamp_dynamic_range_intersects_with_input() {
         process_frame(&patch);
     }
     let cl = patch.sampleables.get("cl").unwrap();
-    let (min, max) = cl.get_range("output", 0).unwrap();
+    let (min, max) = cl.get_range("output", 0, 0).unwrap();
     assert!((min - (-2.0)).abs() < 0.1, "rangeMin should be ~-2, got {min}");
     assert!((max - 3.0).abs() < 0.1, "rangeMax should be ~3, got {max}");
 }
@@ -1795,7 +1795,7 @@ fn remap_dynamic_range_swaps_when_out_min_gt_out_max() {
     for _ in 0..1000 {
         Stepper::new().tick(&*m);
     }
-    let (min, max) = m.get_range("output", 0).unwrap();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
     assert!((min - (-5.0)).abs() < 0.1, "remap rangeMin should be -5 (ordered), got {min}");
     assert!((max - 5.0).abs() < 0.1, "remap rangeMax should be 5 (ordered), got {max}");
 }
@@ -1822,7 +1822,7 @@ fn scale_and_shift_dynamic_range_negative_gain() {
         process_frame(&patch);
     }
     let sas = patch.sampleables.get("sas").unwrap();
-    let (min, max) = sas.get_range("output", 0).unwrap();
+    let (min, max) = sas.get_range("output", 0, 0).unwrap();
     assert!((min - (-5.0)).abs() < 0.1, "rangeMin should be ~-5 (reordered), got {min}");
     assert!((max - 5.0).abs() < 0.1, "rangeMax should be ~5 (reordered), got {max}");
 }
@@ -1851,9 +1851,82 @@ fn clamp_dynamic_range_orders_inverted_bounds() {
         process_frame(&patch);
     }
     let cl = patch.sampleables.get("cl").unwrap();
-    let (min, max) = cl.get_range("output", 0).unwrap();
+    let (min, max) = cl.get_range("output", 0, 0).unwrap();
     assert!((min - (-2.0)).abs() < 0.1, "clamp rangeMin should be ~-2 (ordered), got {min}");
     assert!((max - 3.0).abs() < 0.1, "clamp rangeMax should be ~3 (ordered), got {max}");
+}
+
+#[test]
+fn dynamic_range_is_read_at_the_consumer_sample_slot() {
+    // At block_size > 1 a consumer must read an upstream range at ITS sample
+    // slot, not the producer's latest slot. Drive $scaleAndShift's `scale`
+    // with a per-sample-varying $saw so the composed output range differs
+    // between slots 0 and 1, then assert each slot reads its own range. The
+    // old block-granular read returned the last slot for both, so it would
+    // see slot 1's range at slot 0 and fail.
+    const BS: usize = 2;
+    let graph = make_graph(vec![
+        // Static range [-5, 5], slot-independent — isolates the variation to `scale`.
+        ("in", "$sine", json!({ "freq": 0.0 })),
+        // ~4.2 kHz saw (freq is V/Oct, 0 V = C4) advances ~0.087 cycle/sample,
+        // so slot 0 and slot 1 carry distinct values.
+        ("mod", "$saw", json!({ "freq": 4.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "in", "port": "output", "channel": 0 },
+                "scale": { "type": "cable", "module": "mod", "port": "output", "channel": 0 },
+                "shift": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, BS, &HashMap::new()).expect("from_graph failed");
+
+    // Process one full BS-sample block.
+    for m in patch.sampleables.values() {
+        m.start_block();
+    }
+    for m in patch.sampleables.values() {
+        m.ensure_processed();
+    }
+
+    let modu = patch.sampleables.get("mod").unwrap();
+    let sas = patch.sampleables.get("sas").unwrap();
+
+    // Expected composed range at a slot: input [-5, 5] scaled by g = scale/5
+    // (reordered when g < 0), derived from the scale value actually produced.
+    let expect = |slot: usize| {
+        let g = modu.get_value_at("output", 0, slot) / 5.0;
+        let (a, b) = (-5.0 * g, 5.0 * g);
+        if a <= b { (a, b) } else { (b, a) }
+    };
+    let (e0min, e0max) = expect(0);
+    let (e1min, e1max) = expect(1);
+
+    let (r0min, r0max) = sas.get_range("output", 0, 0).expect("range at slot 0");
+    let (r1min, r1max) = sas.get_range("output", 0, 1).expect("range at slot 1");
+
+    assert!(
+        (r0min - e0min).abs() < 1e-3 && (r0max - e0max).abs() < 1e-3,
+        "slot 0 range {:?} should match scale@0 → {:?}",
+        (r0min, r0max),
+        (e0min, e0max)
+    );
+    assert!(
+        (r1min - e1min).abs() < 1e-3 && (r1max - e1max).abs() < 1e-3,
+        "slot 1 range {:?} should match scale@1 → {:?}",
+        (r1min, r1max),
+        (e1min, e1max)
+    );
+    // Guard: the two slots must actually differ, otherwise the assertions
+    // above would pass even under the old block-granular read.
+    assert!(
+        (r0min - r1min).abs() > 1e-4 || (r0max - r1max).abs() > 1e-4,
+        "per-slot ranges should differ; scale@0={}, scale@1={}",
+        modu.get_value_at("output", 0, 0),
+        modu.get_value_at("output", 0, 1)
+    );
 }
 
 #[test]

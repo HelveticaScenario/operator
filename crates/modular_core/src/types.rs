@@ -237,21 +237,20 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
-    /// Read the per-channel range bounds of an output port. Returns
-    /// `Some((min, max))` for outputs that declared a static `range = (...)`
-    /// or `dynamic_range`, and `None` for outputs without range metadata.
+    /// Read the per-channel range bounds of an output port at sample slot
+    /// `index`. Returns `Some((min, max))` for outputs that declared a static
+    /// `range = (...)` or `dynamic_range`, and `None` for outputs without
+    /// range metadata.
+    ///
+    /// `index` is the consumer's per-block sample slot, threaded the same way
+    /// as `get_value_at` (via the cable's `index_ptr`), so dynamic ranges read
+    /// sample-accurately rather than at block granularity.
     ///
     /// Zero-allocation. Lowers (via the proc-macro wrapper) to a `match` on
     /// the port name that either returns compile-time constants (static
-    /// range) or reads the per-channel runtime values written by the inner
+    /// range) or reads the per-slot runtime values written by the inner
     /// module via `PolyOutput::set_range` (dynamic range).
-    ///
-    /// Range is read at **block granularity**: unlike `get_value_at`, this
-    /// takes no sample index and resolves to the producer's latest processed
-    /// slot (with the same re-entrancy guard as `get_value_at`). Dynamic
-    /// ranges therefore track the producer at block, not per-sample,
-    /// resolution — fine for the control-rate bounds `.range(...)` consumes.
-    fn get_range(&self, _port: &str, _ch: usize) -> Option<(f32, f32)> {
+    fn get_range(&self, _port: &str, _ch: usize, _index: usize) -> Option<(f32, f32)> {
         None
     }
     fn get_state(&self) -> Option<serde_json::Value> {
@@ -2348,9 +2347,11 @@ impl Signal {
     /// Read the per-channel range bounds of the connected output, if any.
     ///
     /// - `Volts` returns `None` — a constant has no signal range.
-    /// - `Cable` delegates to the upstream `Sampleable::get_range`, which
-    ///   reads compile-time constants for static-range outputs or the
-    ///   per-slot runtime values for `dynamic_range` outputs.
+    /// - `Cable` delegates to the upstream `Sampleable::get_range` at the
+    ///   consumer's current per-block sample index, reading compile-time
+    ///   constants for static-range outputs or the per-slot runtime values for
+    ///   `dynamic_range` outputs. The `index_ptr` is threaded exactly as in
+    ///   `get_value`, so the range is read sample-accurately.
     ///
     /// Zero-allocation. Used by utility modules (`$clamp`, `$scaleAndShift`)
     /// to compose their output range from their input's range.
@@ -2361,10 +2362,19 @@ impl Signal {
                 resolved,
                 port,
                 channel,
+                index_ptr,
                 ..
             } => {
                 let ptr = resolved.as_ref()?;
-                unsafe { ptr.as_ref() }.get_range(port, *channel)
+                // `index_ptr` is null until the consumer wrapper's `connect()`
+                // injects it; pre-injection we fall back to slot 0, matching
+                // `get_value`.
+                let index = if index_ptr.is_null() {
+                    0
+                } else {
+                    unsafe { (*(*index_ptr)).get() }
+                };
+                unsafe { ptr.as_ref() }.get_range(port, *channel, index)
             }
         }
     }
