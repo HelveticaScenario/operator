@@ -14,17 +14,18 @@ import type {
     PolySignal,
     SourceLocation,
     Collection,
-    CollectionWithRange,
 } from './GraphBuilder';
 import {
     $c,
     $r,
     $cartesian,
     BaseCollection,
+    CollectionWithRange,
     DeferredModuleOutput,
     DeferredCollection,
     Bus,
     ModuleOutput,
+    ModuleOutputWithRange,
     replaceSignals,
 } from './GraphBuilder';
 import { analyzeSourceSpans } from './analyzeSource';
@@ -523,7 +524,8 @@ export function executePatchScript(
      * @param value - Initial value (must be a numeric literal)
      * @param min - Minimum value
      * @param max - Maximum value
-     * @returns The signal module's output
+     * @returns A CollectionWithRange carrying the slider's value, with a static
+     *   range of [min, max] so `.range(outMin, outMax)` infers the input bounds
      */
     const $slider = (
         label: string,
@@ -559,7 +561,29 @@ export function executePatchScript(
 
         sliders.push({ label, max, min, moduleId, value });
 
-        return result;
+        // The slider declares its bounds at the call site, so re-wrap the
+        // backing $signal's range-less output(s) with a static [min, max]
+        // range. This lets `.range(outMin, outMax)` infer the input bounds
+        // from the slider instead of requiring the 4-arg form. The backing
+        // moduleId is preserved, so Control-panel binding is untouched.
+        const items =
+            result instanceof ModuleOutput
+                ? [result]
+                : [...(result as BaseCollection<ModuleOutput>)];
+        return new CollectionWithRange(
+            ...items.map(
+                (o) =>
+                    new ModuleOutputWithRange(
+                        o.builder,
+                        o.moduleId,
+                        o.portName,
+                        o.channel,
+                        min,
+                        max,
+                        false,
+                    ),
+            ),
+        );
     };
 
     /**

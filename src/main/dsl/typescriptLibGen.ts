@@ -829,10 +829,14 @@ interface ModuleOutputWithRange extends ModuleOutput {
    * outputs route through virtual rangeMin / rangeMax ports.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
-   * @returns A {@link ModuleOutput} with the remapped signal
+   * @param inMin - Optional input minimum; overrides the declared (static or
+   *   dynamic) input bound. Per-bound and nullish, so an explicit \`0\` is honored.
+   * @param inMax - Optional input maximum; overrides the declared input bound.
+   * @returns A {@link CollectionWithRange} whose own range tracks the remapped
+   *   bounds, so further \`.range(...)\` calls chain off it
    * @example lfo.range(note("C3"), note("C5"))
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>): ModuleOutput;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin?: Poly<Signal>, inMax?: Poly<Signal>): CollectionWithRange;
 }
 
 
@@ -1036,9 +1040,12 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    * Uses each output's stored minValue/maxValue.
    * @param outMin - Output minimum as {@link Poly<Signal>}
    * @param outMax - Output maximum as {@link Poly<Signal>}
+   * @param inMin - Optional input minimum; overrides each output's declared
+   *   bound. Per-bound and nullish, so an explicit \`0\` is honored.
+   * @param inMax - Optional input maximum; overrides each output's declared bound.
    * @see {@link Collection.range} - for explicit input range
    */
-  override range(outMin: Poly<Signal>, outMax: Poly<Signal>): Collection;
+  override range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin?: Poly<Signal>, inMax?: Poly<Signal>): CollectionWithRange;
 }
 
 /**
@@ -1169,13 +1176,18 @@ function $deferred(channels?: number): DeferredCollection;
  * @param value - Initial value (must be a numeric literal)
  * @param min - Minimum slider value
  * @param max - Maximum slider value
- * @returns A ModuleOutput carrying the slider's current value as a signal
+ * @returns A {@link CollectionWithRange} carrying the slider's current value,
+ *   with a static [min, max] range so \`.range(outMin, outMax)\` infers the
+ *   input bounds from the slider
  *
  * @example
  * const vol = $slider("Volume", 0.5, 0, 1);
  * $sine(440).amplitude(vol).out();
+ * @example
+ * // Range carried by the slider — no need to repeat 100/8000 as input bounds
+ * $saw(110).pipe(s => $lpf(s, $slider("Cutoff", 1000, 100, 8000).range(100, 8000))).out();
  */
-function $slider(label: string, value: number, min: number, max: number): ModuleOutput;
+function $slider(label: string, value: number, min: number, max: number): CollectionWithRange;
 
 /**
  * A send-return bus. Create one with {@link $bus}, then call \`.send(bus, gain)\` on
