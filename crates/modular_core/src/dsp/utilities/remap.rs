@@ -89,12 +89,17 @@ impl Remap {
             );
 
             self.outputs.sample.set(i, output);
-            // The remap output range is exactly the smoothed `outMin..outMax`
-            // — that's the contract. Publish it so downstream `.range(...)`
+            // The remap output range is the smoothed `outMin..outMax` — that's
+            // the contract. Reorder so `rangeMin <= rangeMax` holds for an
+            // inverted remap (`outMin > outMax`), matching the other
+            // dynamic-range utilities. Publish it so downstream `.range(...)`
             // chains and `$clamp` / `$scaleAndShift` can pick it up.
-            self.outputs
-                .sample
-                .set_range(i, *state.out_min, *state.out_max);
+            let (lo, hi) = if *state.out_min <= *state.out_max {
+                (*state.out_min, *state.out_max)
+            } else {
+                (*state.out_max, *state.out_min)
+            };
+            self.outputs.sample.set_range(i, lo, hi);
         }
     }
 }

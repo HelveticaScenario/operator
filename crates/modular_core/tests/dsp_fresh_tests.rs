@@ -1783,6 +1783,80 @@ fn clamp_dynamic_range_intersects_with_input() {
 }
 
 #[test]
+fn remap_dynamic_range_swaps_when_out_min_gt_out_max() {
+    // An inverted remap (`outMin > outMax`) is a legitimate inversion that
+    // map_range handles. The published range must still be ordered
+    // (rangeMin <= rangeMax), matching $wrap / $spread / $scaleAndShift.
+    let m = make_module(
+        "$remap",
+        "remap",
+        json!({ "input": 0.0, "inMin": -5.0, "inMax": 5.0, "outMin": 5.0, "outMax": -5.0 }),
+    );
+    for _ in 0..1000 {
+        Stepper::new().tick(&*m);
+    }
+    let (min, max) = m.get_range("output", 0).unwrap();
+    assert!((min - (-5.0)).abs() < 0.1, "remap rangeMin should be -5 (ordered), got {min}");
+    assert!((max - 5.0).abs() < 0.1, "remap rangeMax should be 5 (ordered), got {max}");
+}
+
+#[test]
+fn scale_and_shift_dynamic_range_negative_gain() {
+    // $sine([-5,5]) → $scaleAndShift(scale=-5, shift=0): g=-1 flips the
+    // bounds, so the published range must be reordered to [-5, 5], not [5, -5].
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "scale": -5.0,
+                "shift": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let sas = patch.sampleables.get("sas").unwrap();
+    let (min, max) = sas.get_range("output", 0).unwrap();
+    assert!((min - (-5.0)).abs() < 0.1, "rangeMin should be ~-5 (reordered), got {min}");
+    assert!((max - 5.0).abs() < 0.1, "rangeMax should be ~5 (reordered), got {max}");
+}
+
+#[test]
+fn clamp_dynamic_range_orders_inverted_bounds() {
+    // $sine([-5,5]) → $clamp(min=3, max=-2): the clamp value path orders the
+    // bounds to [-2, 3], and the composed range must order them the same way
+    // instead of computing lo=3 > hi=-2 and silently dropping the publish
+    // (which would leave the static fallback (-5, 5)).
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": 3.0,
+                "max": -2.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let (min, max) = cl.get_range("output", 0).unwrap();
+    assert!((min - (-2.0)).abs() < 0.1, "clamp rangeMin should be ~-2 (ordered), got {min}");
+    assert!((max - 3.0).abs() < 0.1, "clamp rangeMax should be ~3 (ordered), got {max}");
+}
+
+#[test]
 fn pulse_remap_via_virtual_range_ports_end_to_end() {
     // The cable-driven mirror of `$pulse(width=1.25).range(0, 1)`:
     //   $remap(input=pulse.output, outMin=0, outMax=1,

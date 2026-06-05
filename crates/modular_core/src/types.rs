@@ -245,6 +245,12 @@ pub trait Sampleable: MessageHandler + Send {
     /// the port name that either returns compile-time constants (static
     /// range) or reads the per-channel runtime values written by the inner
     /// module via `PolyOutput::set_range` (dynamic range).
+    ///
+    /// Range is read at **block granularity**: unlike `get_value_at`, this
+    /// takes no sample index and resolves to the producer's latest processed
+    /// slot (with the same re-entrancy guard as `get_value_at`). Dynamic
+    /// ranges therefore track the producer at block, not per-sample,
+    /// resolution — fine for the control-rate bounds `.range(...)` consumes.
     fn get_range(&self, _port: &str, _ch: usize) -> Option<(f32, f32)> {
         None
     }

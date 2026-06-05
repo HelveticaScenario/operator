@@ -205,8 +205,10 @@ fn validate_signal_reference(
 
       // Match either a real output port, or a virtual `<port>.rangeMin` /
       // `<port>.rangeMax` for any output that declared a `range` (static
-      // or dynamic). The `Outputs` derive surfaces both kinds the same way
-      // — for static range outputs `get_at` returns the constant, for
+      // or dynamic). `min_value.is_some()` is precisely the schema imprint of
+      // a declared range, so it matches exactly the ports the `Outputs` derive
+      // emits virtual range ports for. The derive surfaces both kinds the same
+      // way — for static range outputs `get_at` returns the constant, for
       // dynamic_range outputs it reads the per-slot BlockPort.
       let is_valid_port = src_schema.outputs.iter().any(|o| {
         o.name == *src_port
@@ -433,6 +435,9 @@ pub fn validate_patch(
           continue;
         };
 
+        // $scopeXY intentionally accepts only base output ports: the DSL never
+        // produces a scopeXY axis targeting a virtual `<port>.rangeMin` /
+        // `.rangeMax` view, unlike cables and scopes which can.
         if !schema.outputs.iter().any(|o| o.name == *ch.port_name) {
           errors.push(ValidationError {
             field: "scopeXY".to_string(),

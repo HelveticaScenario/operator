@@ -77,7 +77,10 @@ impl Clamp {
 
             // Compose the output range. Start from the input's declared range
             // (falling back to the static clamp output range when unknown),
-            // then intersect each side with the active bound.
+            // then intersect each side with the active bound. When both bounds
+            // are present they are ordered the same way the clamp value path
+            // orders them (above), so an inverted `min > max` still composes a
+            // valid `lo <= hi` range instead of being silently dropped.
             let (in_min, in_max) = self
                 .params
                 .input
@@ -85,13 +88,23 @@ impl Clamp {
                 .unwrap_or((f32::NEG_INFINITY, f32::INFINITY));
             let lo = if has_min {
                 let a = self.params.min.value_or_zero(i);
-                in_min.max(a)
+                let lower = if has_max {
+                    a.min(self.params.max.value_or_zero(i))
+                } else {
+                    a
+                };
+                in_min.max(lower)
             } else {
                 in_min
             };
             let hi = if has_max {
                 let b = self.params.max.value_or_zero(i);
-                in_max.min(b)
+                let upper = if has_min {
+                    b.max(self.params.min.value_or_zero(i))
+                } else {
+                    b
+                };
+                in_max.min(upper)
             } else {
                 in_max
             };

@@ -317,7 +317,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): ModuleOutput',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): Collection',
                 description:
                     'Remap this output from an explicit input range to a new output range. Creates a $remap module internally.',
                 example: "$sine('c4').range(0, 1, -5, 5)",

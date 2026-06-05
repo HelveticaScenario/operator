@@ -32,6 +32,7 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     // ModuleOutputWithRange properties
     "minValue",
     "maxValue",
+    "dynamicRange",
     // ModuleOutputWithRange methods
     "range",
     // BaseCollection / Collection / CollectionWithRange properties

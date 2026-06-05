@@ -444,10 +444,9 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
             }),
             OutputPrecision::PolySignal => copy_inner_stmts.push(quote! {
                 {
-                    // `get_cycling` mirrors the old `PolyOutput::get_cycling`
-                    // semantics: a mono producer broadcasts its single value to
-                    // all consumer channels rather than producing silence on
-                    // channels >= producer channel count.
+                    // `get_cycling` broadcasts a mono producer's single value
+                    // to every consumer channel, so channels >= the producer's
+                    // channel count read the producer's value, not 0.
                     let poly = &inner.#field_name;
                     for ch in 0..crate::poly::PORT_MAX_CHANNELS {
                         self.#field_name.data[slot][ch] = poly.get_cycling(ch);
