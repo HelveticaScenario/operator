@@ -4,7 +4,7 @@
 //! - Voltage values (V/Oct, pre-converted at parse time)
 //! - Rests
 
-use deserr::{Deserr, DeserializeError, ErrorKind, IntoValue, Map, Sequence, ValuePointerRef};
+use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, Map, Sequence, ValuePointerRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -23,7 +23,7 @@ use crate::{
 };
 
 use super::cache::{
-    CycleStorage, MIN_HAPS_CAP_HINT, MIN_SPANS_CAP_HINT, PARAM_CACHE_CYCLES, SPANS_RESERVE_PER_HAP,
+    CycleStorage, MIN_HAPS_CAP_HINT, SPANS_RESERVE_PER_HAP,
     populate_cycle_storage as cache_populate,
 };
 
@@ -440,14 +440,9 @@ pub struct SeqPatternParam {
     /// The parsed pattern.
     pub(crate) pattern: Option<Pattern<SeqValue>>,
 
-    /// Pre-computed haps for cycles 0..PARAM_CACHE_CYCLES.
+    /// Baked haps for the ribbon window `[offset, offset+length)`, one
+    /// `SeqCycleStorage` per cycle. Filled by [`SeqPatternParam::bake`].
     pub(crate) cached_haps: Vec<SeqCycleStorage>,
-
-    /// Largest `haps.len()` seen across the cached cycles.
-    pub(crate) max_haps_per_cycle: usize,
-
-    /// Largest `span_arena.len()` seen across the cached cycles.
-    pub(crate) max_spans_per_cycle: usize,
 }
 
 impl JsonSchema for SeqPatternParam {
@@ -479,15 +474,13 @@ impl SeqPatternParam {
             all_spans: payload.all_spans,
         }];
 
-        let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) = bake_cycles(&pattern);
-
+        // Parse-only: leave `cached_haps` empty. `Seq`'s `validate` hook
+        // bakes the ribbon window once both `pattern` and `ribbon` are known.
         Ok(Self {
             per_source,
             is_multi_source: false,
             pattern: Some(pattern),
-            cached_haps,
-            max_haps_per_cycle,
-            max_spans_per_cycle,
+            cached_haps: Vec::new(),
         })
     }
 
@@ -573,15 +566,12 @@ impl SeqPatternParam {
             })
             .collect();
 
-        let (cached_haps, max_haps_per_cycle, max_spans_per_cycle) = bake_cycles(&voltage_pattern);
-
+        // Parse-only: leave `cached_haps` empty (see `from_payload`).
         Ok(Self {
             per_source,
             is_multi_source: true,
             pattern: Some(voltage_pattern),
-            cached_haps,
-            max_haps_per_cycle,
-            max_spans_per_cycle,
+            cached_haps: Vec::new(),
         })
     }
 
@@ -603,28 +593,35 @@ impl SeqPatternParam {
         self.is_multi_source
     }
 
-    /// Get the pre-computed cached cycle storages for cycles 0..PARAM_CACHE_CYCLES.
+    /// Get the baked cycle storages for the ribbon window.
     pub(crate) fn cached_haps(&self) -> &[SeqCycleStorage] {
         &self.cached_haps
     }
 
-    /// Capacity hint for sizing audio-thread cycle storages.
-    pub(crate) fn max_haps_per_cycle(&self) -> usize {
-        self.max_haps_per_cycle
-    }
-
-    /// Capacity hint for sizing audio-thread span arenas.
-    pub(crate) fn max_spans_per_cycle(&self) -> usize {
-        self.max_spans_per_cycle
+    /// Bake every integer cycle the ribbon window `[offset, offset+length)`
+    /// touches into `cached_haps`, replacing any previous bake. Runs on the
+    /// main thread at parse time (from `Seq`'s `validate` hook), never on the
+    /// audio thread.
+    pub(crate) fn bake(&mut self, offset: f64, length: f64) {
+        if let Some(pattern) = self.pattern.as_ref() {
+            self.cached_haps = bake_cycles(pattern, offset, length);
+        }
     }
 }
 
-/// Pre-compute cycles 0..PARAM_CACHE_CYCLES of a `Pattern<SeqValue>`
-/// into `SeqCycleStorage` slots and derive audio-thread capacity hints.
-fn bake_cycles(pattern: &Pattern<SeqValue>) -> (Vec<SeqCycleStorage>, usize, usize) {
+/// Bake the integer cycles the ribbon window `[offset, offset+length)` touches
+/// — `[floor(offset), ceil(offset+length))` — into one `SeqCycleStorage` per
+/// cycle (`cached_haps[i]` holds cycle `floor(offset) + i`). Runs on the main
+/// thread, so allocation here is fine; the audio thread only ever reads the
+/// result.
+fn bake_cycles(pattern: &Pattern<SeqValue>, offset: f64, length: f64) -> Vec<SeqCycleStorage> {
+    let base = offset.floor() as i64;
+    let end = (offset + length).ceil() as i64; // exclusive
+    let count = (end - base).max(0) as usize;
     let mut bump = bumpalo::Bump::new();
-    let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(PARAM_CACHE_CYCLES);
-    for cycle in 0..PARAM_CACHE_CYCLES as i64 {
+    let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(count);
+    for i in 0..count {
+        let cycle = base + i as i64;
         let mut storage = SeqCycleStorage::with_capacity(
             MIN_HAPS_CAP_HINT,
             MIN_HAPS_CAP_HINT * SPANS_RESERVE_PER_HAP,
@@ -632,15 +629,7 @@ fn bake_cycles(pattern: &Pattern<SeqValue>) -> (Vec<SeqCycleStorage>, usize, usi
         populate_cycle_storage(pattern, cycle, &mut bump, &mut storage);
         cached_haps.push(storage);
     }
-    let max_haps = cached_haps.iter().map(|c| c.haps.len()).max().unwrap_or(0);
-    let max_spans = cached_haps
-        .iter()
-        .map(|c| c.span_arena.len())
-        .max()
-        .unwrap_or(0);
-    let max_haps_per_cycle = (max_haps.max(MIN_HAPS_CAP_HINT) * 3) / 2;
-    let max_spans_per_cycle = (max_spans.max(MIN_SPANS_CAP_HINT) * 3) / 2;
-    (cached_haps, max_haps_per_cycle, max_spans_per_cycle)
+    cached_haps
 }
 
 // deserr implementation: reads either a plain `ParsedPatternPayload`

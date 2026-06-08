@@ -7951,6 +7951,26 @@
               "type": "null"
             }
           ]
+        },
+        "ribbon": {
+          "description": "loop window [offset, length] in cycles (fractional allowed)",
+          "type": "array",
+          "default": [
+            0.0,
+            1024.0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "number",
+              "format": "double"
+            }
+          ]
         }
       },
       "required": [

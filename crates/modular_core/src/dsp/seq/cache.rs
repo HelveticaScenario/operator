@@ -1,9 +1,8 @@
 //! Shared cycle-cache primitives for the pattern-based sequencer modules.
 //!
-//! `Seq` caches pre-computed hap data in two tiers:
-//! the param cache (cycles `0..PARAM_CACHE_CYCLES`, built at parse time on
-//! the main thread) and the audio-thread module cache (cycles past the
-//! param cache horizon, up to `MAX_MODULE_CYCLES` slots, populated lazily).
+//! `Seq` bakes every cycle of its ribbon loop window `[offset, offset+length)`
+//! once at parse time on the main thread, then loops that window forever — the
+//! audio thread never re-evaluates the pattern.
 //!
 //! Each cycle's data lives in a [`CycleStorage`] holding two parallel
 //! pre-sized `Vec`s: one of scalar haps `H`, one of span entries `S`.
@@ -13,23 +12,12 @@
 
 use crate::pattern_system::{ArenaHap, Pattern};
 
-/// Number of cycles pre-computed at parse time on the main thread. Cycles
-/// beyond this fall through to the per-module audio-thread cache.
-pub(crate) const PARAM_CACHE_CYCLES: usize = 1024;
-
-/// Maximum number of cycles cached by the audio thread past the param
-/// cache. Slots are pre-allocated, so this is a memory/latency tradeoff.
-pub(crate) const MAX_MODULE_CYCLES: usize = 64;
-
-/// Heuristic floor for `max_haps_per_cycle`. Keeps the per-slot Vec from
-/// reallocating on an occasional cycle whose hap count exceeds the
-/// param-time observed maximum.
+/// Initial per-slot `haps` Vec capacity used when baking a cycle. A floor so
+/// the bake-time `push` loop rarely reallocates; the main-thread bake may grow
+/// it past this for dense cycles.
 pub(crate) const MIN_HAPS_CAP_HINT: usize = 16;
 
-/// Heuristic floor for `max_spans_per_cycle`.
-pub(crate) const MIN_SPANS_CAP_HINT: usize = 32;
-
-/// Initial span_arena sizing per cached cycle.
+/// Initial span_arena sizing per cached cycle (`MIN_HAPS_CAP_HINT * this`).
 pub(crate) const SPANS_RESERVE_PER_HAP: usize = 4;
 
 /// Flat span entry tagged with the source pattern it belongs to. Used by
@@ -75,57 +63,18 @@ impl<H, S> CycleStorage<H, S> {
     }
 }
 
-/// Pre-allocate `module_cache` to [`MAX_MODULE_CYCLES`] slots, each sized
-/// to the supplied capacity hints. Call from the main thread on patch
-/// update so the audio thread never reallocates the cache.
-pub(crate) fn rebuild_module_cache<H, S>(
-    module_cache: &mut Vec<CycleStorage<H, S>>,
-    module_cache_populated: &mut Vec<bool>,
-    hap_cap: usize,
-    span_cap: usize,
-) {
-    module_cache.clear();
-    module_cache.reserve_exact(MAX_MODULE_CYCLES);
-    for _ in 0..MAX_MODULE_CYCLES {
-        module_cache.push(CycleStorage::with_capacity(hap_cap, span_cap));
-    }
-    module_cache_populated.clear();
-    module_cache_populated.resize(MAX_MODULE_CYCLES, false);
-}
-
-/// Clear every slot's content but keep their allocated capacities. Reset
-/// the populated flags. Voices keep their cached scalar copy so any
-/// sounding note can still be released by its `whole_end` afterwards.
-pub(crate) fn invalidate_module_cache<H, S>(
-    module_cache: &mut [CycleStorage<H, S>],
-    module_cache_populated: &mut [bool],
-) {
-    for slot in module_cache.iter_mut() {
-        slot.reset();
-    }
-    for p in module_cache_populated.iter_mut() {
-        *p = false;
-    }
-}
-
-/// Look up `cycle`'s storage. Cycles in `0..PARAM_CACHE_CYCLES` come from
-/// the param cache; later cycles come from the audio-thread module cache
-/// (if a slot has been populated for that cycle).
-pub(crate) fn get_cycle_storage<'a, H, S>(
+/// Look up `cycle`'s storage in the baked ribbon window. `cached` holds the
+/// haps for cycles `[base, base+cached.len())` where `base = floor(offset)`; a
+/// `cycle` below `base` or past the end of the window has no storage.
+pub(crate) fn get_cycle_storage<H, S>(
     cycle: i64,
-    param_cache: &'a [CycleStorage<H, S>],
-    module_cache: &'a [CycleStorage<H, S>],
-    module_cache_populated: &[bool],
-) -> Option<&'a CycleStorage<H, S>> {
-    if cycle < PARAM_CACHE_CYCLES as i64 {
-        param_cache.get(cycle as usize)
+    base: i64,
+    cached: &[CycleStorage<H, S>],
+) -> Option<&CycleStorage<H, S>> {
+    if cycle < base {
+        None
     } else {
-        let module_idx = (cycle - PARAM_CACHE_CYCLES as i64) as usize;
-        if module_idx < module_cache.len() && module_cache_populated[module_idx] {
-            Some(&module_cache[module_idx])
-        } else {
-            None
-        }
+        cached.get((cycle - base) as usize)
     }
 }
 
