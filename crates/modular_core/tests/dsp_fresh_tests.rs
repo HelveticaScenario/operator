@@ -30,8 +30,8 @@ const DEFAULT_PORT: &str = "output";
 /// Note: cycle classification (`Block` vs `Sample`) is the caller's
 /// responsibility in `Patch::from_graph`; the tests below pass an empty
 /// `mode_map`, which defaults every module to `Block`. Cycle-aware tests
-/// would build the map via `modular::graph_analysis::classify_modules`
-/// first, but the patches here are acyclic.
+/// would build the map via `modular::graph_analysis::analyze` first, but the
+/// patches here are acyclic.
 const TEST_BLOCK_SIZE: usize = 1;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

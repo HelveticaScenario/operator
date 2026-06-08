@@ -226,8 +226,10 @@ pub trait Sampleable: MessageHandler + Send {
     fn ensure_processed_to(&self, target: usize);
 
     /// Complete any remaining block computation. Equivalent to
-    /// `ensure_processed_to(block_size)`. Called on every module after the
-    /// sink pull so disconnected modules also advance their state.
+    /// `ensure_processed_to(block_size)`. Used by composite modules to fully
+    /// drive a nested sub-module. (The audio thread force-advances every
+    /// top-level module each block via `ensure_processed_to(end)` in
+    /// producer-before-consumer order, so disconnected modules still run.)
     fn ensure_processed(&self);
 
     /// Read the value of port `port`, channel `ch`, at sample slot `index`

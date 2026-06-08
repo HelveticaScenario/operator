@@ -57,10 +57,10 @@ pub trait CloneableParams: Send + 'static {
     /// Walk the params and push every producer module ID it references
     /// (cables, buffer sources, table-internal signals) into `sink`.
     ///
-    /// Used by graph cycle classification before module construction so
-    /// downstream code (e.g. `graph_analysis::classify_modules`) can decide
-    /// whether each module needs `Block` or `Sample` processing without
-    /// requiring the audio thread to know the params type.
+    /// Used to build the cable adjacency map before module construction so
+    /// `graph_analysis::analyze` can decide whether each module needs `Block`
+    /// or `Sample` processing and compute the cache-efficient processing
+    /// order, without requiring the audio thread to know the params type.
     fn collect_cables(&self, sink: &mut Vec<String>);
 }
 

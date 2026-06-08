@@ -1418,10 +1418,14 @@ impl AudioState {
       deserialized_modules.push((id, module_state.module_type, deserialized));
     }
 
-    // Tarjan SCC over the adjacency map. Cycle participants get `Sample`
-    // mode so the wrapper computes one sample at a time and the 1-sample
-    // feedback delay invariant holds; everyone else gets `Block`.
-    let mode_map = crate::graph_analysis::classify_modules(&adjacency);
+    // One Tarjan SCC pass over the adjacency map yields both the per-module
+    // processing mode and a cache-efficient processing order. Cycle
+    // participants get `Sample` mode so the wrapper computes one sample at a
+    // time and the 1-sample feedback delay invariant holds; everyone else
+    // gets `Block`. The order lists producers before consumers.
+    let analysis = crate::graph_analysis::analyze(&adjacency);
+    let mode_map = analysis.modes;
+    update.process_order_ids = analysis.order;
 
     // Pass 2 — construct modules on the main thread with the resolved mode.
     // The audio thread will always replace existing modules and transfer state.
@@ -1589,9 +1593,35 @@ fn chrono_simple_timestamp() -> String {
 
 /// Audio processor that runs on the audio thread.
 /// Owns the Patch directly and processes commands from the main thread.
+/// A raw handle into an audio-thread-owned module box, used to drive every
+/// module's processing in a cache-efficient order without a per-module hash
+/// lookup. SAFETY mirrors the cable `cached_source_ptr` (see
+/// `modular_core::types::SampleablePtr`): the pointer is resolved from a box
+/// in `AudioProcessor::patch.sampleables` after `connect()`, rebuilt on every
+/// structural patch change (insert/remove/remap/replace), and dereferenced
+/// only on the audio thread, which has exclusive access to the patch.
+/// `ensure_processed_to` takes `&self` and mutates only through the module's
+/// `UnsafeCell`, so shared aliasing with the owning `Box` is sound.
+struct ProcessHandle(modular_core::types::SampleablePtr);
+
+// SAFETY: the pointed-to module is `Send` (Sampleable: Send) and is only ever
+// dereferenced on the audio thread that owns the patch. This mirrors the
+// `unsafe impl Send` on `Signal`/`Buffer`, which cache the same pointer type.
+unsafe impl Send for ProcessHandle {}
+
 struct AudioProcessor {
   /// The DSP patch graph - owned directly, no mutex needed
   patch: Patch,
+  /// Cache-efficient processing order: raw handles into every module box in
+  /// `patch.sampleables`, ordered producers-before-consumers. Walked once per
+  /// block by `process_all_modules_to` so every module advances each block,
+  /// whether or not it is reachable from the output or a scope. Rebuilt from
+  /// `process_order_ids` on every structural patch change.
+  process_order: Vec<ProcessHandle>,
+  /// The module IDs behind `process_order`, in the same order, kept so the
+  /// pointer list can be rebuilt after a box moves (e.g. `SingleModuleUpdate`)
+  /// without re-running graph analysis.
+  process_order_ids: Vec<String>,
   /// Command queue consumer
   command_rx: CommandConsumer,
   /// Error queue producer
@@ -1655,6 +1685,8 @@ impl AudioProcessor {
   ) -> Self {
     Self {
       patch: Patch::new(),
+      process_order: Vec::new(),
+      process_order_ids: Vec::new(),
       command_rx,
       error_tx,
       garbage_tx,
@@ -1769,6 +1801,11 @@ impl AudioProcessor {
           for module in self.patch.sampleables.values() {
             module.on_patch_update();
           }
+          // The old box was dropped and a fresh one inserted at this id, so its
+          // cached pointer now dangles. The graph shape is unchanged (same
+          // modules and cables — only this module's params differ), so reuse
+          // `process_order_ids` and just re-resolve the pointers.
+          self.rebuild_process_order_ptrs();
         }
         GraphCommand::DispatchMessage(msg) => {
           if let Err(e) = self.patch.dispatch_message(&msg) {
@@ -1839,6 +1876,10 @@ impl AudioProcessor {
           }
           self.patch.insert_audio_in();
           self.patch.rebuild_message_listeners();
+          // No user modules remain (only the hidden audio-in, which is driven
+          // by injection), so there is nothing to force-process.
+          self.process_order.clear();
+          self.process_order_ids.clear();
         }
         GraphCommand::SetLink(new_resources) => {
           // Construction/destruction of `AblLink` (and `enable()`) are
@@ -1878,6 +1919,7 @@ impl AudioProcessor {
       remaps,
       inserts,
       desired_ids,
+      process_order_ids,
       scope_adds,
       scope_removes,
       scope_xy_adds,
@@ -1981,6 +2023,11 @@ impl AudioProcessor {
       module.on_patch_update();
     }
 
+    // Adopt the new processing order and resolve it to live box pointers. Must
+    // come after every structural mutation above so no pointer dangles.
+    self.process_order_ids = process_order_ids;
+    self.rebuild_process_order_ptrs();
+
     // Update scopes
     {
       let mut scope_collection = self.scope_collection.lock();
@@ -2074,6 +2121,53 @@ impl AudioProcessor {
     }
     if let Some(audio_in) = self.patch.sampleables.get(WellKnownModule::HiddenAudioIn.id()) {
       audio_in.inject_audio_in_block(&self.input_block_scratch);
+    }
+  }
+
+  /// Rebuild the cache-efficient processing-order pointer list from the
+  /// stored `process_order_ids`. Each `SampleablePtr` targets a module's heap
+  /// pointee (via `module.as_ref()`), which stays put when its `Box` is moved
+  /// (a HashMap rehash relocates the fat pointer, not the allocation) — that
+  /// stability is exactly what makes the cached-pointer scheme sound. A handle
+  /// only dangles when its module is dropped or replaced (the pointee is
+  /// freed), so this must run after ANY mutation of `patch.sampleables` that
+  /// removes/replaces a module — the same discipline the cable
+  /// `cached_source_ptr`s follow, which is why every such site also re-runs
+  /// `connect()`. IDs absent from the patch (e.g. dangling cable targets) are
+  /// skipped. Allocates, so it only runs on the patch-swap path, never in the
+  /// per-sample loop.
+  fn rebuild_process_order_ptrs(&mut self) {
+    let AudioProcessor {
+      patch,
+      process_order,
+      process_order_ids,
+      ..
+    } = self;
+    process_order.clear();
+    process_order.reserve(process_order_ids.len());
+    for id in process_order_ids.iter() {
+      if let Some(module) = patch.sampleables.get(id) {
+        process_order.push(ProcessHandle(modular_core::types::SampleablePtr::from(
+          module.as_ref(),
+        )));
+      }
+    }
+  }
+
+  /// Force every module — including those not reachable from the output or any
+  /// scope — to advance to slot `end` within the current internal block, in
+  /// cache-efficient producer-before-consumer order. Each wrapper memoises per
+  /// slot, so this is idempotent and any later root/scope `get_value_at` read
+  /// of an already-advanced slot is a pure cache hit. Cycles stay correct
+  /// regardless of which member is reached first: the wrapper's reentrancy
+  /// guard preserves the 1-sample feedback delay.
+  #[inline]
+  fn process_all_modules_to(&self, end: usize) {
+    for handle in &self.process_order {
+      // SAFETY: see `ProcessHandle`. Audio-thread-exclusive access; the
+      // pointer is live (rebuilt on every structural patch change) and
+      // `ensure_processed_to` mutates only through the module's UnsafeCell.
+      unsafe { handle.0.as_ref().ensure_processed_to(end) };
     }
   }
 
@@ -2310,6 +2404,16 @@ where
               };
 
               let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
+
+              // Force every module to advance to `end`, in cache-efficient
+              // producer-before-consumer order, so modules not reachable from
+              // the output or any scope still process. The root/scope reads in
+              // the drain below then become pure cache hits. Skipped while
+              // stopped so the patch freezes on stop — the drain still ramps
+              // connected modules out via the root pull during the fade.
+              if end > audio_processor.block_pos && !audio_processor.is_stopped() {
+                audio_processor.process_all_modules_to(end);
+              }
 
               // Drain [block_pos, end) into cpal output, inlining the
               // volume-change state machine + soft clip that
@@ -3199,6 +3303,47 @@ mod tests {
     }
   }
 
+  /// A module whose `ensure_processed_to` bumps a shared counter, so tests can
+  /// verify the audio thread force-processes it even with no connections.
+  struct CountingProcessModule {
+    current_id: String,
+    processed: Arc<AtomicUsize>,
+  }
+
+  impl CountingProcessModule {
+    fn new(id: &str, processed: Arc<AtomicUsize>) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: id.to_string(),
+        processed,
+      })
+    }
+  }
+
+  impl MessageHandler for CountingProcessModule {}
+
+  impl modular_core::types::Sampleable for CountingProcessModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn get_module_type(&self) -> &str {
+      "counting-process"
+    }
+    fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn start_block(&self) {}
+    fn ensure_processed_to(&self, _target: usize) {
+      self.processed.fetch_add(1, Ordering::SeqCst);
+    }
+    fn ensure_processed(&self) {
+      self.ensure_processed_to(1);
+    }
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      0.0
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
   fn create_test_processor() -> (CommandProducer, AudioProcessor) {
     let (
       cmd_producer,
@@ -3471,6 +3616,104 @@ mod tests {
       .unwrap()
       .get_value_at("out", 0, 0);
     assert_eq!(updated, 7.25);
+  }
+
+  #[test]
+  fn process_order_drives_disconnected_module() {
+    // A module with no cables, feeding neither the output nor any scope, must
+    // still be force-processed each block.
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let processed = Arc::new(AtomicUsize::new(0));
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "iso".into(),
+      CountingProcessModule::new("iso", Arc::clone(&processed)),
+    ));
+    update.desired_ids.insert("iso".into());
+    update.process_order_ids = vec!["iso".into()];
+
+    processor.apply_patch_update(update, 0);
+
+    // apply_patch_update resolved the id order into a live pointer list.
+    assert_eq!(processor.process_order.len(), 1);
+
+    processor.process_all_modules_to(1);
+    assert_eq!(processed.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn process_order_skips_ids_absent_from_patch() {
+    // A dangling id in the order (e.g. a cable target that isn't a module) is
+    // skipped rather than resolved to a bogus pointer.
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let processed = Arc::new(AtomicUsize::new(0));
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "real".into(),
+      CountingProcessModule::new("real", Arc::clone(&processed)),
+    ));
+    update.desired_ids.insert("real".into());
+    update.process_order_ids = vec!["real".into(), "ghost".into()];
+
+    processor.apply_patch_update(update, 0);
+
+    // Only the real module yields a pointer; "ghost" is silently dropped.
+    assert_eq!(processor.process_order.len(), 1);
+    processor.process_all_modules_to(1);
+    assert_eq!(processed.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn process_order_repointed_after_single_module_update() {
+    // SingleModuleUpdate moves the box, so the cached pointer must be rebuilt
+    // to target the replacement, never the freed original.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+    let old_processed = Arc::new(AtomicUsize::new(0));
+    let new_processed = Arc::new(AtomicUsize::new(0));
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "m".into(),
+      CountingProcessModule::new("m", Arc::clone(&old_processed)),
+    ));
+    update.desired_ids.insert("m".into());
+    update.process_order_ids = vec!["m".into()];
+    processor.apply_patch_update(update, 0);
+
+    cmd_producer
+      .push(GraphCommand::SingleModuleUpdate {
+        module_id: "m".into(),
+        module: CountingProcessModule::new("m", Arc::clone(&new_processed)),
+      })
+      .unwrap();
+    processor.process_commands();
+
+    processor.process_all_modules_to(1);
+    assert_eq!(old_processed.load(Ordering::SeqCst), 0);
+    assert_eq!(new_processed.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn process_order_cleared_on_clear_patch() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "m".into(),
+      CountingProcessModule::new("m", Arc::new(AtomicUsize::new(0))),
+    ));
+    update.desired_ids.insert("m".into());
+    update.process_order_ids = vec!["m".into()];
+    processor.apply_patch_update(update, 0);
+    assert_eq!(processor.process_order.len(), 1);
+
+    cmd_producer.push(GraphCommand::ClearPatch).unwrap();
+    processor.process_commands();
+
+    assert!(processor.process_order.is_empty());
+    assert!(processor.process_order_ids.is_empty());
   }
 
   #[test]
