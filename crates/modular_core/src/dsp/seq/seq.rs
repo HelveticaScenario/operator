@@ -98,18 +98,19 @@ fn default_channels() -> usize {
 
 /// Default ribbon loop length in cycles. Same memory/cost as the old
 /// param cache (cycles `0..1024` baked at parse time).
-const DEFAULT_RIBBON_LENGTH: u64 = 1024;
+const DEFAULT_RIBBON_LENGTH: f64 = 1024.0;
 
-/// Largest ribbon loop length. The whole window bakes synchronously on the
-/// main thread on every pattern/ribbon edit, so it is capped.
-const MAX_RIBBON_LENGTH: u64 = 8192;
+/// Largest ribbon loop length. The window touches `ceil(offset+length) -
+/// floor(offset)` integer cycles, each baked synchronously on the main thread
+/// on every pattern/ribbon edit, so it is capped.
+const MAX_RIBBON_LENGTH: f64 = 8192.0;
 
 /// Largest ribbon offset. Generous, and keeps `offset + length` exact in
 /// `f64` (well under 2^53).
-const MAX_RIBBON_OFFSET: u64 = 1_000_000;
+const MAX_RIBBON_OFFSET: f64 = 1_000_000.0;
 
-fn default_ribbon() -> (u64, u64) {
-    (0, DEFAULT_RIBBON_LENGTH)
+fn default_ribbon() -> (f64, f64) {
+    (0.0, DEFAULT_RIBBON_LENGTH)
 }
 
 #[derive(Clone, Deserr, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
@@ -126,10 +127,10 @@ pub struct SeqParams {
     /// Number of polyphonic voices (1-16)
     #[deserr(default)]
     pub channels: Option<usize>,
-    /// loop window [offset, length] in cycles
+    /// loop window [offset, length] in cycles (fractional allowed)
     #[serde(default = "default_ribbon")]
     #[deserr(default = default_ribbon())]
-    ribbon: (u64, u64),
+    ribbon: (f64, f64),
     /// The pattern string (used for serialization)
     #[serde(skip)]
     #[deserr(skip)]
@@ -146,29 +147,31 @@ fn seq_bake_ribbon(
     _location: deserr::ValuePointerRef,
 ) -> Result<SeqParams, ModuleParamErrors> {
     let (offset, length) = params.ribbon;
-    if length == 0 {
+    let reject = |msg: String| {
         let mut err = ModuleParamErrors::default();
-        err.add(
-            "ribbon".to_string(),
-            "ribbon loop length must be greater than 0".to_string(),
-        );
-        return Err(err);
+        err.add("ribbon".to_string(), msg);
+        Err(err)
+    };
+    // Finiteness first, so ±∞ reports as non-finite rather than over-cap and
+    // NaN never reaches the comparisons below (where it would silently pass).
+    if !offset.is_finite() || !length.is_finite() {
+        return reject("ribbon values must be finite".to_string());
+    }
+    if length <= 0.0 {
+        return reject("ribbon loop length must be greater than 0".to_string());
     }
     if length > MAX_RIBBON_LENGTH {
-        let mut err = ModuleParamErrors::default();
-        err.add(
-            "ribbon".to_string(),
-            format!("ribbon loop length must be {MAX_RIBBON_LENGTH} cycles or fewer"),
-        );
-        return Err(err);
+        return reject(format!(
+            "ribbon loop length must be {MAX_RIBBON_LENGTH} cycles or fewer"
+        ));
+    }
+    if offset < 0.0 {
+        return reject("ribbon offset must be 0 or greater".to_string());
     }
     if offset > MAX_RIBBON_OFFSET {
-        let mut err = ModuleParamErrors::default();
-        err.add(
-            "ribbon".to_string(),
-            format!("ribbon offset must be {MAX_RIBBON_OFFSET} cycles or fewer"),
-        );
-        return Err(err);
+        return reject(format!(
+            "ribbon offset must be {MAX_RIBBON_OFFSET} cycles or fewer"
+        ));
     }
     params.pattern.bake(offset, length);
     Ok(params)
@@ -384,33 +387,39 @@ impl Seq {
     fn get_cycle_storage(&self, cycle: i64) -> Option<&SeqCycleStorage> {
         super::cache::get_cycle_storage(
             cycle,
-            self.params.ribbon.0,
+            self.params.ribbon.0.floor() as i64,
             self.params.pattern.cached_haps(),
         )
     }
 
     fn update(&mut self, sample_rate: f32) {
         // `raw` is the monotonic clock playhead (cycles, fractional). The
-        // ribbon folds it into the baked window with an unsigned modulo:
-        // clock cycle 0 maps to baked cycle `offset`, and the window loops
-        // forever, phase-locked to the clock.
+        // ribbon folds it into the baked window with a continuous-time modulo,
+        // so a fractional `offset`/`length` defines a loop window whose seam
+        // can fall mid-cycle. The window loops forever, phase-locked to the
+        // clock: clock pos 0 plays the window start (`offset`).
         let raw = self.params.playhead.value_or_zero() as f64;
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
 
         let (offset, length) = self.params.ribbon; // length > 0 (validated)
         // Fold the clock into the baked window. Clamp once for the window math
-        // so a (deliberately wired) negative playhead pins to the cycle start
+        // so a (deliberately wired) negative playhead pins to the window start
         // rather than producing a spurious mid-cycle phase. Release below keys
         // off the unclamped monotonic `raw`, tracking each note's true span.
         let raw_clamped = raw.max(0.0);
-        let raw_cycle = raw_clamped.floor() as u64;
-        let slot = raw_cycle % length; // 0..length
-        let current_cycle = (offset + slot) as i64; // baked cycle ∈ [offset, offset+length)
-        // Playhead in the baked cycle's logical frame — the same absolute
-        // frame the cycle's haps live in, so onset / `already_assigned`
-        // checks work exactly as before.
-        let logical = current_cycle as f64 + (raw_clamped - raw_clamped.floor());
+        let base = offset.floor() as i64; // first baked cycle = floor(offset)
+        let phase = raw_clamped.rem_euclid(length); // [0, length)
+        let pos = offset + phase; // playhead in the window, ∈ [offset, offset+length)
+        // Integer cycle for the storage lookup and the `already_assigned`
+        // dedup key. `pos.floor() >= base`, so the index below is never
+        // negative.
+        let current_cycle = pos.floor() as i64;
+        // Playhead in the pattern's absolute frame — the same frame the baked
+        // cycle's haps live in, so onset / `already_assigned` checks work
+        // exactly as before. (For integer offset/length, `pos == old logical`.)
+        let logical = pos;
+        let storage_index = (current_cycle - base) as usize;
 
         // Release voices whose notes have ended. A note's life is tracked in
         // the monotonic `raw` frame (two-sided, so a backward scrub also
@@ -453,7 +462,7 @@ impl Seq {
             ..
         } = &mut self.state;
         events_to_process.clear();
-        let storage_opt = self.params.pattern.cached_haps().get(slot as usize);
+        let storage_opt = self.params.pattern.cached_haps().get(storage_index);
         if let Some(storage) = storage_opt {
             for (hap_index, hap) in storage.haps.iter().enumerate() {
                 if !hap.has_onset || logical < hap.part_begin || logical >= hap.part_end {
@@ -668,3 +677,57 @@ impl crate::types::StatefulModule for Seq {
 }
 
 message_handlers!(impl Seq {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params_with_ribbon(ribbon: (f64, f64)) -> SeqParams {
+        SeqParams {
+            pattern: SeqPatternParam::default(),
+            playhead: None,
+            channels: None,
+            ribbon,
+            pattern_source: String::new(),
+        }
+    }
+
+    fn reject_message(ribbon: (f64, f64)) -> Option<String> {
+        seq_bake_ribbon(params_with_ribbon(ribbon), deserr::ValuePointerRef::Origin)
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    /// NaN / ±∞ cannot reach this hook through the JSON graph (serde_json
+    /// rejects non-finite numbers), but the hook guards finiteness directly so
+    /// no caller can ever drive `floor`/`ceil`/`rem_euclid` with a non-finite
+    /// ribbon value. The finite check runs first, ahead of the magnitude
+    /// bounds, so ±∞ is reported as non-finite rather than over-cap.
+    #[test]
+    fn seq_bake_ribbon_rejects_non_finite() {
+        for bad in [
+            (f64::NAN, 4.0),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 4.0),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, 4.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let msg = reject_message(bad)
+                .unwrap_or_else(|| panic!("expected rejection for ribbon {bad:?}"));
+            assert!(
+                msg.contains("ribbon values must be finite"),
+                "ribbon {bad:?} got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn seq_bake_ribbon_accepts_finite_fractional() {
+        assert!(
+            seq_bake_ribbon(params_with_ribbon((0.5, 1.5)), deserr::ValuePointerRef::Origin)
+                .is_ok(),
+            "a finite fractional ribbon must pass the bounds hook"
+        );
+    }
+}

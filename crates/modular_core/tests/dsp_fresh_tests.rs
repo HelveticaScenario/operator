@@ -1500,10 +1500,20 @@ fn track_clamps_playhead_below_zero() {
 /// Build a `$cycle` patch clocked at 48000 BPM 4/4 (240 samples per cycle),
 /// optionally with a `ribbon: [offset, length]` window.
 fn make_cycle_patch(pattern: Value, ribbon: Option<[u64; 2]>) -> Patch {
+    make_cycle_patch_ribbon(pattern, ribbon.map(|[offset, length]| json!([offset, length])))
+}
+
+/// Like [`make_cycle_patch`] but with a fractional `[offset, length]` ribbon.
+fn make_cycle_patch_frac(pattern: Value, ribbon: [f64; 2]) -> Patch {
+    let [offset, length] = ribbon;
+    make_cycle_patch_ribbon(pattern, Some(json!([offset, length])))
+}
+
+fn make_cycle_patch_ribbon(pattern: Value, ribbon: Option<Value>) -> Patch {
     let mut params = serde_json::Map::new();
     params.insert("pattern".to_string(), pattern);
-    if let Some([offset, length]) = ribbon {
-        params.insert("ribbon".to_string(), json!([offset, length]));
+    if let Some(ribbon) = ribbon {
+        params.insert("ribbon".to_string(), ribbon);
     }
     let graph = make_graph(vec![
         (
@@ -1736,15 +1746,19 @@ fn seq_ribbon_rejects_invalid_bounds() {
         Err(msg) => assert!(msg.contains("ribbon offset must be"), "got: {msg}"),
         Ok(_) => panic!("expected error for over-cap ribbon offset"),
     }
-    // Structural: `u64` rejects a negative offset and a fractional value at
-    // parse time, before the bounds hook runs.
+    // A negative offset is now rejected by the bounds hook (not structurally,
+    // since `f64` accepts it).
+    match attempt(json!([-1, 4])) {
+        Err(msg) => assert!(
+            msg.contains("ribbon offset must be 0 or greater"),
+            "got: {msg}"
+        ),
+        Ok(_) => panic!("expected error for negative ribbon offset"),
+    }
+    // Fractional values are now VALID — a fractional window is the whole point.
     assert!(
-        attempt(json!([-1, 4])).is_err(),
-        "negative offset must be rejected"
-    );
-    assert!(
-        attempt(json!([0.5, 4])).is_err(),
-        "fractional value must be rejected"
+        attempt(json!([0.5, 4])).is_ok(),
+        "fractional ribbon must be accepted"
     );
 }
 
@@ -1832,4 +1846,100 @@ fn seq_ribbon_note_dividing_window_loops_seamlessly() {
         mids4.iter().all(|&g| g),
         "4-cycle note (4 % 2 == 0) also loops with no gap: {mids4:?}"
     );
+}
+
+/// True if any sample in `trace` is within `eps` of `target`.
+fn trace_contains(trace: &[f32], target: f32, eps: f32) -> bool {
+    trace.iter().any(|&v| (v - target).abs() < eps)
+}
+
+/// A fractional ribbon LENGTH defines a loop window whose seam falls mid-cycle.
+/// `ribbon:[0, 1.5]` bakes the slice of cycles 0 and 1 the window touches and
+/// loops with period 1.5 cycles (360 samples): the slowcat only ever plays its
+/// cycle-0 (`c4`) and cycle-1 (`e4`) notes — never cycle 2 (`g4`) or cycle 3
+/// (`b4`) — and the cv trace repeats every 1.5 cycles in steady state.
+#[test]
+fn seq_ribbon_fractional_length_loops() {
+    const SPC: usize = 240;
+    // Reference voltages for the slowcat's first four cycles.
+    let notes = cycle_midpoint_values(
+        &make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), None),
+        "cv",
+        4,
+    );
+    let (c4, e4, g4, b4) = (notes[0], notes[1], notes[2], notes[3]);
+
+    let trace = cycle_port_trace(
+        &make_cycle_patch_frac(mini_payload("<c4 e4 g4 b4>"), [0.0, 1.5]),
+        "cv",
+        9 * SPC,
+    );
+
+    // The window plays both of the cycles it touches...
+    assert!(trace_contains(&trace, c4, 0.01), "window plays cycle 0 (c4)");
+    assert!(trace_contains(&trace, e4, 0.01), "window plays cycle 1 (e4)");
+    // ...and never the cycles beyond it.
+    assert!(
+        !trace_contains(&trace, g4, 0.01),
+        "fractional window [0,1.5) never reaches cycle 2 (g4)"
+    );
+    assert!(
+        !trace_contains(&trace, b4, 0.01),
+        "fractional window [0,1.5) never reaches cycle 3 (b4)"
+    );
+
+    // Loops with period 1.5 cycles (360 samples), checked in steady state
+    // (after the first 4 cycles of warm-up).
+    let period = 360; // 1.5 * 240
+    for s in (4 * SPC)..(6 * SPC) {
+        assert!(
+            approx_eq(trace[s], trace[s + period], 0.01),
+            "cv repeats every 1.5 cycles: sample {s}={} vs {}={}",
+            trace[s],
+            s + period,
+            trace[s + period]
+        );
+    }
+}
+
+/// A fractional ribbon OFFSET starts the loop window partway into the pattern.
+/// `ribbon:[0.5, 2]` covers pattern positions [0.5, 2.5): cycle 0's second
+/// half, all of cycle 1, and cycle 2's first half — so the slowcat plays `c4`,
+/// `e4` AND `g4` (reaching into cycle 2, which an integer `[0,2]` window never
+/// would), but never cycle 3's `b4`. It loops with period 2 cycles.
+#[test]
+fn seq_ribbon_fractional_offset_window() {
+    const SPC: usize = 240;
+    let notes = cycle_midpoint_values(
+        &make_cycle_patch(mini_payload("<c4 e4 g4 b4>"), None),
+        "cv",
+        4,
+    );
+    let (c4, e4, g4, b4) = (notes[0], notes[1], notes[2], notes[3]);
+
+    let trace = cycle_port_trace(
+        &make_cycle_patch_frac(mini_payload("<c4 e4 g4 b4>"), [0.5, 2.0]),
+        "cv",
+        8 * SPC,
+    );
+
+    assert!(trace_contains(&trace, c4, 0.01), "window includes cycle 0 (c4)");
+    assert!(trace_contains(&trace, e4, 0.01), "window includes cycle 1 (e4)");
+    assert!(
+        trace_contains(&trace, g4, 0.01),
+        "fractional offset 0.5 reaches into cycle 2 (g4)"
+    );
+    assert!(
+        !trace_contains(&trace, b4, 0.01),
+        "window [0.5,2.5) never reaches cycle 3 (b4)"
+    );
+
+    // Loops with period 2 cycles (480 samples) in steady state.
+    for s in (4 * SPC)..(6 * SPC) {
+        assert!(
+            approx_eq(trace[s], trace[s + 2 * SPC], 0.01),
+            "cv repeats every 2 cycles: sample {s} vs {}",
+            s + 2 * SPC
+        );
+    }
 }

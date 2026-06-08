@@ -598,24 +598,30 @@ impl SeqPatternParam {
         &self.cached_haps
     }
 
-    /// Bake every cycle of the ribbon window `[offset, offset+length)` into
-    /// `cached_haps`, replacing any previous bake. Runs on the main thread at
-    /// parse time (from `Seq`'s `validate` hook), never on the audio thread.
-    pub(crate) fn bake(&mut self, offset: u64, length: u64) {
+    /// Bake every integer cycle the ribbon window `[offset, offset+length)`
+    /// touches into `cached_haps`, replacing any previous bake. Runs on the
+    /// main thread at parse time (from `Seq`'s `validate` hook), never on the
+    /// audio thread.
+    pub(crate) fn bake(&mut self, offset: f64, length: f64) {
         if let Some(pattern) = self.pattern.as_ref() {
             self.cached_haps = bake_cycles(pattern, offset, length);
         }
     }
 }
 
-/// Bake cycles `[offset, offset+length)` of a `Pattern<SeqValue>` into one
-/// `SeqCycleStorage` per cycle. Runs on the main thread, so allocation here is
-/// fine; the audio thread only ever reads the result.
-fn bake_cycles(pattern: &Pattern<SeqValue>, offset: u64, length: u64) -> Vec<SeqCycleStorage> {
+/// Bake the integer cycles the ribbon window `[offset, offset+length)` touches
+/// — `[floor(offset), ceil(offset+length))` — into one `SeqCycleStorage` per
+/// cycle (`cached_haps[i]` holds cycle `floor(offset) + i`). Runs on the main
+/// thread, so allocation here is fine; the audio thread only ever reads the
+/// result.
+fn bake_cycles(pattern: &Pattern<SeqValue>, offset: f64, length: f64) -> Vec<SeqCycleStorage> {
+    let base = offset.floor() as i64;
+    let end = (offset + length).ceil() as i64; // exclusive
+    let count = (end - base).max(0) as usize;
     let mut bump = bumpalo::Bump::new();
-    let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(length as usize);
-    for i in 0..length {
-        let cycle = (offset + i) as i64;
+    let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(count);
+    for i in 0..count {
+        let cycle = base + i as i64;
         let mut storage = SeqCycleStorage::with_capacity(
             MIN_HAPS_CAP_HINT,
             MIN_HAPS_CAP_HINT * SPANS_RESERVE_PER_HAP,

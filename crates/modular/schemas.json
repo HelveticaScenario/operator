@@ -7813,24 +7813,22 @@
           ]
         },
         "ribbon": {
-          "description": "loop window [offset, length] in cycles",
+          "description": "loop window [offset, length] in cycles (fractional allowed)",
           "type": "array",
           "default": [
-            0,
-            1024
+            0.0,
+            1024.0
           ],
           "maxItems": 2,
           "minItems": 2,
           "prefixItems": [
             {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "number",
+              "format": "double"
             },
             {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
+              "type": "number",
+              "format": "double"
             }
           ]
         }

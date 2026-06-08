@@ -64,17 +64,17 @@ impl<H, S> CycleStorage<H, S> {
 }
 
 /// Look up `cycle`'s storage in the baked ribbon window. `cached` holds the
-/// haps for cycles `[offset, offset+cached.len())`; a `cycle` below `offset`
-/// or past the end of the window has no storage.
+/// haps for cycles `[base, base+cached.len())` where `base = floor(offset)`; a
+/// `cycle` below `base` or past the end of the window has no storage.
 pub(crate) fn get_cycle_storage<H, S>(
     cycle: i64,
-    offset: u64,
+    base: i64,
     cached: &[CycleStorage<H, S>],
 ) -> Option<&CycleStorage<H, S>> {
-    if cycle < offset as i64 {
+    if cycle < base {
         None
     } else {
-        cached.get((cycle - offset as i64) as usize)
+        cached.get((cycle - base) as usize)
     }
 }
 
