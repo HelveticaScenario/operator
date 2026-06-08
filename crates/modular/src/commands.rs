@@ -40,6 +40,13 @@ pub struct PatchUpdate {
   /// Any existing module not in this set (and not reserved) is stale.
   pub desired_ids: std::collections::HashSet<String>,
 
+  /// Module IDs in cache-efficient processing order (producers before the
+  /// consumers that read them), computed on the main thread by
+  /// `graph_analysis::analyze`. The audio thread resolves these to a
+  /// contiguous pointer list it walks every block to force-process every
+  /// module — including ones not reachable from the output or any scope.
+  pub process_order_ids: Vec<String>,
+
   /// ID remappings (applied before inserts/deletes)
   pub remaps: Vec<ModuleIdRemap>,
 
@@ -86,6 +93,7 @@ impl PatchUpdate {
       update_id: 0,
       inserts: Vec::new(),
       desired_ids: std::collections::HashSet::new(),
+      process_order_ids: Vec::new(),
       remaps: Vec::new(),
       scope_adds: Vec::new(),
       scope_removes: Vec::new(),
