@@ -800,10 +800,10 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
 
   // Internal block size. The audio callback drains `block_size` cpal
   // frames per block-level pass (link sync, queued patch swap,
-  // `ensure_processed` on every module, transport-meter write). CPAL's
-  // own buffer size is independent — the callback handles any count of
-  // cpal frames per invocation, splitting them across internal blocks
-  // via `block_pos`.
+  // force-processing every module in dependency order, transport-meter
+  // write). CPAL's own buffer size is independent — the callback handles
+  // any count of cpal frames per invocation, splitting them across
+  // internal blocks via `block_pos`.
   //
   // 64 samples @ 48 kHz = ~1.33 ms per block. Chosen as a balance
   // between block-amortised CPU savings and per-bar-trigger jitter
