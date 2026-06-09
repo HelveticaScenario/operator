@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
 import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
@@ -40,6 +40,7 @@ import {
     scopeBufferKeyToString,
 } from './app/oscilloscope';
 import { useEditorBuffers } from './app/hooks/useEditorBuffers';
+import { getBufferId } from './app/buffers';
 import {
     setTransport,
     updateTransport,
@@ -481,6 +482,20 @@ function App() {
         patchCodeRef.current = patchCode;
     }, [patchCode]);
 
+    // Stable per-buffer identity (the tab's id) used as the patch source id.
+    // Unlike activeBufferId — a file's mutable path — this survives rename and
+    // save, so reconciliation/clock-reset key on the buffer, not its path.
+    const activeSourceId = useMemo(
+        () =>
+            buffers.find((b) => getBufferId(b) === activeBufferId)?.id ??
+            activeBufferId,
+        [buffers, activeBufferId],
+    );
+    const activeSourceIdRef = useRef(activeSourceId);
+    useEffect(() => {
+        activeSourceIdRef.current = activeSourceId;
+    }, [activeSourceId]);
+
     const isClockRunningRef = useRef(isClockRunning);
     useEffect(() => {
         isClockRunningRef.current = isClockRunning;
@@ -667,10 +682,12 @@ function App() {
             try {
                 const patchCodeValue = patchCodeRef.current;
 
-                // Execute DSL in main process (has direct N-API access)
+                // Execute DSL in main process (has direct N-API access).
+                // Use the stable buffer id (not activeBufferId, a file's mutable
+                // path) so reconciliation/clock-reset key on the buffer itself.
                 const result = await electronAPI.executeDSL(
                     patchCodeValue,
-                    activeBufferId,
+                    activeSourceIdRef.current,
                     trigger,
                 );
                 lastPatchResultRef.current = result;

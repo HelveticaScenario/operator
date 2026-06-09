@@ -1129,6 +1129,7 @@ impl Synthesizer {
     &mut self,
     mut patch: PatchGraph,
     trigger: Option<QueuedTrigger>,
+    reset_clock: Option<bool>,
   ) -> PatchUpdateResult {
     // Extract MIDI device names from MIDI modules and sync connections
     self.sync_midi_devices_from_patch(&patch);
@@ -1136,7 +1137,19 @@ impl Synthesizer {
     // Drain deferred deallocations from the audio thread
     self.state.drain_garbage();
 
+    let reset_clock = reset_clock.unwrap_or(false);
     let trigger = trigger.unwrap_or(QueuedTrigger::Immediate);
+
+    // Under Ableton Link, a buffer switch (reset_clock) must land on a Link bar
+    // boundary so the incoming song aligns to the shared timeline. Force the
+    // quantized NextBar trigger regardless of what the caller requested; the
+    // apply then resets ROOT_CLOCK's bar (loop) index to zero (see
+    // `apply_patch_update`). Without Link the caller's trigger stands.
+    let trigger = if reset_clock && self.state.transport_meter.read_link_enabled() {
+      QueuedTrigger::NextBar
+    } else {
+      trigger
+    };
 
     // Assign a unique update ID
     self.next_update_id += 1;
@@ -1187,6 +1200,7 @@ impl Synthesizer {
       update_id,
       wav_data_snapshot,
       tempo_override,
+      reset_clock,
     );
 
     PatchUpdateResult {

@@ -1310,6 +1310,7 @@ impl AudioState {
     update_id: u64,
     wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
     tempo_override: Option<f64>,
+    reset_clock: bool,
   ) -> Result<()> {
     let PatchGraph {
       modules,
@@ -1503,6 +1504,9 @@ impl AudioState {
     // Pass through tempo override for Link integration
     update.tempo_override = tempo_override;
 
+    // Restart the transport when applying this update (set on a buffer switch)
+    update.reset_clock = reset_clock;
+
     // Send the update to audio thread
     self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
   }
@@ -1515,6 +1519,7 @@ impl AudioState {
     update_id: u64,
     wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
     tempo_override: Option<f64>,
+    reset_clock: bool,
   ) -> Vec<ApplyPatchError> {
     // Validate patch
     let schemas = schema();
@@ -1544,6 +1549,7 @@ impl AudioState {
       update_id,
       wav_data,
       tempo_override,
+      reset_clock,
     ) {
       return vec![ApplyPatchError {
         message: format!("Failed to apply patch: {}", e),
@@ -1751,7 +1757,7 @@ impl AudioProcessor {
     // Process commands from the main thread
     while let Ok(cmd) = self.command_rx.pop() {
       match cmd {
-        GraphCommand::QueuedPatchUpdate { update, trigger } => {
+        GraphCommand::QueuedPatchUpdate { mut update, trigger } => {
           // Push tempo to Link if explicitly set via $setTempo. The
           // capture/commit call inside `set_tempo_now` is the realtime-safe
           // way to mutate session state per Ableton's docs.
@@ -1765,6 +1771,11 @@ impl AudioProcessor {
           // we treat it as "apply now" rather than re-queuing for the next
           // bar/beat.
           if let Some((old_update, _)) = self.queued_update.take() {
+            // Carry a pending transport reset forward: if the superseded update
+            // was a buffer switch that never fired, the immediate apply still
+            // lands on a different song than what's playing, so it must still
+            // restart the clock.
+            update.reset_clock |= old_update.reset_clock;
             if let Err(err) = self.garbage_tx.push(GarbageItem::PatchUpdate(old_update)) {
               println!(
                 "Failed to push old patch update to garbage queue: ${:?}",
@@ -1927,6 +1938,7 @@ impl AudioProcessor {
       wav_data,
       profile_records_seed,
       profile_shared_seed,
+      reset_clock,
       ..
     } = update;
 
@@ -2104,6 +2116,31 @@ impl AudioProcessor {
           }
         }
       });
+    }
+
+    // Restart the transport when this update switches playback to a different
+    // buffer (song). Runs after the inserts/transfer/connect above so
+    // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
+    // then refills the block.
+    if reset_clock {
+      if self.link.is_active() {
+        // Under Ableton Link the shared session timeline owns the bar phase —
+        // a full Clock::Start would be re-overridden by the next synced sample
+        // and would spuriously re-fire the bar/beat triggers. The swap is
+        // quantized to a bar boundary (NextBar; see `update_patch`), so reset
+        // only the local bar (loop) index: the incoming song's bar count
+        // restarts at zero while the phase stays locked to the peer timeline.
+        use modular_core::types::ROOT_CLOCK_ID;
+        if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+          root_clock.reset_loop_index();
+        }
+      } else {
+        // Free-run: restart the whole transport (phase, beat, bar count) from
+        // zero. The swap-site eager-fill then refills the block from phase 0.
+        let _ = self
+          .patch
+          .dispatch_message(&Message::Clock(ClockMessages::Start));
+      }
     }
   }
 
@@ -3534,6 +3571,139 @@ mod tests {
         .get_module_type(),
       "my-vca",
       "module should be at new ID"
+    );
+  }
+
+  /// Build a real running ROOT_CLOCK at 120 BPM 4/4, register it as a message
+  /// listener (as `apply_patch_update` does for inserted modules), and start it
+  /// from phase 0. Returns its module id.
+  fn insert_running_root_clock(processor: &mut AudioProcessor) -> String {
+    let id = modular_core::types::ROOT_CLOCK_ID.to_string();
+    let constructors = get_constructors();
+    let constructor = constructors.get("_clock").expect("_clock constructor");
+    let params = crate::deserialize_params(
+      "_clock",
+      serde_json::json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
+      true,
+    )
+    .expect("deserialize clock params");
+    let clock = constructor(
+      &id,
+      44_100.0,
+      params,
+      processor.block_size,
+      modular_core::types::ProcessingMode::Sample,
+    )
+    .expect("construct clock");
+    processor.patch.sampleables.insert(id.clone(), clock);
+    processor.patch.add_message_listeners_for_module(&id);
+    processor
+      .patch
+      .dispatch_message(&Message::Clock(ClockMessages::Start))
+      .expect("start clock");
+    id
+  }
+
+  /// Advance the clock by `samples` and return its resulting bar phase. The test
+  /// processor uses `block_size == 1`, so each block is one `update`.
+  fn advance_clock(processor: &AudioProcessor, id: &str, samples: usize) -> f32 {
+    let clock = processor.patch.sampleables.get(id).unwrap();
+    let mut phase = 0.0;
+    for _ in 0..samples {
+      clock.start_block();
+      phase = clock.get_value_at("playhead", 0, 0);
+    }
+    phase
+  }
+
+  #[test]
+  fn apply_patch_update_with_reset_clock_restarts_transport() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let id = insert_running_root_clock(&mut processor);
+
+    // Run well into the bar so the phase is unambiguously non-zero.
+    let phase_before = advance_clock(&processor, &id, 20_000);
+    assert!(
+      phase_before > 0.1,
+      "clock should have advanced before reset, got {phase_before}"
+    );
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.reset_clock = true;
+    update.desired_ids.insert(id.clone());
+    processor.apply_patch_update(update, 0);
+
+    // Re-fill the block from the top (mirrors the swap-site eager-fill) and
+    // confirm the transport restarted near zero.
+    let phase_after = advance_clock(&processor, &id, 1);
+    assert!(
+      phase_after < 0.001,
+      "transport should restart at ~0 after reset, got {phase_after}"
+    );
+  }
+
+  #[test]
+  fn apply_patch_update_without_reset_clock_keeps_transport_running() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let id = insert_running_root_clock(&mut processor);
+
+    let phase_before = advance_clock(&processor, &id, 20_000);
+    assert!(
+      phase_before > 0.1,
+      "clock should have advanced, got {phase_before}"
+    );
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.reset_clock = false;
+    update.desired_ids.insert(id.clone());
+    processor.apply_patch_update(update, 0);
+
+    // Without a reset the clock keeps advancing from where it was.
+    let phase_after = advance_clock(&processor, &id, 1);
+    assert!(
+      phase_after > phase_before,
+      "transport should keep running (no reset): before={phase_before} after={phase_after}"
+    );
+  }
+
+  #[test]
+  fn superseded_queued_clock_reset_is_inherited() {
+    // A buffer-switch update (reset_clock=true) queued for the next bar, then
+    // superseded by a same-buffer re-eval (reset_clock=false) before it fires,
+    // must still carry the pending transport reset into the immediate apply.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut switch_update = PatchUpdate::new(44_100.0);
+    switch_update.reset_clock = true;
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: switch_update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    let mut reeval_update = PatchUpdate::new(44_100.0);
+    reeval_update.reset_clock = false;
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: reeval_update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    let (queued, trigger) = processor
+      .queued_update
+      .as_ref()
+      .expect("an update should remain queued");
+    assert!(
+      queued.reset_clock,
+      "pending clock reset must survive being superseded"
+    );
+    assert!(
+      matches!(trigger, QueuedTrigger::Immediate),
+      "superseding update applies immediately"
     );
   }
 

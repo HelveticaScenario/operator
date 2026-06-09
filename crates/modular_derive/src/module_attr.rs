@@ -584,6 +584,11 @@ fn impl_module_macro_attr(
                 let module = unsafe { &mut *self.module.get() };
                 module.clear_external_sync();
             }
+
+            fn reset_loop_index(&self) {
+                let module = unsafe { &mut *self.module.get() };
+                module.reset_loop_index_impl();
+            }
         }
     } else {
         quote! {}
