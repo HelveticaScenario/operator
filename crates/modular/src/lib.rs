@@ -1129,7 +1129,6 @@ impl Synthesizer {
     &mut self,
     mut patch: PatchGraph,
     trigger: Option<QueuedTrigger>,
-    reset_clock: Option<bool>,
   ) -> PatchUpdateResult {
     // Extract MIDI device names from MIDI modules and sync connections
     self.sync_midi_devices_from_patch(&patch);
@@ -1188,7 +1187,6 @@ impl Synthesizer {
       update_id,
       wav_data_snapshot,
       tempo_override,
-      reset_clock.unwrap_or(false),
     );
 
     PatchUpdateResult {
