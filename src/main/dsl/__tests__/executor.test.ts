@@ -11,6 +11,7 @@ import { describe, expect, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
+import { isFastPattern, isParsedPattern } from '../miniNotation/index';
 
 const DEFAULT_EXECUTION_OPTIONS = {
     sampleRate: 48_000,
@@ -397,6 +398,159 @@ describe('sequencing', () => {
         expect(findModules(chained, '$cycle').length).toBe(1);
     });
 
+    test('$cycle($p.arrange(...)) builds an arrangement end-to-end', () => {
+        // Round-trips the ArrangePattern wire payload through the native
+        // deserializer (via deriveChannelCount) — a clean build proves Rust
+        // accepted it through from_arrange_payload.
+        const patch = execPatch(
+            '$cycle($p.arrange([2, $p.s("0 2 4", "C(major)")], [2, $p.s("0 2 4", "A(min)")])).out()',
+        );
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+        const pattern = cycles[0].params.pattern as {
+            __kind: string;
+            sections: Array<{
+                cycles: number | string;
+                pattern: { __kind: string };
+            }>;
+        };
+        expect(pattern.__kind).toBe('ArrangePattern');
+        expect(pattern.sections.length).toBe(2);
+        expect(pattern.sections[0].cycles).toBe(2);
+        expect(pattern.sections[0].pattern.__kind).toBe('SpPattern');
+    });
+
+    test('$p.arrange supports an Infinity tail and nesting', () => {
+        const inf = execPatch(
+            '$cycle($p.arrange([2, $p("c4")], [Infinity, $p.s("0 2 4", "f(lydian)")])).out()',
+        );
+        const infPattern = findModules(inf, '$cycle')[0].params.pattern as {
+            sections: Array<{ cycles: number | string }>;
+        };
+        expect(infPattern.sections[1].cycles).toBe('Infinity');
+
+        const nested = execPatch(
+            '$cycle($p.arrange([2, $p("c4")], [2, $p.arrange([1, $p("e4")], [1, $p("g4")])])).out()',
+        );
+        expect(findModules(nested, '$cycle').length).toBe(1);
+    });
+
+    test('$p.arrange surfaces a Rust validation error from a section', () => {
+        // A non-integer scale degree inside a section is rejected by the
+        // native deserializer (round-tripped via deriveChannelCount).
+        expect(() =>
+            execPatch('$cycle($p.arrange([2, $p.s("1.5", "C(major)")])).out()'),
+        ).toThrow(/IntervalValue requires integer scale degrees/);
+    });
+
+    test('$p.arrange rejects an Infinity section that is not last', () => {
+        expect(() =>
+            execPatch(
+                '$cycle($p.arrange([Infinity, $p("c4")], [2, $p("e4")])).out()',
+            ),
+        ).toThrow(/must be the last section/);
+    });
+
+    test('$cycle($p(...).fast(n)) builds end-to-end', () => {
+        // Round-trips the FastPattern wire payload through the native
+        // deserializer — a clean build proves Rust accepted it through
+        // from_fast_payload.
+        const patch = execPatch('$cycle($p("c4 e4").fast(2)).out()');
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+        const pattern = cycles[0].params.pattern;
+        expect(isFastPattern(pattern)).toBe(true);
+        if (!isFastPattern(pattern)) return;
+        expect(isParsedPattern(pattern.pattern)).toBe(true);
+        if (isParsedPattern(pattern.pattern)) {
+            expect(pattern.pattern.source).toBe('c4 e4');
+        }
+        // A number factor is a raw constant on the wire.
+        expect(pattern.factor).toBe(2);
+    });
+
+    test('.fast captures the factor argument span for highlighting', () => {
+        // The factor string is its own highlightable source: the analyzer
+        // registers it under `factor`, and the runtime carries it through as
+        // argument_spans[1] (argument_spans[0] is the wrapped pattern), parallel
+        // to the Rust per_source [inner, factor].
+        const source =
+            'const pat = $p("c4 e4").fast("2 4")\n' +
+            'const seq = $cycle(pat)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+        const pattern = cycles[0].params.pattern;
+        expect(isFastPattern(pattern)).toBe(true);
+        if (!isFastPattern(pattern)) return;
+        const { factor } = pattern;
+        if (typeof factor === 'number') {
+            throw new Error('expected a pattern factor, got a number');
+        }
+        expect(factor.source).toBe('2 4');
+        expect(pattern.argument_spans.length).toBe(2);
+
+        // The factor span must point at the '2 4' literal, not the {0,0} fallback.
+        const factorSpan = pattern.argument_spans[1];
+        expect(factorSpan).not.toEqual({ start: 0, end: 0 });
+        expect(
+            source.slice(factorSpan.start, factorSpan.end).includes('2 4'),
+        ).toBe(true);
+        // The wrapped pattern's span is captured too (argument_spans[0]).
+        const innerSpan = pattern.argument_spans[0];
+        expect(
+            source.slice(innerSpan.start, innerSpan.end).includes('c4 e4'),
+        ).toBe(true);
+    });
+
+    test('.fast with a number factor adds no factor highlight span', () => {
+        // A bare number is a constant, not a highlightable source: the factor is
+        // carried as a raw number and only the wrapped pattern contributes a span.
+        const patch = execPatch('$cycle($p("c4 e4").fast(2)).out()');
+        const pattern = findModules(patch, '$cycle')[0].params.pattern;
+        expect(isFastPattern(pattern)).toBe(true);
+        if (!isFastPattern(pattern)) return;
+        expect(pattern.factor).toBe(2);
+        expect(pattern.argument_spans.length).toBe(1);
+    });
+
+    test('.fast / .slow accept a patterned factor and compose', () => {
+        // Patterned factor string.
+        expect(
+            findModules(
+                execPatch('$cycle($p("c4 e4").fast("2 4")).out()'),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+        // .slow on a scale-degree pattern.
+        expect(
+            findModules(
+                execPatch('$cycle($p.s("0 2 4", "C(major)").slow(2)).out()'),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+        // A .fast wrapping an arrangement.
+        expect(
+            findModules(
+                execPatch(
+                    '$cycle($p.arrange([2, $p("c4")], [2, $p("e4")]).fast(2)).out()',
+                ),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+    });
+
+    test('$cycle($p(...).fast(0)) is accepted (lowers to silence)', () => {
+        // Lenient edge behavior: factor 0 is not rejected at the wire layer.
+        expect(
+            findModules(
+                execPatch('$cycle($p("c4 e4").fast(0)).out()'),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+    });
+
     test('$p rejects dropped atom kinds', () => {
         expect(() => execPatch('$p("m60")')).toThrow();
         expect(() => execPatch('$p("bd sd")')).toThrow();
@@ -408,9 +562,9 @@ describe('sequencing', () => {
         expect(() =>
             execPatch('$cycle($p.s("1.5", "C(major)")).out()'),
         ).toThrow(/IntervalValue requires integer scale degrees, got 1\.5/);
-        expect(() =>
-            execPatch('$cycle($p.s("c4", "C(major)")).out()'),
-        ).toThrow(/IntervalValue does not accept note atoms/);
+        expect(() => execPatch('$cycle($p.s("c4", "C(major)")).out()')).toThrow(
+            /IntervalValue does not accept note atoms/,
+        );
         expect(() =>
             execPatch('$cycle($p.s("440hz", "C(major)")).out()'),
         ).toThrow(/IntervalValue does not accept Hz atoms/);
@@ -578,7 +732,10 @@ describe('sequencing', () => {
         const cycle = findModules(patch, '$cycle')[0];
         const argSpans = (
             cycle.params as {
-                __argument_spans?: Record<string, { start: number; end: number }>;
+                __argument_spans?: Record<
+                    string,
+                    { start: number; end: number }
+                >;
             }
         ).__argument_spans;
         expect(argSpans).toBeDefined();

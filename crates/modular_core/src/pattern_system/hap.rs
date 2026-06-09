@@ -269,6 +269,14 @@ pub enum ArenaHapContext<'b> {
     /// emitted as modifier_spans by `Combined`) appears on the source side.
     /// Used by `Pattern::strip_modifier_spans`.
     Stripped(&'b ArenaHapContext<'b>),
+    /// Shifts every pattern index emitted by `inner` up by `base`. Used by
+    /// `Pattern::offset_pattern_idx` so an arranged section's source-span
+    /// highlights land in the right slot of the flat `per_source` list.
+    /// Nests additively: `Rebased(a, Rebased(b, inner))` emits at `a + b + …`.
+    Rebased {
+        base: u8,
+        inner: &'b ArenaHapContext<'b>,
+    },
 }
 
 /// Static `Empty` context. Used by leaf constructors that emit value-only
@@ -338,12 +346,16 @@ impl<'b> ArenaHapContext<'b> {
         self.walk_inner(0, false, &mut next_pattern_idx, emit);
     }
 
-    fn walk_inner<F: FnMut(u8, &SourceSpan)>(
+    // `emit` is `dyn` rather than a generic `F` so that the `Rebased` arm,
+    // which wraps `emit` in a fresh closure, doesn't trigger unbounded
+    // monomorphisation (each nesting level would otherwise instantiate a new
+    // `walk_inner::<closure>`).
+    fn walk_inner(
         &self,
         pattern_idx: u8,
         stripped: bool,
         next_pattern_idx: &mut u8,
-        emit: &mut F,
+        emit: &mut dyn FnMut(u8, &SourceSpan),
     ) {
         match self {
             ArenaHapContext::Empty => {}
@@ -367,6 +379,22 @@ impl<'b> ArenaHapContext<'b> {
             }
             ArenaHapContext::Stripped(inner) => {
                 inner.walk_inner(pattern_idx, true, next_pattern_idx, emit);
+            }
+            ArenaHapContext::Rebased { base, inner } => {
+                // Walk `inner` in its own fresh index space, then shift every
+                // emitted index up by `base`. A fresh `local_next` keeps the
+                // inner indexing independent of the surrounding `pattern_idx`;
+                // the outer counter is advanced past `base + width` so a
+                // sibling modifier chain continues from the right slot.
+                let base = *base;
+                let mut local_next: u8 = 0;
+                inner.walk_inner(0, stripped, &mut local_next, &mut |idx, span| {
+                    emit(base.saturating_add(idx), span);
+                });
+                let top = base.saturating_add(local_next);
+                if top > *next_pattern_idx {
+                    *next_pattern_idx = top;
+                }
             }
         }
     }

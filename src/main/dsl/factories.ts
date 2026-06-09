@@ -49,7 +49,8 @@ function isParsedPatternLike(
     return (
         typeof value === 'object' &&
         value !== null &&
-        (value as { __kind?: unknown }).__kind === 'ParsedPattern'
+        '__kind' in value &&
+        value.__kind === 'ParsedPattern'
     );
 }
 
@@ -64,8 +65,41 @@ function isSpPatternLike(
     return (
         typeof value === 'object' &&
         value !== null &&
-        (value as { __kind?: unknown }).__kind === 'SpPattern'
+        '__kind' in value &&
+        value.__kind === 'SpPattern'
     );
+}
+
+/**
+ * Structural check for an `ArrangePattern` (returned by `$p.arrange(...)`).
+ * Like `SpPattern`, it carries a flat `argument_spans[i]` list — one per source
+ * across all sections, in order — used to map runtime per-source highlights
+ * back to editor literals.
+ */
+function isArrangePatternLike(
+    value: unknown,
+): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === 'ArrangePattern'
+    );
+}
+
+/**
+ * Structural check for a `.fast(...)` / `.slow(...)` wrapper. Like `SpPattern`
+ * and `ArrangePattern`, it carries a flat `argument_spans[i]` list — the wrapped
+ * pattern's per-source spans — used to map runtime per-source highlights back to
+ * editor literals.
+ */
+function isFastOrSlowPatternLike(
+    value: unknown,
+): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
+    if (typeof value !== 'object' || value === null || !('__kind' in value)) {
+        return false;
+    }
+    return value.__kind === 'FastPattern' || value.__kind === 'SlowPattern';
 }
 
 /**
@@ -301,7 +335,13 @@ export class DSLContext {
                 ...(argumentSpans ?? {}),
             };
             for (const [paramName, value] of Object.entries(params)) {
-                if (isSpPatternLike(value)) {
+                if (
+                    isSpPatternLike(value) ||
+                    isArrangePatternLike(value) ||
+                    isFastOrSlowPatternLike(value)
+                ) {
+                    // Both carry a flat `argument_spans[i]` list lining up with
+                    // the Rust per-source order; emit `<paramName>.<i>` keys.
                     const argSpans = value.argument_spans;
                     if (argSpans && argSpans.length > 0) {
                         argSpans.forEach((span, j) => {

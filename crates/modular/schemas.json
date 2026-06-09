@@ -7997,6 +7997,49 @@
             "end"
           ]
         },
+        "ArrangeKindTag": {
+          "description": "Phantom discriminator matching the literal `\"ArrangePattern\"` string.",
+          "type": "string",
+          "enum": [
+            "ArrangePattern"
+          ]
+        },
+        "ArrangePatternPayload": {
+          "description": "JSON payload for `$cycle($p.arrange(...))`. Sections play in order, each for\nits cycle budget; the whole loops with period `Σ cycles`. A trailing section\nwith `cycles == \"Infinity\"` loops forever once reached.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `$p.arrange` sets this so the `SeqPatternSource`\nuntagged enum picks the `Arrange` variant.",
+              "$ref": "#/$defs/ArrangeKindTag"
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArrangeSectionPayload"
+              }
+            }
+          },
+          "required": [
+            "__kind",
+            "sections"
+          ]
+        },
+        "ArrangeSectionPayload": {
+          "description": "One section of an `$p.arrange(...)` payload: a cycle budget plus a pattern.\n`pattern` is any [`SeqPatternSource`] (recursively), so a section may be a\n`$p`, a `$p.s`, or a nested `$p.arrange`.",
+          "type": "object",
+          "properties": {
+            "cycles": {
+              "$ref": "#/$defs/SectionCycles"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource2"
+            }
+          },
+          "required": [
+            "cycles",
+            "pattern"
+          ]
+        },
         "AtomValue": {
           "description": "Atomic value types produced by the `$p()` DSL parser.\n\nThe reduced set from strudel's krill grammar: `Number` covers bare\nnumeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), and\n`Note` covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`).\nEvery other atom form (`m60` midi shorthand, sample-name identifiers,\n`2v` voltage, module references, quoted strings) has been removed from\nthe grammar and is not representable here.",
           "oneOf": [
@@ -8067,6 +8110,55 @@
                 "Note"
               ]
             }
+          ]
+        },
+        "FactorPayload": {
+          "description": "A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —\nnot a highlightable source. A parsed pattern (`.fast(\"2 4\")`) becomes its own\nhighlightable source, so its active value lights up in the editor as it\ndrives the speed. A factor of `0` yields silence and negatives reverse time,\nmirroring the in-string `*` operator.",
+          "anyOf": [
+            {
+              "description": "`.fast(2)` — a constant. JSON numbers match this before `Pattern`.",
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "description": "`.fast(\"2 4\")` — a parsed number pattern.",
+              "$ref": "#/$defs/ParsedPatternPayload"
+            }
+          ]
+        },
+        "FastKindTag": {
+          "description": "Phantom discriminator matching the literal `\"FastPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "FastPattern"
+          ]
+        },
+        "FastPatternPayload": {
+          "description": "JSON payload for `$p(...).fast(factor)`: speed `pattern` up by `factor`.\n`pattern` is any [`SeqPatternSource`] (recursively), so `.fast` chains and\nnests over `$p`, `$p.s`, `$p.arrange`, and other `.fast`/`.slow` wrappers.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.fast` sets this so the `SeqPatternSource`\nuntagged enum picks the `Fast` variant.",
+              "$ref": "#/$defs/FastKindTag"
+            },
+            "factor": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource2"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "factor"
+          ]
+        },
+        "InfinityTag": {
+          "description": "Phantom discriminator matching the literal `\"Infinity\"` string.",
+          "type": "string",
+          "enum": [
+            "Infinity"
           ]
         },
         "Located": {
@@ -9682,9 +9774,50 @@
             "all_spans"
           ]
         },
-        "SeqPatternSource": {
-          "description": "Wire-level dispatch shape: either a single `ParsedPatternPayload`\n(legacy single-source path used by `$cycle($p(...))`) or a chained\n`$p.s` payload with multi-source highlighting.",
+        "SectionCycles": {
+          "description": "Cycle count for an `$p.arrange(...)` section: a finite positive integer, or\nthe sentinel string `\"Infinity\"` for an infinite tail section. JSON can't\ncarry a numeric infinity, so the TS `$p.arrange` helper emits the string\n`\"Infinity\"`; any finite count arrives as a JSON number.",
           "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "$ref": "#/$defs/InfinityTag"
+            }
+          ]
+        },
+        "SeqPatternSource": {
+          "description": "Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`\npayload, a chained `$p.s` payload with multi-source highlighting, or a\nsingle `ParsedPatternPayload` (the legacy single-source path used by\n`$cycle($p(...))`).\n\nThe `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before\nthe untagged `Single`; each carries a distinct required `__kind` literal, so\nthe untagged enum disambiguates them unambiguously before falling back to\n`Single`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FastPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/SlowPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ArrangePatternPayload"
+            },
+            {
+              "$ref": "#/$defs/SpPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ParsedPatternPayload"
+            }
+          ]
+        },
+        "SeqPatternSource2": {
+          "description": "Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`\npayload, a chained `$p.s` payload with multi-source highlighting, or a\nsingle `ParsedPatternPayload` (the legacy single-source path used by\n`$cycle($p(...))`).\n\nThe `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before\nthe untagged `Single`; each carries a distinct required `__kind` literal, so\nthe untagged enum disambiguates them unambiguously before falling back to\n`Single`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FastPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/SlowPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ArrangePatternPayload"
+            },
             {
               "$ref": "#/$defs/SpPatternPayload"
             },
@@ -9735,6 +9868,34 @@
                 "port"
               ]
             }
+          ]
+        },
+        "SlowKindTag": {
+          "description": "Phantom discriminator matching the literal `\"SlowPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "SlowPattern"
+          ]
+        },
+        "SlowPatternPayload": {
+          "description": "JSON payload for `$p(...).slow(factor)`: the time-inverse of\n[`FastPatternPayload`]. See it for `pattern`/`factor` semantics.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.slow` sets this so the `SeqPatternSource`\nuntagged enum picks the `Slow` variant.",
+              "$ref": "#/$defs/SlowKindTag"
+            },
+            "factor": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource2"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "factor"
           ]
         },
         "SourceSpan": {
