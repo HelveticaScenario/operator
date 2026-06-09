@@ -360,8 +360,9 @@ type ParsedPattern = {
   /**
    * Speed this pattern up by \`factor\`, mirroring Strudel's \`fast\`. The factor
    * is a constant (\`2\`) or a mini-notation number pattern (\`"2 4"\` → ×2 for
-   * the first half of the cycle, ×4 for the second). \`fast(0)\` is silence and
-   * negatives reverse time. Chains and nests with the other pattern builders.
+   * the first half of the cycle, ×4 for the second). A non-positive factor
+   * (\`fast(0)\` or negative) is silence. Chains and nests with the other
+   * pattern builders.
    */
   fast(factor: number | string): FastPattern;
   /**

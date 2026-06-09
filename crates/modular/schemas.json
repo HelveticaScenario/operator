@@ -8113,7 +8113,7 @@
           ]
         },
         "FactorPayload": {
-          "description": "A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —\nnot a highlightable source. A parsed pattern (`.fast(\"2 4\")`) becomes its own\nhighlightable source, so its active value lights up in the editor as it\ndrives the speed. A factor of `0` yields silence and negatives reverse time,\nmirroring the in-string `*` operator.",
+          "description": "A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —\nnot a highlightable source. A parsed pattern (`.fast(\"2 4\")`) becomes its own\nhighlightable source, so its active value lights up in the editor as it\ndrives the speed. A non-positive factor (`0` or negative) yields silence,\nmatching how the in-string `*`/`/` operators lower the same factors.",
           "anyOf": [
             {
               "description": "`.fast(2)` — a constant. JSON numbers match this before `Pattern`.",

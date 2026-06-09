@@ -523,6 +523,73 @@ mod tests {
     }
 
     #[test]
+    fn test_arrange_single_finite_section_budget_is_noop() {
+        // A lone finite section reduces to `timecat([(n, p.fast(n))])._slow(n)`,
+        // which equals `p` exactly: the cycle budget `n` does not gate playback,
+        // so the section keeps advancing through its own cycles past cycle `n`
+        // rather than resetting at the budget.
+        let p = slowcat(vec![
+            pure("p0"),
+            pure("p1"),
+            pure("p2"),
+            pure("p3"),
+            pure("p4"),
+        ]);
+        let arr = arrange(vec![(Some(Fraction::from_integer(3)), p.clone())]);
+        for c in 0..5 {
+            assert_eq!(
+                onset_values(&arr, c),
+                onset_values(&p, c),
+                "lone finite section equals p (budget is a no-op) at cycle {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_arrange_drops_sections_after_infinite_tail() {
+        // `arrange` is public and takes raw cycle counts; the DSL validator
+        // rejects sections after an infinite tail upstream, but the combinator
+        // also drops them defensively (they could never play). Only the finite
+        // prefix and the tail are reachable here — the trailing section never is.
+        let a = slowcat(vec![pure("a0"), pure("a1")]);
+        let b = slowcat(vec![pure("b0"), pure("b1")]);
+        let c = slowcat(vec![pure("c0"), pure("c1")]);
+        let arr = arrange(vec![
+            (Some(Fraction::from_integer(2)), a),
+            (None, b),
+            (Some(Fraction::from_integer(3)), c),
+        ]);
+
+        // Prefix a over cycles [0, 2), then b loops forever from cycle 2.
+        assert_eq!(onset_values(&arr, 0), vec!["a0"]);
+        assert_eq!(onset_values(&arr, 1), vec!["a1"]);
+        assert_eq!(onset_values(&arr, 2), vec!["b0"]);
+        assert_eq!(onset_values(&arr, 3), vec!["b1"]);
+        assert_eq!(onset_values(&arr, 50), vec!["b0"]); // (50 - 2) mod 2 = 0
+        // The dropped section never plays at any queried cycle.
+        let played: Vec<&str> = (0..24).flat_map(|cyc| onset_values(&arr, cyc)).collect();
+        assert!(
+            !played.iter().any(|v| v.starts_with('c')),
+            "dropped trailing section must never play, got {played:?}"
+        );
+    }
+
+    #[test]
+    fn test_arrange_finite_zero_sum_is_silence() {
+        // A finite arrangement whose cycle counts sum to zero lowers to silence,
+        // guarding the subsequent `_slow(0)`. The DSL validator rejects 0-cycle
+        // sections upstream, so this is reachable only via the public combinator.
+        let p = slowcat(vec![pure("p0"), pure("p1")]);
+        let arr = arrange(vec![(Some(Fraction::from_integer(0)), p)]);
+        for c in 0..3 {
+            assert!(
+                onset_values(&arr, c).is_empty(),
+                "zero-sum arrange is silent at cycle {c}"
+            );
+        }
+    }
+
+    #[test]
     fn slowcat_alternates_non_numeric_values() {
         let first = "sig1".to_string();
         let second = "sig2".to_string();

@@ -422,12 +422,9 @@ impl SectionCycles {
         match self {
             SectionCycles::Infinite(_) => Ok(None),
             SectionCycles::Finite(n) => {
-                if !n.is_finite() {
-                    return Err(
-                        "$p.arrange cycle count must be a finite positive integer or Infinity"
-                            .to_string(),
-                    );
-                }
+                // Non-finite values need no explicit guard: NaN and +∞ fail the
+                // `fract` check below and -∞ fails the `<= 0` check, so each is
+                // rejected before the `n as i64` cast.
                 if n <= 0.0 {
                     return Err(format!(
                         "$p.arrange cycle count must be a positive integer, got {n}"
@@ -496,8 +493,8 @@ pub enum SlowKindTag {
 /// A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —
 /// not a highlightable source. A parsed pattern (`.fast("2 4")`) becomes its own
 /// highlightable source, so its active value lights up in the editor as it
-/// drives the speed. A factor of `0` yields silence and negatives reverse time,
-/// mirroring the in-string `*` operator.
+/// drives the speed. A non-positive factor (`0` or negative) yields silence,
+/// matching how the in-string `*`/`/` operators lower the same factors.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum FactorPayload {
@@ -683,7 +680,7 @@ impl SeqPatternParam {
             let (mut pat, metas) = Self::lower_source(section.pattern)?;
             let offset = per_source.len();
             if offset > 0 {
-                pat = pat.offset_pattern_idx(u8::try_from(offset).unwrap_or(u8::MAX));
+                pat = pat.offset_pattern_idx(offset as u32);
             }
             per_source.extend(metas);
             sections.push((cycles, pat));
@@ -773,7 +770,7 @@ impl SeqPatternParam {
                     .fmap(|v| crate::pattern_system::Fraction::from(*v))
                     .strip_modifier_spans();
                 if offset > 0 {
-                    pattern = pattern.offset_pattern_idx(u8::try_from(offset).unwrap_or(u8::MAX));
+                    pattern = pattern.offset_pattern_idx(offset as u32);
                 }
                 let meta = SeqSourceMeta {
                     source: payload.source,
@@ -1187,7 +1184,7 @@ mod tests {
 
         param.bake(0.0, 4.0);
         let storages = param.cached_haps();
-        let pidx = |cycle: usize| -> Vec<u8> {
+        let pidx = |cycle: usize| -> Vec<u32> {
             storages[cycle]
                 .span_arena
                 .iter()
@@ -1402,6 +1399,14 @@ mod tests {
         }
     }
 
+    fn slow_const_payload(factor: f64, pattern: SeqPatternSource) -> SlowPatternPayload {
+        SlowPatternPayload {
+            kind: SlowKindTag::SlowPattern,
+            pattern: Box::new(pattern),
+            factor: FactorPayload::Const(factor),
+        }
+    }
+
     #[test]
     fn test_fast_doubles_onset_count() {
         // "c4 e4" has two onsets per cycle; fast(2) packs the pattern twice → 4.
@@ -1448,7 +1453,7 @@ mod tests {
         assert_eq!(sources, vec!["c4 e4"], "no factor source is added");
 
         param.bake(0.0, 1.0);
-        let pidxs: std::collections::BTreeSet<u8> = param.cached_haps()[0]
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
             .span_arena
             .iter()
             .map(|s| s.pattern_idx)
@@ -1496,6 +1501,60 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_negative_factor_is_silence() {
+        // A negative factor reverses the query span, and reversed spans yield no
+        // haps — so `.fast(-2)` is silence, not reversed playback. Pins the
+        // documented non-positive-factor behavior so the docs can't drift.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_const_payload(-2.0, single_source("c4 e4")))
+                .unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "fast(-2) produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_slow_negative_factor_is_silence() {
+        // The slow side mirrors fast: a negative factor yields silence.
+        let param =
+            SeqPatternParam::from_slow_payload(slow_const_payload(-2.0, single_source("c4 e4")))
+                .unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "slow(-2) produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_fast_pattern_negative_factor_is_silence() {
+        // The pattern-string factor path mirrors the const path: a negative
+        // factor (`.fast("-2")`) reverses the query span and yields silence,
+        // matching the const-factor and zero-factor cases.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_payload("-2", single_source("c4 e4"))).unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "fast(\"-2\") produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_lower_factor_rejects_non_finite_const() {
+        // The const-factor finiteness guard is unreachable over the wire (JSON
+        // cannot carry NaN/∞), so exercise it directly. `Fraction::from(f64)`
+        // maps a non-finite value to 0, so without the guard a non-finite factor
+        // would be silently accepted as factor 0 (silence); the guard rejects it
+        // with an explicit error instead.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                SeqPatternParam::lower_factor(FactorPayload::Const(bad), 0).is_err(),
+                "non-finite const factor {bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn test_fast_per_source_appends_factor_after_inner() {
         // The wrapped pattern's per_source flows through, then the factor is
         // appended as its own highlightable source: `["0", "5", "2"]`. The
@@ -1530,7 +1589,7 @@ mod tests {
         assert_eq!(sources, vec!["c4 e4", "2 4"]);
 
         param.bake(0.0, 1.0);
-        let pidxs: std::collections::BTreeSet<u8> = param.cached_haps()[0]
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
             .span_arena
             .iter()
             .map(|s| s.pattern_idx)

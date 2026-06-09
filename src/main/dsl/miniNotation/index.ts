@@ -421,8 +421,8 @@ const SLOW_KIND = 'SlowPattern' as const;
  * The `.fast(...)` / `.slow(...)` methods attached (non-enumerably) to every
  * pattern object, mirroring Strudel's `fast`/`slow`. The factor is a constant
  * (`2`) or a mini-notation number pattern (`"2 4"` → ×2 then ×4 across the
- * cycle). A factor of `0` yields silence and negatives reverse time, matching
- * the in-string `*` / `/` operators.
+ * cycle). A non-positive factor (`0` or negative) yields silence, matching the
+ * in-string `*` / `/` operators.
  */
 export interface TimeModifiable {
     fast(factor: number | string): FastPattern & TimeModifiable;

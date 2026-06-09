@@ -274,7 +274,7 @@ pub enum ArenaHapContext<'b> {
     /// highlights land in the right slot of the flat `per_source` list.
     /// Nests additively: `Rebased(a, Rebased(b, inner))` emits at `a + b + …`.
     Rebased {
-        base: u8,
+        base: u32,
         inner: &'b ArenaHapContext<'b>,
     },
 }
@@ -339,10 +339,10 @@ impl<'b> ArenaHapContext<'b> {
     ///
     /// A `Stripped` node folds its modifier-side spans back into the source
     /// pattern_idx for the rest of the subtree.
-    pub fn walk<F: FnMut(u8, &SourceSpan)>(&self, emit: &mut F) {
+    pub fn walk<F: FnMut(u32, &SourceSpan)>(&self, emit: &mut F) {
         // Pattern index counter — incremented when we step into a modifier
         // subtree at the root level.
-        let mut next_pattern_idx: u8 = 0;
+        let mut next_pattern_idx: u32 = 0;
         self.walk_inner(0, false, &mut next_pattern_idx, emit);
     }
 
@@ -352,10 +352,10 @@ impl<'b> ArenaHapContext<'b> {
     // `walk_inner::<closure>`).
     fn walk_inner(
         &self,
-        pattern_idx: u8,
+        pattern_idx: u32,
         stripped: bool,
-        next_pattern_idx: &mut u8,
-        emit: &mut dyn FnMut(u8, &SourceSpan),
+        next_pattern_idx: &mut u32,
+        emit: &mut dyn FnMut(u32, &SourceSpan),
     ) {
         match self {
             ArenaHapContext::Empty => {}
@@ -387,7 +387,7 @@ impl<'b> ArenaHapContext<'b> {
                 // the outer counter is advanced past `base + width` so a
                 // sibling modifier chain continues from the right slot.
                 let base = *base;
-                let mut local_next: u8 = 0;
+                let mut local_next: u32 = 0;
                 inner.walk_inner(0, stripped, &mut local_next, &mut |idx, span| {
                     emit(base.saturating_add(idx), span);
                 });

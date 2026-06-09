@@ -138,7 +138,7 @@ pub(crate) struct WithModifierSpanData<T> {
 /// Backing data for [`PatternImpl::OffsetPatternIdx`].
 pub(crate) struct OffsetPatternIdxData<T> {
     pub pat: Pattern<T>,
-    pub k: u8,
+    pub k: u32,
 }
 
 /// Backing data for [`PatternImpl::FastConst`].
@@ -498,7 +498,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     /// `per_source` list (section 0's sources at `[0, …)`, section 1's after,
     /// …). Nests additively, so an arranged section that is itself an arrange
     /// composes correctly. `k == 0` is the identity.
-    pub fn offset_pattern_idx(&self, k: u8) -> Pattern<T> {
+    pub fn offset_pattern_idx(&self, k: u32) -> Pattern<T> {
         if k == 0 {
             return self.clone();
         }
@@ -932,7 +932,7 @@ mod tests {
         // A single leaf span normally walks at pattern_idx 0; offsetting by 3
         // shifts it to 3, and a second offset composes additively (3 + 2 = 5).
         let base = pure_with_span(1.0f64, SourceSpan::new(0, 1));
-        let collect = |pat: &Pattern<f64>| -> Vec<(u8, (usize, usize))> {
+        let collect = |pat: &Pattern<f64>| -> Vec<(u32, (usize, usize))> {
             let bump = bumpalo::Bump::new();
             let mut out: bumpalo::collections::Vec<'_, ArenaHap<'_, f64>> =
                 bumpalo::collections::Vec::new_in(&bump);
