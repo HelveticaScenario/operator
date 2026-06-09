@@ -26,7 +26,7 @@ pub(crate) const SPANS_RESERVE_PER_HAP: usize = 4;
 /// pattern strings.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FlatSpan {
-    pub pattern_idx: u8,
+    pub pattern_idx: u32,
     pub start: u32,
     pub end: u32,
 }

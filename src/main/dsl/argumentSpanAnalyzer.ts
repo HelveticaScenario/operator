@@ -203,6 +203,79 @@ function chainRootIsPs(
 }
 
 /**
+ * Identify `<pattern>.fast(factor)` / `<pattern>.slow(factor)` calls, where
+ * `<pattern>` is any pattern-producing chain: `$p(...)`, `$p.s(...)`,
+ * `$p.arrange(...)`, a nested `.fast`/`.slow`/`.add`/`.sub` link, or a
+ * const-bound pattern. The factor literal is registered under `factor` so the
+ * `.fast`/`.slow` method can capture it via
+ * `captureSourceLocation()` + `lookupArgumentSpan(loc, 'factor')`.
+ */
+function isFastSlowCall(
+    call: CallExpression,
+    constInitMap: Map<string, Node>,
+): boolean {
+    const expr = call.getExpression();
+    if (!Node.isPropertyAccessExpression(expr)) return false;
+    const methodName = expr.getName();
+    if (methodName !== 'fast' && methodName !== 'slow') return false;
+    return chainRootIsPattern(expr.getExpression(), constInitMap);
+}
+
+/**
+ * Walk back through a method chain and return true when it roots in a pattern
+ * builder — `$p(...)`, `$p.s(...)`, or `$p.arrange(...)` — possibly through
+ * intermediate `.add`/`.sub`/`.fast`/`.slow`/mode links and `const` hops.
+ * Generalises [`chainRootIsPs`] beyond the `$p.s` root.
+ */
+function chainRootIsPattern(
+    node: import('ts-morph').Node,
+    constInitMap: Map<string, Node>,
+    visited = new Set<string>(),
+): boolean {
+    let n: import('ts-morph').Node = node;
+    while (true) {
+        if (Node.isCallExpression(n)) {
+            const inner = n.getExpression();
+            // `$p("…")` — a bare-identifier call to the mini-notation factory.
+            if (Node.isIdentifier(inner)) {
+                return inner.getText() === '$p';
+            }
+            if (Node.isPropertyAccessExpression(inner)) {
+                const name = inner.getName();
+                const recv = inner.getExpression();
+                // `$p.s(...)` / `$p.arrange(...)` are chain roots.
+                if (
+                    (name === 's' || name === 'arrange') &&
+                    Node.isIdentifier(recv) &&
+                    recv.getText() === '$p'
+                ) {
+                    return true;
+                }
+                // Any other chain link (.add/.sub/.fast/.slow/mode) — keep
+                // walking toward the root through its receiver.
+                n = recv;
+                continue;
+            }
+            return false;
+        }
+        if (Node.isPropertyAccessExpression(n)) {
+            n = n.getExpression();
+            continue;
+        }
+        if (Node.isIdentifier(n)) {
+            const name = n.getText();
+            if (visited.has(name)) return false;
+            const init = constInitMap.get(name);
+            if (!init) return false;
+            visited.add(name);
+            n = init;
+            continue;
+        }
+        return false;
+    }
+}
+
+/**
  * Get the full dotted path for a property access call.
  * e.g., "$p.s" for $p.s()
  */
@@ -685,6 +758,44 @@ export function analyzeArgumentSpans(
             registry.set(callKey, {
                 args: argsMap,
                 moduleType: '$p.s.chain',
+            });
+            const innerNode = getTrackableNode(pArgs[0], constNodeMap);
+            if (innerNode) {
+                const resolutions = resolveInterpolations(
+                    innerNode,
+                    constNodeMap,
+                    constMap,
+                );
+                if (resolutions) {
+                    const spanKey = `${span.start}:${span.end}`;
+                    interpolationResolutions.set(spanKey, resolutions);
+                }
+            }
+            return;
+        }
+
+        // Track `<pattern>.fast(factor)` / `.slow(factor)`: register the factor
+        // literal span under `factor` so the `.fast`/`.slow` method captures it
+        // via captureSourceLocation()+lookupArgumentSpan(loc, 'factor'). Keyed at
+        // the method name's position, like the `$p.s` chain above.
+        if (isFastSlowCall(call, constInitMap)) {
+            const pArgs = call.getArguments();
+            if (pArgs.length < 1) return;
+            const span = getTrackableSpan(pArgs[0], constMap);
+            if (!span) return;
+            const callExpr = call.getExpression();
+            const callStartPos = Node.isPropertyAccessExpression(callExpr)
+                ? callExpr.getNameNode().getStart()
+                : call.getStart();
+            const { line, column } =
+                sourceFile.getLineAndColumnAtPos(callStartPos);
+            const columnOffset = line === 1 ? firstLineColumnOffset : 0;
+            const callKey: CallSiteKey = `${line + lineOffset}:${column + columnOffset}`;
+            const argsMap = new Map<string, SourceSpan>();
+            argsMap.set('factor', span);
+            registry.set(callKey, {
+                args: argsMap,
+                moduleType: '.fast/.slow',
             });
             const innerNode = getTrackableNode(pArgs[0], constNodeMap);
             if (innerNode) {

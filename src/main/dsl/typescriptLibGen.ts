@@ -348,15 +348,24 @@ type BufferOutputRef = {
 
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
- * \`$cycle\` as its pattern argument. Opaque to user code;
- * the shape is \`{ __kind, ast, source, all_spans }\`. Construct with
- * \`$p(...)\`; never build one by hand.
+ * \`$cycle\` as its pattern argument. Opaque to user code; construct with
+ * \`$p(...)\` and chain \`.fast\`/\`.slow\`. Never build one by hand.
  */
 type ParsedPattern = {
-  readonly __kind: 'ParsedPattern';
-  readonly ast: unknown;
-  readonly source: string;
-  readonly all_spans: ReadonlyArray<readonly [number, number]>;
+  /**
+   * Speed this pattern up by \`factor\`, mirroring Strudel's \`fast\`. The factor
+   * is a constant (\`2\`) or a mini-notation number pattern (\`"2 4"\` → ×2 for
+   * the first half of the cycle, ×4 for the second). A non-positive factor
+   * (\`fast(0)\` or negative) is silence. Chains and nests with the other
+   * pattern builders.
+   */
+  fast(factor: number | string): FastPattern;
+  /**
+   * Slow this pattern down by \`factor\` — the time-inverse of \`fast\`.
+   * \`slow(n)\` equals \`fast(1 / n)\`. The factor may be a constant or a
+   * mini-notation number pattern.
+   */
+  slow(factor: number | string): SlowPattern;
 };
 
 /**
@@ -509,6 +518,43 @@ declare namespace $p {
  * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
  */
 function s(source: string, scale: string): SpPattern;
+
+/**
+ * Arrange patterns over multiple cycles, mirroring Strudel's \`arrange\`.
+ * Each argument is a \`[cycles, pattern]\` tuple: the \`pattern\` (a \`$p(...)\`,
+ * \`$p.s(...)\`, or nested \`$p.arrange(...)\`) plays for \`cycles\` cycles, and
+ * the sections play back-to-back, looping with period \`Σ cycles\`.
+ *
+ * Because each \`$p.s\` section resolves through its own scale, an arrangement
+ * can switch scales (or keys) between sections.
+ *
+ * \`\`\`js
+ * // 4 cycles of a C-major arp, then 2 of an A-minor arp, looping every 6
+ * $cycle($p.arrange(
+ *   [4, $p.s("0 2 4 7", "c(major)")],
+ *   [2, $p.s("0 2 4",   "a(min)")],
+ * ))
+ * \`\`\`
+ *
+ * Cycle counts must be **positive integers**, except a single **trailing**
+ * section may use \`Infinity\` to loop forever once reached (any section after
+ * an \`Infinity\` section could never play and is rejected):
+ *
+ * \`\`\`js
+ * $cycle($p.arrange(
+ *   [2, $p("c4 e4 g4")],            // intro, played once
+ *   [Infinity, $p.s("0 2 4", "f(lydian)")],  // then loops forever
+ * ))
+ * \`\`\`
+ *
+ * The result is an \`ArrangePattern\`, itself usable as a section of another
+ * \`$p.arrange(...)\` (arrangements nest) or as a \`$cycle\` argument.
+ *
+ * @param sections - \`[cycles, pattern]\` tuples, in play order
+ */
+function arrange(
+  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern][]
+): ArrangePattern;
 }
 
 /**
@@ -533,21 +579,53 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
 
 /**
  * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
- * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
- * and gets its own editor-highlight argument span.
- *
- * Arrays declared mutable (rather than readonly) to line up with the
- * schema-generated factory param types. Treat as immutable by
- * convention — chain methods return fresh objects.
+ * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`.
+ * Opaque to user code — chain methods return fresh patterns.
  */
 type SpPattern = {
-  __kind: 'SpPattern';
-  sources: ParsedPattern[];
-  scale: string;
-  ops: { op: 'add' | 'sub'; mode: SpAlignmentMode }[];
-  argument_spans: { start: number; end: number }[];
   add: SpCombineBuilder;
   sub: SpCombineBuilder;
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * An arrangement returned by \`$p.arrange(...)\`. Pass directly to \`$cycle\`'s
+ * \`pattern\` param, or nest it as a section of another \`$p.arrange(...)\`.
+ * Opaque to user code — construct with \`$p.arrange(...)\`; never build one by
+ * hand. A \`cycles\` of \`'Infinity'\` (only the last section) loops forever.
+ */
+type ArrangePattern = {
+  /** Speed this arrangement up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this arrangement down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * A sped-up pattern returned by \`pattern.fast(factor)\` (Strudel's \`fast\`).
+ * Pass directly to \`$cycle\`'s \`pattern\` param, nest it as an \`$p.arrange(...)\`
+ * section, or chain further \`.fast\`/\`.slow\`. Opaque to user code — construct
+ * with \`.fast(...)\`; never build one by hand.
+ */
+type FastPattern = {
+  /** Speed this pattern up further by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * A slowed-down pattern returned by \`pattern.slow(factor)\` (Strudel's \`slow\`).
+ * The time-inverse of \`FastPattern\`; same composition rules.
+ */
+type SlowPattern = {
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down further by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
 };
 
 /**
@@ -1977,23 +2055,35 @@ export function generateDSL(schemas: Schemas): string {
     );
     lines.push('');
     lines.push('/**');
-    lines.push(' * Delay with feedback. Mixes `input` with a deferred feedback signal,');
-    lines.push(' * captures the mix into a buffer of `length` seconds, and routes the');
-    lines.push(' * buffer through `feedbackCb` to produce the feedback signal.');
+    lines.push(
+        ' * Delay with feedback. Mixes `input` with a deferred feedback signal,',
+    );
+    lines.push(
+        ' * captures the mix into a buffer of `length` seconds, and routes the',
+    );
+    lines.push(
+        ' * buffer through `feedbackCb` to produce the feedback signal.',
+    );
     lines.push(' *');
-    lines.push(' * Returns the wet+dry $mix output augmented with a `buffer` property');
+    lines.push(
+        ' * Returns the wet+dry $mix output augmented with a `buffer` property',
+    );
     lines.push(' * referencing the captured buffer for further reads.');
     lines.push(' *');
     lines.push(' * @example');
     lines.push(' * ```js');
-    lines.push(" * // simple feedback delay");
-    lines.push(" * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()");
+    lines.push(' * // simple feedback delay');
+    lines.push(
+        " * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()",
+    );
     lines.push(' * ```');
     lines.push(' *');
     lines.push(' * @example');
     lines.push(' * ```ts');
     lines.push(' * // tap the buffer for an additional read');
-    lines.push(' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)');
+    lines.push(
+        ' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)',
+    );
     lines.push(' * $delayRead(d.buffer, 0.75).out()');
     lines.push(' * ```');
     lines.push(' */');
