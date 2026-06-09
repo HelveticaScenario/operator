@@ -348,15 +348,10 @@ type BufferOutputRef = {
 
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
- * \`$cycle\` as its pattern argument. Opaque to user code;
- * the shape is \`{ __kind, ast, source, all_spans }\`. Construct with
- * \`$p(...)\`; never build one by hand.
+ * \`$cycle\` as its pattern argument. Opaque to user code; construct with
+ * \`$p(...)\` and chain \`.fast\`/\`.slow\`. Never build one by hand.
  */
 type ParsedPattern = {
-  readonly __kind: 'ParsedPattern';
-  readonly ast: unknown;
-  readonly source: string;
-  readonly all_spans: ReadonlyArray<readonly [number, number]>;
   /**
    * Speed this pattern up by \`factor\`, mirroring Strudel's \`fast\`. The factor
    * is a constant (\`2\`) or a mini-notation number pattern (\`"2 4"\` → ×2 for
@@ -584,19 +579,10 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
 
 /**
  * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
- * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
- * and gets its own editor-highlight argument span.
- *
- * Arrays declared mutable (rather than readonly) to line up with the
- * schema-generated factory param types. Treat as immutable by
- * convention — chain methods return fresh objects.
+ * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`.
+ * Opaque to user code — chain methods return fresh patterns.
  */
 type SpPattern = {
-  __kind: 'SpPattern';
-  sources: ParsedPattern[];
-  scale: string;
-  ops: { op: 'add' | 'sub'; mode: SpAlignmentMode }[];
-  argument_spans: { start: number; end: number }[];
   add: SpCombineBuilder;
   sub: SpCombineBuilder;
   /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
@@ -612,9 +598,6 @@ type SpPattern = {
  * hand. A \`cycles\` of \`'Infinity'\` (only the last section) loops forever.
  */
 type ArrangePattern = {
-  __kind: 'ArrangePattern';
-  sections: { cycles: number | 'Infinity'; pattern: ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern }[];
-  argument_spans: { start: number; end: number }[];
   /** Speed this arrangement up by \`factor\`. See \`$p(...).fast\`. */
   fast(factor: number | string): FastPattern;
   /** Slow this arrangement down by \`factor\`. See \`$p(...).slow\`. */
@@ -628,10 +611,6 @@ type ArrangePattern = {
  * with \`.fast(...)\`; never build one by hand.
  */
 type FastPattern = {
-  __kind: 'FastPattern';
-  pattern: ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern;
-  factor: number | ParsedPattern;
-  argument_spans: { start: number; end: number }[];
   /** Speed this pattern up further by \`factor\`. See \`$p(...).fast\`. */
   fast(factor: number | string): FastPattern;
   /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
@@ -643,10 +622,6 @@ type FastPattern = {
  * The time-inverse of \`FastPattern\`; same composition rules.
  */
 type SlowPattern = {
-  __kind: 'SlowPattern';
-  pattern: ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern;
-  factor: number | ParsedPattern;
-  argument_spans: { start: number; end: number }[];
   /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
   fast(factor: number | string): FastPattern;
   /** Slow this pattern down further by \`factor\`. See \`$p(...).slow\`. */
