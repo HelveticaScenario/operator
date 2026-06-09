@@ -8032,7 +8032,7 @@
               "$ref": "#/$defs/SectionCycles"
             },
             "pattern": {
-              "$ref": "#/$defs/SeqPatternSource2"
+              "$ref": "#/$defs/SeqPatternSource"
             }
           },
           "required": [
@@ -8145,7 +8145,7 @@
               "$ref": "#/$defs/FactorPayload"
             },
             "pattern": {
-              "$ref": "#/$defs/SeqPatternSource2"
+              "$ref": "#/$defs/SeqPatternSource"
             }
           },
           "required": [
@@ -9806,26 +9806,6 @@
             }
           ]
         },
-        "SeqPatternSource2": {
-          "description": "Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`\npayload, a chained `$p.s` payload with multi-source highlighting, or a\nsingle `ParsedPatternPayload` (the legacy single-source path used by\n`$cycle($p(...))`).\n\nThe `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before\nthe untagged `Single`; each carries a distinct required `__kind` literal, so\nthe untagged enum disambiguates them unambiguously before falling back to\n`Single`.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FastPatternPayload"
-            },
-            {
-              "$ref": "#/$defs/SlowPatternPayload"
-            },
-            {
-              "$ref": "#/$defs/ArrangePatternPayload"
-            },
-            {
-              "$ref": "#/$defs/SpPatternPayload"
-            },
-            {
-              "$ref": "#/$defs/ParsedPatternPayload"
-            }
-          ]
-        },
         "Signal": {
           "anyOf": [
             {
@@ -9889,7 +9869,7 @@
               "$ref": "#/$defs/FactorPayload"
             },
             "pattern": {
-              "$ref": "#/$defs/SeqPatternSource2"
+              "$ref": "#/$defs/SeqPatternSource"
             }
           },
           "required": [

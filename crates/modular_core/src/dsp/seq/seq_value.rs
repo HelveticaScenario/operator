@@ -594,7 +594,21 @@ impl JsonSchema for SeqPatternParam {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         SeqPatternSource::schema_name()
     }
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        // schemars keys definitions by `schema_id`, not `schema_name`. Delegate
+        // the id too so this param and the real `SeqPatternSource` enum share one
+        // definition. Without this, the param's default id (the bare
+        // `"SeqPatternSource"`) differs from the derived enum's module-path-
+        // qualified id, so the recursive `pattern` fields that reference the enum
+        // (arrange sections, `.fast`/`.slow` wrappers) spawn a byte-identical
+        // duplicate definition named `SeqPatternSource2`.
+        SeqPatternSource::schema_id()
+    }
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Delegate the inline content directly (not `subschema_for`): with a
+        // shared `schema_id`, a `subschema_for::<SeqPatternSource>()` here would
+        // return a `$ref` to the definition currently being built, making the
+        // definition body a self-reference.
         SeqPatternSource::json_schema(generator)
     }
 }
@@ -1103,6 +1117,25 @@ mod tests {
         SeqPatternSource::Single(ParsedPatternPayload::parse_for_test(src))
     }
 
+    /// A two-source chained `$p.s(a, scale).add(b)` — both sources are active
+    /// within every cycle (combined), so its `per_source` has two entries
+    /// highlighting at pattern_idx 0 and 1.
+    fn sp_source_2(a: &str, b: &str, scale: &str) -> SeqPatternSource {
+        SeqPatternSource::Sp(SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![
+                ParsedPatternPayload::parse_for_test(a),
+                ParsedPatternPayload::parse_for_test(b),
+            ],
+            scale: scale.to_string(),
+            ops: vec![SpOp {
+                op: SpOpKind::Add,
+                mode: SpAlignmentMode::In,
+            }],
+            argument_spans: vec![],
+        })
+    }
+
     fn section(cycles: f64, pattern: SeqPatternSource) -> ArrangeSectionPayload {
         ArrangeSectionPayload {
             cycles: SectionCycles::Finite(cycles),
@@ -1599,6 +1632,38 @@ mod tests {
         assert!(
             pidxs.contains(&1),
             "factor atoms highlight at their slot idx 1, got {pidxs:?}"
+        );
+    }
+
+    #[test]
+    fn test_fast_factor_slot_equals_multi_source_inner_count() {
+        // `$p.s("0 2 4", ...).add("0 5").fast("2 4")`: the wrapped pattern is a
+        // *two-source* `$p.s`, both active within every cycle. The factor's
+        // highlightable slot must therefore be the inner source COUNT (2), not a
+        // fixed 1 — `lower_fast` passes `inner.per_source.len()` as the offset.
+        // Baking a cycle proves all three sources light up at their flat slots:
+        // the two inner sources at idx 0 and 1, and the factor "2 4" at idx 2.
+        let inner = sp_source_2("0 2 4", "0 5", "c(maj)");
+        let mut param =
+            SeqPatternParam::from_fast_payload(fast_payload("2 4", inner)).unwrap();
+
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["0 2 4", "0 5", "2 4"]);
+
+        param.bake(0.0, 1.0);
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
+            .span_arena
+            .iter()
+            .map(|s| s.pattern_idx)
+            .collect();
+        assert_eq!(
+            pidxs,
+            std::collections::BTreeSet::from([0, 1, 2]),
+            "inner sources highlight at idx 0/1, factor at idx 2 (== inner count), got {pidxs:?}"
         );
     }
 
