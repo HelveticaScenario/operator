@@ -196,6 +196,12 @@ pub trait Sampleable: MessageHandler + Send {
     fn sync_external_clock(&self, _state: ExternalClockState) {}
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
+    /// Reset the transport loop (bar) index to zero without disturbing the
+    /// bar phase. Only ROOT_CLOCK's wrapper overrides this; every other module
+    /// is a no-op. Used on a buffer switch under Ableton Link: the shared
+    /// timeline owns the phase, so the incoming song restarts its bar count
+    /// from zero while staying locked to the peer timeline.
+    fn reset_loop_index(&self) {}
 
     /// Inject one block's worth of host audio input frames. Only
     /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio

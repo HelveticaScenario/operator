@@ -2119,16 +2119,28 @@ impl AudioProcessor {
     }
 
     // Restart the transport when this update switches playback to a different
-    // buffer (song). Free-run only: under Ableton Link the shared session
-    // timeline is authoritative — a local reset would be re-overridden by the
-    // next synced sample and would spuriously re-fire the bar/beat triggers.
-    // Runs after the inserts/transfer/connect above so ROOT_CLOCK's message
-    // listener is registered; the swap-site eager-fill then refills the block
-    // from phase 0.
-    if reset_clock && !self.link.is_active() {
-      let _ = self
-        .patch
-        .dispatch_message(&Message::Clock(ClockMessages::Start));
+    // buffer (song). Runs after the inserts/transfer/connect above so
+    // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
+    // then refills the block.
+    if reset_clock {
+      if self.link.is_active() {
+        // Under Ableton Link the shared session timeline owns the bar phase —
+        // a full Clock::Start would be re-overridden by the next synced sample
+        // and would spuriously re-fire the bar/beat triggers. The swap is
+        // quantized to a bar boundary (NextBar; see `update_patch`), so reset
+        // only the local bar (loop) index: the incoming song's bar count
+        // restarts at zero while the phase stays locked to the peer timeline.
+        use modular_core::types::ROOT_CLOCK_ID;
+        if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+          root_clock.reset_loop_index();
+        }
+      } else {
+        // Free-run: restart the whole transport (phase, beat, bar count) from
+        // zero. The swap-site eager-fill then refills the block from phase 0.
+        let _ = self
+          .patch
+          .dispatch_message(&Message::Clock(ClockMessages::Start));
+      }
     }
   }
 
