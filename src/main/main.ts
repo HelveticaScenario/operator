@@ -23,7 +23,6 @@ import type {
 } from '../shared/ipcTypes';
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
-import { isBufferSwitch } from './bufferSwitch';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
@@ -895,10 +894,6 @@ registerIPCHandler(
             const shouldReconcile =
                 Boolean(sourceId) && lastAppliedSourceId === sourceId;
 
-            // Switching playback to a different buffer (song) restarts the
-            // transport from the top, applied atomically with the patch swap.
-            const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
-
             if (DEBUG_LOG) {
                 if (!sourceId) {
                     console.log(
@@ -950,11 +945,7 @@ registerIPCHandler(
                 }),
             );
 
-            const { errors, updateId } = synth.updatePatch(
-                patch,
-                trigger,
-                resetClock,
-            );
+            const { errors, updateId } = synth.updatePatch(patch, trigger);
 
             if (errors.length === 0) {
                 lastAppliedPatchGraph = patch;
@@ -1012,10 +1003,6 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     const shouldReconcile =
         Boolean(sourceId) && lastAppliedSourceId === sourceId;
 
-    // Switching playback to a different buffer (song) restarts the transport
-    // from the top, applied atomically with the patch swap.
-    const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
-
     if (DEBUG_LOG) {
         if (!sourceId) {
             console.log('[patch-remap] no sourceId; reconciliation disabled');
@@ -1060,7 +1047,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
         to,
     }));
 
-    const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
+    const { errors, updateId } = synth.updatePatch(patch, trigger);
 
     if (errors.length === 0) {
         lastAppliedPatchGraph = patch;

@@ -52,7 +52,7 @@ export declare class Synthesizer {
    * window the renderer maps into clip space.
    */
   getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges]>
-  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null): PatchUpdateResult
+  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
   /** Set the workspace root directory for WAV file loading. */

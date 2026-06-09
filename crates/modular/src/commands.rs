@@ -72,12 +72,6 @@ pub struct PatchUpdate {
   /// Whether the DSL explicitly called $setTempo (don't push default 120 to Link)
   pub tempo_override: Option<f64>,
 
-  /// When true, restart ROOT_CLOCK's transport (phase, beat, bar count) to zero
-  /// as this update is applied. Set by the main thread when the update switches
-  /// playback to a different buffer (song); a same-buffer live-coding update
-  /// leaves it false so the clock keeps running uninterrupted.
-  pub reset_clock: bool,
-
   /// Pre-allocated TLS profiler records map, one entry per id in
   /// `desired_ids`. Consumed by `profiling::swap_records` on the audio
   /// thread; the evicted map flows back via the garbage queue. Always
@@ -108,7 +102,6 @@ impl PatchUpdate {
       wav_data: HashMap::new(),
       sample_rate,
       tempo_override: None,
-      reset_clock: false,
       profile_records_seed: HashMap::new(),
       profile_shared_seed: HashMap::new(),
     }
