@@ -3,7 +3,10 @@ use schemars::JsonSchema;
 
 use crate::{
     PORT_MAX_CHANNELS,
-    dsp::oscillators::{FmMode, apply_fm},
+    dsp::{
+        oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
+        utils::SchmittTrigger,
+    },
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
@@ -30,6 +33,9 @@ struct PulseOscillatorParams {
     #[serde(default)]
     #[deserr(default)]
     fm_mode: FmMode,
+    /// hard sync source — rising edges reset the oscillator phase
+    #[deserr(default)]
+    sync: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -43,6 +49,12 @@ struct PulseOscillatorOutputs {
 struct PulseChannelState {
     phase: f32,
     width: Clickless,
+    /// Edge detector for the sync input.
+    sync_schmitt: SchmittTrigger,
+    /// Previous sync-input sample, for subsample edge interpolation.
+    sync_prev: f32,
+    /// PolyBLEP residual carried into the next sample from a sync reset.
+    blep_carry: f32,
 }
 
 /// State for the PulseOscillator module.
@@ -96,15 +108,15 @@ impl PulseOscillator {
             // Wrap phase (rem_euclid supports negative increments from through-zero FM)
             state.phase = state.phase.rem_euclid(1.0);
 
-            // Naive pulse wave
-            let mut naive_pulse = if state.phase < pulse_width { 1.0 } else { -1.0 };
+            let naive_pulse = |p: f32| if p < pulse_width { 1.0 } else { -1.0 };
 
-            // Apply PolyBLEP at the rising edge (phase = 0)
+            // Naive pulse plus PolyBLEP at its own rising (phase 0) and falling
+            // (phase = width) edges. The sync reset lands in the upcoming
+            // interval, so these operate on the real, pre-reset phase.
             let abs_phase_inc = phase_increment.abs();
-            naive_pulse += poly_blep_pulse(state.phase, abs_phase_inc);
-
-            // Apply PolyBLEP at the falling edge (phase = pulse_width)
-            naive_pulse -= poly_blep_pulse(
+            let mut body = naive_pulse(state.phase);
+            body += poly_blep_pulse(state.phase, abs_phase_inc);
+            body -= poly_blep_pulse(
                 if state.phase >= pulse_width {
                     state.phase - pulse_width
                 } else {
@@ -113,7 +125,28 @@ impl PulseOscillator {
                 abs_phase_inc,
             );
 
-            self.outputs.sample.set(ch, naive_pulse * 5.0);
+            let pending = state.blep_carry;
+            state.blep_carry = 0.0;
+
+            // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
+            // at the subsample crossing to band-limit the reset discontinuity.
+            // (The jump is zero when the pulse was already high at the reset.)
+            let mut now = 0.0;
+            if let Some(sync) = &self.params.sync {
+                let v = sync.get_value(ch);
+                if state.sync_schmitt.process(v) {
+                    let frac = sync_edge_fraction(state.sync_prev, v);
+                    let before = naive_pulse(state.phase);
+                    state.phase = 0.0;
+                    let after = naive_pulse(0.0);
+                    let (n, carry) = sync_blep(after - before, frac);
+                    now = n;
+                    state.blep_carry = carry;
+                }
+                state.sync_prev = v;
+            }
+
+            self.outputs.sample.set(ch, (body + pending + now) * 5.0);
         }
     }
 }
