@@ -7885,7 +7885,7 @@
   },
   {
     "name": "$wrap",
-    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n```",
+    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\nSet **octave** to `true` to shift by whole integers instead, preserving the\nfractional part (pitch class in V/Oct signals). Always exact when\n`max − min ≥ 1`; makes the closest-octave attempt otherwise.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n// keep pitch class, clamp to octave range 0–2 V\n$wrap({ input: voct, min: 0, max: 2, octave: true })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "WrapParams",
@@ -7902,6 +7902,11 @@
         "min": {
           "description": "lower bound of the wrap range",
           "$ref": "#/$defs/PolySignal"
+        },
+        "octave": {
+          "description": "when true, shifts by whole integers to preserve the fractional part (pitch class in V/Oct)",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
