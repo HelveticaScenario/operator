@@ -18,7 +18,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
-    dsp::oscillators::{FmMode, apply_fm, wavetable_prep::PreparedWavetable},
+    dsp::{
+        oscillators::{
+            FmMode, apply_fm, sync_blep, sync_edge_fraction, wavetable_prep::PreparedWavetable,
+        },
+        utils::SchmittTrigger,
+    },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::{Connect, Table, Wav, WavData},
 };
@@ -45,6 +50,9 @@ pub(crate) struct WavetableOscParams {
     #[serde(default)]
     #[deserr(default)]
     pub(crate) fm_mode: FmMode,
+    /// hard sync source — rising edges reset the oscillator phase.
+    #[deserr(default)]
+    pub(crate) sync: Option<PolySignal>,
     /// Optional phase-warp table applied before sampling.
     #[deserr(default)]
     pub(crate) phase: Option<Table>,
@@ -68,11 +76,22 @@ struct WavetableOscOutputs {
 struct ChannelState {
     /// Phase accumulator in `[0, 1)`.
     phase: f64,
+    /// Edge detector for the sync input.
+    sync_schmitt: SchmittTrigger,
+    /// Previous sync-input sample, for subsample edge interpolation.
+    sync_prev: f32,
+    /// PolyBLEP residual carried into the next sample from a sync reset.
+    blep_carry: f32,
 }
 
 impl Default for ChannelState {
     fn default() -> Self {
-        Self { phase: 0.0 }
+        Self {
+            phase: 0.0,
+            sync_schmitt: SchmittTrigger::default(),
+            sync_prev: 0.0,
+            blep_carry: 0.0,
+        }
     }
 }
 
@@ -89,10 +108,12 @@ pub fn wavetable_derive_channel_count(params: &WavetableOscParams) -> usize {
     let pos_ch = params.position.as_ref().map(|p| p.channels()).unwrap_or(0);
     let fm_ch = params.fm.as_ref().map(|f| f.channels()).unwrap_or(0);
     let phase_ch = params.phase.as_ref().map(|t| t.channels()).unwrap_or(0);
+    let sync_ch = params.sync.as_ref().map(|s| s.channels()).unwrap_or(0);
     pitch_ch
         .max(pos_ch)
         .max(fm_ch)
         .max(phase_ch)
+        .max(sync_ch)
         .clamp(1, PORT_MAX_CHANNELS)
 }
 
@@ -169,11 +190,12 @@ impl WavetableOsc {
             };
 
             let level = prepared.mipmap_level_for_freq(freq);
-            let sample = prepared.read_sample(level, frame_f, warped_phase);
+            let before = prepared.read_sample(level, frame_f, warped_phase);
 
-            // Output ±5V — wavetables are normalized in [-1, 1] after the
-            // FFT round-trip; scale to the synth's audio range.
-            self.outputs.sample.set(ch, sample * 5.0);
+            // Naive read plus any residual carried from a sync reset on the
+            // previous sample.
+            let mut sample = before + state.blep_carry;
+            state.blep_carry = 0.0;
 
             // Advance phase, wrap to [0, 1). rem_euclid in f64.
             let increment = freq as f64 * inv_sr;
@@ -190,6 +212,31 @@ impl WavetableOsc {
             if !next.is_finite() {
                 next = 0.0;
             }
+
+            // Hard sync: a rising edge resets the phase so the next sample reads
+            // from the table's start. A PolyBLEP at the subsample crossing
+            // band-limits the resulting step.
+            if let Some(sync) = &self.params.sync {
+                let v = sync.get_value(ch);
+                if state.sync_schmitt.process(v) {
+                    let frac = sync_edge_fraction(state.sync_prev, v);
+                    let warped_zero = match &self.params.phase {
+                        Some(table) => table.evaluate(0.0, ch),
+                        None => 0.0,
+                    };
+                    let after = prepared.read_sample(level, frame_f, warped_zero);
+                    let (now, carry) = sync_blep(after - before, frac);
+                    sample += now;
+                    state.blep_carry = carry;
+                    next = 0.0;
+                }
+                state.sync_prev = v;
+            }
+
+            // Output ±5V — wavetables are normalized in [-1, 1] after the
+            // FFT round-trip; scale to the synth's audio range.
+            self.outputs.sample.set(ch, sample * 5.0);
+
             state.phase = next;
         }
     }
@@ -256,6 +303,7 @@ mod tests {
             position: None,
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
             phase: None,
             prepared: None,
         }
