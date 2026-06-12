@@ -25,7 +25,7 @@ struct SimpleOutputs {
 
 #[test]
 fn block_outputs_struct_exists() {
-    let bo = SimpleBlockOutputs::new(4);
+    let bo = SimpleBlockOutputs::new(4, 1);
     // Fresh buffer returns 0.0 at every index.
     assert_eq!(bo.get_at(0, 0, 0), 0.0);
     assert_eq!(bo.get_at(1, 2, 3), 0.0);
@@ -37,7 +37,7 @@ fn copy_from_inner_fills_block_outputs() {
         value: 2.5,
         poly: PolyOutput::mono(1.0),
     };
-    let mut bo = SimpleBlockOutputs::new(4);
+    let mut bo = SimpleBlockOutputs::new(4, 1);
     bo.copy_from_inner(&inner, 2);
     let value_idx = SimpleBlockOutputs::port_index("value").unwrap();
     let poly_idx = SimpleBlockOutputs::port_index("poly").unwrap();
@@ -63,7 +63,7 @@ fn get_at_reads_correct_port() {
         value: 7.5,
         poly: PolyOutput::mono(3.5),
     };
-    let mut bo = SimpleBlockOutputs::new(4);
+    let mut bo = SimpleBlockOutputs::new(4, 1);
     bo.copy_from_inner(&inner, 1);
     assert!((bo.get_at(0, 0, 1) - 7.5).abs() < 1e-6); // value
     assert!((bo.get_at(1, 0, 1) - 3.5).abs() < 1e-6); // poly
@@ -71,6 +71,6 @@ fn get_at_reads_correct_port() {
 
 #[test]
 fn get_at_out_of_range_returns_zero() {
-    let bo = SimpleBlockOutputs::new(4);
+    let bo = SimpleBlockOutputs::new(4, 1);
     assert_eq!(bo.get_at(99, 0, 0), 0.0);
 }

@@ -4,7 +4,7 @@ use crate::{
         oscillators::{FmMode, apply_fm},
         utils::interpolate,
     },
-    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -39,12 +39,6 @@ struct ChannelState {
     phase: f32,
 }
 
-/// State for the SineOscillator module.
-#[derive(Default)]
-struct SineOscillatorState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// A sine wave oscillator.
 ///
 /// ## Example
@@ -55,7 +49,7 @@ struct SineOscillatorState {
 #[module(name = "$sine", args(freq))]
 pub struct SineOscillator {
     outputs: SineOscillatorOutputs,
-    state: SineOscillatorState,
+    channel_state: Box<[ChannelState]>,
     params: SineOscillatorParams,
 }
 
@@ -64,7 +58,7 @@ impl SineOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);

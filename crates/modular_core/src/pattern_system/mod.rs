@@ -320,8 +320,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                 &State,
                 &'b bumpalo::Bump,
                 &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
-            )
-            + Send
+            ) + Send
             + Sync
             + 'static,
     {
@@ -613,7 +612,10 @@ fn fastcat_query_into<'b, T: Clone + Send + Sync + 'static>(
             out.reserve(scratch.len());
             for hap in scratch {
                 let new_part = hap.part.with_time(|t| t * &inv_n + &b_r);
-                let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t * &inv_n + &b_r));
+                let new_whole = hap
+                    .whole
+                    .as_ref()
+                    .map(|w| w.with_time(|t| t * &inv_n + &b_r));
                 out.push(ArenaHap {
                     whole: new_whole,
                     part: new_part,
@@ -751,7 +753,10 @@ fn compress_query_into<'b, T: Clone + Send + Sync + 'static>(
         let b_r = &compressed_begin - &(&cycle * duration);
         for hap in scratch {
             let new_part = hap.part.with_time(|t| t * duration + &b_r);
-            let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t * duration + &b_r));
+            let new_whole = hap
+                .whole
+                .as_ref()
+                .map(|w| w.with_time(|t| t * duration + &b_r));
             if let Some(final_part) = new_part.intersection(&cycle_span) {
                 out.push(ArenaHap {
                     whole: new_whole,
@@ -996,8 +1001,8 @@ mod tests {
         use crate::pattern_system::constructors::pure_with_span;
         use crate::pattern_system::hap::SourceSpan;
 
-        let pat = pure_with_span(1.0f64, SourceSpan::new(0, 1))
-            .with_modifier_span(SourceSpan::new(5, 6));
+        let pat =
+            pure_with_span(1.0f64, SourceSpan::new(0, 1)).with_modifier_span(SourceSpan::new(5, 6));
         let stripped = pat.strip_modifier_spans();
         let haps = stripped.query_arc(
             Fraction::from_integer(0.into()),

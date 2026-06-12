@@ -651,7 +651,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             {
                 name: 'channels',
                 type: 'number',
-                description: 'Number of deferred outputs (1-16, default 1)',
+                description: 'Number of deferred outputs (1-64, default 1)',
             },
         ],
         returns: 'DeferredCollection',

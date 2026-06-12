@@ -6,8 +6,7 @@ use serde::Serialize;
 
 use crate::dsp::utils::voct_to_hz;
 use crate::params::ParamsDeserializer;
-use crate::patch::Patch;
-use crate::types::{Connect, Module, ModuleSchema, SampleableConstructor};
+use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 /// FM synthesis mode for oscillators.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserr, Serialize, JsonSchema, Connect)]

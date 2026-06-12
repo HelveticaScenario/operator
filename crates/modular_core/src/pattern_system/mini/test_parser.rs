@@ -375,11 +375,7 @@ impl<'a> Parser<'a> {
         // hz suffix?
         if self.matches_keyword_ci("hz") {
             let end = self.pos;
-            return Ok(MiniAST::Pure(Located::new(
-                AtomValue::Hz(n),
-                start,
-                end,
-            )));
+            return Ok(MiniAST::Pure(Located::new(AtomValue::Hz(n), start, end)));
         }
         let end = self.pos;
         Ok(MiniAST::Pure(Located::new(
@@ -416,7 +412,11 @@ impl<'a> Parser<'a> {
         if self.peek() == Some(b'.') {
             // Optional fractional part (must have digits after .)
             let after_dot = self.pos + 1;
-            if self.input.get(after_dot).is_some_and(|c| c.is_ascii_digit()) {
+            if self
+                .input
+                .get(after_dot)
+                .is_some_and(|c| c.is_ascii_digit())
+            {
                 self.pos += 1;
                 while matches!(self.peek(), Some(b'0'..=b'9')) {
                     self.pos += 1;
@@ -541,7 +541,12 @@ impl<'a> Parser<'a> {
         let mut elems: Vec<(MiniASTF64, Option<f64>)> = Vec::new();
         loop {
             self.skip_ws();
-            if self.at_end() || matches!(self.peek(), Some(b']') | Some(b'>') | Some(b')') | Some(b',')) {
+            if self.at_end()
+                || matches!(
+                    self.peek(),
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',')
+                )
+            {
                 break;
             }
             let base = self.mod_operand_f64()?;
@@ -630,7 +635,12 @@ impl<'a> Parser<'a> {
         let mut elems: Vec<(MiniASTU32, Option<f64>)> = Vec::new();
         loop {
             self.skip_ws();
-            if self.at_end() || matches!(self.peek(), Some(b']') | Some(b'>') | Some(b')') | Some(b',')) {
+            if self.at_end()
+                || matches!(
+                    self.peek(),
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',')
+                )
+            {
                 break;
             }
             let base = self.mod_operand_u32()?;
@@ -709,7 +719,12 @@ impl<'a> Parser<'a> {
         let mut elems: Vec<(MiniASTI32, Option<f64>)> = Vec::new();
         loop {
             self.skip_ws();
-            if self.at_end() || matches!(self.peek(), Some(b']') | Some(b'>') | Some(b')') | Some(b',')) {
+            if self.at_end()
+                || matches!(
+                    self.peek(),
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',')
+                )
+            {
                 break;
             }
             let base = self.mod_operand_i32()?;
@@ -910,9 +925,9 @@ mod tests {
             MiniAST::Replicate(inner, count) => {
                 assert_eq!(*count, 3);
                 match inner.as_ref() {
-                    MiniAST::Pure(l) => assert!(
-                        matches!(l.node, AtomValue::Note { letter: 'a', .. })
-                    ),
+                    MiniAST::Pure(l) => {
+                        assert!(matches!(l.node, AtomValue::Note { letter: 'a', .. }))
+                    }
                     other => panic!("expected Pure note, got {:?}", other),
                 }
             }

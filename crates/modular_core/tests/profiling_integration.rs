@@ -11,7 +11,7 @@ use modular_core::profiling::{
     self, ModuleProfileAccum, build_seed, drain_collection, new_collection, swap_records,
     try_swap_shared,
 };
-use modular_core::types::{ModuleState, PatchGraph};
+use modular_core::types::{ModuleSpec, PatchGraph};
 use serde_json::json;
 
 const SAMPLE_RATE: f32 = 48000.0;
@@ -21,7 +21,7 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
     PatchGraph {
         modules: modules
             .into_iter()
-            .map(|(id, module_type, params)| ModuleState {
+            .map(|(id, module_type, params)| ModuleSpec {
                 id: id.to_string(),
                 module_type: module_type.to_string(),
                 id_is_explicit: None,

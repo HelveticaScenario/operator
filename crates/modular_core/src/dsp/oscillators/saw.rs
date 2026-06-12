@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 
 use crate::{
     dsp::oscillators::{FmMode, apply_fm},
-    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 
@@ -42,12 +42,6 @@ struct ChannelState {
     shape: Clickless,
 }
 
-/// State for the SawOscillator module.
-#[derive(Default)]
-struct SawOscillatorState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// A variable-symmetry triangle oscillator that morphs between saw, triangle, and ramp.
 ///
 /// The `shape` parameter shifts the peak position of a triangle wave,
@@ -67,7 +61,7 @@ struct SawOscillatorState {
 #[module(name = "$saw", args(freq))]
 pub struct SawOscillator {
     outputs: SawOscillatorOutputs,
-    state: SawOscillatorState,
+    channel_state: Box<[ChannelState]>,
     params: SawOscillatorParams,
 }
 
@@ -79,7 +73,7 @@ impl SawOscillator {
         let inv_sample_rate = 1.0 / sample_rate;
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             // Update shape with smoothing - clamp to valid range
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);

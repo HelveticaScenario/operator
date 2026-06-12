@@ -1478,9 +1478,7 @@ impl Buffer {
     }
 
     pub fn frame_count(&self) -> usize {
-        self.buffer_ref()
-            .map(|b| b.frame_count())
-            .unwrap_or(0)
+        self.buffer_ref().map(|b| b.frame_count()).unwrap_or(0)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -1511,9 +1509,7 @@ impl Buffer {
     }
 
     pub fn read_write_index(&self) -> usize {
-        self.buffer_ref()
-            .map(|b| b.read_write_index())
-            .unwrap_or(0)
+        self.buffer_ref().map(|b| b.read_write_index()).unwrap_or(0)
     }
 
     pub fn fill(&self, value: f32) {
@@ -1539,13 +1535,11 @@ impl Buffer {
     }
 
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> Option<R> {
-        self.buffer_ref()
-            .map(|buffer| buffer.with_data(f))
+        self.buffer_ref().map(|buffer| buffer.with_data(f))
     }
 
     pub fn with_data_mut<R>(&self, f: impl FnOnce(&mut Vec<Vec<f32>>) -> R) -> Option<R> {
-        self.buffer_ref()
-            .map(|buffer| buffer.with_data_mut(f))
+        self.buffer_ref().map(|buffer| buffer.with_data_mut(f))
     }
 
     pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
@@ -2441,7 +2435,7 @@ impl PartialEq for Signal {
     Deserialize,
     JsonSchema,
     Deserr,
-    Connect
+    Connect,
 )]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
@@ -2605,7 +2599,7 @@ pub struct ModuleSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[napi(object)]
-pub struct ModuleState {
+pub struct ModuleSpec {
     pub id: String,
     pub module_type: String,
     pub id_is_explicit: Option<bool>,
@@ -2713,7 +2707,7 @@ pub struct ScopeXyRanges {
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]
 pub struct PatchGraph {
-    pub modules: Vec<ModuleState>,
+    pub modules: Vec<ModuleSpec>,
     pub module_id_remaps: Option<Vec<ModuleIdRemap>>,
     // #[serde(default)]
     pub scopes: Vec<Scope>,

@@ -1,5 +1,4 @@
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::utils::sanitize,
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
@@ -35,12 +34,6 @@ struct SlewChannelState {
     initialized: bool,
 }
 
-/// State for the LagProcessor module.
-#[derive(Default)]
-struct LagProcessorState {
-    channels: [SlewChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Slew limiter that smooths abrupt voltage changes.
 ///
 /// Separate **rise** and **fall** times control how quickly the output can
@@ -60,7 +53,7 @@ struct LagProcessorState {
 pub struct LagProcessor {
     outputs: LagProcessorOutputs,
     params: LagProcessorParams,
-    state: LagProcessorState,
+    channel_state: Box<[SlewChannelState]>,
 }
 
 impl LagProcessor {
@@ -68,7 +61,7 @@ impl LagProcessor {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
             let input = self.params.input.get_value(ch);
             if !state.initialized {
                 state.current_value = sanitize(input);

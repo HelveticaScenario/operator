@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
-use modular_core::types::{ModuleState, PatchGraph, Sampleable};
+use modular_core::types::{ModuleSpec, PatchGraph, Sampleable};
 use serde_json::{Value, json};
 
 /// Helper — build a mini-notation payload shaped like what `$p(source)`
@@ -472,7 +472,7 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
     PatchGraph {
         modules: modules
             .into_iter()
-            .map(|(id, module_type, params)| ModuleState {
+            .map(|(id, module_type, params)| ModuleSpec {
                 id: id.to_string(),
                 module_type: module_type.to_string(),
                 id_is_explicit: None,

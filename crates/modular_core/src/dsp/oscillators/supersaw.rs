@@ -17,7 +17,7 @@ fn default_voices() -> usize {
 struct SupersawParams {
     /// pitch in V/Oct (0V = C4)
     freq: PolySignal,
-    /// number of supersaw voices (1–16)
+    /// number of supersaw voices (1–64)
     #[serde(default = "default_voices")]
     #[deserr(default = default_voices())]
     voices: usize,
@@ -54,7 +54,7 @@ pub fn supersaw_derive_channel_count(params: &SupersawParams) -> usize {
 /// creating a rich, full sound.
 ///
 /// - **freq** — pitch in V/Oct (0V = C4)
-/// - **voices** — number of detuned saw voices (1–16, default 5)
+/// - **voices** — number of detuned saw voices (1–64, default 5)
 /// - **detune** — detune spread in semitones (default 0.18)
 ///
 /// Output range is **±5V** with gain compensation for input channel count.
@@ -70,12 +70,14 @@ pub struct Supersaw {
     outputs: SupersawOutputs,
     params: SupersawParams,
     state: SupersawState,
+    /// Phase state for matrix mixing: a `PORT_MAX_CHANNELS * voices` matrix
+    /// indexed as `[input_ch * voices + voice]` (row stride = voice count).
+    /// Allocated in `init` to the active voice count rather than the fixed max.
+    channel_state: Box<[f32]>,
 }
 
-/// State for the Supersaw module.
+/// Module-level state for the Supersaw module.
 struct SupersawState {
-    /// Phase state for matrix mixing: indexed as [input_ch * PORT_MAX_CHANNELS + voice]
-    osc_states: [f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
     rng_state: u32,
     /// Voice count clamped to [1, PORT_MAX_CHANNELS]. Derived from params.
     voices: usize,
@@ -89,10 +91,12 @@ struct SupersawState {
     voice_t: [f32; PORT_MAX_CHANNELS],
 }
 
+// Hand-written `Default`: `voice_t` is `[f32; PORT_MAX_CHANNELS]` and the
+// standard library only derives `Default` for arrays up to length 32, so a
+// 64-wide array needs an explicit array-repeat initializer.
 impl Default for SupersawState {
     fn default() -> Self {
         Self {
-            osc_states: [0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
             rng_state: 0,
             voices: 1,
             input_channels: 1,
@@ -147,8 +151,13 @@ impl Supersaw {
         // patch updates by transfer_state_from, so it must not be re-seeded in
         // configure().
         self.state.rng_state = self as *const Self as usize as u32;
-        for i in 0..self.state.osc_states.len() {
-            self.state.osc_states[i] = rand_phase(&mut self.state.rng_state);
+        // `voices` rows of state per input channel. Input channels are bounded
+        // by PORT_MAX_CHANNELS, so allocating that many rows keeps the matrix
+        // valid for any input width while shrinking the voice dimension.
+        let voices = self.channel_count().max(1);
+        self.channel_state = vec![0.0; PORT_MAX_CHANNELS * voices].into_boxed_slice();
+        for i in 0..self.channel_state.len() {
+            self.channel_state[i] = rand_phase(&mut self.state.rng_state);
         }
     }
 
@@ -208,8 +217,8 @@ impl Supersaw {
                 let freq = base_freq * (2.0f32).powf(offset_semitones / 12.0);
                 let dt = freq * inv_sample_rate;
 
-                let state_idx = input_ch * PORT_MAX_CHANNELS + voice;
-                let phase = &mut self.state.osc_states[state_idx];
+                let state_idx = input_ch * voices + voice;
+                let phase = &mut self.channel_state[state_idx];
 
                 // Advance phase (rem_euclid supports negative increments from through-zero FM)
                 *phase += dt;
@@ -257,7 +266,11 @@ mod tests {
             _channel_count: channels,
             _block_index: Default::default(),
             state: SupersawState::default(),
+            channel_state: Box::default(),
         };
+        // Mirror the production lifecycle: init() allocates and seeds the phase
+        // matrix; on_patch_update() computes the param-derived constants that
+        // update() reads from state.
         s.init(48000.0);
         s.on_patch_update();
         s
@@ -315,15 +328,15 @@ mod tests {
     }
 
     #[test]
-    fn test_voices_clamped_to_16() {
+    fn test_voices_clamped_to_max() {
         let params = SupersawParams {
             freq: PolySignal::mono(Signal::Volts(0.0)),
-            voices: 32,
+            voices: 100,
             detune: None,
             fm: None,
             fm_mode: FmMode::default(),
         };
-        assert_eq!(supersaw_derive_channel_count(&params), 16);
+        assert_eq!(supersaw_derive_channel_count(&params), PORT_MAX_CHANNELS);
 
         let params_zero = SupersawParams {
             freq: PolySignal::mono(Signal::Volts(0.0)),
@@ -346,8 +359,8 @@ mod tests {
             fm_mode: FmMode::default(),
         });
         // Force known phases (overwrite whatever init set)
-        for i in 0..PORT_MAX_CHANNELS * PORT_MAX_CHANNELS {
-            s_no_detune.state.osc_states[i] = 0.25;
+        for i in 0..s_no_detune.channel_state.len() {
+            s_no_detune.channel_state[i] = 0.25;
         }
 
         let mut s_detune = make_supersaw(SupersawParams {
@@ -357,8 +370,8 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
         });
-        for i in 0..PORT_MAX_CHANNELS * PORT_MAX_CHANNELS {
-            s_detune.state.osc_states[i] = 0.25;
+        for i in 0..s_detune.channel_state.len() {
+            s_detune.channel_state[i] = 0.25;
         }
 
         // Run both for several samples
@@ -398,7 +411,7 @@ mod tests {
 
         // Check that at least some initial phases differ
         // (statistically extremely unlikely all 4 are identical)
-        let phases: Vec<f32> = (0..4).map(|v| s.state.osc_states[v]).collect();
+        let phases: Vec<f32> = (0..4).map(|v| s.channel_state[v]).collect();
         let all_same = phases.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10);
         assert!(!all_same, "Random phases should not all be identical");
     }
@@ -414,8 +427,8 @@ mod tests {
             fm_mode: FmMode::default(),
         });
         // Force known phases, zero detune -> all voices should produce identical output
-        for i in 0..PORT_MAX_CHANNELS * PORT_MAX_CHANNELS {
-            s.state.osc_states[i] = 0.5;
+        for i in 0..s.channel_state.len() {
+            s.channel_state[i] = 0.5;
         }
         s.update(48000.0);
 
@@ -446,7 +459,7 @@ mod tests {
             fm_mode: FmMode::default(),
         });
         // Set phase to 0.75 -> naive saw = 2*0.75 - 1 = 0.5
-        s1.state.osc_states[0] = 0.75;
+        s1.channel_state[0] = 0.75;
         s1.update(48000.0);
         let val_mono = s1.outputs.sample.get(0);
 
@@ -463,9 +476,10 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
         });
-        // Set all 4 input channel phases identically
+        // Set all 4 input channel phases identically. Row stride is the voice
+        // count (1 here), so channel `input_ch`'s single voice is at `input_ch`.
         for input_ch in 0..4 {
-            s4.state.osc_states[input_ch * PORT_MAX_CHANNELS] = 0.75;
+            s4.channel_state[input_ch] = 0.75;
         }
         s4.update(48000.0);
         let val_quad = s4.outputs.sample.get(0);

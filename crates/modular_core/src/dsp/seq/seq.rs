@@ -121,7 +121,7 @@ pub struct SeqParams {
     #[signal(range = (0.0, 1.0))]
     #[deserr(default)]
     playhead: Option<MonoSignal>,
-    /// Number of polyphonic voices (1-16)
+    /// Number of polyphonic voices (1-64)
     #[deserr(default)]
     pub channels: Option<usize>,
     /// loop window [offset, length] in cycles (fractional allowed)
@@ -351,15 +351,24 @@ pub struct Seq {
     outputs: SeqOutputs,
     params: SeqParams,
     state: SeqState,
+    /// Per-channel voice state, one element per polyphonic channel. Sized to the
+    /// derived channel count by the `#[module]` macro and carried across patch
+    /// updates by the macro's per-element state transfer.
+    channel_state: Box<[SeqChannel]>,
 }
 
-/// State for the Seq module.
+/// Per-channel sequencer state.
+#[derive(Default)]
+struct SeqChannel {
+    /// Per-voice playback state.
+    voice: VoiceState,
+    /// Last CV voltage — holds through rest periods and state transfers. Also
+    /// the "value the voice held before", used for nearest-value allocation.
+    last_cv: f32,
+}
+
+/// Module-level state for the Seq module.
 struct SeqState {
-    /// Per-voice state array
-    voices: [VoiceState; PORT_MAX_CHANNELS],
-    /// Last CV voltage per channel — holds through rest periods and state transfers.
-    /// Also the "value the voice held before", used for nearest-value allocation.
-    last_cv: [f32; PORT_MAX_CHANNELS],
     /// Previous frame's folded playhead position, for window-membership edge
     /// detection: a hap fires only when the playhead *enters* its window (an
     /// outside→inside transition), never because it is merely inside it.
@@ -380,8 +389,6 @@ struct SeqState {
 impl Default for SeqState {
     fn default() -> Self {
         Self {
-            voices: std::array::from_fn(|_| VoiceState::default()),
-            last_cv: [0.0; PORT_MAX_CHANNELS],
             prev_logical: 0.0,
             started: false,
             voices_to_release: ArrayVec::new(),
@@ -471,16 +478,17 @@ impl Seq {
         // frees), because `logical` wraps at the ribbon seam.
         self.state.voices_to_release.clear();
         for i in 0..num_channels {
-            if let Some(cached) = self.state.voices[i].cached_hap {
+            if let Some(cached) = self.channel_state[i].voice.cached_hap {
                 if !cached.contains(raw) {
                     self.state.voices_to_release.push(i);
                 }
             }
         }
         for i in self.state.voices_to_release.iter().copied() {
-            self.state.voices[i].active = false;
-            self.state.voices[i].cached_hap = None;
-            self.state.voices[i]
+            self.channel_state[i].voice.active = false;
+            self.channel_state[i].voice.cached_hap = None;
+            self.channel_state[i]
+                .voice
                 .gate
                 .set_state(TempGateState::Low, TempGateState::Low, 0);
         }
@@ -490,10 +498,10 @@ impl Seq {
                 self.outputs.cv.set(ch, 0.0);
                 self.outputs
                     .gate
-                    .set(ch, self.state.voices[ch].gate.process());
+                    .set(ch, self.channel_state[ch].voice.gate.process());
                 self.outputs
                     .trig
-                    .set(ch, self.state.voices[ch].trigger.process());
+                    .set(ch, self.channel_state[ch].voice.trigger.process());
             }
             return;
         }
@@ -501,11 +509,7 @@ impl Seq {
         // Collect new onsets for this frame, then dispatch to voices in a
         // separate pass so we don't hold a borrow of cycle storage while
         // mutating voice state.
-        let SeqState {
-            voices,
-            events_to_process,
-            ..
-        } = &mut self.state;
+        let events_to_process = &mut self.state.events_to_process;
         events_to_process.clear();
         let storage_opt = self.params.pattern.cached_haps().get(storage_index);
         if let Some(storage) = storage_opt {
@@ -526,7 +530,8 @@ impl Seq {
                 }
                 let hap_index = hap_index as u32;
                 let already_assigned = (0..num_channels).any(|i| {
-                    voices[i]
+                    self.channel_state[i]
+                        .voice
                         .cached_hap
                         .map(|existing| {
                             existing.hap_index == hap_index
@@ -562,18 +567,23 @@ impl Seq {
             // Tier 1: free voices.
             let mut free: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
             for i in 0..num_channels {
-                if !self.state.voices[i].active {
+                if !self.channel_state[i].voice.active {
                     free.push(i);
                 }
             }
             {
                 let SeqState {
                     events_to_process,
-                    last_cv,
                     assign,
                     ..
                 } = &mut self.state;
-                assign_nearest(events_to_process, &mut assigned, &free, last_cv, assign);
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &free,
+                    &self.channel_state,
+                    assign,
+                );
             }
 
             // Tier 2: steal orphaned voices, computed lazily only when onsets
@@ -581,8 +591,8 @@ impl Seq {
             if (0..n).any(|ei| assigned[ei].is_none()) {
                 let mut orphans: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
                 for i in 0..num_channels {
-                    if self.state.voices[i].active
-                        && let Some(cached) = self.state.voices[i].cached_hap
+                    if self.channel_state[i].voice.active
+                        && let Some(cached) = self.channel_state[i].voice.cached_hap
                         && self.voice_is_orphan(&cached)
                     {
                         orphans.push(i);
@@ -590,11 +600,16 @@ impl Seq {
                 }
                 let SeqState {
                     events_to_process,
-                    last_cv,
                     assign,
                     ..
                 } = &mut self.state;
-                assign_nearest(events_to_process, &mut assigned, &orphans, last_cv, assign);
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &orphans,
+                    &self.channel_state,
+                    assign,
+                );
             }
 
             // Apply the chosen voice for each placed onset. Map the note's logical
@@ -606,7 +621,7 @@ impl Seq {
                     continue;
                 };
                 let event = self.state.events_to_process[ei];
-                let voice = &mut self.state.voices[voice_idx];
+                let voice = &mut self.channel_state[voice_idx].voice;
                 voice.cached_hap = Some(CachedHap {
                     hap_index: event.hap_index,
                     cached_cycle: current_cycle,
@@ -626,17 +641,16 @@ impl Seq {
             }
         }
 
-        let state = &mut self.state;
         for ch in 0..num_channels {
-            let voice = &mut state.voices[ch];
-            if let Some(cached) = voice.cached_hap
+            let channel = &mut self.channel_state[ch];
+            if let Some(cached) = channel.voice.cached_hap
                 && let Some(cv) = cached.get_cv()
             {
-                state.last_cv[ch] = cv as f32;
+                channel.last_cv = cv as f32;
             }
-            self.outputs.cv.set(ch, state.last_cv[ch]);
-            self.outputs.gate.set(ch, voice.gate.process());
-            self.outputs.trig.set(ch, voice.trigger.process());
+            self.outputs.cv.set(ch, channel.last_cv);
+            self.outputs.gate.set(ch, channel.voice.gate.process());
+            self.outputs.trig.set(ch, channel.voice.trigger.process());
         }
     }
 }
@@ -688,12 +702,13 @@ impl Default for AssignScratch {
 /// Onsets already placed (by an earlier tier) are skipped, so this is called
 /// once per tier (free voices, then orphaned voices). Allocation-free: fixed
 /// `[_; PORT_MAX_CHANNELS]` stacks, an in-place `sort_unstable`, and the boxed
-/// `scratch` decision table.
+/// `scratch` decision table. Each candidate's previously-held value is read
+/// from `channel_state[voice].last_cv`.
 fn assign_nearest(
     events: &[PendingEvent],
     assigned: &mut [Option<usize>; PORT_MAX_CHANNELS],
     candidates: &[usize],
-    last_cv: &[f32; PORT_MAX_CHANNELS],
+    channel_state: &[SeqChannel],
     scratch: &mut AssignScratch,
 ) {
     // Gather the unplaced onsets and the candidate voices as (value, index)
@@ -707,7 +722,7 @@ fn assign_nearest(
     }
     let mut cands: ArrayVec<(f32, u32), PORT_MAX_CHANNELS> = ArrayVec::new();
     for &vidx in candidates {
-        cands.push((last_cv[vidx], vidx as u32));
+        cands.push((channel_state[vidx].last_cv, vidx as u32));
     }
     if evs.is_empty() || cands.is_empty() {
         return;
@@ -833,7 +848,8 @@ impl crate::types::StatefulModule for Seq {
         let mut per_pattern_spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_sources];
         let mut any_non_rest = false;
 
-        for voice in self.state.voices.iter().take(num_channels) {
+        for channel in self.channel_state.iter().take(num_channels) {
+            let voice = &channel.voice;
             if let Some(cached) = voice.cached_hap
                 && !cached.is_rest()
             {
@@ -979,13 +995,14 @@ mod tests {
         cands: &[usize],
         cv: &[(usize, f32)],
     ) -> Vec<Option<usize>> {
-        let mut last_cv = [0.0f32; PORT_MAX_CHANNELS];
+        let mut channels: Vec<SeqChannel> =
+            (0..PORT_MAX_CHANNELS).map(|_| SeqChannel::default()).collect();
         for &(i, v) in cv {
-            last_cv[i] = v;
+            channels[i].last_cv = v;
         }
         let mut assigned = [None; PORT_MAX_CHANNELS];
         let mut scratch = AssignScratch::default();
-        assign_nearest(events, &mut assigned, cands, &last_cv, &mut scratch);
+        assign_nearest(events, &mut assigned, cands, &channels, &mut scratch);
         assigned[..events.len()].to_vec()
     }
 

@@ -1,5 +1,5 @@
 use modular_core::params::ARGUMENT_SPANS_KEY;
-use modular_core::types::{ModuleSchema, ModuleState, PatchGraph, Signal, WellKnownModule};
+use modular_core::types::{ModuleSchema, ModuleSpec, PatchGraph, Signal, WellKnownModule};
 use napi_derive::napi;
 use schemars::Schema;
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub struct ValidationError {
 ///
 /// For explicitly named modules, returns the user's ID (e.g., "myOscillator").
 /// For auto-generated IDs, returns None so the error can be tied to source line instead.
-fn format_module_location(module: &ModuleState) -> String {
+fn format_module_location(module: &ModuleSpec) -> String {
   if module.id_is_explicit == Some(true) {
     // User explicitly set this ID, show it
     format!("'{}'", module.id)
@@ -162,7 +162,7 @@ fn validate_signal_reference(
   signal: &Signal,
   field: &str,
   location: &str,
-  module_by_id: &HashMap<&str, &ModuleState>,
+  module_by_id: &HashMap<&str, &ModuleSpec>,
   schema_map: &HashMap<&str, &ModuleSchema>,
   errors: &mut Vec<ValidationError>,
 ) {
@@ -224,7 +224,7 @@ fn validate_signals_in_json_value(
   value: &serde_json::Value,
   field: &str,
   location: &str,
-  module_by_id: &HashMap<&str, &ModuleState>,
+  module_by_id: &HashMap<&str, &ModuleSpec>,
   schema_map: &HashMap<&str, &ModuleSchema>,
   errors: &mut Vec<ValidationError>,
 ) {
@@ -312,11 +312,11 @@ pub fn validate_patch(
     schemas.iter().map(|s| (s.name.as_str(), s)).collect();
 
   // Build a map from module id -> module instance (state) from the patch.
-  let module_by_id: HashMap<&str, &ModuleState> =
+  let module_by_id: HashMap<&str, &ModuleSpec> =
     patch.modules.iter().map(|m| (m.id.as_str(), m)).collect();
 
   // === Schema helpers ===
-  // The runtime patch stores parameter values as JSON (`ModuleState.params`), but
+  // The runtime patch stores parameter values as JSON (`ModuleSpec.params`), but
   // the authoritative set of valid parameter names/types lives in the module schema.
 
   // === Module validation ===
@@ -507,7 +507,7 @@ pub fn validate_patch(
 #[cfg(test)]
 mod tests {
   use super::*;
-  use modular_core::types::ModuleState;
+  use modular_core::types::ModuleSpec;
   use serde_json::json;
 
   fn schemas() -> Vec<ModuleSchema> {
@@ -518,7 +518,7 @@ mod tests {
   fn test_valid_patch() {
     let schemas = schemas();
     let patch = PatchGraph {
-      modules: vec![ModuleState {
+      modules: vec![ModuleSpec {
         id: "sine-1".to_string(),
         module_type: "$sine".to_string(),
         id_is_explicit: None,
@@ -538,7 +538,7 @@ mod tests {
   fn patch_with_scope_xy(x_port: &str, x_module: &str) -> PatchGraph {
     use modular_core::types::{ScopeChannel, ScopeXy, ScopeXyPair};
     PatchGraph {
-      modules: vec![ModuleState {
+      modules: vec![ModuleSpec {
         id: "sine-1".to_string(),
         module_type: "$sine".to_string(),
         id_is_explicit: None,
@@ -602,7 +602,7 @@ mod tests {
   fn test_unknown_module_type() {
     let schemas = schemas();
     let patch = PatchGraph {
-      modules: vec![ModuleState {
+      modules: vec![ModuleSpec {
         id: "foo-1".to_string(),
         module_type: "unknown-module".to_string(),
         id_is_explicit: None,
@@ -641,7 +641,7 @@ mod tests {
   fn test_cable_to_nonexistent_module() {
     let schemas = schemas();
     let patch = PatchGraph {
-      modules: vec![ModuleState {
+      modules: vec![ModuleSpec {
         id: "root".to_string(),
         module_type: "$signal".to_string(),
         id_is_explicit: None,
@@ -667,7 +667,7 @@ mod tests {
     let schemas = schemas();
     let patch = PatchGraph {
       modules: vec![
-        ModuleState {
+        ModuleSpec {
           id: "sine-1".to_string(),
           module_type: "$sine".to_string(),
           id_is_explicit: None,
@@ -675,7 +675,7 @@ mod tests {
               "freq": 4.0
           }),
         },
-        ModuleState {
+        ModuleSpec {
           id: "root".to_string(),
           module_type: "$signal".to_string(),
           id_is_explicit: None,
@@ -705,7 +705,7 @@ mod tests {
   fn test_nested_signal_cable_to_nonexistent_module() {
     let schemas = schemas();
     let patch = PatchGraph {
-      modules: vec![ModuleState {
+      modules: vec![ModuleSpec {
         id: "nested-1".to_string(),
         module_type: "$mix".to_string(),
         id_is_explicit: None,
@@ -737,7 +737,7 @@ mod tests {
     let schemas = schemas();
     let patch = PatchGraph {
       modules: vec![
-        ModuleState {
+        ModuleSpec {
           id: "sine-1".to_string(),
           module_type: "$sine".to_string(),
           id_is_explicit: None,
@@ -745,7 +745,7 @@ mod tests {
               "freq": 4.0
           }),
         },
-        ModuleState {
+        ModuleSpec {
           id: "nested-1".to_string(),
           module_type: "$mix".to_string(),
           id_is_explicit: None,
@@ -770,7 +770,7 @@ mod tests {
     let schemas = schemas();
     let patch = PatchGraph {
       modules: vec![
-        ModuleState {
+        ModuleSpec {
           id: "sine-1".to_string(),
           module_type: "$sine".to_string(),
           id_is_explicit: None,
@@ -778,7 +778,7 @@ mod tests {
               "freq": 4.0
           }),
         },
-        ModuleState {
+        ModuleSpec {
           id: "signal-1".to_string(),
           module_type: "$signal".to_string(),
           id_is_explicit: None,
@@ -833,7 +833,7 @@ mod tests {
     let schemas = modular_core::dsp::schema();
 
     let patch = PatchGraph {
-      modules: vec![ModuleState {
+      modules: vec![ModuleSpec {
         id: "noise-1".to_string(),
         module_type: "$noise".to_string(),
         id_is_explicit: None,

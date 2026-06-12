@@ -55,8 +55,6 @@ pub fn parse<T: FromMiniAtom>(
 /// Test-only entry point: parse a mini-notation string into a `MiniAST`.
 /// Kept so in-crate fixtures that used `mini::parse_ast` continue to work.
 #[doc(hidden)]
-pub fn parse_ast(
-    source: &str,
-) -> Result<MiniAST, test_parser::ParseError> {
+pub fn parse_ast(source: &str) -> Result<MiniAST, test_parser::ParseError> {
     test_parser::parse(source)
 }

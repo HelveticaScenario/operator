@@ -1,8 +1,5 @@
 use crate::dsp::utils::{SchmittState, SchmittTrigger};
-use crate::{
-    PORT_MAX_CHANNELS,
-    poly::{PolyOutput, PolySignal},
-};
+use crate::poly::{PolyOutput, PolySignal};
 use deserr::Deserr;
 use schemars::JsonSchema;
 
@@ -30,12 +27,6 @@ struct SampleAndHoldChannelState {
     held_value: f32,
 }
 
-/// State for the SampleAndHold module.
-#[derive(Default)]
-struct SampleAndHoldState {
-    channels: [SampleAndHoldChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Captures and holds a voltage on each trigger.
 ///
 /// When **trigger** receives a rising edge, the current value of **input**
@@ -56,7 +47,7 @@ struct SampleAndHoldState {
 pub struct SampleAndHold {
     outputs: SampleAndHoldOutputs,
     params: SampleAndHoldParams,
-    state: SampleAndHoldState,
+    channel_state: Box<[SampleAndHoldChannelState]>,
 }
 
 impl SampleAndHold {
@@ -64,7 +55,7 @@ impl SampleAndHold {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
             let input = self.params.input.get_value(ch);
             let trigger = self.params.trigger.get_value(ch);
 
@@ -107,12 +98,6 @@ struct TrackAndHoldChannelState {
     gate: SchmittTrigger,
 }
 
-/// State for the TrackAndHold module.
-#[derive(Default)]
-struct TrackAndHoldState {
-    channels: [TrackAndHoldChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Follows the input while the gate is low, and holds the value when the
 /// gate goes high.
 ///
@@ -127,7 +112,7 @@ struct TrackAndHoldState {
 pub struct TrackAndHold {
     outputs: TrackAndHoldOutputs,
     params: TrackAndHoldParams,
-    state: TrackAndHoldState,
+    channel_state: Box<[TrackAndHoldChannelState]>,
 }
 
 impl TrackAndHold {
@@ -135,7 +120,7 @@ impl TrackAndHold {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
             let input = self.params.input.get_value(ch);
             let gate = self.params.gate.get_value(ch);
 

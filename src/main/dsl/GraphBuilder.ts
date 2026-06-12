@@ -1,6 +1,6 @@
 import type {
     ModuleSchema,
-    ModuleState,
+    ModuleSpec,
     PatchGraph,
     Scope,
     ScopeChannel,
@@ -18,7 +18,7 @@ import { captureSourceLocation } from './captureSourceLocation';
 
 import z from 'zod';
 
-export const PORT_MAX_CHANNELS = 16;
+export const PORT_MAX_CHANNELS = 64;
 
 /** Exponent used by .gain() for perceptual amplitude curve */
 const GAIN_CURVE_EXP = 3;
@@ -575,7 +575,7 @@ export interface SourceLocation {
  * consistency across all module creation paths.
  */
 export class GraphBuilder {
-    private modules = new Map<string, ModuleState>();
+    private modules = new Map<string, ModuleSpec>();
     private counters = new Map<string, number>();
     private schemas: ProcessedModuleSchema[] = [];
     private schemaByName = new Map<string, ProcessedModuleSchema>();
@@ -705,7 +705,7 @@ export class GraphBuilder {
             });
         }
 
-        const moduleState: ModuleState = {
+        const moduleState: ModuleSpec = {
             id,
             idIsExplicit: Boolean(explicitId),
             moduleType,
@@ -719,7 +719,7 @@ export class GraphBuilder {
     /**
      * Get a module by ID
      */
-    getModule(id: string): ModuleState | undefined {
+    getModule(id: string): ModuleSpec | undefined {
         return this.modules.get(id);
     }
 

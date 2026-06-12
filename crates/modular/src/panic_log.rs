@@ -77,10 +77,7 @@ fn write_panic_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
   let pid = std::process::id();
   let path = dir.join(format!("panic-{epoch}-{pid}.log"));
 
-  let mut f: File = OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(&path)?;
+  let mut f: File = OpenOptions::new().create(true).append(true).open(&path)?;
 
   let payload: &str = if let Some(s) = info.payload().downcast_ref::<&'static str>() {
     s

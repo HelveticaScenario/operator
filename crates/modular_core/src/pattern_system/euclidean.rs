@@ -335,5 +335,4 @@ mod tests {
         let true_count = haps.iter().filter(|h| h.value).count();
         assert_eq!(true_count, 3);
     }
-
 }
