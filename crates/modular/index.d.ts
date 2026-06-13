@@ -131,6 +131,13 @@ export declare class Synthesizer {
    * Note: MIDI messages are polled automatically in the audio thread.
    */
   tryReconnectMidi(): void
+  /**
+   * Close any MIDI devices whose deferred disconnect is now safe (their patch
+   * update has been applied on the audio thread). Called periodically from the
+   * main process so a device a patch dropped still closes even if no further
+   * patch updates arrive. Idempotent.
+   */
+  pruneDisconnectedMidi(): void
 }
 
 export interface ApplyPatchError {

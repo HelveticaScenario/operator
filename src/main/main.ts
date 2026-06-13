@@ -561,6 +561,10 @@ setInterval(() => {
     // cannot free memory itself, so it pushes old resources onto a lock-free
     // garbage queue. Call periodically from the main thread to drop them.
     synth.drainGarbage();
+    // Close MIDI devices whose deferred disconnect is now safe (their patch
+    // update has been applied). Backstop for when no further patch updates
+    // arrive to trigger the prune inline.
+    synth.pruneDisconnectedMidi();
 }, 10000);
 
 // Workspace root state

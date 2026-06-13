@@ -30,7 +30,7 @@ use crate::audio::{
   create_input_ring_buffer, find_input_device_in_host, find_output_device_in_host,
   get_host_by_preference, make_input_stream, make_stream, preferred_default_sample_rate,
 };
-use crate::commands::{GraphCommand, QueuedTrigger};
+use crate::commands::{GraphCommand, QueuedTrigger, TransportMeta};
 use crate::midi::MidiInputManager;
 
 use std::path::{Path, PathBuf};
@@ -1061,9 +1061,7 @@ impl Synthesizer {
   /// - Windows: `%APPDATA%\Operator\logs\`
   #[napi]
   pub fn panic_log_dir(&self) -> String {
-    panic_log::panic_log_dir()
-      .to_string_lossy()
-      .into_owned()
+    panic_log::panic_log_dir().to_string_lossy().into_owned()
   }
 
   #[napi]
@@ -1118,9 +1116,7 @@ impl Synthesizer {
   /// window, the last element the newest — and `ranges` is the per-axis volt
   /// window the renderer maps into clip space.
   #[napi]
-  pub fn get_scope_xy(
-    &self,
-  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
+  pub fn get_scope_xy(&self) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
     self.state.get_scope_xy_buffers()
   }
 
@@ -1131,9 +1127,6 @@ impl Synthesizer {
     trigger: Option<QueuedTrigger>,
     reset_clock: Option<bool>,
   ) -> PatchUpdateResult {
-    // Extract MIDI device names from MIDI modules and sync connections
-    self.sync_midi_devices_from_patch(&patch);
-
     // Drain deferred deallocations from the audio thread
     self.state.drain_garbage();
 
@@ -1155,9 +1148,20 @@ impl Synthesizer {
     self.next_update_id += 1;
     let update_id = self.next_update_id;
 
-    // Update transport meter with tempo/time signature from ROOT_CLOCK params
-    // Also extract and strip `tempoSet` — it's a DSL-only flag, not a real Clock param
-    let tempo_override =
+    // Open this patch's MIDI devices proactively (early open is harmless). Closes
+    // are deferred: a device the new patch drops is closed only once this update
+    // is applied, so the still-playing patch keeps it until the swap. Then prune
+    // any deferred closes whose update has since been applied on the audio thread.
+    self.sync_midi_devices_from_patch(&patch, update_id);
+    self
+      .midi_manager
+      .prune_disconnects(self.state.transport_meter.read_applied_update_id());
+
+    // Extract tempo/time-signature from ROOT_CLOCK to carry to the audio thread.
+    // The meter write and Link tempo push happen at apply time (see
+    // `apply_patch_update`) so a queued update doesn't change tempo before its
+    // patch swaps in.
+    let transport_meta =
       if let Some(root_clock) = patch.modules.iter_mut().find(|m| m.id == *ROOT_CLOCK_ID) {
         let bpm = root_clock
           .params
@@ -1174,20 +1178,20 @@ impl Synthesizer {
           .get("denominator")
           .and_then(|v| v.as_u64())
           .unwrap_or(4) as u32;
-        self
-          .state
-          .transport_meter
-          .write_tempo(bpm, numerator, denominator);
-
-        // Check if DSL explicitly called $setTempo, then strip the flag
-        // so Rust serde doesn't reject the unknown field on ClockParams
+        // `tempoSet` is a DSL-only flag, not a real Clock param 
+        // (serde would reject the unknown field).
         let tempo_set = root_clock
           .params
           .as_object_mut()
           .and_then(|obj| obj.remove("tempoSet"))
           .and_then(|v| v.as_bool())
           .unwrap_or(false);
-        if tempo_set { Some(bpm) } else { None }
+        Some(TransportMeta {
+          tempo: bpm,
+          numerator,
+          denominator,
+          tempo_set,
+        })
       } else {
         None
       };
@@ -1199,7 +1203,7 @@ impl Synthesizer {
       trigger,
       update_id,
       wav_data_snapshot,
-      tempo_override,
+      transport_meta,
       reset_clock,
     );
 
@@ -1267,8 +1271,10 @@ impl Synthesizer {
       .send_command(GraphCommand::SingleModuleUpdate { module_id, module })
   }
 
-  /// Extract MIDI device names from patch modules and sync connections
-  fn sync_midi_devices_from_patch(&self, patch: &PatchGraph) {
+  /// Extract MIDI device names from patch modules and sync connections.
+  /// `update_id` tags any deferred closes so they only take effect once this
+  /// update is applied on the audio thread (see `MidiInputManager`).
+  fn sync_midi_devices_from_patch(&self, patch: &PatchGraph, update_id: u64) {
     use std::collections::HashSet;
 
     let mut devices: HashSet<String> = HashSet::new();
@@ -1288,8 +1294,7 @@ impl Synthesizer {
       }
     }
 
-    // Sync MIDI manager connections
-    self.midi_manager.sync_devices(&devices);
+    self.midi_manager.sync_devices(&devices, update_id);
   }
 
   #[napi]
@@ -1728,6 +1733,17 @@ impl Synthesizer {
   #[napi]
   pub fn try_reconnect_midi(&self) {
     self.midi_manager.try_reconnect();
+  }
+
+  /// Close any MIDI devices whose deferred disconnect is now safe (their patch
+  /// update has been applied on the audio thread). Called periodically from the
+  /// main process so a device a patch dropped still closes even if no further
+  /// patch updates arrive. Idempotent.
+  #[napi]
+  pub fn prune_disconnected_midi(&self) {
+    self
+      .midi_manager
+      .prune_disconnects(self.state.transport_meter.read_applied_update_id());
   }
 }
 
