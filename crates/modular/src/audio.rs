@@ -46,7 +46,7 @@ use std::time::Instant;
 
 use crate::commands::{
   AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
-  GraphCommand, PatchUpdate, QueuedTrigger,
+  GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
 };
 use crate::midi::MidiInputManager;
 
@@ -994,10 +994,11 @@ pub struct AudioState {
   /// XY scope collection - shared with audio thread for UI reads.
   /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
   scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
-  /// Display ranges for the active $scopeXY (global, last-call-wins). Set on
-  /// each patch update from `ScopeXy.x_range`/`y_range`; read on the main
-  /// thread by `get_scope_xy_buffers` to ship the volt→clip window. Main-thread
-  /// only, never shared with the audio thread.
+  /// Display ranges for the active $scopeXY (global, last-call-wins). Written by
+  /// the audio thread in `apply_patch_update` (atomically with the XY buffer
+  /// swap, so the window updates exactly when the patch applies);
+  /// read on the main thread by `get_scope_xy_buffers` to ship the
+  /// volt→clip window. Shared with the audio thread via `AudioSharedState`.
   scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   /// Recording writer - shared with audio thread
   recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
@@ -1151,6 +1152,7 @@ impl AudioState {
       stopped: self.stopped.clone(),
       scope_collection: self.scope_collection.clone(),
       scope_xy_collection: self.scope_xy_collection.clone(),
+      scope_xy_ranges: self.scope_xy_ranges.clone(),
       recording_writer: self.recording_writer.clone(),
       audio_budget_meter: self.audio_budget_meter.clone(),
       module_states: self.module_states.clone(),
@@ -1309,7 +1311,7 @@ impl AudioState {
     trigger: QueuedTrigger,
     update_id: u64,
     wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
-    tempo_override: Option<f64>,
+    transport_meta: Option<TransportMeta>,
     reset_clock: bool,
   ) -> Result<()> {
     let PatchGraph {
@@ -1391,10 +1393,11 @@ impl AudioState {
         .collect();
     }
 
-    // Publish the active display window (global, last-call-wins). Updated every
-    // patch update — including range-only changes that leave the pair keys
-    // untouched — so a renderer poll always sees the current volt→clip mapping.
-    *self.scope_xy_ranges.lock() = scope_xy.as_ref().map(|sx| ScopeXyRanges {
+    // Carry the active display window (global, last-call-wins) on the update so
+    // the audio thread publishes it atomically with the XY buffer swap — a
+    // queued update's window then takes effect exactly when its patch applies.
+    // `None` clears the window when the patch has no $scopeXY.
+    update.scope_xy_ranges = scope_xy.as_ref().map(|sx| ScopeXyRanges {
       x_min: sx.x_range.0,
       x_max: sx.x_range.1,
       y_min: sx.y_range.0,
@@ -1500,8 +1503,10 @@ impl AudioState {
     // Populate wav_data from the cache snapshot
     update.wav_data = wav_data;
 
-    // Pass through tempo override for Link integration
-    update.tempo_override = tempo_override;
+    // Carry tempo/time-sig to apply time: the meter write and (when $setTempo
+    // was called) the Link tempo push happen in apply_patch_update, atomically
+    // with the module swap.
+    update.transport_meta = transport_meta;
 
     // Restart the transport when applying this update (set on a buffer switch)
     update.reset_clock = reset_clock;
@@ -1517,7 +1522,7 @@ impl AudioState {
     trigger: QueuedTrigger,
     update_id: u64,
     wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
-    tempo_override: Option<f64>,
+    transport_meta: Option<TransportMeta>,
     reset_clock: bool,
   ) -> Vec<ApplyPatchError> {
     // Validate patch
@@ -1547,7 +1552,7 @@ impl AudioState {
       trigger,
       update_id,
       wav_data,
-      tempo_override,
+      transport_meta,
       reset_clock,
     ) {
       return vec![ApplyPatchError {
@@ -1566,6 +1571,9 @@ pub struct AudioSharedState {
   pub stopped: Arc<AtomicBool>,
   pub scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
   pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
+  /// Display ranges for the active $scopeXY — written by the audio thread on
+  /// apply, read by the main thread for the renderer.
+  pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   pub audio_budget_meter: Arc<AudioBudgetMeter>,
   /// Module states (e.g., seq current step) - written by audio thread, read by main thread
@@ -1644,6 +1652,10 @@ struct AudioProcessor {
   /// to append samples, so the per-sample path never touches the collection
   /// mutex. Reconciled against the collection on each patch update.
   scope_xy_audio: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
+  /// Shared XY-scope display window. Written here in `apply_patch_update` so the
+  /// volt→clip mapping swaps atomically with the buffers; read by the main
+  /// thread for the renderer.
+  scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   /// Shared module states (e.g., seq current step)
   module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
   /// MIDI input manager for polling
@@ -1699,6 +1711,7 @@ impl AudioProcessor {
       scope_collection: shared.scope_collection,
       scope_xy_collection: shared.scope_xy_collection,
       scope_xy_audio: Vec::new(),
+      scope_xy_ranges: shared.scope_xy_ranges,
       module_states: shared.module_states,
       midi_manager: shared.midi_manager,
       queued_update: None,
@@ -1757,12 +1770,10 @@ impl AudioProcessor {
     while let Ok(cmd) = self.command_rx.pop() {
       match cmd {
         GraphCommand::QueuedPatchUpdate { mut update, trigger } => {
-          // Push tempo to Link if explicitly set via $setTempo. The
-          // capture/commit call inside `set_tempo_now` is the realtime-safe
-          // way to mutate session state per Ableton's docs.
-          if let Some(tempo) = update.tempo_override {
-            self.link.set_tempo_now(tempo);
-          }
+          // The Link tempo push and meter write are applied in
+          // `apply_patch_update`, atomically with the module swap. Pushing the
+          // tempo while the update is only queued would advance the
+          // still-playing patch's phase at the new tempo before its swap.
 
           // If there's already a queued update, discard it and apply the new one
           // immediately. This is intentional: when the user triggers a second
@@ -1938,6 +1949,8 @@ impl AudioProcessor {
       profile_records_seed,
       profile_shared_seed,
       reset_clock,
+      transport_meta,
+      scope_xy_ranges,
       ..
     } = update;
 
@@ -2117,6 +2130,11 @@ impl AudioProcessor {
       });
     }
 
+    // Publish the XY display window now, atomically with the buffer swap above,
+    // so the renderer maps this patch's signal against this patch's volt→clip
+    // window from the instant the patch applies. `None` clears it.
+    *self.scope_xy_ranges.lock() = scope_xy_ranges;
+
     // Restart the transport when this update switches playback to a different
     // buffer (song). Runs after the inserts/transfer/connect above so
     // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
@@ -2139,6 +2157,19 @@ impl AudioProcessor {
         let _ = self
           .patch
           .dispatch_message(&Message::Clock(ClockMessages::Start));
+      }
+    }
+
+    // Apply tempo/time-sig now, atomically with the swap. The meter readout
+    // always reflects the patch that just applied; the Link push only happens
+    // when the DSL explicitly set the tempo, so a plain live-coding edit never
+    // overrides a peer-driven Link tempo.
+    if let Some(t) = transport_meta {
+      self
+        .transport_meter
+        .write_tempo(t.tempo, t.numerator, t.denominator);
+      if t.tempo_set {
+        self.link.set_tempo_now(t.tempo);
       }
     }
   }
@@ -2945,6 +2976,13 @@ impl TransportMeter {
       .store(update_id, Ordering::Relaxed);
   }
 
+  /// Read the ID of the most recently applied patch update (used by the main
+  /// thread to prune deferred MIDI disconnects once their update has applied).
+  #[inline]
+  pub fn read_applied_update_id(&self) -> u64 {
+    self.last_applied_update_id.load(Ordering::Relaxed)
+  }
+
   /// Write just the BPM (e.g. when Link tempo changes externally).
   #[inline]
   pub fn write_bpm(&self, bpm: f64) {
@@ -3126,6 +3164,7 @@ mod tests {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
       scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_ranges: Arc::new(Mutex::new(None)),
       recording_writer: Arc::new(Mutex::new(None)),
       audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
       module_states: Arc::new(Mutex::new(HashMap::new())),
@@ -3367,6 +3406,7 @@ mod tests {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
       scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_ranges: Arc::new(Mutex::new(None)),
       recording_writer: Arc::new(Mutex::new(None)),
       audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
       module_states: Arc::new(Mutex::new(HashMap::new())),
@@ -3676,6 +3716,177 @@ mod tests {
     assert!(
       matches!(trigger, QueuedTrigger::Immediate),
       "superseding update applies immediately"
+    );
+  }
+
+  #[test]
+  fn queued_update_defers_meter_and_tempo_to_apply() {
+    // A queued (NextBar) update must not touch the transport meter or Link
+    // tempo at queue time — both are carried on the update and applied later.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.transport_meta = Some(TransportMeta {
+      tempo: 90.0,
+      numerator: 3,
+      denominator: 4,
+      tempo_set: true,
+    });
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    // Meter still shows the defaults — nothing written at queue time.
+    let snap = processor.transport_meter.snapshot();
+    assert_eq!(snap.bpm, 120.0, "meter tempo must not change until apply");
+    assert_eq!(snap.time_sig_numerator, 4);
+    assert_eq!(snap.time_sig_denominator, 4);
+
+    // The tempo is held on the queued update for deferred apply (the only
+    // observable proof the Link push is deferred — set_tempo_now no-ops here).
+    let (queued, trigger) = processor
+      .queued_update
+      .as_ref()
+      .expect("an update should remain queued");
+    assert!(matches!(trigger, QueuedTrigger::NextBar));
+    let meta = queued
+      .transport_meta
+      .as_ref()
+      .expect("transport_meta carried on queued update");
+    assert_eq!(meta.tempo, 90.0);
+    assert!(meta.tempo_set);
+  }
+
+  #[test]
+  fn apply_patch_update_writes_meter() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let mut update = PatchUpdate::new(44_100.0);
+    update.transport_meta = Some(TransportMeta {
+      tempo: 90.0,
+      numerator: 3,
+      denominator: 4,
+      tempo_set: false,
+    });
+    processor.apply_patch_update(update, 0);
+
+    let snap = processor.transport_meter.snapshot();
+    assert_eq!(snap.bpm, 90.0);
+    assert_eq!(snap.time_sig_numerator, 3);
+    assert_eq!(snap.time_sig_denominator, 4);
+  }
+
+  #[test]
+  fn apply_patch_update_without_transport_meta_leaves_meter() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    // transport_meta defaults to None (patch with no ROOT_CLOCK).
+    let update = PatchUpdate::new(44_100.0);
+    processor.apply_patch_update(update, 0);
+
+    let snap = processor.transport_meter.snapshot();
+    assert_eq!(snap.bpm, 120.0);
+    assert_eq!(snap.time_sig_numerator, 4);
+    assert_eq!(snap.time_sig_denominator, 4);
+  }
+
+  #[test]
+  fn queued_update_defers_scope_xy_ranges() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+    let ranges = ScopeXyRanges {
+      x_min: -1.0,
+      x_max: 1.0,
+      y_min: -2.0,
+      y_max: 2.0,
+    };
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.scope_xy_ranges = Some(ranges);
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    // Display window not published at queue time; carried for deferred apply.
+    assert_eq!(*processor.scope_xy_ranges.lock(), None);
+    let (queued, _) = processor.queued_update.as_ref().expect("queued update");
+    assert_eq!(queued.scope_xy_ranges, Some(ranges));
+  }
+
+  #[test]
+  fn apply_patch_update_writes_scope_xy_ranges() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let ranges = ScopeXyRanges {
+      x_min: -1.0,
+      x_max: 1.0,
+      y_min: -2.0,
+      y_max: 2.0,
+    };
+    let mut update = PatchUpdate::new(44_100.0);
+    update.scope_xy_ranges = Some(ranges);
+    processor.apply_patch_update(update, 0);
+
+    assert_eq!(*processor.scope_xy_ranges.lock(), Some(ranges));
+  }
+
+  #[test]
+  fn superseded_update_meter_not_written_and_latest_wins() {
+    // Queue B(90, $setTempo) then C(80, $setTempo) before B fires. C supersedes
+    // B and applies immediately; only C's tempo should win, and neither writes
+    // the meter at queue time.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut b = PatchUpdate::new(44_100.0);
+    b.transport_meta = Some(TransportMeta {
+      tempo: 90.0,
+      numerator: 4,
+      denominator: 4,
+      tempo_set: true,
+    });
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: b,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    let mut c = PatchUpdate::new(44_100.0);
+    c.transport_meta = Some(TransportMeta {
+      tempo: 80.0,
+      numerator: 4,
+      denominator: 4,
+      tempo_set: true,
+    });
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: c,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    assert_eq!(
+      processor.transport_meter.snapshot().bpm,
+      120.0,
+      "neither queued update writes the meter at queue time"
+    );
+    let (queued, trigger) = processor
+      .queued_update
+      .as_ref()
+      .expect("an update should remain queued");
+    assert!(matches!(trigger, QueuedTrigger::Immediate));
+    assert_eq!(
+      queued.transport_meta.as_ref().expect("meta carried").tempo,
+      80.0,
+      "the superseding update's tempo wins; the discarded one is not merged"
     );
   }
 

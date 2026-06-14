@@ -561,6 +561,10 @@ setInterval(() => {
     // cannot free memory itself, so it pushes old resources onto a lock-free
     // garbage queue. Call periodically from the main thread to drop them.
     synth.drainGarbage();
+    // Close MIDI devices whose deferred disconnect is now safe (their patch
+    // update has been applied). Backstop for when no further patch updates
+    // arrive to trigger the prune inline.
+    synth.pruneDisconnectedMidi();
 }, 10000);
 
 // Workspace root state
@@ -1675,21 +1679,40 @@ const createWindow = (): void => {
     });
 
     // And load the index.html of the app.
-    if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-        void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-    } else {
-        void mainWindow.loadFile(
-            path.join(
-                __dirname,
-                `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
-            ),
-        );
-    }
+    const loadRenderer = (): void => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            return;
+        }
+        if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+            void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+        } else {
+            void mainWindow.loadFile(
+                path.join(
+                    __dirname,
+                    `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
+                ),
+            );
+        }
+    };
+
+    // The window can come up before the Vite dev server is serving, which
+    // fails the initial load and leaves a white screen with no retry. Reload
+    // on failure so the renderer appears on its own once the server is up.
+    mainWindow.webContents.on('did-fail-load', (_event, errorCode) => {
+        // ERR_ABORTED (-3) is a normal aborted navigation (e.g. HMR), not a
+        // real failure — retrying it would loop.
+        if (errorCode === -3) {
+            return;
+        }
+        setTimeout(loadRenderer, 500);
+    });
 
     // Flush pending logs when the renderer is ready
     mainWindow.webContents.on('did-finish-load', () => {
         flushPendingLogs();
     });
+
+    loadRenderer();
 
     // Start watching config file for changes
     startConfigWatcher();
