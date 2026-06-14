@@ -110,17 +110,17 @@ impl MixDown {
     ///   silent gaps. There are no collisions, so `mode` does not apply.
     fn build_gains(gains: &mut [f32], in_ch: usize, out_ch: usize) {
         // Clear any stale entries from a previous topology.
-        for g in gains.iter_mut() {
-            *g = 0.0;
-        }
+        gains.fill(0.0);
 
         if in_ch == 0 || out_ch == 0 {
             return;
         }
 
+        // Mono and fold-down are row-keyed: each input owns one row of the
+        // flat `in_ch * out_ch` matrix, so iterate rows via `chunks_mut`.
         if out_ch == 1 {
-            for i in 0..in_ch {
-                gains[i * out_ch] = 1.0;
+            for row in gains.chunks_mut(out_ch).take(in_ch) {
+                row[0] = 1.0;
             }
             return;
         }
@@ -128,7 +128,7 @@ impl MixDown {
         if out_ch <= in_ch {
             // Fold-down: scatter each input across the output field so every
             // input contributes.
-            for i in 0..in_ch {
+            for (i, row) in gains.chunks_mut(out_ch).enumerate().take(in_ch) {
                 let t = if in_ch == 1 {
                     0.5
                 } else {
@@ -137,15 +137,18 @@ impl MixDown {
                 let pos = t * (out_ch - 1) as f32;
                 let lo = pos.floor() as usize;
                 let frac = pos - lo as f32;
-                gains[i * out_ch + lo] = (1.0 - frac).sqrt();
+                row[lo] = (1.0 - frac).sqrt();
                 if lo + 1 < out_ch {
-                    gains[i * out_ch + lo + 1] = frac.sqrt();
+                    row[lo + 1] = frac.sqrt();
                 }
             }
         } else {
             // Fold-up: gather an equal-power interpolation of adjacent inputs
             // into each output so no output channel is left silent. With a
-            // single input (N == 1) every output samples it at unity.
+            // single input (N == 1) every output samples it at unity. This
+            // branch writes one output column `j` across two adjacent input
+            // rows (`lo`, `lo + 1`), so it indexes the flat matrix directly
+            // rather than iterating rows.
             for j in 0..out_ch {
                 let s = if in_ch == 1 {
                     0.0
