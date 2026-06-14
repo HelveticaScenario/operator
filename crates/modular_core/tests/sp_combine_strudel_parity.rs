@@ -64,8 +64,8 @@ fn parse_mode(s: &str) -> SpAlignmentMode {
 }
 
 fn parse_pattern(source: &str) -> Pattern<IntervalValue> {
-    let ast = mini::parse_ast(source)
-        .unwrap_or_else(|e| panic!("parse error for `{source}`: {e:?}"));
+    let ast =
+        mini::parse_ast(source).unwrap_or_else(|e| panic!("parse error for `{source}`: {e:?}"));
     mini::convert::<IntervalValue>(&ast)
         .unwrap_or_else(|e| panic!("convert error for `{source}`: {e:?}"))
 }
@@ -100,8 +100,7 @@ struct Extracted {
 }
 
 fn extract_actual(pat: &Pattern<IntervalValue>) -> Extracted {
-    let haps =
-        pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+    let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
     let pre_filter_count = haps.len();
     let mut rest_count = 0usize;
     let mut out: Vec<CmpHap> = haps
@@ -130,8 +129,10 @@ fn extract_actual(pat: &Pattern<IntervalValue>) -> Extracted {
 }
 
 fn extract_expected(haps: &[FixtureHap]) -> Vec<CmpHap> {
-    let mut out: Vec<CmpHap> =
-        haps.iter().map(|h| (h.whole, h.part, h.value as i32)).collect();
+    let mut out: Vec<CmpHap> = haps
+        .iter()
+        .map(|h| (h.whole, h.part, h.value as i32))
+        .collect();
     out.sort_by(|a, b| sort_key(a).cmp(&sort_key(b)));
     out
 }
@@ -234,14 +235,12 @@ const FAILURE_RENDER_CAP: usize = 25;
 fn combine_sp_matches_strudel_for_full_grammar_cross() {
     ensure_fixtures();
     let path = fixture_path("sp_combine.json");
-    let text = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("missing fixture at {path:?}: {e}"));
-    let rows: Vec<Row1> =
-        serde_json::from_str(&text).expect("fixture must parse as Row1[]");
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("missing fixture at {path:?}: {e}"));
+    let rows: Vec<Row1> = serde_json::from_str(&text).expect("fixture must parse as Row1[]");
 
     let mut failures: Vec<String> = Vec::new();
-    let mut hist: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
+    let mut hist: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let mut compared = 0usize;
 
     for row in &rows {
@@ -349,14 +348,12 @@ struct Row2 {
 fn combine_sp_chain2_matches_strudel() {
     ensure_fixtures();
     let path = fixture_path("sp_combine_chain2.json");
-    let text = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("missing fixture at {path:?}: {e}"));
-    let rows: Vec<Row2> =
-        serde_json::from_str(&text).expect("fixture must parse as Row2[]");
+    let text =
+        fs::read_to_string(&path).unwrap_or_else(|e| panic!("missing fixture at {path:?}: {e}"));
+    let rows: Vec<Row2> = serde_json::from_str(&text).expect("fixture must parse as Row2[]");
 
     let mut failures: Vec<String> = Vec::new();
-    let mut hist: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
+    let mut hist: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let mut compared = 0usize;
 
     for row in &rows {
@@ -367,12 +364,15 @@ fn combine_sp_chain2_matches_strudel() {
             continue;
         };
         let mode1 = parse_mode(&row.mode1);
-        let mode2 = parse_mode(row.mode2.as_deref().unwrap_or_else(|| {
-            panic!("non-error row missing mode2: {row:?}")
-        }));
-        let op2 = row.op2.as_deref().unwrap_or_else(|| {
-            panic!("non-error row missing op2: {row:?}")
-        });
+        let mode2 = parse_mode(
+            row.mode2
+                .as_deref()
+                .unwrap_or_else(|| panic!("non-error row missing mode2: {row:?}")),
+        );
+        let op2 = row
+            .op2
+            .as_deref()
+            .unwrap_or_else(|| panic!("non-error row missing op2: {row:?}"));
 
         let lhs = parse_pattern(&row.lhs_source);
         let rhs1 = parse_pattern(&row.rhs1_source);

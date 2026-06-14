@@ -89,10 +89,7 @@ impl Fraction {
     pub fn whole_cycle(&self) -> super::TimeSpan {
         // Share floor_value between sam and next_sam.
         let f = self.floor_value();
-        super::TimeSpan::new(
-            Fraction { num: f, den: 1 },
-            Fraction { num: f + 1, den: 1 },
-        )
+        super::TimeSpan::new(Fraction { num: f, den: 1 }, Fraction { num: f + 1, den: 1 })
     }
 
     /// Convert to f64 (lossy).

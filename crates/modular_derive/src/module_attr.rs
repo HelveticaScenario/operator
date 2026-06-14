@@ -84,7 +84,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
                     let lit: syn::LitInt = input.parse()?;
                     let n: u8 = lit.base10_parse()?;
                     // Must match modular_core::poly::PORT_MAX_CHANNELS
-                    const MAX: u8 = 16;
+                    const MAX: u8 = 64;
                     if n < 1 || n > MAX {
                         return Err(syn::Error::new(
                             lit.span(),
@@ -326,10 +326,7 @@ fn impl_module_macro_attr(
                     format!("{name}BlockOutputs")
                 };
                 last.ident = Ident::new(&new_name, last.ident.span());
-                Ok(Type::Path(syn::TypePath {
-                    qself: None,
-                    path,
-                }))
+                Ok(Type::Path(syn::TypePath { qself: None, path }))
             }
             _ => Err(syn::Error::new(
                 Span::call_site(),
@@ -338,48 +335,60 @@ fn impl_module_macro_attr(
         }
     }
 
-    let (outputs_ty, module_field_inits, has_state_field): (Type, Vec<TokenStream2>, bool) =
-        match ast.data {
-            Data::Struct(ref data) => match data.fields {
-                Fields::Named(ref fields) => {
-                    // Disallow legacy per-field #[output] annotations on the module struct.
-                    if fields
-                        .named
-                        .iter()
-                        .any(|f| unwrap_attr(&f.attrs, "output").is_some())
-                    {
+    let (outputs_ty, module_field_inits, has_state_field, has_channel_state_field): (
+        Type,
+        Vec<TokenStream2>,
+        bool,
+        bool,
+    ) = match ast.data {
+        Data::Struct(ref data) => match data.fields {
+            Fields::Named(ref fields) => {
+                // Disallow legacy per-field #[output] annotations on the module struct.
+                if fields
+                    .named
+                    .iter()
+                    .any(|f| unwrap_attr(&f.attrs, "output").is_some())
+                {
+                    return Err(syn::Error::new(
+                        Span::call_site(),
+                        "#[module] expects an `outputs` field (a struct that derives Outputs); do not annotate module fields with #[output(...)]",
+                    ));
+                }
+
+                let outputs_field = fields
+                    .named
+                    .iter()
+                    .find(|f| f.ident.as_ref().map(|i| i == "outputs").unwrap_or(false));
+
+                let outputs_ty = match outputs_field {
+                    Some(f) => f.ty.clone(),
+                    None => {
                         return Err(syn::Error::new(
                             Span::call_site(),
-                            "#[module] expects an `outputs` field (a struct that derives Outputs); do not annotate module fields with #[output(...)]",
+                            "#[module] requires a field named `outputs` whose type derives Outputs",
                         ));
                     }
+                };
 
-                    let outputs_field = fields
-                        .named
-                        .iter()
-                        .find(|f| f.ident.as_ref().map(|i| i == "outputs").unwrap_or(false));
+                let has_state = fields
+                    .named
+                    .iter()
+                    .any(|f| f.ident.as_ref().map(|i| i == "state").unwrap_or(false));
+                let has_channel_state = fields.named.iter().any(|f| {
+                    f.ident
+                        .as_ref()
+                        .map(|i| i == "channel_state")
+                        .unwrap_or(false)
+                });
 
-                    let outputs_ty = match outputs_field {
-                        Some(f) => f.ty.clone(),
-                        None => {
-                            return Err(syn::Error::new(
-                                Span::call_site(),
-                                "#[module] requires a field named `outputs` whose type derives Outputs",
-                            ));
-                        }
-                    };
-
-                    let has_state = fields
-                        .named
-                        .iter()
-                        .any(|f| f.ident.as_ref().map(|i| i == "state").unwrap_or(false));
-
-                    // Generate per-field initialization for the inner module struct.
-                    // - `params` → use deserialized params
-                    // - `_channel_count` → use deserialized channel count
-                    // - `outputs` and `state` → use Default::default()
-                    // - other fields → error
-                    let field_inits: Vec<TokenStream2> = fields
+                // Generate per-field initialization for the inner module struct.
+                // - `params` → use deserialized params
+                // - `_channel_count` → use deserialized channel count
+                // - `outputs` and `state` → use Default::default()
+                // - `channel_state` → a boxed slice of `channel_count` default
+                //   elements (per-channel state, sized to the patch's channels)
+                // - other fields → error
+                let field_inits: Vec<TokenStream2> = fields
                         .named
                         .iter()
                         .map(|f| {
@@ -390,17 +399,21 @@ fn impl_module_macro_attr(
                                 "_channel_count" => {
                                     Ok(quote! { _channel_count: deserialized.channel_count })
                                 }
-                                "_block_index" => {
-                                    Ok(quote! { _block_index: Default::default() })
-                                }
+                                "_block_index" => Ok(quote! { _block_index: Default::default() }),
                                 "outputs" | "state" => {
                                     Ok(quote! { #field_name: Default::default() })
                                 }
+                                "channel_state" => Ok(quote! {
+                                    channel_state: (0..deserialized.channel_count)
+                                        .map(|_| ::core::default::Default::default())
+                                        .collect::<::std::vec::Vec<_>>()
+                                        .into_boxed_slice()
+                                }),
                                 other => Err(syn::Error::new(
                                     field_name.span(),
                                     format!(
-                                        "Module struct field `{other}` is not allowed. \
-                                     Only `state`, `outputs`, and `params` fields are permitted.",
+                                        "Module struct field `{other}` is not allowed. Only \
+                                     `state`, `channel_state`, `outputs`, and `params` are permitted.",
                                     ),
                                 )),
                             }
@@ -409,22 +422,22 @@ fn impl_module_macro_attr(
                         .into_iter()
                         .collect();
 
-                    (outputs_ty, field_inits, has_state)
-                }
-                Fields::Unnamed(_) | Fields::Unit => {
-                    return Err(syn::Error::new(
-                        Span::call_site(),
-                        "#[module] can only be applied to structs with named fields",
-                    ));
-                }
-            },
-            Data::Enum(_) | Data::Union(_) => {
+                (outputs_ty, field_inits, has_state, has_channel_state)
+            }
+            Fields::Unnamed(_) | Fields::Unit => {
                 return Err(syn::Error::new(
                     Span::call_site(),
-                    "#[module] can only be applied to structs",
+                    "#[module] can only be applied to structs with named fields",
                 ));
             }
-        };
+        },
+        Data::Enum(_) | Data::Union(_) => {
+            return Err(syn::Error::new(
+                Span::call_site(),
+                "#[module] can only be applied to structs",
+            ));
+        }
+    };
     let block_outputs_ty = block_outputs_type_from(&outputs_ty)?;
 
     let struct_name = format_ident!("{}Sampleable", name);
@@ -594,14 +607,39 @@ fn impl_module_macro_attr(
         quote! {}
     };
 
-    // Generate transfer_state_from body - only swap state if the module has a `state` field
-    let transfer_state_body = if has_state_field {
+    // Generate transfer_state_from body.
+    //
+    // `state` (module-level, non-per-channel) is always carried over with a
+    // swap — it is the same size in both modules.
+    let state_transfer = if has_state_field {
         quote! {
             std::mem::swap(&mut new_inner.state, &mut old_inner.state);
         }
     } else {
-        // No state field, nothing to transfer (buffer transfer handled below)
         quote! {}
+    };
+    // `channel_state` (per-channel) carries over the overlapping channels:
+    // equal lengths swap the whole boxed slice (O(1) pointer swap); otherwise
+    // the first `min(old, new)` channels are swapped element-wise and the
+    // surplus keeps its freshly-initialised value. Neither path allocates or
+    // clones on the audio thread.
+    let channel_state_transfer = if has_channel_state_field {
+        quote! {
+            let new_len = new_inner.channel_state.len();
+            let old_len = old_inner.channel_state.len();
+            if new_len == old_len {
+                std::mem::swap(&mut new_inner.channel_state, &mut old_inner.channel_state);
+            } else {
+                let n = new_len.min(old_len);
+                new_inner.channel_state[..n].swap_with_slice(&mut old_inner.channel_state[..n]);
+            }
+        }
+    } else {
+        quote! {}
+    };
+    let transfer_state_body = quote! {
+        #state_transfer
+        #channel_state_transfer
     };
 
     // Generate the channel count derivation function name
@@ -893,6 +931,10 @@ fn impl_module_macro_attr(
                     }
                     let new_inner = unsafe { &mut *self.module.get() };
                     let old_inner = unsafe { &mut *old_typed.module.get() };
+                    // Block-sized output buffers and per-channel state are sized
+                    // to the module's channel count, so they can only be moved
+                    // between modules of the same count.
+                    let same_channels = new_inner._channel_count == old_inner._channel_count;
                     #transfer_state_body
                     // Transfer buffer data (no-op for modules without buffer outputs)
                     crate::types::OutputStruct::transfer_buffers_from(
@@ -905,10 +947,14 @@ fn impl_module_macro_attr(
                     // Without this swap the "second" module in a cycle would
                     // see zeros from the freshly-constructed wrapper and
                     // inject a one-sample discontinuity into the feedback loop.
-                    unsafe {
-                        let new_block_outputs = &mut *self.block_outputs.get();
-                        let old_block_outputs = &mut *old_typed.block_outputs.get();
-                        std::mem::swap(new_block_outputs, old_block_outputs);
+                    // Skipped on a channel-count change: the buffers differ in
+                    // width, and the fresh wrapper's buffer is the correct size.
+                    if same_channels {
+                        unsafe {
+                            let new_block_outputs = &mut *self.block_outputs.get();
+                            let old_block_outputs = &mut *old_typed.block_outputs.get();
+                            std::mem::swap(new_block_outputs, old_block_outputs);
+                        }
                     }
                 }
             }
@@ -941,7 +987,7 @@ fn impl_module_macro_attr(
                 module: std::cell::UnsafeCell::new(inner),
                 argument_spans: std::cell::UnsafeCell::new(deserialized.argument_spans),
                 index: std::cell::Cell::new(0),
-                block_outputs: std::cell::UnsafeCell::new(<#block_outputs_ty>::new(_block_size)),
+                block_outputs: std::cell::UnsafeCell::new(<#block_outputs_ty>::new(_block_size, deserialized.channel_count)),
                 block_size: _block_size,
                 mode: _mode,
                 computing: std::cell::Cell::new(false),
@@ -971,7 +1017,7 @@ fn impl_module_macro_attr(
             fn get_schema() -> crate::types::ModuleSchema {
                 let params_schema = schemars::schema_for!(#params_struct_name);
                 let outputs = <#outputs_ty as crate::types::OutputStruct>::schemas();
-           
+
                 crate::types::ModuleSchema {
                     name: #module_name.to_string(),
                     documentation: #module_documentation_token,

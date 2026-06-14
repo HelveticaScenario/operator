@@ -378,11 +378,21 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    // Each port is sized to its true width: f32 outputs are mono (1 channel,
+    // broadcast to consumers via cycling-on-read), PolyOutput ports get the
+    // module's derived channel count.
     let block_new_inits: Vec<_> = outputs
         .iter()
         .map(|o| {
             let field_name = &o.field_name;
-            quote! { #field_name: crate::block_port::BlockPort::new(block_size) }
+            match o.precision {
+                OutputPrecision::F32 => {
+                    quote! { #field_name: crate::block_port::BlockPort::new(block_size, 1) }
+                }
+                OutputPrecision::PolySignal => {
+                    quote! { #field_name: crate::block_port::BlockPort::new(block_size, channel_count) }
+                }
+            }
         })
         .collect();
 
@@ -414,26 +424,21 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
             let field_name = &o.field_name;
             match o.precision {
                 OutputPrecision::F32 => quote! {
-                    // Broadcast the mono f32 value to every channel slot.
-                    // Mirrors the old `PolyOutput::mono(value).get_cycling(ch)`
-                    // path that downstream cables relied on: an f32 output
-                    // reads as the same value on any consumer channel rather
-                    // than silence on channels >= 1.
-                    let v = inner.#field_name;
-                    for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                        self.#field_name.data[slot][ch] = v;
-                    }
+                    // f32 output is mono: write the single value to the port's
+                    // one channel. Consumers on any channel read it back via
+                    // BlockPort::get's cycling (`ch % 1 == 0`), preserving the
+                    // mono-broadcast semantics downstream cables rely on.
+                    self.#field_name.set(slot, 0, inner.#field_name);
                 },
                 OutputPrecision::PolySignal => quote! {
                     {
-                        // `get_cycling` mirrors the old `PolyOutput::get_cycling`
-                        // semantics that `get_poly_sample(...).get_cycling(ch)`
-                        // used to provide: a mono producer broadcasts its single
-                        // value to all consumer channels rather than producing
-                        // silence on channels >= producer channel count.
+                        // Write each of this port's channels. `get_cycling`
+                        // fills the port even when the producer is narrower
+                        // than the port width; reads at higher consumer
+                        // channels wrap via BlockPort::get's modulo.
                         let poly = &inner.#field_name;
-                        for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                            self.#field_name.data[slot][ch] = poly.get_cycling(ch);
+                        for ch in 0..self.#field_name.channels() {
+                            self.#field_name.set(slot, ch, poly.get_cycling(ch));
                         }
                     }
                 },
@@ -449,8 +454,10 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         }
 
         impl #block_outputs_name {
-            /// Allocate all ports for the given block size. Call only on the main thread.
-            pub fn new(block_size: usize) -> Self {
+            /// Allocate all ports for the given block size and channel count.
+            /// Call only on the main thread. f32 ports are mono; PolyOutput
+            /// ports are sized to `channel_count`.
+            pub fn new(block_size: usize, channel_count: usize) -> Self {
                 Self {
                     #(#block_new_inits,)*
                 }

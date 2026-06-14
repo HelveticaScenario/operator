@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 
 use crate::dsp::fx::enosc_tables::{aa_segment, interpolate_segment};
 use crate::dsp::utils::voct_to_hz;
-use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -38,12 +38,6 @@ struct ChannelState {
     amount: Clickless,
 }
 
-/// State for the Segment module.
-#[derive(Default)]
-struct SegmentState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Waveshaper that morphs through 8 distinct tonal shapes as you sweep the
 /// amount control. Low settings pass the signal cleanly; mid settings compress
 /// and square it off; high settings introduce stepped, ripple-like overtone
@@ -51,7 +45,7 @@ struct SegmentState {
 #[module(name = "$segment", args(input, amount))]
 pub struct Segment {
     outputs: SegmentOutputs,
-    state: SegmentState,
+    channel_state: Box<[ChannelState]>,
     params: SegmentParams,
 }
 
@@ -61,7 +55,7 @@ impl Segment {
         let freq_connected = !self.params.freq.is_disconnected();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);

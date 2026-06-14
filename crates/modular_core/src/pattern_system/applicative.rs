@@ -55,9 +55,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                     };
 
                     for hap_val in haps_val.iter() {
-                        if &hap_val.part.begin >= window_end
-                            || hap_val.part.end <= *window_begin
-                        {
+                        if &hap_val.part.begin >= window_end || hap_val.part.end <= *window_begin {
                             continue;
                         }
                         if let Some(part) = fn_part.intersection(&hap_val.part) {
@@ -119,9 +117,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                         &lookup_span.end
                     };
                     for hap_fn in haps_fn.iter() {
-                        if &hap_fn.part.begin >= window_end
-                            || hap_fn.part.end <= *window_begin
-                        {
+                        if &hap_fn.part.begin >= window_end || hap_fn.part.end <= *window_begin {
                             continue;
                         }
                         if let Some(part) = hap_fn.part.intersection(&hap_val.part) {
@@ -201,9 +197,9 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
 #[cfg(test)]
 mod tests {
     use crate::pattern_system::Fraction;
+    use crate::pattern_system::Pattern;
     use crate::pattern_system::combinators::fastcat;
     use crate::pattern_system::constructors::pure;
-    use crate::pattern_system::Pattern;
 
     #[test]
     fn test_app_left_structure() {

@@ -11,7 +11,7 @@ use std::f32::consts::PI;
 
 use crate::dsp::utils::halfband::{Halfband2xDown, Halfband2xUp};
 use crate::dsp::utils::one_pole::OnePole;
-use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
 /// Saturation algorithm.
@@ -70,7 +70,6 @@ struct ChannelState {
 
 #[derive(Default)]
 struct OverdriveState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
     tilt_coeff: f32,
     dc_block_coeff: f32,
 }
@@ -96,6 +95,7 @@ const TONE_RANGE: f32 = 3.0;
 pub struct Overdrive {
     outputs: OverdriveOutputs,
     state: OverdriveState,
+    channel_state: Box<[ChannelState]>,
     params: OverdriveParams,
 }
 
@@ -113,8 +113,11 @@ impl Overdrive {
         self.state.dc_block_coeff = (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
 
         // Tilt-EQ coefficient is constant for the module's lifetime, so seed
-        // every channel's filters once here instead of per sample.
-        for channel in self.state.channels.iter_mut() {
+        // every channel's filters once here instead of per sample. `init` runs
+        // after the macro sizes `channel_state` to the channel count and before
+        // the audio thread carries over runtime state, so a later channel-count
+        // grow keeps the freshly seeded surplus channels.
+        for channel in self.channel_state.iter_mut() {
             channel.tilt_pre.set_coeff(self.state.tilt_coeff);
             channel.tilt_post.set_coeff(self.state.tilt_coeff);
         }
@@ -126,7 +129,7 @@ impl Overdrive {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
             let drive_raw = self.params.drive.get_value(ch);
@@ -222,6 +225,7 @@ pub fn __bench_make_overdrive(params: OverdriveParams) -> Overdrive {
         _channel_count: 1,
         _block_index: Default::default(),
         state: OverdriveState::default(),
+        channel_state: vec![ChannelState::default(); 1].into_boxed_slice(),
     };
     od.init(48000.0);
     od
@@ -249,6 +253,7 @@ mod tests {
             _channel_count: 1,
             _block_index: Default::default(),
             state: OverdriveState::default(),
+            channel_state: vec![ChannelState::default(); 1].into_boxed_slice(),
         };
         od.init(48000.0);
         od

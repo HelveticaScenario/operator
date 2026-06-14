@@ -15,9 +15,8 @@ use schemars::JsonSchema;
 
 use crate::{
     dsp::utils::{SchmittTrigger, voct_to_midi},
-    patch::Patch as ModularPatch,
-    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
-    types::{Clickless, Connect},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
+    types::Clickless,
 };
 
 /// Block size for rendering - matches VCV Rack's implementation
@@ -266,11 +265,12 @@ pub struct Plaits {
     outputs: PlaitsOutputs,
     params: PlaitsParams,
     state: PlaitsState,
+    /// One heavy Plaits voice per active channel; built in `init`.
+    channel_state: Box<[PlaitsChannelState]>,
 }
 
-/// State for the Plaits module.
+/// Module-level state for the Plaits module.
 struct PlaitsState {
-    channels: Vec<PlaitsChannelState>,
     buffer_pos: usize,
     sample_rate: f32,
 }
@@ -278,7 +278,6 @@ struct PlaitsState {
 impl Default for PlaitsState {
     fn default() -> Self {
         Self {
-            channels: Vec::new(),   // Will be initialized in init()
             buffer_pos: BLOCK_SIZE, // Start exhausted to trigger initial render
             sample_rate: 0.0,
         }
@@ -290,15 +289,18 @@ impl Plaits {
     /// Called once at construction time by the macro-generated constructor.
     fn init(&mut self, sample_rate: f32) {
         self.state.sample_rate = sample_rate;
-        self.state.channels = Vec::with_capacity(PORT_MAX_CHANNELS);
-        for _ in 0..PORT_MAX_CHANNELS {
-            let mut voice = Voice::new(BLOCK_SIZE, sample_rate);
-            voice.init();
-            self.state.channels.push(PlaitsChannelState {
-                voice,
-                ..PlaitsChannelState::default()
-            });
-        }
+        let num_channels = self.channel_count().max(1);
+        self.channel_state = (0..num_channels)
+            .map(|_| {
+                let mut voice = Voice::new(BLOCK_SIZE, sample_rate);
+                voice.init();
+                PlaitsChannelState {
+                    voice,
+                    ..PlaitsChannelState::default()
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
     }
 
     fn update(&mut self, _sample_rate: f32) {
@@ -310,7 +312,7 @@ impl Plaits {
         // Triggers can be as short as 1 sample, so we need to detect rising edges
         // and latch them until the next block render.
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
             let trigger_val = self.params.trigger.value_or(ch, 0.0);
 
             // Detect rising edge using Schmitt trigger for noise immunity
@@ -327,7 +329,7 @@ impl Plaits {
         }
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
             // Output scaling: Plaits outputs ±1.0, scale to ±5V (inverted to match hardware)
             let main = -state.main_buffer[self.state.buffer_pos] * 5.0;
             let aux = -state.aux_buffer[self.state.buffer_pos] * 5.0;
@@ -351,7 +353,7 @@ impl Plaits {
 
     fn render_block(&mut self, num_channels: usize) {
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             // Update smoothed parameters
             state

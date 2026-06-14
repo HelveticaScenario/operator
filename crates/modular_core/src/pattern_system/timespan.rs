@@ -211,5 +211,4 @@ mod tests {
         let span = TimeSpan::new(Fraction::new(1, 4), Fraction::new(3, 4));
         assert_eq!(span.duration(), Fraction::new(1, 2));
     }
-
 }

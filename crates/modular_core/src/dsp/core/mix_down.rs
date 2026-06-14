@@ -14,7 +14,7 @@ fn default_channels() -> usize {
 pub struct MixDownParams {
     /// Polyphonic input whose channels are folded down.
     pub input: PolySignal,
-    /// Target output channel count (1–16). Defaults to 1 (mono).
+    /// Target output channel count (1–64). Defaults to 1 (mono).
     #[serde(default = "default_channels")]
     #[deserr(default = default_channels())]
     pub channels: usize,
@@ -47,7 +47,7 @@ struct MixDownOutputs {
 /// exceeds the input channel count, the input is instead spread to fill every
 /// output channel (equal-power interpolation) so no channel is left silent.
 ///
-/// - **channels** — target output channel count (1–16, default 1)
+/// - **channels** — target output channel count (1–64, default 1)
 /// - **mode** — how channels landing on the same output combine (sum / average /
 ///   max / min); applies only when folding down (target ≤ input channels)
 ///
@@ -61,29 +61,39 @@ struct MixDownOutputs {
     name = "$mixDown",
     channels_param = "channels",
     args(input, channels),
-    patch_update,
+    has_init,
+    patch_update
 )]
 pub struct MixDown {
     outputs: MixDownOutputs,
     params: MixDownParams,
-    state: MixDownState,
-}
-
-/// State for the MixDown module.
-///
-/// `gains[i][j]` is the equal-power pan gain from input channel `i` to output
-/// channel `j`. It depends only on the input/output channel counts, both fixed
-/// for the patch's lifetime, so it is built once per patch-apply in
-/// `on_patch_update` (loop-invariant — keeps the per-sample `sqrt` out of
-/// `update`) and read unchanged on the audio thread.
-#[derive(Default)]
-struct MixDownState {
-    gains: [[f32; PORT_MAX_CHANNELS]; PORT_MAX_CHANNELS],
+    /// Equal-power pan gains, stored row-major as a flat `in_ch * out_ch`
+    /// matrix: `gains[i * out_ch + j]` is the gain from input channel `i` to
+    /// output channel `j`. Both counts are fixed for the patch's lifetime, so
+    /// the matrix is sized to them in `init` (no fixed `PORT_MAX²` upfront cost)
+    /// and rebuilt — never reallocated — in `on_patch_update`, then read
+    /// unchanged on the audio thread.
+    ///
+    /// It lives in `channel_state` (not `state`) so the macro's size-aware
+    /// transfer never grows a swapped-in box across a channel-count change: a
+    /// fresh `init` always sizes each new instance, and `on_patch_update` only
+    /// fills within that length.
+    channel_state: Box<[f32]>,
 }
 
 message_handlers!(impl MixDown {});
 
 impl MixDown {
+    /// Size the gain matrix to the patch's input × output channel counts on the
+    /// main thread, so `on_patch_update` (audio thread) only fills it. Both
+    /// counts are resolved by construction time: `out_ch` from `channels`,
+    /// `in_ch` from the input signal's width.
+    fn init(&mut self, _sample_rate: f32) {
+        let in_ch = self.params.input.channels().min(PORT_MAX_CHANNELS);
+        let out_ch = self.channel_count();
+        self.channel_state = vec![0.0; in_ch * out_ch].into_boxed_slice();
+    }
+
     /// Fill `gains` with the equal-power pan matrix mapping `in_ch` (N) input
     /// channels onto `out_ch` (M) output channels. `gains[i][j]` is the gain
     /// from input channel `i` to output channel `j`.
@@ -98,24 +108,18 @@ impl MixDown {
     ///   position `s = j*(N-1)/(M-1)` and gathers an equal-power interpolation
     ///   of the adjacent input channels. This fills every output channel — no
     ///   silent gaps. There are no collisions, so `mode` does not apply.
-    fn build_gains(
-        gains: &mut [[f32; PORT_MAX_CHANNELS]; PORT_MAX_CHANNELS],
-        in_ch: usize,
-        out_ch: usize,
-    ) {
+    fn build_gains(gains: &mut [f32], in_ch: usize, out_ch: usize) {
         // Clear any stale entries from a previous topology.
-        for row in gains.iter_mut() {
-            for g in row.iter_mut() {
-                *g = 0.0;
-            }
-        }
+        gains.fill(0.0);
 
         if in_ch == 0 || out_ch == 0 {
             return;
         }
 
+        // Mono and fold-down are row-keyed: each input owns one row of the
+        // flat `in_ch * out_ch` matrix, so iterate rows via `chunks_mut`.
         if out_ch == 1 {
-            for row in gains.iter_mut().take(in_ch) {
+            for row in gains.chunks_mut(out_ch).take(in_ch) {
                 row[0] = 1.0;
             }
             return;
@@ -124,7 +128,7 @@ impl MixDown {
         if out_ch <= in_ch {
             // Fold-down: scatter each input across the output field so every
             // input contributes.
-            for (i, row) in gains.iter_mut().enumerate().take(in_ch) {
+            for (i, row) in gains.chunks_mut(out_ch).enumerate().take(in_ch) {
                 let t = if in_ch == 1 {
                     0.5
                 } else {
@@ -141,7 +145,10 @@ impl MixDown {
         } else {
             // Fold-up: gather an equal-power interpolation of adjacent inputs
             // into each output so no output channel is left silent. With a
-            // single input (N == 1) every output samples it at unity.
+            // single input (N == 1) every output samples it at unity. This
+            // branch writes one output column `j` across two adjacent input
+            // rows (`lo`, `lo + 1`), so it indexes the flat matrix directly
+            // rather than iterating rows.
             for j in 0..out_ch {
                 let s = if in_ch == 1 {
                     0.0
@@ -150,9 +157,9 @@ impl MixDown {
                 };
                 let lo = s.floor() as usize;
                 let frac = s - lo as f32;
-                gains[lo][j] = (1.0 - frac).sqrt();
+                gains[lo * out_ch + j] = (1.0 - frac).sqrt();
                 if lo + 1 < in_ch {
-                    gains[lo + 1][j] = frac.sqrt();
+                    gains[(lo + 1) * out_ch + j] = frac.sqrt();
                 }
             }
         }
@@ -168,7 +175,7 @@ impl MixDown {
             *v = self.params.input.get_value(i);
         }
 
-        let gains = &self.state.gains;
+        let gains = &self.channel_state;
 
         // Folding up gathers an equal-power crossfade per output (no inputs
         // collide on one output), so the combine mode is irrelevant — sum the
@@ -186,7 +193,7 @@ impl MixDown {
                 for j in 0..out_ch {
                     let mut acc = 0.0f32;
                     for i in 0..in_ch {
-                        acc += in_vals[i] * gains[i][j];
+                        acc += in_vals[i] * gains[i * out_ch + j];
                     }
                     self.outputs.sample.set(j, acc);
                 }
@@ -196,7 +203,7 @@ impl MixDown {
                     let mut acc = 0.0f32;
                     let mut count: u32 = 0;
                     for i in 0..in_ch {
-                        let g = gains[i][j];
+                        let g = gains[i * out_ch + j];
                         if g == 0.0 {
                             continue;
                         }
@@ -213,7 +220,7 @@ impl MixDown {
                     let mut best_abs = -1.0f32;
                     let mut best_val = 0.0f32;
                     for i in 0..in_ch {
-                        let g = gains[i][j];
+                        let g = gains[i * out_ch + j];
                         if g == 0.0 {
                             continue;
                         }
@@ -236,7 +243,7 @@ impl MixDown {
                     let mut best_abs = f32::INFINITY;
                     let mut best_val = 0.0f32;
                     for i in 0..in_ch {
-                        let g = gains[i][j];
+                        let g = gains[i * out_ch + j];
                         if g == 0.0 {
                             continue;
                         }
@@ -264,11 +271,12 @@ impl crate::types::PatchUpdateHandler for MixDown {
     /// counts are fixed for the patch's lifetime, and this runs after the
     /// connect pass (so `input.channels()` is resolved) and after any
     /// `transfer_state_from`, so the unconditional rebuild overwrites a stale
-    /// swapped-in matrix. Allocation-free — safe on the audio thread.
+    /// swapped-in matrix. The matrix was sized in `init`, so this only fills it
+    /// — allocation-free, safe on the audio thread.
     fn on_patch_update(&mut self) {
         let in_ch = self.params.input.channels().min(PORT_MAX_CHANNELS);
         let out_ch = self.channel_count();
-        Self::build_gains(&mut self.state.gains, in_ch, out_ch);
+        Self::build_gains(&mut self.channel_state, in_ch, out_ch);
     }
 }
 
@@ -279,8 +287,8 @@ mod tests {
     use crate::types::{OutputStruct, Signal};
 
     /// Build a MixDown directly, initializing `_channel_count` and the output
-    /// channels the way the module macro would. `channels` is clamped to 1–16
-    /// (matching the macro's `channels_param` codegen).
+    /// channels the way the module macro would. `channels` is clamped to
+    /// 1–PORT_MAX_CHANNELS (matching the macro's `channels_param` codegen).
     fn make_mix_down(params: MixDownParams) -> MixDown {
         let channels = params.channels.clamp(1, PORT_MAX_CHANNELS);
         let mut outputs = MixDownOutputs::default();
@@ -290,10 +298,12 @@ mod tests {
             outputs,
             _channel_count: channels,
             _block_index: Default::default(),
-            state: MixDownState::default(),
+            channel_state: Box::default(),
         };
-        // Production constructs → connects → on_patch_update → process; mirror
-        // that order here so the gain matrix is built before update() reads it.
+        // Production constructs → init → connects → on_patch_update → process;
+        // mirror that order so the gain matrix is sized (init) and built
+        // (on_patch_update) before update() reads it.
+        m.init(48000.0);
         crate::types::PatchUpdateHandler::on_patch_update(&mut m);
         m
     }
@@ -308,11 +318,7 @@ mod tests {
     fn test_three_to_two_equal_power_pan() {
         // 3 input channels folded to 2: inputs land at -1, 0, +1.
         let mut m = make_mix_down(MixDownParams {
-            input: PolySignal::poly(&[
-                Signal::Volts(1.0),
-                Signal::Volts(1.0),
-                Signal::Volts(1.0),
-            ]),
+            input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(1.0), Signal::Volts(1.0)]),
             channels: 2,
             mode: MixMode::Sum,
         });
@@ -327,11 +333,7 @@ mod tests {
     fn test_center_input_equal_power() {
         // Only the center input is active: it pans equally to both outputs.
         let mut m = make_mix_down(MixDownParams {
-            input: PolySignal::poly(&[
-                Signal::Volts(0.0),
-                Signal::Volts(4.0),
-                Signal::Volts(0.0),
-            ]),
+            input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(4.0), Signal::Volts(0.0)]),
             channels: 2,
             mode: MixMode::Sum,
         });
@@ -344,11 +346,7 @@ mod tests {
     fn test_mono_fold_down_default_channels() {
         // channels defaults to 1 in the DSL; here we exercise a plain mono sum.
         let mut m = make_mix_down(MixDownParams {
-            input: PolySignal::poly(&[
-                Signal::Volts(1.0),
-                Signal::Volts(2.0),
-                Signal::Volts(3.0),
-            ]),
+            input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(2.0), Signal::Volts(3.0)]),
             channels: 1,
             mode: MixMode::Sum,
         });
@@ -387,11 +385,7 @@ mod tests {
     fn test_average_mode() {
         // 3→2, average of the contributing (non-zero-gain) inputs per output.
         let mut m = make_mix_down(MixDownParams {
-            input: PolySignal::poly(&[
-                Signal::Volts(1.0),
-                Signal::Volts(2.0),
-                Signal::Volts(3.0),
-            ]),
+            input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(2.0), Signal::Volts(3.0)]),
             channels: 2,
             mode: MixMode::Average,
         });
@@ -404,10 +398,10 @@ mod tests {
 
     #[test]
     fn test_channel_count_clamped() {
-        // Over-large channel counts clamp to PORT_MAX_CHANNELS (16).
+        // Over-large channel counts clamp to PORT_MAX_CHANNELS.
         let mut m = make_mix_down(MixDownParams {
             input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(2.0)]),
-            channels: 20,
+            channels: PORT_MAX_CHANNELS + 50,
             mode: MixMode::Sum,
         });
         m.update(48000.0);

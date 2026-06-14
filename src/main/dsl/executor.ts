@@ -26,6 +26,7 @@ import {
     Bus,
     ModuleOutput,
     replaceSignals,
+    PORT_MAX_CHANNELS,
 } from './GraphBuilder';
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
@@ -211,7 +212,7 @@ export function executePatchScript(
         // and costs a per-sample read on the audio thread, so an uncapped
         // max(len(x), len(y)) would let user input balloon audio-thread work
         // for traces that are never shown.
-        const MAX_SCOPE_XY_TRACES = 16;
+        const MAX_SCOPE_XY_TRACES = 64;
         const requested = Math.max(xs.length, ys.length);
         const n = Math.min(requested, MAX_SCOPE_XY_TRACES);
         if (requested > MAX_SCOPE_XY_TRACES) {
@@ -242,12 +243,12 @@ export function executePatchScript(
     /**
      * Create a DeferredCollection with placeholder signals that can be assigned later.
      * Useful for feedback loops and forward references.
-     * @param channels - Number of deferred outputs (1-16, default 1)
+     * @param channels - Number of deferred outputs (1-64, default 1)
      */
     const $deferred = (channels: number = 1): DeferredCollection => {
-        if (channels < 1 || channels > 16) {
+        if (channels < 1 || channels > PORT_MAX_CHANNELS) {
             throw new Error(
-                `deferred() channels must be between 1 and 16, got ${channels}`,
+                `deferred() channels must be between 1 and ${PORT_MAX_CHANNELS}, got ${channels}`,
             );
         }
         const items: DeferredModuleOutput[] = [];

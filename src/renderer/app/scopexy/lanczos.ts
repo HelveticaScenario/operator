@@ -1,8 +1,9 @@
 // Sample-buffer dimensions and the GPU Lanczos upsampler kernel for the XY
 // scope. SCOPE_XY_CAPACITY mirrors the Rust ring size (audio.rs); MAX_TRACES
-// caps how many traces the pipeline draws (and the DSL pair count).
+// caps how many traces the pipeline draws (and the DSL pair count) — one per
+// channel, so it matches PORT_MAX_CHANNELS.
 
-export const MAX_TRACES = 16;
+export const MAX_TRACES = 64;
 export const SCOPE_XY_CAPACITY = 2048;
 
 // Lanczos upsampler tuning: each input sample produces STEPS interpolated
