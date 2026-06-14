@@ -65,7 +65,6 @@ impl HapContext {
         }
     }
 
-
     /// Combine two contexts (e.g., when combining haps in applicative operations).
     pub fn combine(&self, other: &HapContext) -> HapContext {
         let mut combined = self.clone();
@@ -323,10 +322,7 @@ impl<'b> ArenaHapContext<'b> {
 
     /// Wrap so all spans (including modifier-side) appear as source on extract.
     #[inline]
-    pub fn strip_in(
-        ctx: &'b ArenaHapContext<'b>,
-        bump: &'b Bump,
-    ) -> &'b ArenaHapContext<'b> {
+    pub fn strip_in(ctx: &'b ArenaHapContext<'b>, bump: &'b Bump) -> &'b ArenaHapContext<'b> {
         if matches!(ctx, ArenaHapContext::Empty) {
             return ctx;
         }
@@ -407,11 +403,7 @@ impl<'b> ArenaHapContext<'b> {
         let mut current_extras: Vec<SourceSpan> = Vec::new();
         self.walk(&mut |idx, span| {
             if idx as i32 != current_idx {
-                flush_owned_extras(
-                    &mut owned,
-                    current_idx,
-                    std::mem::take(&mut current_extras),
-                );
+                flush_owned_extras(&mut owned, current_idx, std::mem::take(&mut current_extras));
                 current_idx = idx as i32;
             }
             current_extras.push(span.clone());
@@ -419,7 +411,6 @@ impl<'b> ArenaHapContext<'b> {
         flush_owned_extras(&mut owned, current_idx, current_extras);
         owned
     }
-
 }
 
 fn flush_owned_extras(owned: &mut HapContext, pattern_idx: i32, spans: Vec<SourceSpan>) {

@@ -103,7 +103,10 @@ mod tests {
   #[test]
   fn filename_trailing_digits() {
     assert_eq!(parse_bpm_from_filename(&p("breaks125.wav")), Some(125.0));
-    assert_eq!(parse_bpm_from_filename(&p("cw_amen01_175.wav")), Some(175.0));
+    assert_eq!(
+      parse_bpm_from_filename(&p("cw_amen01_175.wav")),
+      Some(175.0)
+    );
   }
 
   #[test]

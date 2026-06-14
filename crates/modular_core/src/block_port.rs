@@ -1,47 +1,65 @@
 //! Block-sized port buffer.
 //!
-//! Layout: `data[sample_index][channel_index]`
-//!
+//! Layout: a flat `block_size * channels` slice, indexed `data[index * channels + ch]`.
 //! All channel values at the same sample index are contiguous in memory,
 //! enabling future SIMD optimization. Heap-allocated once at construction;
 //! never resized on the audio thread.
 
-use crate::poly::PORT_MAX_CHANNELS;
-
-/// A pre-allocated buffer holding `block_size` samples, each with `PORT_MAX_CHANNELS` channels.
+/// A pre-allocated buffer holding `block_size` samples, each with `channels`
+/// channels. The channel count is the producing port's width: 1 for a mono
+/// (f32) output, the module's channel count for a polyphonic output.
 ///
-/// `data[i][ch]` is the value for sample index `i`, channel `ch`.
+/// Reads cycle (`ch % channels`) so a consumer with more channels than the
+/// producer still sees the producer's value broadcast/wrapped across its
+/// channels — preserving the mono→poly broadcast semantics.
 pub struct BlockPort {
-    /// `data.len() == block_size` (set at construction, never changed).
-    pub data: Box<[[f32; PORT_MAX_CHANNELS]]>,
+    /// Flat `block_size * channels` voltages. Length never changes after
+    /// construction.
+    data: Box<[f32]>,
+    /// Per-port channel width (`>= 1` for live ports, `0` only when the
+    /// module is zero-channel).
+    channels: usize,
+    /// Number of sample slots (the internal block size).
+    block_size: usize,
 }
 
 impl BlockPort {
-    /// Allocate a new zeroed port buffer for the given block size.
+    /// Allocate a new zeroed port buffer for the given block size and channel
+    /// width.
     ///
     /// **Must not be called on the audio thread** (allocates heap memory).
-    pub fn new(block_size: usize) -> Self {
+    pub fn new(block_size: usize, channels: usize) -> Self {
         Self {
-            data: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size].into_boxed_slice(),
+            data: vec![0.0f32; block_size * channels].into_boxed_slice(),
+            channels,
+            block_size,
         }
     }
 
-    /// Read value at `(index, ch)`, returning `0.0` for out-of-range accesses.
+    /// This port's channel width.
     #[inline]
-    pub fn get(&self, index: usize, ch: usize) -> f32 {
-        self.data
-            .get(index)
-            .and_then(|slot| slot.get(ch).copied())
-            .unwrap_or(0.0)
+    pub fn channels(&self) -> usize {
+        self.channels
     }
 
-    /// Write value at `(index, ch)`. Silently ignored if out of range.
+    /// Read value at `(index, ch)`, returning `0.0` for out-of-range sample
+    /// indices or a zero-channel port. The channel index cycles modulo the
+    /// port width, so a consumer reading a higher channel than the producer
+    /// has wraps around — preserving mono-broadcast / poly-cycling semantics.
+    #[inline]
+    pub fn get(&self, index: usize, ch: usize) -> f32 {
+        if self.channels == 0 || index >= self.block_size {
+            return 0.0;
+        }
+        self.data[index * self.channels + ch % self.channels]
+    }
+
+    /// Write value at `(index, ch)`. Silently ignored if out of range. The
+    /// channel index is raw (no cycling): callers write `0..channels`.
     #[inline]
     pub fn set(&mut self, index: usize, ch: usize, value: f32) {
-        if let Some(slot) = self.data.get_mut(index) {
-            if let Some(cell) = slot.get_mut(ch) {
-                *cell = value;
-            }
+        if index < self.block_size && ch < self.channels {
+            self.data[index * self.channels + ch] = value;
         }
     }
 }
@@ -49,34 +67,50 @@ impl BlockPort {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::poly::PORT_MAX_CHANNELS;
 
     #[test]
     fn block_port_new_zeroed() {
-        let bp = BlockPort::new(4);
-        assert_eq!(bp.data.len(), 4);
-        for slot in bp.data.iter() {
-            assert_eq!(*slot, [0.0f32; PORT_MAX_CHANNELS]);
+        let bp = BlockPort::new(4, 16);
+        assert_eq!(bp.channels(), 16);
+        for index in 0..4 {
+            for ch in 0..16 {
+                assert_eq!(bp.get(index, ch), 0.0);
+            }
         }
     }
 
     #[test]
     fn block_port_get_in_range() {
-        let mut bp = BlockPort::new(4);
-        bp.data[2][3] = 1.5;
+        let mut bp = BlockPort::new(4, 16);
+        bp.set(2, 3, 1.5);
         assert_eq!(bp.get(2, 3), 1.5);
     }
 
     #[test]
     fn block_port_get_out_of_range() {
-        let bp = BlockPort::new(4);
+        let bp = BlockPort::new(4, 16);
+        // Sample index out of range → 0.0.
         assert_eq!(bp.get(99, 0), 0.0);
-        assert_eq!(bp.get(0, 99), 0.0);
+    }
+
+    #[test]
+    fn block_port_channel_cycles() {
+        // A mono (width-1) port broadcasts to every consumer channel.
+        let mut bp = BlockPort::new(4, 1);
+        bp.set(1, 0, 2.5);
+        assert_eq!(bp.get(1, 0), 2.5);
+        assert_eq!(bp.get(1, 5), 2.5); // 5 % 1 == 0
+        // A width-2 port wraps higher channels.
+        let mut poly = BlockPort::new(4, 2);
+        poly.set(0, 0, 1.0);
+        poly.set(0, 1, 2.0);
+        assert_eq!(poly.get(0, 2), 1.0); // 2 % 2 == 0
+        assert_eq!(poly.get(0, 3), 2.0); // 3 % 2 == 1
     }
 
     #[test]
     fn block_port_set() {
-        let mut bp = BlockPort::new(4);
+        let mut bp = BlockPort::new(4, 16);
         bp.set(1, 2, 3.14);
         assert!((bp.get(1, 2) - 3.14).abs() < 1e-6);
     }

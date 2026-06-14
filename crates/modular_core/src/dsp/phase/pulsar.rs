@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 
 use crate::dsp::fx::enosc_tables::aa_pulsar;
 use crate::dsp::utils::voct_to_hz;
-use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -40,12 +40,6 @@ struct ChannelState {
     amount: Clickless,
 }
 
-/// State for the Pulsar module.
-#[derive(Default)]
-struct PulsarState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Phase effect: pulsar synthesis distortion.
 ///
 /// Transforms a 0–1 phase signal by compressing the active portion of each
@@ -64,7 +58,7 @@ struct PulsarState {
 #[module(name = "$pulsar", args(input, amount))]
 pub struct Pulsar {
     outputs: PulsarOutputs,
-    state: PulsarState,
+    channel_state: Box<[ChannelState]>,
     params: PulsarParams,
 }
 
@@ -74,7 +68,7 @@ impl Pulsar {
         let freq_connected = self.params.freq.is_some();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);

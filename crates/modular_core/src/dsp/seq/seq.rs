@@ -76,8 +76,6 @@ struct VoiceState {
     trigger: TempGate,
     /// Whether this voice is currently active (playing a note).
     active: bool,
-    /// Timestamp when this voice was last assigned (for LRU stealing).
-    last_assigned: f64,
 }
 
 impl Default for VoiceState {
@@ -87,7 +85,6 @@ impl Default for VoiceState {
             gate: TempGate::new_gate(TempGateState::Low),
             trigger: TempGate::new_gate(TempGateState::Low),
             active: false,
-            last_assigned: 0.0,
         }
     }
 }
@@ -124,7 +121,7 @@ pub struct SeqParams {
     #[signal(range = (0.0, 1.0))]
     #[deserr(default)]
     playhead: Option<MonoSignal>,
-    /// Number of polyphonic voices (1-16)
+    /// Number of polyphonic voices (1-64)
     #[deserr(default)]
     pub channels: Option<usize>,
     /// loop window [offset, length] in cycles (fractional allowed)
@@ -354,30 +351,49 @@ pub struct Seq {
     outputs: SeqOutputs,
     params: SeqParams,
     state: SeqState,
+    /// Per-channel voice state, one element per polyphonic channel. Sized to the
+    /// derived channel count by the `#[module]` macro and carried across patch
+    /// updates by the macro's per-element state transfer.
+    channel_state: Box<[SeqChannel]>,
 }
 
-/// State for the Seq module.
+/// Per-channel sequencer state.
+#[derive(Default)]
+struct SeqChannel {
+    /// Per-voice playback state.
+    voice: VoiceState,
+    /// Last CV voltage — holds through rest periods and state transfers. Also
+    /// the "value the voice held before", used for nearest-value allocation.
+    last_cv: f32,
+}
+
+/// Module-level state for the Seq module.
 struct SeqState {
-    /// Per-voice state array
-    voices: [VoiceState; PORT_MAX_CHANNELS],
-    /// Round-robin voice index for allocation
-    next_voice: usize,
-    /// Last CV voltage per channel — holds through rest periods and state transfers
-    last_cv: [f32; PORT_MAX_CHANNELS],
+    /// Previous frame's folded playhead position, for window-membership edge
+    /// detection: a hap fires only when the playhead *enters* its window (an
+    /// outside→inside transition), never because it is merely inside it.
+    prev_logical: f64,
+    /// False until the first `update`. On the first frame there is no previous
+    /// position, so every in-window onset fires (a fresh `$cycle` starts playing
+    /// from the current position).
+    started: bool,
     /// Scratch buffer for voice release — reused each frame to avoid heap alloc
     voices_to_release: ArrayVec<usize, PORT_MAX_CHANNELS>,
     /// Scratch buffer for onset events awaiting voice allocation.
     events_to_process: ArrayVec<PendingEvent, PORT_MAX_CHANNELS>,
+    /// Pre-allocated DP scratch for nearest-value voice assignment. Boxed and
+    /// built here (main thread) so the audio thread never allocates.
+    assign: Box<AssignScratch>,
 }
 
 impl Default for SeqState {
     fn default() -> Self {
         Self {
-            voices: std::array::from_fn(|_| VoiceState::default()),
-            next_voice: 0,
-            last_cv: [0.0; PORT_MAX_CHANNELS],
+            prev_logical: 0.0,
+            started: false,
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
+            assign: Box::new(AssignScratch::default()),
         }
     }
 }
@@ -390,6 +406,32 @@ impl Seq {
             self.params.ribbon.0.floor() as i64,
             self.params.pattern.cached_haps(),
         )
+    }
+
+    /// True when the voice's held note no longer exists in the *current* baked
+    /// pattern, matched on BOTH time-window AND value. Such a voice is a lingering
+    /// old-pattern note and may be stolen for a new onset; a voice that still has
+    /// an exact window+value match is a genuine continuation and is never stolen.
+    ///
+    /// Both keys are required. Window-only would wrongly keep an old `c4[0,1]`
+    /// when the new pattern only has `e5[0,1]` at that geometry; value-only would
+    /// wrongly keep it when the new pattern has `c4` at a *different* window (e.g.
+    /// `[c4*2]`). Note: this is stricter than `resolve_hap_index`, whose
+    /// geometry-only fallback is for highlight display, not steal eligibility.
+    fn voice_is_orphan(&self, cached: &CachedHap) -> bool {
+        const EPS: f64 = 1e-6;
+        let Some(storage) = self.get_cycle_storage(cached.cached_cycle) else {
+            return true; // cycle no longer in the baked window → orphaned
+        };
+        !storage.haps.iter().any(|h| {
+            (h.whole_begin - cached.whole_begin).abs() < EPS
+                && (h.whole_end - cached.whole_end).abs() < EPS
+                && match (h.value, cached.value) {
+                    (SeqValue::Voltage(a), SeqValue::Voltage(b)) => (a - b).abs() < EPS,
+                    (SeqValue::Rest, SeqValue::Rest) => true,
+                    _ => false,
+                }
+        })
     }
 
     fn update(&mut self, sample_rate: f32) {
@@ -421,21 +463,32 @@ impl Seq {
         let logical = pos;
         let storage_index = (current_cycle - base) as usize;
 
+        // Window-membership edge detection baseline: capture last frame's folded
+        // position, then advance it for this frame (unconditionally, so the
+        // baseline stays correct even on the no-pattern early-return below). A
+        // hap fires only on an outside→inside transition (see the collection
+        // pass), so a mid-window pattern swap or scrub does not re-trigger it.
+        let prev_logical = self.state.prev_logical;
+        let started = self.state.started;
+        self.state.prev_logical = logical;
+        self.state.started = true;
+
         // Release voices whose notes have ended. A note's life is tracked in
         // the monotonic `raw` frame (two-sided, so a backward scrub also
         // frees), because `logical` wraps at the ribbon seam.
         self.state.voices_to_release.clear();
         for i in 0..num_channels {
-            if let Some(cached) = self.state.voices[i].cached_hap {
+            if let Some(cached) = self.channel_state[i].voice.cached_hap {
                 if !cached.contains(raw) {
                     self.state.voices_to_release.push(i);
                 }
             }
         }
         for i in self.state.voices_to_release.iter().copied() {
-            self.state.voices[i].active = false;
-            self.state.voices[i].cached_hap = None;
-            self.state.voices[i]
+            self.channel_state[i].voice.active = false;
+            self.channel_state[i].voice.cached_hap = None;
+            self.channel_state[i]
+                .voice
                 .gate
                 .set_state(TempGateState::Low, TempGateState::Low, 0);
         }
@@ -445,10 +498,10 @@ impl Seq {
                 self.outputs.cv.set(ch, 0.0);
                 self.outputs
                     .gate
-                    .set(ch, self.state.voices[ch].gate.process());
+                    .set(ch, self.channel_state[ch].voice.gate.process());
                 self.outputs
                     .trig
-                    .set(ch, self.state.voices[ch].trigger.process());
+                    .set(ch, self.channel_state[ch].voice.trigger.process());
             }
             return;
         }
@@ -456,11 +509,7 @@ impl Seq {
         // Collect new onsets for this frame, then dispatch to voices in a
         // separate pass so we don't hold a borrow of cycle storage while
         // mutating voice state.
-        let SeqState {
-            voices,
-            events_to_process,
-            ..
-        } = &mut self.state;
+        let events_to_process = &mut self.state.events_to_process;
         events_to_process.clear();
         let storage_opt = self.params.pattern.cached_haps().get(storage_index);
         if let Some(storage) = storage_opt {
@@ -471,9 +520,18 @@ impl Seq {
                 if hap.value.is_rest() {
                     continue;
                 }
+                // Window-membership edge: fire only on *entering* the window. Skip
+                // if the playhead was already inside it last frame — a mid-window
+                // pattern swap, a scrub that lands inside, or a paused playhead is
+                // not an onset. (`started` is false on the very first frame, so a
+                // fresh module fires its in-window notes.)
+                if started && prev_logical >= hap.part_begin && prev_logical < hap.part_end {
+                    continue;
+                }
                 let hap_index = hap_index as u32;
                 let already_assigned = (0..num_channels).any(|i| {
-                    voices[i]
+                    self.channel_state[i]
+                        .voice
                         .cached_hap
                         .map(|existing| {
                             existing.hap_index == hap_index
@@ -496,51 +554,103 @@ impl Seq {
             }
         }
 
-        let state = &mut self.state;
-        for event in state.events_to_process.iter().copied() {
-            let mut found = None;
+        // Assign this frame's onsets to voices by nearest previously-held value
+        // (voice leading). Tier 1 draws from the free (inactive) voices; only if
+        // they run out does Tier 2 steal "orphaned" voices — old-pattern notes
+        // that no longer exist in the current pattern — so a new hap is never
+        // dropped while a stale note rings. A current-pattern continuation is
+        // never stolen. Onsets with no free or orphan voice are dropped.
+        let n = self.state.events_to_process.len();
+        if n > 0 {
+            let mut assigned: [Option<usize>; PORT_MAX_CHANNELS] = [None; PORT_MAX_CHANNELS];
+
+            // Tier 1: free voices.
+            let mut free: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
             for i in 0..num_channels {
-                let idx = (state.next_voice + i) % num_channels;
-                if !state.voices[idx].active {
-                    state.next_voice = (idx + 1) % num_channels;
-                    state.voices[idx].last_assigned = raw;
-                    found = Some(idx);
-                    break;
+                if !self.channel_state[i].voice.active {
+                    free.push(i);
                 }
             }
-            let Some(voice_idx) = found else { continue };
-            let voice = &mut state.voices[voice_idx];
-            // Map the note's logical span onto the current absolute lap so
-            // release keys off the monotonic `raw` clock and the note plays
-            // its full length even across the ribbon wrap.
-            voice.cached_hap = Some(CachedHap {
-                hap_index: event.hap_index,
-                cached_cycle: current_cycle,
-                whole_begin: event.whole_begin,
-                whole_end: event.whole_end,
-                raw_begin: raw - (logical - event.whole_begin),
-                raw_end: raw + (event.whole_end - logical),
-                value: event.value,
-            });
-            voice.active = true;
-            voice
-                .gate
-                .set_state(TempGateState::Low, TempGateState::High, hold);
-            voice
-                .trigger
-                .set_state(TempGateState::High, TempGateState::Low, hold);
+            {
+                let SeqState {
+                    events_to_process,
+                    assign,
+                    ..
+                } = &mut self.state;
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &free,
+                    &self.channel_state,
+                    assign,
+                );
+            }
+
+            // Tier 2: steal orphaned voices, computed lazily only when onsets
+            // remain unplaced (the steady state never reaches here).
+            if (0..n).any(|ei| assigned[ei].is_none()) {
+                let mut orphans: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
+                for i in 0..num_channels {
+                    if self.channel_state[i].voice.active
+                        && let Some(cached) = self.channel_state[i].voice.cached_hap
+                        && self.voice_is_orphan(&cached)
+                    {
+                        orphans.push(i);
+                    }
+                }
+                let SeqState {
+                    events_to_process,
+                    assign,
+                    ..
+                } = &mut self.state;
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &orphans,
+                    &self.channel_state,
+                    assign,
+                );
+            }
+
+            // Apply the chosen voice for each placed onset. Map the note's logical
+            // span onto the current absolute lap so release keys off the monotonic
+            // `raw` clock and the note plays its full length across the ribbon
+            // wrap. A stolen voice re-triggers (gate Low→High), cutting its old note.
+            for ei in 0..n {
+                let Some(voice_idx) = assigned[ei] else {
+                    continue;
+                };
+                let event = self.state.events_to_process[ei];
+                let voice = &mut self.channel_state[voice_idx].voice;
+                voice.cached_hap = Some(CachedHap {
+                    hap_index: event.hap_index,
+                    cached_cycle: current_cycle,
+                    whole_begin: event.whole_begin,
+                    whole_end: event.whole_end,
+                    raw_begin: raw - (logical - event.whole_begin),
+                    raw_end: raw + (event.whole_end - logical),
+                    value: event.value,
+                });
+                voice.active = true;
+                voice
+                    .gate
+                    .set_state(TempGateState::Low, TempGateState::High, hold);
+                voice
+                    .trigger
+                    .set_state(TempGateState::High, TempGateState::Low, hold);
+            }
         }
 
         for ch in 0..num_channels {
-            let voice = &mut state.voices[ch];
-            if let Some(cached) = voice.cached_hap
+            let channel = &mut self.channel_state[ch];
+            if let Some(cached) = channel.voice.cached_hap
                 && let Some(cv) = cached.get_cv()
             {
-                state.last_cv[ch] = cv as f32;
+                channel.last_cv = cv as f32;
             }
-            self.outputs.cv.set(ch, state.last_cv[ch]);
-            self.outputs.gate.set(ch, voice.gate.process());
-            self.outputs.trig.set(ch, voice.trigger.process());
+            self.outputs.cv.set(ch, channel.last_cv);
+            self.outputs.gate.set(ch, channel.voice.gate.process());
+            self.outputs.trig.set(ch, channel.voice.trigger.process());
         }
     }
 }
@@ -552,6 +662,140 @@ struct PendingEvent {
     whole_begin: f64,
     whole_end: f64,
     value: SeqValue,
+}
+
+/// Square dimension of the assignment DP table: one extra row/column for the
+/// empty prefix. Scales with `PORT_MAX_CHANNELS`, so a future channel bump
+/// resizes the scratch automatically.
+const DP_DIM: usize = PORT_MAX_CHANNELS + 1;
+
+/// Pre-allocated scratch for the voice-assignment DP ([`assign_nearest`]). One
+/// decision bit per cell; boxed in `SeqState` and built on the main thread so
+/// the audio thread never allocates.
+struct AssignScratch {
+    /// `decision[i * DP_DIM + j]` records the choice at cell `(i, j)`:
+    /// `true` = match row item `i-1` to column item `j-1`; `false` = skip
+    /// column `j-1`. Only the cells visited by the current call are written
+    /// before they are read back, so the table needs no per-call clear.
+    decision: [bool; DP_DIM * DP_DIM],
+}
+
+impl Default for AssignScratch {
+    fn default() -> Self {
+        Self {
+            decision: [false; DP_DIM * DP_DIM],
+        }
+    }
+}
+
+/// Assign the still-unplaced onsets in `events` to `candidates` voices so that
+/// total pitch movement `Σ |onset voltage − last_cv[voice]|` is minimized — the
+/// provably-optimal voice leading, not a greedy approximation.
+///
+/// Because the cost is `|Δvalue|` on a line, the optimal matching is
+/// order-preserving: sort both sides by value and match them with a 1-D DP
+/// (`dp[i][j] = min(skip column j, match row i to column j + cost)`). The
+/// shorter side is fully matched; the longer side contributes a chosen subset.
+/// Runs in `O(E·V)` (plus an `O(N log N)` in-place sort), versus the cubic of a
+/// repeated global-nearest scan — cheap even at the max channel count.
+///
+/// Onsets already placed (by an earlier tier) are skipped, so this is called
+/// once per tier (free voices, then orphaned voices). Allocation-free: fixed
+/// `[_; PORT_MAX_CHANNELS]` stacks, an in-place `sort_unstable`, and the boxed
+/// `scratch` decision table. Each candidate's previously-held value is read
+/// from `channel_state[voice].last_cv`.
+fn assign_nearest(
+    events: &[PendingEvent],
+    assigned: &mut [Option<usize>; PORT_MAX_CHANNELS],
+    candidates: &[usize],
+    channel_state: &[SeqChannel],
+    scratch: &mut AssignScratch,
+) {
+    // Gather the unplaced onsets and the candidate voices as (value, index)
+    // pairs. Index is the tie-break so the comparator is a total order, making
+    // the allocation-free unstable sort deterministic.
+    let mut evs: ArrayVec<(f32, u32), PORT_MAX_CHANNELS> = ArrayVec::new();
+    for (ei, ev) in events.iter().enumerate() {
+        if assigned[ei].is_none() {
+            evs.push((ev.value.to_voltage().unwrap_or(0.0) as f32, ei as u32));
+        }
+    }
+    let mut cands: ArrayVec<(f32, u32), PORT_MAX_CHANNELS> = ArrayVec::new();
+    for &vidx in candidates {
+        cands.push((channel_state[vidx].last_cv, vidx as u32));
+    }
+    if evs.is_empty() || cands.is_empty() {
+        return;
+    }
+    let by_value = |a: &(f32, u32), b: &(f32, u32)| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    };
+    evs.sort_unstable_by(by_value);
+    cands.sort_unstable_by(by_value);
+
+    // Rows = shorter side (every item matched); cols = longer side (a subset is
+    // chosen). Whether events or candidates are the rows flips which index in a
+    // matched pair is the event vs the voice.
+    let events_are_rows = evs.len() <= cands.len();
+    let (rows, cols): (&[(f32, u32)], &[(f32, u32)]) = if events_are_rows {
+        (&evs, &cands)
+    } else {
+        (&cands, &evs)
+    };
+    let s = rows.len();
+    let l = cols.len();
+
+    // Order-preserving min-cost DP, rolled to two rows. `dp[j]` is the cost of
+    // matching the first `i` row items into the first `j` columns; +∞ marks an
+    // infeasible prefix (fewer columns than rows).
+    let mut dp_prev = [f32::INFINITY; DP_DIM];
+    let mut dp_cur = [f32::INFINITY; DP_DIM];
+    for slot in dp_prev.iter_mut().take(l + 1) {
+        *slot = 0.0; // row 0: nothing matched yet, cost 0 for any column count
+    }
+    for i in 1..=s {
+        dp_cur[0] = f32::INFINITY; // can't match ≥1 items into 0 columns
+        for j in 1..=l {
+            let skip = dp_cur[j - 1];
+            let take = if dp_prev[j - 1].is_finite() {
+                dp_prev[j - 1] + (rows[i - 1].0 - cols[j - 1].0).abs()
+            } else {
+                f32::INFINITY
+            };
+            // Prefer skip on ties → the lowest-index (after sort) column wins,
+            // matching the old lowest-voice-index tie-break.
+            if take < skip {
+                dp_cur[j] = take;
+                scratch.decision[i * DP_DIM + j] = true;
+            } else {
+                dp_cur[j] = skip;
+                scratch.decision[i * DP_DIM + j] = false;
+            }
+        }
+        std::mem::swap(&mut dp_prev, &mut dp_cur);
+    }
+
+    // Backtrack from (s, l), recording matched pairs into `assigned`.
+    let mut i = s;
+    let mut j = l;
+    while i > 0 && j > 0 {
+        if scratch.decision[i * DP_DIM + j] {
+            let row_idx = rows[i - 1].1 as usize;
+            let col_idx = cols[j - 1].1 as usize;
+            let (event_index, voice_index) = if events_are_rows {
+                (row_idx, col_idx)
+            } else {
+                (col_idx, row_idx)
+            };
+            assigned[event_index] = Some(voice_index);
+            i -= 1;
+            j -= 1;
+        } else {
+            j -= 1;
+        }
+    }
 }
 
 /// Resolve the hap in `storage` that the voice's cached scalars describe.
@@ -604,7 +848,8 @@ impl crate::types::StatefulModule for Seq {
         let mut per_pattern_spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_sources];
         let mut any_non_rest = false;
 
-        for voice in self.state.voices.iter().take(num_channels) {
+        for channel in self.channel_state.iter().take(num_channels) {
+            let voice = &channel.voice;
             if let Some(cached) = voice.cached_hap
                 && !cached.is_rest()
             {
@@ -725,9 +970,92 @@ mod tests {
     #[test]
     fn seq_bake_ribbon_accepts_finite_fractional() {
         assert!(
-            seq_bake_ribbon(params_with_ribbon((0.5, 1.5)), deserr::ValuePointerRef::Origin)
-                .is_ok(),
+            seq_bake_ribbon(
+                params_with_ribbon((0.5, 1.5)),
+                deserr::ValuePointerRef::Origin
+            )
+            .is_ok(),
             "a finite fractional ribbon must pass the bounds hook"
         );
+    }
+
+    fn ev(v: f64) -> PendingEvent {
+        PendingEvent {
+            hap_index: 0,
+            whole_begin: 0.0,
+            whole_end: 1.0,
+            value: SeqValue::Voltage(v),
+        }
+    }
+
+    /// Run `assign_nearest` over the given events and candidate voices (with the
+    /// given `last_cv` for the referenced voices) and return the assignment.
+    fn run_assign(
+        events: &[PendingEvent],
+        cands: &[usize],
+        cv: &[(usize, f32)],
+    ) -> Vec<Option<usize>> {
+        let mut channels: Vec<SeqChannel> =
+            (0..PORT_MAX_CHANNELS).map(|_| SeqChannel::default()).collect();
+        for &(i, v) in cv {
+            channels[i].last_cv = v;
+        }
+        let mut assigned = [None; PORT_MAX_CHANNELS];
+        let mut scratch = AssignScratch::default();
+        assign_nearest(events, &mut assigned, cands, &channels, &mut scratch);
+        assigned[..events.len()].to_vec()
+    }
+
+    #[test]
+    fn assign_nearest_picks_optimal_subset_not_rank_match() {
+        // Events 0 V and 10 V; three voices last held 0, 1, 10 V. The optimal
+        // (min total movement) matching is 0→v0 and 10→v2 (cost 0). A naive
+        // sorted rank-match (0→v0, 10→v1) would cost 9 — this guards that the DP
+        // chooses *which* voices, not just pairs them in order.
+        let got = run_assign(
+            &[ev(0.0), ev(10.0)],
+            &[0, 1, 2],
+            &[(0, 0.0), (1, 1.0), (2, 10.0)],
+        );
+        assert_eq!(got[0], Some(0), "0 V → voice 0");
+        assert_eq!(got[1], Some(2), "10 V → voice 2 (last_cv 10), not voice 1");
+    }
+
+    #[test]
+    fn assign_nearest_drops_excess_onsets_optimally() {
+        // Three events, two voices: place the two with zero movement (0→v0,
+        // 10→v1) and drop the middle 5 V onset.
+        let got = run_assign(
+            &[ev(0.0), ev(5.0), ev(10.0)],
+            &[0, 1],
+            &[(0, 0.0), (1, 10.0)],
+        );
+        assert_eq!(got[0], Some(0));
+        assert_eq!(got[2], Some(1));
+        assert_eq!(got[1], None, "the 5 V event is dropped (only two voices)");
+    }
+
+    #[test]
+    fn assign_nearest_minimizes_total_movement_three_voices() {
+        // Voices last held 0, 1, 2 V; onsets at 2, 1, 0 V (reversed order). Each
+        // onset must land on the voice already at its pitch (total movement 0),
+        // regardless of event order.
+        let got = run_assign(
+            &[ev(2.0), ev(1.0), ev(0.0)],
+            &[0, 1, 2],
+            &[(0, 0.0), (1, 1.0), (2, 2.0)],
+        );
+        assert_eq!(got[0], Some(2), "2 V → voice 2");
+        assert_eq!(got[1], Some(1), "1 V → voice 1");
+        assert_eq!(got[2], Some(0), "0 V → voice 0");
+    }
+
+    #[test]
+    fn assign_nearest_identical_values_use_distinct_voices() {
+        // Two onsets at the same value with two equal-prior voices: both placed
+        // on distinct voices (no collapse), deterministically by index.
+        let got = run_assign(&[ev(0.0), ev(0.0)], &[0, 1], &[(0, 0.0), (1, 0.0)]);
+        assert!(got[0].is_some() && got[1].is_some(), "both onsets placed");
+        assert_ne!(got[0], got[1], "onsets take distinct voices");
     }
 }

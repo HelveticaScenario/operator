@@ -252,66 +252,71 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
 
     let (default_connection_stmts, connect_body, collect_cables_body, inject_index_body) =
         match &ast.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(fields) => {
-                let mut default_stmts = TokenStream2::new();
-                let mut connect_stmts = TokenStream2::new();
-                let mut collect_cables_stmts = TokenStream2::new();
-                let mut inject_index_stmts = TokenStream2::new();
+            Data::Struct(data) => match &data.fields {
+                Fields::Named(fields) => {
+                    let mut default_stmts = TokenStream2::new();
+                    let mut connect_stmts = TokenStream2::new();
+                    let mut collect_cables_stmts = TokenStream2::new();
+                    let mut inject_index_stmts = TokenStream2::new();
 
-                for field in fields.named.iter() {
-                    if let Err(e) = emit_field_named_struct(
-                        field,
-                        &mut default_stmts,
-                        &mut connect_stmts,
-                        &mut collect_cables_stmts,
-                        &mut inject_index_stmts,
-                    ) {
-                        return e.to_compile_error().into();
+                    for field in fields.named.iter() {
+                        if let Err(e) = emit_field_named_struct(
+                            field,
+                            &mut default_stmts,
+                            &mut connect_stmts,
+                            &mut collect_cables_stmts,
+                            &mut inject_index_stmts,
+                        ) {
+                            return e.to_compile_error().into();
+                        }
+                    }
+
+                    (
+                        default_stmts,
+                        connect_stmts,
+                        collect_cables_stmts,
+                        inject_index_stmts,
+                    )
+                }
+                Fields::Unnamed(_) | Fields::Unit => {
+                    return syn::Error::new(
+                        ast.span(),
+                        "#[derive(Connect)] on a struct requires named fields",
+                    )
+                    .to_compile_error()
+                    .into();
+                }
+            },
+            Data::Enum(data) => {
+                let mut connect_arms = TokenStream2::new();
+                let mut collect_arms = TokenStream2::new();
+                let mut inject_arms = TokenStream2::new();
+                for variant in data.variants.iter() {
+                    match emit_variant_arms(name, variant) {
+                        Ok((c_arm, cc_arm, ii_arm)) => {
+                            connect_arms.extend(c_arm);
+                            connect_arms.extend(quote! { , });
+                            collect_arms.extend(cc_arm);
+                            collect_arms.extend(quote! { , });
+                            inject_arms.extend(ii_arm);
+                            inject_arms.extend(quote! { , });
+                        }
+                        Err(e) => return e.to_compile_error().into(),
                     }
                 }
-
-                (default_stmts, connect_stmts, collect_cables_stmts, inject_index_stmts)
-            }
-            Fields::Unnamed(_) | Fields::Unit => {
-                return syn::Error::new(
-                    ast.span(),
-                    "#[derive(Connect)] on a struct requires named fields",
+                (
+                    TokenStream2::new(),
+                    quote! { match self { #connect_arms } },
+                    quote! { match self { #collect_arms } },
+                    quote! { match self { #inject_arms } },
                 )
-                .to_compile_error()
-                .into();
             }
-        },
-        Data::Enum(data) => {
-            let mut connect_arms = TokenStream2::new();
-            let mut collect_arms = TokenStream2::new();
-            let mut inject_arms = TokenStream2::new();
-            for variant in data.variants.iter() {
-                match emit_variant_arms(name, variant) {
-                    Ok((c_arm, cc_arm, ii_arm)) => {
-                        connect_arms.extend(c_arm);
-                        connect_arms.extend(quote! { , });
-                        collect_arms.extend(cc_arm);
-                        collect_arms.extend(quote! { , });
-                        inject_arms.extend(ii_arm);
-                        inject_arms.extend(quote! { , });
-                    }
-                    Err(e) => return e.to_compile_error().into(),
-                }
+            Data::Union(_) => {
+                return syn::Error::new(ast.span(), "#[derive(Connect)] does not support unions")
+                    .to_compile_error()
+                    .into();
             }
-            (
-                TokenStream2::new(),
-                quote! { match self { #connect_arms } },
-                quote! { match self { #collect_arms } },
-                quote! { match self { #inject_arms } },
-            )
-        }
-        Data::Union(_) => {
-            return syn::Error::new(ast.span(), "#[derive(Connect)] does not support unions")
-                .to_compile_error()
-                .into();
-        }
-    };
+        };
 
     let generated = quote! {
         impl crate::types::Connect for #name {

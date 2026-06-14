@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use modular_core::dsp::{get_constructors, get_params_deserializers};
 use modular_core::params::DeserializedParams;
 use modular_core::patch::Patch;
-use modular_core::types::{ModuleState, PatchGraph, Sampleable};
+use modular_core::types::{ModuleSpec, PatchGraph, Sampleable};
 use serde_json::{Value, json};
 
 /// Helper — build a mini-notation payload shaped like what `$p(source)`
@@ -472,7 +472,7 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
     PatchGraph {
         modules: modules
             .into_iter()
-            .map(|(id, module_type, params)| ModuleState {
+            .map(|(id, module_type, params)| ModuleSpec {
                 id: id.to_string(),
                 module_type: module_type.to_string(),
                 id_is_explicit: None,
@@ -1500,7 +1500,10 @@ fn track_clamps_playhead_below_zero() {
 /// Build a `$cycle` patch clocked at 48000 BPM 4/4 (240 samples per cycle),
 /// optionally with a `ribbon: [offset, length]` window.
 fn make_cycle_patch(pattern: Value, ribbon: Option<[u64; 2]>) -> Patch {
-    make_cycle_patch_ribbon(pattern, ribbon.map(|[offset, length]| json!([offset, length])))
+    make_cycle_patch_ribbon(
+        pattern,
+        ribbon.map(|[offset, length]| json!([offset, length])),
+    )
 }
 
 /// Like [`make_cycle_patch`] but with a fractional `[offset, length]` ribbon.
@@ -1876,8 +1879,14 @@ fn seq_ribbon_fractional_length_loops() {
     );
 
     // The window plays both of the cycles it touches...
-    assert!(trace_contains(&trace, c4, 0.01), "window plays cycle 0 (c4)");
-    assert!(trace_contains(&trace, e4, 0.01), "window plays cycle 1 (e4)");
+    assert!(
+        trace_contains(&trace, c4, 0.01),
+        "window plays cycle 0 (c4)"
+    );
+    assert!(
+        trace_contains(&trace, e4, 0.01),
+        "window plays cycle 1 (e4)"
+    );
     // ...and never the cycles beyond it.
     assert!(
         !trace_contains(&trace, g4, 0.01),
@@ -1923,8 +1932,14 @@ fn seq_ribbon_fractional_offset_window() {
         8 * SPC,
     );
 
-    assert!(trace_contains(&trace, c4, 0.01), "window includes cycle 0 (c4)");
-    assert!(trace_contains(&trace, e4, 0.01), "window includes cycle 1 (e4)");
+    assert!(
+        trace_contains(&trace, c4, 0.01),
+        "window includes cycle 0 (c4)"
+    );
+    assert!(
+        trace_contains(&trace, e4, 0.01),
+        "window includes cycle 1 (e4)"
+    );
     assert!(
         trace_contains(&trace, g4, 0.01),
         "fractional offset 0.5 reaches into cycle 2 (g4)"
@@ -1942,4 +1957,278 @@ fn seq_ribbon_fractional_offset_window() {
             s + 2 * SPC
         );
     }
+}
+
+// ─── $cycle voice leading, edge-triggered onsets, new-pattern voice stealing ──
+
+/// Build a `$cycle` patch with optional explicit `channels` and `playhead`.
+/// A `Some(playhead)` overrides the clock connection with a constant position
+/// (`Signal::Volts`, read with no smoothing), so a test can place the playhead
+/// arbitrarily — including moving it backward across rebuild+transfer steps.
+fn cycle_patch(pattern: Value, channels: Option<u64>, playhead: Option<f64>) -> Patch {
+    let mut params = serde_json::Map::new();
+    params.insert("pattern".to_string(), pattern);
+    if let Some(ch) = channels {
+        params.insert("channels".to_string(), json!(ch));
+    }
+    if let Some(ph) = playhead {
+        params.insert("playhead".to_string(), json!(ph));
+    }
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": 4, "denominator": 4 }),
+        ),
+        ("seq", "$cycle", Value::Object(params)),
+    ]);
+    Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed")
+}
+
+/// Replicate `apply_patch_update`'s reuse path: transfer state, reconnect,
+/// `on_patch_update`. No ClearPatch / transport reset — so `prev_logical` and the
+/// held voices carry from `old` into `new`, exactly as a live edit does.
+fn transfer_into(new_patch: &Patch, old_patch: &Patch) {
+    for (id, m) in &new_patch.sampleables {
+        if let Some(old) = old_patch.sampleables.get(id) {
+            m.transfer_state_from(old.as_ref());
+        }
+    }
+    for m in new_patch.sampleables.values() {
+        m.connect(new_patch);
+    }
+    for m in new_patch.sampleables.values() {
+        m.on_patch_update();
+    }
+}
+
+/// Read channel `ch` of `port` on the `seq` module at the current frame.
+fn seq_val(patch: &Patch, port: &str, ch: usize) -> f32 {
+    patch
+        .sampleables
+        .get("seq")
+        .unwrap()
+        .get_value_at(port, ch, 0)
+}
+
+#[test]
+fn cycle_swap_does_not_fire_in_progress_note_until_its_onset() {
+    // A new pattern's note whose window already contains the playhead at swap
+    // time must NOT fire mid-window — even with a free voice available
+    // (channels=2). It fires only when the playhead next crosses its onset.
+    // (Old level-detection would have triggered it immediately on the free voice.)
+    let a = cycle_patch(mini_payload("c4"), Some(2), None);
+    for _ in 0..120 {
+        process_frame(&a); // advance to mid-cycle 0 (playhead ~0.5)
+    }
+    let b = cycle_patch(mini_payload("e4"), Some(2), None);
+    transfer_into(&b, &a);
+
+    // Rest of cycle 0 after the swap: e4's window [0,1] already holds the
+    // playhead, so no onset fires.
+    let mut prev_hi = [false; 2];
+    let mut onsets_cycle0 = 0;
+    for _ in 0..100 {
+        process_frame(&b);
+        for ch in 0..2 {
+            let hi = seq_val(&b, "trig", ch) > 2.5;
+            if hi && !prev_hi[ch] {
+                onsets_cycle0 += 1;
+            }
+            prev_hi[ch] = hi;
+        }
+    }
+    assert_eq!(
+        onsets_cycle0, 0,
+        "no onset should fire mid-window on a pattern swap (a free voice is present)"
+    );
+
+    // Cross into cycle 1: e4's real onset is crossed → it fires.
+    let mut onsets_cycle1 = 0;
+    for _ in 0..200 {
+        process_frame(&b);
+        for ch in 0..2 {
+            let hi = seq_val(&b, "trig", ch) > 2.5;
+            if hi && !prev_hi[ch] {
+                onsets_cycle1 += 1;
+            }
+            prev_hi[ch] = hi;
+        }
+    }
+    assert!(
+        onsets_cycle1 >= 1,
+        "e4 must fire when the playhead crosses its onset in the next cycle"
+    );
+}
+
+#[test]
+fn cycle_onset_fires_on_backward_entry() {
+    // The playhead is an arbitrary signal; a hap fires on ENTERING its window
+    // from EITHER direction. `g4 c5`: g4 window [0,0.5], c5 window [0.5,1].
+    // Frame 1 at playhead 0.6 plays c5. Frame 2 moves the playhead BACKWARD to
+    // 0.4 — entering g4's window from the right — which must fire g4.
+    let a = cycle_patch(mini_payload("g4 c5"), None, Some(0.6));
+    process_frame(&a);
+    let cv1 = seq_val(&a, "cv", 0);
+    assert!(
+        (cv1 - 1.0).abs() < 0.02,
+        "frame 1 at playhead 0.6 should play c5 (1 V), got {cv1}"
+    );
+
+    let b = cycle_patch(mini_payload("g4 c5"), None, Some(0.4));
+    transfer_into(&b, &a);
+    process_frame(&b);
+    let trig = seq_val(&b, "trig", 0);
+    let cv2 = seq_val(&b, "cv", 0);
+    assert!(
+        trig > 2.5,
+        "entering g4's window from the right (backward) must fire a trig, got {trig}"
+    );
+    assert!(
+        (cv2 - 0.5833).abs() < 0.02,
+        "cv should be g4 (~0.583 V) after backward entry, got {cv2}"
+    );
+}
+
+#[test]
+fn cycle_new_pattern_steals_orphaned_voice() {
+    // An old long note (`c3/4`, 4-cycle) holds the only voice (channels=1). After
+    // swapping to `e4 g4`, the new onsets — which the playhead crosses in cycle 1
+    // — must STEAL the lingering c3 voice rather than be dropped. Without stealing
+    // the old c3 (-1 V) would keep sounding for four cycles.
+    let a = cycle_patch(mini_payload("c3/4"), Some(1), None);
+    for _ in 0..120 {
+        process_frame(&a);
+    }
+    let cv0 = seq_val(&a, "cv", 0);
+    assert!(
+        (cv0 - (-1.0)).abs() < 0.02,
+        "old c3/4 should sound at -1 V before the swap, got {cv0}"
+    );
+
+    let b = cycle_patch(mini_payload("e4 g4"), Some(1), None);
+    transfer_into(&b, &a);
+
+    // Advance through cycle 1; the new pattern's onsets steal the c3 voice.
+    let mut saw_new_trig = false;
+    let mut max_cv = f32::MIN;
+    for _ in 0..240 {
+        process_frame(&b);
+        if seq_val(&b, "trig", 0) > 2.5 {
+            saw_new_trig = true;
+        }
+        max_cv = max_cv.max(seq_val(&b, "cv", 0));
+    }
+    assert!(
+        saw_new_trig,
+        "the new pattern's onset must fire by stealing the orphaned c3 voice"
+    );
+    assert!(
+        max_cv > 0.2,
+        "cv must reach the new pattern's positive notes (e4/g4), got max {max_cv}"
+    );
+    assert!(
+        seq_val(&b, "cv", 0) > -0.5,
+        "the old c3 (-1 V) must no longer be sounding after the steal"
+    );
+}
+
+#[test]
+fn cycle_allocates_nearest_value_voice() {
+    // Voice leading: `c4 c5, c5 c4` layers two mono lines so each half-cycle
+    // boundary re-onsets one c4 and one c5. Nearest-value allocation keeps each
+    // physical voice on its pitch across the boundary (the voice holding c4 takes
+    // the new c4, etc.), so one channel stays ~0 V and the other ~1 V throughout.
+    // Round-robin would swap the lanes every half cycle.
+    let patch = cycle_patch(mini_payload("c4 c5, c5 c4"), None, None);
+
+    let mut ch0 = [0f32; 2];
+    let mut ch1 = [0f32; 2];
+    for s in 1..=180 {
+        process_frame(&patch);
+        if s == 60 {
+            // first half-slot [0,0.5]
+            ch0[0] = seq_val(&patch, "cv", 0);
+            ch1[0] = seq_val(&patch, "cv", 1);
+        }
+        if s == 180 {
+            // second half-slot [0.5,1]
+            ch0[1] = seq_val(&patch, "cv", 0);
+            ch1[1] = seq_val(&patch, "cv", 1);
+        }
+    }
+    let near0 = |v: f32| v.abs() < 0.05;
+    let near1 = |v: f32| (v - 1.0).abs() < 0.05;
+    let lane_a = near0(ch0[0]) && near0(ch0[1]) && near1(ch1[0]) && near1(ch1[1]);
+    let lane_b = near1(ch0[0]) && near1(ch0[1]) && near0(ch1[0]) && near0(ch1[1]);
+    assert!(
+        lane_a || lane_b,
+        "each voice must keep its pitch across the boundary (no lane swap): \
+         ch0=[{},{}] ch1=[{},{}]",
+        ch0[0],
+        ch0[1],
+        ch1[0],
+        ch1[1]
+    );
+}
+
+#[test]
+fn cycle_simultaneous_identical_notes_keep_separate_voices() {
+    // `c4,c4` layers two whole-cycle c4 haps. Both must get their own voice (two
+    // active gates) — the joint nearest-value assignment must not collapse
+    // identical-value simultaneous onsets onto one voice. Read after the
+    // ~16-sample gate retrigger gap.
+    let patch = cycle_patch(mini_payload("c4,c4"), None, None);
+    for _ in 0..40 {
+        process_frame(&patch);
+    }
+    let g0 = seq_val(&patch, "gate", 0);
+    let g1 = seq_val(&patch, "gate", 1);
+    assert!(
+        g0 > 2.5 && g1 > 2.5,
+        "both voices should be gated high for `c4,c4`: g0={g0} g1={g1}"
+    );
+}
+
+#[test]
+fn cycle_swap_to_same_note_does_not_retrigger() {
+    // Editing a pattern while a note sounds must not re-trigger that note if the
+    // new pattern keeps it (same window+value): the gate stays continuously high
+    // and no fresh trig fires (a continuation, not a glitch).
+    let a = cycle_patch(mini_payload("c4"), Some(1), None);
+    for _ in 0..120 {
+        process_frame(&a);
+    }
+    assert!(
+        seq_val(&a, "gate", 0) > 2.5,
+        "c4 should be sounding before the swap"
+    );
+
+    let b = cycle_patch(mini_payload("c4"), Some(1), None);
+    transfer_into(&b, &a);
+
+    let mut prev_hi = false;
+    let mut new_onsets = 0;
+    let mut gate_dropped = false;
+    for _ in 0..100 {
+        // rest of cycle 0 — the same note continues
+        process_frame(&b);
+        let hi = seq_val(&b, "trig", 0) > 2.5;
+        if hi && !prev_hi {
+            new_onsets += 1;
+        }
+        prev_hi = hi;
+        if seq_val(&b, "gate", 0) < 2.5 {
+            gate_dropped = true;
+        }
+    }
+    assert_eq!(
+        new_onsets, 0,
+        "a continued note must not re-trigger on swap"
+    );
+    assert!(
+        !gate_dropped,
+        "the gate must stay high across the swap (no glitch)"
+    );
 }

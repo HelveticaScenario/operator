@@ -131,6 +131,13 @@ export declare class Synthesizer {
    * Note: MIDI messages are polled automatically in the audio thread.
    */
   tryReconnectMidi(): void
+  /**
+   * Close any MIDI devices whose deferred disconnect is now safe (their patch
+   * update has been applied on the audio thread). Called periodically from the
+   * main process so a device a patch dropped still closes even if no further
+   * patch updates arrive. Idempotent.
+   */
+  pruneDisconnectedMidi(): void
 }
 
 export interface ApplyPatchError {
@@ -425,7 +432,7 @@ export interface ModuleSchema {
   channelsParamDefault?: number
 }
 
-export interface ModuleState {
+export interface ModuleSpec {
   id: string
   moduleType: string
   idIsExplicit?: boolean
@@ -446,7 +453,7 @@ export interface OutputSchema {
 }
 
 export interface PatchGraph {
-  modules: Array<ModuleState>
+  modules: Array<ModuleSpec>
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
   scopeXy?: ScopeXy

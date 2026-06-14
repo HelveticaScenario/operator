@@ -2,7 +2,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
         utils::SchmittTrigger,
@@ -57,12 +56,6 @@ struct PulseChannelState {
     blep_carry: f32,
 }
 
-/// State for the PulseOscillator module.
-#[derive(Default)]
-struct PulseOscillatorState {
-    channels: [PulseChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Pulse/square wave oscillator with pulse width modulation.
 ///
 /// The `freq` input follows the **V/Oct** standard (0V = C4).
@@ -80,7 +73,7 @@ struct PulseOscillatorState {
 #[module(name = "$pulse", args(freq))]
 pub struct PulseOscillator {
     outputs: PulseOscillatorOutputs,
-    state: PulseOscillatorState,
+    channel_state: Box<[PulseChannelState]>,
     params: PulseOscillatorParams,
 }
 
@@ -89,7 +82,7 @@ impl PulseOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let base_width = self.params.width.value_or(ch, 2.5);
             let pwm = self.params.pwm.value_or(ch, 0.0);

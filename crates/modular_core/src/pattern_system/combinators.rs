@@ -273,7 +273,10 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
             out.reserve(scratch.len());
             for hap in scratch {
                 let new_part = hap.part.with_time(|t| t / &factor_clone);
-                let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t / &factor_clone));
+                let new_whole = hap
+                    .whole
+                    .as_ref()
+                    .map(|w| w.with_time(|t| t / &factor_clone));
                 out.push(crate::pattern_system::ArenaHap {
                     whole: new_whole,
                     part: new_part,
@@ -317,7 +320,6 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         }
         Pattern::new_fast_const(self.clone(), Fraction::from_integer(1) / factor)
     }
-
 }
 
 /// Compute the least common multiple of two fractions.

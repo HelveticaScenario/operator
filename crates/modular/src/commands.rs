@@ -5,7 +5,7 @@
 
 use modular_core::profiling::ModuleProfileAccum;
 use modular_core::types::{
-  Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, WavData,
+  Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges, WavData,
 };
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -23,6 +23,20 @@ pub enum QueuedTrigger {
   NextBar,
   /// Apply at the next beat (ROOT_CLOCK beat_trigger).
   NextBeat,
+}
+
+/// Transport/meter values extracted from the patch's ROOT_CLOCK, carried to the
+/// audio thread so the meter write and the Link tempo push happen at apply time,
+/// atomically with the module swap. `None` when the patch has no ROOT_CLOCK.
+pub struct TransportMeta {
+  /// Tempo in BPM.
+  pub tempo: f64,
+  /// Time signature numerator (beats per bar).
+  pub numerator: u32,
+  /// Time signature denominator (beat value).
+  pub denominator: u32,
+  /// The DSL explicitly called `$setTempo` — push `tempo` to Link on apply.
+  pub tempo_set: bool,
 }
 
 /// A single atomic patch update - always processed as a complete unit.
@@ -69,8 +83,13 @@ pub struct PatchUpdate {
   /// Sample rate for new modules
   pub sample_rate: f32,
 
-  /// Whether the DSL explicitly called $setTempo (don't push default 120 to Link)
-  pub tempo_override: Option<f64>,
+  /// Tempo/time-signature for the meter + Link, applied when this update is
+  /// applied. `None` when the patch has no ROOT_CLOCK.
+  pub transport_meta: Option<TransportMeta>,
+
+  /// XY-scope display window, applied atomically with the XY scope
+  /// buffer swap. `None` when the patch has no `$scopeXY` (clears the display).
+  pub scope_xy_ranges: Option<ScopeXyRanges>,
 
   /// When true, restart ROOT_CLOCK's transport (phase, beat, bar count) to zero
   /// as this update is applied. Set by the main thread when the update switches
@@ -107,7 +126,8 @@ impl PatchUpdate {
       scope_xy_removes: Vec::new(),
       wav_data: HashMap::new(),
       sample_rate,
-      tempo_override: None,
+      transport_meta: None,
+      scope_xy_ranges: None,
       reset_clock: false,
       profile_records_seed: HashMap::new(),
       profile_shared_seed: HashMap::new(),

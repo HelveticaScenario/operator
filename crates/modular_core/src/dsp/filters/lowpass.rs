@@ -2,7 +2,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -49,23 +48,42 @@ struct LowpassFilterOutputs {
 pub struct LowpassFilter {
     outputs: LowpassFilterOutputs,
     state: LowpassFilterState,
+    channel_state: Box<[LowpassChannel]>,
     params: LowpassFilterParams,
 }
 
-/// State for the LowpassFilter module.
+/// Per-channel filter state.
+#[derive(Clone, Copy)]
+struct LowpassChannel {
+    /// Audio-rate biquad state.
+    z1: f32,
+    z2: f32,
+    /// Cached coefficients (control-rate).
+    coeffs: BiquadCoeffs,
+    /// Last seen params (for change detection); `NaN` = never computed.
+    last_cutoff: f32,
+    last_resonance: f32,
+    /// Parameter smoothing to prevent clicks on sudden changes.
+    smooth_cutoff: Clickless,
+    smooth_resonance: Clickless,
+}
+
+impl Default for LowpassChannel {
+    fn default() -> Self {
+        Self {
+            z1: 0.0,
+            z2: 0.0,
+            coeffs: BiquadCoeffs::default(),
+            last_cutoff: f32::NAN,
+            last_resonance: f32::NAN,
+            smooth_cutoff: Clickless::default(),
+            smooth_resonance: Clickless::default(),
+        }
+    }
+}
+
+/// Module-level state for the LowpassFilter (mono-input fast path).
 struct LowpassFilterState {
-    /// Per-channel state (audio-rate)
-    z1: [f32; PORT_MAX_CHANNELS],
-    z2: [f32; PORT_MAX_CHANNELS],
-    /// Cached coefficients (control-rate)
-    coeffs: [BiquadCoeffs; PORT_MAX_CHANNELS],
-    /// Last seen params (for change detection)
-    last_cutoff: [f32; PORT_MAX_CHANNELS],
-    last_resonance: [f32; PORT_MAX_CHANNELS],
-    /// Parameter smoothing to prevent clicks on sudden changes
-    smooth_cutoff: [Clickless; PORT_MAX_CHANNELS],
-    smooth_resonance: [Clickless; PORT_MAX_CHANNELS],
-    /// Mono optimization
     coeffs_mono: BiquadCoeffs,
     last_cutoff_mono: f32,
     last_resonance_mono: f32,
@@ -76,13 +94,6 @@ struct LowpassFilterState {
 impl Default for LowpassFilterState {
     fn default() -> Self {
         Self {
-            z1: [0.0; PORT_MAX_CHANNELS],
-            z2: [0.0; PORT_MAX_CHANNELS],
-            coeffs: [BiquadCoeffs::default(); PORT_MAX_CHANNELS],
-            last_cutoff: [f32::NAN; PORT_MAX_CHANNELS],
-            last_resonance: [f32::NAN; PORT_MAX_CHANNELS],
-            smooth_cutoff: [Clickless::default(); PORT_MAX_CHANNELS],
-            smooth_resonance: [Clickless::default(); PORT_MAX_CHANNELS],
             coeffs_mono: BiquadCoeffs::default(),
             last_cutoff_mono: f32::NAN,
             last_resonance_mono: f32::NAN,
@@ -130,7 +141,6 @@ fn compute_biquad(cutoff: f32, resonance: f32, sample_rate: f32) -> BiquadCoeffs
 impl LowpassFilter {
     fn update(&mut self, sample_rate: f32) {
         let channels = self.channel_count();
-        let state = &mut self.state;
 
         let cutoff_mono = self.params.cutoff.is_monophonic();
         let resonance_mono = self
@@ -141,6 +151,7 @@ impl LowpassFilter {
 
         // Update coefficients with smoothed params to prevent clicks
         if cutoff_mono && resonance_mono {
+            let state = &mut self.state;
             state
                 .smooth_cutoff_mono
                 .update(self.params.cutoff.get_value(0));
@@ -157,15 +168,17 @@ impl LowpassFilter {
             }
         } else {
             for i in 0..channels as usize {
-                state.smooth_cutoff[i].update(self.params.cutoff.get_value(i));
-                state.smooth_resonance[i].update(self.params.resonance.value_or(i, 0.0));
-                let c = *state.smooth_cutoff[i];
-                let r = *state.smooth_resonance[i];
+                let cs = &mut self.channel_state[i];
+                cs.smooth_cutoff.update(self.params.cutoff.get_value(i));
+                cs.smooth_resonance
+                    .update(self.params.resonance.value_or(i, 0.0));
+                let c = *cs.smooth_cutoff;
+                let r = *cs.smooth_resonance;
 
-                if changed(c, state.last_cutoff[i]) || changed(r, state.last_resonance[i]) {
-                    state.coeffs[i] = compute_biquad(c, r, sample_rate);
-                    state.last_cutoff[i] = c;
-                    state.last_resonance[i] = r;
+                if changed(c, cs.last_cutoff) || changed(r, cs.last_resonance) {
+                    cs.coeffs = compute_biquad(c, r, sample_rate);
+                    cs.last_cutoff = c;
+                    cs.last_resonance = r;
                 }
             }
         }
@@ -174,17 +187,17 @@ impl LowpassFilter {
             let input = self.params.input.get_value(i);
 
             let c = if cutoff_mono && resonance_mono {
-                state.coeffs_mono
+                self.state.coeffs_mono
             } else {
-                state.coeffs[i]
+                self.channel_state[i].coeffs
             };
 
-            let w = input - c.a1 * state.z1[i] - c.a2 * state.z2[i];
-            let w = sanitize(w);
-            let y = c.b0 * w + c.b1 * state.z1[i] + c.b2 * state.z2[i];
+            let cs = &mut self.channel_state[i];
+            let w = sanitize(input - c.a1 * cs.z1 - c.a2 * cs.z2);
+            let y = c.b0 * w + c.b1 * cs.z1 + c.b2 * cs.z2;
 
-            state.z2[i] = state.z1[i];
-            state.z1[i] = w;
+            cs.z2 = cs.z1;
+            cs.z1 = w;
             self.outputs.sample.set(i, y);
         }
     }

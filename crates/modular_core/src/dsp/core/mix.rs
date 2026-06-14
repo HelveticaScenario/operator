@@ -87,13 +87,7 @@ pub fn mix_derive_channel_count(params: &MixParams) -> usize {
 pub struct Mix {
     outputs: MixOutputs,
     params: MixParams,
-    state: MixState,
-}
-
-/// State for the Mix module.
-#[derive(Default)]
-struct MixState {
-    gain_buffer: [Clickless; PORT_MAX_CHANNELS],
+    channel_state: Box<[Clickless]>,
 }
 
 message_handlers!(impl Mix {});
@@ -109,7 +103,7 @@ pub fn __bench_make_mix(params: MixParams) -> Mix {
         outputs,
         _channel_count: channels,
         _block_index: Default::default(),
-        state: MixState::default(),
+        channel_state: vec![Clickless::default(); channels].into_boxed_slice(),
     }
 }
 
@@ -172,8 +166,7 @@ impl Mix {
                         sum += input.get_value(channel);
                         count += 1;
                     }
-                    pre_gain_values[channel] =
-                        if count > 0 { sum / count as f32 } else { 0.0 };
+                    pre_gain_values[channel] = if count > 0 { sum / count as f32 } else { 0.0 };
                 }
             }
             MixMode::Max => {
@@ -215,8 +208,7 @@ impl Mix {
                             best_val = v;
                         }
                     }
-                    pre_gain_values[channel] =
-                        if best_abs.is_finite() { best_val } else { 0.0 };
+                    pre_gain_values[channel] = if best_abs.is_finite() { best_val } else { 0.0 };
                 }
             }
         }
@@ -232,8 +224,8 @@ impl Mix {
             let amp_val = gain.value_or(i, 5.0);
             let normalized = (amp_val.abs() * (1.0 / 5.0)).max(0.0);
             let curved = amp_val.signum() * (normalized * normalized * normalized);
-            self.state.gain_buffer[i].update(curved);
-            let gain_value = *self.state.gain_buffer[i];
+            self.channel_state[i].update(curved);
+            let gain_value = *self.channel_state[i];
             self.outputs.sample.set(i, pre_gain_value * gain_value);
         }
     }
@@ -250,13 +242,14 @@ mod tests {
         let channels = mix_derive_channel_count(&params);
         let mut outputs = MixOutputs::default();
         outputs.set_all_channels(channels);
-        Mix {
+        let mixer = Mix {
             params,
             outputs,
             _channel_count: channels,
             _block_index: Default::default(),
-            state: MixState::default(),
-        }
+            channel_state: vec![Clickless::default(); channels].into_boxed_slice(),
+        };
+        mixer
     }
 
     #[test]

@@ -21,8 +21,13 @@ jobs:
                   node-version: 24
                   cache: 'yarn'
 
-            - name: Setup Rust
-              uses: dtolnay/rust-toolchain@stable
+            # Installs the channel + components (rustfmt, clippy) pinned in
+            # rust-toolchain.toml — the single source of truth for the version.
+            - name: Setup Rust (pinned via rust-toolchain.toml)
+              run: rustup toolchain install
+
+            - name: Rust formatting (cargo fmt --check)
+              run: cargo fmt -p modular_core -p modular_derive -p modular -- --check
 
             # The vitest suite loads the N-API binding at import time
             # (factories.ts -> @modular/core), so CI must build the native
@@ -37,6 +42,12 @@ jobs:
 
             - name: Build native module
               run: yarn build-native
+
+            # Non-gating: surfaces clippy findings as annotations without
+            # failing the build (the tree is not yet clippy-clean).
+            - name: Clippy (informational)
+              continue-on-error: true
+              run: cargo clippy -p modular_core -p modular_derive -p modular --all-targets
 
             - name: Verify generated grammar is in sync
               run: |

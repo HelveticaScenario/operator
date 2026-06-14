@@ -64,7 +64,6 @@ impl Sampleable for DummySampleable {
 
 impl MessageHandler for DummySampleable {}
 
-
 fn make_empty_patch() -> Patch {
     Patch::new()
 }
