@@ -2,7 +2,10 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::oscillators::{FmMode, apply_fm},
+    dsp::{
+        oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
+        utils::SchmittTrigger,
+    },
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
@@ -26,6 +29,9 @@ struct SawOscillatorParams {
     #[serde(default)]
     #[deserr(default)]
     fm_mode: FmMode,
+    /// hard sync source — rising edges reset the oscillator phase
+    #[deserr(default)]
+    sync: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -40,6 +46,12 @@ struct SawOscillatorOutputs {
 struct ChannelState {
     phase: f32,
     shape: Clickless,
+    /// Edge detector for the sync input.
+    sync_schmitt: SchmittTrigger,
+    /// Previous sync-input sample, for subsample edge interpolation.
+    sync_prev: f32,
+    /// PolyBLEP residual carried into the next sample from a sync reset.
+    blep_carry: f32,
 }
 
 /// A variable-symmetry triangle oscillator that morphs between saw, triangle, and ramp.
@@ -95,17 +107,38 @@ impl SawOscillator {
             state.phase += phase_increment;
             state.phase = state.phase.rem_euclid(1.0);
 
-            // DPW: compute integral at new phase, differentiate
-            let integral_new = triangle_integral(state.phase, s);
-
-            let raw_output = if phase_increment.abs() > 1.0e-7 {
+            // DPW body for this sample. The sync reset (below) lands in the
+            // upcoming interval, so the phase advanced normally here and the DPW
+            // differentiation stays valid; the reset is band-limited separately.
+            let body = if phase_increment.abs() > 1.0e-7 {
+                let integral_new = triangle_integral(state.phase, s);
                 (integral_new - integral_old) / phase_increment
             } else {
                 // Near-DC fallback: use naive waveform (no aliasing at low freq)
                 naive_triangle(state.phase, s)
             };
 
-            self.outputs.sample.set(ch, raw_output * 5.0);
+            let pending = state.blep_carry;
+            state.blep_carry = 0.0;
+
+            // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
+            // at the subsample crossing to band-limit the reset discontinuity.
+            let mut now = 0.0;
+            if let Some(sync) = &self.params.sync {
+                let v = sync.get_value(ch);
+                if state.sync_schmitt.process(v) {
+                    let frac = sync_edge_fraction(state.sync_prev, v);
+                    let before = naive_triangle(state.phase, s);
+                    state.phase = 0.0;
+                    let after = naive_triangle(0.0, s);
+                    let (n, carry) = sync_blep(after - before, frac);
+                    now = n;
+                    state.blep_carry = carry;
+                }
+                state.sync_prev = v;
+            }
+
+            self.outputs.sample.set(ch, (body + pending + now) * 5.0);
         }
     }
 }

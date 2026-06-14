@@ -2113,6 +2113,17 @@
         "freq": {
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2224,6 +2235,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -2262,6 +2281,17 @@
         },
         "shape": {
           "description": "waveform shape: 0=saw, 2.5=triangle, 5=ramp",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2389,6 +2419,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -2427,6 +2465,17 @@
         },
         "pwm": {
           "description": "pulse width modulation CV — added to the width parameter",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2569,6 +2618,14 @@
       {
         "name": "fm",
         "description": "FM input signal (pre-scaled by user)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -3514,6 +3571,17 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "sync": {
+          "description": "hard sync source — rising edges reset every detuned voice's phase",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "voices": {
           "description": "number of supersaw voices (1–64)",
           "type": "integer",
@@ -3639,6 +3707,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset every detuned voice's phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3688,6 +3764,17 @@
         },
         "position": {
           "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase.",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3956,6 +4043,14 @@
       {
         "name": "fm",
         "description": "FM input signal (pre-scaled by user).",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,

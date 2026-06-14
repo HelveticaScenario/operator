@@ -2,7 +2,10 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::oscillators::{FmMode, apply_fm},
+    dsp::{
+        oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
+        utils::SchmittTrigger,
+    },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
 };
 
@@ -32,6 +35,9 @@ struct SupersawParams {
     #[serde(default)]
     #[deserr(default)]
     fm_mode: FmMode,
+    /// hard sync source — rising edges reset every detuned voice's phase
+    #[deserr(default)]
+    sync: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -89,6 +95,13 @@ struct SupersawState {
     gain: f32,
     /// Per-voice interpolation factor for symmetric detuning.
     voice_t: [f32; PORT_MAX_CHANNELS],
+    /// Per-input-channel edge detector for the sync input.
+    sync_schmitt: [SchmittTrigger; PORT_MAX_CHANNELS],
+    /// Per-input-channel previous sync sample, for subsample edge interpolation.
+    sync_prev: [f32; PORT_MAX_CHANNELS],
+    /// Per-voice PolyBLEP residual carried into the next sample from a sync
+    /// reset. Indexed like `channel_state`.
+    blep_carry: [f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
 }
 
 // Hand-written `Default`: `voice_t` is `[f32; PORT_MAX_CHANNELS]` and the
@@ -103,6 +116,9 @@ impl Default for SupersawState {
             inv_sample_rate: 0.0,
             gain: 0.0,
             voice_t: [0.0; PORT_MAX_CHANNELS],
+            sync_schmitt: [SchmittTrigger::default(); PORT_MAX_CHANNELS],
+            sync_prev: [0.0; PORT_MAX_CHANNELS],
+            blep_carry: [0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
         }
     }
 }
@@ -196,7 +212,22 @@ impl Supersaw {
         let input_channels = self.state.input_channels;
         let inv_sample_rate = self.state.inv_sample_rate;
         let gain = self.state.gain;
-        let voice_t = &self.state.voice_t;
+
+        // Detect sync once per input channel (the master edge resets every
+        // detuned voice of that channel together) and record the subsample
+        // crossing for the PolyBLEP correction below.
+        let mut sync_edge = [false; PORT_MAX_CHANNELS];
+        let mut sync_frac = [0.0f32; PORT_MAX_CHANNELS];
+        if let Some(sync) = &self.params.sync {
+            for input_ch in 0..input_channels {
+                let v = sync.get_value(input_ch);
+                if self.state.sync_schmitt[input_ch].process(v) {
+                    sync_edge[input_ch] = true;
+                    sync_frac[input_ch] = sync_edge_fraction(self.state.sync_prev[input_ch], v);
+                }
+                self.state.sync_prev[input_ch] = v;
+            }
+        }
 
         for voice in 0..voices {
             let mut accum = 0.0f32;
@@ -206,7 +237,7 @@ impl Supersaw {
                 let detune = self.params.detune.value_or(input_ch, 0.18);
                 let offset_semitones = if voices > 1 {
                     // lerp from -detune/2 to +detune/2
-                    -detune / 2.0 + voice_t[voice] * detune
+                    -detune / 2.0 + self.state.voice_t[voice] * detune
                 } else {
                     0.0
                 };
@@ -218,18 +249,31 @@ impl Supersaw {
                 let dt = freq * inv_sample_rate;
 
                 let state_idx = input_ch * voices + voice;
-                let phase = &mut self.channel_state[state_idx];
 
                 // Advance phase (rem_euclid supports negative increments from through-zero FM)
-                *phase += dt;
-                *phase = phase.rem_euclid(1.0);
+                let mut phase = (self.channel_state[state_idx] + dt).rem_euclid(1.0);
 
-                // Naive saw: maps [0,1) to [-1,1)
-                let mut saw = 2.0 * *phase - 1.0;
+                // Naive saw + its own PolyBLEP wrap correction, then any residual
+                // carried from a sync reset on the previous sample. The reset
+                // (below) lands in the upcoming interval, so this operates on the
+                // real, pre-reset phase.
+                let mut saw = 2.0 * phase - 1.0;
+                saw -= poly_blep_saw(phase, dt.abs());
+                saw += self.state.blep_carry[state_idx];
+                self.state.blep_carry[state_idx] = 0.0;
 
-                // Apply PolyBLEP correction
-                saw -= poly_blep_saw(*phase, dt.abs());
+                // Hard sync resets this voice, band-limited with a PolyBLEP at
+                // the subsample crossing.
+                if sync_edge[input_ch] {
+                    let before = 2.0 * phase - 1.0;
+                    phase = 0.0;
+                    let after = -1.0;
+                    let (now, carry) = sync_blep(after - before, sync_frac[input_ch]);
+                    saw += now;
+                    self.state.blep_carry[state_idx] = carry;
+                }
 
+                self.channel_state[state_idx] = phase;
                 accum += saw;
             }
 
@@ -284,6 +328,7 @@ mod tests {
             detune: None,
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         // Run several samples to get past initialization
         for _ in 0..100 {
@@ -302,6 +347,7 @@ mod tests {
             detune: None,
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         };
         assert_eq!(supersaw_derive_channel_count(&params), 7);
     }
@@ -314,6 +360,7 @@ mod tests {
             detune: None,
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         for _ in 0..1000 {
             s.update(48000.0);
@@ -335,6 +382,7 @@ mod tests {
             detune: None,
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         };
         assert_eq!(supersaw_derive_channel_count(&params), PORT_MAX_CHANNELS);
 
@@ -344,6 +392,7 @@ mod tests {
             detune: None,
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         };
         assert_eq!(supersaw_derive_channel_count(&params_zero), 1);
     }
@@ -357,6 +406,7 @@ mod tests {
             detune: Some(PolySignal::mono(Signal::Volts(0.0))),
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         // Force known phases (overwrite whatever init set)
         for i in 0..s_no_detune.channel_state.len() {
@@ -369,6 +419,7 @@ mod tests {
             detune: Some(PolySignal::mono(Signal::Volts(2.0))),
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         for i in 0..s_detune.channel_state.len() {
             s_detune.channel_state[i] = 0.25;
@@ -405,6 +456,7 @@ mod tests {
             detune: Some(PolySignal::mono(Signal::Volts(0.0))),
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         // Trigger phase initialization via init()
         s.init(48000.0);
@@ -425,6 +477,7 @@ mod tests {
             detune: Some(PolySignal::mono(Signal::Volts(0.0))),
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         // Force known phases, zero detune -> all voices should produce identical output
         for i in 0..s.channel_state.len() {
@@ -447,6 +500,70 @@ mod tests {
     }
 
     #[test]
+    fn hard_sync_resets_all_voice_phases() {
+        let mut s = make_supersaw(SupersawParams {
+            freq: PolySignal::mono(Signal::Volts(0.0)),
+            voices: 3,
+            detune: Some(PolySignal::mono(Signal::Volts(1.0))),
+            fm: None,
+            fm_mode: FmMode::default(),
+            sync: Some(PolySignal::mono(Signal::Volts(0.0))),
+        });
+
+        // Advance so every voice phase is clearly non-zero and the sync edge
+        // detector is armed low.
+        for _ in 0..50 {
+            s.update(48000.0);
+        }
+        let advanced = (0..3)
+            .map(|v| s.channel_state[v])
+            .any(|p| p.abs() > 1e-3);
+        assert!(advanced, "voice phases should have advanced before sync");
+
+        // Drive a rising edge on the sync input.
+        s.params.sync = Some(PolySignal::mono(Signal::Volts(5.0)));
+        s.update(48000.0);
+
+        for voice in 0..3 {
+            let p = s.channel_state[voice];
+            assert!(
+                p.abs() < 1e-6,
+                "voice {voice} phase {p} should reset to 0 on hard sync"
+            );
+        }
+    }
+
+    #[test]
+    fn synced_output_stays_bounded_across_many_resets() {
+        // A fast master sync against a slower slave fires resets constantly,
+        // exercising the PolyBLEP correction + carry every few samples.
+        let mut s = make_supersaw(SupersawParams {
+            freq: PolySignal::mono(Signal::Volts(-1.0)),
+            voices: 5,
+            detune: Some(PolySignal::mono(Signal::Volts(0.3))),
+            fm: None,
+            fm_mode: FmMode::default(),
+            sync: Some(PolySignal::mono(Signal::Volts(0.0))),
+        });
+
+        // Toggle the sync input low/high every few samples to generate edges.
+        for i in 0..2000 {
+            let high = (i / 7) % 2 == 0;
+            s.params.sync = Some(PolySignal::mono(Signal::Volts(if high {
+                5.0
+            } else {
+                0.0
+            })));
+            s.update(48000.0);
+            for voice in 0..5 {
+                let v = s.outputs.sample.get(voice);
+                assert!(v.is_finite(), "output must stay finite, got {v}");
+                assert!(v.abs() <= 6.0, "output {v} should stay bounded near ±5V");
+            }
+        }
+    }
+
+    #[test]
     fn test_gain_compensation() {
         // With 4 input channels, gain should be 5.0 / sqrt(4) = 2.5
         // With 1 input channel, gain should be 5.0 / sqrt(1) = 5.0
@@ -457,6 +574,7 @@ mod tests {
             detune: Some(PolySignal::mono(Signal::Volts(0.0))),
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         // Set phase to 0.75 -> naive saw = 2*0.75 - 1 = 0.5
         s1.channel_state[0] = 0.75;
@@ -475,6 +593,7 @@ mod tests {
             detune: Some(PolySignal::mono(Signal::Volts(0.0))),
             fm: None,
             fm_mode: FmMode::default(),
+            sync: None,
         });
         // Set all 4 input channel phases identically. Row stride is the voice
         // count (1 here), so channel `input_ch`'s single voice is at `input_ch`.
