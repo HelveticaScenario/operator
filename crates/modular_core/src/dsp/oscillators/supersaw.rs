@@ -76,10 +76,22 @@ pub struct Supersaw {
     outputs: SupersawOutputs,
     params: SupersawParams,
     state: SupersawState,
-    /// Phase state for matrix mixing: a `PORT_MAX_CHANNELS * voices` matrix
+    /// Per-voice state for matrix mixing: a `PORT_MAX_CHANNELS * voices` matrix
     /// indexed as `[input_ch * voices + voice]` (row stride = voice count).
     /// Allocated in `init` to the active voice count rather than the fixed max.
-    channel_state: Box<[f32]>,
+    channel_state: Box<[VoiceState]>,
+}
+
+/// One cell of the voice-mixing matrix: the running phase plus the PolyBLEP
+/// residual carried into the next sample from a sync reset. Lives in
+/// `channel_state` (not `state`) so it rides the size-aware per-channel
+/// transfer instead of the wholesale `state` swap.
+#[derive(Default, Clone, Copy)]
+struct VoiceState {
+    /// Phase accumulator in `[0, 1)`.
+    phase: f32,
+    /// PolyBLEP residual carried into the next sample from a sync reset.
+    blep_carry: f32,
 }
 
 /// Module-level state for the Supersaw module.
@@ -99,9 +111,6 @@ struct SupersawState {
     sync_schmitt: [SchmittTrigger; PORT_MAX_CHANNELS],
     /// Per-input-channel previous sync sample, for subsample edge interpolation.
     sync_prev: [f32; PORT_MAX_CHANNELS],
-    /// Per-voice PolyBLEP residual carried into the next sample from a sync
-    /// reset. Indexed like `channel_state`.
-    blep_carry: [f32; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
 }
 
 // Hand-written `Default`: `voice_t` is `[f32; PORT_MAX_CHANNELS]` and the
@@ -118,7 +127,6 @@ impl Default for SupersawState {
             voice_t: [0.0; PORT_MAX_CHANNELS],
             sync_schmitt: [SchmittTrigger::default(); PORT_MAX_CHANNELS],
             sync_prev: [0.0; PORT_MAX_CHANNELS],
-            blep_carry: [0.0; PORT_MAX_CHANNELS * PORT_MAX_CHANNELS],
         }
     }
 }
@@ -171,9 +179,10 @@ impl Supersaw {
         // by PORT_MAX_CHANNELS, so allocating that many rows keeps the matrix
         // valid for any input width while shrinking the voice dimension.
         let voices = self.channel_count().max(1);
-        self.channel_state = vec![0.0; PORT_MAX_CHANNELS * voices].into_boxed_slice();
-        for i in 0..self.channel_state.len() {
-            self.channel_state[i] = rand_phase(&mut self.state.rng_state);
+        self.channel_state =
+            vec![VoiceState::default(); PORT_MAX_CHANNELS * voices].into_boxed_slice();
+        for cell in self.channel_state.iter_mut() {
+            cell.phase = rand_phase(&mut self.state.rng_state);
         }
     }
 
@@ -251,7 +260,7 @@ impl Supersaw {
                 let state_idx = input_ch * voices + voice;
 
                 // Advance phase (rem_euclid supports negative increments from through-zero FM)
-                let mut phase = (self.channel_state[state_idx] + dt).rem_euclid(1.0);
+                let mut phase = (self.channel_state[state_idx].phase + dt).rem_euclid(1.0);
 
                 // Naive saw + its own PolyBLEP wrap correction, then any residual
                 // carried from a sync reset on the previous sample. The reset
@@ -259,8 +268,8 @@ impl Supersaw {
                 // real, pre-reset phase.
                 let mut saw = 2.0 * phase - 1.0;
                 saw -= poly_blep_saw(phase, dt.abs());
-                saw += self.state.blep_carry[state_idx];
-                self.state.blep_carry[state_idx] = 0.0;
+                saw += self.channel_state[state_idx].blep_carry;
+                self.channel_state[state_idx].blep_carry = 0.0;
 
                 // Hard sync resets this voice, band-limited with a PolyBLEP at
                 // the subsample crossing.
@@ -270,10 +279,10 @@ impl Supersaw {
                     let after = -1.0;
                     let (now, carry) = sync_blep(after - before, sync_frac[input_ch]);
                     saw += now;
-                    self.state.blep_carry[state_idx] = carry;
+                    self.channel_state[state_idx].blep_carry = carry;
                 }
 
-                self.channel_state[state_idx] = phase;
+                self.channel_state[state_idx].phase = phase;
                 accum += saw;
             }
 
@@ -410,7 +419,7 @@ mod tests {
         });
         // Force known phases (overwrite whatever init set)
         for i in 0..s_no_detune.channel_state.len() {
-            s_no_detune.channel_state[i] = 0.25;
+            s_no_detune.channel_state[i].phase = 0.25;
         }
 
         let mut s_detune = make_supersaw(SupersawParams {
@@ -422,7 +431,7 @@ mod tests {
             sync: None,
         });
         for i in 0..s_detune.channel_state.len() {
-            s_detune.channel_state[i] = 0.25;
+            s_detune.channel_state[i].phase = 0.25;
         }
 
         // Run both for several samples
@@ -463,7 +472,7 @@ mod tests {
 
         // Check that at least some initial phases differ
         // (statistically extremely unlikely all 4 are identical)
-        let phases: Vec<f32> = (0..4).map(|v| s.channel_state[v]).collect();
+        let phases: Vec<f32> = (0..4).map(|v| s.channel_state[v].phase).collect();
         let all_same = phases.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10);
         assert!(!all_same, "Random phases should not all be identical");
     }
@@ -481,7 +490,7 @@ mod tests {
         });
         // Force known phases, zero detune -> all voices should produce identical output
         for i in 0..s.channel_state.len() {
-            s.channel_state[i] = 0.5;
+            s.channel_state[i].phase = 0.5;
         }
         s.update(48000.0);
 
@@ -516,7 +525,7 @@ mod tests {
             s.update(48000.0);
         }
         let advanced = (0..3)
-            .map(|v| s.channel_state[v])
+            .map(|v| s.channel_state[v].phase)
             .any(|p| p.abs() > 1e-3);
         assert!(advanced, "voice phases should have advanced before sync");
 
@@ -525,7 +534,7 @@ mod tests {
         s.update(48000.0);
 
         for voice in 0..3 {
-            let p = s.channel_state[voice];
+            let p = s.channel_state[voice].phase;
             assert!(
                 p.abs() < 1e-6,
                 "voice {voice} phase {p} should reset to 0 on hard sync"
@@ -577,7 +586,7 @@ mod tests {
             sync: None,
         });
         // Set phase to 0.75 -> naive saw = 2*0.75 - 1 = 0.5
-        s1.channel_state[0] = 0.75;
+        s1.channel_state[0].phase = 0.75;
         s1.update(48000.0);
         let val_mono = s1.outputs.sample.get(0);
 
@@ -598,7 +607,7 @@ mod tests {
         // Set all 4 input channel phases identically. Row stride is the voice
         // count (1 here), so channel `input_ch`'s single voice is at `input_ch`.
         for input_ch in 0..4 {
-            s4.channel_state[input_ch] = 0.75;
+            s4.channel_state[input_ch].phase = 0.75;
         }
         s4.update(48000.0);
         let val_quad = s4.outputs.sample.get(0);
