@@ -32,6 +32,10 @@ struct SawOscillatorParams {
     /// hard sync source — rising edges reset the oscillator phase
     #[deserr(default)]
     sync: Option<PolySignal>,
+    /// phase offset in [0, 1) added to the internal phase before sampling
+    #[signal(default = 0.0, range = (0.0, 1.0))]
+    #[deserr(default)]
+    phase_offset: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -100,22 +104,29 @@ impl SawOscillator {
             // 0 = saw (peak at 1.0), 2.5 = triangle (peak at 0.5), 5 = ramp (peak at 0.0)
             let s = (1.0 - *state.shape * 0.2).clamp(0.001, 0.999);
 
+            // Phase offset shifts the read position without altering the
+            // accumulator, so it never drifts.
+            let offset = self.params.phase_offset.value_or(ch, 0.0);
+            let read_offset = offset.rem_euclid(1.0);
+
             // DPW: compute integral at current phase BEFORE advancing
-            let integral_old = triangle_integral(state.phase, s);
+            let read_old = (state.phase + read_offset).rem_euclid(1.0);
+            let integral_old = triangle_integral(read_old, s);
 
             // Advance phase (rem_euclid supports negative increments from through-zero FM)
             state.phase += phase_increment;
             state.phase = state.phase.rem_euclid(1.0);
+            let read_phase = (state.phase + read_offset).rem_euclid(1.0);
 
             // DPW body for this sample. The sync reset (below) lands in the
             // upcoming interval, so the phase advanced normally here and the DPW
             // differentiation stays valid; the reset is band-limited separately.
             let body = if phase_increment.abs() > 1.0e-7 {
-                let integral_new = triangle_integral(state.phase, s);
+                let integral_new = triangle_integral(read_phase, s);
                 (integral_new - integral_old) / phase_increment
             } else {
                 // Near-DC fallback: use naive waveform (no aliasing at low freq)
-                naive_triangle(state.phase, s)
+                naive_triangle(read_phase, s)
             };
 
             let pending = state.blep_carry;
@@ -128,9 +139,9 @@ impl SawOscillator {
                 let v = sync.get_value(ch);
                 if state.sync_schmitt.process(v) {
                     let frac = sync_edge_fraction(state.sync_prev, v);
-                    let before = naive_triangle(state.phase, s);
+                    let before = naive_triangle(read_phase, s);
                     state.phase = 0.0;
-                    let after = naive_triangle(0.0, s);
+                    let after = naive_triangle(read_offset, s);
                     let (n, carry) = sync_blep(after - before, frac);
                     now = n;
                     state.blep_carry = carry;

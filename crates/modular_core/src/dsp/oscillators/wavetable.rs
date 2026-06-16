@@ -56,6 +56,10 @@ pub(crate) struct WavetableOscParams {
     /// Optional phase-warp table applied before sampling.
     #[deserr(default)]
     pub(crate) phase: Option<Table>,
+    /// phase offset in [0, 1) added to the internal phase before warping/sampling
+    #[signal(default = 0.0, range = (0.0, 1.0))]
+    #[deserr(default)]
+    pub(crate) phase_offset: Option<PolySignal>,
     /// Pre-computed mipmap pyramid, populated by `prepare_resources` on the
     /// main thread. Skipped from serialization and deserialization.
     #[serde(skip)]
@@ -104,11 +108,17 @@ pub fn wavetable_derive_channel_count(params: &WavetableOscParams) -> usize {
     let fm_ch = params.fm.as_ref().map(|f| f.channels()).unwrap_or(0);
     let phase_ch = params.phase.as_ref().map(|t| t.channels()).unwrap_or(0);
     let sync_ch = params.sync.as_ref().map(|s| s.channels()).unwrap_or(0);
+    let offset_ch = params
+        .phase_offset
+        .as_ref()
+        .map(|o| o.channels())
+        .unwrap_or(0);
     pitch_ch
         .max(pos_ch)
         .max(fm_ch)
         .max(phase_ch)
         .max(sync_ch)
+        .max(offset_ch)
         .clamp(1, PORT_MAX_CHANNELS)
 }
 
@@ -177,8 +187,11 @@ impl WavetableOsc {
             // Advance raw phase first, then apply warp. Using the pre-advance
             // phase is equivalent here but we advance after reading so the
             // very first sample uses the state's starting phase (0.0 by
-            // default).
-            let raw_phase = state.phase as f32;
+            // default). The phase offset shifts the read position without
+            // altering the accumulator, so it never drifts.
+            let offset = self.params.phase_offset.value_or(ch, 0.0);
+            let read_offset = offset.rem_euclid(1.0);
+            let raw_phase = (state.phase as f32 + read_offset).rem_euclid(1.0);
             let warped_phase = match &self.params.phase {
                 Some(table) => table.evaluate(raw_phase, ch),
                 None => raw_phase,
@@ -215,9 +228,11 @@ impl WavetableOsc {
                 let v = sync.get_value(ch);
                 if state.sync_schmitt.process(v) {
                     let frac = sync_edge_fraction(state.sync_prev, v);
+                    // After a reset the accumulator is 0, so the effective read
+                    // phase is the offset itself.
                     let warped_zero = match &self.params.phase {
-                        Some(table) => table.evaluate(0.0, ch),
-                        None => 0.0,
+                        Some(table) => table.evaluate(read_offset, ch),
+                        None => read_offset,
                     };
                     let after = prepared.read_sample(level, frame_f, warped_zero);
                     let (now, carry) = sync_blep(after - before, frac);
@@ -301,6 +316,7 @@ mod tests {
             fm_mode: FmMode::default(),
             sync: None,
             phase: None,
+            phase_offset: None,
             prepared: None,
         }
     }

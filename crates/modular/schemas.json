@@ -2114,6 +2114,17 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "sync": {
           "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
@@ -2243,6 +2254,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2278,6 +2297,17 @@
         "freq": {
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
+        },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "shape": {
           "description": "waveform shape: 0=saw, 2.5=triangle, 5=ramp",
@@ -2427,6 +2457,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2462,6 +2500,17 @@
         "freq": {
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
+        },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pwm": {
           "description": "pulse width modulation CV — added to the width parameter",
@@ -2630,6 +2679,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -3003,12 +3060,19 @@
   },
   {
     "name": "$noise",
-    "documentation": "Noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
       "type": "object",
       "properties": {
+        "channels": {
+          "description": "number of independent noise channels (1–64), each a different sequence",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
         "color": {
           "description": "color of the noise: white, pink, brown",
           "$ref": "#/$defs/NoiseKind"
@@ -3040,7 +3104,7 @@
       {
         "name": "output",
         "description": "signal output",
-        "polyphonic": false,
+        "polyphonic": true,
         "default": true,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -3051,7 +3115,8 @@
       {
         "name": "color"
       }
-    ]
+    ],
+    "channelsParam": "channels"
   },
   {
     "name": "$macro",
@@ -3758,6 +3823,17 @@
             }
           ]
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pitch": {
           "description": "Pitch in V/Oct (0V = C4).",
           "$ref": "#/$defs/PolySignal"
@@ -4055,6 +4131,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
