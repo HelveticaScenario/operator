@@ -75,43 +75,43 @@ impl Clamp {
 
             self.outputs.sample.set(i, val);
 
-            // Compose the output range. Start from the input's declared range
-            // (falling back to the static clamp output range when unknown),
-            // then intersect each side with the active bound. When both bounds
-            // are present they are ordered the same way the clamp value path
-            // orders them (above), so an inverted `min > max` still composes a
-            // valid `lo <= hi` range instead of being silently dropped.
+            // Compose the output range as the image of the input's declared
+            // range under the clamp transfer function. The clamp is monotonic,
+            // so the image of `[in_min, in_max]` is just its endpoints passed
+            // through the same bound logic the value path uses — always
+            // ordered, and correct even when the input range lies wholly
+            // outside the window (the output collapses onto one boundary,
+            // giving a degenerate `[c, c]`). Fall back to the static output
+            // range when the input range is unknown.
             let (in_min, in_max) = self
                 .params
                 .input
                 .get_range(i)
                 .unwrap_or((f32::NEG_INFINITY, f32::INFINITY));
-            let lo = if has_min {
-                let a = self.params.min.value_or_zero(i);
-                let lower = if has_max {
-                    a.min(self.params.max.value_or_zero(i))
-                } else {
-                    a
-                };
-                in_min.max(lower)
-            } else {
-                in_min
+            let (lo, hi) = match (has_min, has_max) {
+                (true, true) => {
+                    let a = self.params.min.value_or_zero(i);
+                    let b = self.params.max.value_or_zero(i);
+                    // Order the window the same way the value path does above.
+                    let (win_lo, win_hi) = if b < a { (b, a) } else { (a, b) };
+                    (in_min.clamp(win_lo, win_hi), in_max.clamp(win_lo, win_hi))
+                }
+                (true, false) => {
+                    let min_val = self.params.min.value_or_zero(i);
+                    (in_min.max(min_val), in_max.max(min_val))
+                }
+                (false, true) => {
+                    let max_val = self.params.max.value_or_zero(i);
+                    (in_min.min(max_val), in_max.min(max_val))
+                }
+                (false, false) => (in_min, in_max),
             };
-            let hi = if has_max {
-                let b = self.params.max.value_or_zero(i);
-                let upper = if has_min {
-                    b.max(self.params.min.value_or_zero(i))
-                } else {
-                    b
-                };
-                in_max.min(upper)
-            } else {
-                in_max
-            };
-            // Only publish when bounded on both sides and ordered — otherwise
-            // we'd leak ±inf into the BlockPort and downstream `.range()`
-            // wiring would map to nonsense.
-            if lo.is_finite() && hi.is_finite() && lo <= hi {
+            // Publish only when both ends are finite. A one-sided clamp over an
+            // input with no declared range stays half-infinite — there is no
+            // meaningful bounded range to publish, so the static fallback
+            // applies. The monotonic image is already ordered, so no `lo <= hi`
+            // guard is needed.
+            if lo.is_finite() && hi.is_finite() {
                 self.outputs.sample.set_range(i, lo, hi);
             }
         }

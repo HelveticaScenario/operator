@@ -1333,8 +1333,8 @@ function $deferred(channels?: number): DeferredCollection;
  * const vol = $slider("Volume", 0.5, 0, 1);
  * $sine(440).amplitude(vol).out();
  * @example
- * // Range carried by the slider — no need to repeat 100/8000 as input bounds
- * $saw(110).pipe(s => $lpf(s, $slider("Cutoff", 1000, 100, 8000).range(100, 8000))).out();
+ * // Range carried by the slider — declare [0,1] once, remap to a useful range
+ * $saw(110).pipe(s => $lpf(s, $slider("Cutoff", 0.5, 0, 1).range(100, 8000))).out();
  */
 function $slider(label: string, value: number, min: number, max: number): CollectionWithRange;
 

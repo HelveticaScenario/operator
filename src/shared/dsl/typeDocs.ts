@@ -347,7 +347,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
 
     ModuleOutputWithRange: {
         definition:
-            'interface extends ModuleOutput { minValue: number; maxValue: number; range(...): CollectionWithRange }',
+            'interface extends ModuleOutput { minValue: number; maxValue: number; dynamicRange: boolean; range(...): CollectionWithRange }',
         description:
             'An extension of ModuleOutput that knows its output value range (minValue, maxValue). ' +
             'Typically returned by LFOs, envelopes, and other modulation sources. ' +
@@ -641,7 +641,8 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             { name: 'min', type: 'number', description: 'Minimum value' },
             { name: 'max', type: 'number', description: 'Maximum value' },
         ],
-        returns: 'CollectionWithRange carrying the current slider value, with a static [min, max] range so .range(outMin, outMax) infers the input bounds',
+        returns:
+            'CollectionWithRange carrying the current slider value, with a static [min, max] range so .range(outMin, outMax) infers the input bounds',
         signature:
             '$slider(label: string, value: number, min: number, max: number): CollectionWithRange',
     },

@@ -38,8 +38,10 @@ struct WrapOutputs {
 /// the bounds are swapped automatically.
 ///
 /// Set **octave** to `true` to shift by whole integers instead, preserving the
-/// fractional part (pitch class in V/Oct signals). Always exact when
-/// `max − min ≥ 1`; makes the closest-octave attempt otherwise.
+/// fractional part (pitch class in V/Oct signals). Exact when the span
+/// `max − min` is a whole number of octaves (e.g. integer-volt windows);
+/// otherwise it makes the closest-octave attempt, which can land just outside
+/// `[min, max]`.
 ///
 /// ```js
 /// // wrap a ramp into 0–5 V

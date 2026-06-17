@@ -1,5 +1,13 @@
 # Design: DC Offset Fix with Dynamic Range Annotations
 
+> **⚠️ SUPERSEDED (2026-06-17).** This design's in-`$pulse` analytic DC
+> subtraction and the `get_sample()` fast path were **not** shipped. The DC fix
+> landed as a standalone `$dcBlock` module
+> (`crates/modular_core/src/dsp/utilities/dc_block.rs`); `$pulse` keeps a plain
+> static `(-5, 5)` range. The per-channel dynamic-range work described here
+> _did_ ship, but on the utilities (`$remap`, `$clamp`, `$scaleAndShift`,
+> `$wrap`, `$spread`) rather than on `$pulse`. Kept as a decision record only.
+
 Date: 2026-04-14
 
 ## Problem

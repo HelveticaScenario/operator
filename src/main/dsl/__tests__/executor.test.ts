@@ -11,9 +11,9 @@ import { describe, expect, expectTypeOf, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
-import type {
+import {
     CollectionWithRange,
-    ModuleOutputWithRange,
+    type ModuleOutputWithRange,
 } from '../GraphBuilder';
 import { isFastPattern, isParsedPattern } from '../miniNotation/index';
 
@@ -1094,6 +1094,17 @@ describe('dynamic-range .range()', () => {
         expect(scalarOf(params.inMin)).toBe(0); // explicit 0 honored
         expect(isCableVal(params.inMax)).toBe(true);
         expect(cableOf(params.inMax)?.port).toBe('output.rangeMax');
+    });
+
+    test('.range() on an empty CollectionWithRange returns an empty CollectionWithRange', () => {
+        // The empty-collection guard short-circuits before touching the
+        // $remap factory and must return a range-aware (not base) collection so
+        // a subsequent .range() still chains. The wrong return type is caught
+        // by tsc; this guards the runtime branch (no throw, no $remap emitted).
+        const empty = new CollectionWithRange();
+        const result = empty.range(0, 1);
+        expect(result).toBeInstanceOf(CollectionWithRange);
+        expect([...result].length).toBe(0);
     });
 });
 

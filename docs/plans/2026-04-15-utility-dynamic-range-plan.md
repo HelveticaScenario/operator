@@ -1,5 +1,10 @@
 # Utility Module Dynamic Range Implementation Plan
 
+> **⚠️ Note (2026-06-17).** The per-channel dynamic-range design here shipped,
+> but the code snippets reference a `get_sample(port, channel)` fast path that
+> was **not** implemented — the engine reads ranges via `get_value_at` /
+> `get_range(port, ch, index)`. Treat the snippets as illustrative, not literal.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add `dynamic_range` to 5 utility modules (`$remap`, `$scaleAndShift`, `$clamp`, `$wrap`, `$spread`) so `.range()` produces correct remappings downstream. Also add `Signal::get_range()` / `PolySignal::get_range()` so modules can read their input's range without extra params.

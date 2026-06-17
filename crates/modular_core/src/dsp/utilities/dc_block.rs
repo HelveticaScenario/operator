@@ -38,7 +38,9 @@ struct DcBlockState {
 
 /// DC-blocker corner frequency, in Hz. Matches the inline blocker in
 /// `$overdrive`: low enough to leave audio untouched, high enough to strip a
-/// constant offset within a few milliseconds.
+/// constant offset over a few tens of milliseconds (~8 ms time constant). An
+/// offset present from the first sample is removed immediately by the input
+/// priming; a step that appears mid-stream decays over that time constant.
 const DC_BLOCK_FC_HZ: f32 = 20.0;
 
 /// DC blocker — removes the DC (0 Hz) offset from a signal.
@@ -77,7 +79,10 @@ impl DcBlock {
         let coeff = self.state.coeff;
 
         for ch in 0..num_channels {
-            let input = self.params.input.get_value(ch);
+            // Sanitize the input once so a non-finite sample can never poison
+            // the filter history (`prev_in`); otherwise a single NaN would
+            // force an extra zeroed output on the following sample.
+            let input = sanitize(self.params.input.get_value(ch));
             let state = &mut self.channel_state[ch];
 
             if !state.initialized {

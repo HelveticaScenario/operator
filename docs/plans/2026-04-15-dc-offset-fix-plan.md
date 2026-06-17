@@ -1,5 +1,11 @@
 # DC Offset Fix Implementation Plan
 
+> **⚠️ SUPERSEDED (2026-06-17).** The shipped DC fix is the standalone
+> `$dcBlock` module (`crates/modular_core/src/dsp/utilities/dc_block.rs`), not
+> the in-`$pulse` analytic subtraction described here, and the `get_sample()`
+> fast path was never added (the engine reads via `get_value_at` /
+> `get_range`). Kept as a historical planning artifact.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Eliminate unintentional DC offset accumulation from the `$pulse` oscillator by applying analytic DC subtraction, making output range annotations runtime-dynamic (per-channel), and adding a `get_sample()` fast path to avoid copying the now-larger `PolyOutput` on every cable read.

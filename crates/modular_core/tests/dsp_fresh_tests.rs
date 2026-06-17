@@ -1583,6 +1583,28 @@ fn dc_block_centers_offset_pulse_and_preserves_ac() {
     );
 }
 
+#[test]
+fn dc_block_blocks_each_channel_independently() {
+    // Two channels carry distinct constant offsets. Priming means each blocks
+    // to ~0 from the first sample, independently — exercising the per-channel
+    // `channel_state` array and the polyphonic `update` loop.
+    let m = make_module("$dcBlock", "dc-poly", json!({ "input": [2.5, -1.0] }));
+    let mut s = Stepper::new();
+    for i in 0..500 {
+        let slot = s.tick(&*m);
+        let c0 = m.get_value_at(DEFAULT_PORT, 0, slot);
+        let c1 = m.get_value_at(DEFAULT_PORT, 1, slot);
+        assert!(
+            c0.abs() < 1e-3,
+            "ch0 (2.5V DC) should block to ~0V; sample {i} = {c0}V"
+        );
+        assert!(
+            c1.abs() < 1e-3,
+            "ch1 (-1.0V DC) should block to ~0V; sample {i} = {c1}V"
+        );
+    }
+}
+
 // ─── Virtual range ports + dynamic_range ─────────────────────────────────────
 
 #[test]
@@ -1876,6 +1898,133 @@ fn clamp_dynamic_range_orders_inverted_bounds() {
     assert!(
         (max - 3.0).abs() < 0.1,
         "clamp rangeMax should be ~3 (ordered), got {max}"
+    );
+}
+
+#[test]
+fn clamp_dynamic_range_collapses_to_point_when_input_outside_window() {
+    // $sine([-5, 5]) → $clamp(min=10, max=20): the input range lies entirely
+    // below the window, so the output is pinned to the constant 10. The
+    // composed range must collapse to the degenerate point [10, 10] — not drop
+    // the publish and leave the stale/static fallback.
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": 10.0,
+                "max": 20.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let (min, max) = cl.get_range("output", 0, 0).unwrap();
+    assert!(
+        (min - 10.0).abs() < 0.1 && (max - 10.0).abs() < 0.1,
+        "range should collapse to [10, 10], got [{min}, {max}]"
+    );
+    // The published range must equal the constant the clamp actually emits.
+    let val = cl.get_value_at("output", 0, 0);
+    assert!(
+        (val - 10.0).abs() < 0.1,
+        "clamped value should be pinned to 10, got {val}"
+    );
+}
+
+#[test]
+fn clamp_dynamic_range_single_min_bound_over_ranged_input() {
+    // One-sided clamp ($sine([-5, 5]), min=0, no max): the image of the input
+    // range under max(x, 0) is [0, 5].
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "cl",
+            "$clamp",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "min": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let cl = patch.sampleables.get("cl").unwrap();
+    let (min, max) = cl.get_range("output", 0, 0).unwrap();
+    assert!(
+        (min - 0.0).abs() < 0.1,
+        "single-min rangeMin should be ~0, got {min}"
+    );
+    assert!(
+        (max - 5.0).abs() < 0.1,
+        "single-min rangeMax should be ~5, got {max}"
+    );
+}
+
+#[test]
+fn clamp_dynamic_range_single_bound_no_input_range_falls_back_to_static() {
+    // A one-sided clamp over an input with no declared range (a Volts
+    // constant) stays half-infinite (`[0, +inf)`), so nothing is published and
+    // get_range returns the static fallback (-5, 5) rather than leaking +inf.
+    let m = make_module("$clamp", "cl", json!({ "input": 2.5, "min": 0.0 }));
+    m.start_block();
+    m.ensure_processed();
+    let (min, max) = m.get_range("output", 0, 0).unwrap();
+    assert!(
+        (min - (-5.0)).abs() < 0.01 && (max - 5.0).abs() < 0.01,
+        "should fall back to static (-5, 5), got [{min}, {max}]"
+    );
+}
+
+#[test]
+fn dynamic_range_is_independent_per_channel() {
+    // Distinct per-channel ranges must not bleed across channels. Drive
+    // $scaleAndShift with a 2-channel `scale` ([5, 2.5] → g = 1.0, 0.5) over a
+    // mono static-range [-5, 5] input: channel 0 → [-5, 5], channel 1 →
+    // [-2.5, 2.5]. Exercises set_range's channel index, the per-channel
+    // copy_from_inner loop, and get_range_min/max's channel cycling.
+    let graph = make_graph(vec![
+        ("osc", "$sine", json!({ "freq": 0.0 })),
+        (
+            "sas",
+            "$scaleAndShift",
+            json!({
+                "input": { "type": "cable", "module": "osc", "port": "output", "channel": 0 },
+                "scale": [5.0, 2.5],
+                "shift": 0.0
+            }),
+        ),
+    ]);
+    let patch = Patch::from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..200 {
+        process_frame(&patch);
+    }
+    let sas = patch.sampleables.get("sas").unwrap();
+    let (c0min, c0max) = sas.get_range("output", 0, 0).unwrap();
+    let (c1min, c1max) = sas.get_range("output", 1, 0).unwrap();
+    assert!(
+        (c0min - (-5.0)).abs() < 0.1 && (c0max - 5.0).abs() < 0.1,
+        "ch0 range should be ~[-5, 5], got [{c0min}, {c0max}]"
+    );
+    assert!(
+        (c1min - (-2.5)).abs() < 0.1 && (c1max - 2.5).abs() < 0.1,
+        "ch1 range should be ~[-2.5, 2.5], got [{c1min}, {c1max}]"
+    );
+    // Guard: the two channels must actually differ, else a cross-channel
+    // bleed bug would pass the assertions above.
+    assert!(
+        (c0max - c1max).abs() > 0.1,
+        "per-channel ranges should differ; ch0max={c0max}, ch1max={c1max}"
     );
 }
 
