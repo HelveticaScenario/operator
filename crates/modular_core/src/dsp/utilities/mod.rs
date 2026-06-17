@@ -9,6 +9,7 @@ pub mod buffer;
 pub mod clamp;
 pub mod clock_divider;
 pub mod curve;
+pub mod dc_block;
 pub mod delay;
 pub mod lag;
 pub mod logic;
@@ -36,6 +37,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     clamp::Clamp::install_constructor(map);
     clock_divider::ClockDivider::install_constructor(map);
     curve::Curve::install_constructor(map);
+    dc_block::DcBlock::install_constructor(map);
     delay::DelayRead::install_constructor(map);
     lag::LagProcessor::install_constructor(map);
     logic::RisingEdgeDetector::install_constructor(map);
@@ -61,6 +63,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     clamp::Clamp::install_params_deserializer(map);
     clock_divider::ClockDivider::install_params_deserializer(map);
     curve::Curve::install_params_deserializer(map);
+    dc_block::DcBlock::install_params_deserializer(map);
     delay::DelayRead::install_params_deserializer(map);
     lag::LagProcessor::install_params_deserializer(map);
     logic::RisingEdgeDetector::install_params_deserializer(map);
@@ -87,6 +90,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         clamp::Clamp::get_schema(),
         clock_divider::ClockDivider::get_schema(),
         curve::Curve::get_schema(),
+        dc_block::DcBlock::get_schema(),
         delay::DelayRead::get_schema(),
         lag::LagProcessor::get_schema(),
         logic::RisingEdgeDetector::get_schema(),

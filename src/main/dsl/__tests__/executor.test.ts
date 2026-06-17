@@ -349,11 +349,11 @@ describe('chaining methods', () => {
     });
 
     test('dynamicRange output wires .range() through virtual rangeMin / rangeMax cables', () => {
-        // $pulse declares dynamic_range, so .range(0, 5) should bind the
+        // $clamp declares dynamic_range, so .range(0, 5) should bind the
         // remap's inMin / inMax to the upstream's virtual range ports rather
         // than baking in the static [-5, 5].
         const patch = execPatch(
-            '$pulse("C4", { width: 1 }).range(0, 5).out()',
+            '$clamp($sine("C4"), { min: -2, max: 3 }).range(0, 5).out()',
         );
         const remaps = findModules(patch, '$remap');
         expect(remaps.length).toBeGreaterThan(0);
@@ -417,7 +417,7 @@ describe('chaining methods', () => {
         // .range(...) must be a CollectionWithRange whose .range(outMin, outMax)
         // re-binds to the upstream remap's virtual range ports — not the 4-arg
         // Collection.range that would leave inMin / inMax unset.
-        const patch = execPatch('$pulse("C4", { width: 1 }).range(0, 5).range(0, 1).out()');
+        const patch = execPatch('$clamp($sine("C4"), { min: -2, max: 3 }).range(0, 5).range(0, 1).out()');
         const remaps = findModules(patch, '$remap');
         expect(remaps.length).toBe(2);
 
@@ -752,6 +752,11 @@ describe('utilities', () => {
         expect(findModules(patch, '$slew').length).toBe(1);
     });
 
+    test('$dcBlock', () => {
+        const patch = execPatch('$dcBlock($pulse("C2", { width: 1 })).out()');
+        expect(findModules(patch, '$dcBlock').length).toBe(1);
+    });
+
     test('$quantizer', () => {
         const patch = execPatch('$quantizer($sine("C4"), "C(major)").out()');
         expect(findModules(patch, '$quantizer').length).toBe(1);
@@ -899,11 +904,11 @@ describe('dynamic-range .range()', () => {
     const scalarOf = (v: unknown): unknown => (Array.isArray(v) ? v[0] : v);
 
     test('a dynamic-range output wires virtual rangeMin/rangeMax cables into $remap', () => {
-        // $pulse declares dynamic_range, so the 2-arg .range() must wire cables
+        // $clamp declares dynamic_range, so the 2-arg .range() must wire cables
         // to its virtual output.rangeMin / output.rangeMax ports rather than
         // bake in the static -5 / 5 fallback constants.
         const patch = execPatch(
-            "$pulse('c3', { width: 1.25 }).range(0, 1).out()",
+            "$clamp($sine('c3'), { min: -2, max: 3 }).range(0, 1).out()",
         );
         const remaps = findModules(patch, '$remap');
         expect(remaps.length).toBe(1);
@@ -919,7 +924,7 @@ describe('dynamic-range .range()', () => {
         // .range(0, 1, 0) overrides inMin with the explicit scalar 0 (nullish,
         // so honored) while inMax keeps wiring the live output.rangeMax cable.
         const patch = execPatch(
-            "$pulse('c3', { width: 1.25 }).range(0, 1, 0).out()",
+            "$clamp($sine('c3'), { min: -2, max: 3 }).range(0, 1, 0).out()",
         );
         const remaps = findModules(patch, '$remap');
         expect(remaps.length).toBe(1);

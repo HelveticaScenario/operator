@@ -50,8 +50,8 @@ export interface OutputSchemaWithRange {
      * When true the module computes per-channel range bounds at runtime
      * and exposes them as `<port>.rangeMin` / `<port>.rangeMax` virtual
      * ports. `.range(...)` wiring routes through those cables so the
-     * downstream `$remap` adapts to the live bounds (e.g. `$pulse` whose
-     * range depends on `width`).
+     * downstream `$remap` adapts to the live bounds (e.g. `$clamp` whose
+     * range tracks its `min` / `max` bounds).
      */
     dynamicRange?: boolean;
 }
@@ -472,8 +472,8 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
      *
      * Outputs marked `dynamicRange` wire cables to the upstream module's
      * virtual `<port>.rangeMin` / `<port>.rangeMax` ports so the
-     * downstream `$remap` tracks the live bounds (e.g. `$pulse` whose range
-     * depends on `width`). Static-range outputs pass their compile-time
+     * downstream `$remap` tracks the live bounds (e.g. `$clamp` whose range
+     * follows its `min` / `max` bounds). Static-range outputs pass their compile-time
      * `minValue` / `maxValue` directly.
      *
      * Passing `inMin` / `inMax` overrides the declared input bounds. The

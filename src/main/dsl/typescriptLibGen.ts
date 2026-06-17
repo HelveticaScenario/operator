@@ -817,7 +817,7 @@ interface ModuleOutputWithRange extends ModuleOutput {
   readonly maxValue: number;
   /**
    * True when the module computes per-channel range bounds at runtime
-   * (e.g. \`$pulse\` whose range depends on \`width\`). \`.range(...)\` wires
+   * (e.g. \`$clamp\` whose range tracks its bounds). \`.range(...)\` wires
    * cables to the upstream's virtual \`<port>.rangeMin\` / \`<port>.rangeMax\`
    * ports so the downstream remap tracks the live bounds.
    */

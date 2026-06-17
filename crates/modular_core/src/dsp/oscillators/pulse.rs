@@ -35,7 +35,7 @@ struct PulseOscillatorParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PulseOscillatorOutputs {
-    #[output("output", "signal output", default, range = (-5.0, 5.0), dynamic_range)]
+    #[output("output", "signal output", default, range = (-5.0, 5.0))]
     sample: PolyOutput,
 }
 
@@ -113,18 +113,7 @@ impl PulseOscillator {
                 abs_phase_inc,
             );
 
-            // DC offset for this pulse width: (2w - 1) * 5V
-            // Subtract analytic mean so the signal is centered at 0V regardless
-            // of duty cycle. Peak-to-peak stays 10V; range becomes
-            // [-10*w, 10*(1-w)] instead of [-5, 5].
-            let dc = (2.0 * pulse_width - 1.0) * 5.0;
-            self.outputs.sample.set(ch, naive_pulse * 5.0 - dc);
-
-            // Publish the DC-shifted range so downstream `.range(...)` chains
-            // and `$scaleAndShift` / `$clamp` can map the actual swing.
-            self.outputs
-                .sample
-                .set_range(ch, -10.0 * pulse_width, 10.0 * (1.0 - pulse_width));
+            self.outputs.sample.set(ch, naive_pulse * 5.0);
         }
     }
 }

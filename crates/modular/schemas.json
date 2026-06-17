@@ -2421,7 +2421,7 @@
         "default": true,
         "minValue": -5.0,
         "maxValue": 5.0,
-        "dynamicRange": true
+        "dynamicRange": false
       }
     ],
     "signalParams": [
@@ -5885,6 +5885,107 @@
       },
       {
         "name": "exp"
+      }
+    ]
+  },
+  {
+    "name": "$dcBlock",
+    "documentation": "DC blocker — removes the DC (0 Hz) offset from a signal.\n\nA first-order high-pass filter (`y = x − x_prev + R·y_prev`) with a fixed\n~20 Hz corner. It strips a constant offset while passing audio essentially\nuntouched, running independently on every channel of a polyphonic input.\nFor a tunable corner use `$hpf`.\n\nUseful after asymmetric waveshaping or a non-square `$pulse`, whose duty\ncycle leaves a duty-dependent DC offset.\n\n```js\n// recenter an asymmetric pulse on 0 V\n$dcBlock($pulse('c2', { width: 1 }))\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DcBlockParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "DC-blocked signal",
+        "polyphonic": true,
+        "default": true,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
       }
     ]
   },
