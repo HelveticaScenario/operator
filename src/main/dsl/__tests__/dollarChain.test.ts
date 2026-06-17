@@ -10,11 +10,7 @@ import { beforeEach, describe, expect, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { DSLContext } from '../factories';
-import {
-    Collection,
-    type GraphBuilder,
-    ModuleOutput,
-} from '../GraphBuilder';
+import { Collection, type GraphBuilder, ModuleOutput } from '../GraphBuilder';
 import { executePatchScript } from '../executor';
 import {
     dollarMethodName,
@@ -87,8 +83,9 @@ describe('.$. chainable namespace', () => {
 
     test('multi-output module exposes its extra outputs (.low/.mid/.high)', () => {
         const sig = builder.getFactory('$sine')(0);
-        const xover = (sig as unknown as { $: Record<string, () => unknown> }).$
-            .xover() as Record<string, unknown>;
+        const xover = (
+            sig as unknown as { $: Record<string, () => unknown> }
+        ).$.xover() as Record<string, unknown>;
         expect(xover).toHaveProperty('low');
         expect(xover).toHaveProperty('mid');
         expect(xover).toHaveProperty('high');
@@ -96,7 +93,8 @@ describe('.$. chainable namespace', () => {
 
     test('unknown methods, symbols, and `then` resolve to undefined', () => {
         const sig = builder.getFactory('$sine')(0);
-        const dollar = (sig as unknown as { $: Record<PropertyKey, unknown> }).$;
+        const dollar = (sig as unknown as { $: Record<PropertyKey, unknown> })
+            .$;
         expect(dollar.notAModule).toBeUndefined();
         expect(dollar[Symbol.iterator]).toBeUndefined();
         // `then` undefined keeps the proxy from being mistaken for a thenable.
@@ -105,7 +103,9 @@ describe('.$. chainable namespace', () => {
 
     test('empty collection yields an empty Collection without throwing', () => {
         const result = (
-            new Collection() as unknown as { $: Record<string, (...a: unknown[]) => unknown> }
+            new Collection() as unknown as {
+                $: Record<string, (...a: unknown[]) => unknown>;
+            }
         ).$.lpf('100hz');
         expect(result).toBeInstanceOf(Collection);
         expect((result as Collection).items.length).toBe(0);
@@ -124,7 +124,9 @@ describe('.$m. mix namespace', () => {
     });
 
     test('crossfade emits $mix, $remap, $clamp, and $scaleAndShift', () => {
-        const types = moduleTypes(execPatch('$saw(0).$m.lpf(2.5, "100hz").out()'));
+        const types = moduleTypes(
+            execPatch('$saw(0).$m.lpf(2.5, "100hz").out()'),
+        );
         expect(types).toContain('$mix');
         expect(types).toContain('$remap');
         expect(types).toContain('$clamp');
@@ -163,7 +165,9 @@ describe('dollar-chain drift guard', () => {
             .filter((s) =>
                 qualifiesForDollarChain(
                     processModuleSchema(
-                        s as unknown as Parameters<typeof processModuleSchema>[0],
+                        s as unknown as Parameters<
+                            typeof processModuleSchema
+                        >[0],
                     ),
                 ),
             )

@@ -176,10 +176,26 @@ export function createScopeXY(
                 gl!.FLOAT,
                 null,
             );
-            gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, gl!.NEAREST);
-            gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, gl!.NEAREST);
-            gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_S, gl!.CLAMP_TO_EDGE);
-            gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE);
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_MIN_FILTER,
+                gl!.NEAREST,
+            );
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_MAG_FILTER,
+                gl!.NEAREST,
+            );
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_WRAP_S,
+                gl!.CLAMP_TO_EDGE,
+            );
+            gl!.texParameteri(
+                gl!.TEXTURE_2D,
+                gl!.TEXTURE_WRAP_T,
+                gl!.CLAMP_TO_EDGE,
+            );
             traceTextures.push(tex);
         }
         return traceTextures[idx];
@@ -210,8 +226,16 @@ export function createScopeXY(
         lineFbo: createFbo(gl, canvas.width, canvas.height),
         tightFboA: createFbo(gl, halfDim(canvas.width), halfDim(canvas.height)),
         tightFboB: createFbo(gl, halfDim(canvas.width), halfDim(canvas.height)),
-        bigFboA: createFbo(gl, eighthDim(canvas.width), eighthDim(canvas.height)),
-        bigFboB: createFbo(gl, eighthDim(canvas.width), eighthDim(canvas.height)),
+        bigFboA: createFbo(
+            gl,
+            eighthDim(canvas.width),
+            eighthDim(canvas.height),
+        ),
+        bigFboB: createFbo(
+            gl,
+            eighthDim(canvas.width),
+            eighthDim(canvas.height),
+        ),
         lineSize: options.beamSize ?? 0.012,
         intensity: options.intensity ?? 0.6,
         fadeAmount: options.fadeAmount ?? 0.15,
@@ -222,7 +246,10 @@ export function createScopeXY(
             ...(options.color ?? [0.05, 1.0, 0.35]),
             1,
         ]),
-        backgroundColor: new Float32Array([...(options.background ?? [0, 0, 0]), 1]),
+        backgroundColor: new Float32Array([
+            ...(options.background ?? [0, 0, 0]),
+            1,
+        ]),
         lineShaderUniformsSetup: false,
     };
 
@@ -286,8 +313,20 @@ export function createScopeXY(
 
         // Pass 3: tight bloom — downsample, then horizontal+vertical blur.
         copyPass(ctx, ctx.lineFbo, ctx.tightFboA);
-        blurPass(ctx, ctx.tightFboA, ctx.tightFboB, 1.0 / ctx.tightFboA.width, 0);
-        blurPass(ctx, ctx.tightFboB, ctx.tightFboA, 0, 1.0 / ctx.tightFboB.height);
+        blurPass(
+            ctx,
+            ctx.tightFboA,
+            ctx.tightFboB,
+            1.0 / ctx.tightFboA.width,
+            0,
+        );
+        blurPass(
+            ctx,
+            ctx.tightFboB,
+            ctx.tightFboA,
+            0,
+            1.0 / ctx.tightFboB.height,
+        );
 
         // Pass 4: big bloom — further downsample then blur so the 1/8-res
         // kernel still covers a perceptible radius.

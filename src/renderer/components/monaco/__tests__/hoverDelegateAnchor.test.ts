@@ -21,7 +21,9 @@ const liveDelegate = { delay: -1, dispose() {}, showHover: () => undefined };
 // A fake monaco whose editor.create mimics a real StandaloneEditor constructor:
 // it overwrites monaco's global hover-delegate factory with its own service.
 // Here that service is "immortal" (never disposed), standing in for the anchor.
-function makeFakeMonaco(setFactory: HoverFactoryModule['setHoverDelegateFactory']) {
+function makeFakeMonaco(
+    setFactory: HoverFactoryModule['setHoverDelegateFactory'],
+) {
     let created = 0;
     return {
         editor: {
@@ -66,9 +68,8 @@ describe('installHoverDelegateAnchor (monaco-editor#4612 workaround)', () => {
 
     it('pins the default hover delegate to an immortal service, surviving a later disposed editor', async () => {
         const factory = (await import(FACTORY_PATH)) as HoverFactoryModule;
-        const { installHoverDelegateAnchor } = await import(
-            '../hoverDelegateAnchor'
-        );
+        const { installHoverDelegateAnchor } =
+            await import('../hoverDelegateAnchor');
         const fakeMonaco = makeFakeMonaco(factory.setHoverDelegateFactory);
 
         // Anchor created (sets the immortal factory) and Lazy pinned to it.
@@ -84,9 +85,8 @@ describe('installHoverDelegateAnchor (monaco-editor#4612 workaround)', () => {
 
     it('is idempotent: repeated installs do not create another anchor', async () => {
         const factory = (await import(FACTORY_PATH)) as HoverFactoryModule;
-        const { installHoverDelegateAnchor } = await import(
-            '../hoverDelegateAnchor'
-        );
+        const { installHoverDelegateAnchor } =
+            await import('../hoverDelegateAnchor');
         const fakeMonaco = makeFakeMonaco(factory.setHoverDelegateFactory);
 
         installHoverDelegateAnchor(fakeMonaco as never);

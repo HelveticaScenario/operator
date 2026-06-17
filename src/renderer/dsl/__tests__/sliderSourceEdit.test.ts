@@ -18,7 +18,10 @@ describe('findSliderValueSpan', () => {
             `$sine('a3', {fm: $slider('x', 0,0,5)}).out();\n`;
         const liveValueStart = source.indexOf('0,0,5)');
         const span = findSliderValueSpan(source, 'x');
-        expect(span).toEqual({ start: liveValueStart, end: liveValueStart + 1 });
+        expect(span).toEqual({
+            start: liveValueStart,
+            end: liveValueStart + 1,
+        });
     });
 
     test('ignores a slider inside a block comment', () => {
@@ -27,7 +30,10 @@ describe('findSliderValueSpan', () => {
             `$sine('a3', {fm: $slider('g', 4, 0, 10)}).out();\n`;
         const liveValueStart = source.indexOf('4, 0, 10)');
         const span = findSliderValueSpan(source, 'g');
-        expect(span).toEqual({ start: liveValueStart, end: liveValueStart + 1 });
+        expect(span).toEqual({
+            start: liveValueStart,
+            end: liveValueStart + 1,
+        });
     });
 
     test('does not treat // inside a string as a comment', () => {
@@ -38,7 +44,10 @@ describe('findSliderValueSpan', () => {
             `$sine('a3', {fm: $slider('x', 1, 0, 9)}).out();\n`;
         const liveValueStart = source.indexOf('1, 0, 9)');
         const span = findSliderValueSpan(source, 'x');
-        expect(span).toEqual({ start: liveValueStart, end: liveValueStart + 1 });
+        expect(span).toEqual({
+            start: liveValueStart,
+            end: liveValueStart + 1,
+        });
     });
 
     test('returns null when the label is absent', () => {

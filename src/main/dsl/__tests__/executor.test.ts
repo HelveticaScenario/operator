@@ -903,7 +903,9 @@ describe('sliders', () => {
     test('$slider result is re-rangeable via 2-arg .range()', () => {
         // $slider returns a CollectionWithRange carrying [min, max], so the
         // 2-arg .range() remaps from [100, 8000] into the new [0, 5] range.
-        const result = exec('$slider("Cutoff", 1000, 100, 8000).range(0, 5).out()');
+        const result = exec(
+            '$slider("Cutoff", 1000, 100, 8000).range(0, 5).out()',
+        );
         expect(result.sliders.length).toBe(1);
         const remaps = findModules(result.patch, '$remap');
         expect(remaps.length).toBe(1);

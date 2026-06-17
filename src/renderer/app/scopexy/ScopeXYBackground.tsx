@@ -1,10 +1,6 @@
 import { useEffect, useRef } from 'react';
 import electronAPI from '../../electronAPI';
-import {
-    createScopeXY,
-    type ScopeXYPairData,
-    type ScopeXY,
-} from './pipeline';
+import { createScopeXY, type ScopeXYPairData, type ScopeXY } from './pipeline';
 
 type Rgb = [number, number, number];
 
@@ -35,9 +31,7 @@ function parseCssColor(value: string, fallback: Rgb): Rgb {
         }
         return [r / 255, g / 255, b / 255];
     }
-    const match = trimmed.match(
-        /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i,
-    );
+    const match = trimmed.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
     if (match) {
         return [
             parseInt(match[1], 10) / 255,

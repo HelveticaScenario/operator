@@ -98,11 +98,17 @@ describe('$p.s chain methods', () => {
         const base = $p.s('0 1 2', 'c(maj)');
         for (const mode of MODES) {
             const addR = (
-                base.add as unknown as Record<string, (rhs: string) => SpPattern>
+                base.add as unknown as Record<
+                    string,
+                    (rhs: string) => SpPattern
+                >
             )[mode]('0');
             expect(addR.ops[0]).toEqual({ op: 'add', mode });
             const subR = (
-                base.sub as unknown as Record<string, (rhs: string) => SpPattern>
+                base.sub as unknown as Record<
+                    string,
+                    (rhs: string) => SpPattern
+                >
             )[mode]('0');
             expect(subR.ops[0]).toEqual({ op: 'sub', mode });
         }
@@ -204,7 +210,9 @@ describe('$p.s opaque payload preservation through replaceSignals', () => {
         // were unaffected, masking the bug as "works for '0', fails for '0 1'".
         const pat = $p.s('0 1', 'c(maj)');
         const walked = replaceSignals(pat) as SpPattern;
-        const seq = (walked.sources[0].ast as { Sequence?: Array<[unknown, unknown]> }).Sequence;
+        const seq = (
+            walked.sources[0].ast as { Sequence?: Array<[unknown, unknown]> }
+        ).Sequence;
         expect(seq).toBeDefined();
         expect(seq).toHaveLength(2);
         expect(seq![0][1]).toBeNull();

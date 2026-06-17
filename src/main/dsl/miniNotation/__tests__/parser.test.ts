@@ -309,7 +309,8 @@ describe('whitespace around modifiers (Rust pest parity)', () => {
     test('space before and after the slow sigil attaches to preceding element', () => {
         for (const src of ['0/2', '0 /2', '0/ 2', '0 / 2']) {
             const r = $p(src);
-            if (!('Slow' in r.ast)) return expect.fail(`expected Slow for "${src}"`);
+            if (!('Slow' in r.ast))
+                return expect.fail(`expected Slow for "${src}"`);
             expect(r.ast.Slow[1]).toEqual({
                 Pure: { node: 2, span: expect.anything() },
             });
@@ -358,7 +359,8 @@ describe('modifiers inside operand subsequences', () => {
         const r = $p('0(<16!2 12>,8)');
         if (!('Euclidean' in r.ast)) return expect.fail('expected Euclidean');
         const pulses = r.ast.Euclidean.pulses;
-        if (!('SlowCat' in pulses)) return expect.fail('expected SlowCat pulses');
+        if (!('SlowCat' in pulses))
+            return expect.fail('expected SlowCat pulses');
         const first = pulses.SlowCat[0][0];
         expect('Replicate' in first).toBe(true);
         if ('Replicate' in first) {
@@ -367,9 +369,7 @@ describe('modifiers inside operand subsequences', () => {
     });
 
     test('full reported pattern parses', () => {
-        expect(() =>
-            $p('0(<16!2 12>,[16 <8 12> 16])'),
-        ).not.toThrow();
+        expect(() => $p('0(<16!2 12>,[16 <8 12> 16])')).not.toThrow();
     });
 });
 
@@ -612,4 +612,3 @@ describe('separator model (Tidal/krill parity)', () => {
         expect(() => $p('<0 | 1>')).toThrow(MiniParseError);
     });
 });
-

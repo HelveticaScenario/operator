@@ -46,9 +46,7 @@ describe('migrateCycleCalls', () => {
     test('strips voltage in traced variable assignment', () => {
         const source = `const pat = "5v 7v";\n$cycle(pat);`;
         const result = migrateCycleCalls(source);
-        expect(result.migrated).toBe(
-            `const pat = $p("5 7");\n$cycle(pat);`,
-        );
+        expect(result.migrated).toBe(`const pat = $p("5 7");\n$cycle(pat);`);
         expect(result.assignmentsChanged).toBe(1);
     });
 
@@ -160,9 +158,7 @@ describe('migrateCycleCalls', () => {
     test('rewrites $iCycle(string, scale) to $cycle($p.s(string, scale))', () => {
         const source = `$iCycle("0 2 4", "C(major)");`;
         const result = migrateCycleCalls(source);
-        expect(result.migrated).toBe(
-            `$cycle($p.s("0 2 4", "C(major)"));`,
-        );
+        expect(result.migrated).toBe(`$cycle($p.s("0 2 4", "C(major)"));`);
         expect(result.callsChanged).toBe(1);
     });
 
@@ -178,9 +174,7 @@ describe('migrateCycleCalls', () => {
     test('rewrites $iCycle(single-elem array, scale) to plain $p.s', () => {
         const source = `$iCycle(["0 2 4"], "C(major)");`;
         const result = migrateCycleCalls(source);
-        expect(result.migrated).toBe(
-            `$cycle($p.s("0 2 4", "C(major)"));`,
-        );
+        expect(result.migrated).toBe(`$cycle($p.s("0 2 4", "C(major)"));`);
         expect(result.callsChanged).toBe(1);
     });
 
@@ -194,9 +188,7 @@ describe('migrateCycleCalls', () => {
     test('migrates $iCycle array form in comment', () => {
         const source = `// $iCycle(["0 2", "4"], "C")`;
         const result = migrateCycleCalls(source);
-        expect(result.migrated).toBe(
-            `// $cycle($p.s("0 2", "C").add("4"))`,
-        );
+        expect(result.migrated).toBe(`// $cycle($p.s("0 2", "C").add("4"))`);
         expect(result.commentsChanged).toBe(1);
     });
 

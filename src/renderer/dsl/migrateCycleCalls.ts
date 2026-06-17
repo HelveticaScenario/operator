@@ -325,9 +325,7 @@ function resolveISources(
     return null;
 }
 
-function collectArrayStrings(
-    arr: ArrayLiteralExpression,
-): string[] | null {
+function collectArrayStrings(arr: ArrayLiteralExpression): string[] | null {
     const out: string[] = [];
     for (const elem of arr.getElements()) {
         if (isStringish(elem)) {
@@ -376,17 +374,18 @@ function collectAssignments(
             if (node.getOperatorToken().getText() !== '=') return;
             const left = node.getLeft();
             if (!Node.isIdentifier(left)) return;
-            push(map, left.getText(), siteFromExpression(left, node.getRight()));
+            push(
+                map,
+                left.getText(),
+                siteFromExpression(left, node.getRight()),
+            );
         }
     });
 
     return map;
 }
 
-function siteFromExpression(
-    nameNode: Node,
-    expr: Expression,
-): AssignmentSite {
+function siteFromExpression(nameNode: Node, expr: Expression): AssignmentSite {
     return {
         rhsStart: expr.getStart(),
         rhsEnd: expr.getEnd(),
@@ -413,7 +412,9 @@ function assignmentsVisibleAt(
 ): boolean {
     const callSym = callSite.getSymbol()?.compilerSymbol;
     if (!callSym) return false;
-    return sites.every((s) => s.nameNode.getSymbol()?.compilerSymbol === callSym);
+    return sites.every(
+        (s) => s.nameNode.getSymbol()?.compilerSymbol === callSym,
+    );
 }
 
 function push(
@@ -448,4 +449,3 @@ function applyEdits(
     out += source.slice(cursor);
     return { source: out, conflict: false };
 }
-

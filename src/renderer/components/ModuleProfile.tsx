@@ -228,20 +228,11 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                                 <span
                                     className="module-profile-bar-fill"
                                     style={{
-                                        width: formatBar(
-                                            v,
-                                            maxSelfNsPerSample,
-                                        ),
+                                        width: formatBar(v, maxSelfNsPerSample),
                                     }}
                                 />
                             </span>
-                            <span>
-                                {formatValue(
-                                    v,
-                                    unit,
-                                    sampleRateHz,
-                                )}
-                            </span>
+                            <span>{formatValue(v, unit, sampleRateHz)}</span>
                         </div>
                     );
                 },
@@ -252,24 +243,15 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                 id: 'params',
                 header: 'Params',
                 cell: (info) =>
-                    formatValue(
-                        info.getValue(),
-                        unit,
-                        sampleRateHz,
-                    ),
+                    formatValue(info.getValue(), unit, sampleRateHz),
                 sortingFn: (a, b) =>
-                    a.original.paramsNsPerSample -
-                    b.original.paramsNsPerSample,
+                    a.original.paramsNsPerSample - b.original.paramsNsPerSample,
             }),
             columnHelper.accessor('totalNsPerSample', {
                 id: 'total',
                 header: 'Total',
                 cell: (info) =>
-                    formatValue(
-                        info.getValue(),
-                        unit,
-                        sampleRateHz,
-                    ),
+                    formatValue(info.getValue(), unit, sampleRateHz),
                 sortingFn: (a, b) =>
                     a.original.totalNsPerSample - b.original.totalNsPerSample,
             }),
@@ -348,14 +330,13 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
 
                 <div className="module-profile-body">
                     <p className="module-profile-legend">
-                        Per-sample averages.{' '}
-                        <strong>Self</strong>: time in this module's own DSP.{' '}
-                        <strong>Params</strong>: time fetching cable inputs
-                        from upstream (their cost shows in their own Self).{' '}
-                        <strong>Total</strong>: Self + Params.{' '}
-                        <strong>Mode</strong>: <em>sample</em> = in a
-                        feedback cycle (per-sample wrapper); <em>block</em> =
-                        acyclic (per-block wrapper).
+                        Per-sample averages. <strong>Self</strong>: time in this
+                        module's own DSP. <strong>Params</strong>: time fetching
+                        cable inputs from upstream (their cost shows in their
+                        own Self). <strong>Total</strong>: Self + Params.{' '}
+                        <strong>Mode</strong>: <em>sample</em> = in a feedback
+                        cycle (per-sample wrapper); <em>block</em> = acyclic
+                        (per-block wrapper).
                     </p>
                     {rows === null ? (
                         <div className="module-profile-loading">Loading…</div>
@@ -378,8 +359,7 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                                         {hg.headers.map((header) => {
                                             const isNumeric =
                                                 header.column.id === 'self' ||
-                                                header.column.id ===
-                                                    'params' ||
+                                                header.column.id === 'params' ||
                                                 header.column.id === 'total';
                                             const sortDir =
                                                 header.column.getIsSorted();
@@ -395,8 +375,7 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
                                                         header.getContext(),
                                                     )}
                                                     {sortDir === 'asc' && ' ▲'}
-                                                    {sortDir === 'desc' &&
-                                                        ' ▼'}
+                                                    {sortDir === 'desc' && ' ▼'}
                                                 </th>
                                             );
                                         })}

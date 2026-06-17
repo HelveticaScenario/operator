@@ -176,8 +176,7 @@ export function executePatchScript(
         const flatten = (v: unknown): ModuleOutput[] => {
             if (v instanceof ModuleOutput) return [v];
             if (v instanceof BaseCollection) return [...v];
-            if (Array.isArray(v))
-                return v.flatMap((e: unknown) => flatten(e));
+            if (Array.isArray(v)) return v.flatMap((e: unknown) => flatten(e));
             throw new Error(
                 '$scopeXY: arguments must be a ModuleOutput, Collection, or array thereof',
             );
@@ -347,7 +346,9 @@ export function executePatchScript(
         feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
         length: number,
     ): Collection & { buffer: BufferOutputRef } => {
-        const def = $deferred(input instanceof BaseCollection ? input.length : 1);
+        const def = $deferred(
+            input instanceof BaseCollection ? input.length : 1,
+        );
         const mixed = $mix([input, def]) as Collection;
         const buf = $buffer(mixed, length);
         def.set(feedbackCb(buf));

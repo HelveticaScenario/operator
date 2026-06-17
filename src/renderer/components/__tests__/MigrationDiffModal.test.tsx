@@ -15,8 +15,7 @@ import * as React from 'react';
 // element tree by reference identity and read its props in place.
 
 vi.mock('react', async (importOriginal) => {
-    const actual =
-        await importOriginal<typeof import('react')>();
+    const actual = await importOriginal<typeof import('react')>();
     return {
         ...actual,
         useRef: (initial?: unknown) => ({ current: initial }),
@@ -180,11 +179,9 @@ describe('MigrationDiffModal', () => {
             const children = (el.props as { children?: unknown }).children;
             if (typeof children === 'string') texts.push(children);
         }
-        expect(
-            texts.some((t) =>
-                t.includes('Buffer already migrated'),
-            ),
-        ).toBe(true);
+        expect(texts.some((t) => t.includes('Buffer already migrated'))).toBe(
+            true,
+        );
     });
 
     test('Apply button is disabled when totalChanges === 0', () => {

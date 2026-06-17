@@ -53,8 +53,13 @@ function makeHarness() {
     function makeCollection(initial?: { range: FakeRange }[]) {
         let ids: string[] = [];
         const coll = {
-            decos: [] as { range: FakeRange; options?: { className?: string } }[],
-            set(decos: { range: FakeRange; options?: { className?: string } }[]) {
+            decos: [] as {
+                range: FakeRange;
+                options?: { className?: string };
+            }[],
+            set(
+                decos: { range: FakeRange; options?: { className?: string } }[],
+            ) {
                 for (const id of ids) ranges.delete(id);
                 ids = [];
                 coll.decos = decos;
@@ -78,7 +83,10 @@ function makeHarness() {
     }
 
     const model = {
-        getPositionAt: (offset: number) => ({ lineNumber: 1, column: offset + 1 }),
+        getPositionAt: (offset: number) => ({
+            lineNumber: 1,
+            column: offset + 1,
+        }),
         // Non-interpolated literal: contains no '${'.
         getValueInRange: () => '"0 2 4"',
         getDecorationRange: (id: string) => {

@@ -253,8 +253,10 @@ export const IPC_CHANNELS = {
     SYNTH_IS_RECORDING: 'modular:synth:is-recording',
     SYNTH_GET_HEALTH: 'modular:synth:get-health',
     SYNTH_GET_MODULE_PROFILE: 'modular:synth:get-module-profile',
-    SYNTH_SET_MODULE_PROFILING_ENABLED: 'modular:synth:set-module-profiling-enabled',
-    SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE: 'modular:synth:set-module-profiling-sample-rate',
+    SYNTH_SET_MODULE_PROFILING_ENABLED:
+        'modular:synth:set-module-profiling-enabled',
+    SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE:
+        'modular:synth:set-module-profiling-sample-rate',
     SYNTH_GET_MODULE_STATES: 'modular:synth:get-module-states',
     SYNTH_STOP: 'modular:synth:stop',
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',

@@ -634,7 +634,8 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             { name: 'min', type: 'number', description: 'Minimum value' },
             { name: 'max', type: 'number', description: 'Maximum value' },
         ],
-        returns: 'CollectionWithRange carrying the current slider value (range [min, max])',
+        returns:
+            'CollectionWithRange carrying the current slider value (range [min, max])',
         signature:
             '$slider(label: string, value: number, min: number, max: number): CollectionWithRange',
     },

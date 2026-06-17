@@ -26,7 +26,10 @@ describe('$p.arrange builder', () => {
     });
 
     test('encodes Infinity as the string sentinel "Infinity"', () => {
-        const r = $p.arrange([2, $p('c4')], [Infinity, $p.s('0 2 4', 'a(min)')]);
+        const r = $p.arrange(
+            [2, $p('c4')],
+            [Infinity, $p.s('0 2 4', 'a(min)')],
+        );
         expect(r.sections[0].cycles).toBe(2);
         expect(r.sections[1].cycles).toBe('Infinity');
     });
@@ -71,17 +74,14 @@ describe('$p.arrange builder', () => {
 
     test('rejects a non-pattern section payload', () => {
         expect(() =>
-            $p.arrange([
-                2,
-                'c4' as unknown as ReturnType<typeof $p>,
-            ]),
+            $p.arrange([2, 'c4' as unknown as ReturnType<typeof $p>]),
         ).toThrow(MiniParseError);
     });
 
     test('rejects an Infinity section that is not last', () => {
-        expect(() =>
-            $p.arrange([Infinity, $p('c4')], [2, $p('e4')]),
-        ).toThrow(MiniParseError);
+        expect(() => $p.arrange([Infinity, $p('c4')], [2, $p('e4')])).toThrow(
+            MiniParseError,
+        );
     });
 
     test('survives replaceSignals verbatim (no AST collapse)', () => {
