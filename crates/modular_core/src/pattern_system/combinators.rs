@@ -450,11 +450,14 @@ mod tests {
 
     /// Query one integer cycle and return the values of its onset haps.
     fn onset_values(pat: &Pattern<&'static str>, cycle: i64) -> Vec<&'static str> {
-        pat.query_arc(Fraction::from_integer(cycle), Fraction::from_integer(cycle + 1))
-            .into_iter()
-            .filter(|h| h.has_onset())
-            .map(|h| h.value)
-            .collect()
+        pat.query_arc(
+            Fraction::from_integer(cycle),
+            Fraction::from_integer(cycle + 1),
+        )
+        .into_iter()
+        .filter(|h| h.has_onset())
+        .map(|h| h.value)
+        .collect()
     }
 
     #[test]

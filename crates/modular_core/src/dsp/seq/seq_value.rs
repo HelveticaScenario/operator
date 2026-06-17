@@ -1644,8 +1644,7 @@ mod tests {
         // Baking a cycle proves all three sources light up at their flat slots:
         // the two inner sources at idx 0 and 1, and the factor "2 4" at idx 2.
         let inner = sp_source_2("0 2 4", "0 5", "c(maj)");
-        let mut param =
-            SeqPatternParam::from_fast_payload(fast_payload("2 4", inner)).unwrap();
+        let mut param = SeqPatternParam::from_fast_payload(fast_payload("2 4", inner)).unwrap();
 
         let sources: Vec<&str> = param
             .per_source()

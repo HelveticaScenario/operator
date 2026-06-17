@@ -1,7 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use modular_core::dsp::fx::overdrive::{
-    OverdriveMode, OverdriveParams, __bench_make_overdrive,
-};
+use modular_core::dsp::fx::overdrive::{__bench_make_overdrive, OverdriveMode, OverdriveParams};
 use modular_core::poly::PolySignal;
 use modular_core::types::Signal;
 use std::hint::black_box;

@@ -109,7 +109,12 @@ struct NoiseChannelState {
 /// $noise("pink").out()
 /// $noise("white", { channels: 4 }).out()
 /// ```
-#[module(name = "$noise", channels_param = "channels", patch_update, args(color))]
+#[module(
+    name = "$noise",
+    channels_param = "channels",
+    patch_update,
+    args(color)
+)]
 pub struct Noise {
     outputs: NoiseOutputs,
     params: NoiseParams,

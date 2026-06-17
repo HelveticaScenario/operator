@@ -995,8 +995,9 @@ mod tests {
         cands: &[usize],
         cv: &[(usize, f32)],
     ) -> Vec<Option<usize>> {
-        let mut channels: Vec<SeqChannel> =
-            (0..PORT_MAX_CHANNELS).map(|_| SeqChannel::default()).collect();
+        let mut channels: Vec<SeqChannel> = (0..PORT_MAX_CHANNELS)
+            .map(|_| SeqChannel::default())
+            .collect();
         for &(i, v) in cv {
             channels[i].last_cv = v;
         }

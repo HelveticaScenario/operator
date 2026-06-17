@@ -1,5 +1,5 @@
 use criterion::{Criterion, criterion_group, criterion_main};
-use modular_core::dsp::core::mix::{MixMode, MixParams, __bench_make_mix};
+use modular_core::dsp::core::mix::{__bench_make_mix, MixMode, MixParams};
 use modular_core::poly::PolySignal;
 use modular_core::types::Signal;
 use std::hint::black_box;

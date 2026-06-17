@@ -64,8 +64,8 @@ fn profiler_attributes_work_to_both_modules() {
             }),
         ),
     ]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new())
-        .expect("from_graph");
+    let patch =
+        Patch::from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new()).expect("from_graph");
 
     let collection = new_collection();
     // Patch::from_graph bypasses the audio-thread patch-swap path, so seed
@@ -96,8 +96,16 @@ fn profiler_attributes_work_to_both_modules() {
         .get("sig")
         .unwrap_or_else(|| panic!("no record for sig; snapshot: {:?}", snap));
 
-    assert!(osc.samples_processed >= 2000, "osc samples: {}", osc.samples_processed);
-    assert!(sig.samples_processed >= 2000, "sig samples: {}", sig.samples_processed);
+    assert!(
+        osc.samples_processed >= 2000,
+        "osc samples: {}",
+        osc.samples_processed
+    );
+    assert!(
+        sig.samples_processed >= 2000,
+        "sig samples: {}",
+        sig.samples_processed
+    );
     assert!(osc.self_ns > 0, "osc self_ns should be > 0");
     assert!(sig.self_ns > 0, "sig self_ns should be > 0");
     assert!(osc.ensure_calls_did_work > 0);
@@ -122,8 +130,8 @@ fn profiler_attributes_work_to_both_modules() {
 #[test]
 fn profiler_disabled_produces_no_records() {
     let graph = make_graph(vec![("osc", "$sine", json!({ "freq": 0.0 }))]);
-    let patch = Patch::from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new())
-        .expect("from_graph");
+    let patch =
+        Patch::from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new()).expect("from_graph");
 
     profiling::set_enabled(false);
     profiling::refresh_enabled();

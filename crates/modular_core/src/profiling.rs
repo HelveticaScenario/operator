@@ -75,7 +75,9 @@ impl ModuleProfileAccum {
         self.ensure_calls_did_work = self
             .ensure_calls_did_work
             .saturating_add(other.ensure_calls_did_work);
-        self.samples_processed = self.samples_processed.saturating_add(other.samples_processed);
+        self.samples_processed = self
+            .samples_processed
+            .saturating_add(other.samples_processed);
         // Last-write-wins on mode. The same id can legitimately switch
         // mode across patch swaps when graph_analysis reclassifies its
         // SCC membership.
@@ -464,9 +466,8 @@ mod tests {
         );
         flush_into(&collection);
 
-        let snap: HashMap<String, ModuleProfileAccum> = drain_collection(&collection)
-            .into_iter()
-            .collect();
+        let snap: HashMap<String, ModuleProfileAccum> =
+            drain_collection(&collection).into_iter().collect();
         let parent = snap.get("parent").unwrap();
         let child = snap.get("child").unwrap();
 
