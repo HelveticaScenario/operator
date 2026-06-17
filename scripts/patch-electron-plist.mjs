@@ -51,14 +51,10 @@ function plistBuddy(command) {
 
 // Add NSLocalNetworkUsageDescription (skip if already present)
 if (!plistBuddy(`Print :NSLocalNetworkUsageDescription`)) {
-    plistBuddy(
-        `Add :NSLocalNetworkUsageDescription string '${description}'`,
-    );
+    plistBuddy(`Add :NSLocalNetworkUsageDescription string '${description}'`);
     console.log('[patch-electron-plist] Added NSLocalNetworkUsageDescription');
 } else {
-    plistBuddy(
-        `Set :NSLocalNetworkUsageDescription '${description}'`,
-    );
+    plistBuddy(`Set :NSLocalNetworkUsageDescription '${description}'`);
     console.log(
         '[patch-electron-plist] Updated NSLocalNetworkUsageDescription',
     );
@@ -79,10 +75,9 @@ if (!plistBuddy(`Print :NSBonjourServices`)) {
 // Modifying Info.plist invalidates the existing code signature, and macOS
 // silently blocks Local Network access (no prompt) for unsigned/broken-sig apps.
 try {
-    execSync(
-        `codesign --force --deep --sign - "${electronApp}"`,
-        { stdio: 'pipe' },
-    );
+    execSync(`codesign --force --deep --sign - "${electronApp}"`, {
+        stdio: 'pipe',
+    });
     console.log('[patch-electron-plist] Re-signed Electron.app (ad-hoc)');
 } catch (err) {
     console.warn(

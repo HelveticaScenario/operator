@@ -65,15 +65,7 @@ const OPS = {
     sub: (a) => (b) => a - b,
 };
 
-const MODES = [
-    'in',
-    'out',
-    'mix',
-    'squeeze',
-    'squeezeout',
-    'reset',
-    'restart',
-];
+const MODES = ['in', 'out', 'mix', 'squeeze', 'squeezeout', 'reset', 'restart'];
 
 const MODE_METHOD = {
     in: '_opIn',
@@ -129,7 +121,9 @@ function genSingleChain() {
                 for (const modeName of MODES) {
                     let result;
                     try {
-                        result = queryRow(applyOp(lhsPat, rhsPat, opName, modeName));
+                        result = queryRow(
+                            applyOp(lhsPat, rhsPat, opName, modeName),
+                        );
                     } catch (err) {
                         rows.push({
                             lhs: lhs.label,
