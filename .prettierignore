@@ -6,3 +6,9 @@ crates/modular/package-template.wasi.cjs
 crates/modular/wasi-worker-browser.mjs
 crates/modular/wasi-worker.mjs
 crates/modular/.yarnrc.yml
+node_modules
+generated
+dist
+playwright-report
+target
+.vite
