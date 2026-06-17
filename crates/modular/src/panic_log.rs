@@ -28,82 +28,82 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static INSTALL: Once = Once::new();
 
 pub fn install_panic_hook() {
-  INSTALL.call_once(|| {
-    let prev = panic::take_hook();
-    panic::set_hook(Box::new(move |info| {
-      let _ = write_panic_log(info);
-      prev(info);
-    }));
-  });
+    INSTALL.call_once(|| {
+        let prev = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            let _ = write_panic_log(info);
+            prev(info);
+        }));
+    });
 }
 
 pub fn panic_log_dir() -> PathBuf {
-  #[cfg(target_os = "macos")]
-  {
-    if let Some(home) = std::env::var_os("HOME") {
-      let mut p = PathBuf::from(home);
-      p.push("Library/Logs/Operator");
-      return p;
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let mut p = PathBuf::from(home);
+            p.push("Library/Logs/Operator");
+            return p;
+        }
     }
-  }
-  #[cfg(target_os = "linux")]
-  {
-    if let Some(home) = std::env::var_os("HOME") {
-      let mut p = PathBuf::from(home);
-      p.push(".config/Operator/logs");
-      return p;
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let mut p = PathBuf::from(home);
+            p.push(".config/Operator/logs");
+            return p;
+        }
     }
-  }
-  #[cfg(target_os = "windows")]
-  {
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-      let mut p = PathBuf::from(appdata);
-      p.push("Operator");
-      p.push("logs");
-      return p;
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            let mut p = PathBuf::from(appdata);
+            p.push("Operator");
+            p.push("logs");
+            return p;
+        }
     }
-  }
-  std::env::temp_dir().join("operator-panic-logs")
+    std::env::temp_dir().join("operator-panic-logs")
 }
 
 fn write_panic_log(info: &panic::PanicHookInfo<'_>) -> std::io::Result<()> {
-  let dir = panic_log_dir();
-  create_dir_all(&dir)?;
+    let dir = panic_log_dir();
+    create_dir_all(&dir)?;
 
-  let epoch = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0);
-  let pid = std::process::id();
-  let path = dir.join(format!("panic-{epoch}-{pid}.log"));
+    let epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    let path = dir.join(format!("panic-{epoch}-{pid}.log"));
 
-  let mut f: File = OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut f: File = OpenOptions::new().create(true).append(true).open(&path)?;
 
-  let payload: &str = if let Some(s) = info.payload().downcast_ref::<&'static str>() {
-    s
-  } else if let Some(s) = info.payload().downcast_ref::<String>() {
-    s.as_str()
-  } else {
-    "<non-string panic payload>"
-  };
+    let payload: &str = if let Some(s) = info.payload().downcast_ref::<&'static str>() {
+        s
+    } else if let Some(s) = info.payload().downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "<non-string panic payload>"
+    };
 
-  let location = info
-    .location()
-    .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
-    .unwrap_or_else(|| "<unknown>".to_string());
+    let location = info
+        .location()
+        .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+        .unwrap_or_else(|| "<unknown>".to_string());
 
-  let thread_handle = std::thread::current();
-  let thread_name = thread_handle.name().unwrap_or("<unnamed>");
+    let thread_handle = std::thread::current();
+    let thread_name = thread_handle.name().unwrap_or("<unnamed>");
 
-  let backtrace = Backtrace::force_capture();
+    let backtrace = Backtrace::force_capture();
 
-  writeln!(f, "==== Operator panic ====")?;
-  writeln!(f, "epoch: {epoch}")?;
-  writeln!(f, "pid:   {pid}")?;
-  writeln!(f, "thread: {thread_name}")?;
-  writeln!(f, "location: {location}")?;
-  writeln!(f, "payload: {payload}")?;
-  writeln!(f, "backtrace:\n{backtrace}")?;
-  writeln!(f, "========================\n")?;
-  f.flush()
+    writeln!(f, "==== Operator panic ====")?;
+    writeln!(f, "epoch: {epoch}")?;
+    writeln!(f, "pid:   {pid}")?;
+    writeln!(f, "thread: {thread_name}")?;
+    writeln!(f, "location: {location}")?;
+    writeln!(f, "payload: {payload}")?;
+    writeln!(f, "backtrace:\n{backtrace}")?;
+    writeln!(f, "========================\n")?;
+    f.flush()
 }
