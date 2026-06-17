@@ -7,42 +7,42 @@
 //! - `PolySignal`: A fixed-capacity input buffer containing Signal values (for polyphonic module inputs)
 
 use crate::{dsp::utils::sanitize, types::Signal};
-use arrayvec::ArrayVec;
 use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Cow;
 
-/// Maximum channels per cable (matches VCV Rack / MIDI convention)
-pub const PORT_MAX_CHANNELS: usize = 16;
+/// Maximum channels per cable. A hard cap on polyphony — buffers are sized to
+/// each module's actual channel count, so this only bounds the maximum, it is
+/// not allocated up front.
+pub const PORT_MAX_CHANNELS: usize = 64;
 
-/// A polyphonic output buffer with channel count metadata.
+/// A polyphonic output buffer holding one voltage per active channel.
 ///
-/// This is a fixed-capacity buffer that can hold up to 16 channels.
-/// The `channels` field indicates how many channels are semantically valid:
-/// - 0 = disconnected
-/// - 1 = monophonic
-/// - 2-16 = polyphonic
-#[derive(Clone, Copy, Debug)]
+/// The backing slice is sized to the module's channel count (1..=16) on the
+/// main thread at construction (`set_channels`), never on the audio thread.
+/// `voltages.len()` is the active channel count: 0 = disconnected, 1 = mono,
+/// 2-16 = polyphonic.
+#[derive(Clone, Debug)]
 pub struct PolyOutput {
-    /// Voltage values for each channel (always allocated, not all may be active)
-    voltages: [f32; PORT_MAX_CHANNELS],
-    /// Number of active channels: 0 = disconnected, 1 = mono, 2-16 = poly
-    channels: usize,
-    /// Per-channel minimum output range. NaN = unknown (no range metadata).
-    /// Only meaningful on outputs declared with `dynamic_range`.
-    range_min: [f32; PORT_MAX_CHANNELS],
-    /// Per-channel maximum output range. NaN = unknown (no range metadata).
-    range_max: [f32; PORT_MAX_CHANNELS],
+    /// One voltage per active channel. Length is the channel count.
+    voltages: Box<[f32]>,
+    /// Per-channel minimum output range, same length as `voltages`. NaN =
+    /// unknown (no range metadata). Only meaningful on outputs declared with
+    /// `dynamic_range`.
+    range_min: Box<[f32]>,
+    /// Per-channel maximum output range, same length as `voltages`. NaN =
+    /// unknown (no range metadata). Only meaningful on outputs declared with
+    /// `dynamic_range`.
+    range_max: Box<[f32]>,
 }
 
 impl Default for PolyOutput {
     fn default() -> Self {
         Self {
-            voltages: [0.0; PORT_MAX_CHANNELS],
-            channels: 0, // Disconnected
-            range_min: [f32::NAN; PORT_MAX_CHANNELS],
-            range_max: [f32::NAN; PORT_MAX_CHANNELS],
+            voltages: Box::new([]), // Disconnected (0 channels)
+            range_min: Box::new([]),
+            range_max: Box::new([]),
         }
     }
 }
@@ -52,43 +52,31 @@ impl Default for PolyOutput {
 /// bounds, not part of the signal value itself.
 impl PartialEq for PolyOutput {
     fn eq(&self, other: &Self) -> bool {
-        if self.channels != other.channels {
-            return false;
-        }
-        // Only compare active channels
-        for i in 0..self.channels as usize {
-            if self.voltages[i] != other.voltages[i] {
-                return false;
-            }
-        }
-        true
+        self.voltages == other.voltages
     }
 }
 
 impl PolyOutput {
     /// Create a monophonic signal with a single value
     pub fn mono(value: f32) -> Self {
-        let mut sig = Self::default();
-        sig.voltages[0] = value;
-        sig.channels = 1;
-        sig
+        Self {
+            voltages: vec![value].into_boxed_slice(),
+            range_min: vec![f32::NAN].into_boxed_slice(),
+            range_max: vec![f32::NAN].into_boxed_slice(),
+        }
     }
 
     // === Accessors ===
 
     /// Get voltage for a specific channel (returns 0.0 if out of range)
     pub fn get(&self, channel: usize) -> f32 {
-        if channel < self.channels as usize {
-            self.voltages[channel]
-        } else {
-            0.0
-        }
+        self.voltages.get(channel).copied().unwrap_or(0.0)
     }
 
     /// Set voltage for a specific channel
     pub fn set(&mut self, channel: usize, value: f32) {
-        if channel < PORT_MAX_CHANNELS {
-            self.voltages[channel] = sanitize(value);
+        if let Some(slot) = self.voltages.get_mut(channel) {
+            *slot = sanitize(value);
         }
     }
 
@@ -96,29 +84,30 @@ impl PolyOutput {
     /// This is consistent with Vec::cycle_get for non-signal params.
     /// A mono signal cycles to all channels, a 2-ch signal alternates, etc.
     pub fn get_cycling(&self, channel: usize) -> f32 {
-        if self.channels == 0 {
+        let n = self.voltages.len();
+        if n == 0 {
             0.0 // Disconnected
         } else {
-            self.voltages[channel % self.channels as usize]
+            self.voltages[channel % n]
         }
     }
 
-    /// Set the number of active channels (clears higher channels to 0)
+    /// Size the buffer to `channels` active channels.
+    ///
+    /// Reallocates when the count changes — **main thread only** (called once
+    /// per output at construction via `OutputStruct::set_all_channels`). When
+    /// the count is unchanged this is a no-op, so it is safe to re-invoke.
     pub fn set_channels(&mut self, channels: usize) {
-        let channels = channels.clamp(0, PORT_MAX_CHANNELS);
-        // Clear channels beyond the new count
-        for c in channels..self.channels {
-            self.voltages[c] = 0.0;
+        let channels = channels.min(PORT_MAX_CHANNELS);
+        if self.voltages.len() != channels {
+            self.voltages = vec![0.0; channels].into_boxed_slice();
+            self.range_min = vec![f32::NAN; channels].into_boxed_slice();
+            self.range_max = vec![f32::NAN; channels].into_boxed_slice();
         }
-        self.channels = channels;
     }
 
     pub fn channels(&self) -> usize {
-        self.channels
-    }
-
-    pub fn set_all(&mut self, voltages: &[f32; PORT_MAX_CHANNELS]) {
-        self.voltages = *voltages;
+        self.voltages.len()
     }
 
     // === Dynamic range metadata ===
@@ -128,22 +117,36 @@ impl PolyOutput {
 
     /// Record the runtime range bounds for a channel.
     pub fn set_range(&mut self, channel: usize, min: f32, max: f32) {
-        if channel < PORT_MAX_CHANNELS {
-            self.range_min[channel] = min;
-            self.range_max[channel] = max;
+        if let Some(slot) = self.range_min.get_mut(channel) {
+            *slot = min;
+        }
+        if let Some(slot) = self.range_max.get_mut(channel) {
+            *slot = max;
         }
     }
 
-    /// Read the minimum range bound for a channel. Returns `NaN` when unset.
+    /// Read the minimum range bound for a channel (cycling). Returns `NaN` when
+    /// unset or disconnected.
     #[inline]
     pub fn get_range_min(&self, channel: usize) -> f32 {
-        self.range_min[channel % PORT_MAX_CHANNELS]
+        let n = self.range_min.len();
+        if n == 0 {
+            f32::NAN
+        } else {
+            self.range_min[channel % n]
+        }
     }
 
-    /// Read the maximum range bound for a channel. Returns `NaN` when unset.
+    /// Read the maximum range bound for a channel (cycling). Returns `NaN` when
+    /// unset or disconnected.
     #[inline]
     pub fn get_range_max(&self, channel: usize) -> f32 {
-        self.range_max[channel % PORT_MAX_CHANNELS]
+        let n = self.range_max.len();
+        if n == 0 {
+            f32::NAN
+        } else {
+            self.range_max[channel % n]
+        }
     }
 }
 
@@ -157,8 +160,8 @@ impl Serialize for PolyOutput {
         // Serialize as a struct with channels and voltages array
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("PolyOutput", 2)?;
-        state.serialize_field("channels", &self.channels)?;
-        state.serialize_field("voltages", &self.voltages[..self.channels as usize])?;
+        state.serialize_field("channels", &self.voltages.len())?;
+        state.serialize_field("voltages", &self.voltages[..])?;
         state.end()
     }
 }
@@ -175,12 +178,16 @@ impl<'de> Deserialize<'de> for PolyOutput {
         }
 
         let de = PolyOutputDe::deserialize(deserializer)?;
-        let mut sig = PolyOutput::default();
-        sig.channels = de.channels.min(PORT_MAX_CHANNELS);
-        for (i, &v) in de.voltages.iter().enumerate().take(sig.channels as usize) {
-            sig.voltages[i] = v;
+        let channels = de.channels.min(PORT_MAX_CHANNELS);
+        let mut voltages = vec![0.0f32; channels].into_boxed_slice();
+        for (i, &v) in de.voltages.iter().enumerate().take(channels) {
+            voltages[i] = v;
         }
-        Ok(sig)
+        Ok(PolyOutput {
+            voltages,
+            range_min: vec![f32::NAN; channels].into_boxed_slice(),
+            range_max: vec![f32::NAN; channels].into_boxed_slice(),
+        })
     }
 }
 
@@ -216,25 +223,29 @@ impl JsonSchema for PolyOutput {
 /// - 2-16 = polyphonic (multiple signals)
 ///
 /// Disconnected inputs are represented as `Option<PolySignal>` at the param level.
-#[derive(Clone, Debug, Connect)]
+#[derive(Clone, Debug)]
 pub struct PolySignal {
-    /// Active signal channels (always at least 1, up to PORT_MAX_CHANNELS)
-    channels: ArrayVec<Signal, PORT_MAX_CHANNELS>,
+    /// Active signal channels (always at least 1, up to PORT_MAX_CHANNELS).
+    /// Sized to the actual channel count on the main thread at deserialize.
+    channels: Box<[Signal]>,
 }
 
-impl<const CAP: usize> crate::types::Connect for ArrayVec<Signal, CAP> {
+// Hand-written rather than `#[derive(Connect)]`: deriving would require a
+// `Connect for Box<[Signal]>` impl, which overlaps the blanket `Connect for
+// Box<T>` under coherence. Forwarding over the slice directly sidesteps that.
+impl crate::types::Connect for PolySignal {
     fn connect(&mut self, patch: &crate::Patch) {
-        for signal in self.iter_mut() {
+        for signal in self.channels.iter_mut() {
             signal.connect(patch);
         }
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {
-        for signal in self.iter() {
+        for signal in self.channels.iter() {
             signal.collect_cables(sink);
         }
     }
     fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
-        for signal in self.iter_mut() {
+        for signal in self.channels.iter_mut() {
             signal.inject_index_ptr(ptr);
         }
     }
@@ -243,9 +254,9 @@ impl<const CAP: usize> crate::types::Connect for ArrayVec<Signal, CAP> {
 impl PolySignal {
     /// Create a mono (1-channel) PolySignal from a single Signal.
     pub fn mono(signal: Signal) -> Self {
-        let mut channels = ArrayVec::new();
-        channels.push(signal);
-        Self { channels }
+        Self {
+            channels: vec![signal].into_boxed_slice(),
+        }
     }
 
     /// Create a polyphonic PolySignal from a slice of Signals.
@@ -254,10 +265,12 @@ impl PolySignal {
             !signals.is_empty(),
             "PolySignal must have at least 1 channel"
         );
-        let mut channels = ArrayVec::new();
-        for s in signals.iter().take(PORT_MAX_CHANNELS) {
-            channels.push(s.clone());
-        }
+        let channels = signals
+            .iter()
+            .take(PORT_MAX_CHANNELS)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self { channels }
     }
 

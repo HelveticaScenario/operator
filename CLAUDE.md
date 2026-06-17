@@ -82,6 +82,26 @@ E2E tests require the webpack build to exist — run `yarn start` once first.
 - Store initialized data on the params struct with `#[serde(skip)] #[schemars(skip)]` for fields hidden from serialization.
 - Once deserialization is complete, treat the params object as immutable — `process` reads but never mutates it.
 
+### Module Lifecycle Hooks (`init` vs `on_patch_update` vs `update`)
+
+A module has three places to put logic. Pick by **how often the inputs change** and **what's resolved yet**. Lifecycle order on every patch update is:
+
+```
+init (construct, main thread) → transfer_state_from → connect → on_patch_update → … → update (per sample)
+```
+
+| Hook | Opt-in | When/thread | Put here |
+| ---- | ------ | ----------- | -------- |
+| `fn init(&mut self, sample_rate: f32)` | `has_init` flag | Once at construction, main thread, **may allocate** | Heap allocation; one-time seeding of runtime state (phases, RNG); **sample-rate-only** derived constants. |
+| `fn on_patch_update(&mut self)` | `patch_update` flag + `impl PatchUpdateHandler` | After every patch update, once all modules are connected, audio thread, **no alloc** | **Param-derived** constant caches; anything needing the resolved graph (connected modules, `Wav::sample_rate()` — resolves in `connect()`). No `sample_rate` arg, so capture it in `init` if needed. |
+| `fn update(&mut self, sample_rate: f32)` | — | Every sample, audio thread, hot path, **no alloc** | Only work that reads a live signal (`PolySignal::get_value`/`value_or` — may be a cable varying per sample) or evolving state. Never recompute lifetime-constant work here — hoist it. |
+
+**Why param-derived caches must NOT go in `init`** (the clobber rule): on a patch update every module is reconstructed, then `transfer_state_from` does `std::mem::swap` on the **entire `state` struct** to preserve runtime continuity — overwriting anything `init` computed into `state`. So a value derived from a non-signal param (recomputed when that param changes) must be set in `on_patch_update`, which runs *after* the swap and reads the current `self.params`.
+
+**Why sample-rate-only caches are fine in `init`:** a transfer only happens between two modules at the same engine rate (a rate change rebuilds the processor — it is not a state transfer), so the swapped-in old value equals what `init` would compute. `init` also runs **before `connect()`**, so it cannot read connection/topology state.
+
+Examples: `supersaw` — `init` seeds phases + `inv_sample_rate` (sr-only); `on_patch_update` computes `voice_t`/`gain`/`voices` (param-derived). `sampler` — `rate_ratio` is in `on_patch_update` because `wav.sample_rate()` only resolves in `connect()`. Test harnesses that build a module directly must mirror this: call `init` then `on_patch_update` before driving `update`.
+
 ## Conventions
 
 ### Voltage Standards

@@ -1,4 +1,5 @@
 import { getReservedOutputNames } from '@modular/core';
+import type { ModuleSchema } from '@modular/core';
 import type {
     JSONSchema,
     Schemas,
@@ -8,6 +9,11 @@ import {
     schemaToTypeExpr,
     getEnumVariants,
 } from '../../shared/dsl/schemaTypeResolver';
+import {
+    dollarMethodName,
+    processModuleSchema,
+    qualifiesForDollarChain,
+} from './paramsSchema';
 import type { WavsFolderNode } from './executor';
 export type { WavsFolderNode } from './executor';
 
@@ -342,15 +348,24 @@ type BufferOutputRef = {
 
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
- * \`$cycle\` as its pattern argument. Opaque to user code;
- * the shape is \`{ __kind, ast, source, all_spans }\`. Construct with
- * \`$p(...)\`; never build one by hand.
+ * \`$cycle\` as its pattern argument. Opaque to user code; construct with
+ * \`$p(...)\` and chain \`.fast\`/\`.slow\`. Never build one by hand.
  */
 type ParsedPattern = {
-  readonly __kind: 'ParsedPattern';
-  readonly ast: unknown;
-  readonly source: string;
-  readonly all_spans: ReadonlyArray<readonly [number, number]>;
+  /**
+   * Speed this pattern up by \`factor\`, mirroring Strudel's \`fast\`. The factor
+   * is a constant (\`2\`) or a mini-notation number pattern (\`"2 4"\` → ×2 for
+   * the first half of the cycle, ×4 for the second). A non-positive factor
+   * (\`fast(0)\` or negative) is silence. Chains and nests with the other
+   * pattern builders.
+   */
+  fast(factor: number | string): FastPattern;
+  /**
+   * Slow this pattern down by \`factor\` — the time-inverse of \`fast\`.
+   * \`slow(n)\` equals \`fast(1 / n)\`. The factor may be a constant or a
+   * mini-notation number pattern.
+   */
+  slow(factor: number | string): SlowPattern;
 };
 
 /**
@@ -503,6 +518,43 @@ declare namespace $p {
  * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
  */
 function s(source: string, scale: string): SpPattern;
+
+/**
+ * Arrange patterns over multiple cycles, mirroring Strudel's \`arrange\`.
+ * Each argument is a \`[cycles, pattern]\` tuple: the \`pattern\` (a \`$p(...)\`,
+ * \`$p.s(...)\`, or nested \`$p.arrange(...)\`) plays for \`cycles\` cycles, and
+ * the sections play back-to-back, looping with period \`Σ cycles\`.
+ *
+ * Because each \`$p.s\` section resolves through its own scale, an arrangement
+ * can switch scales (or keys) between sections.
+ *
+ * \`\`\`js
+ * // 4 cycles of a C-major arp, then 2 of an A-minor arp, looping every 6
+ * $cycle($p.arrange(
+ *   [4, $p.s("0 2 4 7", "c(major)")],
+ *   [2, $p.s("0 2 4",   "a(min)")],
+ * ))
+ * \`\`\`
+ *
+ * Cycle counts must be **positive integers**, except a single **trailing**
+ * section may use \`Infinity\` to loop forever once reached (any section after
+ * an \`Infinity\` section could never play and is rejected):
+ *
+ * \`\`\`js
+ * $cycle($p.arrange(
+ *   [2, $p("c4 e4 g4")],            // intro, played once
+ *   [Infinity, $p.s("0 2 4", "f(lydian)")],  // then loops forever
+ * ))
+ * \`\`\`
+ *
+ * The result is an \`ArrangePattern\`, itself usable as a section of another
+ * \`$p.arrange(...)\` (arrangements nest) or as a \`$cycle\` argument.
+ *
+ * @param sections - \`[cycles, pattern]\` tuples, in play order
+ */
+function arrange(
+  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern][]
+): ArrangePattern;
 }
 
 /**
@@ -527,21 +579,53 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
 
 /**
  * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
- * \`$cycle\`'s \`pattern\` param. Each chained RHS lives in \`sources[]\`
- * and gets its own editor-highlight argument span.
- *
- * Arrays declared mutable (rather than readonly) to line up with the
- * schema-generated factory param types. Treat as immutable by
- * convention — chain methods return fresh objects.
+ * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`.
+ * Opaque to user code — chain methods return fresh patterns.
  */
 type SpPattern = {
-  __kind: 'SpPattern';
-  sources: ParsedPattern[];
-  scale: string;
-  ops: { op: 'add' | 'sub'; mode: SpAlignmentMode }[];
-  argument_spans: { start: number; end: number }[];
   add: SpCombineBuilder;
   sub: SpCombineBuilder;
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * An arrangement returned by \`$p.arrange(...)\`. Pass directly to \`$cycle\`'s
+ * \`pattern\` param, or nest it as a section of another \`$p.arrange(...)\`.
+ * Opaque to user code — construct with \`$p.arrange(...)\`; never build one by
+ * hand. A \`cycles\` of \`'Infinity'\` (only the last section) loops forever.
+ */
+type ArrangePattern = {
+  /** Speed this arrangement up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this arrangement down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * A sped-up pattern returned by \`pattern.fast(factor)\` (Strudel's \`fast\`).
+ * Pass directly to \`$cycle\`'s \`pattern\` param, nest it as an \`$p.arrange(...)\`
+ * section, or chain further \`.fast\`/\`.slow\`. Opaque to user code — construct
+ * with \`.fast(...)\`; never build one by hand.
+ */
+type FastPattern = {
+  /** Speed this pattern up further by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * A slowed-down pattern returned by \`pattern.slow(factor)\` (Strudel's \`slow\`).
+ * The time-inverse of \`FastPattern\`; same composition rules.
+ */
+type SlowPattern = {
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down further by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
 };
 
 /**
@@ -763,6 +847,21 @@ interface ModuleOutput {
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
 
   /**
+   * Fold this output's channels down to a target channel count by panning them
+   * evenly across the output field with an equal-power law. Creates a \\$mixDown
+   * module internally.
+   *
+   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @returns A Collection from the \\$mixDown output
+   *
+   * @example
+   * // Fold a 3-voice spread down to stereo
+   * $saw($spread(0, 5, 3)).mix(2).out()
+   */
+  mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection;
+
+  /**
    * Remap this output from an explicit input range to a new output range.
    * Creates a $remap module internally.
    * @param outMin - New minimum as {@link Poly<Signal>}
@@ -781,6 +880,22 @@ interface ModuleOutput {
    * @returns This output for chaining
    */
   send(bus: Bus, gain?: Poly<Signal>): this;
+
+  /**
+   * Chainable module namespace. Every module whose first argument is a
+   * {@link Poly<Signal>} becomes a method here, receiving this output as that
+   * argument.
+   * @example $sine(0).$.lpf('100hz')  // ≡ $lpf($sine(0), '100hz')
+   */
+  readonly $: DollarChain;
+
+  /**
+   * Like {@link $}, but each method takes a leading \`mix\` signal that
+   * crossfades the dry input against the wet result (0 = dry, 5 = wet,
+   * 2.5 = equal).
+   * @example $sine(0).$m.lpf(2.5, '100hz')
+   */
+  readonly $m: DollarMixChain;
 }
 
 /**
@@ -991,12 +1106,43 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
 
   /**
+   * Fold this collection's channels down to a target channel count by panning
+   * them evenly across the output field with an equal-power law. Creates a
+   * \\$mixDown module internally.
+   *
+   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @returns A Collection from the \\$mixDown output
+   *
+   * @example
+   * // Fold a 3-voice spread down to stereo
+   * $saw($spread(0, 5, 3)).mix(2).out()
+   */
+  mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection;
+
+  /**
    * Register all outputs in this collection as a send to a bus, with optional gain.
    * @param bus - The {@link Bus} to send to
    * @param gain - Send level as {@link Poly<Signal>}
    * @returns This collection for chaining
    */
   send(bus: Bus, gain?: Poly<Signal>): this;
+
+  /**
+   * Chainable module namespace. Every module whose first argument is a
+   * {@link Poly<Signal>} becomes a method here, receiving this collection as
+   * that argument.
+   * @example $c(a, b).$.lpf('100hz')  // ≡ $lpf($c(a, b), '100hz')
+   */
+  readonly $: DollarChain;
+
+  /**
+   * Like {@link $}, but each method takes a leading \`mix\` signal that
+   * crossfades the dry input against the wet result (0 = dry, 5 = wet,
+   * 2.5 = equal).
+   * @example $c(a, b).$m.lpf(2.5, '100hz')
+   */
+  readonly $m: DollarMixChain;
 }
 
 /**
@@ -1161,7 +1307,7 @@ function $setTimeSignature(numerator: number, denominator: number): void;
 /**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
  * Useful for feedback loops and forward references.
- * @param channels - Number of deferred outputs (1-16, default 1)
+ * @param channels - Number of deferred outputs (1-64, default 1)
  * @example
  * const feedback = $deferred();
  * const delayed = $delay(osc.out, feedback[0]);
@@ -1595,104 +1741,54 @@ function getFactoryReturnType(moduleSchema: Schema): string {
     return getMultiOutputInterfaceName(moduleSchema);
 }
 
-function renderFactoryFunction(
-    moduleSchema: Schema,
-    _interfaceName: string,
-    indent: string,
-): string[] {
-    const functionName = moduleSchema.name.split('.').pop()!;
+/**
+ * Build the trailing `config?: { ... }` argument shared by the factory-function
+ * and `.$.`-method renderers: every non-positional param, plus an optional
+ * `id`. `config` is required only when some non-positional param is required.
+ * Returns the rendered argument and the nested `@param config` doc lines.
+ */
+function buildConfigArg(moduleSchema: Schema): {
+    arg: string;
+    paramDocs: string[];
+} {
     const { paramsSchema } = moduleSchema;
     const schemaProperties = paramsSchema.properties as
         | Record<string, JSONSchema | undefined>
         | undefined;
-
-    const args: string[] = [];
-    const positionalArgs = moduleSchema.positionalArgs || [];
     const schemaRequired: readonly string[] = paramsSchema.required || [];
-    // Build docstring lines
-    const docLines: string[] = [];
-    if (moduleSchema.documentation) {
-        docLines.push(...moduleSchema.documentation.split(/\r?\n/));
-    }
-
-    const positionalRequiredness = positionalArgs.map((a) =>
-        schemaRequired.includes(a.name),
+    const positionalKeys = new Set(
+        (moduleSchema.positionalArgs || []).map((a) => a.name),
     );
+    const allParamKeys = Object.keys(paramsSchema.properties || {});
 
-    for (let i = 0; i < positionalArgs.length; i++) {
-        const arg = positionalArgs[i];
-        const propSchema = schemaProperties?.[arg.name];
-        const type = propSchema
-            ? schemaToTypeExpr(propSchema, paramsSchema)
-            : 'any';
+    const configProps: string[] = [];
+    const paramDocs: string[] = [];
 
-        const isRequired = positionalRequiredness[i];
-
-        if (isRequired) {
-            args.push(`${arg.name}: ${type}`);
-        } else {
-            // Check if all subsequent positional args are also optional
-            const allSubsequentOptional = positionalRequiredness
-                .slice(i + 1)
-                .every((r: boolean) => !r);
-            if (allSubsequentOptional) {
-                args.push(`${arg.name}?: ${type}`);
-            } else {
-                args.push(`${arg.name}: ${type} | undefined`);
-            }
+    for (const key of allParamKeys) {
+        if (positionalKeys.has(key)) {
+            continue;
         }
+        const propSchema = schemaProperties?.[key];
+        if (!propSchema) {
+            continue;
+        }
+        const type = schemaToTypeExpr(propSchema, paramsSchema);
+        const optionalMark = schemaRequired.includes(key) ? '' : '?';
+        configProps.push(`${key}${optionalMark}: ${type}`);
 
-        // Add @param for positional arg
+        // Collect config param descriptions
         const description = propSchema?.description;
         if (description) {
             const firstLine = description.split(/\r?\n/)[0];
-            docLines.push(`@param ${arg.name} - ${firstLine}`);
-        } else {
-            docLines.push(`@param ${arg.name}`);
+            paramDocs.push(`${key} - ${firstLine}`);
         }
 
         // Append enum variant descriptions as sub-bullets
-        if (propSchema) {
-            const variants = getEnumVariants(propSchema, paramsSchema);
-            if (variants && variants.some((v) => v.description)) {
-                for (const v of variants) {
-                    const desc = v.description ? ` — ${v.description}` : '';
-                    docLines.push(`  - \`${v.value}\`${desc}`);
-                }
-            }
-        }
-    }
-
-    const allParamKeys = Object.keys(paramsSchema.properties || {});
-    const positionalKeys = new Set(positionalArgs.map((a) => a.name));
-
-    const configProps: string[] = [];
-    const configParamDocs: string[] = [];
-
-    for (const key of allParamKeys) {
-        if (!positionalKeys.has(key)) {
-            const propSchema = schemaProperties?.[key];
-            if (!propSchema) {
-                continue;
-            }
-            const type = schemaToTypeExpr(propSchema, paramsSchema);
-            const optionalMark = schemaRequired.includes(key) ? '' : '?';
-            configProps.push(`${key}${optionalMark}: ${type}`);
-
-            // Collect config param descriptions
-            const description = propSchema?.description;
-            if (description) {
-                const firstLine = description.split(/\r?\n/)[0];
-                configParamDocs.push(`${key} - ${firstLine}`);
-            }
-
-            // Append enum variant descriptions as sub-bullets
-            const variants = getEnumVariants(propSchema, paramsSchema);
-            if (variants && variants.some((v) => v.description)) {
-                for (const v of variants) {
-                    const desc = v.description ? ` — ${v.description}` : '';
-                    configParamDocs.push(`    - \`${v.value}\`${desc}`);
-                }
+        const variants = getEnumVariants(propSchema, paramsSchema);
+        if (variants && variants.some((v) => v.description)) {
+            for (const v of variants) {
+                const desc = v.description ? ` — ${v.description}` : '';
+                paramDocs.push(`    - \`${v.value}\`${desc}`);
             }
         }
     }
@@ -1707,19 +1803,172 @@ function renderFactoryFunction(
             !positionalKeys.has(key) && schemaRequired.includes(key),
     );
     const configOptional = hasRequiredConfigProps ? '' : '?';
-    args.push(`config${configOptional}: ${configType}`);
+    return { arg: `config${configOptional}: ${configType}`, paramDocs };
+}
 
-    // Add @param config with nested property descriptions
-    if (configParamDocs.length > 0) {
+/**
+ * Build the parameter list and JSDoc lines shared by the factory-function and
+ * `.$.`-method renderers. `positionalStart` drops leading positionals (1 for
+ * `.$.`, whose receiver is injected as the first argument); `leadParams` are
+ * prepended to the parameter list (the `.$m.` `mix` crossfade); `leadDocLines`
+ * are prepended before the module's own documentation. The module's full
+ * documentation and every `@param` are always included, so the factory and
+ * `.$.` surfaces carry identical docs and cannot drift.
+ */
+function buildSignature(
+    moduleSchema: Schema,
+    opts: {
+        positionalStart: number;
+        leadParams?: { decl: string; doc: string }[];
+        leadDocLines?: string[];
+    },
+): { args: string[]; docLines: string[] } {
+    const { paramsSchema } = moduleSchema;
+    const schemaProperties = paramsSchema.properties as
+        | Record<string, JSONSchema | undefined>
+        | undefined;
+    const schemaRequired: readonly string[] = paramsSchema.required || [];
+    const positionals = (moduleSchema.positionalArgs || []).slice(
+        opts.positionalStart,
+    );
+    const requiredness = positionals.map((a) =>
+        schemaRequired.includes(a.name),
+    );
+
+    const args: string[] = [];
+    const docLines: string[] = [...(opts.leadDocLines ?? [])];
+    if (moduleSchema.documentation) {
+        docLines.push(...moduleSchema.documentation.split(/\r?\n/));
+    }
+
+    for (const lead of opts.leadParams ?? []) {
+        args.push(lead.decl);
+        docLines.push(lead.doc);
+    }
+
+    for (let i = 0; i < positionals.length; i++) {
+        const arg = positionals[i];
+        const propSchema = schemaProperties?.[arg.name];
+        const type = propSchema
+            ? schemaToTypeExpr(propSchema, paramsSchema)
+            : 'any';
+
+        if (requiredness[i]) {
+            args.push(`${arg.name}: ${type}`);
+        } else {
+            // Stay before any required arg: emit `| undefined` rather than `?`.
+            const allSubsequentOptional = requiredness
+                .slice(i + 1)
+                .every((r) => !r);
+            args.push(
+                allSubsequentOptional
+                    ? `${arg.name}?: ${type}`
+                    : `${arg.name}: ${type} | undefined`,
+            );
+        }
+
+        const description = propSchema?.description;
+        if (description) {
+            const firstLine = description.split(/\r?\n/)[0];
+            docLines.push(`@param ${arg.name} - ${firstLine}`);
+        } else {
+            docLines.push(`@param ${arg.name}`);
+        }
+
+        if (propSchema) {
+            const variants = getEnumVariants(propSchema, paramsSchema);
+            if (variants && variants.some((v) => v.description)) {
+                for (const v of variants) {
+                    const desc = v.description ? ` — ${v.description}` : '';
+                    docLines.push(`  - \`${v.value}\`${desc}`);
+                }
+            }
+        }
+    }
+
+    const { arg: configArg, paramDocs } = buildConfigArg(moduleSchema);
+    args.push(configArg);
+    if (paramDocs.length > 0) {
         docLines.push(`@param config - Configuration object`);
-        for (const doc of configParamDocs) {
+        for (const doc of paramDocs) {
             docLines.push(`  - ${doc}`);
         }
     } else {
         docLines.push(`@param config - Configuration object`);
     }
 
-    // Get return type based on outputs
+    return { args, docLines };
+}
+
+/**
+ * Render one method of the `.$.` (or `.$m.` when `withMix`) chainable namespace
+ * for `moduleSchema`: the module's factory with its first positional dropped
+ * (it becomes the chained signal receiver). For `.$m.`, a required leading
+ * `mix` signal crossfades dry/wet and the return type collapses to
+ * `Collection`. Carries the module's full documentation, like the factory.
+ *
+ * Only called on schemas passing `qualifiesForDollarChain`, which guarantees
+ * `dollarMethodName` yields a valid TS identifier for the interface member.
+ */
+function renderDollarMethod(
+    moduleSchema: Schema,
+    withMix: boolean,
+    indent: string,
+): string[] {
+    const rawName = moduleSchema.name.split('.').pop()!;
+    const methodName = dollarMethodName(moduleSchema.name);
+
+    const leadDocLines = withMix
+        ? [
+              `Chain through \`${rawName}\`, crossfading the dry input against`,
+              'the wet result by a leading `mix` signal (0 = dry, 5 = wet,',
+              '2.5 = equal). Equivalent to `.pipeMix(s => ' +
+                  `${rawName}(s, ...), mix)\`.`,
+              '',
+          ]
+        : [
+              `Chain through \`${rawName}\` with this signal as its first`,
+              `argument. Equivalent to \`${rawName}(this, ...)\`.`,
+              '',
+          ];
+
+    const leadParams = withMix
+        ? [
+              {
+                  decl: 'mix: Poly<Signal>',
+                  doc: '@param mix - Dry/wet crossfade as {@link Poly<Signal>}. 0 = dry input only, 5 = wet result only, 2.5 = equal.',
+              },
+          ]
+        : [];
+
+    const { args, docLines } = buildSignature(moduleSchema, {
+        positionalStart: 1,
+        leadParams,
+        leadDocLines,
+    });
+
+    const returnType = withMix
+        ? 'Collection'
+        : getFactoryReturnType(moduleSchema);
+
+    const lines: string[] = [`${indent}/**`];
+    for (const line of docLines) {
+        lines.push(`${indent} * ${line}`);
+    }
+    lines.push(`${indent} */`);
+    lines.push(`${indent}${methodName}(${args.join(', ')}): ${returnType};`);
+    return lines;
+}
+
+function renderFactoryFunction(
+    moduleSchema: Schema,
+    _interfaceName: string,
+    indent: string,
+): string[] {
+    const functionName = moduleSchema.name.split('.').pop()!;
+    const { args, docLines } = buildSignature(moduleSchema, {
+        positionalStart: 0,
+    });
     const returnType = getFactoryReturnType(moduleSchema);
 
     const lines: string[] = [];
@@ -1829,29 +2078,70 @@ export function generateDSL(schemas: Schemas): string {
     );
     lines.push('');
     lines.push('/**');
-    lines.push(' * Delay with feedback. Mixes `input` with a deferred feedback signal,');
-    lines.push(' * captures the mix into a buffer of `length` seconds, and routes the');
-    lines.push(' * buffer through `feedbackCb` to produce the feedback signal.');
+    lines.push(
+        ' * Delay with feedback. Mixes `input` with a deferred feedback signal,',
+    );
+    lines.push(
+        ' * captures the mix into a buffer of `length` seconds, and routes the',
+    );
+    lines.push(
+        ' * buffer through `feedbackCb` to produce the feedback signal.',
+    );
     lines.push(' *');
-    lines.push(' * Returns the wet+dry $mix output augmented with a `buffer` property');
+    lines.push(
+        ' * Returns the wet+dry $mix output augmented with a `buffer` property',
+    );
     lines.push(' * referencing the captured buffer for further reads.');
     lines.push(' *');
     lines.push(' * @example');
     lines.push(' * ```js');
-    lines.push(" * // simple feedback delay");
-    lines.push(" * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()");
+    lines.push(' * // simple feedback delay');
+    lines.push(
+        " * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()",
+    );
     lines.push(' * ```');
     lines.push(' *');
     lines.push(' * @example');
     lines.push(' * ```ts');
     lines.push(' * // tap the buffer for an additional read');
-    lines.push(' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)');
+    lines.push(
+        ' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)',
+    );
     lines.push(' * $delayRead(d.buffer, 0.75).out()');
     lines.push(' * ```');
     lines.push(' */');
     lines.push(
         'export function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): Collection & { buffer: BufferOutputRef };',
     );
+
+    // `.$.` / `.$m.` chainable module namespaces. The qualifying set matches the
+    // runtime `dollarLookup` exactly (shared `qualifiesForDollarChain` predicate
+    // over the same schemas), so the two cannot drift.
+    const dollarSchemas = userFacingSchemas.filter((s) =>
+        qualifiesForDollarChain(
+            processModuleSchema(s as unknown as ModuleSchema),
+        ),
+    );
+
+    lines.push('');
+    lines.push(
+        '/** Methods of the `.$` chainable module namespace (see {@link ModuleOutput.$}). */',
+    );
+    lines.push('interface DollarChain {');
+    for (const s of dollarSchemas) {
+        lines.push(...renderDollarMethod(s, false, '  '));
+    }
+    lines.push('}');
+
+    lines.push('');
+    lines.push(
+        '/** Methods of the `.$m` chainable module namespace (see {@link ModuleOutput.$m}). */',
+    );
+    lines.push('interface DollarMixChain {');
+    for (const s of dollarSchemas) {
+        lines.push(...renderDollarMethod(s, true, '  '));
+    }
+    lines.push('}');
 
     return lines.join('\n') + '\n';
 }

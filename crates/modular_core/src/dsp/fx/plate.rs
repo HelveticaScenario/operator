@@ -119,6 +119,28 @@ struct PlateOutputs {
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
+/// Fixed delay-tap read lengths, derived only from the sample rate and so
+/// constant for the module's lifetime. Computed once in `init` instead of
+/// being recomputed (float multiply + `round` + cast) every sample.
+#[derive(Default, Clone, Copy)]
+struct PlateLengths {
+    predelay: usize,
+    input_diff: [usize; 4],
+    mod_ap_1_base: f32,
+    mod_ap_2_base: f32,
+    line_a: [usize; 3],
+    line_b_delay: usize,
+    line_b_ap: [usize; 2],
+    line_c: [usize; 3],
+    line_d_ap: usize,
+    line_d: [usize; 3],
+    line_e_ap: [usize; 2],
+    line_f_ap: usize,
+    line_f: [usize; 3],
+    /// Per-volt modulation excursion in samples (multiplied by the live mod input).
+    mod_excursion_scale: f32,
+}
+
 #[derive(Default)]
 struct PlateState {
     // Input section
@@ -169,6 +191,9 @@ struct PlateState {
     dc_block_coeff: f32,
 
     sample_rate: f32,
+
+    // Cached fixed read lengths (see PlateLengths).
+    lengths: PlateLengths,
 }
 
 // ─── Module ──────────────────────────────────────────────────────────────────
@@ -246,10 +271,55 @@ impl Plate {
         // DC blocking coefficient: one-pole HPF at ~20 Hz
         let dc_fc = 20.0_f32;
         self.state.dc_block_coeff = 1.0 - (std::f32::consts::TAU * dc_fc / sample_rate);
+
+        // Cache the fixed read lengths used every sample in update().
+        self.state.lengths = PlateLengths {
+            predelay: ms_to_samples(PREDELAY_MS, sample_rate),
+            input_diff: [
+                ms_to_samples(INPUT_AP_1.0, sample_rate),
+                ms_to_samples(INPUT_AP_2.0, sample_rate),
+                ms_to_samples(INPUT_AP_3.0, sample_rate),
+                ms_to_samples(INPUT_AP_4.0, sample_rate),
+            ],
+            mod_ap_1_base: ms_to_samples(MOD_AP_1_MS, sample_rate) as f32,
+            mod_ap_2_base: ms_to_samples(MOD_AP_2_MS, sample_rate) as f32,
+            line_a: [
+                scale_samples(LINE_A_1, sample_rate).max(1),
+                scale_samples(LINE_A_2, sample_rate).max(1),
+                scale_samples(LINE_A_3, sample_rate).max(1),
+            ],
+            line_b_delay: scale_samples(LINE_B_DELAY, sample_rate).max(1),
+            line_b_ap: [
+                ms_to_samples(LINE_B_AP_1.0, sample_rate).max(1),
+                ms_to_samples(LINE_B_AP_2.0, sample_rate).max(1),
+            ],
+            line_c: [
+                scale_samples(LINE_C_1, sample_rate).max(1),
+                scale_samples(LINE_C_2, sample_rate).max(1),
+                scale_samples(LINE_C_3, sample_rate).max(1),
+            ],
+            line_d_ap: ms_to_samples(LINE_D_AP.0, sample_rate).max(1),
+            line_d: [
+                scale_samples(LINE_D_1, sample_rate).max(1),
+                scale_samples(LINE_D_2, sample_rate).max(1),
+                scale_samples(LINE_D_3, sample_rate).max(1),
+            ],
+            line_e_ap: [
+                ms_to_samples(LINE_E_AP_1.0, sample_rate).max(1),
+                ms_to_samples(LINE_E_AP_2.0, sample_rate).max(1),
+            ],
+            line_f_ap: ms_to_samples(LINE_F_AP.0, sample_rate).max(1),
+            line_f: [
+                scale_samples(LINE_F_1, sample_rate).max(1),
+                scale_samples(LINE_F_2, sample_rate).max(1),
+                scale_samples(LINE_F_3, sample_rate).max(1),
+            ],
+            mod_excursion_scale: (REF_MOD_EXCURSION * sample_rate / REF_SAMPLE_RATE) / 5.0,
+        };
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let sample_rate = self.state.sample_rate;
+        let lens = self.state.lengths;
         let num_input_channels = self.params.input.channels();
 
         // ── Read parameters ──────────────────────────────────────────────
@@ -270,7 +340,7 @@ impl Plate {
         let decay = *self.state.smoothed_decay;
 
         let mod_v = self.params.modulation.value_or(0.0);
-        let mod_excursion = mod_v * (REF_MOD_EXCURSION * sample_rate / REF_SAMPLE_RATE) / 5.0;
+        let mod_excursion = mod_v * lens.mod_excursion_scale;
 
         // ── Sum input channels to mono ───────────────────────────────────
 
@@ -294,16 +364,14 @@ impl Plate {
         // ── Predelay (fixed 50ms) ────────────────────────────────────────
 
         self.state.predelay.write(filtered);
-        let predelay_len = ms_to_samples(PREDELAY_MS, sample_rate);
-        let predelayed = self.state.predelay.read(predelay_len);
+        let predelayed = self.state.predelay.read(lens.predelay);
 
         // ── Input diffusion (4 cascaded allpasses, fixed gains) ──────────
 
-        let input_aps = [INPUT_AP_1, INPUT_AP_2, INPUT_AP_3, INPUT_AP_4];
+        let input_ap_gains = [INPUT_AP_1.1, INPUT_AP_2.1, INPUT_AP_3.1, INPUT_AP_4.1];
         let mut diffused = predelayed;
-        for (i, &(ms, gain)) in input_aps.iter().enumerate() {
-            let delay = ms_to_samples(ms, sample_rate);
-            diffused = self.state.input_diff[i].allpass(diffused, delay, gain);
+        for (i, &gain) in input_ap_gains.iter().enumerate() {
+            diffused = self.state.input_diff[i].allpass(diffused, lens.input_diff[i], gain);
         }
 
         // ── Feedback junction ────────────────────────────────────────────
@@ -312,8 +380,7 @@ impl Plate {
 
         // ── Modulated allpass 1 (wet8: 100ms base, gain 0.7) ────────────
 
-        let mod_ap_1_base = ms_to_samples(MOD_AP_1_MS, sample_rate) as f32;
-        let mod_ap_1_delay = (mod_ap_1_base + mod_excursion).max(1.0);
+        let mod_ap_1_delay = (lens.mod_ap_1_base + mod_excursion).max(1.0);
         let after_mod_ap_1 = self
             .state
             .mod_ap_1
@@ -321,45 +388,35 @@ impl Plate {
 
         // ── Line A ──────────────────────────────────────────────────────
 
-        let line_a_lens = [LINE_A_1, LINE_A_2, LINE_A_3];
         let mut signal = after_mod_ap_1;
-        for (i, &ref_len) in line_a_lens.iter().enumerate() {
-            let len = scale_samples(ref_len, sample_rate).max(1);
+        for i in 0..3 {
             self.state.line_a[i].write(signal);
-            signal = self.state.line_a[i].read(len);
+            signal = self.state.line_a[i].read(lens.line_a[i]);
         }
         // Tap points from Line A (read from end of each delay)
-        let tap_aa = self.state.line_a[0].read(scale_samples(LINE_A_1, sample_rate).max(1));
-        let tap_ab = self.state.line_a[1].read(scale_samples(LINE_A_2, sample_rate).max(1));
+        let tap_aa = self.state.line_a[0].read(lens.line_a[0]);
+        let tap_ab = self.state.line_a[1].read(lens.line_a[1]);
         let after_line_a = signal; // = output of line_a[2]
 
         // ── Line B ──────────────────────────────────────────────────────
 
-        let line_b_len = scale_samples(LINE_B_DELAY, sample_rate).max(1);
         self.state.line_b_delay.write(after_line_a);
-        let after_b_delay = self.state.line_b_delay.read(line_b_len);
+        let after_b_delay = self.state.line_b_delay.read(lens.line_b_delay);
 
         self.state.line_b_lpf.set_coeff(damping);
         let after_b_lpf = self.state.line_b_lpf.process(after_b_delay);
 
-        let after_b_ap1 = self.state.line_b_ap[0].allpass(
-            after_b_lpf,
-            ms_to_samples(LINE_B_AP_1.0, sample_rate).max(1),
-            LINE_B_AP_1.1,
-        );
+        let after_b_ap1 =
+            self.state.line_b_ap[0].allpass(after_b_lpf, lens.line_b_ap[0], LINE_B_AP_1.1);
         let tap_ba3 = after_b_ap1; // tap from ba3
 
-        let after_b_ap2 = self.state.line_b_ap[1].allpass(
-            after_b_ap1,
-            ms_to_samples(LINE_B_AP_2.0, sample_rate).max(1),
-            LINE_B_AP_2.1,
-        );
+        let after_b_ap2 =
+            self.state.line_b_ap[1].allpass(after_b_ap1, lens.line_b_ap[1], LINE_B_AP_2.1);
         let tap_bb = after_b_ap2;
 
         // ── Modulated allpass 2 (bc: 100ms base, gain 0.5) ──────────────
 
-        let mod_ap_2_base = ms_to_samples(MOD_AP_2_MS, sample_rate) as f32;
-        let mod_ap_2_delay = (mod_ap_2_base + mod_excursion).max(1.0);
+        let mod_ap_2_delay = (lens.mod_ap_2_base + mod_excursion).max(1.0);
         let after_mod_ap_2 = self
             .state
             .mod_ap_2
@@ -367,34 +424,29 @@ impl Plate {
 
         // ── Line C ──────────────────────────────────────────────────────
 
-        let line_c_lens = [LINE_C_1, LINE_C_2, LINE_C_3];
         let mut signal = after_mod_ap_2;
-        for (i, &ref_len) in line_c_lens.iter().enumerate() {
-            let len = scale_samples(ref_len, sample_rate).max(1);
+        for i in 0..3 {
             self.state.line_c[i].write(signal);
-            signal = self.state.line_c[i].read(len);
+            signal = self.state.line_c[i].read(lens.line_c[i]);
         }
-        let tap_ca = self.state.line_c[0].read(scale_samples(LINE_C_1, sample_rate).max(1));
-        let tap_cb = self.state.line_c[1].read(scale_samples(LINE_C_2, sample_rate).max(1));
+        let tap_ca = self.state.line_c[0].read(lens.line_c[0]);
+        let tap_cb = self.state.line_c[1].read(lens.line_c[1]);
         let after_line_c = signal * decay; // Mul(decay)
 
         // ── Line D ──────────────────────────────────────────────────────
 
-        let after_d_ap = self.state.line_d_ap.allpass(
-            after_line_c,
-            ms_to_samples(LINE_D_AP.0, sample_rate).max(1),
-            LINE_D_AP.1,
-        );
+        let after_d_ap = self
+            .state
+            .line_d_ap
+            .allpass(after_line_c, lens.line_d_ap, LINE_D_AP.1);
 
-        let line_d_lens = [LINE_D_1, LINE_D_2, LINE_D_3];
         let mut signal = after_d_ap;
-        for (i, &ref_len) in line_d_lens.iter().enumerate() {
-            let len = scale_samples(ref_len, sample_rate).max(1);
+        for i in 0..3 {
             self.state.line_d_delay[i].write(signal);
-            signal = self.state.line_d_delay[i].read(len);
+            signal = self.state.line_d_delay[i].read(lens.line_d[i]);
         }
-        let tap_da2 = self.state.line_d_delay[0].read(scale_samples(LINE_D_1, sample_rate).max(1));
-        let tap_db = self.state.line_d_delay[1].read(scale_samples(LINE_D_2, sample_rate).max(1));
+        let tap_da2 = self.state.line_d_delay[0].read(lens.line_d[0]);
+        let tap_db = self.state.line_d_delay[1].read(lens.line_d[1]);
         let after_line_d = signal; // = output of line_d_delay[2]
 
         // ── Line E ──────────────────────────────────────────────────────
@@ -402,37 +454,28 @@ impl Plate {
         self.state.line_e_lpf.set_coeff(damping);
         let after_e_lpf = self.state.line_e_lpf.process(after_line_d);
 
-        let after_e_ap1 = self.state.line_e_ap[0].allpass(
-            after_e_lpf,
-            ms_to_samples(LINE_E_AP_1.0, sample_rate).max(1),
-            LINE_E_AP_1.1,
-        );
+        let after_e_ap1 =
+            self.state.line_e_ap[0].allpass(after_e_lpf, lens.line_e_ap[0], LINE_E_AP_1.1);
         let tap_ea2 = after_e_ap1;
 
-        let after_e_ap2 = self.state.line_e_ap[1].allpass(
-            after_e_ap1,
-            ms_to_samples(LINE_E_AP_2.0, sample_rate).max(1),
-            LINE_E_AP_2.1,
-        );
+        let after_e_ap2 =
+            self.state.line_e_ap[1].allpass(after_e_ap1, lens.line_e_ap[1], LINE_E_AP_2.1);
         let tap_eb = after_e_ap2;
 
         // ── Line F ──────────────────────────────────────────────────────
 
-        let after_f_ap = self.state.line_f_ap.allpass(
-            after_e_ap2,
-            ms_to_samples(LINE_F_AP.0, sample_rate).max(1),
-            LINE_F_AP.1,
-        );
+        let after_f_ap = self
+            .state
+            .line_f_ap
+            .allpass(after_e_ap2, lens.line_f_ap, LINE_F_AP.1);
 
-        let line_f_lens = [LINE_F_1, LINE_F_2, LINE_F_3];
         let mut signal = after_f_ap;
-        for (i, &ref_len) in line_f_lens.iter().enumerate() {
-            let len = scale_samples(ref_len, sample_rate).max(1);
+        for i in 0..3 {
             self.state.line_f_delay[i].write(signal);
-            signal = self.state.line_f_delay[i].read(len);
+            signal = self.state.line_f_delay[i].read(lens.line_f[i]);
         }
-        let tap_fa2 = self.state.line_f_delay[0].read(scale_samples(LINE_F_1, sample_rate).max(1));
-        let tap_fb = self.state.line_f_delay[1].read(scale_samples(LINE_F_2, sample_rate).max(1));
+        let tap_fa2 = self.state.line_f_delay[0].read(lens.line_f[0]);
+        let tap_fb = self.state.line_f_delay[1].read(lens.line_f[1]);
 
         // Feedback: end of Line F * decay → back to input
         self.state.feedback = signal * decay;

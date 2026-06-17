@@ -517,3 +517,55 @@ export function processSchemas(
 ): ProcessedModuleSchema[] {
     return schemas.map(processModuleSchema);
 }
+
+/**
+ * Modules that take a (poly)signal first argument but must not appear in the
+ * `.$.`/`.$m.` chainable namespaces: `_clock` is an internal module, and
+ * `$buffer` returns a buffer reference rather than a signal output.
+ */
+const DOLLAR_EXCLUDED = new Set(['_clock', '$buffer']);
+
+/**
+ * Whether a module qualifies for the `.$.`/`.$m.` chainable namespaces.
+ *
+ * A module qualifies when its first positional argument is a `signal` or
+ * `polySignal` — so a chained output can be injected as that argument — and it
+ * produces at least one output. This is the single source of truth shared by
+ * the runtime (GraphBuilder) and type generation (typescriptLibGen) so the two
+ * can never drift.
+ */
+export function qualifiesForDollarChain(s: ProcessedModuleSchema): boolean {
+    if (DOLLAR_EXCLUDED.has(s.name)) {
+        return false;
+    }
+    if (!s.outputs || s.outputs.length === 0) {
+        return false;
+    }
+    const first = s.positionalArgs?.[0];
+    if (!first) {
+        return false;
+    }
+    const kind = s.paramsByName[first.name]?.kind;
+    if (kind !== 'signal' && kind !== 'polySignal') {
+        return false;
+    }
+    // The method name must be a bare identifier — it is both a runtime proxy
+    // key and a generated TS interface member. Gating it here (rather than only
+    // in type generation) keeps the runtime and generated sets identical.
+    return isValidDollarMethodName(dollarMethodName(s.name));
+}
+
+/**
+ * Method name for a module in the `.$.` namespace: the last dotted segment of
+ * its name, minus the leading `$` (e.g. `$lpf` → `lpf`). Used as the single
+ * name derivation by both the runtime proxy and type generation.
+ */
+export function dollarMethodName(name: string): string {
+    const base = name.split('.').pop() ?? name;
+    return base.startsWith('$') ? base.slice(1) : base;
+}
+
+/** Whether `name` is a bare TS identifier — required of a `.$.` method name. */
+function isValidDollarMethodName(name: string): boolean {
+    return /^[$A-Za-z_][$A-Za-z0-9_]*$/.test(name);
+}

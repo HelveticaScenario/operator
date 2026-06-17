@@ -1,5 +1,5 @@
 use crate::dsp::utils::SchmittTrigger;
-use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use deserr::Deserr;
 use schemars::JsonSchema;
 
@@ -64,12 +64,6 @@ impl Default for ChannelState {
     }
 }
 
-/// State for the Adsr module.
-#[derive(Default)]
-struct AdsrState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// An Attack-Decay-Sustain-Release envelope generator.
 ///
 /// Generates a control voltage envelope driven by a **gate** input.
@@ -90,7 +84,7 @@ struct AdsrState {
 #[module(name = "$adsr", args(gate))]
 pub struct Adsr {
     outputs: AdsrOutputs,
-    state: AdsrState,
+    channel_state: Box<[ChannelState]>,
     params: AdsrParams,
 }
 
@@ -106,7 +100,7 @@ impl Adsr {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             // Smooth parameter targets to avoid clicks when values change (times in seconds)
             state.attack = self.params.attack.value_or(ch, 0.0).max(0.0);

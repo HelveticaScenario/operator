@@ -2,7 +2,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -79,13 +78,12 @@ struct LadderState {
 pub struct Jup6f {
     outputs: Jup6fOutputs,
     state: Jup6fState,
+    channel_state: Box<[LadderState]>,
     params: Jup6fParams,
 }
 
 /// State for the Jup6f module.
 struct Jup6fState {
-    /// Per-channel ladder state
-    channels: [LadderState; PORT_MAX_CHANNELS],
     /// Mono optimization
     mono_g: f32,
     mono_k: f32,
@@ -98,7 +96,6 @@ struct Jup6fState {
 impl Default for Jup6fState {
     fn default() -> Self {
         Self {
-            channels: [LadderState::default(); PORT_MAX_CHANNELS],
             mono_g: 0.0,
             mono_k: 0.0,
             last_cutoff_mono: f32::NAN, // Indicate that coefficients have never been calculated
@@ -197,6 +194,7 @@ impl Jup6f {
     fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
         let state = &mut self.state;
+        let channel_state = &mut self.channel_state;
         let cutoff_mono = self.params.cutoff.is_monophonic();
         let resonance_mono = self
             .params
@@ -225,23 +223,23 @@ impl Jup6f {
             }
         } else {
             for i in 0..num_channels {
-                state.channels[i]
+                channel_state[i]
                     .smooth_cutoff
                     .update(self.params.cutoff.get_value(i));
-                state.channels[i]
+                channel_state[i]
                     .smooth_resonance
                     .update(self.params.resonance.value_or(i, 0.0));
-                let c = *state.channels[i].smooth_cutoff;
-                let r = *state.channels[i].smooth_resonance;
+                let c = *channel_state[i].smooth_cutoff;
+                let r = *channel_state[i].smooth_resonance;
 
-                if changed(c, state.channels[i].last_cutoff)
-                    || changed(r, state.channels[i].last_resonance)
+                if changed(c, channel_state[i].last_cutoff)
+                    || changed(r, channel_state[i].last_resonance)
                 {
                     let (g, k) = compute_coeffs(c, r, sample_rate);
-                    state.channels[i].g = g;
-                    state.channels[i].k = k;
-                    state.channels[i].last_cutoff = c;
-                    state.channels[i].last_resonance = r;
+                    channel_state[i].g = g;
+                    channel_state[i].k = k;
+                    channel_state[i].last_cutoff = c;
+                    channel_state[i].last_resonance = r;
                 }
             }
         }
@@ -252,10 +250,10 @@ impl Jup6f {
             let (g, k) = if is_mono {
                 (state.mono_g, state.mono_k)
             } else {
-                (state.channels[i].g, state.channels[i].k)
+                (channel_state[i].g, channel_state[i].k)
             };
 
-            let (lp24, lp12, bp, hp) = process_ladder(input, &mut state.channels[i].s, g, k);
+            let (lp24, lp12, bp, hp) = process_ladder(input, &mut channel_state[i].s, g, k);
 
             self.outputs.lp24.set(i, lp24 * 5.0);
             self.outputs.lp12.set(i, lp12 * 5.0);

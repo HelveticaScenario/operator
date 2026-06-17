@@ -30,7 +30,7 @@ use crate::audio::{
   create_input_ring_buffer, find_input_device_in_host, find_output_device_in_host,
   get_host_by_preference, make_input_stream, make_stream, preferred_default_sample_rate,
 };
-use crate::commands::{GraphCommand, QueuedTrigger};
+use crate::commands::{GraphCommand, QueuedTrigger, TransportMeta};
 use crate::midi::MidiInputManager;
 
 use std::path::{Path, PathBuf};
@@ -471,6 +471,27 @@ pub struct PatchUpdateResult {
   pub update_id: f64,
 }
 
+/// Per-module audio-thread profile sample. `self_ns` excludes time spent
+/// recursively pulling upstream params; `total_ns - self_ns` is that pull
+/// cost. Counts cover one drain window.
+#[napi(object)]
+pub struct ModuleProfileSample {
+  pub module_id: String,
+  /// Time inside this module's own DSP, excluding recursive upstream pulls.
+  pub self_ns: f64,
+  /// Total time, including recursive upstream pulls.
+  pub total_ns: f64,
+  /// Calls to `ensure_processed_to` that advanced the per-block cursor.
+  pub ensure_calls_did_work: u32,
+  /// Sample slots processed in this window.
+  pub samples_processed: u32,
+  /// Processing mode of this module: "block" for acyclic subgraphs (whole
+  /// block computed per call) or "sample" for modules inside feedback
+  /// cycles (one sample per call). Sample-mode modules pay wrapper +
+  /// profiler overhead per sample, not per block.
+  pub mode: String,
+}
+
 /// Audio configuration for synthesizer initialization
 #[napi(object)]
 #[derive(Debug, Clone, Default)]
@@ -779,10 +800,10 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
 
   // Internal block size. The audio callback drains `block_size` cpal
   // frames per block-level pass (link sync, queued patch swap,
-  // `ensure_processed` on every module, transport-meter write). CPAL's
-  // own buffer size is independent — the callback handles any count of
-  // cpal frames per invocation, splitting them across internal blocks
-  // via `block_pos`.
+  // force-processing every module in dependency order, transport-meter
+  // write). CPAL's own buffer size is independent — the callback handles
+  // any count of cpal frames per invocation, splitting them across
+  // internal blocks via `block_pos`.
   //
   // 64 samples @ 48 kHz = ~1.33 ms per block. Chosen as a balance
   // between block-amortised CPU savings and per-bar-trigger jitter
@@ -1040,9 +1061,7 @@ impl Synthesizer {
   /// - Windows: `%APPDATA%\Operator\logs\`
   #[napi]
   pub fn panic_log_dir(&self) -> String {
-    panic_log::panic_log_dir()
-      .to_string_lossy()
-      .into_owned()
+    panic_log::panic_log_dir().to_string_lossy().into_owned()
   }
 
   #[napi]
@@ -1050,14 +1069,54 @@ impl Synthesizer {
     self.state.get_audio_buffers()
   }
 
+  /// Drain the per-module profiler snapshot accumulated since the last
+  /// call. Returns one entry per module instance that did work in that
+  /// window. No-op (returns empty) when profiling is disabled.
+  #[napi]
+  pub fn get_module_profile(&self) -> Vec<ModuleProfileSample> {
+    use modular_core::types::ProcessingMode;
+    self
+      .state
+      .get_module_profile()
+      .into_iter()
+      .map(|(module_id, acc)| ModuleProfileSample {
+        module_id,
+        // u64 → f64: lossy past 2^53 ns (~104 days of accumulated time).
+        // The UI drains on a 1 s cadence, so per-window values are far
+        // below that ceiling. Revisit if the drain window is lengthened.
+        self_ns: acc.self_ns as f64,
+        total_ns: acc.total_ns as f64,
+        ensure_calls_did_work: acc.ensure_calls_did_work,
+        samples_processed: acc.samples_processed,
+        mode: match acc.mode {
+          ProcessingMode::Block => "block".to_string(),
+          ProcessingMode::Sample => "sample".to_string(),
+        },
+      })
+      .collect()
+  }
+
+  /// Turn per-module profiling on or off. Off by default. Disabled-cost is
+  /// a single TLS bool read per `ensure_processed_to` did-work entry.
+  #[napi]
+  pub fn set_module_profiling_enabled(&self, enabled: bool) {
+    self.state.set_module_profiling_enabled(enabled);
+  }
+
+  /// Profile only 1-of-N audio callbacks. `rate` of 1 means every
+  /// callback; higher values reduce overhead proportionally at the cost
+  /// of statistical smoothing in the UI.
+  #[napi]
+  pub fn set_module_profiling_sample_rate(&self, rate: u32) {
+    self.state.set_module_profiling_sample_rate(rate);
+  }
+
   /// Snapshot every active $scopeXY pair as (key, x samples, y samples,
   /// ranges). Samples are chronological — element 0 is the oldest of the
   /// window, the last element the newest — and `ranges` is the per-axis volt
   /// window the renderer maps into clip space.
   #[napi]
-  pub fn get_scope_xy(
-    &self,
-  ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
+  pub fn get_scope_xy(&self) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
     self.state.get_scope_xy_buffers()
   }
 
@@ -1066,22 +1125,43 @@ impl Synthesizer {
     &mut self,
     mut patch: PatchGraph,
     trigger: Option<QueuedTrigger>,
+    reset_clock: Option<bool>,
   ) -> PatchUpdateResult {
-    // Extract MIDI device names from MIDI modules and sync connections
-    self.sync_midi_devices_from_patch(&patch);
-
     // Drain deferred deallocations from the audio thread
     self.state.drain_garbage();
 
+    let reset_clock = reset_clock.unwrap_or(false);
     let trigger = trigger.unwrap_or(QueuedTrigger::Immediate);
+
+    // Under Ableton Link, a buffer switch (reset_clock) must land on a Link bar
+    // boundary so the incoming song aligns to the shared timeline. Force the
+    // quantized NextBar trigger regardless of what the caller requested; the
+    // apply then resets ROOT_CLOCK's bar (loop) index to zero (see
+    // `apply_patch_update`). Without Link the caller's trigger stands.
+    let trigger = if reset_clock && self.state.transport_meter.read_link_enabled() {
+      QueuedTrigger::NextBar
+    } else {
+      trigger
+    };
 
     // Assign a unique update ID
     self.next_update_id += 1;
     let update_id = self.next_update_id;
 
-    // Update transport meter with tempo/time signature from ROOT_CLOCK params
-    // Also extract and strip `tempoSet` — it's a DSL-only flag, not a real Clock param
-    let tempo_override =
+    // Open this patch's MIDI devices proactively (early open is harmless). Closes
+    // are deferred: a device the new patch drops is closed only once this update
+    // is applied, so the still-playing patch keeps it until the swap. Then prune
+    // any deferred closes whose update has since been applied on the audio thread.
+    self.sync_midi_devices_from_patch(&patch, update_id);
+    self
+      .midi_manager
+      .prune_disconnects(self.state.transport_meter.read_applied_update_id());
+
+    // Extract tempo/time-signature from ROOT_CLOCK to carry to the audio thread.
+    // The meter write and Link tempo push happen at apply time (see
+    // `apply_patch_update`) so a queued update doesn't change tempo before its
+    // patch swaps in.
+    let transport_meta =
       if let Some(root_clock) = patch.modules.iter_mut().find(|m| m.id == *ROOT_CLOCK_ID) {
         let bpm = root_clock
           .params
@@ -1098,20 +1178,20 @@ impl Synthesizer {
           .get("denominator")
           .and_then(|v| v.as_u64())
           .unwrap_or(4) as u32;
-        self
-          .state
-          .transport_meter
-          .write_tempo(bpm, numerator, denominator);
-
-        // Check if DSL explicitly called $setTempo, then strip the flag
-        // so Rust serde doesn't reject the unknown field on ClockParams
+        // `tempoSet` is a DSL-only flag, not a real Clock param 
+        // (serde would reject the unknown field).
         let tempo_set = root_clock
           .params
           .as_object_mut()
           .and_then(|obj| obj.remove("tempoSet"))
           .and_then(|v| v.as_bool())
           .unwrap_or(false);
-        if tempo_set { Some(bpm) } else { None }
+        Some(TransportMeta {
+          tempo: bpm,
+          numerator,
+          denominator,
+          tempo_set,
+        })
       } else {
         None
       };
@@ -1123,7 +1203,8 @@ impl Synthesizer {
       trigger,
       update_id,
       wav_data_snapshot,
-      tempo_override,
+      transport_meta,
+      reset_clock,
     );
 
     PatchUpdateResult {
@@ -1190,8 +1271,10 @@ impl Synthesizer {
       .send_command(GraphCommand::SingleModuleUpdate { module_id, module })
   }
 
-  /// Extract MIDI device names from patch modules and sync connections
-  fn sync_midi_devices_from_patch(&self, patch: &PatchGraph) {
+  /// Extract MIDI device names from patch modules and sync connections.
+  /// `update_id` tags any deferred closes so they only take effect once this
+  /// update is applied on the audio thread (see `MidiInputManager`).
+  fn sync_midi_devices_from_patch(&self, patch: &PatchGraph, update_id: u64) {
     use std::collections::HashSet;
 
     let mut devices: HashSet<String> = HashSet::new();
@@ -1211,8 +1294,7 @@ impl Synthesizer {
       }
     }
 
-    // Sync MIDI manager connections
-    self.midi_manager.sync_devices(&devices);
+    self.midi_manager.sync_devices(&devices, update_id);
   }
 
   #[napi]
@@ -1484,6 +1566,11 @@ impl Synthesizer {
     self._output_stream = setup_result.output_stream;
     self._input_stream = setup_result.input_stream;
     self.state = setup_result.state;
+    // The fresh AudioState starts with a zero profiling refcount, so reset
+    // the process-global profiling flag to match. Otherwise switching audio
+    // devices while profiling is enabled leaves the global stuck on with no
+    // refcount able to clear it; the UI panel re-enables on its next open.
+    modular_core::profiling::set_enabled(false);
     self.sample_rate = setup_result.sample_rate;
     self.buffer_size = buffer_size;
     self.channels = setup_result.channels;
@@ -1646,6 +1733,17 @@ impl Synthesizer {
   #[napi]
   pub fn try_reconnect_midi(&self) {
     self.midi_manager.try_reconnect();
+  }
+
+  /// Close any MIDI devices whose deferred disconnect is now safe (their patch
+  /// update has been applied on the audio thread). Called periodically from the
+  /// main process so a device a patch dropped still closes even if no further
+  /// patch updates arrive. Idempotent.
+  #[napi]
+  pub fn prune_disconnected_midi(&self) {
+    self
+      .midi_manager
+      .prune_disconnects(self.state.transport_meter.read_applied_update_id());
   }
 }
 

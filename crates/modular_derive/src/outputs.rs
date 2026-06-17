@@ -424,11 +424,19 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         let field_name = &o.field_name;
         let output_name = &o.output_name;
 
-        // Data port: regular BlockPort field + port_index + get_at.
+        // Data port: regular BlockPort field + port_index + get_at. Each port is
+        // sized to its true width — f32 outputs are mono (1 channel, broadcast
+        // to consumers via cycling-on-read), PolyOutput ports get the module's
+        // derived channel count.
         block_fields.push(quote! { pub #field_name: crate::block_port::BlockPort });
-        block_new_inits.push(quote! {
-            #field_name: crate::block_port::BlockPort::new(block_size)
-        });
+        match o.precision {
+            OutputPrecision::F32 => block_new_inits.push(quote! {
+                #field_name: crate::block_port::BlockPort::new(block_size, 1)
+            }),
+            OutputPrecision::PolySignal => block_new_inits.push(quote! {
+                #field_name: crate::block_port::BlockPort::new(block_size, channel_count)
+            }),
+        }
         port_index_arms.push(quote! { #output_name => Some(#next_idx), });
         get_at_arms.push(quote! { #next_idx => self.#field_name.get(index, ch), });
         next_idx += 1;
@@ -436,20 +444,21 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         // Copy data into the block buffer at `slot`.
         match o.precision {
             OutputPrecision::F32 => copy_inner_stmts.push(quote! {
-                // Broadcast the mono f32 value to every channel slot.
-                let v = inner.#field_name;
-                for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                    self.#field_name.data[slot][ch] = v;
-                }
+                // f32 output is mono: write the single value to the port's one
+                // channel. Consumers on any channel read it back via
+                // BlockPort::get's cycling (`ch % 1 == 0`), preserving the
+                // mono-broadcast semantics downstream cables rely on.
+                self.#field_name.set(slot, 0, inner.#field_name);
             }),
             OutputPrecision::PolySignal => copy_inner_stmts.push(quote! {
                 {
-                    // `get_cycling` broadcasts a mono producer's single value
-                    // to every consumer channel, so channels >= the producer's
-                    // channel count read the producer's value, not 0.
+                    // Write each of this port's channels. `get_cycling` fills the
+                    // port even when the producer is narrower than the port
+                    // width; reads at higher consumer channels wrap via
+                    // BlockPort::get's modulo.
                     let poly = &inner.#field_name;
-                    for ch in 0..crate::poly::PORT_MAX_CHANNELS {
-                        self.#field_name.data[slot][ch] = poly.get_cycling(ch);
+                    for ch in 0..self.#field_name.channels() {
+                        self.#field_name.set(slot, ch, poly.get_cycling(ch));
                     }
                 }
             }),
@@ -460,27 +469,24 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
             let min_lit = min as f32;
             let max_lit = max as f32;
             let base_name = output_name.value();
-            let range_min_name = LitStr::new(
-                &format!("{}.rangeMin", base_name),
-                output_name.span(),
-            );
-            let range_max_name = LitStr::new(
-                &format!("{}.rangeMax", base_name),
-                output_name.span(),
-            );
+            let range_min_name =
+                LitStr::new(&format!("{}.rangeMin", base_name), output_name.span());
+            let range_max_name =
+                LitStr::new(&format!("{}.rangeMax", base_name), output_name.span());
 
             if o.dynamic_range {
                 // Extra BlockPorts let the inner module write per-channel
                 // per-slot bounds; only allocated for `dynamic_range` outputs.
+                // Sized to the module's channel count, matching the data port.
                 let field_min = format_ident!("{}_range_min", field_name);
                 let field_max = format_ident!("{}_range_max", field_name);
                 block_fields.push(quote! { pub #field_min: crate::block_port::BlockPort });
                 block_fields.push(quote! { pub #field_max: crate::block_port::BlockPort });
                 block_new_inits.push(quote! {
-                    #field_min: crate::block_port::BlockPort::new(block_size)
+                    #field_min: crate::block_port::BlockPort::new(block_size, channel_count)
                 });
                 block_new_inits.push(quote! {
-                    #field_max: crate::block_port::BlockPort::new(block_size)
+                    #field_max: crate::block_port::BlockPort::new(block_size, channel_count)
                 });
 
                 let min_idx = next_idx;
@@ -498,13 +504,19 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 copy_inner_stmts.push(quote! {
                     {
                         let poly = &inner.#field_name;
-                        for ch in 0..crate::poly::PORT_MAX_CHANNELS {
+                        for ch in 0..self.#field_min.channels() {
                             let rmin = poly.get_range_min(ch);
                             let rmax = poly.get_range_max(ch);
-                            self.#field_min.data[slot][ch] =
-                                if rmin.is_nan() { #min_lit } else { rmin };
-                            self.#field_max.data[slot][ch] =
-                                if rmax.is_nan() { #max_lit } else { rmax };
+                            self.#field_min.set(
+                                slot,
+                                ch,
+                                if rmin.is_nan() { #min_lit } else { rmin },
+                            );
+                            self.#field_max.set(
+                                slot,
+                                ch,
+                                if rmax.is_nan() { #max_lit } else { rmax },
+                            );
                         }
                     }
                 });
@@ -544,8 +556,10 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         }
 
         impl #block_outputs_name {
-            /// Allocate all ports for the given block size. Call only on the main thread.
-            pub fn new(block_size: usize) -> Self {
+            /// Allocate all ports for the given block size and channel count.
+            /// Call only on the main thread. f32 ports are mono; PolyOutput
+            /// ports are sized to `channel_count`.
+            pub fn new(block_size: usize, channel_count: usize) -> Self {
                 Self {
                     #(#block_new_inits,)*
                 }

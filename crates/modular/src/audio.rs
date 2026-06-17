@@ -11,6 +11,7 @@ use modular_core::PatchGraph;
 use modular_core::dsp::get_constructors;
 use modular_core::dsp::schema;
 use modular_core::dsp::utils::SchmittTrigger;
+use modular_core::profiling::{ModuleProfileAccum, ModuleProfileCollection};
 
 use modular_core::types::ClockMessages;
 use modular_core::types::Message;
@@ -26,6 +27,7 @@ use ringbuf::{
   traits::{Consumer, Producer, Split},
 };
 use rtrb::{Consumer as RtrbConsumer, Producer as RtrbProducer, RingBuffer};
+use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs::File;
@@ -34,7 +36,6 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::cell::UnsafeCell;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +46,7 @@ use std::time::Instant;
 
 use crate::commands::{
   AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
-  GraphCommand, PatchUpdate, QueuedTrigger,
+  GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
 };
 use crate::midi::MidiInputManager;
 
@@ -993,10 +994,11 @@ pub struct AudioState {
   /// XY scope collection - shared with audio thread for UI reads.
   /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
   scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
-  /// Display ranges for the active $scopeXY (global, last-call-wins). Set on
-  /// each patch update from `ScopeXy.x_range`/`y_range`; read on the main
-  /// thread by `get_scope_xy_buffers` to ship the volt→clip window. Main-thread
-  /// only, never shared with the audio thread.
+  /// Display ranges for the active $scopeXY (global, last-call-wins). Written by
+  /// the audio thread in `apply_patch_update` (atomically with the XY buffer
+  /// swap, so the window updates exactly when the patch applies);
+  /// read on the main thread by `get_scope_xy_buffers` to ship the
+  /// volt→clip window. Shared with the audio thread via `AudioSharedState`.
   scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   /// Recording writer - shared with audio thread
   recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
@@ -1024,6 +1026,14 @@ pub struct AudioState {
   /// Plumbed through `make_stream` so the audio thread can be flipped to
   /// a real block size without touching every constructor call site.
   pub block_size: usize,
+  /// Per-module profile snapshot. Audio thread writes via try_lock at
+  /// callback end (see `modular_core::profiling::flush_into`); main thread
+  /// drains via `get_module_profile`.
+  module_profile_collection: ModuleProfileCollection,
+  /// Refcount of enable requests. The underlying profiling global is on
+  /// iff this is > 0. Lets multiple consumers (UI panel, future telemetry
+  /// hooks) coexist without one clobbering another's enable state.
+  module_profiling_enable_count: Arc<AtomicU32>,
 }
 
 #[derive(Default)]
@@ -1066,6 +1076,8 @@ impl AudioState {
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
       block_size,
+      module_profile_collection: modular_core::profiling::new_collection(),
+      module_profiling_enable_count: Arc::new(AtomicU32::new(0)),
     }
   }
 
@@ -1140,13 +1152,54 @@ impl AudioState {
       stopped: self.stopped.clone(),
       scope_collection: self.scope_collection.clone(),
       scope_xy_collection: self.scope_xy_collection.clone(),
+      scope_xy_ranges: self.scope_xy_ranges.clone(),
       recording_writer: self.recording_writer.clone(),
       audio_budget_meter: self.audio_budget_meter.clone(),
       module_states: self.module_states.clone(),
       midi_manager: self.midi_manager.clone(),
       transport_meter: self.transport_meter.clone(),
       audio_thread_panicked: self.audio_thread_panicked.clone(),
+      module_profile_collection: self.module_profile_collection.clone(),
     }
+  }
+
+  /// Enable / disable per-module profiling. Refcounted: each `true` must
+  /// be balanced by a `false`. The underlying profiling global is on iff
+  /// the refcount is > 0, so multiple consumers (UI panel + future
+  /// telemetry, etc.) can coexist without one clobbering another's state.
+  pub fn set_module_profiling_enabled(&self, on: bool) {
+    if on {
+      let prev = self
+        .module_profiling_enable_count
+        .fetch_add(1, Ordering::Relaxed);
+      if prev == 0 {
+        modular_core::profiling::set_enabled(true);
+      }
+    } else {
+      let prev = self
+        .module_profiling_enable_count
+        .fetch_sub(1, Ordering::Relaxed);
+      if prev == 1 {
+        modular_core::profiling::set_enabled(false);
+      } else if prev == 0 {
+        // Unbalanced disable — restore the counter and ignore so callers
+        // who forget a prior enable don't underflow the global.
+        self
+          .module_profiling_enable_count
+          .store(0, Ordering::Relaxed);
+      }
+    }
+  }
+
+  /// Profile 1-of-N audio callbacks. 1 = every callback.
+  pub fn set_module_profiling_sample_rate(&self, rate: u32) {
+    modular_core::profiling::set_sample_rate(rate);
+  }
+
+  /// Drain the accumulated per-module profile data. Returns one entry per
+  /// module that had activity since the last drain.
+  pub fn get_module_profile(&self) -> Vec<(String, ModuleProfileAccum)> {
+    modular_core::profiling::drain_collection(&self.module_profile_collection)
   }
 
   pub fn start_recording(&self, filename: Option<String>) -> Result<String> {
@@ -1258,7 +1311,8 @@ impl AudioState {
     trigger: QueuedTrigger,
     update_id: u64,
     wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
-    tempo_override: Option<f64>,
+    transport_meta: Option<TransportMeta>,
+    reset_clock: bool,
   ) -> Result<()> {
     let PatchGraph {
       modules,
@@ -1317,8 +1371,7 @@ impl AudioState {
     // are sample-rate ring buffers that would smear if reused).
     {
       let scope_xy_collection = self.scope_xy_collection.lock();
-      let current_keys: HashSet<ScopeXyBufferKey> =
-        scope_xy_collection.keys().cloned().collect();
+      let current_keys: HashSet<ScopeXyBufferKey> = scope_xy_collection.keys().cloned().collect();
 
       let desired_keys: HashSet<ScopeXyBufferKey> = match scope_xy.as_ref() {
         Some(sx) => sx
@@ -1340,10 +1393,11 @@ impl AudioState {
         .collect();
     }
 
-    // Publish the active display window (global, last-call-wins). Updated every
-    // patch update — including range-only changes that leave the pair keys
-    // untouched — so a renderer poll always sees the current volt→clip mapping.
-    *self.scope_xy_ranges.lock() = scope_xy.as_ref().map(|sx| ScopeXyRanges {
+    // Carry the active display window (global, last-call-wins) on the update so
+    // the audio thread publishes it atomically with the XY buffer swap — a
+    // queued update's window then takes effect exactly when its patch applies.
+    // `None` clears the window when the patch has no $scopeXY.
+    update.scope_xy_ranges = scope_xy.as_ref().map(|sx| ScopeXyRanges {
       x_min: sx.x_range.0,
       x_max: sx.x_range.1,
       y_min: sx.y_range.0,
@@ -1367,10 +1421,14 @@ impl AudioState {
       deserialized_modules.push((id, module_state.module_type, deserialized));
     }
 
-    // Tarjan SCC over the adjacency map. Cycle participants get `Sample`
-    // mode so the wrapper computes one sample at a time and the 1-sample
-    // feedback delay invariant holds; everyone else gets `Block`.
-    let mode_map = crate::graph_analysis::classify_modules(&adjacency);
+    // One Tarjan SCC pass over the adjacency map yields both the per-module
+    // processing mode and a cache-efficient processing order. Cycle
+    // participants get `Sample` mode so the wrapper computes one sample at a
+    // time and the 1-sample feedback delay invariant holds; everyone else
+    // gets `Block`. The order lists producers before consumers.
+    let analysis = crate::graph_analysis::analyze(&adjacency);
+    let mode_map = analysis.modes;
+    update.process_order_ids = analysis.order;
 
     // Pass 2 — construct modules on the main thread with the resolved mode.
     // The audio thread will always replace existing modules and transfer state.
@@ -1427,6 +1485,14 @@ impl AudioState {
     // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread
     update.desired_ids = update.inserts.iter().map(|(id, _)| id.clone()).collect();
 
+    // Profiler seed maps for the audio thread's TLS records and shared
+    // map. One entry per inserted id, two maps because each `swap_*`
+    // consumes its operand.
+    update.profile_records_seed =
+      modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+    update.profile_shared_seed =
+      modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+
     // Run main-thread resource preparation (e.g. FFT-based mipmap generation for
     // wavetable oscillators). Called here because allocation and file-backed
     // data access must not happen on the audio thread.
@@ -1437,8 +1503,13 @@ impl AudioState {
     // Populate wav_data from the cache snapshot
     update.wav_data = wav_data;
 
-    // Pass through tempo override for Link integration
-    update.tempo_override = tempo_override;
+    // Carry tempo/time-sig to apply time: the meter write and (when $setTempo
+    // was called) the Link tempo push happen in apply_patch_update, atomically
+    // with the module swap.
+    update.transport_meta = transport_meta;
+
+    // Restart the transport when applying this update (set on a buffer switch)
+    update.reset_clock = reset_clock;
 
     // Send the update to audio thread
     self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
@@ -1451,7 +1522,8 @@ impl AudioState {
     trigger: QueuedTrigger,
     update_id: u64,
     wav_data: HashMap<String, Arc<modular_core::types::WavData>>,
-    tempo_override: Option<f64>,
+    transport_meta: Option<TransportMeta>,
+    reset_clock: bool,
   ) -> Vec<ApplyPatchError> {
     // Validate patch
     let schemas = schema();
@@ -1480,7 +1552,8 @@ impl AudioState {
       trigger,
       update_id,
       wav_data,
-      tempo_override,
+      transport_meta,
+      reset_clock,
     ) {
       return vec![ApplyPatchError {
         message: format!("Failed to apply patch: {}", e),
@@ -1498,6 +1571,9 @@ pub struct AudioSharedState {
   pub stopped: Arc<AtomicBool>,
   pub scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
   pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
+  /// Display ranges for the active $scopeXY — written by the audio thread on
+  /// apply, read by the main thread for the renderer.
+  pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
   pub audio_budget_meter: Arc<AudioBudgetMeter>,
   /// Module states (e.g., seq current step) - written by audio thread, read by main thread
@@ -1509,6 +1585,9 @@ pub struct AudioSharedState {
   /// Set by the audio callback after catching a panic. The callback then
   /// writes silence forever; the stream must be torn down to recover.
   pub audio_thread_panicked: Arc<AtomicBool>,
+  /// Per-module profiler snapshot — audio thread flushes here via try_lock
+  /// at the end of every callback.
+  pub module_profile_collection: ModuleProfileCollection,
 }
 
 fn chrono_simple_timestamp() -> String {
@@ -1527,9 +1606,35 @@ fn chrono_simple_timestamp() -> String {
 
 /// Audio processor that runs on the audio thread.
 /// Owns the Patch directly and processes commands from the main thread.
+/// A raw handle into an audio-thread-owned module box, used to drive every
+/// module's processing in a cache-efficient order without a per-module hash
+/// lookup. SAFETY mirrors the cable `cached_source_ptr` (see
+/// `modular_core::types::SampleablePtr`): the pointer is resolved from a box
+/// in `AudioProcessor::patch.sampleables` after `connect()`, rebuilt on every
+/// structural patch change (insert/remove/remap/replace), and dereferenced
+/// only on the audio thread, which has exclusive access to the patch.
+/// `ensure_processed_to` takes `&self` and mutates only through the module's
+/// `UnsafeCell`, so shared aliasing with the owning `Box` is sound.
+struct ProcessHandle(modular_core::types::SampleablePtr);
+
+// SAFETY: the pointed-to module is `Send` (Sampleable: Send) and is only ever
+// dereferenced on the audio thread that owns the patch. This mirrors the
+// `unsafe impl Send` on `Signal`/`Buffer`, which cache the same pointer type.
+unsafe impl Send for ProcessHandle {}
+
 struct AudioProcessor {
   /// The DSP patch graph - owned directly, no mutex needed
   patch: Patch,
+  /// Cache-efficient processing order: raw handles into every module box in
+  /// `patch.sampleables`, ordered producers-before-consumers. Walked once per
+  /// block by `process_all_modules_to` so every module advances each block,
+  /// whether or not it is reachable from the output or a scope. Rebuilt from
+  /// `process_order_ids` on every structural patch change.
+  process_order: Vec<ProcessHandle>,
+  /// The module IDs behind `process_order`, in the same order, kept so the
+  /// pointer list can be rebuilt after a box moves (e.g. `SingleModuleUpdate`)
+  /// without re-running graph analysis.
+  process_order_ids: Vec<String>,
   /// Command queue consumer
   command_rx: CommandConsumer,
   /// Error queue producer
@@ -1547,6 +1652,10 @@ struct AudioProcessor {
   /// to append samples, so the per-sample path never touches the collection
   /// mutex. Reconciled against the collection on each patch update.
   scope_xy_audio: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
+  /// Shared XY-scope display window. Written here in `apply_patch_update` so the
+  /// volt→clip mapping swaps atomically with the buffers; read by the main
+  /// thread for the renderer.
+  scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
   /// Shared module states (e.g., seq current step)
   module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
   /// MIDI input manager for polling
@@ -1573,6 +1682,13 @@ struct AudioProcessor {
   /// Ableton Link integration (audio-thread side). Owns the live
   /// `rusty_link` resources when active and exposes only RT-safe operations.
   link: crate::link::LinkState,
+  /// Shared per-module profile snapshot — flushed at end of each callback.
+  module_profile_collection: ModuleProfileCollection,
+  /// Profiler shared-map seed whose swap lost the `try_lock` race with the
+  /// main-thread drain. Retried on a later callback (see
+  /// `retry_pending_profile_seed`) so the audio thread never blocks on the
+  /// profiler mutex. Normally `None`.
+  pending_profile_shared_seed: Option<HashMap<String, ModuleProfileAccum>>,
 }
 
 impl AudioProcessor {
@@ -1586,6 +1702,8 @@ impl AudioProcessor {
   ) -> Self {
     Self {
       patch: Patch::new(),
+      process_order: Vec::new(),
+      process_order_ids: Vec::new(),
       command_rx,
       error_tx,
       garbage_tx,
@@ -1593,6 +1711,7 @@ impl AudioProcessor {
       scope_collection: shared.scope_collection,
       scope_xy_collection: shared.scope_xy_collection,
       scope_xy_audio: Vec::new(),
+      scope_xy_ranges: shared.scope_xy_ranges,
       module_states: shared.module_states,
       midi_manager: shared.midi_manager,
       queued_update: None,
@@ -1602,6 +1721,35 @@ impl AudioProcessor {
       block_pos: block_size,
       input_block_scratch: vec![[0.0f32; PORT_MAX_CHANNELS]; block_size],
       link: crate::link::LinkState::new(),
+      module_profile_collection: shared.module_profile_collection,
+      pending_profile_shared_seed: None,
+    }
+  }
+
+  /// Route an evicted profiler map to the garbage queue for drop on the
+  /// main thread. On a saturated queue the map drops here on the audio
+  /// thread instead (memory-safe but undesirable), so log its size to make
+  /// that diagnosable, mirroring the PatchUpdate eviction path.
+  fn drop_profile_map(&mut self, map: HashMap<String, ModuleProfileAccum>) {
+    let len = map.len();
+    if self.garbage_tx.push(GarbageItem::ProfileMap(map)).is_err() {
+      println!("Profiler map ({len} entries) dropped on audio thread: garbage queue full");
+    }
+  }
+
+  /// Retry a deferred profiler shared-map swap. A swap is deferred when
+  /// [`modular_core::profiling::try_swap_shared`] loses the `try_lock` race
+  /// with the main-thread drain; retrying here keeps the audio thread from
+  /// ever blocking on the profiler mutex. No-op when nothing is pending.
+  fn retry_pending_profile_seed(&mut self) {
+    let Some(seed) = self.pending_profile_shared_seed.take() else {
+      return;
+    };
+    match modular_core::profiling::try_swap_shared(&self.module_profile_collection, seed) {
+      Ok(old) => self.drop_profile_map(old),
+      Err(seed) => {
+        self.pending_profile_shared_seed = Some(seed);
+      }
     }
   }
 
@@ -1621,13 +1769,11 @@ impl AudioProcessor {
     // Process commands from the main thread
     while let Ok(cmd) = self.command_rx.pop() {
       match cmd {
-        GraphCommand::QueuedPatchUpdate { update, trigger } => {
-          // Push tempo to Link if explicitly set via $setTempo. The
-          // capture/commit call inside `set_tempo_now` is the realtime-safe
-          // way to mutate session state per Ableton's docs.
-          if let Some(tempo) = update.tempo_override {
-            self.link.set_tempo_now(tempo);
-          }
+        GraphCommand::QueuedPatchUpdate { mut update, trigger } => {
+          // The Link tempo push and meter write are applied in
+          // `apply_patch_update`, atomically with the module swap. Pushing the
+          // tempo while the update is only queued would advance the
+          // still-playing patch's phase at the new tempo before its swap.
 
           // If there's already a queued update, discard it and apply the new one
           // immediately. This is intentional: when the user triggers a second
@@ -1635,6 +1781,11 @@ impl AudioProcessor {
           // we treat it as "apply now" rather than re-queuing for the next
           // bar/beat.
           if let Some((old_update, _)) = self.queued_update.take() {
+            // Carry a pending transport reset forward: if the superseded update
+            // was a buffer switch that never fired, the immediate apply still
+            // lands on a different song than what's playing, so it must still
+            // restart the clock.
+            update.reset_clock |= old_update.reset_clock;
             if let Err(err) = self.garbage_tx.push(GarbageItem::PatchUpdate(old_update)) {
               println!(
                 "Failed to push old patch update to garbage queue: ${:?}",
@@ -1671,6 +1822,11 @@ impl AudioProcessor {
           for module in self.patch.sampleables.values() {
             module.on_patch_update();
           }
+          // The old box was dropped and a fresh one inserted at this id, so its
+          // cached pointer now dangles. The graph shape is unchanged (same
+          // modules and cables — only this module's params differ), so reuse
+          // `process_order_ids` and just re-resolve the pointers.
+          self.rebuild_process_order_ptrs();
         }
         GraphCommand::DispatchMessage(msg) => {
           if let Err(e) = self.patch.dispatch_message(&msg) {
@@ -1732,15 +1888,19 @@ impl AudioProcessor {
           {
             let garbage_tx = &mut self.garbage_tx;
             let scope_xy_audio = &mut self.scope_xy_audio;
-            scope_xy_audio.retain(
-              |(_k, buf)| match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
+            scope_xy_audio.retain(|(_k, buf)| {
+              match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
                 Ok(()) => false,
                 Err(_) => true,
-              },
-            );
+              }
+            });
           }
           self.patch.insert_audio_in();
           self.patch.rebuild_message_listeners();
+          // No user modules remain (only the hidden audio-in, which is driven
+          // by injection), so there is nothing to force-process.
+          self.process_order.clear();
+          self.process_order_ids.clear();
         }
         GraphCommand::SetLink(new_resources) => {
           // Construction/destruction of `AblLink` (and `enable()`) are
@@ -1780,11 +1940,17 @@ impl AudioProcessor {
       remaps,
       inserts,
       desired_ids,
+      process_order_ids,
       scope_adds,
       scope_removes,
       scope_xy_adds,
       scope_xy_removes,
       wav_data,
+      profile_records_seed,
+      profile_shared_seed,
+      reset_clock,
+      transport_meta,
+      scope_xy_ranges,
       ..
     } = update;
 
@@ -1881,6 +2047,11 @@ impl AudioProcessor {
       module.on_patch_update();
     }
 
+    // Adopt the new processing order and resolve it to live box pointers. Must
+    // come after every structural mutation above so no pointer dangles.
+    self.process_order_ids = process_order_ids;
+    self.rebuild_process_order_ptrs();
+
     // Update scopes
     {
       let mut scope_collection = self.scope_collection.lock();
@@ -1895,6 +2066,32 @@ impl AudioProcessor {
       // Add new scopes
       for (key, buffer) in scope_adds {
         scope_collection.insert(key, buffer);
+      }
+    }
+
+    // Profiler-map swap: `swap_records` updates the audio thread's TLS
+    // records, `try_swap_shared` updates the cross-thread snapshot. Both
+    // operands were allocated on the main thread; the evicted maps drop
+    // on the main thread via `GarbageItem::ProfileMap`. Counters
+    // accumulated since the last UI drain do not survive the swap — a
+    // patch swap is a graph discontinuity, and pre-swap stats are not
+    // comparable to post-swap ones.
+    {
+      let old_records = modular_core::profiling::swap_records(profile_records_seed);
+      self.drop_profile_map(old_records);
+      // Non-blocking shared-map swap. On `try_lock` contention with the
+      // main-thread drain, stash the seed and retry on a later callback
+      // (see `retry_pending_profile_seed`) so the audio thread never blocks.
+      match modular_core::profiling::try_swap_shared(
+        &self.module_profile_collection,
+        profile_shared_seed,
+      ) {
+        Ok(old_shared) => self.drop_profile_map(old_shared),
+        Err(seed) => {
+          if let Some(superseded) = self.pending_profile_shared_seed.replace(seed) {
+            self.drop_profile_map(superseded);
+          }
+        }
       }
     }
 
@@ -1932,6 +2129,49 @@ impl AudioProcessor {
         }
       });
     }
+
+    // Publish the XY display window now, atomically with the buffer swap above,
+    // so the renderer maps this patch's signal against this patch's volt→clip
+    // window from the instant the patch applies. `None` clears it.
+    *self.scope_xy_ranges.lock() = scope_xy_ranges;
+
+    // Restart the transport when this update switches playback to a different
+    // buffer (song). Runs after the inserts/transfer/connect above so
+    // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
+    // then refills the block.
+    if reset_clock {
+      if self.link.is_active() {
+        // Under Ableton Link the shared session timeline owns the bar phase —
+        // a full Clock::Start would be re-overridden by the next synced sample
+        // and would spuriously re-fire the bar/beat triggers. The swap is
+        // quantized to a bar boundary (NextBar; see `update_patch`), so reset
+        // only the local bar (loop) index: the incoming song's bar count
+        // restarts at zero while the phase stays locked to the peer timeline.
+        use modular_core::types::ROOT_CLOCK_ID;
+        if let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) {
+          root_clock.reset_loop_index();
+        }
+      } else {
+        // Free-run: restart the whole transport (phase, beat, bar count) from
+        // zero. The swap-site eager-fill then refills the block from phase 0.
+        let _ = self
+          .patch
+          .dispatch_message(&Message::Clock(ClockMessages::Start));
+      }
+    }
+
+    // Apply tempo/time-sig now, atomically with the swap. The meter readout
+    // always reflects the patch that just applied; the Link push only happens
+    // when the DSL explicitly set the tempo, so a plain live-coding edit never
+    // overrides a peer-driven Link tempo.
+    if let Some(t) = transport_meta {
+      self
+        .transport_meter
+        .write_tempo(t.tempo, t.numerator, t.denominator);
+      if t.tempo_set {
+        self.link.set_tempo_now(t.tempo);
+      }
+    }
   }
 
   /// Pull one full block of host audio input from `input_reader` into
@@ -1946,8 +2186,59 @@ impl AudioProcessor {
         slot[ch] = frame[ch] * AUDIO_INPUT_GAIN;
       }
     }
-    if let Some(audio_in) = self.patch.sampleables.get(WellKnownModule::HiddenAudioIn.id()) {
+    if let Some(audio_in) = self
+      .patch
+      .sampleables
+      .get(WellKnownModule::HiddenAudioIn.id())
+    {
       audio_in.inject_audio_in_block(&self.input_block_scratch);
+    }
+  }
+
+  /// Rebuild the cache-efficient processing-order pointer list from the
+  /// stored `process_order_ids`. Each `SampleablePtr` targets a module's heap
+  /// pointee (via `module.as_ref()`), which stays put when its `Box` is moved
+  /// (a HashMap rehash relocates the fat pointer, not the allocation) — that
+  /// stability is exactly what makes the cached-pointer scheme sound. A handle
+  /// only dangles when its module is dropped or replaced (the pointee is
+  /// freed), so this must run after ANY mutation of `patch.sampleables` that
+  /// removes/replaces a module — the same discipline the cable
+  /// `cached_source_ptr`s follow, which is why every such site also re-runs
+  /// `connect()`. IDs absent from the patch (e.g. dangling cable targets) are
+  /// skipped. Allocates, so it only runs on the patch-swap path, never in the
+  /// per-sample loop.
+  fn rebuild_process_order_ptrs(&mut self) {
+    let AudioProcessor {
+      patch,
+      process_order,
+      process_order_ids,
+      ..
+    } = self;
+    process_order.clear();
+    process_order.reserve(process_order_ids.len());
+    for id in process_order_ids.iter() {
+      if let Some(module) = patch.sampleables.get(id) {
+        process_order.push(ProcessHandle(modular_core::types::SampleablePtr::from(
+          module.as_ref(),
+        )));
+      }
+    }
+  }
+
+  /// Force every module — including those not reachable from the output or any
+  /// scope — to advance to slot `end` within the current internal block, in
+  /// cache-efficient producer-before-consumer order. Each wrapper memoises per
+  /// slot, so this is idempotent and any later root/scope `get_value_at` read
+  /// of an already-advanced slot is a pure cache hit. Cycles stay correct
+  /// regardless of which member is reached first: the wrapper's reentrancy
+  /// guard preserves the 1-sample feedback delay.
+  #[inline]
+  fn process_all_modules_to(&self, end: usize) {
+    for handle in &self.process_order {
+      // SAFETY: see `ProcessHandle`. Audio-thread-exclusive access; the
+      // pointer is live (rebuilt on every structural patch change) and
+      // `ensure_processed_to` mutates only through the module's UnsafeCell.
+      unsafe { handle.0.as_ref().ensure_processed_to(end) };
     }
   }
 
@@ -2086,6 +2377,10 @@ where
 
           let callback_start = Instant::now();
 
+          // Mirror the main-thread enable atomic into the audio thread's
+          // profiler TLS. Cheap relaxed load once per callback.
+          modular_core::profiling::refresh_enabled();
+
           // Process any pending commands from the main thread
           {
             profiling::scope!("process_commands");
@@ -2135,11 +2430,7 @@ where
 
           {
             let eager_end = block_size.min(audio_processor.block_pos + num_frames);
-            audio_processor.eager_fill_clock(
-              audio_processor.block_pos,
-              eager_end,
-              written,
-            );
+            audio_processor.eager_fill_clock(audio_processor.block_pos, eager_end, written);
           }
 
           {
@@ -2156,30 +2447,32 @@ where
                 audio_processor.eager_fill_clock(0, eager_end, written);
               }
 
-              let scan_end =
-                block_size.min(audio_processor.block_pos + (num_frames - written));
+              let scan_end = block_size.min(audio_processor.block_pos + (num_frames - written));
 
               // Resolve trigger sample for queued patch swap.
-              let trigger_sample: Option<usize> = match audio_processor
-                .queued_update
-                .as_ref()
-                .map(|(_, t)| t)
-              {
-                Some(QueuedTrigger::Immediate) => Some(audio_processor.block_pos),
-                Some(QueuedTrigger::NextBar) => audio_processor.scan_trigger(
-                  "barTrigger",
-                  audio_processor.block_pos,
-                  scan_end,
-                ),
-                Some(QueuedTrigger::NextBeat) => audio_processor.scan_trigger(
-                  "beatTrigger",
-                  audio_processor.block_pos,
-                  scan_end,
-                ),
-                None => None,
-              };
+              let trigger_sample: Option<usize> =
+                match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
+                  Some(QueuedTrigger::Immediate) => Some(audio_processor.block_pos),
+                  Some(QueuedTrigger::NextBar) => {
+                    audio_processor.scan_trigger("barTrigger", audio_processor.block_pos, scan_end)
+                  }
+                  Some(QueuedTrigger::NextBeat) => {
+                    audio_processor.scan_trigger("beatTrigger", audio_processor.block_pos, scan_end)
+                  }
+                  None => None,
+                };
 
               let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
+
+              // Force every module to advance to `end`, in cache-efficient
+              // producer-before-consumer order, so modules not reachable from
+              // the output or any scope still process. The root/scope reads in
+              // the drain below then become pure cache hits. Skipped while
+              // stopped so the patch freezes on stop — the drain still ramps
+              // connected modules out via the root pull during the fade.
+              if end > audio_processor.block_pos && !audio_processor.is_stopped() {
+                audio_processor.process_all_modules_to(end);
+              }
 
               // Drain [block_pos, end) into cpal output, inlining the
               // volume-change state machine + soft clip that
@@ -2218,16 +2511,13 @@ where
                     continue;
                   }
 
-                  if let Some(root) =
-                    audio_processor.patch.sampleables.get(&*ROOT_ID)
-                  {
+                  if let Some(root) = audio_processor.patch.sampleables.get(&*ROOT_ID) {
                     let mut any_audible = false;
                     let mut samples = [0.0f32; PORT_MAX_CHANNELS];
                     for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                      let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i)
-                        * AUDIO_OUTPUT_ATTENUATION;
-                      let sample =
-                        safety_soft_clip(raw * final_state_processor.attenuation_factor);
+                      let raw =
+                        root.get_value_at(&ROOT_OUTPUT_PORT, ch, i) * AUDIO_OUTPUT_ATTENUATION;
+                      let sample = safety_soft_clip(raw * final_state_processor.attenuation_factor);
                       samples[ch] = sample;
                       if sample.abs() >= 0.0005 {
                         any_audible = true;
@@ -2241,7 +2531,11 @@ where
                       }
                     } else {
                       for ch in 0..num_channels {
-                        let v = if ch < PORT_MAX_CHANNELS { samples[ch] } else { 0.0 };
+                        let v = if ch < PORT_MAX_CHANNELS {
+                          samples[ch]
+                        } else {
+                          0.0
+                        };
                         output[frame_start + ch] = T::from_sample(v);
                       }
                     }
@@ -2255,41 +2549,24 @@ where
                     }
                     if let Some(scope_lock) = scope_guard.as_mut() {
                       for (key, scope_buffer) in scope_lock.iter_mut() {
-                        if let Some(module) =
-                          audio_processor.patch.sampleables.get(&key.module_id)
+                        if let Some(module) = audio_processor.patch.sampleables.get(&key.module_id)
                         {
-                          let s = module.get_value_at(
-                            &key.port_name,
-                            key.channel as usize,
-                            i,
-                          );
+                          let s = module.get_value_at(&key.port_name, key.channel as usize, i);
                           scope_buffer.push(s);
                         }
                       }
                     }
                     for (key, xy_buffer) in &audio_processor.scope_xy_audio {
                       let (Some(x_mod), Some(y_mod)) = (
-                        audio_processor
-                          .patch
-                          .sampleables
-                          .get(&key.pair.x.module_id),
-                        audio_processor
-                          .patch
-                          .sampleables
-                          .get(&key.pair.y.module_id),
+                        audio_processor.patch.sampleables.get(&key.pair.x.module_id),
+                        audio_processor.patch.sampleables.get(&key.pair.y.module_id),
                       ) else {
                         continue;
                       };
-                      let xv = x_mod.get_value_at(
-                        &key.pair.x.port_name,
-                        key.pair.x.channel as usize,
-                        i,
-                      );
-                      let yv = y_mod.get_value_at(
-                        &key.pair.y.port_name,
-                        key.pair.y.channel as usize,
-                        i,
-                      );
+                      let xv =
+                        x_mod.get_value_at(&key.pair.x.port_name, key.pair.x.channel as usize, i);
+                      let yv =
+                        y_mod.get_value_at(&key.pair.y.port_name, key.pair.y.channel as usize, i);
                       xy_buffer.push(xv, yv);
                     }
                   } else {
@@ -2324,13 +2601,10 @@ where
                 // `[swap_pos, block_size)` was filled under the OLD params;
                 // refill the remainder of this callback's range from
                 // `swap_pos` forward under the NEW patch.
-                if let Some(root_clock) =
-                  audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
-                {
+                if let Some(root_clock) = audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID) {
                   root_clock.set_initial_index(swap_pos);
                 }
-                let eager_end =
-                  block_size.min(audio_processor.block_pos + (num_frames - written));
+                let eager_end = block_size.min(audio_processor.block_pos + (num_frames - written));
                 audio_processor.eager_fill_clock(swap_pos, eager_end, written);
               }
             }
@@ -2368,6 +2642,13 @@ where
             profiling::scope!("collect_module_states");
             audio_processor.collect_module_states();
           }
+
+          // Retry any deferred profiler shared-map swap, then flush this
+          // callback's per-module profile data into the cross-thread
+          // snapshot. Both are no-ops when nothing is pending / profiling
+          // is disabled (early-out inside the calls).
+          audio_processor.retry_pending_profile_seed();
+          modular_core::profiling::flush_into(&audio_processor.module_profile_collection);
 
           let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
 
@@ -2695,6 +2976,13 @@ impl TransportMeter {
       .store(update_id, Ordering::Relaxed);
   }
 
+  /// Read the ID of the most recently applied patch update (used by the main
+  /// thread to prune deferred MIDI disconnects once their update has applied).
+  #[inline]
+  pub fn read_applied_update_id(&self) -> u64 {
+    self.last_applied_update_id.load(Ordering::Relaxed)
+  }
+
   /// Write just the BPM (e.g. when Link tempo changes externally).
   #[inline]
   pub fn write_bpm(&self, bpm: f64) {
@@ -2876,12 +3164,14 @@ mod tests {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
       scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_ranges: Arc::new(Mutex::new(None)),
       recording_writer: Arc::new(Mutex::new(None)),
       audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      module_profile_collection: modular_core::profiling::new_collection(),
     };
 
     let processor = AudioProcessor::new(
@@ -3061,6 +3351,47 @@ mod tests {
     }
   }
 
+  /// A module whose `ensure_processed_to` bumps a shared counter, so tests can
+  /// verify the audio thread force-processes it even with no connections.
+  struct CountingProcessModule {
+    current_id: String,
+    processed: Arc<AtomicUsize>,
+  }
+
+  impl CountingProcessModule {
+    fn new(id: &str, processed: Arc<AtomicUsize>) -> Box<dyn modular_core::types::Sampleable> {
+      Box::new(Self {
+        current_id: id.to_string(),
+        processed,
+      })
+    }
+  }
+
+  impl MessageHandler for CountingProcessModule {}
+
+  impl modular_core::types::Sampleable for CountingProcessModule {
+    fn get_id(&self) -> &str {
+      &self.current_id
+    }
+    fn get_module_type(&self) -> &str {
+      "counting-process"
+    }
+    fn connect(&self, _patch: &modular_core::patch::Patch) {}
+    fn start_block(&self) {}
+    fn ensure_processed_to(&self, _target: usize) {
+      self.processed.fetch_add(1, Ordering::SeqCst);
+    }
+    fn ensure_processed(&self) {
+      self.ensure_processed_to(1);
+    }
+    fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
+      0.0
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+      self
+    }
+  }
+
   fn create_test_processor() -> (CommandProducer, AudioProcessor) {
     let (
       cmd_producer,
@@ -3075,12 +3406,14 @@ mod tests {
       stopped: Arc::new(AtomicBool::new(true)),
       scope_collection: Arc::new(Mutex::new(HashMap::new())),
       scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
+      scope_xy_ranges: Arc::new(Mutex::new(None)),
       recording_writer: Arc::new(Mutex::new(None)),
       audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
       module_states: Arc::new(Mutex::new(HashMap::new())),
       midi_manager: Arc::new(MidiInputManager::new()),
       transport_meter: Arc::new(TransportMeter::default()),
       audio_thread_panicked: Arc::new(AtomicBool::new(false)),
+      module_profile_collection: modular_core::profiling::new_collection(),
     };
 
     let processor = AudioProcessor::new(
@@ -3253,6 +3586,310 @@ mod tests {
     );
   }
 
+  /// Build a real running ROOT_CLOCK at 120 BPM 4/4, register it as a message
+  /// listener (as `apply_patch_update` does for inserted modules), and start it
+  /// from phase 0. Returns its module id.
+  fn insert_running_root_clock(processor: &mut AudioProcessor) -> String {
+    let id = modular_core::types::ROOT_CLOCK_ID.to_string();
+    let constructors = get_constructors();
+    let constructor = constructors.get("_clock").expect("_clock constructor");
+    let params = crate::deserialize_params(
+      "_clock",
+      serde_json::json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
+      true,
+    )
+    .expect("deserialize clock params");
+    let clock = constructor(
+      &id,
+      44_100.0,
+      params,
+      processor.block_size,
+      modular_core::types::ProcessingMode::Sample,
+    )
+    .expect("construct clock");
+    processor.patch.sampleables.insert(id.clone(), clock);
+    processor.patch.add_message_listeners_for_module(&id);
+    processor
+      .patch
+      .dispatch_message(&Message::Clock(ClockMessages::Start))
+      .expect("start clock");
+    id
+  }
+
+  /// Advance the clock by `samples` and return its resulting bar phase. The test
+  /// processor uses `block_size == 1`, so each block is one `update`.
+  fn advance_clock(processor: &AudioProcessor, id: &str, samples: usize) -> f32 {
+    let clock = processor.patch.sampleables.get(id).unwrap();
+    let mut phase = 0.0;
+    for _ in 0..samples {
+      clock.start_block();
+      phase = clock.get_value_at("playhead", 0, 0);
+    }
+    phase
+  }
+
+  #[test]
+  fn apply_patch_update_with_reset_clock_restarts_transport() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let id = insert_running_root_clock(&mut processor);
+
+    // Run well into the bar so the phase is unambiguously non-zero.
+    let phase_before = advance_clock(&processor, &id, 20_000);
+    assert!(
+      phase_before > 0.1,
+      "clock should have advanced before reset, got {phase_before}"
+    );
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.reset_clock = true;
+    update.desired_ids.insert(id.clone());
+    processor.apply_patch_update(update, 0);
+
+    // Re-fill the block from the top (mirrors the swap-site eager-fill) and
+    // confirm the transport restarted near zero.
+    let phase_after = advance_clock(&processor, &id, 1);
+    assert!(
+      phase_after < 0.001,
+      "transport should restart at ~0 after reset, got {phase_after}"
+    );
+  }
+
+  #[test]
+  fn apply_patch_update_without_reset_clock_keeps_transport_running() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let id = insert_running_root_clock(&mut processor);
+
+    let phase_before = advance_clock(&processor, &id, 20_000);
+    assert!(
+      phase_before > 0.1,
+      "clock should have advanced, got {phase_before}"
+    );
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.reset_clock = false;
+    update.desired_ids.insert(id.clone());
+    processor.apply_patch_update(update, 0);
+
+    // Without a reset the clock keeps advancing from where it was.
+    let phase_after = advance_clock(&processor, &id, 1);
+    assert!(
+      phase_after > phase_before,
+      "transport should keep running (no reset): before={phase_before} after={phase_after}"
+    );
+  }
+
+  #[test]
+  fn superseded_queued_clock_reset_is_inherited() {
+    // A buffer-switch update (reset_clock=true) queued for the next bar, then
+    // superseded by a same-buffer re-eval (reset_clock=false) before it fires,
+    // must still carry the pending transport reset into the immediate apply.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut switch_update = PatchUpdate::new(44_100.0);
+    switch_update.reset_clock = true;
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: switch_update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    let mut reeval_update = PatchUpdate::new(44_100.0);
+    reeval_update.reset_clock = false;
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: reeval_update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    let (queued, trigger) = processor
+      .queued_update
+      .as_ref()
+      .expect("an update should remain queued");
+    assert!(
+      queued.reset_clock,
+      "pending clock reset must survive being superseded"
+    );
+    assert!(
+      matches!(trigger, QueuedTrigger::Immediate),
+      "superseding update applies immediately"
+    );
+  }
+
+  #[test]
+  fn queued_update_defers_meter_and_tempo_to_apply() {
+    // A queued (NextBar) update must not touch the transport meter or Link
+    // tempo at queue time — both are carried on the update and applied later.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.transport_meta = Some(TransportMeta {
+      tempo: 90.0,
+      numerator: 3,
+      denominator: 4,
+      tempo_set: true,
+    });
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    // Meter still shows the defaults — nothing written at queue time.
+    let snap = processor.transport_meter.snapshot();
+    assert_eq!(snap.bpm, 120.0, "meter tempo must not change until apply");
+    assert_eq!(snap.time_sig_numerator, 4);
+    assert_eq!(snap.time_sig_denominator, 4);
+
+    // The tempo is held on the queued update for deferred apply (the only
+    // observable proof the Link push is deferred — set_tempo_now no-ops here).
+    let (queued, trigger) = processor
+      .queued_update
+      .as_ref()
+      .expect("an update should remain queued");
+    assert!(matches!(trigger, QueuedTrigger::NextBar));
+    let meta = queued
+      .transport_meta
+      .as_ref()
+      .expect("transport_meta carried on queued update");
+    assert_eq!(meta.tempo, 90.0);
+    assert!(meta.tempo_set);
+  }
+
+  #[test]
+  fn apply_patch_update_writes_meter() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let mut update = PatchUpdate::new(44_100.0);
+    update.transport_meta = Some(TransportMeta {
+      tempo: 90.0,
+      numerator: 3,
+      denominator: 4,
+      tempo_set: false,
+    });
+    processor.apply_patch_update(update, 0);
+
+    let snap = processor.transport_meter.snapshot();
+    assert_eq!(snap.bpm, 90.0);
+    assert_eq!(snap.time_sig_numerator, 3);
+    assert_eq!(snap.time_sig_denominator, 4);
+  }
+
+  #[test]
+  fn apply_patch_update_without_transport_meta_leaves_meter() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    // transport_meta defaults to None (patch with no ROOT_CLOCK).
+    let update = PatchUpdate::new(44_100.0);
+    processor.apply_patch_update(update, 0);
+
+    let snap = processor.transport_meter.snapshot();
+    assert_eq!(snap.bpm, 120.0);
+    assert_eq!(snap.time_sig_numerator, 4);
+    assert_eq!(snap.time_sig_denominator, 4);
+  }
+
+  #[test]
+  fn queued_update_defers_scope_xy_ranges() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+    let ranges = ScopeXyRanges {
+      x_min: -1.0,
+      x_max: 1.0,
+      y_min: -2.0,
+      y_max: 2.0,
+    };
+
+    let mut update = PatchUpdate::new(44_100.0);
+    update.scope_xy_ranges = Some(ranges);
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    // Display window not published at queue time; carried for deferred apply.
+    assert_eq!(*processor.scope_xy_ranges.lock(), None);
+    let (queued, _) = processor.queued_update.as_ref().expect("queued update");
+    assert_eq!(queued.scope_xy_ranges, Some(ranges));
+  }
+
+  #[test]
+  fn apply_patch_update_writes_scope_xy_ranges() {
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let ranges = ScopeXyRanges {
+      x_min: -1.0,
+      x_max: 1.0,
+      y_min: -2.0,
+      y_max: 2.0,
+    };
+    let mut update = PatchUpdate::new(44_100.0);
+    update.scope_xy_ranges = Some(ranges);
+    processor.apply_patch_update(update, 0);
+
+    assert_eq!(*processor.scope_xy_ranges.lock(), Some(ranges));
+  }
+
+  #[test]
+  fn superseded_update_meter_not_written_and_latest_wins() {
+    // Queue B(90, $setTempo) then C(80, $setTempo) before B fires. C supersedes
+    // B and applies immediately; only C's tempo should win, and neither writes
+    // the meter at queue time.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut b = PatchUpdate::new(44_100.0);
+    b.transport_meta = Some(TransportMeta {
+      tempo: 90.0,
+      numerator: 4,
+      denominator: 4,
+      tempo_set: true,
+    });
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: b,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    let mut c = PatchUpdate::new(44_100.0);
+    c.transport_meta = Some(TransportMeta {
+      tempo: 80.0,
+      numerator: 4,
+      denominator: 4,
+      tempo_set: true,
+    });
+    cmd_producer
+      .push(GraphCommand::QueuedPatchUpdate {
+        update: c,
+        trigger: QueuedTrigger::NextBar,
+      })
+      .unwrap();
+
+    processor.process_commands();
+
+    assert_eq!(
+      processor.transport_meter.snapshot().bpm,
+      120.0,
+      "neither queued update writes the meter at queue time"
+    );
+    let (queued, trigger) = processor
+      .queued_update
+      .as_ref()
+      .expect("an update should remain queued");
+    assert!(matches!(trigger, QueuedTrigger::Immediate));
+    assert_eq!(
+      queued.transport_meta.as_ref().expect("meta carried").tempo,
+      80.0,
+      "the superseding update's tempo wins; the discarded one is not merged"
+    );
+  }
+
   #[test]
   fn test_single_module_update_re_registers_message_listeners() {
     let (mut cmd_producer, mut processor) = create_test_processor();
@@ -3332,6 +3969,104 @@ mod tests {
       .unwrap()
       .get_value_at("out", 0, 0);
     assert_eq!(updated, 7.25);
+  }
+
+  #[test]
+  fn process_order_drives_disconnected_module() {
+    // A module with no cables, feeding neither the output nor any scope, must
+    // still be force-processed each block.
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let processed = Arc::new(AtomicUsize::new(0));
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "iso".into(),
+      CountingProcessModule::new("iso", Arc::clone(&processed)),
+    ));
+    update.desired_ids.insert("iso".into());
+    update.process_order_ids = vec!["iso".into()];
+
+    processor.apply_patch_update(update, 0);
+
+    // apply_patch_update resolved the id order into a live pointer list.
+    assert_eq!(processor.process_order.len(), 1);
+
+    processor.process_all_modules_to(1);
+    assert_eq!(processed.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn process_order_skips_ids_absent_from_patch() {
+    // A dangling id in the order (e.g. a cable target that isn't a module) is
+    // skipped rather than resolved to a bogus pointer.
+    let (_cmd_producer, mut processor) = create_test_processor();
+    let processed = Arc::new(AtomicUsize::new(0));
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "real".into(),
+      CountingProcessModule::new("real", Arc::clone(&processed)),
+    ));
+    update.desired_ids.insert("real".into());
+    update.process_order_ids = vec!["real".into(), "ghost".into()];
+
+    processor.apply_patch_update(update, 0);
+
+    // Only the real module yields a pointer; "ghost" is silently dropped.
+    assert_eq!(processor.process_order.len(), 1);
+    processor.process_all_modules_to(1);
+    assert_eq!(processed.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn process_order_repointed_after_single_module_update() {
+    // SingleModuleUpdate moves the box, so the cached pointer must be rebuilt
+    // to target the replacement, never the freed original.
+    let (mut cmd_producer, mut processor) = create_test_processor();
+    let old_processed = Arc::new(AtomicUsize::new(0));
+    let new_processed = Arc::new(AtomicUsize::new(0));
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "m".into(),
+      CountingProcessModule::new("m", Arc::clone(&old_processed)),
+    ));
+    update.desired_ids.insert("m".into());
+    update.process_order_ids = vec!["m".into()];
+    processor.apply_patch_update(update, 0);
+
+    cmd_producer
+      .push(GraphCommand::SingleModuleUpdate {
+        module_id: "m".into(),
+        module: CountingProcessModule::new("m", Arc::clone(&new_processed)),
+      })
+      .unwrap();
+    processor.process_commands();
+
+    processor.process_all_modules_to(1);
+    assert_eq!(old_processed.load(Ordering::SeqCst), 0);
+    assert_eq!(new_processed.load(Ordering::SeqCst), 1);
+  }
+
+  #[test]
+  fn process_order_cleared_on_clear_patch() {
+    let (mut cmd_producer, mut processor) = create_test_processor();
+
+    let mut update = PatchUpdate::new(48000.0);
+    update.inserts.push((
+      "m".into(),
+      CountingProcessModule::new("m", Arc::new(AtomicUsize::new(0))),
+    ));
+    update.desired_ids.insert("m".into());
+    update.process_order_ids = vec!["m".into()];
+    processor.apply_patch_update(update, 0);
+    assert_eq!(processor.process_order.len(), 1);
+
+    cmd_producer.push(GraphCommand::ClearPatch).unwrap();
+    processor.process_commands();
+
+    assert!(processor.process_order.is_empty());
+    assert!(processor.process_order_ids.is_empty());
   }
 
   #[test]

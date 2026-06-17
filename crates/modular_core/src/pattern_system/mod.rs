@@ -44,7 +44,7 @@ pub use hap::{ArenaHap, ArenaHapContext, DspHap, Hap, HapContext, SourceSpan};
 pub use state::State;
 pub use timespan::TimeSpan;
 
-pub use combinators::{fastcat, slowcat, stack, timecat};
+pub use combinators::{arrange, fastcat, slowcat, stack, timecat};
 pub use constructors::{pure, pure_with_span, signal, silence};
 
 // Re-export mini notation types
@@ -91,6 +91,10 @@ enum PatternImpl<T> {
     /// `strip_modifier_spans` wrapper — folds each hap's modifier-side
     /// spans back into the source side at extract time.
     StripModifierSpans(Arc<Pattern<T>>),
+    /// `offset_pattern_idx` wrapper — shifts every hap's pattern indices up
+    /// by `k` (via an `ArenaHapContext::Rebased`) so an arranged section's
+    /// highlights land in the right slot of the flat `per_source` list.
+    OffsetPatternIdx(Arc<OffsetPatternIdxData<T>>),
     /// `with_modifier_span` wrapper — combines each hap's context with a
     /// leaf context carrying the modifier span.
     WithModifierSpan(Arc<WithModifierSpanData<T>>),
@@ -129,6 +133,12 @@ pub(crate) struct CompressData<T> {
 pub(crate) struct WithModifierSpanData<T> {
     pub pat: Pattern<T>,
     pub span: SourceSpan,
+}
+
+/// Backing data for [`PatternImpl::OffsetPatternIdx`].
+pub(crate) struct OffsetPatternIdxData<T> {
+    pub pat: Pattern<T>,
+    pub k: u32,
 }
 
 /// Backing data for [`PatternImpl::FastConst`].
@@ -310,8 +320,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                 &State,
                 &'b bumpalo::Bump,
                 &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
-            )
-            + Send
+            ) + Send
             + Sync
             + 'static,
     {
@@ -378,6 +387,19 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                 let leaf = ArenaHapContext::with_span_in(data.span.clone(), bump);
                 for hap in &mut out[start..] {
                     hap.context = ArenaHapContext::combine_in(hap.context, leaf, bump);
+                }
+            }
+            PatternImpl::OffsetPatternIdx(data) => {
+                let start = out.len();
+                data.pat.query_into(state, bump, out);
+                // Wrap each hap's context so its pattern indices shift up by k.
+                // A k of 0 is a no-op the constructor skips, so wrapping here is
+                // always meaningful.
+                for hap in &mut out[start..] {
+                    hap.context = bump.alloc(ArenaHapContext::Rebased {
+                        base: data.k,
+                        inner: hap.context,
+                    });
                 }
             }
             PatternImpl::Compress(data) => {
@@ -466,6 +488,24 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     pub fn strip_modifier_spans(&self) -> Pattern<T> {
         Pattern {
             query: PatternImpl::StripModifierSpans(Arc::new(self.clone())),
+            steps: self.steps.clone(),
+        }
+    }
+
+    /// Shift every hap's pattern indices up by `k`. Used by `arrange` so that
+    /// each section's source-span highlights land at their slot in the flat
+    /// `per_source` list (section 0's sources at `[0, …)`, section 1's after,
+    /// …). Nests additively, so an arranged section that is itself an arrange
+    /// composes correctly. `k == 0` is the identity.
+    pub fn offset_pattern_idx(&self, k: u32) -> Pattern<T> {
+        if k == 0 {
+            return self.clone();
+        }
+        Pattern {
+            query: PatternImpl::OffsetPatternIdx(Arc::new(OffsetPatternIdxData {
+                pat: self.clone(),
+                k,
+            })),
             steps: self.steps.clone(),
         }
     }
@@ -572,7 +612,10 @@ fn fastcat_query_into<'b, T: Clone + Send + Sync + 'static>(
             out.reserve(scratch.len());
             for hap in scratch {
                 let new_part = hap.part.with_time(|t| t * &inv_n + &b_r);
-                let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t * &inv_n + &b_r));
+                let new_whole = hap
+                    .whole
+                    .as_ref()
+                    .map(|w| w.with_time(|t| t * &inv_n + &b_r));
                 out.push(ArenaHap {
                     whole: new_whole,
                     part: new_part,
@@ -710,7 +753,10 @@ fn compress_query_into<'b, T: Clone + Send + Sync + 'static>(
         let b_r = &compressed_begin - &(&cycle * duration);
         for hap in scratch {
             let new_part = hap.part.with_time(|t| t * duration + &b_r);
-            let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t * duration + &b_r));
+            let new_whole = hap
+                .whole
+                .as_ref()
+                .map(|w| w.with_time(|t| t * duration + &b_r));
             if let Some(final_part) = new_part.intersection(&cycle_span) {
                 out.push(ArenaHap {
                     whole: new_whole,
@@ -884,12 +930,79 @@ mod tests {
     }
 
     #[test]
+    fn test_offset_pattern_idx_shifts_walk_indices() {
+        use crate::pattern_system::constructors::pure_with_span;
+        use crate::pattern_system::hap::SourceSpan;
+
+        // A single leaf span normally walks at pattern_idx 0; offsetting by 3
+        // shifts it to 3, and a second offset composes additively (3 + 2 = 5).
+        let base = pure_with_span(1.0f64, SourceSpan::new(0, 1));
+        let collect = |pat: &Pattern<f64>| -> Vec<(u32, (usize, usize))> {
+            let bump = bumpalo::Bump::new();
+            let mut out: bumpalo::collections::Vec<'_, ArenaHap<'_, f64>> =
+                bumpalo::collections::Vec::new_in(&bump);
+            pat.query_into(
+                &State::new(TimeSpan::new(
+                    Fraction::from_integer(0),
+                    Fraction::from_integer(1),
+                )),
+                &bump,
+                &mut out,
+            );
+            let mut spans = Vec::new();
+            for hap in &out {
+                hap.context
+                    .walk(&mut |idx, span| spans.push((idx, (span.start, span.end))));
+            }
+            spans
+        };
+
+        assert_eq!(collect(&base), vec![(0, (0, 1))]);
+        assert_eq!(collect(&base.offset_pattern_idx(3)), vec![(3, (0, 1))]);
+        assert_eq!(
+            collect(&base.offset_pattern_idx(3).offset_pattern_idx(2)),
+            vec![(5, (0, 1))],
+            "nested offsets compose additively"
+        );
+        // k == 0 is the identity.
+        assert_eq!(collect(&base.offset_pattern_idx(0)), vec![(0, (0, 1))]);
+    }
+
+    #[test]
+    fn test_offset_pattern_idx_shifts_multi_index_context() {
+        use crate::pattern_system::constructors::pure_with_span;
+        use crate::pattern_system::hap::SourceSpan;
+
+        // A combined context has spans at idx 0 (source) and idx 1 (modifier).
+        // Offsetting by 4 shifts the whole chain to 4 and 5.
+        let pat = pure_with_span(1.0f64, SourceSpan::new(0, 1))
+            .with_modifier_span(SourceSpan::new(5, 6))
+            .offset_pattern_idx(4);
+        let bump = bumpalo::Bump::new();
+        let mut out: bumpalo::collections::Vec<'_, ArenaHap<'_, f64>> =
+            bumpalo::collections::Vec::new_in(&bump);
+        pat.query_into(
+            &State::new(TimeSpan::new(
+                Fraction::from_integer(0),
+                Fraction::from_integer(1),
+            )),
+            &bump,
+            &mut out,
+        );
+        let mut spans = Vec::new();
+        out[0]
+            .context
+            .walk(&mut |idx, span| spans.push((idx, (span.start, span.end))));
+        assert_eq!(spans, vec![(4, (0, 1)), (5, (5, 6))]);
+    }
+
+    #[test]
     fn test_strip_modifier_spans_preserves_in_source_extra() {
         use crate::pattern_system::constructors::pure_with_span;
         use crate::pattern_system::hap::SourceSpan;
 
-        let pat = pure_with_span(1.0f64, SourceSpan::new(0, 1))
-            .with_modifier_span(SourceSpan::new(5, 6));
+        let pat =
+            pure_with_span(1.0f64, SourceSpan::new(0, 1)).with_modifier_span(SourceSpan::new(5, 6));
         let stripped = pat.strip_modifier_spans();
         let haps = stripped.query_arc(
             Fraction::from_integer(0.into()),

@@ -58,6 +58,9 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     { label: 'note bare letter (octave null)', input: 'c' },
     { label: 'note sharp', input: 'c#4' },
     { label: 'note flat', input: 'eb3' },
+    { label: 'note flat no octave', input: 'eb' },
+    { label: 'note b-flat no octave', input: 'bb' },
+    { label: 'note f-alias flat no octave', input: 'cf' },
     { label: 'note s-alias sharp', input: 'cs4' },
     { label: 'rest tilde', input: '~' },
     { label: 'sequence (null weights)', input: '0 1 2' },
@@ -80,6 +83,11 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     { label: 'weight @n positional', input: '0@2 1' },
     { label: 'random choice |', input: '0|1|2' },
     { label: 'rest inside choice', input: '0|~|2' },
+    { label: 'choice of space-separated sequences', input: '0 1 | 2 3' },
+    { label: 'choice of fast subsequences', input: '[0 1] | [2 3]' },
+    { label: 'choice of comma-chord subsequences', input: '[0,0,0] | [0,-7,0]' },
+    { label: 'replicate !! accumulates to 3', input: '0!!' },
+    { label: 'weight bare @ defaults to 2', input: '0@' },
 ];
 
 /**

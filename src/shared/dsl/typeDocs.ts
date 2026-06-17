@@ -151,6 +151,15 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
                     'The callback receives this collection and returns a second signal; both are passed as inputs to $mix.',
                 example: "$c(osc1, osc2).pipeMix(s => $lpf(s, '1000hz')).out()",
             },
+            {
+                name: 'mix',
+                signature:
+                    'mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection',
+                description:
+                    "Fold this collection's channels down to a target channel count by panning them evenly across the output field (equal-power). " +
+                    'Builds a $mixDown module. channels defaults to 1 (mono); mode controls how channels landing on the same output combine.',
+                example: '$saw($spread(0, 5, 3)).mix(2).out()',
+            },
         ],
         name: 'Collection',
         seeAlso: ['CollectionWithRange', 'ModuleOutput', 'Poly<Signal>'],
@@ -313,6 +322,15 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
                     'Pipe this output through a transform, then mix the original and transformed signals together using a $mix module. ' +
                     'The callback receives this output and returns a second signal; both are passed as inputs to $mix.',
                 example: "$saw('c4').pipeMix(s => $lpf(s, '1000hz')).out()",
+            },
+            {
+                name: 'mix',
+                signature:
+                    'mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection',
+                description:
+                    "Fold this output's channels down to a target channel count by panning them evenly across the output field (equal-power). " +
+                    'Builds a $mixDown module. channels defaults to 1 (mono); mode controls how channels landing on the same output combine.',
+                example: '$saw($spread(0, 5, 3)).mix(2).out()',
             },
             {
                 name: 'range',
@@ -640,7 +658,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             {
                 name: 'channels',
                 type: 'number',
-                description: 'Number of deferred outputs (1-16, default 1)',
+                description: 'Number of deferred outputs (1-64, default 1)',
             },
         ],
         returns: 'DeferredCollection',

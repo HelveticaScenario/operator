@@ -3,8 +3,9 @@
 //! This module defines the commands sent from the main thread to the audio thread,
 //! and the errors reported back from the audio thread.
 
+use modular_core::profiling::ModuleProfileAccum;
 use modular_core::types::{
-  Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, WavData,
+  Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges, WavData,
 };
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -24,6 +25,20 @@ pub enum QueuedTrigger {
   NextBeat,
 }
 
+/// Transport/meter values extracted from the patch's ROOT_CLOCK, carried to the
+/// audio thread so the meter write and the Link tempo push happen at apply time,
+/// atomically with the module swap. `None` when the patch has no ROOT_CLOCK.
+pub struct TransportMeta {
+  /// Tempo in BPM.
+  pub tempo: f64,
+  /// Time signature numerator (beats per bar).
+  pub numerator: u32,
+  /// Time signature denominator (beat value).
+  pub denominator: u32,
+  /// The DSL explicitly called `$setTempo` — push `tempo` to Link on apply.
+  pub tempo_set: bool,
+}
+
 /// A single atomic patch update - always processed as a complete unit.
 ///
 /// This struct ensures the audio thread receives a complete, consistent batch of changes.
@@ -38,6 +53,13 @@ pub struct PatchUpdate {
   /// Set of desired module IDs, pre-computed on the main thread.
   /// Any existing module not in this set (and not reserved) is stale.
   pub desired_ids: std::collections::HashSet<String>,
+
+  /// Module IDs in cache-efficient processing order (producers before the
+  /// consumers that read them), computed on the main thread by
+  /// `graph_analysis::analyze`. The audio thread resolves these to a
+  /// contiguous pointer list it walks every block to force-process every
+  /// module — including ones not reachable from the output or any scope.
+  pub process_order_ids: Vec<String>,
 
   /// ID remappings (applied before inserts/deletes)
   pub remaps: Vec<ModuleIdRemap>,
@@ -61,8 +83,32 @@ pub struct PatchUpdate {
   /// Sample rate for new modules
   pub sample_rate: f32,
 
-  /// Whether the DSL explicitly called $setTempo (don't push default 120 to Link)
-  pub tempo_override: Option<f64>,
+  /// Tempo/time-signature for the meter + Link, applied when this update is
+  /// applied. `None` when the patch has no ROOT_CLOCK.
+  pub transport_meta: Option<TransportMeta>,
+
+  /// XY-scope display window, applied atomically with the XY scope
+  /// buffer swap. `None` when the patch has no `$scopeXY` (clears the display).
+  pub scope_xy_ranges: Option<ScopeXyRanges>,
+
+  /// When true, restart ROOT_CLOCK's transport (phase, beat, bar count) to zero
+  /// as this update is applied. Set by the main thread when the update switches
+  /// playback to a different buffer (song); a same-buffer live-coding update
+  /// leaves it false so the clock keeps running uninterrupted.
+  pub reset_clock: bool,
+
+  /// Pre-allocated TLS profiler records map, one entry per id in
+  /// `desired_ids`. Consumed by `profiling::swap_records` on the audio
+  /// thread; the evicted map flows back via the garbage queue. Always
+  /// populated, even when profiling is disabled — the swap maintains
+  /// the audio-thread allocation invariant for the next enable.
+  pub profile_records_seed: HashMap<String, ModuleProfileAccum>,
+
+  /// Pre-allocated map for the cross-thread `ModuleProfileCollection`,
+  /// consumed by `profiling::try_swap_shared`. Same key set as
+  /// `profile_records_seed`; held separately because each swap consumes
+  /// its operand.
+  pub profile_shared_seed: HashMap<String, ModuleProfileAccum>,
 }
 
 impl PatchUpdate {
@@ -72,6 +118,7 @@ impl PatchUpdate {
       update_id: 0,
       inserts: Vec::new(),
       desired_ids: std::collections::HashSet::new(),
+      process_order_ids: Vec::new(),
       remaps: Vec::new(),
       scope_adds: Vec::new(),
       scope_removes: Vec::new(),
@@ -79,7 +126,11 @@ impl PatchUpdate {
       scope_xy_removes: Vec::new(),
       wav_data: HashMap::new(),
       sample_rate,
-      tempo_override: None,
+      transport_meta: None,
+      scope_xy_ranges: None,
+      reset_clock: false,
+      profile_records_seed: HashMap::new(),
+      profile_shared_seed: HashMap::new(),
     }
   }
 
@@ -198,6 +249,10 @@ pub enum GarbageItem {
   /// Live Link resources removed from the audio thread. Drop tears down
   /// internal networking threads and sockets — must happen on the main thread.
   Link(Box<LinkResources>),
+  /// Profiler records map evicted by `swap_records` / `try_swap_shared`.
+  /// Drops on the main thread so the `HashMap`'s bucket deallocation
+  /// stays off the audio thread.
+  ProfileMap(HashMap<String, ModuleProfileAccum>),
 }
 
 /// Capacity for the garbage queue (audio → main).

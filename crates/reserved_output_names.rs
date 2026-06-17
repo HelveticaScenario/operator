@@ -28,6 +28,7 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     "outMono",
     "pipe",
     "pipeMix",
+    "mix",
     "toString",
     // ModuleOutputWithRange properties
     "minValue",

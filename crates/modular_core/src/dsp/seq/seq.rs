@@ -18,6 +18,7 @@ use arrayvec::ArrayVec;
 use crate::{
     MonoSignal,
     dsp::utils::{TempGate, TempGateState, min_gate_samples},
+    param_errors::ModuleParamErrors,
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
@@ -29,19 +30,27 @@ use super::seq_value::{SeqCycleStorage, SeqPatternParam, SeqValue};
 struct CachedHap {
     /// Index of this hap within the owning cycle's `haps` vector.
     hap_index: u32,
-    /// The cycle this hap belongs to.
+    /// The baked cycle this hap belongs to, in `[offset, offset+length)`.
     cached_cycle: i64,
-    /// Cached `whole_begin` for the release check.
+    /// `whole_begin` in the pattern's logical (cycle) frame. Kept for
+    /// `get_state` highlight geometry; NOT used for release, since the
+    /// logical frame wraps at the ribbon seam.
     whole_begin: f64,
-    /// Cached `whole_end` for the release check.
+    /// `whole_end` in the logical frame (see `whole_begin`).
     whole_end: f64,
+    /// Note onset in the monotonic clock (`raw`) frame.
+    raw_begin: f64,
+    /// Note end in the monotonic clock (`raw`) frame. Release keys off `raw`
+    /// so a note plays its full length across the ribbon wrap, where the
+    /// logical frame is non-monotonic.
+    raw_end: f64,
     /// Cached value for CV/rest detection.
     value: SeqValue,
 }
 
 impl CachedHap {
-    fn contains(&self, playhead: f64) -> bool {
-        playhead >= self.whole_begin && playhead < self.whole_end
+    fn contains(&self, raw: f64) -> bool {
+        raw >= self.raw_begin && raw < self.raw_end
     }
 
     fn get_cv(&self) -> Option<f64> {
@@ -67,8 +76,6 @@ struct VoiceState {
     trigger: TempGate,
     /// Whether this voice is currently active (playing a note).
     active: bool,
-    /// Timestamp when this voice was last assigned (for LRU stealing).
-    last_assigned: f64,
 }
 
 impl Default for VoiceState {
@@ -78,7 +85,6 @@ impl Default for VoiceState {
             gate: TempGate::new_gate(TempGateState::Low),
             trigger: TempGate::new_gate(TempGateState::Low),
             active: false,
-            last_assigned: 0.0,
         }
     }
 }
@@ -87,9 +93,26 @@ fn default_channels() -> usize {
     4
 }
 
+/// Default ribbon loop length in cycles. Same memory/cost as the old
+/// param cache (cycles `0..1024` baked at parse time).
+const DEFAULT_RIBBON_LENGTH: f64 = 1024.0;
+
+/// Largest ribbon loop length. The window touches `ceil(offset+length) -
+/// floor(offset)` integer cycles, each baked synchronously on the main thread
+/// on every pattern/ribbon edit, so it is capped.
+const MAX_RIBBON_LENGTH: f64 = 8192.0;
+
+/// Largest ribbon offset. Generous, and keeps `offset + length` exact in
+/// `f64` (well under 2^53).
+const MAX_RIBBON_OFFSET: f64 = 1_000_000.0;
+
+fn default_ribbon() -> (f64, f64) {
+    (0.0, DEFAULT_RIBBON_LENGTH)
+}
+
 #[derive(Clone, Deserr, ChannelCount, JsonSchema, Connect, Debug, SignalParams)]
 #[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
+#[deserr(rename_all = camelCase, deny_unknown_fields, validate = seq_bake_ribbon -> ModuleParamErrors)]
 pub struct SeqParams {
     /// pattern string in mini-notation
     pattern: SeqPatternParam,
@@ -98,14 +121,57 @@ pub struct SeqParams {
     #[signal(range = (0.0, 1.0))]
     #[deserr(default)]
     playhead: Option<MonoSignal>,
-    /// Number of polyphonic voices (1-16)
+    /// Number of polyphonic voices (1-64)
     #[deserr(default)]
     pub channels: Option<usize>,
+    /// loop window [offset, length] in cycles (fractional allowed)
+    #[serde(default = "default_ribbon")]
+    #[deserr(default = default_ribbon())]
+    ribbon: (f64, f64),
     /// The pattern string (used for serialization)
     #[serde(skip)]
     #[deserr(skip)]
     #[schemars(skip)]
     pub pattern_source: String,
+}
+
+/// Struct-level `deserr` validate hook. Runs after every field (and its
+/// default) is deserialized but before channel-count derivation, so both
+/// `pattern` and `ribbon` are present. Validates the ribbon bounds, then
+/// bakes the pattern's haps for the loop window `[offset, offset+length)`.
+fn seq_bake_ribbon(
+    mut params: SeqParams,
+    _location: deserr::ValuePointerRef,
+) -> Result<SeqParams, ModuleParamErrors> {
+    let (offset, length) = params.ribbon;
+    let reject = |msg: String| {
+        let mut err = ModuleParamErrors::default();
+        err.add("ribbon".to_string(), msg);
+        Err(err)
+    };
+    // Finiteness first, so ±∞ reports as non-finite rather than over-cap and
+    // NaN never reaches the comparisons below (where it would silently pass).
+    if !offset.is_finite() || !length.is_finite() {
+        return reject("ribbon values must be finite".to_string());
+    }
+    if length <= 0.0 {
+        return reject("ribbon loop length must be greater than 0".to_string());
+    }
+    if length > MAX_RIBBON_LENGTH {
+        return reject(format!(
+            "ribbon loop length must be {MAX_RIBBON_LENGTH} cycles or fewer"
+        ));
+    }
+    if offset < 0.0 {
+        return reject("ribbon offset must be 0 or greater".to_string());
+    }
+    if offset > MAX_RIBBON_OFFSET {
+        return reject(format!(
+            "ribbon offset must be {MAX_RIBBON_OFFSET} cycles or fewer"
+        ));
+    }
+    params.pattern.bake(offset, length);
+    Ok(params)
 }
 
 /// Channel count derivation for Seq.
@@ -280,145 +346,149 @@ struct SeqOutputs {
     channels_derive = seq_derive_channel_count,
     args(pattern),
     stateful,
-    patch_update,
 )]
 pub struct Seq {
     outputs: SeqOutputs,
     params: SeqParams,
     state: SeqState,
+    /// Per-channel voice state, one element per polyphonic channel. Sized to the
+    /// derived channel count by the `#[module]` macro and carried across patch
+    /// updates by the macro's per-element state transfer.
+    channel_state: Box<[SeqChannel]>,
 }
 
-/// Number of cycles pre-computed at parse time on the main thread.
-/// Cycles beyond this fall through to module_cache on the audio thread.
-use super::cache::PARAM_CACHE_CYCLES;
+/// Per-channel sequencer state.
+#[derive(Default)]
+struct SeqChannel {
+    /// Per-voice playback state.
+    voice: VoiceState,
+    /// Last CV voltage — holds through rest periods and state transfers. Also
+    /// the "value the voice held before", used for nearest-value allocation.
+    last_cv: f32,
+}
 
-/// State for the Seq module.
+/// Module-level state for the Seq module.
 struct SeqState {
-    /// Per-voice state array
-    voices: [VoiceState; PORT_MAX_CHANNELS],
-    /// Round-robin voice index for allocation
-    next_voice: usize,
-    /// Current cycle number (integer part of playhead)
-    current_cycle: Option<i64>,
-    /// Module-level cache for cycles >= PARAM_CACHE_CYCLES. Pre-allocated to
-    /// MAX_MODULE_CYCLES slots at patch update time.
-    module_cache: Vec<SeqCycleStorage>,
-    /// Parallel `populated[i] == true` iff `module_cache[i]` was filled for
-    /// cycle `PARAM_CACHE_CYCLES + i`.
-    module_cache_populated: Vec<bool>,
-    /// Last CV voltage per channel — holds through rest periods and state transfers
-    last_cv: [f32; PORT_MAX_CHANNELS],
+    /// Previous frame's folded playhead position, for window-membership edge
+    /// detection: a hap fires only when the playhead *enters* its window (an
+    /// outside→inside transition), never because it is merely inside it.
+    prev_logical: f64,
+    /// False until the first `update`. On the first frame there is no previous
+    /// position, so every in-window onset fires (a fresh `$cycle` starts playing
+    /// from the current position).
+    started: bool,
     /// Scratch buffer for voice release — reused each frame to avoid heap alloc
     voices_to_release: ArrayVec<usize, PORT_MAX_CHANNELS>,
     /// Scratch buffer for onset events awaiting voice allocation.
     events_to_process: ArrayVec<PendingEvent, PORT_MAX_CHANNELS>,
-    /// Bumpalo arena reused across `ensure_cycle_cached` calls. Reset before
-    /// each miss-path query so the pattern_system combinator chain allocates
-    /// intermediates from a single chunk.
-    query_arena: bumpalo::Bump,
+    /// Pre-allocated DP scratch for nearest-value voice assignment. Boxed and
+    /// built here (main thread) so the audio thread never allocates.
+    assign: Box<AssignScratch>,
 }
 
 impl Default for SeqState {
     fn default() -> Self {
         Self {
-            voices: std::array::from_fn(|_| VoiceState::default()),
-            next_voice: 0,
-            current_cycle: None,
-            module_cache: Vec::new(),
-            module_cache_populated: Vec::new(),
-            last_cv: [0.0; PORT_MAX_CHANNELS],
+            prev_logical: 0.0,
+            started: false,
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
-            query_arena: bumpalo::Bump::new(),
+            assign: Box::new(AssignScratch::default()),
         }
     }
 }
 
 impl Seq {
-    /// Invalidate the cycle cache. Keeps allocated Vec capacities so the
-    /// audio thread can re-fill without reallocation.
-    fn invalidate_cache(&mut self) {
-        self.state.current_cycle = None;
-        super::cache::invalidate_module_cache(
-            &mut self.state.module_cache,
-            &mut self.state.module_cache_populated,
-        );
-    }
-
-    /// Resize the module_cache to MAX_MODULE_CYCLES with each slot pre-sized
-    /// to the param's capacity hints. Called on patch update.
-    fn rebuild_module_cache(&mut self) {
-        super::cache::rebuild_module_cache(
-            &mut self.state.module_cache,
-            &mut self.state.module_cache_populated,
-            self.params.pattern.max_haps_per_cycle(),
-            self.params.pattern.max_spans_per_cycle(),
-        );
-    }
-
-    /// Ensure that the given cycle's haps are available. For cycles
-    /// `0..PARAM_CACHE_CYCLES` the param cache already has them. For cycles
-    /// in the audio-thread cache range, fill the slot in place using the
-    /// reusable bumpalo arena.
-    fn ensure_cycle_cached(&mut self, cycle: i64) {
-        if cycle < PARAM_CACHE_CYCLES as i64 {
-            return;
-        }
-        let module_idx = (cycle - PARAM_CACHE_CYCLES as i64) as usize;
-        if module_idx >= self.state.module_cache.len() {
-            return; // Beyond cache horizon
-        }
-        if self.state.module_cache_populated[module_idx] {
-            return;
-        }
-        let Some(pattern) = self.params.pattern.pattern() else {
-            return;
-        };
-        let slot = &mut self.state.module_cache[module_idx];
-        super::seq_value::populate_cycle_storage(
-            pattern,
-            cycle,
-            &mut self.state.query_arena,
-            slot,
-        );
-        self.state.module_cache_populated[module_idx] = true;
-    }
-
-    /// Look up the storage for `cycle` from param cache or module cache.
+    /// Look up the storage for `cycle` in the baked ribbon window.
     fn get_cycle_storage(&self, cycle: i64) -> Option<&SeqCycleStorage> {
         super::cache::get_cycle_storage(
             cycle,
+            self.params.ribbon.0.floor() as i64,
             self.params.pattern.cached_haps(),
-            &self.state.module_cache,
-            &self.state.module_cache_populated,
         )
     }
 
+    /// True when the voice's held note no longer exists in the *current* baked
+    /// pattern, matched on BOTH time-window AND value. Such a voice is a lingering
+    /// old-pattern note and may be stolen for a new onset; a voice that still has
+    /// an exact window+value match is a genuine continuation and is never stolen.
+    ///
+    /// Both keys are required. Window-only would wrongly keep an old `c4[0,1]`
+    /// when the new pattern only has `e5[0,1]` at that geometry; value-only would
+    /// wrongly keep it when the new pattern has `c4` at a *different* window (e.g.
+    /// `[c4*2]`). Note: this is stricter than `resolve_hap_index`, whose
+    /// geometry-only fallback is for highlight display, not steal eligibility.
+    fn voice_is_orphan(&self, cached: &CachedHap) -> bool {
+        const EPS: f64 = 1e-6;
+        let Some(storage) = self.get_cycle_storage(cached.cached_cycle) else {
+            return true; // cycle no longer in the baked window → orphaned
+        };
+        !storage.haps.iter().any(|h| {
+            (h.whole_begin - cached.whole_begin).abs() < EPS
+                && (h.whole_end - cached.whole_end).abs() < EPS
+                && match (h.value, cached.value) {
+                    (SeqValue::Voltage(a), SeqValue::Voltage(b)) => (a - b).abs() < EPS,
+                    (SeqValue::Rest, SeqValue::Rest) => true,
+                    _ => false,
+                }
+        })
+    }
+
     fn update(&mut self, sample_rate: f32) {
-        let playhead = self.params.playhead.value_or_zero() as f64;
+        // `raw` is the monotonic clock playhead (cycles, fractional). The
+        // ribbon folds it into the baked window with a continuous-time modulo,
+        // so a fractional `offset`/`length` defines a loop window whose seam
+        // can fall mid-cycle. The window loops forever, phase-locked to the
+        // clock: clock pos 0 plays the window start (`offset`).
+        let raw = self.params.playhead.value_or_zero() as f64;
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
-        let current_cycle = playhead.floor() as i64;
 
-        // On a new cycle, populate the module cache slot if needed.
-        if self.state.current_cycle != Some(current_cycle) {
-            self.ensure_cycle_cached(current_cycle);
-            self.state.current_cycle = Some(current_cycle);
-        }
+        let (offset, length) = self.params.ribbon; // length > 0 (validated)
+        // Fold the clock into the baked window. Clamp once for the window math
+        // so a (deliberately wired) negative playhead pins to the window start
+        // rather than producing a spurious mid-cycle phase. Release below keys
+        // off the unclamped monotonic `raw`, tracking each note's true span.
+        let raw_clamped = raw.max(0.0);
+        let base = offset.floor() as i64; // first baked cycle = floor(offset)
+        let phase = raw_clamped.rem_euclid(length); // [0, length)
+        let pos = offset + phase; // playhead in the window, ∈ [offset, offset+length)
+        // Integer cycle for the storage lookup and the `already_assigned`
+        // dedup key. `pos.floor() >= base`, so the index below is never
+        // negative.
+        let current_cycle = pos.floor() as i64;
+        // Playhead in the pattern's absolute frame — the same frame the baked
+        // cycle's haps live in, so onset / `already_assigned` checks work
+        // exactly as before. (For integer offset/length, `pos == old logical`.)
+        let logical = pos;
+        let storage_index = (current_cycle - base) as usize;
 
-        // Release voices whose haps have ended.
+        // Window-membership edge detection baseline: capture last frame's folded
+        // position, then advance it for this frame (unconditionally, so the
+        // baseline stays correct even on the no-pattern early-return below). A
+        // hap fires only on an outside→inside transition (see the collection
+        // pass), so a mid-window pattern swap or scrub does not re-trigger it.
+        let prev_logical = self.state.prev_logical;
+        let started = self.state.started;
+        self.state.prev_logical = logical;
+        self.state.started = true;
+
+        // Release voices whose notes have ended. A note's life is tracked in
+        // the monotonic `raw` frame (two-sided, so a backward scrub also
+        // frees), because `logical` wraps at the ribbon seam.
         self.state.voices_to_release.clear();
         for i in 0..num_channels {
-            if let Some(cached) = self.state.voices[i].cached_hap {
-                if !cached.contains(playhead) {
+            if let Some(cached) = self.channel_state[i].voice.cached_hap {
+                if !cached.contains(raw) {
                     self.state.voices_to_release.push(i);
                 }
             }
         }
         for i in self.state.voices_to_release.iter().copied() {
-            self.state.voices[i].active = false;
-            self.state.voices[i].cached_hap = None;
-            self.state.voices[i]
+            self.channel_state[i].voice.active = false;
+            self.channel_state[i].voice.cached_hap = None;
+            self.channel_state[i]
+                .voice
                 .gate
                 .set_state(TempGateState::Low, TempGateState::Low, 0);
         }
@@ -428,10 +498,10 @@ impl Seq {
                 self.outputs.cv.set(ch, 0.0);
                 self.outputs
                     .gate
-                    .set(ch, self.state.voices[ch].gate.process());
+                    .set(ch, self.channel_state[ch].voice.gate.process());
                 self.outputs
                     .trig
-                    .set(ch, self.state.voices[ch].trigger.process());
+                    .set(ch, self.channel_state[ch].voice.trigger.process());
             }
             return;
         }
@@ -439,35 +509,29 @@ impl Seq {
         // Collect new onsets for this frame, then dispatch to voices in a
         // separate pass so we don't hold a borrow of cycle storage while
         // mutating voice state.
-        let SeqState {
-            voices,
-            events_to_process,
-            module_cache,
-            module_cache_populated,
-            ..
-        } = &mut self.state;
+        let events_to_process = &mut self.state.events_to_process;
         events_to_process.clear();
-        let storage_opt: Option<&SeqCycleStorage> = if current_cycle < PARAM_CACHE_CYCLES as i64 {
-            self.params.pattern.cached_haps().get(current_cycle as usize)
-        } else {
-            let module_idx = (current_cycle - PARAM_CACHE_CYCLES as i64) as usize;
-            if module_idx < module_cache.len() && module_cache_populated[module_idx] {
-                Some(&module_cache[module_idx])
-            } else {
-                None
-            }
-        };
+        let storage_opt = self.params.pattern.cached_haps().get(storage_index);
         if let Some(storage) = storage_opt {
             for (hap_index, hap) in storage.haps.iter().enumerate() {
-                if !hap.has_onset || playhead < hap.part_begin || playhead >= hap.part_end {
+                if !hap.has_onset || logical < hap.part_begin || logical >= hap.part_end {
                     continue;
                 }
                 if hap.value.is_rest() {
                     continue;
                 }
+                // Window-membership edge: fire only on *entering* the window. Skip
+                // if the playhead was already inside it last frame — a mid-window
+                // pattern swap, a scrub that lands inside, or a paused playhead is
+                // not an onset. (`started` is false on the very first frame, so a
+                // fresh module fires its in-window notes.)
+                if started && prev_logical >= hap.part_begin && prev_logical < hap.part_end {
+                    continue;
+                }
                 let hap_index = hap_index as u32;
                 let already_assigned = (0..num_channels).any(|i| {
-                    voices[i]
+                    self.channel_state[i]
+                        .voice
                         .cached_hap
                         .map(|existing| {
                             existing.hap_index == hap_index
@@ -490,46 +554,103 @@ impl Seq {
             }
         }
 
-        let state = &mut self.state;
-        for event in state.events_to_process.iter().copied() {
-            let mut found = None;
+        // Assign this frame's onsets to voices by nearest previously-held value
+        // (voice leading). Tier 1 draws from the free (inactive) voices; only if
+        // they run out does Tier 2 steal "orphaned" voices — old-pattern notes
+        // that no longer exist in the current pattern — so a new hap is never
+        // dropped while a stale note rings. A current-pattern continuation is
+        // never stolen. Onsets with no free or orphan voice are dropped.
+        let n = self.state.events_to_process.len();
+        if n > 0 {
+            let mut assigned: [Option<usize>; PORT_MAX_CHANNELS] = [None; PORT_MAX_CHANNELS];
+
+            // Tier 1: free voices.
+            let mut free: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
             for i in 0..num_channels {
-                let idx = (state.next_voice + i) % num_channels;
-                if !state.voices[idx].active {
-                    state.next_voice = (idx + 1) % num_channels;
-                    state.voices[idx].last_assigned = playhead;
-                    found = Some(idx);
-                    break;
+                if !self.channel_state[i].voice.active {
+                    free.push(i);
                 }
             }
-            let Some(voice_idx) = found else { continue };
-            let voice = &mut state.voices[voice_idx];
-            voice.cached_hap = Some(CachedHap {
-                hap_index: event.hap_index,
-                cached_cycle: current_cycle,
-                whole_begin: event.whole_begin,
-                whole_end: event.whole_end,
-                value: event.value,
-            });
-            voice.active = true;
-            voice
-                .gate
-                .set_state(TempGateState::Low, TempGateState::High, hold);
-            voice
-                .trigger
-                .set_state(TempGateState::High, TempGateState::Low, hold);
+            {
+                let SeqState {
+                    events_to_process,
+                    assign,
+                    ..
+                } = &mut self.state;
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &free,
+                    &self.channel_state,
+                    assign,
+                );
+            }
+
+            // Tier 2: steal orphaned voices, computed lazily only when onsets
+            // remain unplaced (the steady state never reaches here).
+            if (0..n).any(|ei| assigned[ei].is_none()) {
+                let mut orphans: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
+                for i in 0..num_channels {
+                    if self.channel_state[i].voice.active
+                        && let Some(cached) = self.channel_state[i].voice.cached_hap
+                        && self.voice_is_orphan(&cached)
+                    {
+                        orphans.push(i);
+                    }
+                }
+                let SeqState {
+                    events_to_process,
+                    assign,
+                    ..
+                } = &mut self.state;
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &orphans,
+                    &self.channel_state,
+                    assign,
+                );
+            }
+
+            // Apply the chosen voice for each placed onset. Map the note's logical
+            // span onto the current absolute lap so release keys off the monotonic
+            // `raw` clock and the note plays its full length across the ribbon
+            // wrap. A stolen voice re-triggers (gate Low→High), cutting its old note.
+            for ei in 0..n {
+                let Some(voice_idx) = assigned[ei] else {
+                    continue;
+                };
+                let event = self.state.events_to_process[ei];
+                let voice = &mut self.channel_state[voice_idx].voice;
+                voice.cached_hap = Some(CachedHap {
+                    hap_index: event.hap_index,
+                    cached_cycle: current_cycle,
+                    whole_begin: event.whole_begin,
+                    whole_end: event.whole_end,
+                    raw_begin: raw - (logical - event.whole_begin),
+                    raw_end: raw + (event.whole_end - logical),
+                    value: event.value,
+                });
+                voice.active = true;
+                voice
+                    .gate
+                    .set_state(TempGateState::Low, TempGateState::High, hold);
+                voice
+                    .trigger
+                    .set_state(TempGateState::High, TempGateState::Low, hold);
+            }
         }
 
         for ch in 0..num_channels {
-            let voice = &mut state.voices[ch];
-            if let Some(cached) = voice.cached_hap
+            let channel = &mut self.channel_state[ch];
+            if let Some(cached) = channel.voice.cached_hap
                 && let Some(cv) = cached.get_cv()
             {
-                state.last_cv[ch] = cv as f32;
+                channel.last_cv = cv as f32;
             }
-            self.outputs.cv.set(ch, state.last_cv[ch]);
-            self.outputs.gate.set(ch, voice.gate.process());
-            self.outputs.trig.set(ch, voice.trigger.process());
+            self.outputs.cv.set(ch, channel.last_cv);
+            self.outputs.gate.set(ch, channel.voice.gate.process());
+            self.outputs.trig.set(ch, channel.voice.trigger.process());
         }
     }
 }
@@ -541,6 +662,140 @@ struct PendingEvent {
     whole_begin: f64,
     whole_end: f64,
     value: SeqValue,
+}
+
+/// Square dimension of the assignment DP table: one extra row/column for the
+/// empty prefix. Scales with `PORT_MAX_CHANNELS`, so a future channel bump
+/// resizes the scratch automatically.
+const DP_DIM: usize = PORT_MAX_CHANNELS + 1;
+
+/// Pre-allocated scratch for the voice-assignment DP ([`assign_nearest`]). One
+/// decision bit per cell; boxed in `SeqState` and built on the main thread so
+/// the audio thread never allocates.
+struct AssignScratch {
+    /// `decision[i * DP_DIM + j]` records the choice at cell `(i, j)`:
+    /// `true` = match row item `i-1` to column item `j-1`; `false` = skip
+    /// column `j-1`. Only the cells visited by the current call are written
+    /// before they are read back, so the table needs no per-call clear.
+    decision: [bool; DP_DIM * DP_DIM],
+}
+
+impl Default for AssignScratch {
+    fn default() -> Self {
+        Self {
+            decision: [false; DP_DIM * DP_DIM],
+        }
+    }
+}
+
+/// Assign the still-unplaced onsets in `events` to `candidates` voices so that
+/// total pitch movement `Σ |onset voltage − last_cv[voice]|` is minimized — the
+/// provably-optimal voice leading, not a greedy approximation.
+///
+/// Because the cost is `|Δvalue|` on a line, the optimal matching is
+/// order-preserving: sort both sides by value and match them with a 1-D DP
+/// (`dp[i][j] = min(skip column j, match row i to column j + cost)`). The
+/// shorter side is fully matched; the longer side contributes a chosen subset.
+/// Runs in `O(E·V)` (plus an `O(N log N)` in-place sort), versus the cubic of a
+/// repeated global-nearest scan — cheap even at the max channel count.
+///
+/// Onsets already placed (by an earlier tier) are skipped, so this is called
+/// once per tier (free voices, then orphaned voices). Allocation-free: fixed
+/// `[_; PORT_MAX_CHANNELS]` stacks, an in-place `sort_unstable`, and the boxed
+/// `scratch` decision table. Each candidate's previously-held value is read
+/// from `channel_state[voice].last_cv`.
+fn assign_nearest(
+    events: &[PendingEvent],
+    assigned: &mut [Option<usize>; PORT_MAX_CHANNELS],
+    candidates: &[usize],
+    channel_state: &[SeqChannel],
+    scratch: &mut AssignScratch,
+) {
+    // Gather the unplaced onsets and the candidate voices as (value, index)
+    // pairs. Index is the tie-break so the comparator is a total order, making
+    // the allocation-free unstable sort deterministic.
+    let mut evs: ArrayVec<(f32, u32), PORT_MAX_CHANNELS> = ArrayVec::new();
+    for (ei, ev) in events.iter().enumerate() {
+        if assigned[ei].is_none() {
+            evs.push((ev.value.to_voltage().unwrap_or(0.0) as f32, ei as u32));
+        }
+    }
+    let mut cands: ArrayVec<(f32, u32), PORT_MAX_CHANNELS> = ArrayVec::new();
+    for &vidx in candidates {
+        cands.push((channel_state[vidx].last_cv, vidx as u32));
+    }
+    if evs.is_empty() || cands.is_empty() {
+        return;
+    }
+    let by_value = |a: &(f32, u32), b: &(f32, u32)| {
+        a.0.partial_cmp(&b.0)
+            .unwrap_or(Ordering::Equal)
+            .then(a.1.cmp(&b.1))
+    };
+    evs.sort_unstable_by(by_value);
+    cands.sort_unstable_by(by_value);
+
+    // Rows = shorter side (every item matched); cols = longer side (a subset is
+    // chosen). Whether events or candidates are the rows flips which index in a
+    // matched pair is the event vs the voice.
+    let events_are_rows = evs.len() <= cands.len();
+    let (rows, cols): (&[(f32, u32)], &[(f32, u32)]) = if events_are_rows {
+        (&evs, &cands)
+    } else {
+        (&cands, &evs)
+    };
+    let s = rows.len();
+    let l = cols.len();
+
+    // Order-preserving min-cost DP, rolled to two rows. `dp[j]` is the cost of
+    // matching the first `i` row items into the first `j` columns; +∞ marks an
+    // infeasible prefix (fewer columns than rows).
+    let mut dp_prev = [f32::INFINITY; DP_DIM];
+    let mut dp_cur = [f32::INFINITY; DP_DIM];
+    for slot in dp_prev.iter_mut().take(l + 1) {
+        *slot = 0.0; // row 0: nothing matched yet, cost 0 for any column count
+    }
+    for i in 1..=s {
+        dp_cur[0] = f32::INFINITY; // can't match ≥1 items into 0 columns
+        for j in 1..=l {
+            let skip = dp_cur[j - 1];
+            let take = if dp_prev[j - 1].is_finite() {
+                dp_prev[j - 1] + (rows[i - 1].0 - cols[j - 1].0).abs()
+            } else {
+                f32::INFINITY
+            };
+            // Prefer skip on ties → the lowest-index (after sort) column wins,
+            // matching the old lowest-voice-index tie-break.
+            if take < skip {
+                dp_cur[j] = take;
+                scratch.decision[i * DP_DIM + j] = true;
+            } else {
+                dp_cur[j] = skip;
+                scratch.decision[i * DP_DIM + j] = false;
+            }
+        }
+        std::mem::swap(&mut dp_prev, &mut dp_cur);
+    }
+
+    // Backtrack from (s, l), recording matched pairs into `assigned`.
+    let mut i = s;
+    let mut j = l;
+    while i > 0 && j > 0 {
+        if scratch.decision[i * DP_DIM + j] {
+            let row_idx = rows[i - 1].1 as usize;
+            let col_idx = cols[j - 1].1 as usize;
+            let (event_index, voice_index) = if events_are_rows {
+                (row_idx, col_idx)
+            } else {
+                (col_idx, row_idx)
+            };
+            assigned[event_index] = Some(voice_index);
+            i -= 1;
+            j -= 1;
+        } else {
+            j -= 1;
+        }
+    }
 }
 
 /// Resolve the hap in `storage` that the voice's cached scalars describe.
@@ -590,11 +845,11 @@ impl crate::types::StatefulModule for Seq {
         let num_sources = per_source.len().max(1);
 
         // Per-pattern active spans from all active voices.
-        let mut per_pattern_spans: Vec<Vec<(usize, usize)>> =
-            vec![Vec::new(); num_sources];
+        let mut per_pattern_spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_sources];
         let mut any_non_rest = false;
 
-        for voice in self.state.voices.iter().take(num_channels) {
+        for channel in self.channel_state.iter().take(num_channels) {
+            let voice = &channel.voice;
             if let Some(cached) = voice.cached_hap
                 && !cached.is_rest()
             {
@@ -608,8 +863,7 @@ impl crate::types::StatefulModule for Seq {
                     for span in &storage.span_arena[start..end] {
                         let idx = span.pattern_idx as usize;
                         if idx < num_sources {
-                            per_pattern_spans[idx]
-                                .push((span.start as usize, span.end as usize));
+                            per_pattern_spans[idx].push((span.start as usize, span.end as usize));
                         }
                     }
                 }
@@ -631,7 +885,10 @@ impl crate::types::StatefulModule for Seq {
             // pattern_idx > 0 to those.
             let is_multi = self.params.pattern.is_multi_source();
             let mut param_spans = serde_json::Map::new();
-            if !is_multi && num_sources == 1 && let Some(meta) = per_source.first() {
+            if !is_multi
+                && num_sources == 1
+                && let Some(meta) = per_source.first()
+            {
                 param_spans.insert(
                     "pattern".to_string(),
                     serde_json::json!({
@@ -664,11 +921,141 @@ impl crate::types::StatefulModule for Seq {
     }
 }
 
-impl crate::types::PatchUpdateHandler for Seq {
-    fn on_patch_update(&mut self) {
-        self.rebuild_module_cache();
-        self.invalidate_cache();
+message_handlers!(impl Seq {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params_with_ribbon(ribbon: (f64, f64)) -> SeqParams {
+        SeqParams {
+            pattern: SeqPatternParam::default(),
+            playhead: None,
+            channels: None,
+            ribbon,
+            pattern_source: String::new(),
+        }
+    }
+
+    fn reject_message(ribbon: (f64, f64)) -> Option<String> {
+        seq_bake_ribbon(params_with_ribbon(ribbon), deserr::ValuePointerRef::Origin)
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    /// NaN / ±∞ cannot reach this hook through the JSON graph (serde_json
+    /// rejects non-finite numbers), but the hook guards finiteness directly so
+    /// no caller can ever drive `floor`/`ceil`/`rem_euclid` with a non-finite
+    /// ribbon value. The finite check runs first, ahead of the magnitude
+    /// bounds, so ±∞ is reported as non-finite rather than over-cap.
+    #[test]
+    fn seq_bake_ribbon_rejects_non_finite() {
+        for bad in [
+            (f64::NAN, 4.0),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 4.0),
+            (0.0, f64::INFINITY),
+            (f64::NEG_INFINITY, 4.0),
+            (0.0, f64::NEG_INFINITY),
+        ] {
+            let msg = reject_message(bad)
+                .unwrap_or_else(|| panic!("expected rejection for ribbon {bad:?}"));
+            assert!(
+                msg.contains("ribbon values must be finite"),
+                "ribbon {bad:?} got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn seq_bake_ribbon_accepts_finite_fractional() {
+        assert!(
+            seq_bake_ribbon(
+                params_with_ribbon((0.5, 1.5)),
+                deserr::ValuePointerRef::Origin
+            )
+            .is_ok(),
+            "a finite fractional ribbon must pass the bounds hook"
+        );
+    }
+
+    fn ev(v: f64) -> PendingEvent {
+        PendingEvent {
+            hap_index: 0,
+            whole_begin: 0.0,
+            whole_end: 1.0,
+            value: SeqValue::Voltage(v),
+        }
+    }
+
+    /// Run `assign_nearest` over the given events and candidate voices (with the
+    /// given `last_cv` for the referenced voices) and return the assignment.
+    fn run_assign(
+        events: &[PendingEvent],
+        cands: &[usize],
+        cv: &[(usize, f32)],
+    ) -> Vec<Option<usize>> {
+        let mut channels: Vec<SeqChannel> =
+            (0..PORT_MAX_CHANNELS).map(|_| SeqChannel::default()).collect();
+        for &(i, v) in cv {
+            channels[i].last_cv = v;
+        }
+        let mut assigned = [None; PORT_MAX_CHANNELS];
+        let mut scratch = AssignScratch::default();
+        assign_nearest(events, &mut assigned, cands, &channels, &mut scratch);
+        assigned[..events.len()].to_vec()
+    }
+
+    #[test]
+    fn assign_nearest_picks_optimal_subset_not_rank_match() {
+        // Events 0 V and 10 V; three voices last held 0, 1, 10 V. The optimal
+        // (min total movement) matching is 0→v0 and 10→v2 (cost 0). A naive
+        // sorted rank-match (0→v0, 10→v1) would cost 9 — this guards that the DP
+        // chooses *which* voices, not just pairs them in order.
+        let got = run_assign(
+            &[ev(0.0), ev(10.0)],
+            &[0, 1, 2],
+            &[(0, 0.0), (1, 1.0), (2, 10.0)],
+        );
+        assert_eq!(got[0], Some(0), "0 V → voice 0");
+        assert_eq!(got[1], Some(2), "10 V → voice 2 (last_cv 10), not voice 1");
+    }
+
+    #[test]
+    fn assign_nearest_drops_excess_onsets_optimally() {
+        // Three events, two voices: place the two with zero movement (0→v0,
+        // 10→v1) and drop the middle 5 V onset.
+        let got = run_assign(
+            &[ev(0.0), ev(5.0), ev(10.0)],
+            &[0, 1],
+            &[(0, 0.0), (1, 10.0)],
+        );
+        assert_eq!(got[0], Some(0));
+        assert_eq!(got[2], Some(1));
+        assert_eq!(got[1], None, "the 5 V event is dropped (only two voices)");
+    }
+
+    #[test]
+    fn assign_nearest_minimizes_total_movement_three_voices() {
+        // Voices last held 0, 1, 2 V; onsets at 2, 1, 0 V (reversed order). Each
+        // onset must land on the voice already at its pitch (total movement 0),
+        // regardless of event order.
+        let got = run_assign(
+            &[ev(2.0), ev(1.0), ev(0.0)],
+            &[0, 1, 2],
+            &[(0, 0.0), (1, 1.0), (2, 2.0)],
+        );
+        assert_eq!(got[0], Some(2), "2 V → voice 2");
+        assert_eq!(got[1], Some(1), "1 V → voice 1");
+        assert_eq!(got[2], Some(0), "0 V → voice 0");
+    }
+
+    #[test]
+    fn assign_nearest_identical_values_use_distinct_voices() {
+        // Two onsets at the same value with two equal-prior voices: both placed
+        // on distinct voices (no collapse), deterministically by index.
+        let got = run_assign(&[ev(0.0), ev(0.0)], &[0, 1], &[(0, 0.0), (1, 0.0)]);
+        assert!(got[0].is_some() && got[1].is_some(), "both onsets placed");
+        assert_ne!(got[0], got[1], "onsets take distinct voices");
     }
 }
-
-message_handlers!(impl Seq {});

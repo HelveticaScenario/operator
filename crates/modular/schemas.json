@@ -245,6 +245,147 @@
     ]
   },
   {
+    "name": "$mixDown",
+    "documentation": "Folds a polyphonic input down to an arbitrary target channel count.\n\nUnlike `$mix` (which mixes channel `n` of every input into output channel\n`n`), `$mixDown` takes a single poly signal and distributes its `N` channels\nacross `M` output channels by panning them evenly over the output field with\nan equal-power crossfade. With the default `channels = 1` it is a plain mono\nsum; `channels = 2` produces an equal-power stereo fold-down. When the target\nexceeds the input channel count, the input is instead spread to fill every\noutput channel (equal-power interpolation) so no channel is left silent.\n\n- **channels** — target output channel count (1–64, default 1)\n- **mode** — how channels landing on the same output combine (sum / average /\n  max / min); applies only when folding down (target ≤ input channels)\n\n## Example\n\n```js\n// Fold a 3-voice spread down to stereo\n$saw($spread(0, 5, 3)).mix(2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MixDownParams",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "description": "Target output channel count (1–64). Defaults to 1 (mono).",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "input": {
+          "description": "Polyphonic input whose channels are folded down.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "How channels that land on the same output channel are combined.",
+          "$ref": "#/$defs/MixMode"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MixMode": {
+          "description": "Mixing mode for combining input signals.",
+          "oneOf": [
+            {
+              "description": "Sum all inputs.",
+              "type": "string",
+              "const": "sum"
+            },
+            {
+              "description": "Average all inputs.",
+              "type": "string",
+              "const": "average"
+            },
+            {
+              "description": "Keep the strongest input.",
+              "type": "string",
+              "const": "max"
+            },
+            {
+              "description": "Keep the weakest non-zero input.",
+              "type": "string",
+              "const": "min"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "fold-down output: input channels panned evenly across the output channels",
+        "polyphonic": true,
+        "default": true,
+        "dynamicRange": false
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "Polyphonic input whose channels are folded down.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "channels"
+      }
+    ],
+    "channelsParam": "channels"
+  },
+  {
     "name": "$stereoMix",
     "documentation": "Pan and spread a signal into stereo.",
     "paramsSchema": {
@@ -268,7 +409,7 @@
           ]
         },
         "width": {
-          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position.",
+          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
           "anyOf": [
             {
               "$ref": "#/$defs/MonoSignal"
@@ -383,7 +524,7 @@
       },
       {
         "name": "width",
-        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position.",
+        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1993,6 +2134,28 @@
         "freq": {
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
+        },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2105,6 +2268,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2141,8 +2320,30 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "shape": {
           "description": "waveform shape: 0=saw, 2.5=triangle, 5=ramp",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2271,6 +2472,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2307,8 +2524,30 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pwm": {
           "description": "pulse width modulation CV — added to the width parameter",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2456,6 +2695,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2832,12 +3087,19 @@
   },
   {
     "name": "$noise",
-    "documentation": "Noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
       "type": "object",
       "properties": {
+        "channels": {
+          "description": "number of independent noise channels (1–64), each a different sequence",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
         "color": {
           "description": "color of the noise: white, pink, brown",
           "$ref": "#/$defs/NoiseKind"
@@ -2869,7 +3131,7 @@
       {
         "name": "output",
         "description": "signal output",
-        "polyphonic": false,
+        "polyphonic": true,
         "default": true,
         "minValue": -5.0,
         "maxValue": 5.0,
@@ -2881,7 +3143,8 @@
       {
         "name": "color"
       }
-    ]
+    ],
+    "channelsParam": "channels"
   },
   {
     "name": "$macro",
@@ -3223,8 +3486,8 @@
     },
     "outputs": [
       {
-        "name": "mix",
-        "description": "mixed synthesis output",
+        "name": "output",
+        "description": "mixed synthesis output (main/aux crossfade)",
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
@@ -3367,7 +3630,7 @@
   },
   {
     "name": "$supersaw",
-    "documentation": "Supersaw oscillator with multiple detuned sawtooth voices and PolyBLEP anti-aliasing.\n\nGenerates a classic supersaw sound by stacking multiple sawtooth oscillators\nwith symmetric detuning. Each input channel is processed by all voices,\ncreating a rich, full sound.\n\n- **freq** — pitch in V/Oct (0V = C4)\n- **voices** — number of detuned saw voices (1–16, default 5)\n- **detune** — detune spread in semitones (default 0.18)\n\nOutput range is **±5V** with gain compensation for input channel count.\n\n## Example\n\n```js\n$supersaw('c3').out()\n$supersaw('c3', { voices: 7, detune: 0.3 }).out()\n```",
+    "documentation": "Supersaw oscillator with multiple detuned sawtooth voices and PolyBLEP anti-aliasing.\n\nGenerates a classic supersaw sound by stacking multiple sawtooth oscillators\nwith symmetric detuning. Each input channel is processed by all voices,\ncreating a rich, full sound.\n\n- **freq** — pitch in V/Oct (0V = C4)\n- **voices** — number of detuned saw voices (1–64, default 5)\n- **detune** — detune spread in semitones (default 0.18)\n\nOutput range is **±5V** with gain compensation for input channel count.\n\n## Example\n\n```js\n$supersaw('c3').out()\n$supersaw('c3', { voices: 7, detune: 0.3 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SupersawParams",
@@ -3404,8 +3667,19 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "sync": {
+          "description": "hard sync source — rising edges reset every detuned voice's phase",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "voices": {
-          "description": "number of supersaw voices (1–16)",
+          "description": "number of supersaw voices (1–64)",
           "type": "integer",
           "format": "uint",
           "default": 5,
@@ -3530,6 +3804,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset every detuned voice's phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3573,12 +3855,34 @@
             }
           ]
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pitch": {
           "description": "Pitch in V/Oct (0V = C4).",
           "$ref": "#/$defs/PolySignal"
         },
         "position": {
           "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase.",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3852,6 +4156,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -7560,7 +7880,7 @@
           ]
         },
         "count": {
-          "description": "number of output channels (1–16)",
+          "description": "number of output channels (1–64)",
           "type": "integer",
           "format": "uint",
           "minimum": 0
@@ -7691,14 +8011,14 @@
   },
   {
     "name": "$unison",
-    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–16)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 16.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()\n```",
+    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–64)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 64.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "UnisonParams",
       "type": "object",
       "properties": {
         "count": {
-          "description": "number of unison voices per input channel (1–16)",
+          "description": "number of unison voices per input channel (1–64)",
           "type": "integer",
           "format": "uint",
           "default": 1,
@@ -7824,7 +8144,7 @@
   },
   {
     "name": "$wrap",
-    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n```",
+    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\nSet **octave** to `true` to shift by whole integers instead, preserving the\nfractional part (pitch class in V/Oct signals). Always exact when\n`max − min ≥ 1`; makes the closest-octave attempt otherwise.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n// keep pitch class, clamp to octave range 0–2 V\n$wrap(voct, 0, 2, { octave: true })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "WrapParams",
@@ -7841,6 +8161,11 @@
         "min": {
           "description": "lower bound of the wrap range",
           "$ref": "#/$defs/PolySignal"
+        },
+        "octave": {
+          "description": "when true, shifts by whole integers to preserve the fractional part (pitch class in V/Oct)",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -7966,7 +8291,7 @@
       "type": "object",
       "properties": {
         "channels": {
-          "description": "Number of polyphonic voices (1-16)",
+          "description": "Number of polyphonic voices (1-64)",
           "type": [
             "integer",
             "null"
@@ -7986,6 +8311,26 @@
             },
             {
               "type": "null"
+            }
+          ]
+        },
+        "ribbon": {
+          "description": "loop window [offset, length] in cycles (fractional allowed)",
+          "type": "array",
+          "default": [
+            0.0,
+            1024.0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "number",
+              "format": "double"
             }
           ]
         }
@@ -8012,6 +8357,49 @@
           "required": [
             "start",
             "end"
+          ]
+        },
+        "ArrangeKindTag": {
+          "description": "Phantom discriminator matching the literal `\"ArrangePattern\"` string.",
+          "type": "string",
+          "enum": [
+            "ArrangePattern"
+          ]
+        },
+        "ArrangePatternPayload": {
+          "description": "JSON payload for `$cycle($p.arrange(...))`. Sections play in order, each for\nits cycle budget; the whole loops with period `Σ cycles`. A trailing section\nwith `cycles == \"Infinity\"` loops forever once reached.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `$p.arrange` sets this so the `SeqPatternSource`\nuntagged enum picks the `Arrange` variant.",
+              "$ref": "#/$defs/ArrangeKindTag"
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArrangeSectionPayload"
+              }
+            }
+          },
+          "required": [
+            "__kind",
+            "sections"
+          ]
+        },
+        "ArrangeSectionPayload": {
+          "description": "One section of an `$p.arrange(...)` payload: a cycle budget plus a pattern.\n`pattern` is any [`SeqPatternSource`] (recursively), so a section may be a\n`$p`, a `$p.s`, or a nested `$p.arrange`.",
+          "type": "object",
+          "properties": {
+            "cycles": {
+              "$ref": "#/$defs/SectionCycles"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "cycles",
+            "pattern"
           ]
         },
         "AtomValue": {
@@ -8084,6 +8472,55 @@
                 "Note"
               ]
             }
+          ]
+        },
+        "FactorPayload": {
+          "description": "A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —\nnot a highlightable source. A parsed pattern (`.fast(\"2 4\")`) becomes its own\nhighlightable source, so its active value lights up in the editor as it\ndrives the speed. A non-positive factor (`0` or negative) yields silence,\nmatching how the in-string `*`/`/` operators lower the same factors.",
+          "anyOf": [
+            {
+              "description": "`.fast(2)` — a constant. JSON numbers match this before `Pattern`.",
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "description": "`.fast(\"2 4\")` — a parsed number pattern.",
+              "$ref": "#/$defs/ParsedPatternPayload"
+            }
+          ]
+        },
+        "FastKindTag": {
+          "description": "Phantom discriminator matching the literal `\"FastPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "FastPattern"
+          ]
+        },
+        "FastPatternPayload": {
+          "description": "JSON payload for `$p(...).fast(factor)`: speed `pattern` up by `factor`.\n`pattern` is any [`SeqPatternSource`] (recursively), so `.fast` chains and\nnests over `$p`, `$p.s`, `$p.arrange`, and other `.fast`/`.slow` wrappers.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.fast` sets this so the `SeqPatternSource`\nuntagged enum picks the `Fast` variant.",
+              "$ref": "#/$defs/FastKindTag"
+            },
+            "factor": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "factor"
+          ]
+        },
+        "InfinityTag": {
+          "description": "Phantom discriminator matching the literal `\"Infinity\"` string.",
+          "type": "string",
+          "enum": [
+            "Infinity"
           ]
         },
         "Located": {
@@ -9699,9 +10136,30 @@
             "all_spans"
           ]
         },
-        "SeqPatternSource": {
-          "description": "Wire-level dispatch shape: either a single `ParsedPatternPayload`\n(legacy single-source path used by `$cycle($p(...))`) or a chained\n`$p.s` payload with multi-source highlighting.",
+        "SectionCycles": {
+          "description": "Cycle count for an `$p.arrange(...)` section: a finite positive integer, or\nthe sentinel string `\"Infinity\"` for an infinite tail section. JSON can't\ncarry a numeric infinity, so the TS `$p.arrange` helper emits the string\n`\"Infinity\"`; any finite count arrives as a JSON number.",
           "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "$ref": "#/$defs/InfinityTag"
+            }
+          ]
+        },
+        "SeqPatternSource": {
+          "description": "Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`\npayload, a chained `$p.s` payload with multi-source highlighting, or a\nsingle `ParsedPatternPayload` (the legacy single-source path used by\n`$cycle($p(...))`).\n\nThe `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before\nthe untagged `Single`; each carries a distinct required `__kind` literal, so\nthe untagged enum disambiguates them unambiguously before falling back to\n`Single`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FastPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/SlowPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ArrangePatternPayload"
+            },
             {
               "$ref": "#/$defs/SpPatternPayload"
             },
@@ -9752,6 +10210,34 @@
                 "port"
               ]
             }
+          ]
+        },
+        "SlowKindTag": {
+          "description": "Phantom discriminator matching the literal `\"SlowPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "SlowPattern"
+          ]
+        },
+        "SlowPatternPayload": {
+          "description": "JSON payload for `$p(...).slow(factor)`: the time-inverse of\n[`FastPatternPayload`]. See it for `pattern`/`factor` semantics.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.slow` sets this so the `SeqPatternSource`\nuntagged enum picks the `Slow` variant.",
+              "$ref": "#/$defs/SlowKindTag"
+            },
+            "factor": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "factor"
           ]
         },
         "SourceSpan": {
@@ -10225,7 +10711,7 @@
   },
   {
     "name": "$midiCV",
-    "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 16 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// 4-voice polyphonic MIDI synth\nconst midi = $midiCV({ channels: 4 });\n$sine(midi.pitch).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n\n// Mono lead with pitch bend\nconst lead = $midiCV({ channels: 1, pitchBendRange: 12 });\n$saw(lead.pitch).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n```",
+    "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 64 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// 4-voice polyphonic MIDI synth\nconst midi = $midiCV({ channels: 4 });\n$sine(midi.pitch).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n\n// Mono lead with pitch bend\nconst lead = $midiCV({ channels: 1, pitchBendRange: 12 });\n$saw(lead.pitch).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "MidiCvParams",
@@ -10242,7 +10728,7 @@
           "minimum": 0
         },
         "channels": {
-          "description": "Number of polyphonic voices (1-16)",
+          "description": "Number of polyphonic voices (1-64)",
           "type": "integer",
           "format": "uint",
           "default": 1,

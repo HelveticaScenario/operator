@@ -1,0 +1,4 @@
+# Repo-wide rustfmt standard. Default style (4-space indent); edition pinned so
+# bare `rustfmt <file>` matches `cargo fmt`. Keep this the single config — do not
+# reintroduce per-crate rustfmt.toml overrides.
+edition = "2024"

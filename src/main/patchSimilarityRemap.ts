@@ -1,6 +1,6 @@
 import type { PatchGraph } from '../shared/ipcTypes';
 
-type ModuleState = PatchGraph['modules'][number];
+type ModuleSpec = PatchGraph['modules'][number];
 
 const RESERVED_MODULE_IDS = new Set([
     'ROOT_OUTPUT',
@@ -23,7 +23,7 @@ function isLikelyImplicitId(id: string, moduleType: string): boolean {
     return re.test(id);
 }
 
-function isExplicitId(module: Pick<ModuleState, 'id' | 'moduleType'>): boolean {
+function isExplicitId(module: Pick<ModuleSpec, 'id' | 'moduleType'>): boolean {
     // Prefer the real DSL-provided flag when present.
     // (napi-rs typically maps Option<bool> to `boolean | null | undefined` in TS)
     const maybeFlag = (module as unknown as { idIsExplicit?: boolean | null })
@@ -187,7 +187,7 @@ function _canonicalizeForFingerprint(
 
 function extractFeatures(
     ctx: Pick<GraphContext, 'typeById'>,
-    module: ModuleState,
+    module: ModuleSpec,
 ): Map<string, Feature> {
     const features = new Map<string, Feature>();
 
@@ -431,9 +431,9 @@ function multisetJaccard(
 
 function moduleSimilarity(
     desiredGraph: PatchGraph,
-    desired: ModuleState,
+    desired: ModuleSpec,
     currentGraph: PatchGraph,
-    current: ModuleState,
+    current: ModuleSpec,
     desiredDownstream: Map<string, Map<string, number>>,
     currentDownstream: Map<string, Map<string, number>>,
     desiredCtx: GraphContext,
@@ -641,12 +641,12 @@ export function reconcilePatchBySimilarity(
     const ambiguityMargin = options.ambiguityMargin ?? DEFAULT_AMBIGUITY_MARGIN;
     const { debugLog } = options;
 
-    const currentById = new Map<string, ModuleState>();
+    const currentById = new Map<string, ModuleSpec>();
     for (const m of currentGraph.modules) {
         currentById.set(m.id, m);
     }
 
-    const desiredById = new Map<string, ModuleState>();
+    const desiredById = new Map<string, ModuleSpec>();
     for (const m of desiredGraph.modules) {
         desiredById.set(m.id, m);
     }
@@ -693,8 +693,8 @@ export function reconcilePatchBySimilarity(
 
     // 2) Per-type optimal assignment for remaining modules.
 
-    const desiredByType = new Map<string, ModuleState[]>();
-    const currentByType = new Map<string, ModuleState[]>();
+    const desiredByType = new Map<string, ModuleSpec[]>();
+    const currentByType = new Map<string, ModuleSpec[]>();
 
     for (const desired of desiredGraph.modules) {
         if (RESERVED_MODULE_IDS.has(desired.id)) {

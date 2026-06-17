@@ -15,7 +15,7 @@ struct SpreadParams {
     min: MonoSignal,
     /// upper bound of the spread range
     max: MonoSignal,
-    /// number of output channels (1–16)
+    /// number of output channels (1–64)
     count: usize,
     /// distribution bias (-5 to 5): positive biases toward max, negative toward min
     #[signal(default = 0.0, range = (-5.0, 5.0))]

@@ -196,6 +196,12 @@ pub trait Sampleable: MessageHandler + Send {
     fn sync_external_clock(&self, _state: ExternalClockState) {}
     /// Clear external clock synchronization, returning to free-running mode.
     fn clear_external_sync(&self) {}
+    /// Reset the transport loop (bar) index to zero without disturbing the
+    /// bar phase. Only ROOT_CLOCK's wrapper overrides this; every other module
+    /// is a no-op. Used on a buffer switch under Ableton Link: the shared
+    /// timeline owns the phase, so the incoming song restarts its bar count
+    /// from zero while staying locked to the peer timeline.
+    fn reset_loop_index(&self) {}
 
     /// Inject one block's worth of host audio input frames. Only
     /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
@@ -226,8 +232,10 @@ pub trait Sampleable: MessageHandler + Send {
     fn ensure_processed_to(&self, target: usize);
 
     /// Complete any remaining block computation. Equivalent to
-    /// `ensure_processed_to(block_size)`. Called on every module after the
-    /// sink pull so disconnected modules also advance their state.
+    /// `ensure_processed_to(block_size)`. Used by composite modules to fully
+    /// drive a nested sub-module. (The audio thread force-advances every
+    /// top-level module each block via `ensure_processed_to(end)` in
+    /// producer-before-consumer order, so disconnected modules still run.)
     fn ensure_processed(&self);
 
     /// Read the value of port `port`, channel `ch`, at sample slot `index`
@@ -1486,9 +1494,7 @@ impl Buffer {
     }
 
     pub fn frame_count(&self) -> usize {
-        self.buffer_ref()
-            .map(|b| b.frame_count())
-            .unwrap_or(0)
+        self.buffer_ref().map(|b| b.frame_count()).unwrap_or(0)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -1519,9 +1525,7 @@ impl Buffer {
     }
 
     pub fn read_write_index(&self) -> usize {
-        self.buffer_ref()
-            .map(|b| b.read_write_index())
-            .unwrap_or(0)
+        self.buffer_ref().map(|b| b.read_write_index()).unwrap_or(0)
     }
 
     pub fn fill(&self, value: f32) {
@@ -1547,13 +1551,11 @@ impl Buffer {
     }
 
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> Option<R> {
-        self.buffer_ref()
-            .map(|buffer| buffer.with_data(f))
+        self.buffer_ref().map(|buffer| buffer.with_data(f))
     }
 
     pub fn with_data_mut<R>(&self, f: impl FnOnce(&mut Vec<Vec<f32>>) -> R) -> Option<R> {
-        self.buffer_ref()
-            .map(|buffer| buffer.with_data_mut(f))
+        self.buffer_ref().map(|buffer| buffer.with_data_mut(f))
     }
 
     pub fn read_hermite_wrapped(&self, channel: usize, frame: f32) -> f32 {
@@ -2484,7 +2486,7 @@ impl PartialEq for Signal {
     Deserialize,
     JsonSchema,
     Deserr,
-    Connect
+    Connect,
 )]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
@@ -2655,7 +2657,7 @@ pub struct ModuleSchema {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[napi(object)]
-pub struct ModuleState {
+pub struct ModuleSpec {
     pub id: String,
     pub module_type: String,
     pub id_is_explicit: Option<bool>,
@@ -2763,7 +2765,7 @@ pub struct ScopeXyRanges {
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]
 pub struct PatchGraph {
-    pub modules: Vec<ModuleState>,
+    pub modules: Vec<ModuleSpec>,
     pub module_id_remaps: Option<Vec<ModuleIdRemap>>,
     // #[serde(default)]
     pub scopes: Vec<Scope>,

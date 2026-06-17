@@ -11,7 +11,7 @@ use std::f32::consts::PI;
 
 use crate::dsp::utils::halfband::{Halfband2xDown, Halfband2xUp};
 use crate::dsp::utils::one_pole::OnePole;
-use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
 /// Saturation algorithm.
@@ -31,21 +31,21 @@ pub enum OverdriveMode {
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct OverdriveParams {
+pub struct OverdriveParams {
     /// input signal to overdrive (bipolar, typically -5 to 5)
-    input: PolySignal,
+    pub input: PolySignal,
     /// drive amount (0 = unity gain, 5 = ~30 dB pre-shaper gain)
     #[signal(default = 0.0, range = (0.0, 5.0))]
-    drive: PolySignal,
+    pub drive: PolySignal,
     /// tone (-5 = dark, 0 = neutral, +5 = bright). Pre-emphasises highs into
     /// the shaper at positive values and de-emphasises them after, and vice versa.
     #[signal(default = 0.0, range = (-5.0, 5.0))]
     #[deserr(default)]
-    tone: Option<PolySignal>,
+    pub tone: Option<PolySignal>,
     /// saturation mode (defaults to soft)
     #[serde(default)]
     #[deserr(default)]
-    mode: Option<OverdriveMode>,
+    pub mode: Option<OverdriveMode>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -70,7 +70,6 @@ struct ChannelState {
 
 #[derive(Default)]
 struct OverdriveState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
     tilt_coeff: f32,
     dc_block_coeff: f32,
 }
@@ -96,6 +95,7 @@ const TONE_RANGE: f32 = 3.0;
 pub struct Overdrive {
     outputs: OverdriveOutputs,
     state: OverdriveState,
+    channel_state: Box<[ChannelState]>,
     params: OverdriveParams,
 }
 
@@ -110,18 +110,26 @@ impl Overdrive {
 
         // DC blocker runs at the base rate before the upsampler.
         let base_rate = sample_rate.max(1.0);
-        self.state.dc_block_coeff =
-            (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
+        self.state.dc_block_coeff = (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
+
+        // Tilt-EQ coefficient is constant for the module's lifetime, so seed
+        // every channel's filters once here instead of per sample. `init` runs
+        // after the macro sizes `channel_state` to the channel count and before
+        // the audio thread carries over runtime state, so a later channel-count
+        // grow keeps the freshly seeded surplus channels.
+        for channel in self.channel_state.iter_mut() {
+            channel.tilt_pre.set_coeff(self.state.tilt_coeff);
+            channel.tilt_post.set_coeff(self.state.tilt_coeff);
+        }
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let tilt_coeff = self.state.tilt_coeff;
         let dc_coeff = self.state.dc_block_coeff;
         let mode = self.params.mode.unwrap_or_default();
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
             let drive_raw = self.params.drive.get_value(ch);
@@ -140,9 +148,6 @@ impl Overdrive {
             let amount = tone * 0.2;
             let pre_high_gain = TONE_RANGE.powf(amount);
             let post_high_gain = TONE_RANGE.powf(-amount);
-
-            state.tilt_pre.set_coeff(tilt_coeff);
-            state.tilt_post.set_coeff(tilt_coeff);
 
             // DC-block the input at base rate before upsampling.
             let x_norm = input / 5.0;
@@ -209,6 +214,30 @@ fn process_one(
 
 message_handlers!(impl Overdrive {});
 
+#[doc(hidden)]
+pub fn __bench_make_overdrive(params: OverdriveParams) -> Overdrive {
+    use crate::types::OutputStruct;
+    let mut outputs = OverdriveOutputs::default();
+    outputs.set_all_channels(1);
+    let mut od = Overdrive {
+        params,
+        outputs,
+        _channel_count: 1,
+        _block_index: Default::default(),
+        state: OverdriveState::default(),
+        channel_state: vec![ChannelState::default(); 1].into_boxed_slice(),
+    };
+    od.init(48000.0);
+    od
+}
+
+impl Overdrive {
+    #[doc(hidden)]
+    pub fn __bench_update(&mut self, sample_rate: f32) {
+        self.update(sample_rate);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -224,6 +253,7 @@ mod tests {
             _channel_count: 1,
             _block_index: Default::default(),
             state: OverdriveState::default(),
+            channel_state: vec![ChannelState::default(); 1].into_boxed_slice(),
         };
         od.init(48000.0);
         od
@@ -258,7 +288,10 @@ mod tests {
         for _ in 0..1000 {
             od.update(48000.0);
             let y = od.outputs.sample.get(0);
-            assert!(y.abs() <= 5.05, "soft-clip output should be bounded, got {y}");
+            assert!(
+                y.abs() <= 5.05,
+                "soft-clip output should be bounded, got {y}"
+            );
         }
     }
 
@@ -271,7 +304,10 @@ mod tests {
         for _ in 0..1000 {
             od.update(48000.0);
             let y = od.outputs.sample.get(0);
-            assert!(y.abs() <= 5.05, "hard-clip output should be bounded, got {y}");
+            assert!(
+                y.abs() <= 5.05,
+                "hard-clip output should be bounded, got {y}"
+            );
         }
     }
 

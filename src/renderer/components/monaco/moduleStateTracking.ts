@@ -336,6 +336,19 @@ interface ParamCache {
      * This prevents re-creating them on every poll.
      */
     trackedDecorationsCreated?: boolean;
+    /**
+     * The evaluated pattern `source` the tracked decorations were built from.
+     * Any edit to the pattern changes this — including a same-width value edit
+     * (e.g. `1` -> `7`) that leaves the leaf offsets (`all_spans`) and the
+     * argument literal's document bounds (`argument_spans`) unchanged. Such an
+     * edit rewrites the step's text, which can collapse that step's tracked
+     * Monaco decoration (NeverGrowsWhenTypingAtEdges) so `getDecorationRange`
+     * returns an empty range and the step stops highlighting. Comparing this
+     * detects the edit and rebuilds the decorations from `argSpan` + the fresh
+     * `all_spans` leaf offsets, so the edited step highlights again without a
+     * restart.
+     */
+    lastSource?: string;
 }
 
 /**
@@ -470,7 +483,15 @@ export function startModuleStatePolling({
                         paramCache.argumentSpan.start !== argSpan.start ||
                         paramCache.argumentSpan.end !== argSpan.end;
 
-                    if (argSpanChanged) {
+                    // Check if the pattern's evaluated source changed (a step
+                    // was edited). A same-width value edit leaves both argSpan
+                    // and all_spans unchanged, but still rewrites the text and
+                    // can collapse the edited step's tracked decoration — so the
+                    // source must be compared independently of argSpanChanged.
+                    const sourceChanged =
+                        paramCache.lastSource !== evaluatedSource;
+
+                    if (argSpanChanged || sourceChanged) {
                         // Clear old tracked decorations if any
                         if (paramCache.decorationCollection) {
                             paramCache.decorationCollection.clear();
@@ -478,6 +499,7 @@ export function startModuleStatePolling({
                         paramCache.trackedDecorationIds = undefined;
                         paramCache.decorationCollection = undefined;
                         paramCache.trackedDecorationsCreated = false;
+                        paramCache.lastSource = evaluatedSource;
 
                         paramCache.argumentSpan = argSpan;
                         paramCache.positionMapper = undefined;

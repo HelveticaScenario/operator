@@ -37,6 +37,12 @@ struct SamplerState {
     position: f64,
     playing: bool,
     gate_trigger: SchmittTrigger,
+    /// Engine sample rate, captured in init.
+    sample_rate: f32,
+    /// wav_rate / engine_rate. The WAV's sample rate only resolves after
+    /// connect(), so this is computed in on_patch_update, not init. Constant
+    /// until the next patch update.
+    rate_ratio: f64,
 }
 
 /// One-shot sample player. Plays a loaded WAV file from the beginning on each
@@ -46,7 +52,7 @@ struct SamplerState {
 /// $sampler($wavs().kick, $pulse('4hz'))
 /// $sampler($wavs().tables.pad, $clock.beat, { speed: 0.5 })
 /// ```
-#[module(name = "$sampler", channels_derive = sampler_derive_channel_count, args(wav, gate))]
+#[module(name = "$sampler", channels_derive = sampler_derive_channel_count, args(wav, gate), has_init, patch_update)]
 pub struct Sampler {
     params: SamplerParams,
     outputs: SamplerOutputs,
@@ -54,7 +60,14 @@ pub struct Sampler {
 }
 
 impl Sampler {
-    fn update(&mut self, sample_rate: f32) {
+    /// Capture the engine sample rate. Invoked by the `#[module]` proc macro at
+    /// construction. The playback rate ratio is finished in on_patch_update,
+    /// once the WAV is connected.
+    fn init(&mut self, sample_rate: f32) {
+        self.state.sample_rate = sample_rate;
+    }
+
+    fn update(&mut self, _sample_rate: f32) {
         let channels = self.channel_count();
         let frame_count = self.params.wav.frame_count();
 
@@ -98,14 +111,23 @@ impl Sampler {
             self.outputs.sample.set(ch, value);
         }
 
-        // Advance position, compensating for sample rate difference
+        // Advance position, compensating for sample rate difference (ratio
+        // resolved in on_patch_update).
+        self.state.position += speed * self.state.rate_ratio;
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Sampler {
+    fn on_patch_update(&mut self) {
+        // wav.sample_rate() is only valid after connect() resolves the WAV data,
+        // so the rate ratio is computed here rather than in init.
         let wav_rate = self.params.wav.sample_rate() as f64;
-        let rate_ratio = if wav_rate > 0.0 && sample_rate > 0.0 {
-            wav_rate / sample_rate as f64
+        let engine_rate = self.state.sample_rate as f64;
+        self.state.rate_ratio = if wav_rate > 0.0 && engine_rate > 0.0 {
+            wav_rate / engine_rate
         } else {
             1.0
         };
-        self.state.position += speed * rate_ratio;
     }
 }
 
@@ -206,6 +228,7 @@ mod tests {
         let mut patch = Patch::new();
         patch.wav_data.insert("test".to_string(), wav_data);
         module.connect(&patch);
+        module.on_patch_update();
 
         // Run a few samples — no trigger, should output silence
         let mut s = Stepper::new();
@@ -233,6 +256,7 @@ mod tests {
         let mut patch = Patch::new();
         patch.wav_data.insert("test".to_string(), wav_data);
         module.connect(&patch);
+        module.on_patch_update();
 
         // First tick: gate is high, Schmitt trigger detects rising edge, position resets to 0
         // 0.2 * 5.0 = 1.0
@@ -258,6 +282,7 @@ mod tests {
         let mut patch = Patch::new();
         patch.wav_data.insert("test".to_string(), wav_data);
         module.connect(&patch);
+        module.on_patch_update();
 
         // Play through the 2-frame sample
         let mut s = Stepper::new();
@@ -288,6 +313,7 @@ mod tests {
         let mut patch = Patch::new();
         patch.wav_data.insert("test".to_string(), wav_data);
         module.connect(&patch);
+        module.on_patch_update();
 
         // With negative speed, gate trigger should start from end of sample.
         // Frame 3 = 0.8*5=4.0, frame 2 = 0.6*5=3.0, frame 1 = 0.4*5=2.0, frame 0 = 0.2*5=1.0
@@ -328,6 +354,7 @@ mod tests {
         let mut patch = Patch::new();
         patch.wav_data.insert("stereo".to_string(), wav_data);
         module.connect(&patch);
+        module.on_patch_update();
 
         let mut s = Stepper::new();
 

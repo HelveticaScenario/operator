@@ -108,6 +108,50 @@ describe('atom kinds', () => {
         });
     });
 
+    test('Note with flat, no octave', () => {
+        const r = $p('eb');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'e', accidental: 'b', octave: null } },
+                span: { start: 0, end: 2 },
+            },
+        });
+    });
+
+    test('Note b-flat, no octave (b-letter / b-accidental collision)', () => {
+        const r = $p('bb');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'b', accidental: 'b', octave: null } },
+                span: { start: 0, end: 2 },
+            },
+        });
+    });
+
+    test('Note with f-alias flat, no octave', () => {
+        const r = $p('cf');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'c', accidental: 'b', octave: null } },
+                span: { start: 0, end: 2 },
+            },
+        });
+    });
+
+    test('bare note letter b stays a plain note (no accidental)', () => {
+        const r = $p('b');
+        const atom = firstPureAtom(r.ast);
+        expect(atom).toEqual({
+            Pure: {
+                node: { Note: { letter: 'b', accidental: null, octave: null } },
+                span: { start: 0, end: 1 },
+            },
+        });
+    });
+
     test('Rest', () => {
         const r = $p('~');
         expect(r.ast).toEqual({ Rest: { start: 0, end: 1 } });
@@ -178,6 +222,26 @@ describe('modifiers', () => {
         }
     });
 
+    test('replicate !! accumulates to 3 (one flat Replicate, not nested)', () => {
+        // Tidal `pRepeat = 1 + sum es` / krill: `0!!` is 3 copies, not 4.
+        const r = $p('0!!');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(r.ast.Replicate[1]).toBe(3);
+        expect('Replicate' in r.ast.Replicate[0]).toBe(false);
+    });
+
+    test('replicate `! !` with spaces also accumulates to 3', () => {
+        const r = $p('0 ! !');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(r.ast.Replicate[1]).toBe(3);
+    });
+
+    test('replicate !2!3 accumulates to 4', () => {
+        const r = $p('0!2!3');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(r.ast.Replicate[1]).toBe(4);
+    });
+
     test('degrade ? with probability', () => {
         const r = $p('0?0.3');
         expect('Degrade' in r.ast).toBe(true);
@@ -225,6 +289,14 @@ describe('modifiers', () => {
         expect(entries.length).toBe(2);
         expect(entries[0][1]).toBeCloseTo(3);
         expect(entries[1][1]).toBeNull();
+    });
+
+    test('bare `@` defaults weight to 2', () => {
+        // Matches Tidal `pElongate = 1 + sum` / krill, and `_` elongation.
+        const r = $p('0@');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence).toHaveLength(1);
+        expect(r.ast.Sequence[0][1]).toBe(2);
     });
 });
 
@@ -318,14 +390,43 @@ describe('random choice', () => {
         expect('Rest' in r.ast.RandomChoice[0][1]).toBe(true);
     });
 
+    test('| chooses between whole bracketed subsequences', () => {
+        // Regression: `|` must alternate whole subsequences, not bind to a
+        // single neighbouring atom. `[0,0,0]` / `[0,-7,0]` are comma-chords.
+        const r = $p('[0,0,0] | [0,-7,0]');
+        if (!('RandomChoice' in r.ast))
+            return expect.fail('expected RandomChoice');
+        const [choices] = r.ast.RandomChoice;
+        expect(choices.length).toBe(2);
+        for (const c of choices) {
+            if (!('FastCat' in c))
+                return expect.fail('each choice should be a FastCat');
+            expect('Stack' in c.FastCat[0][0]).toBe(true);
+        }
+    });
+
+    test('| chooses between whole space-separated sequences', () => {
+        const r = $p('0 1 | 2 3');
+        if (!('RandomChoice' in r.ast))
+            return expect.fail('expected RandomChoice');
+        const [choices] = r.ast.RandomChoice;
+        expect(choices.length).toBe(2);
+        expect('Sequence' in choices[0]).toBe(true);
+        expect('Sequence' in choices[1]).toBe(true);
+    });
+
     test('seeds are assigned depth-first, left-to-right', () => {
-        const r = $p('0|1 2?');
-        // Walk the tree to collect seeds; expect RandomChoice first (0), Degrade second (1).
+        // `[0|1]` is parsed before `2?`, so the choice gets seed 0 and the
+        // degrade gets seed 1.
+        const r = $p('[0|1] 2?');
         if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
         const [first, second] = r.ast.Sequence;
-        if (!('RandomChoice' in first[0]))
-            return expect.fail('first element should be RandomChoice');
-        expect(first[0].RandomChoice[1]).toBe(0);
+        if (!('FastCat' in first[0]))
+            return expect.fail('first element should be FastCat');
+        const inner = first[0].FastCat[0][0];
+        if (!('RandomChoice' in inner))
+            return expect.fail('FastCat should wrap a RandomChoice');
+        expect(inner.RandomChoice[1]).toBe(0);
         if (!('Degrade' in second[0]))
             return expect.fail('second element should be Degrade');
         expect(second[0].Degrade[2]).toBe(1);
@@ -484,6 +585,31 @@ describe('feet `.`', () => {
             expect(r.ast.Sequence).toHaveLength(2);
             expect(r.ast.Sequence.every(([, w]) => w === null)).toBe(true);
         }
+    });
+});
+
+// Top-level `,` (stack) and `|` (choice) are mutually exclusive, with feet
+// (`.`) living inside each operand — matching Tidal stackTail/chooseTail and
+// krill. `<...>`/`{...}` are comma-only voices.
+describe('separator model (Tidal/krill parity)', () => {
+    test('`|` binds looser than feet: `0 | 1 . 2` is choose(0, feet(1,2))', () => {
+        const r = $p('0 | 1 . 2');
+        if (!('RandomChoice' in r.ast))
+            return expect.fail('expected RandomChoice');
+        const [choices] = r.ast.RandomChoice;
+        expect(choices.length).toBe(2);
+        // The second choice is the feet sub-sequence `1 . 2`, not a bare atom.
+        if (!('Sequence' in choices[1]))
+            return expect.fail('second choice should be a feet Sequence');
+        expect(choices[1].Sequence).toHaveLength(2);
+    });
+
+    test('mixing `,` and `|` at the top level is a parse error', () => {
+        expect(() => $p('0 , 1 | 2')).toThrow(MiniParseError);
+    });
+
+    test('`|` inside `<...>` is a parse error (comma-only voices)', () => {
+        expect(() => $p('<0 | 1>')).toThrow(MiniParseError);
     });
 });
 

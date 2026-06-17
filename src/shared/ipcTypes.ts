@@ -252,6 +252,9 @@ export const IPC_CHANNELS = {
     SYNTH_STOP_RECORDING: 'modular:synth:stop-recording',
     SYNTH_IS_RECORDING: 'modular:synth:is-recording',
     SYNTH_GET_HEALTH: 'modular:synth:get-health',
+    SYNTH_GET_MODULE_PROFILE: 'modular:synth:get-module-profile',
+    SYNTH_SET_MODULE_PROFILING_ENABLED: 'modular:synth:set-module-profiling-enabled',
+    SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE: 'modular:synth:set-module-profiling-sample-rate',
     SYNTH_GET_MODULE_STATES: 'modular:synth:get-module-states',
     SYNTH_STOP: 'modular:synth:stop',
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',
@@ -337,6 +340,7 @@ export const MENU_CHANNELS = {
     MIGRATE_BUFFER: 'modular:menu:migrate-buffer',
     NEW_FILE: 'modular:menu:new-file',
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
+    OPEN_MODULE_PROFILE: 'modular:menu:open-module-profile',
     OPEN_SETTINGS: 'modular:menu:open-settings',
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
@@ -383,6 +387,12 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_IS_RECORDING]: typeof Synthesizer.prototype.isRecording;
 
     [IPC_CHANNELS.SYNTH_GET_HEALTH]: typeof Synthesizer.prototype.getHealth;
+
+    [IPC_CHANNELS.SYNTH_GET_MODULE_PROFILE]: typeof Synthesizer.prototype.getModuleProfile;
+
+    [IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_ENABLED]: typeof Synthesizer.prototype.setModuleProfilingEnabled;
+
+    [IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE]: typeof Synthesizer.prototype.setModuleProfilingSampleRate;
 
     [IPC_CHANNELS.SYNTH_GET_MODULE_STATES]: typeof Synthesizer.prototype.getModuleStates;
 

@@ -23,6 +23,7 @@ import type {
 } from '../shared/ipcTypes';
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
+import { isBufferSwitch } from './bufferSwitch';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
@@ -560,6 +561,10 @@ setInterval(() => {
     // cannot free memory itself, so it pushes old resources onto a lock-free
     // garbage queue. Call periodically from the main thread to drop them.
     synth.drainGarbage();
+    // Close MIDI devices whose deferred disconnect is now safe (their patch
+    // update has been applied). Backstop for when no further patch updates
+    // arrive to trigger the prune inline.
+    synth.pruneDisconnectedMidi();
 }, 10000);
 
 // Workspace root state
@@ -894,6 +899,10 @@ registerIPCHandler(
             const shouldReconcile =
                 Boolean(sourceId) && lastAppliedSourceId === sourceId;
 
+            // Switching playback to a different buffer (song) restarts the
+            // transport from the top, applied atomically with the patch swap.
+            const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
+
             if (DEBUG_LOG) {
                 if (!sourceId) {
                     console.log(
@@ -945,7 +954,11 @@ registerIPCHandler(
                 }),
             );
 
-            const { errors, updateId } = synth.updatePatch(patch, trigger);
+            const { errors, updateId } = synth.updatePatch(
+                patch,
+                trigger,
+                resetClock,
+            );
 
             if (errors.length === 0) {
                 lastAppliedPatchGraph = patch;
@@ -1003,6 +1016,10 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     const shouldReconcile =
         Boolean(sourceId) && lastAppliedSourceId === sourceId;
 
+    // Switching playback to a different buffer (song) restarts the transport
+    // from the top, applied atomically with the patch swap.
+    const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
+
     if (DEBUG_LOG) {
         if (!sourceId) {
             console.log('[patch-remap] no sourceId; reconciliation disabled');
@@ -1047,7 +1064,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
         to,
     }));
 
-    const { errors, updateId } = synth.updatePatch(patch, trigger);
+    const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
 
     if (errors.length === 0) {
         lastAppliedPatchGraph = patch;
@@ -1066,6 +1083,16 @@ registerIPCHandler('SYNTH_STOP_RECORDING', () => synth.stopRecording());
 registerIPCHandler('SYNTH_IS_RECORDING', () => synth.isRecording());
 
 registerIPCHandler('SYNTH_GET_HEALTH', () => synth.getHealth());
+
+registerIPCHandler('SYNTH_GET_MODULE_PROFILE', () => synth.getModuleProfile());
+
+registerIPCHandler('SYNTH_SET_MODULE_PROFILING_ENABLED', (enabled: boolean) => {
+    synth.setModuleProfilingEnabled(enabled);
+});
+
+registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
+    synth.setModuleProfilingSampleRate(rate);
+});
 
 registerIPCHandler('SYNTH_STOP', () => {
     synth.stop();
@@ -1652,21 +1679,40 @@ const createWindow = (): void => {
     });
 
     // And load the index.html of the app.
-    if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-        void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-    } else {
-        void mainWindow.loadFile(
-            path.join(
-                __dirname,
-                `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
-            ),
-        );
-    }
+    const loadRenderer = (): void => {
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            return;
+        }
+        if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
+            void mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+        } else {
+            void mainWindow.loadFile(
+                path.join(
+                    __dirname,
+                    `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
+                ),
+            );
+        }
+    };
+
+    // The window can come up before the Vite dev server is serving, which
+    // fails the initial load and leaves a white screen with no retry. Reload
+    // on failure so the renderer appears on its own once the server is up.
+    mainWindow.webContents.on('did-fail-load', (_event, errorCode) => {
+        // ERR_ABORTED (-3) is a normal aborted navigation (e.g. HMR), not a
+        // real failure — retrying it would loop.
+        if (errorCode === -3) {
+            return;
+        }
+        setTimeout(loadRenderer, 500);
+    });
 
     // Flush pending logs when the renderer is ready
     mainWindow.webContents.on('did-finish-load', () => {
         flushPendingLogs();
     });
+
+    loadRenderer();
 
     // Start watching config file for changes
     startConfigWatcher();
@@ -1831,6 +1877,16 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Engine Health...',
+                },
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.OPEN_MODULE_PROFILE,
+                            );
+                        }
+                    },
+                    label: 'Module Profile...',
                 },
             ],
         },

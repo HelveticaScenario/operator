@@ -1,7 +1,7 @@
 {
     "name": "@modular/app",
     "productName": "Operator",
-    "version": "0.0.77",
+    "version": "0.0.90",
     "description": "Operator - a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches",
     "main": ".vite/build/main.js",
     "repository": {
@@ -101,6 +101,7 @@
         "@fontsource/source-code-pro": "^5.2.7",
         "@fontsource/victor-mono": "^5.2.8",
         "@monaco-editor/react": "^4.7.0",
+        "@tanstack/react-table": "^8.21.3",
         "electron-squirrel-startup": "^1.0.1",
         "monaco-editor": "^0.55.1",
         "prettier": "^3.4.2",

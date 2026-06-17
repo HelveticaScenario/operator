@@ -4,7 +4,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::utils::sanitize,
     poly::{PolyOutput, PolySignal},
 };
@@ -34,7 +33,6 @@ struct DcBlockChannelState {
 /// State for the DcBlock module.
 #[derive(Default)]
 struct DcBlockState {
-    channels: [DcBlockChannelState; PORT_MAX_CHANNELS],
     coeff: f32,
 }
 
@@ -62,6 +60,7 @@ pub struct DcBlock {
     outputs: DcBlockOutputs,
     params: DcBlockParams,
     state: DcBlockState,
+    channel_state: Box<[DcBlockChannelState]>,
 }
 
 impl DcBlock {
@@ -79,7 +78,7 @@ impl DcBlock {
 
         for ch in 0..num_channels {
             let input = self.params.input.get_value(ch);
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             if !state.initialized {
                 // Prime the input history so a steady offset present from the
