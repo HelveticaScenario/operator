@@ -204,6 +204,23 @@ export class Bus {
 }
 
 /**
+ * Normalize a {@link PolySignal} into a flat array of scalar {@link Signal}s.
+ * Scalars (number, string, ModuleOutput) wrap to a single-element array;
+ * arrays and collections spread. The scalar cases are guarded before the
+ * spread because strings are themselves iterable.
+ */
+function toSignalArray(v: PolySignal): Signal[] {
+    if (
+        typeof v === 'number' ||
+        typeof v === 'string' ||
+        v instanceof ModuleOutput
+    ) {
+        return [v];
+    }
+    return [...v];
+}
+
+/**
  * BaseCollection provides iterable, indexable container for ModuleOutput arrays
  * with chainable DSP methods (amplitude, shift, scope, out).
  */
@@ -467,6 +484,22 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
         ) as Collection;
     }
 
+    /**
+     * Wrap every output as a {@link ModuleOutputWithRange} carrying a known
+     * value range, returning a {@link CollectionWithRange}. `min`/`max` may be
+     * poly: each is normalized and cycled across the items. Internal plumbing
+     * for `.range()`; not part of the DSL surface.
+     */
+    withRange(min: PolySignal, max: PolySignal): CollectionWithRange {
+        const mins = toSignalArray(min);
+        const maxs = toSignalArray(max);
+        return new CollectionWithRange(
+            ...this.items.map((o, i) =>
+                o.withRange(mins[i % mins.length], maxs[i % maxs.length]),
+            ),
+        );
+    }
+
     toString(): string {
         return `[${this.items.map((item) => item.toString()).join(',')}]`;
     }
@@ -485,15 +518,17 @@ export class Collection extends BaseCollection<ModuleOutput> {
         outMax: PolySignal,
         inMin: PolySignal,
         inMax: PolySignal,
-    ): Collection {
+    ): CollectionWithRange {
         if (this.items.length === 0) {
-            return new Collection();
+            return new CollectionWithRange();
         }
         const factory = this.items[0].builder.getFactory('$remap');
         if (!factory) {
             throw new Error('Factory for util.remap not registered');
         }
-        return factory(this.items, outMin, outMax, inMin, inMax) as Collection;
+        return (
+            factory(this.items, outMin, outMax, inMin, inMax) as Collection
+        ).withRange(outMin, outMax);
     }
 }
 
@@ -502,24 +537,31 @@ export class Collection extends BaseCollection<ModuleOutput> {
  * Use .range(outMin, outMax) to remap using stored min/max values.
  */
 export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
+    /** Already ranged: returns itself. */
+    withRange(_min: PolySignal, _max: PolySignal): CollectionWithRange {
+        return this;
+    }
+
     /**
      * Remap outputs from their known range to a new output range
      */
-    range(outMin: PolySignal, outMax: PolySignal): Collection {
+    range(outMin: PolySignal, outMax: PolySignal): CollectionWithRange {
         if (this.items.length === 0) {
-            return new Collection();
+            return new CollectionWithRange();
         }
         const factory = this.items[0].builder.getFactory('$remap');
         if (!factory) {
             throw new Error('Factory for util.remap not registered');
         }
-        return factory(
-            this.items,
-            outMin,
-            outMax,
-            this.items.map((o) => o.minValue),
-            this.items.map((o) => o.maxValue),
-        ) as Collection;
+        return (
+            factory(
+                this.items,
+                outMin,
+                outMax,
+                this.items.map((o) => o.minValue),
+                this.items.map((o) => o.maxValue),
+            ) as Collection
+        ).withRange(outMin, outMax);
     }
 }
 
@@ -1520,6 +1562,21 @@ export class ModuleOutput {
     }
 
     /**
+     * Wrap this output as a {@link ModuleOutputWithRange} carrying a known value
+     * range. Internal plumbing for `.range()`; not part of the DSL surface.
+     */
+    withRange(min: Signal, max: Signal): ModuleOutputWithRange {
+        return new ModuleOutputWithRange(
+            this.builder,
+            this.moduleId,
+            this.portName,
+            this.channel,
+            min,
+            max,
+        );
+    }
+
+    /**
      * Remap this output from explicit input range to output range
      */
     range(
@@ -1527,9 +1584,11 @@ export class ModuleOutput {
         outMax: PolySignal,
         inMin: PolySignal,
         inMax: PolySignal,
-    ): Collection {
+    ): CollectionWithRange {
         const factory = this.builder.getFactory('$remap');
-        return factory(this, outMin, outMax, inMin, inMax) as Collection;
+        return (
+            factory(this, outMin, outMax, inMin, inMax) as Collection
+        ).withRange(outMin, outMax);
     }
 
     toString(): string {
@@ -1542,35 +1601,42 @@ export class ModuleOutput {
  * Provides .range() method to easily remap the output to a new range.
  */
 export class ModuleOutputWithRange extends ModuleOutput {
-    readonly minValue: number;
-    readonly maxValue: number;
+    readonly minValue: Signal;
+    readonly maxValue: Signal;
 
     constructor(
         builder: GraphBuilder,
         moduleId: string,
         portName: string,
         channel: number = 0,
-        minValue: number,
-        maxValue: number,
+        minValue: Signal,
+        maxValue: Signal,
     ) {
         super(builder, moduleId, portName, channel);
         this.minValue = minValue;
         this.maxValue = maxValue;
     }
 
+    /** Already ranged: returns itself. */
+    withRange(_min: Signal, _max: Signal): ModuleOutputWithRange {
+        return this;
+    }
+
     /**
      * Remap this output from its known range to a new range.
      * Creates a remap module internally.
      */
-    range(outMin: PolySignal, outMax: PolySignal): Collection {
+    range(outMin: PolySignal, outMax: PolySignal): CollectionWithRange {
         const factory = this.builder.getFactory('$remap');
-        return factory(
-            this,
-            outMin,
-            outMax,
-            this.minValue,
-            this.maxValue,
-        ) as Collection;
+        return (
+            factory(
+                this,
+                outMin,
+                outMax,
+                this.minValue,
+                this.maxValue,
+            ) as Collection
+        ).withRange(outMin, outMax);
     }
 }
 

@@ -35,6 +35,8 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     "maxValue",
     // ModuleOutputWithRange methods
     "range",
+    // ModuleOutput / BaseCollection internal converter methods
+    "withRange",
     // BaseCollection / Collection / CollectionWithRange properties
     "items",
     "length",

@@ -868,10 +868,10 @@ interface ModuleOutput {
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @param inMin - Input minimum as {@link Poly<Signal>}
    * @param inMax - Input maximum as {@link Poly<Signal>}
-   * @returns A {@link ModuleOutput} with the remapped signal
+   * @returns A {@link CollectionWithRange} carrying the remapped signal
    * @example $sine('c4').range(0, 1, -5, 5)
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): ModuleOutput;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): CollectionWithRange;
 
   /**
    * Register this output as a send to a bus, with optional gain.
@@ -927,19 +927,19 @@ interface DeferredModuleOutput extends ModuleOutput {
  */
 interface ModuleOutputWithRange extends ModuleOutput {
   /** The minimum value this output produces */
-  readonly minValue: number;
+  readonly minValue: Signal;
   /** The maximum value this output produces */
-  readonly maxValue: number;
+  readonly maxValue: Signal;
   
   /**
    * Remap the output from its native range to a new range.
    * Uses the stored minValue/maxValue automatically.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
-   * @returns A {@link ModuleOutput} with the remapped signal
+   * @returns A {@link CollectionWithRange} carrying the remapped signal
    * @example lfo.range(note("C3"), note("C5"))
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>): ModuleOutput;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 }
 
 
@@ -1033,7 +1033,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @param outMax - Output maximum as {@link Poly<Signal>}
    * @see {@link CollectionWithRange.range} - for automatic input range
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): Collection;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): CollectionWithRange;
 
   /**
    * Pipe this collection through a transform function.
@@ -1176,7 +1176,7 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    * @param outMax - Output maximum as {@link Poly<Signal>}
    * @see {@link Collection.range} - for explicit input range
    */
-  override range(outMin: Poly<Signal>, outMax: Poly<Signal>): Collection;
+  override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 }
 
 /**
@@ -1307,13 +1307,13 @@ function $deferred(channels?: number): DeferredCollection;
  * @param value - Initial value (must be a numeric literal)
  * @param min - Minimum slider value
  * @param max - Maximum slider value
- * @returns A ModuleOutput carrying the slider's current value as a signal
+ * @returns A CollectionWithRange carrying the slider's current value (range [min, max])
  *
  * @example
  * const vol = $slider("Volume", 0.5, 0, 1);
  * $sine(440).amplitude(vol).out();
  */
-function $slider(label: string, value: number, min: number, max: number): ModuleOutput;
+function $slider(label: string, value: number, min: number, max: number): CollectionWithRange;
 
 /**
  * A send-return bus. Create one with {@link $bus}, then call \`.send(bus, gain)\` on

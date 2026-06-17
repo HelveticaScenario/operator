@@ -524,7 +524,7 @@ export function executePatchScript(
      * @param value - Initial value (must be a numeric literal)
      * @param min - Minimum value
      * @param max - Maximum value
-     * @returns The signal module's output
+     * @returns A CollectionWithRange carrying the slider value (range [min, max])
      */
     const $slider = (
         label: string,
@@ -560,7 +560,7 @@ export function executePatchScript(
 
         sliders.push({ label, max, min, moduleId, value });
 
-        return result;
+        return $c(result).withRange(min, max);
     };
 
     /**
