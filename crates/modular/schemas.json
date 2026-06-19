@@ -12,25 +12,123 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
+    "name": "$signal",
+    "documentation": "Utility module for routing, naming, and exposing signals in a patch.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SignalParams",
+      "type": "object",
+      "properties": {
+        "source": {
+          "description": "Input signal to forward.",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
             },
             {
               "type": "null"
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
             }
           ]
         },
         "rate": {
           "description": "Simulation speed — Lorenz time-units advanced per second of audio.\nInput 0–5 maps to 0–200 t/s; default 0.1 → 4 t/s (slow LFO-rate butterfly).\nHigher values push outputs toward audio-rate chaos.",
+        "Signal": {
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
+              "type": "number",
+              "format": "double"
             },
             {
               "type": "null"
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
             }
           ]
         },
         "rho": {
           "description": "Rho (ρ) — distance from the origin to the critical points.\nInput 0–5 maps to ρ 0–60; default 2.333 → ρ=28.\nChaos requires ρ > 24.74 (→ CV > ~2.06V); below that the system spirals to a fixed point.",
+          "anyOf": [
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "forwarded signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "source",
+        "description": "Input signal to forward.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "source"
+      }
+    ]
+  },
+  {
+    "name": "$mix",
+    "documentation": "Mix module for combining multiple signals into a single mix bus.\n\nUse this when you want to blend several multichannel modulation/audio sources.\nIt mixes channel `n` across all inputs into output channel `n`, rather than\nfolding all channels into a single mono channel.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MixParams",
+      "type": "object",
+      "properties": {
+        "gain": {
+          "description": "Final output level (perceptual curve, exponent 3).",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -56,6 +154,91 @@
         "PolySignal": {
           "anyOf": [
             {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        "inputs": {
+          "description": "Input signals to mix channel-by-channel.\n\nChannel `n` from every input is mixed into output channel `n`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PolySignal"
+          }
+        },
+        "Signal": {
+          "anyOf": [
+        "mode": {
+          "description": "How inputs are combined.",
+          "$ref": "#/$defs/MixMode"
+        }
+      },
+      "required": [
+        "inputs"
+      ],
+      "$defs": {
+        "MixMode": {
+          "description": "Mixing mode for combining input signals.",
+          "oneOf": [
+            {
+              "type": "number",
+              "format": "double"
+              "description": "Sum all inputs.",
+              "type": "string",
+              "const": "sum"
+            },
+            {
+              "type": "string"
+              "description": "Average all inputs.",
+              "type": "string",
+              "const": "average"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+              "description": "Keep the strongest input.",
+              "type": "string",
+              "const": "max"
+            },
+            {
+              "description": "Keep the weakest non-zero input.",
+              "type": "string",
+              "const": "min"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+        "PolySignal": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
               "$ref": "#/$defs/Signal"
             },
             {
@@ -191,6 +374,81 @@
         "source"
       ],
       "$defs": {
+        "name": "output",
+        "description": "multichannel mix: each output channel mixes the same channel index from all inputs (not a mono fold-down)",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "gain",
+        "description": "Final output level (perceptual curve, exponent 3).",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "inputs"
+      }
+    ]
+  },
+  {
+    "name": "$mixDown",
+    "documentation": "Folds a polyphonic input down to an arbitrary target channel count.\n\nUnlike `$mix` (which mixes channel `n` of every input into output channel\n`n`), `$mixDown` takes a single poly signal and distributes its `N` channels\nacross `M` output channels by panning them evenly over the output field with\nan equal-power crossfade. With the default `channels = 1` it is a plain mono\nsum; `channels = 2` produces an equal-power stereo fold-down. When the target\nexceeds the input channel count, the input is instead spread to fill every\noutput channel (equal-power interpolation) so no channel is left silent.\n\n- **channels** — target output channel count (1–64, default 1)\n- **mode** — how channels landing on the same output combine (sum / average /\n  max / min); applies only when folding down (target ≤ input channels)\n\n## Example\n\n```js\n// Fold a 3-voice spread down to stereo\n$saw($spread(0, 5, 3)).mix(2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MixDownParams",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "description": "Target output channel count (1–64). Defaults to 1 (mono).",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "input": {
+          "description": "Polyphonic input whose channels are folded down.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "How channels that land on the same output channel are combined.",
+          "$ref": "#/$defs/MixMode"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MixMode": {
+          "description": "Mixing mode for combining input signals.",
+          "oneOf": [
+            {
+              "description": "Sum all inputs.",
+              "type": "string",
+              "const": "sum"
+            },
+            {
+              "description": "Average all inputs.",
+              "type": "string",
+              "const": "average"
+            },
+            {
+              "description": "Keep the strongest input.",
+              "type": "string",
+              "const": "max"
+            },
+            {
+              "description": "Keep the weakest non-zero input.",
+              "type": "string",
+              "const": "min"
+            }
+          ]
+        },
         "PolySignal": {
           "anyOf": [
             {
@@ -331,6 +589,80 @@
               "description": "Keep the weakest non-zero input.",
               "type": "string",
               "const": "min"
+        "description": "fold-down output: input channels panned evenly across the output channels",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "Polyphonic input whose channels are folded down.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "channels"
+      }
+    ],
+    "channelsParam": "channels"
+  },
+  {
+    "name": "$stereoMix",
+    "documentation": "Pan and spread a signal into stereo.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "StereoMixerParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "Input signal to place in the stereo field.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "pan": {
+          "description": "Pan position per channel (-5 = left, 0 = center, +5 = right).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
             }
           ]
         },
@@ -10925,6 +11257,284 @@
     ],
     "signalParams": [],
     "positionalArgs": []
+  },
+  {
+    "name": "$grains",
+    "documentation": "Granular sampler. Continuously spawns short, windowed grains from a WAV\nfile, enabling time-stretching, pitch-shifting independent of time, and\ncloud textures.\n\nEach polyphonic channel maintains up to 64 concurrent grains. Spawned grains\ncapture their pitch, start position, and length at spawn time, so live\nparameter changes only affect new grains.\n\nAmplitude is normalised using the Mutable Instruments Clouds formula:\n`gain = 1/√(max(1, smoothed_active_grains − 1))`.\n\n```js\n$grains('c4', $wavs().pad, $clock.beat)\n$grains(voct, $wavs().strings, gate, { density: 3, shape: 'bell', length: 2 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GrainsParams",
+      "type": "object",
+      "properties": {
+        "density": {
+          "description": "Grain spawn rate: grains/sec = value × 10. Default 2.5 V = 25 grains/sec.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "directionBias": {
+          "description": "Reverse probability: 0 V = always forward, 5 V = always reverse.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gate": {
+          "description": "Gate: rising edge resets the loop counter; high level enables grain spawning.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "length": {
+          "description": "Grain length: 1 V ≈ 100 ms, 0.01 V ≈ 1 ms. Clamped to sample duration.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loopCount": {
+          "description": "Max grains per gate-high. Absent/null = infinite.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "pitch": {
+          "description": "Pitch of spawned grains in V/Oct. 0 V = native speed, 1 V = 2×, −1 V = 0.5×.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "shape": {
+          "description": "Amplitude window function applied to each grain.",
+          "$ref": "#/$defs/GrainShape"
+        },
+        "start": {
+          "description": "Read position within the sample: 0 V = start, 5 V = end.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "description": "WAV file to granulate.",
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "pitch",
+        "wav",
+        "gate"
+      ],
+      "$defs": {
+        "GrainShape": {
+          "description": "Amplitude windowing function applied to each grain.",
+          "oneOf": [
+            {
+              "description": "Symmetric triangle: linear rise and fall meeting at the centre.",
+              "type": "string",
+              "const": "triangle"
+            },
+            {
+              "description": "Linear rise to peak then a sharp 1 ms linear fall at the tail.",
+              "type": "string",
+              "const": "ramp"
+            },
+            {
+              "description": "1 ms linear attack, sustain at peak, 1 ms linear decay.",
+              "type": "string",
+              "const": "square"
+            },
+            {
+              "description": "1 ms linear attack followed by exponential decay matching `$perc`.",
+              "type": "string",
+              "const": "decay"
+            },
+            {
+              "description": "Gaussian bell curve; endpoints ≈ 0.01 (−40 dB).",
+              "type": "string",
+              "const": "bell"
+            },
+            {
+              "description": "Lanczos-windowed sinc, 3 lobes per side.",
+              "type": "string",
+              "const": "sinc"
+            },
+            {
+              "description": "Cosine-tapered flat-top (Tukey) window, α = 0.5.",
+              "type": "string",
+              "const": "tukey"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "granular synthesis output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "pitch",
+        "description": "Pitch of spawned grains in V/Oct. 0 V = native speed, 1 V = 2×, −1 V = 0.5×.",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -4.0,
+        "maxValue": 4.0
+      },
+      {
+        "name": "gate",
+        "description": "Gate: rising edge resets the loop counter; high level enables grain spawning.",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "start",
+        "description": "Read position within the sample: 0 V = start, 5 V = end.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "length",
+        "description": "Grain length: 1 V ≈ 100 ms, 0.01 V ≈ 1 ms. Clamped to sample duration.",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.01,
+        "maxValue": 10.0
+      },
+      {
+        "name": "density",
+        "description": "Grain spawn rate: grains/sec = value × 10. Default 2.5 V = 25 grains/sec.",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0001,
+        "maxValue": 100.0
+      },
+      {
+        "name": "directionBias",
+        "description": "Reverse probability: 0 V = always forward, 5 V = always reverse.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "pitch"
+      },
+      {
+        "name": "wav"
+      },
+      {
+        "name": "gate"
+      }
+    ]
   },
   {
     "name": "$sampler",
