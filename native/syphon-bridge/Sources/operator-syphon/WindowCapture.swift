@@ -45,8 +45,11 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         let scWindow = try await findWindow(windowID: windowID)
         let filter = SCContentFilter(desktopIndependentWindow: scWindow)
 
-        // Capture at the window's backing-pixel resolution.
-        let scale = NSScreen.main?.backingScaleFactor ?? 2
+        // Capture at the window's backing-pixel resolution, using the scale of
+        // the display the window actually sits on (not necessarily the key
+        // window's screen), so a window on a non-Retina external display isn't
+        // captured at the wrong DPI.
+        let scale = Self.backingScale(for: scWindow.frame)
         let config = SCStreamConfiguration()
         config.pixelFormat = kCVPixelFormatType_32BGRA
         config.width = max(2, Int(scWindow.frame.width * scale))
@@ -66,6 +69,25 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     func stop() async {
         try? await stream?.stopCapture()
         stream = nil
+    }
+
+    /// Backing scale of the display the window's centre lies on.
+    ///
+    /// `SCWindow.frame` is in top-left-origin global points; `NSScreen.frame` is
+    /// bottom-left-origin. Both spaces are anchored on the primary screen (the
+    /// one at AppKit origin `(0, 0)`, i.e. `screens.first`), so flipping the
+    /// centre's y by the primary screen's height converts between them. Falls
+    /// back to the main screen's scale (then 2) if no screen contains the centre.
+    private static func backingScale(for windowFrame: CGRect) -> CGFloat {
+        let screens = NSScreen.screens
+        guard let primary = screens.first else { return 2 }
+        let centerAppKit = CGPoint(
+            x: windowFrame.midX,
+            y: primary.frame.height - windowFrame.midY)
+        for screen in screens where screen.frame.contains(centerAppKit) {
+            return screen.backingScaleFactor
+        }
+        return NSScreen.main?.backingScaleFactor ?? primary.backingScaleFactor
     }
 
     /// The window may not be shareable the instant we launch (it can lag the

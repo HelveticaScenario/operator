@@ -22,12 +22,25 @@ export type SyphonStatus =
 const SERVER_NAME = 'Operator';
 const DEFAULT_FPS = 60;
 const RESTART_DELAY_MS = 1500;
+/**
+ * Circuit breaker for automatic crash-restarts: allow at most
+ * MAX_RESTARTS_PER_WINDOW within any RESTART_WINDOW_MS rolling window. This
+ * bounds both a helper that can never start (its window never becomes shareable)
+ * and one that flaps — reaches `ready`, crashes immediately, repeat — neither of
+ * which should restart forever. A genuinely healthy helper that crashes only
+ * occasionally always has budget, since old restarts age out of the window. The
+ * window is cleared on a user-initiated start.
+ */
+const MAX_RESTARTS_PER_WINDOW = 5;
+const RESTART_WINDOW_MS = 60_000;
 
 export class SyphonBridge {
     private child: ChildProcess | null = null;
     private status: SyphonStatus = 'stopped';
     private restartTimer: ReturnType<typeof setTimeout> | null = null;
     private intentionalStop = false;
+    /** Timestamps (ms) of recent automatic restarts, for the rolling-window cap. */
+    private restartTimes: number[] = [];
     private readonly fps: number;
     private readonly onStatusChange: (status: SyphonStatus) => void;
 
@@ -100,6 +113,8 @@ export class SyphonBridge {
         }
 
         this.intentionalStop = false;
+        // Fresh user action — clear the crash-restart history.
+        this.restartTimes = [];
         this.spawn(window, windowId);
         return { ok: true };
     }
@@ -114,8 +129,12 @@ export class SyphonBridge {
         const child = this.child;
         if (child) {
             child.kill('SIGTERM');
+            // `child.killed` only reflects that a signal was *sent*, not that the
+            // process exited, so it can't gate the force-kill. The exit handler
+            // nulls `this.child`; if it's still our current child after the grace
+            // period it hasn't exited — force it.
             setTimeout(() => {
-                if (!child.killed) child.kill('SIGKILL');
+                if (this.child === child) child.kill('SIGKILL');
             }, 1000);
         }
         this.setStatus('stopped');
@@ -136,12 +155,21 @@ export class SyphonBridge {
      */
     dispose(): void {
         this.intentionalStop = true;
-        if (this.restartTimer) clearTimeout(this.restartTimer);
+        if (this.restartTimer) {
+            clearTimeout(this.restartTimer);
+            this.restartTimer = null;
+        }
         this.child?.kill('SIGTERM');
         this.child = null;
     }
 
     private spawn(window: BrowserWindow, windowId: string): void {
+        // A user (re)start can race a pending crash-restart; cancel it so we
+        // don't end up with two helpers publishing the same source.
+        if (this.restartTimer) {
+            clearTimeout(this.restartTimer);
+            this.restartTimer = null;
+        }
         const bin = this.helperPath();
         this.setStatus('starting');
 
@@ -161,6 +189,8 @@ export class SyphonBridge {
         });
 
         child.on('error', (err) => {
+            // Ignore a late event from a child we've already replaced or detached.
+            if (this.child !== child) return;
             console.error(
                 `[syphon-bridge] failed to launch (${bin}):`,
                 err.message,
@@ -170,11 +200,20 @@ export class SyphonBridge {
         });
 
         child.on('exit', (code, signal) => {
+            // Ignore a late exit from a child we've already replaced or detached;
+            // keeps the single-live-child invariant explicit.
+            if (this.child !== child) return;
             this.child = null;
             console.log(
                 `[syphon-bridge] exited code=${code ?? '-'} signal=${signal ?? '-'}`,
             );
             if (this.intentionalStop) {
+                this.setStatus('stopped');
+                return;
+            }
+            // Clean self-exit (code 0): the helper tore itself down on its own —
+            // e.g. the captured window closed. Not a crash, so don't restart.
+            if (code === 0) {
                 this.setStatus('stopped');
                 return;
             }
@@ -185,8 +224,21 @@ export class SyphonBridge {
                 this.setStatus('permission_required');
                 return;
             }
-            // Otherwise treat as a crash and restart while the feature is on.
+            // Otherwise treat it as a crash and restart while the feature is on,
+            // but only within the rolling restart budget so a helper that can
+            // never start — or that flaps — doesn't loop forever.
             this.setStatus('error');
+            const now = Date.now();
+            this.restartTimes = this.restartTimes.filter(
+                (t) => now - t < RESTART_WINDOW_MS,
+            );
+            if (this.restartTimes.length >= MAX_RESTARTS_PER_WINDOW) {
+                console.error(
+                    `[syphon-bridge] giving up after ${this.restartTimes.length} restarts within ${RESTART_WINDOW_MS / 1000}s`,
+                );
+                return;
+            }
+            this.restartTimes.push(now);
             this.restartTimer = setTimeout(() => {
                 this.restartTimer = null;
                 if (this.intentionalStop) return;
