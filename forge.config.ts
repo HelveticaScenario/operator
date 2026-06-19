@@ -11,6 +11,7 @@ import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 // if (process.env.APPLE_ID && process.env.APPLE_PASSWORD && process.env.APPLE_TEAM_ID) {
 
@@ -60,7 +61,12 @@ const config: ForgeConfig = {
     hooks: {
         // Copy @modular/core workspace package to node_modules before packaging
         // This is needed because yarn workspaces use symlinks which don't survive packaging
-        packageAfterCopy: async (_config, buildPath) => {
+        packageAfterCopy: async (
+            _config,
+            buildPath,
+            _electronVersion,
+            platform,
+        ) => {
             const sourceDir = path.join(__dirname, 'crates', 'modular');
             const targetDir = path.join(
                 buildPath,
@@ -112,6 +118,52 @@ const config: ForgeConfig = {
                     fs.copyFileSync(
                         pdbSrc,
                         path.join(targetDir, `${nodeFile}.pdb`),
+                    );
+                }
+            }
+
+            // macOS: stage the headless Syphon companion into the app bundle.
+            // buildPath is Contents/Resources/app, so Contents is two levels up.
+            // @electron/osx-sign runs after this hook and signs the helper +
+            // Syphon.framework (inside-out, hardened runtime, our Developer ID),
+            // so library validation passes without extra entitlements.
+            if (platform === 'darwin') {
+                const bridgeDist = path.join(
+                    __dirname,
+                    'native',
+                    'syphon-bridge',
+                    'dist',
+                );
+                const helperSrc = path.join(
+                    bridgeDist,
+                    'MacOS',
+                    'operator-syphon',
+                );
+                const frameworkSrc = path.join(
+                    bridgeDist,
+                    'Frameworks',
+                    'Syphon.framework',
+                );
+                if (fs.existsSync(helperSrc) && fs.existsSync(frameworkSrc)) {
+                    const contents = path.resolve(buildPath, '..', '..');
+                    const frameworksDir = path.join(contents, 'Frameworks');
+                    fs.mkdirSync(frameworksDir, { recursive: true });
+                    // ditto preserves the executable bit, symlinks, and the
+                    // framework's Versions structure.
+                    execFileSync('ditto', [
+                        helperSrc,
+                        path.join(contents, 'MacOS', 'operator-syphon'),
+                    ]);
+                    execFileSync('ditto', [
+                        frameworkSrc,
+                        path.join(frameworksDir, 'Syphon.framework'),
+                    ]);
+                    console.log(
+                        '[forge] staged Syphon companion (operator-syphon + Syphon.framework)',
+                    );
+                } else {
+                    console.warn(
+                        '[forge] native/syphon-bridge/dist not found — run `yarn build-syphon-bridge` before packaging. Skipping Syphon helper.',
                     );
                 }
             }

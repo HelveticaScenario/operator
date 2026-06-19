@@ -24,6 +24,7 @@ import type {
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { isBufferSwitch } from './bufferSwitch';
+import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
@@ -47,6 +48,52 @@ declare const MAIN_WINDOW_VITE_NAME: string;
 
 // Declare mainWindow early so log forwarding can reference it
 let mainWindow: BrowserWindow | null = null;
+
+// Headless ScreenCaptureKit -> Syphon companion (macOS only); created on ready.
+let syphonBridge: SyphonBridge | null = null;
+const SYPHON_MENU_ITEM_ID = 'syphon-toggle';
+
+/** Reflect the bridge's active state in the View-menu checkbox. */
+function syncSyphonMenuItem(): void {
+    const item =
+        Menu.getApplicationMenu()?.getMenuItemById(SYPHON_MENU_ITEM_ID);
+    if (item) item.checked = syphonBridge?.isActive ?? false;
+}
+
+/** Construct the Syphon bridge (macOS only) and route status changes to the UI. */
+function setupSyphonBridge(): void {
+    if (!SyphonBridge.supported) return;
+    syphonBridge = new SyphonBridge({
+        onStatusChange: (status: SyphonStatus) => {
+            syncSyphonMenuItem();
+            if (status === 'permission_required') {
+                promptScreenRecordingPermission();
+            }
+        },
+    });
+}
+
+function promptScreenRecordingPermission(): void {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    void dialog
+        .showMessageBox(mainWindow, {
+            buttons: ['Open System Settings', 'Not Now'],
+            defaultId: 0,
+            detail:
+                'To publish the Operator window to Syphon, allow Operator under ' +
+                'Privacy & Security → Screen & System Audio Recording, then enable ' +
+                '“Publish Window to Syphon” again.',
+            message: 'Screen Recording permission needed',
+            type: 'info',
+        })
+        .then((res) => {
+            if (res.response === 0) {
+                void shell.openExternal(
+                    'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+                );
+            }
+        });
+}
 
 // ========================================================================
 // Main Process Log Forwarding
@@ -1888,6 +1935,35 @@ const createMenu = (): void => {
                     },
                     label: 'Module Profile...',
                 },
+                // Publish the window as a Syphon source (macOS only).
+                ...(isMac
+                    ? ([
+                          { type: 'separator' },
+                          {
+                              checked: false,
+                              click: () => {
+                                  if (!mainWindow || mainWindow.isDestroyed()) {
+                                      return;
+                                  }
+                                  const result =
+                                      syphonBridge?.toggle(mainWindow);
+                                  syncSyphonMenuItem();
+                                  if (result && !result.ok && result.reason) {
+                                      void dialog.showMessageBox(mainWindow, {
+                                          buttons: ['OK'],
+                                          detail: result.reason,
+                                          message:
+                                              'Could not start Syphon output',
+                                          type: 'warning',
+                                      });
+                                  }
+                              },
+                              id: SYPHON_MENU_ITEM_ID,
+                              label: 'Publish Window to Syphon',
+                              type: 'checkbox',
+                          },
+                      ] as Electron.MenuItemConstructorOptions[])
+                    : []),
             ],
         },
         // Run menu
@@ -2008,6 +2084,7 @@ app.on('ready', () => {
 
     createWindow();
     createMenu();
+    setupSyphonBridge();
 
     if (app.isPackaged) {
         initAutoUpdater();
@@ -2028,6 +2105,7 @@ app.on('ready', () => {
 
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    syphonBridge?.dispose();
 });
 
 // Quit when all windows are closed (on all platforms, including macOS)
