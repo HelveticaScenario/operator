@@ -8,6 +8,7 @@ crates/modular/wasi-worker.mjs
 crates/modular/.yarnrc.yml
 crates/modular/schemas.json
 crates/modular/index.d.ts
+**/*.dSYM/**/*
 crates/mi-plaits-dsp-rs
 crates/rust-music-theory
 node_modules
