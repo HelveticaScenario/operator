@@ -41,13 +41,18 @@ func parseArgs() -> Args? {
 /// `@MainActor` by default under Swift 6, so closures authored there would be
 /// main-actor-isolated and trap when invoked on the capture or watchdog queues.
 /// Defining them here keeps them non-isolated.
-final class BridgeRunner {
+///
+/// `@unchecked Sendable`: mutable state (signalSources/watchdog/isShuttingDown) is
+/// only touched during run()/shutDown() on the main queue, so the lifecycle
+/// callbacks can capture `self` without data races.
+final class BridgeRunner: @unchecked Sendable {
     private let capture: WindowCapture
     private let publisher: SyphonPublisher
     private let windowID: CGWindowID
     private let fps: Int32
     private var signalSources: [DispatchSourceSignal] = []
     private var watchdog: DispatchSourceTimer?
+    private var isShuttingDown = false
 
     init(
         device: MTLDevice, publisher: SyphonPublisher, windowID: CGWindowID,
@@ -63,11 +68,10 @@ final class BridgeRunner {
         capture.onTexture = { [publisher] texture, hold in
             publisher.publish(texture: texture, hold: hold)
         }
-        capture.onStop = { [publisher] reason in
+        capture.onStop = { [weak self] reason in
             log("capture stopped: \(reason)")
             emitStatus("stopped")
-            publisher.stop()
-            exit(0)
+            self?.shutDown()
         }
 
         installSignalHandlers()
@@ -89,19 +93,35 @@ final class BridgeRunner {
         }
     }
 
-    // Operator signals us on quit / toggle-off. Handlers run on the main queue,
-    // which the run loop drains.
+    /// Idempotent graceful teardown: end the SCStream and retire the Syphon
+    /// server (so clients see the source leave), then exit. A hard 1s backstop
+    /// guarantees the process exits even if the async stop stalls. All callers
+    /// dispatch on the main queue, so the `isShuttingDown` guard needs no lock.
+    private func shutDown() {
+        if isShuttingDown { return }
+        isShuttingDown = true
+        watchdog?.cancel()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { exit(0) }
+
+        let capture = self.capture
+        let publisher = self.publisher
+        Task {
+            await capture.stop()  // ends the SCStream session
+            publisher.stop()  // retires the Syphon server
+            exit(0)
+        }
+    }
+
+    // Operator signals us on quit (SIGTERM) / toggle-off. Handlers run on the
+    // main queue, which the run loop drains.
     private func installSignalHandlers() {
         for sig in [SIGTERM, SIGINT] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler { [capture, publisher] in
+            source.setEventHandler { [weak self] in
                 log("received signal \(sig); shutting down")
-                Task {
-                    await capture.stop()
-                    publisher.stop()
-                    exit(0)
-                }
+                self?.shutDown()
             }
             source.resume()
             signalSources.append(source)
@@ -109,14 +129,15 @@ final class BridgeRunner {
     }
 
     // On macOS an orphaned child is reparented to launchd (pid 1) with no signal,
-    // so poll getppid() and exit if Operator is gone.
+    // so poll getppid() and tear down if Operator is gone. On the main queue so it
+    // serializes with the signal handlers over `isShuttingDown`.
     private func installParentWatchdog() {
-        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 2, repeating: 2)
-        timer.setEventHandler {
+        timer.setEventHandler { [weak self] in
             if getppid() == 1 {
                 log("parent process exited; shutting down")
-                exit(0)
+                self?.shutDown()
             }
         }
         timer.resume()

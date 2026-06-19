@@ -129,11 +129,15 @@ export class SyphonBridge {
         return this.start(window);
     }
 
-    /** Kill the helper immediately (on app quit). */
+    /**
+     * Stop the helper on app quit. SIGTERM (not SIGKILL) so it gracefully ends
+     * the SCStream and retires the Syphon server before exiting; the helper's own
+     * 1s backstop + getppid watchdog guarantee it terminates even if we don't wait.
+     */
     dispose(): void {
         this.intentionalStop = true;
         if (this.restartTimer) clearTimeout(this.restartTimer);
-        this.child?.kill('SIGKILL');
+        this.child?.kill('SIGTERM');
         this.child = null;
     }
 
