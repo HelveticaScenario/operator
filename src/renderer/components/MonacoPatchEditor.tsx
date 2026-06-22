@@ -23,6 +23,7 @@ import {
 } from './monaco/scopeViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
 import {
     bindEditorContextConstants,
     bindEditorFocus,
@@ -389,6 +390,16 @@ export function MonacoPatchEditor({
             electronAPI.midi.listInputs(),
         );
         return () => midiProvider.dispose();
+    }, [monaco]);
+
+    // Autocomplete command ids and `when` context keys in the keybindings.json
+    // buffer (provider scopes itself to that model).
+    useEffect(() => {
+        if (!monaco) {
+            return;
+        }
+        const provider = registerKeybindingsCompletionProvider(monaco);
+        return () => provider.dispose();
     }, [monaco]);
 
     // Define Monaco theme from the current app theme

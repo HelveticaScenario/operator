@@ -66,11 +66,19 @@ export function bindEditorContextConstants(): Teardown {
     contextKeys.setMany({
         editorReadonly: false,
         editorHasDefinitionProvider: true,
+        // Operator registers no reference / document-symbol providers yet, so
+        // these are published as false (defined but unsatisfied): menu items
+        // and `when` clauses gated on them stay disabled, and flipping to true
+        // here is all that's needed once such providers are added.
+        editorHasReferenceProvider: false,
+        editorHasDocumentSymbolProvider: false,
         editorLangId: 'javascript',
     });
     return () => {
         contextKeys.unset('editorReadonly');
         contextKeys.unset('editorHasDefinitionProvider');
+        contextKeys.unset('editorHasReferenceProvider');
+        contextKeys.unset('editorHasDocumentSymbolProvider');
         contextKeys.unset('editorLangId');
     };
 }
