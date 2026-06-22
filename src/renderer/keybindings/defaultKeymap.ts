@@ -28,6 +28,8 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: '$mod+s', command: 'operator.save' },
     { key: '$mod+w', command: 'operator.closeBuffer' },
     { key: '$mod+,', command: 'operator.openSettings' },
+    { key: 'F1', command: 'operator.showCommandPalette' },
+    { key: '$mod+Shift+p', command: 'operator.showCommandPalette' },
 ];
 
 /**
