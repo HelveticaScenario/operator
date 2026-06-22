@@ -25,6 +25,7 @@ import type { editor } from 'monaco-editor';
 import type { ContextMenuItemDescriptor } from '../../shared/ipcTypes';
 import { listCommands } from './commands';
 import { evaluateWhen } from './contextKey';
+import { getCommandAccelerator } from './keymap';
 
 interface ActionSpec {
     id: string;
@@ -142,11 +143,13 @@ function actionDescriptor(
         : spec.requires
           ? evaluateWhen(spec.requires)
           : true;
+    const accelerator = getCommandAccelerator(spec.id);
     return {
         kind: 'command',
         commandId: spec.id,
         label: action?.label?.trim() || spec.label,
         enabled,
+        ...(accelerator ? { accelerator } : {}),
     };
 }
 
@@ -165,6 +168,7 @@ export function buildEditorMenuItems(
         if (!placement || !evaluateWhen(metadata?.when)) {
             continue;
         }
+        const accelerator = getCommandAccelerator(id);
         placed.push({
             group: placement.group,
             order: placement.order,
@@ -173,6 +177,7 @@ export function buildEditorMenuItems(
                 commandId: id,
                 label: metadata?.label ?? id,
                 enabled: true,
+                ...(accelerator ? { accelerator } : {}),
             },
         });
     }

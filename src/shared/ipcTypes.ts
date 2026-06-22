@@ -249,7 +249,14 @@ export interface FileContextMenuOptions {
  *    they work even though Monaco does not expose clipboard via `getAction`.
  */
 export type ContextMenuItemDescriptor =
-    | { kind: 'command'; commandId: string; label: string; enabled: boolean }
+    | {
+          kind: 'command';
+          commandId: string;
+          label: string;
+          enabled: boolean;
+          /** Electron accelerator to display (not registered); e.g. `Shift+F12`. */
+          accelerator?: string;
+      }
     | { kind: 'role'; role: 'cut' | 'copy' | 'paste' }
     | {
           kind: 'submenu';
@@ -354,6 +361,7 @@ export const IPC_CHANNELS = {
     // UI operations
     SHOW_CONTEXT_MENU: 'ui:show-context-menu',
     ON_CONTEXT_MENU_COMMAND: 'ui:on-context-menu-command',
+    MENU_SET_ACCELERATORS: 'ui:menu-set-accelerators',
     SHOW_UNSAVED_CHANGES_DIALOG: 'ui:show-unsaved-changes-dialog',
 
     // Window operations
@@ -525,6 +533,9 @@ export interface IPCHandlers {
     // UI operations
     [IPC_CHANNELS.SHOW_CONTEXT_MENU]: (options: ContextMenuOptions) => void;
     [IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND]: (action: ContextMenuAction) => void;
+    [IPC_CHANNELS.MENU_SET_ACCELERATORS]: (
+        accelerators: Record<string, string>,
+    ) => void;
     [IPC_CHANNELS.SHOW_UNSAVED_CHANGES_DIALOG]: (
         fileName: string,
     ) => Promise<number>;

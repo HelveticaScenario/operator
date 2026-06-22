@@ -24,6 +24,7 @@ import {
     toTinykeys,
     type Platform,
 } from './vscodeKeys';
+import { toElectronAccelerator } from '../../shared/keybindings/accelerator';
 
 export type ResolvedKeybinding = {
     key: string;
@@ -189,10 +190,41 @@ export function installKeymap(
     entries: readonly ResolvedKeybinding[],
     target: Window | HTMLElement = window,
 ): InstallKeymapResult {
+    commandAccelerators = buildAcceleratorMap(entries);
     const groups = groupByKey(entries);
     const map = buildBindingMap(groups);
     const dispose = tinykeys(target, map);
     return { entries: [...entries], dispose };
+}
+
+// Command id -> Electron accelerator for the bound key, rebuilt on each
+// install. The single source of truth for the shortcut shown next to a
+// command in both the editor context menu and the application menu.
+let commandAccelerators: Record<string, string> = {};
+
+function buildAcceleratorMap(
+    entries: readonly ResolvedKeybinding[],
+): Record<string, string> {
+    const map: Record<string, string> = {};
+    for (const entry of entries) {
+        const accel = toElectronAccelerator(entry.key);
+        // Last formattable binding for a command wins (user overrides come
+        // after defaults); chord sequences format to null and are skipped.
+        if (accel) {
+            map[entry.command] = accel;
+        }
+    }
+    return map;
+}
+
+/** Electron accelerator for a command's current binding, if any. */
+export function getCommandAccelerator(commandId: string): string | undefined {
+    return commandAccelerators[commandId];
+}
+
+/** Snapshot of every command's accelerator (for the application menu). */
+export function getCommandAccelerators(): Record<string, string> {
+    return { ...commandAccelerators };
 }
 
 /**
@@ -205,7 +237,18 @@ export async function loadAndInstallKeymap(
 ): Promise<InstallKeymapResult> {
     const overrides = await loadUserOverrides();
     const entries = mergeKeymap(DEFAULT_KEYMAP, overrides, detectPlatform());
-    return installKeymap(entries, target);
+    const result = installKeymap(entries, target);
+    // Push resolved accelerators to the main process so the application (top
+    // bar) menu shows the same shortcuts as the editor context menu.
+    const api = (
+        window as unknown as {
+            electronAPI?: {
+                menu?: { setAccelerators?: (m: Record<string, string>) => void };
+            };
+        }
+    ).electronAPI;
+    api?.menu?.setAccelerators?.(commandAccelerators);
+    return result;
 }
 
 async function loadUserOverrides(): Promise<KeybindingOverride[]> {

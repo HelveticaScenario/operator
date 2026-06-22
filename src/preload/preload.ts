@@ -241,6 +241,12 @@ export interface ElectronAPI {
         ensureFile: () => Promise<string>;
     };
 
+    // Application (top bar) menu integration
+    menu: {
+        /** Push command -> accelerator so the app menu shows live shortcuts. */
+        setAccelerators: (accelerators: Record<string, string>) => void;
+    };
+
     // Wavs folder change notification
     onWavsChange: (callback: () => void) => () => void;
 
@@ -488,6 +494,13 @@ const electronAPI: ElectronAPI = {
         writeUser: (overrides) =>
             invokeIPC('KEYBINDINGS_WRITE_USER', overrides),
         ensureFile: () => invokeIPC('KEYBINDINGS_ENSURE_FILE'),
+    },
+
+    // Application (top bar) menu integration
+    menu: {
+        setAccelerators: (accelerators) => {
+            void invokeIPC('MENU_SET_ACCELERATORS', accelerators);
+        },
     },
 
     // Main process log forwarding

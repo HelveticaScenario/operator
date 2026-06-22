@@ -30,6 +30,19 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: '$mod+,', command: 'operator.openSettings' },
     { key: 'F1', command: 'operator.showCommandPalette' },
     { key: '$mod+Shift+p', command: 'operator.showCommandPalette' },
+
+    // Monaco's built-in editor commands. These mirror Monaco's own default
+    // keybindings so the editor context menu can display the shortcut. Monaco
+    // handles the key natively while the editor is focused (it stops event
+    // propagation, so this binding is shadowed there, not double-dispatched);
+    // the entry exists for display and as a fallback dispatch path.
+    { key: 'F12', command: 'editor.action.revealDefinition' },
+    { key: '$mod+Shift+o', command: 'editor.action.quickOutline' },
+    { key: 'Shift+F12', command: 'editor.action.goToReferences' },
+    { key: 'Alt+F12', command: 'editor.action.peekDefinition' },
+    { key: 'F2', command: 'editor.action.rename' },
+    { key: '$mod+F2', command: 'editor.action.changeAll' },
+    { key: 'Shift+Alt+f', command: 'editor.action.formatDocument' },
 ];
 
 /**

@@ -1319,6 +1319,10 @@ registerIPCHandler('SHOW_CONTEXT_MENU', (options: ContextMenuOptions) => {
                         new MenuItem({
                             label: item.label,
                             enabled: item.enabled,
+                            // Display-only: dispatch is handled in the renderer
+                            // (tinykeys / Monaco), so do not register a global.
+                            accelerator: item.accelerator,
+                            registerAccelerator: false,
                             click: () =>
                                 webContents.send(
                                     IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND,
@@ -1945,6 +1949,26 @@ const createWindow = (): void => {
     startConfigWatcher();
 };
 
+// Command id -> Electron accelerator, pushed from the renderer's resolved
+// keymap so the application menu shows the same shortcuts as the editor
+// context menu (and reflects user keybindings.json overrides).
+let menuAccelerators: Record<string, string> = {};
+let menuAcceleratorsReceived = false;
+
+/**
+ * Accelerator for a command. Until the renderer pushes the resolved keymap,
+ * fall back to the built-in default so the menu isn't blank at startup.
+ * Once pushed, the map is authoritative: a command it omits (a binding the
+ * user removed) gets no accelerator, so removals take effect and the
+ * application menu stays in sync with the editor context menu.
+ */
+function menuAccelerator(
+    commandId: string,
+    fallback: string,
+): string | undefined {
+    return menuAcceleratorsReceived ? menuAccelerators[commandId] : fallback;
+}
+
 /**
  * Create the application menu
  */
@@ -1968,7 +1992,10 @@ const createMenu = (): void => {
                           },
                           { type: 'separator' },
                           {
-                              accelerator: 'Cmd+,',
+                              accelerator: menuAccelerator(
+                                  'operator.openSettings',
+                                  'Cmd+,',
+                              ),
                               click: () => {
                                   if (mainWindow && !mainWindow.isDestroyed()) {
                                       mainWindow.webContents.send(
@@ -1995,7 +2022,10 @@ const createMenu = (): void => {
             label: 'File',
             submenu: [
                 {
-                    accelerator: 'CmdOrCtrl+N',
+                    accelerator: menuAccelerator(
+                        'operator.newFile',
+                        'CmdOrCtrl+N',
+                    ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2006,7 +2036,10 @@ const createMenu = (): void => {
                     label: 'New File',
                 },
                 {
-                    accelerator: 'CmdOrCtrl+O',
+                    accelerator: menuAccelerator(
+                        'operator.openWorkspace',
+                        'CmdOrCtrl+O',
+                    ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2018,7 +2051,7 @@ const createMenu = (): void => {
                 },
                 { type: 'separator' },
                 {
-                    accelerator: 'CmdOrCtrl+S',
+                    accelerator: menuAccelerator('operator.save', 'CmdOrCtrl+S'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2029,7 +2062,10 @@ const createMenu = (): void => {
                     label: 'Save',
                 },
                 {
-                    accelerator: 'CmdOrCtrl+W',
+                    accelerator: menuAccelerator(
+                        'operator.closeBuffer',
+                        'CmdOrCtrl+W',
+                    ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2044,7 +2080,10 @@ const createMenu = (): void => {
                     ? []
                     : ([
                           {
-                              accelerator: 'Ctrl+,',
+                              accelerator: menuAccelerator(
+                                  'operator.openSettings',
+                                  'Ctrl+,',
+                              ),
                               click: () => {
                                   if (mainWindow && !mainWindow.isDestroyed()) {
                                       mainWindow.webContents.send(
@@ -2122,7 +2161,10 @@ const createMenu = (): void => {
             label: 'Run',
             submenu: [
                 {
-                    accelerator: 'Ctrl+Enter',
+                    accelerator: menuAccelerator(
+                        'operator.updatePatch',
+                        'CmdOrCtrl+Enter',
+                    ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2133,7 +2175,10 @@ const createMenu = (): void => {
                     label: 'Update Patch',
                 },
                 {
-                    accelerator: 'Ctrl+Shift+Enter',
+                    accelerator: menuAccelerator(
+                        'operator.updatePatchNextBeat',
+                        'CmdOrCtrl+Shift+Enter',
+                    ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2146,7 +2191,7 @@ const createMenu = (): void => {
                     label: 'Update Patch (Next Beat)',
                 },
                 {
-                    accelerator: 'Ctrl+.',
+                    accelerator: menuAccelerator('operator.stop', 'CmdOrCtrl+.'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2207,6 +2252,15 @@ const createMenu = (): void => {
     const menu = Menu.buildFromTemplate(template);
     Menu.setApplicationMenu(menu);
 };
+
+// The renderer pushes resolved accelerators once the keymap loads (and on
+// every change); rebuild the application menu so its shortcuts stay in sync
+// with the editor context menu and the user's keybindings.json.
+registerIPCHandler('MENU_SET_ACCELERATORS', (accelerators) => {
+    menuAccelerators = accelerators ?? {};
+    menuAcceleratorsReceived = true;
+    createMenu();
+});
 
 // This method will be called when Electron has finished
 // Initialization and is ready to create browser windows.
