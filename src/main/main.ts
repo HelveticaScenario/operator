@@ -12,6 +12,7 @@ import {
 import type { PatchGraph, AudioConfigOptions } from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
+import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import type {
     IPCHandlers,
     FileTreeEntry,
@@ -1713,74 +1714,6 @@ const KEYBINDINGS_TEMPLATE = `// Operator keybindings — VS Code keybindings.js
 ]
 `;
 
-/**
- * Strip JSONC line/block comments outside string literals, then drop trailing
- * commas, so the VS Code keybindings file parses with `JSON.parse`. Both
- * passes are string-aware (JSON strings are double-quoted only).
- */
-function parseJsonc(text: string): unknown {
-    let stripped = '';
-    let inString = false;
-    for (let i = 0; i < text.length; i++) {
-        const c = text[i];
-        if (inString) {
-            stripped += c;
-            if (c === '\\') {
-                stripped += text[i + 1] ?? '';
-                i++;
-            } else if (c === '"') {
-                inString = false;
-            }
-            continue;
-        }
-        if (c === '"') {
-            inString = true;
-            stripped += c;
-        } else if (c === '/' && text[i + 1] === '/') {
-            i += 2;
-            while (i < text.length && text[i] !== '\n') i++;
-        } else if (c === '/' && text[i + 1] === '*') {
-            i += 2;
-            while (i < text.length && !(text[i] === '*' && text[i + 1] === '/'))
-                i++;
-            i++;
-        } else {
-            stripped += c;
-        }
-    }
-
-    let result = '';
-    inString = false;
-    for (let i = 0; i < stripped.length; i++) {
-        const c = stripped[i];
-        if (inString) {
-            result += c;
-            if (c === '\\') {
-                result += stripped[i + 1] ?? '';
-                i++;
-            } else if (c === '"') {
-                inString = false;
-            }
-            continue;
-        }
-        if (c === '"') {
-            inString = true;
-            result += c;
-        } else if (c === ',') {
-            let j = i + 1;
-            while (j < stripped.length && /\s/.test(stripped[j])) j++;
-            if (stripped[j] === '}' || stripped[j] === ']') {
-                continue; // drop trailing comma
-            }
-            result += c;
-        } else {
-            result += c;
-        }
-    }
-
-    return JSON.parse(result);
-}
-
 function loadUserKeybindings(): KeybindingOverride[] {
     try {
         if (!fs.existsSync(KEYBINDINGS_FILE)) {
@@ -1790,12 +1723,17 @@ function loadUserKeybindings(): KeybindingOverride[] {
         if (raw.length === 0) {
             return [];
         }
-        let parsed: unknown;
-        try {
-            parsed = parseJsonc(raw);
-        } catch (error) {
-            console.error('Error parsing keybindings.json:', error);
-            return [];
+        // VS Code's keybindings.json is JSONC (comments + trailing commas);
+        // jsonc-parser tolerates both and recovers from minor syntax errors.
+        const errors: ParseError[] = [];
+        const parsed: unknown = parseJsonc(raw, errors, {
+            allowTrailingComma: true,
+        });
+        if (errors.length > 0) {
+            console.error(
+                'keybindings.json has JSON syntax errors:',
+                errors,
+            );
         }
         if (!Array.isArray(parsed)) {
             console.error('keybindings.json must be a JSON array; ignoring.');
