@@ -31,7 +31,6 @@ import {
 } from '../keybindings/contextKeyBootstrap';
 import electronAPI from '../electronAPI';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
-import { executeCommand } from '../keybindings/commands';
 import { buildEditorMenuItems } from '../keybindings/editorMenuItems';
 import { dispatchCommand, setActiveEditor } from '../keybindings/dispatch';
 
@@ -222,60 +221,14 @@ export function MonacoPatchEditor({
         };
     }, [editor]);
 
-    const handleMount: OnMount = (ed, _monacoInstance) => {
+    const handleMount: OnMount = (ed) => {
         setEditor(ed);
         editorRef.current = ed;
-
-        // On Windows/Linux, use Ctrl; on macOS, use WinCtrl (physical Ctrl)
-        // This ensures all shortcuts use the Control key on all platforms.
-        const ctrl =
-            electronAPI.platform === 'darwin'
-                ? _monacoInstance.KeyMod.WinCtrl
-                : _monacoInstance.KeyMod.CtrlCmd;
-
-        // On Windows, Monaco swallows global accelerators, so we need to
-        // Register them as Monaco keybindings that trigger the Electron menu actions.
-        // Ctrl+Enter -> Update Patch (next bar; if already queued, Rust discards old + applies new immediately)
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.Enter, () => {
-            window.electronAPI.triggerMenuAction('UPDATE_PATCH');
-        });
-
-        // Ctrl+Shift+Enter -> Update Patch (next beat)
-        ed.addCommand(
-            ctrl | _monacoInstance.KeyMod.Shift | _monacoInstance.KeyCode.Enter,
-            () => {
-                window.electronAPI.triggerMenuAction('UPDATE_PATCH_NEXT_BEAT');
-            },
-        );
-
-        // Ctrl+. -> Stop Sound
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.Period, () => {
-            window.electronAPI.triggerMenuAction('STOP');
-        });
-
-        // Ctrl+N -> New File
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.KeyN, () => {
-            window.electronAPI.triggerMenuAction('NEW_FILE');
-        });
-
-        // Ctrl+W -> Close Buffer
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.KeyW, () => {
-            window.electronAPI.triggerMenuAction('CLOSE_BUFFER');
-        });
-
-        // Override Monaco's built-in palette (F1, Ctrl+Shift+P) so both chords
-        // open the Operator workbench palette instead of `editor.action.quickCommand`.
-        // Outside the editor the same chord is caught by the window-level
-        // keymap (Phase 2.3). Single palette, one keybinding, no conflict.
-        ed.addCommand(_monacoInstance.KeyCode.F1, () => {
-            executeCommand('operator.showCommandPalette');
-        });
-        ed.addCommand(
-            ctrl | _monacoInstance.KeyMod.Shift | _monacoInstance.KeyCode.KeyP,
-            () => {
-                executeCommand('operator.showCommandPalette');
-            },
-        );
+        // No editor-level keybindings are registered here: the capture-phase
+        // window keymap (keybindings/keymap) owns every shortcut and runs
+        // before Monaco, so it is the single source of truth. Hardcoding
+        // editor bindings here (previously Ctrl+Enter etc.) would shadow the
+        // keymap and could not be rebound or removed via keybindings.json.
     };
 
     useEffect(() => {
