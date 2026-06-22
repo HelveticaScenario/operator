@@ -336,6 +336,9 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$delayRead" => {
             json!({ "buffer": { "type": "buffer_ref", "module": "test-module", "port": "buffer", "channels": 1 }, "time": 0.1 })
         }
+        "$grains" => {
+            json!({ "pitch": 0.0, "wav": { "type": "wav_ref", "path": "test", "channels": 1 }, "gate": 0.0 })
+        }
         "$sampler" => {
             json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 }, "gate": 0.0 })
         }

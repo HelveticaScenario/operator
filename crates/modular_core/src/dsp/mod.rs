@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use crate::params::ParamsDeserializer;
 use crate::types::{ModuleSchema, SampleableConstructor};
 
+pub mod chaos;
 pub mod consts;
 pub mod core;
 pub mod dynamics;
@@ -19,6 +20,7 @@ pub mod utils;
 
 pub fn get_constructors() -> HashMap<String, SampleableConstructor> {
     let mut map = HashMap::new();
+    chaos::install_constructors(&mut map);
     core::install_constructors(&mut map);
     dynamics::install_constructors(&mut map);
     fx::install_constructors(&mut map);
@@ -38,6 +40,7 @@ pub fn get_constructors() -> HashMap<String, SampleableConstructor> {
 /// and returns a `CachedParams` containing the typed params and derived channel count.
 pub fn get_params_deserializers() -> HashMap<String, ParamsDeserializer> {
     let mut map = HashMap::new();
+    chaos::install_params_deserializers(&mut map);
     core::install_params_deserializers(&mut map);
     dynamics::install_params_deserializers(&mut map);
     fx::install_params_deserializers(&mut map);
@@ -53,6 +56,7 @@ pub fn get_params_deserializers() -> HashMap<String, ParamsDeserializer> {
 
 pub fn schema() -> Vec<ModuleSchema> {
     [
+        chaos::schemas(),
         core::schemas(),
         dynamics::schemas(),
         fx::schemas(),
