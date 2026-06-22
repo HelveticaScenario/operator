@@ -193,7 +193,13 @@ export function installKeymap(
     commandAccelerators = buildAcceleratorMap(entries);
     const groups = groupByKey(entries);
     const map = buildBindingMap(groups);
-    const dispose = tinykeys(target, map);
+    // Capture phase: Monaco's editor keybindings listen on the editor DOM node
+    // in the bubble phase and stopPropagation() the keys they handle, which
+    // would otherwise shadow our window-level bindings (e.g. Cmd+Enter, which
+    // Monaco defaults to "insert line below"). Listening in capture lets an
+    // Operator binding intercept its key before Monaco; keys we don't bind, or
+    // don't handle (when-clause false), fall through untouched.
+    const dispose = tinykeys(target, map, { capture: true });
     return { entries: [...entries], dispose };
 }
 
