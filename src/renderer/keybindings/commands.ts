@@ -5,7 +5,7 @@
  * after VS Code's `CommandsRegistry`. Pure JS: no Monaco / Electron coupling
  * lives in this file.
  *
- * Surfaces that dispatch commands (cmdk palette, Radix context menu,
+ * Surfaces that dispatch commands (cmdk palette, editor context menu,
  * tinykeys keymap, Electron menu IPC, in-editor key bindings) all funnel
  * through `executeCommand` so the body of each operation lives in exactly
  * one place.
@@ -26,9 +26,10 @@ export type CommandMetadata = {
      */
     when?: string;
     /**
-     * Optional placement hint for the editor context menu (Phase 2.1b).
-     * `group` matches Monaco's existing group ids
-     * (`navigation`, `1_modification`, `9_cutcopypaste`, ...).
+     * Optional placement in the editor context menu, consumed by
+     * `editorMenuItems.ts`. Entries sort by `group` (a Monaco-style lexical
+     * id such as `1_patch` or `9_cutcopypaste`) then `order`, with a
+     * separator drawn between groups.
      */
     contextMenu?: { group: string; order: number };
 };

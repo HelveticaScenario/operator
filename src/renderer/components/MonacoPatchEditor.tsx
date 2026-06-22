@@ -29,7 +29,8 @@ import {
 } from '../keybindings/contextKeyBootstrap';
 import electronAPI from '../electronAPI';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
-import { executeCommand } from '../keybindings/commands';
+import { executeCommand, getCommand } from '../keybindings/commands';
+import { buildEditorMenuItems } from '../keybindings/editorMenuItems';
 
 export interface PatchEditorProps {
     value: string;
@@ -166,6 +167,50 @@ export function MonacoPatchEditor({
             scopeZoneHandleRef.current?.repositionZones();
         });
         return () => disposable.dispose();
+    }, [editor]);
+
+    // Native editor context menu (right-click). Monaco's built-in menu is
+    // disabled (it hosts a "Command Palette" entry that bypasses our keymap),
+    // so we pop a native Electron menu built from the command registry and
+    // dispatch the chosen item through the shared command path.
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        const contextSub = editor.onContextMenu((e) => {
+            // Focus on every right-click (editor convention) so the native
+            // clipboard roles act on this editor.
+            editor.focus();
+            const position = e.target.position;
+            const selection = editor.getSelection();
+            // Right-clicking outside the current selection collapses the caret
+            // to the click point so paste lands where the user clicked; an
+            // existing selection is preserved so copy/cut act on it.
+            if (
+                position &&
+                (!selection || !selection.containsPosition(position))
+            ) {
+                editor.setPosition(position);
+            }
+            void electronAPI.showContextMenu({
+                type: 'editor',
+                items: buildEditorMenuItems(),
+            });
+        });
+        const disposeCommandSub = electronAPI.onContextMenuCommand((action) => {
+            if (action.command !== 'editor' || !action.commandId) {
+                return;
+            }
+            // Only registry-command items round-trip; clipboard roles are
+            // handled natively in the main process.
+            if (getCommand(action.commandId)) {
+                void executeCommand(action.commandId);
+            }
+        });
+        return () => {
+            contextSub.dispose();
+            disposeCommandSub();
+        };
     }, [editor]);
 
     const handleMount: OnMount = (ed, _monacoInstance) => {
@@ -388,11 +433,10 @@ export function MonacoPatchEditor({
             folding: false,
             matchBrackets: 'always',
             automaticLayout: true,
-            // Monaco's editor context menu hosts a "Command Palette"
-            // entry that invokes `editor.action.quickCommand`
-            // directly, bypassing our keybinding override. Disable
-            // the built-in menu wholesale; Phase 2.1b replaces it
-            // with a Radix context menu.
+            // Monaco's built-in menu hosts a "Command Palette" entry that
+            // invokes `editor.action.quickCommand` directly, bypassing our
+            // keymap. Disable it; the native right-click menu wired up in the
+            // onContextMenu effect above replaces it.
             contextmenu: false,
             fontFamily: `${font}, monospace`,
             fontLigatures: fontLigatures,

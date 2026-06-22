@@ -1294,6 +1294,30 @@ registerIPCHandler('SHOW_CONTEXT_MENU', (options: ContextMenuOptions) => {
                 label: 'Reveal in Finder/Explorer',
             }),
         );
+    } else if (options.type === 'editor') {
+        for (const item of options.items) {
+            if (item === null) {
+                menu.append(new MenuItem({ type: 'separator' }));
+            } else if (item.kind === 'role') {
+                // Native clipboard: the OS acts on the focused editor directly.
+                menu.append(new MenuItem({ role: item.role }));
+            } else {
+                menu.append(
+                    new MenuItem({
+                        label: item.label,
+                        enabled: item.enabled,
+                        click: () =>
+                            webContents.send(
+                                IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND,
+                                {
+                                    command: 'editor',
+                                    commandId: item.commandId,
+                                },
+                            ),
+                    }),
+                );
+            }
+        }
     }
 
     menu.popup();

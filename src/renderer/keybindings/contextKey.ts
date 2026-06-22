@@ -4,7 +4,7 @@
  * Modeled on vscode's `ContextKeyService` but stripped to a single
  * global, flat key-value store. No DOM-tree scoping, no per-editor
  * contexts. Surfaces that need "is this command available right now?"
- * (cmdk palette, Radix context menu, tinykeys keymap) parse a when-
+ * (cmdk palette, editor context menu, tinykeys keymap) parse a when-
  * clause via `parseWhen` and evaluate it against this service.
  *
  * Bootstrap keys wired in by callers (typed for autocomplete):

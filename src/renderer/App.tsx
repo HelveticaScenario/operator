@@ -931,30 +931,42 @@ function App() {
     }, [createUntitledFile]);
 
     // Register operator.* commands in the global registry. The Electron menu
-    // IPC dispatchers below, the future cmdk palette (2.1a), the Radix context
-    // menu (2.1b), and the tinykeys keymap (2.3) all dispatch through
-    // `executeCommand` — single source of truth for what each command does.
+    // IPC dispatchers below, the cmdk palette, the editor context menu, and
+    // the tinykeys keymap all dispatch through `executeCommand` — single
+    // source of truth for what each command does.
     useEffect(() => {
         registerCommand(
             'operator.updatePatch',
             () => {
                 handleSubmitRef.current('NextBar');
             },
-            { label: 'Update Patch', category: 'Patch' },
+            {
+                label: 'Update Patch',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 1 },
+            },
         );
         registerCommand(
             'operator.updatePatchNextBeat',
             () => {
                 handleSubmitRef.current('NextBeat');
             },
-            { label: 'Update Patch (Next Beat)', category: 'Patch' },
+            {
+                label: 'Update Patch (Next Beat)',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 2 },
+            },
         );
         registerCommand(
             'operator.stop',
             () => {
                 handleStopRef.current();
             },
-            { label: 'Stop', category: 'Patch' },
+            {
+                label: 'Stop',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 3 },
+            },
         );
         registerCommand(
             'operator.newFile',

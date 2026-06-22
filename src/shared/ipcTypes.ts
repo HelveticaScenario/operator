@@ -227,7 +227,7 @@ export interface WorkspaceFolder {
     path: string;
 }
 
-export interface ContextMenuOptions {
+export interface FileContextMenuOptions {
     type: 'file' | 'directory' | 'unknown' | 'untitled';
     path?: string;
     bufferId?: string;
@@ -237,12 +237,38 @@ export interface ContextMenuOptions {
     y?: number;
 }
 
-export type ContextMenuCommand = 'save' | 'rename' | 'delete';
+/**
+ * One row in the editor context menu, built in the renderer and shipped to
+ * the main process, which materializes a native menu.
+ *
+ *  - `command`: an Operator registry command. Clicking echoes `commandId`
+ *    back via ON_CONTEXT_MENU_COMMAND and the renderer runs `executeCommand`.
+ *  - `role`: a native Electron clipboard role. The OS performs cut/copy/paste
+ *    against the focused editor directly — no round-trip — which is also why
+ *    they work even though Monaco does not expose clipboard via `getAction`.
+ */
+export type ContextMenuItemDescriptor =
+    | { kind: 'command'; commandId: string; label: string; enabled: boolean }
+    | { kind: 'role'; role: 'cut' | 'copy' | 'paste' };
+
+export interface EditorContextMenuOptions {
+    type: 'editor';
+    /** Items in display order; a `null` entry renders as a separator. */
+    items: (ContextMenuItemDescriptor | null)[];
+}
+
+export type ContextMenuOptions =
+    | FileContextMenuOptions
+    | EditorContextMenuOptions;
+
+export type ContextMenuCommand = 'save' | 'rename' | 'delete' | 'editor';
 
 export interface ContextMenuAction {
     command: ContextMenuCommand;
     path?: string;
     bufferId?: string;
+    /** Set when `command === 'editor'`: the id to dispatch in the renderer. */
+    commandId?: string;
 }
 
 /**
