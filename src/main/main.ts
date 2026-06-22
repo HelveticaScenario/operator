@@ -16,6 +16,7 @@ import type {
     IPCHandlers,
     FileTreeEntry,
     ContextMenuOptions,
+    EditorContextMenuOptions,
     DSLExecuteResult,
     KeybindingOverride,
     MainLogLevel,
@@ -1295,28 +1296,45 @@ registerIPCHandler('SHOW_CONTEXT_MENU', (options: ContextMenuOptions) => {
             }),
         );
     } else if (options.type === 'editor') {
-        for (const item of options.items) {
-            if (item === null) {
-                menu.append(new MenuItem({ type: 'separator' }));
-            } else if (item.kind === 'role') {
-                // Native clipboard: the OS acts on the focused editor directly.
-                menu.append(new MenuItem({ role: item.role }));
-            } else {
-                menu.append(
-                    new MenuItem({
-                        label: item.label,
-                        enabled: item.enabled,
-                        click: () =>
-                            webContents.send(
-                                IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND,
-                                {
-                                    command: 'editor',
-                                    commandId: item.commandId,
-                                },
-                            ),
-                    }),
-                );
+        // Materialize the renderer-built descriptors, recursing into submenus.
+        const buildEditorItems = (
+            items: EditorContextMenuOptions['items'],
+        ): Menu => {
+            const target = new Menu();
+            for (const item of items) {
+                if (item === null) {
+                    target.append(new MenuItem({ type: 'separator' }));
+                } else if (item.kind === 'role') {
+                    // Native clipboard: the OS acts on the focused editor.
+                    target.append(new MenuItem({ role: item.role }));
+                } else if (item.kind === 'submenu') {
+                    target.append(
+                        new MenuItem({
+                            label: item.label,
+                            submenu: buildEditorItems(item.items),
+                        }),
+                    );
+                } else {
+                    target.append(
+                        new MenuItem({
+                            label: item.label,
+                            enabled: item.enabled,
+                            click: () =>
+                                webContents.send(
+                                    IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND,
+                                    {
+                                        command: 'editor',
+                                        commandId: item.commandId,
+                                    },
+                                ),
+                        }),
+                    );
+                }
             }
+            return target;
+        };
+        for (const child of buildEditorItems(options.items).items) {
+            menu.append(child);
         }
     }
 
@@ -1662,16 +1680,102 @@ registerIPCHandler('CONFIG_WRITE', (partial: Partial<AppConfig>) => {
     saveConfig(merged);
 });
 
-// User keybinding overrides. Schema is intentionally permissive: invalid
-// entries are dropped at load time so a malformed file never breaks the
-// renderer's bootstrap.
+// User keybinding overrides. The file is VS Code-style `keybindings.json`,
+// which is JSONC (comments + trailing commas), so it is tolerated here.
+// `args` is passed through verbatim, so it accepts any JSON value.
 const KeybindingOverrideSchema = z.object({
     key: z.string().min(1),
     command: z.string().nullable(),
     when: z.string().optional(),
-    args: z.array(z.unknown()).optional(),
+    args: z.unknown().optional(),
 });
-const UserKeybindingsSchema = z.array(KeybindingOverrideSchema);
+
+const KEYBINDINGS_TEMPLATE = `// Operator keybindings — VS Code keybindings.json format.
+//
+// "key" uses VS Code syntax: cmd / ctrl / alt / shift, and chords separated
+// by spaces (e.g. "cmd+k cmd+i"). "command" is an Operator command
+// (operator.*) or a Monaco editor command (editor.action.revealDefinition,
+// cursorDown, ...). Prefix a command with "-" to remove a binding. Changes
+// take effect when you save this file.
+[
+    // { "key": "cmd+enter", "command": "operator.updatePatch" },
+    // { "key": "cmd+.", "command": "operator.stop" },
+    // { "key": "cmd+p", "command": "operator.showCommandPalette" },
+    // {
+    //     "key": "f12",
+    //     "command": "editor.action.revealDefinition",
+    //     "when": "editorTextFocus"
+    // }
+]
+`;
+
+/**
+ * Strip JSONC line/block comments outside string literals, then drop trailing
+ * commas, so the VS Code keybindings file parses with `JSON.parse`. Both
+ * passes are string-aware (JSON strings are double-quoted only).
+ */
+function parseJsonc(text: string): unknown {
+    let stripped = '';
+    let inString = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inString) {
+            stripped += c;
+            if (c === '\\') {
+                stripped += text[i + 1] ?? '';
+                i++;
+            } else if (c === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (c === '"') {
+            inString = true;
+            stripped += c;
+        } else if (c === '/' && text[i + 1] === '/') {
+            i += 2;
+            while (i < text.length && text[i] !== '\n') i++;
+        } else if (c === '/' && text[i + 1] === '*') {
+            i += 2;
+            while (i < text.length && !(text[i] === '*' && text[i + 1] === '/'))
+                i++;
+            i++;
+        } else {
+            stripped += c;
+        }
+    }
+
+    let result = '';
+    inString = false;
+    for (let i = 0; i < stripped.length; i++) {
+        const c = stripped[i];
+        if (inString) {
+            result += c;
+            if (c === '\\') {
+                result += stripped[i + 1] ?? '';
+                i++;
+            } else if (c === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (c === '"') {
+            inString = true;
+            result += c;
+        } else if (c === ',') {
+            let j = i + 1;
+            while (j < stripped.length && /\s/.test(stripped[j])) j++;
+            if (stripped[j] === '}' || stripped[j] === ']') {
+                continue; // drop trailing comma
+            }
+            result += c;
+        } else {
+            result += c;
+        }
+    }
+
+    return JSON.parse(result);
+}
 
 function loadUserKeybindings(): KeybindingOverride[] {
     try {
@@ -1682,16 +1786,32 @@ function loadUserKeybindings(): KeybindingOverride[] {
         if (raw.length === 0) {
             return [];
         }
-        const parsed = JSON.parse(raw);
-        const result = UserKeybindingsSchema.safeParse(parsed);
-        if (!result.success) {
-            console.error(
-                'User keybindings validation failed:',
-                result.error.flatten(),
-            );
+        let parsed: unknown;
+        try {
+            parsed = parseJsonc(raw);
+        } catch (error) {
+            console.error('Error parsing keybindings.json:', error);
             return [];
         }
-        return result.data;
+        if (!Array.isArray(parsed)) {
+            console.error('keybindings.json must be a JSON array; ignoring.');
+            return [];
+        }
+        // Validate per entry so one malformed binding does not discard the
+        // rest of the file (matches VS Code's lenient behaviour).
+        const out: KeybindingOverride[] = [];
+        for (const entry of parsed) {
+            const result = KeybindingOverrideSchema.safeParse(entry);
+            if (result.success) {
+                out.push(result.data);
+            } else {
+                console.warn(
+                    '[keybindings] dropping invalid entry:',
+                    result.error.flatten(),
+                );
+            }
+        }
+        return out;
     } catch (error) {
         console.error('Error loading user keybindings:', error);
         return [];
@@ -1700,7 +1820,7 @@ function loadUserKeybindings(): KeybindingOverride[] {
 
 function saveUserKeybindings(overrides: KeybindingOverride[]) {
     try {
-        const validated = UserKeybindingsSchema.parse(overrides);
+        const validated = z.array(KeybindingOverrideSchema).parse(overrides);
         fs.writeFileSync(
             KEYBINDINGS_FILE,
             JSON.stringify(validated, null, 2),
@@ -1712,6 +1832,18 @@ function saveUserKeybindings(overrides: KeybindingOverride[]) {
     }
 }
 
+/** Create the keybindings file with a commented template if it is missing. */
+function ensureKeybindingsFile(): string {
+    try {
+        if (!fs.existsSync(KEYBINDINGS_FILE)) {
+            fs.writeFileSync(KEYBINDINGS_FILE, KEYBINDINGS_TEMPLATE, 'utf-8');
+        }
+    } catch (error) {
+        console.error('Error creating keybindings.json:', error);
+    }
+    return KEYBINDINGS_FILE;
+}
+
 registerIPCHandler('KEYBINDINGS_GET_PATH', () => KEYBINDINGS_FILE);
 registerIPCHandler('KEYBINDINGS_READ_USER', () => loadUserKeybindings());
 registerIPCHandler(
@@ -1720,6 +1852,7 @@ registerIPCHandler(
         saveUserKeybindings(overrides);
     },
 );
+registerIPCHandler('KEYBINDINGS_ENSURE_FILE', () => ensureKeybindingsFile());
 
 // Update operations
 ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, async () => {

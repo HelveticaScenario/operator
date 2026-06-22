@@ -6,6 +6,8 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { KeybindingOverride } from '../../shared/ipcTypes';
 import { registerCommand, unregisterCommand } from './commands';
+import { setActiveEditor } from './dispatch';
+import type { editor } from 'monaco-editor';
 import type { DefaultKeybinding } from './defaultKeymap';
 import {
     installKeymap,
@@ -20,51 +22,81 @@ const SAMPLE_DEFAULTS: DefaultKeybinding[] = [
 ];
 
 describe('mergeKeymap', () => {
-    test('returns defaults verbatim when no overrides are supplied', () => {
-        const merged = mergeKeymap(SAMPLE_DEFAULTS, []);
+    test('canonicalizes default keys ($mod -> platform modifier) on darwin', () => {
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, [], 'darwin');
         expect(merged).toEqual([
-            { key: '$mod+Enter', command: 'operator.updatePatch' },
-            { key: '$mod+.', command: 'operator.stop' },
-            { key: '$mod+s', command: 'operator.save' },
+            { key: 'Meta+Enter', command: 'operator.updatePatch' },
+            { key: 'Meta+.', command: 'operator.stop' },
+            { key: 'Meta+s', command: 'operator.save' },
         ]);
     });
 
-    test('null-command user entry removes matching default (case-insensitive)', () => {
+    test('$mod resolves to Control off darwin', () => {
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, [], 'other');
+        expect(merged.map((e) => e.key)).toEqual([
+            'Control+Enter',
+            'Control+.',
+            'Control+s',
+        ]);
+    });
+
+    test('null-command user entry removes the matching default', () => {
         const overrides: KeybindingOverride[] = [
             { key: '$MOD+enter', command: null },
         ];
-        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides);
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
         expect(merged.map((e) => e.command)).toEqual([
             'operator.stop',
             'operator.save',
         ]);
     });
 
-    test('non-null user entry is appended after defaults', () => {
+    test('a VS Code key collapses onto the same canonical chord as a $mod default', () => {
+        // `cmd+enter` (VS Code) and `$mod+Enter` (default) are one chord on
+        // darwin, so the `-` removal cancels the default.
         const overrides: KeybindingOverride[] = [
-            { key: '$mod+k', command: 'operator.openSettings' },
+            { key: 'cmd+enter', command: '-operator.updatePatch' },
         ];
-        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides);
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
+        expect(merged.some((e) => e.command === 'operator.updatePatch')).toBe(
+            false,
+        );
+    });
+
+    test('non-null user entry is appended after defaults (key translated)', () => {
+        const overrides: KeybindingOverride[] = [
+            { key: 'cmd+k', command: 'operator.openSettings' },
+        ];
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
         expect(merged.at(-1)).toEqual({
-            key: '$mod+k',
+            key: 'Meta+k',
             command: 'operator.openSettings',
         });
         expect(merged).toHaveLength(SAMPLE_DEFAULTS.length + 1);
     });
 
-    test('remove + replace pattern: null entry plus new entry on same key', () => {
+    test('order-sensitive removal: a later -command cancels an earlier bind', () => {
+        const overrides: KeybindingOverride[] = [
+            { key: 'cmd+e', command: 'editor.action.showHover' },
+            { key: 'cmd+e', command: '-editor.action.showHover' },
+        ];
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
+        expect(merged.some((e) => e.key === 'Meta+e')).toBe(false);
+    });
+
+    test('remove + replace pattern leaves only the replacement', () => {
         const overrides: KeybindingOverride[] = [
             { key: '$mod+Enter', command: null },
             { key: '$mod+Enter', command: 'operator.stop' },
         ];
-        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides);
-        const enterEntries = merged.filter((e) => e.key === '$mod+Enter');
+        const merged = mergeKeymap(SAMPLE_DEFAULTS, overrides, 'darwin');
+        const enterEntries = merged.filter((e) => e.key === 'Meta+Enter');
         expect(enterEntries).toEqual([
-            { key: '$mod+Enter', command: 'operator.stop' },
+            { key: 'Meta+Enter', command: 'operator.stop' },
         ]);
     });
 
-    test('preserves when-clauses on both defaults and overrides', () => {
+    test('preserves when-clauses and args on both defaults and overrides', () => {
         const defaults: DefaultKeybinding[] = [
             {
                 key: '$mod+Enter',
@@ -74,22 +106,24 @@ describe('mergeKeymap', () => {
         ];
         const overrides: KeybindingOverride[] = [
             {
-                key: '$mod+p',
-                command: 'operator.showCommandPalette',
-                when: '!inSettingsModal',
+                key: 'alt+shift+i',
+                command: 'editor.action.insertSnippet',
+                args: { snippet: '$CURSOR' },
+                when: 'editorTextFocus',
             },
         ];
-        const merged = mergeKeymap(defaults, overrides);
+        const merged = mergeKeymap(defaults, overrides, 'darwin');
         expect(merged).toEqual([
             {
-                key: '$mod+Enter',
+                key: 'Meta+Enter',
                 command: 'operator.updatePatch',
                 when: 'editorFocused',
             },
             {
-                key: '$mod+p',
-                command: 'operator.showCommandPalette',
-                when: '!inSettingsModal',
+                key: 'Alt+Shift+(KeyI)',
+                command: 'editor.action.insertSnippet',
+                args: { snippet: '$CURSOR' },
+                when: 'editorTextFocus',
             },
         ]);
     });
@@ -112,7 +146,59 @@ describe('installKeymap', () => {
         unregisterCommand(cmdId);
         target.remove();
         setWhenEvaluator(() => true);
+        setActiveEditor(null);
         vi.restoreAllMocks();
+    });
+
+    function fakeEditor(focused: boolean, trigger: () => void) {
+        return {
+            hasTextFocus: () => focused,
+            trigger,
+        } as unknown as editor.ICodeEditor;
+    }
+
+    test('editor command is not dispatched (event not consumed) when the editor lacks focus', () => {
+        const trigger = vi.fn();
+        setActiveEditor(fakeEditor(false, trigger));
+        const { dispose } = installKeymap(
+            [{ key: 'a', command: 'editor.action.fooBar' }],
+            target,
+        );
+
+        const event = new KeyboardEvent('keydown', {
+            key: 'a',
+            bubbles: true,
+            cancelable: true,
+        });
+        target.dispatchEvent(event);
+
+        expect(trigger).not.toHaveBeenCalled();
+        expect(event.defaultPrevented).toBe(false);
+        dispose();
+    });
+
+    test('editor command dispatches to the focused editor and consumes the event', () => {
+        const trigger = vi.fn();
+        setActiveEditor(fakeEditor(true, trigger));
+        const { dispose } = installKeymap(
+            [{ key: 'a', command: 'editor.action.fooBar' }],
+            target,
+        );
+
+        const event = new KeyboardEvent('keydown', {
+            key: 'a',
+            bubbles: true,
+            cancelable: true,
+        });
+        target.dispatchEvent(event);
+
+        expect(trigger).toHaveBeenCalledWith(
+            'operator.keybinding',
+            'editor.action.fooBar',
+            undefined,
+        );
+        expect(event.defaultPrevented).toBe(true);
+        dispose();
     });
 
     test('dispatches the bound command on a matching keydown', () => {
@@ -171,18 +257,22 @@ describe('installKeymap', () => {
         dispose();
     });
 
-    test('warns and skips dispatch when the command id is not registered', () => {
-        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    test('an unknown command with no active editor is a no-op (event not consumed)', () => {
         const { dispose } = installKeymap(
             [{ key: 'a', command: 'no.such.command' }],
             target,
         );
 
-        target.dispatchEvent(
-            new KeyboardEvent('keydown', { key: 'a', bubbles: true }),
-        );
+        const event = new KeyboardEvent('keydown', {
+            key: 'a',
+            bubbles: true,
+            cancelable: true,
+        });
+        target.dispatchEvent(event);
 
-        expect(warn).toHaveBeenCalled();
+        // Nothing dispatched it, so the keymap leaves the event alone for
+        // other listeners rather than preventing its default.
+        expect(event.defaultPrevented).toBe(false);
         dispose();
     });
 });

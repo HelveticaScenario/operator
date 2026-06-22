@@ -89,15 +89,16 @@ export interface PrettierConfig {
 /**
  * One user-keybinding entry persisted in `<userData>/keybindings.json`.
  *
- * `command: null` removes any default binding with the same `key`, mirroring
- * VS Code's `keybindings.json` "remove" syntax. `args` is reserved for
- * commands that accept positional arguments (none today).
+ * Format mirrors VS Code's `keybindings.json`: `key` accepts VS Code chord
+ * syntax (`cmd+k cmd+i`), and a `command` prefixed with `-` (or set to `null`)
+ * removes a matching binding. `args` is passed verbatim to the command — an
+ * object for editor commands (e.g. `{ snippet }`) or omitted.
  */
 export interface KeybindingOverride {
     key: string;
     command: string | null;
     when?: string;
-    args?: unknown[];
+    args?: unknown;
 }
 
 export interface AppConfig {
@@ -249,7 +250,12 @@ export interface FileContextMenuOptions {
  */
 export type ContextMenuItemDescriptor =
     | { kind: 'command'; commandId: string; label: string; enabled: boolean }
-    | { kind: 'role'; role: 'cut' | 'copy' | 'paste' };
+    | { kind: 'role'; role: 'cut' | 'copy' | 'paste' }
+    | {
+          kind: 'submenu';
+          label: string;
+          items: (ContextMenuItemDescriptor | null)[];
+      };
 
 export interface EditorContextMenuOptions {
     type: 'editor';
@@ -364,6 +370,7 @@ export const IPC_CHANNELS = {
     KEYBINDINGS_GET_PATH: 'modular:keybindings:get-path',
     KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
     KEYBINDINGS_WRITE_USER: 'modular:keybindings:write-user',
+    KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
     // Main process logging
     MAIN_LOG: 'modular:main:log',
@@ -541,6 +548,7 @@ export interface IPCHandlers {
     [IPC_CHANNELS.KEYBINDINGS_WRITE_USER]: (
         overrides: KeybindingOverride[],
     ) => void;
+    [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
 
     // Main process logging
     [IPC_CHANNELS.MAIN_LOG]: (entry: MainLogEntry) => void;

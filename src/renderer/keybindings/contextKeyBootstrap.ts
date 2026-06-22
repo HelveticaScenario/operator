@@ -21,19 +21,57 @@ import { contextKeys } from './contextKey';
 
 export type Teardown = () => void;
 
-/** Mirror Monaco focus state into `editorFocused`. */
+// VS Code names several focus context keys that map onto Operator's single
+// editor; keep them in lock-step so VS Code-authored `when` clauses gate
+// correctly. `editorFocused` is Operator's own; the rest are VS Code aliases.
+const EDITOR_FOCUS_KEYS = [
+    'editorFocused',
+    'editorFocus',
+    'editorTextFocus',
+    'textInputFocus',
+    'inputFocus',
+] as const;
+
+function setEditorFocus(focused: boolean): void {
+    const next: Record<string, boolean> = {};
+    for (const key of EDITOR_FOCUS_KEYS) {
+        next[key] = focused;
+    }
+    contextKeys.setMany(next);
+}
+
+/** Mirror Monaco focus state into `editorFocused` and its VS Code aliases. */
 export function bindEditorFocus(ed: editor.IStandaloneCodeEditor): Teardown {
-    contextKeys.set('editorFocused', ed.hasWidgetFocus());
+    setEditorFocus(ed.hasWidgetFocus());
     const focusSub = ed.onDidFocusEditorWidget(() => {
-        contextKeys.set('editorFocused', true);
+        setEditorFocus(true);
     });
     const blurSub = ed.onDidBlurEditorWidget(() => {
-        contextKeys.set('editorFocused', false);
+        setEditorFocus(false);
     });
     return () => {
         focusSub.dispose();
         blurSub.dispose();
-        contextKeys.set('editorFocused', false);
+        setEditorFocus(false);
+    };
+}
+
+/**
+ * Seed the static editor context keys VS Code `when` clauses commonly test.
+ * Operator's editor is always editable JavaScript with a definition provider,
+ * so these are constant; provider keys we do not satisfy stay unset (falsy),
+ * which simply means those bindings never fire.
+ */
+export function bindEditorContextConstants(): Teardown {
+    contextKeys.setMany({
+        editorReadonly: false,
+        editorHasDefinitionProvider: true,
+        editorLangId: 'javascript',
+    });
+    return () => {
+        contextKeys.unset('editorReadonly');
+        contextKeys.unset('editorHasDefinitionProvider');
+        contextKeys.unset('editorLangId');
     };
 }
 

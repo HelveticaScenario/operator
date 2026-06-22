@@ -13,19 +13,30 @@
 import type { KeyBindingMap } from 'tinykeys';
 import { tinykeys } from 'tinykeys';
 import type { KeybindingOverride } from '../../shared/ipcTypes';
-import { executeCommand, getCommand } from './commands';
+import { dispatchCommand } from './dispatch';
 import {
     DEFAULT_KEYMAP,
     defaultKeymapAsOverrides,
     type DefaultKeybinding,
 } from './defaultKeymap';
+import {
+    normalizeOverride,
+    toTinykeys,
+    type Platform,
+} from './vscodeKeys';
 
 export type ResolvedKeybinding = {
     key: string;
     command: string;
     when?: string;
-    args?: unknown[];
+    args?: unknown;
 };
+
+function detectPlatform(): Platform {
+    const api = (window as unknown as { electronAPI?: { platform?: string } })
+        .electronAPI;
+    return api?.platform === 'darwin' ? 'darwin' : 'other';
+}
 
 type WhenEvaluator = (when: string | undefined) => boolean;
 
@@ -40,54 +51,58 @@ export function setWhenEvaluator(evaluator: WhenEvaluator): void {
     whenEvaluator = evaluator;
 }
 
-function normalizeKey(key: string): string {
-    return key.trim().toLowerCase();
-}
-
 /**
- * Merge user overrides on top of the default keymap.
+ * Merge user overrides on top of the default keymap. Both sides are
+ * translated to canonical tinykeys bindings (see `vscodeKeys`), so a default
+ * and an override that denote the same physical chord collapse to one key.
  *
- * Semantics mirror VS Code's `keybindings.json`:
- *   - A user entry with `command: null` removes every default binding whose
- *     key matches (case-insensitive).
- *   - Other user entries are appended after the surviving defaults. Within a
- *     key, entries are tried in order at dispatch time; the first whose
- *     when-clause evaluates to true wins.
+ * Semantics mirror VS Code's `keybindings.json`, applied in file order:
+ *   - A removal (`command: null`, or a `-`-prefixed command) drops every
+ *     earlier binding — default or prior override — with the same key, and
+ *     the same command when one is named.
+ *   - Other entries are appended. Within a key, the last entry wins (tried
+ *     first at dispatch); the first whose when-clause passes fires.
  */
 export function mergeKeymap(
     defaults: readonly DefaultKeybinding[],
     userOverrides: readonly KeybindingOverride[],
+    platform: Platform,
 ): ResolvedKeybinding[] {
-    const removedKeys = new Set<string>();
-    for (const entry of userOverrides) {
-        if (entry.command === null) {
-            removedKeys.add(normalizeKey(entry.key));
-        }
-    }
-
-    const out: ResolvedKeybinding[] = [];
+    let list: ResolvedKeybinding[] = [];
     for (const entry of defaults) {
-        if (removedKeys.has(normalizeKey(entry.key))) {
+        const key = toTinykeys(entry.key, platform);
+        if (key === null) {
             continue;
         }
-        out.push({
-            key: entry.key,
+        list.push({
+            key,
             command: entry.command,
             ...(entry.when ? { when: entry.when } : {}),
         });
     }
-    for (const entry of userOverrides) {
-        if (entry.command === null) {
+    for (const override of userOverrides) {
+        const entry = normalizeOverride(override, platform);
+        if (!entry) {
             continue;
         }
-        out.push({
-            key: entry.key,
-            command: entry.command,
-            ...(entry.when ? { when: entry.when } : {}),
-            ...(entry.args ? { args: entry.args } : {}),
-        });
+        if (entry.type === 'remove') {
+            list = list.filter(
+                (e) =>
+                    !(
+                        e.key === entry.key &&
+                        (entry.command === null || e.command === entry.command)
+                    ),
+            );
+        } else {
+            list.push({
+                key: entry.key,
+                command: entry.command,
+                ...(entry.when ? { when: entry.when } : {}),
+                ...(entry.args !== undefined ? { args: entry.args } : {}),
+            });
+        }
     }
-    return out;
+    return list;
 }
 
 /**
@@ -130,25 +145,29 @@ function buildBindingMap(
                 if (!whenEvaluator(candidate.when)) {
                     continue;
                 }
-                if (!getCommand(candidate.command)) {
-                    // Unregistered command - skip rather than throw so a
-                    // typo in user keybindings.json doesn't break dispatch.
-                    console.warn(
-                        `[keymap] binding "${key}" references unknown command "${candidate.command}"`,
-                    );
-                    continue;
-                }
-                event.preventDefault();
-                event.stopPropagation();
+                let handled = false;
                 try {
-                    const args = candidate.args ?? [];
-                    void executeCommand(candidate.command, ...args);
+                    // Resolves to an Operator command or, failing that, an
+                    // editor command on the focused editor. Returns false when
+                    // neither applies (no registry command, and no editor with
+                    // text focus), so the event falls through to other
+                    // listeners — keystrokes are never swallowed for an editor
+                    // command while focus is elsewhere.
+                    handled = dispatchCommand(candidate.command, candidate.args, {
+                        requireEditorFocus: true,
+                    });
                 } catch (error) {
                     console.error(
                         `[keymap] error executing command "${candidate.command}":`,
                         error,
                     );
+                    handled = true;
                 }
+                if (!handled) {
+                    continue;
+                }
+                event.preventDefault();
+                event.stopPropagation();
                 return;
             }
         };
@@ -185,7 +204,7 @@ export async function loadAndInstallKeymap(
     target: Window | HTMLElement = window,
 ): Promise<InstallKeymapResult> {
     const overrides = await loadUserOverrides();
-    const entries = mergeKeymap(DEFAULT_KEYMAP, overrides);
+    const entries = mergeKeymap(DEFAULT_KEYMAP, overrides, detectPlatform());
     return installKeymap(entries, target);
 }
 

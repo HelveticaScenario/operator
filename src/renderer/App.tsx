@@ -46,7 +46,8 @@ import {
     registerCommand,
     unregisterCommand,
 } from './keybindings/commands';
-import { loadAndInstallKeymap } from './keybindings/keymap';
+import { loadAndInstallKeymap, setWhenEvaluator } from './keybindings/keymap';
+import { evaluateWhen } from './keybindings/contextKey';
 import { getBufferId } from './app/buffers';
 import {
     setTransport,
@@ -124,6 +125,15 @@ function App() {
         }
     }, []);
 
+    // Absolute path to the user keybindings.json, resolved once. Used to
+    // detect when that file is saved so the keymap can be reloaded live.
+    const keybindingsPathRef = useRef<string | null>(null);
+    const handleFileSaved = useCallback((filePath: string) => {
+        if (filePath === keybindingsPathRef.current) {
+            window.dispatchEvent(new Event('operator:keybindings-changed'));
+        }
+    }, []);
+
     const {
         buffers,
         setBuffers,
@@ -132,6 +142,7 @@ function App() {
         patchCode,
         handlePatchChange,
         openFile,
+        openAbsoluteFile,
         createUntitledFile,
         saveFile,
         renameFile,
@@ -142,7 +153,11 @@ function App() {
         setRenamingPath,
         handleRenameCommit,
         formatFileLabel,
-    } = useEditorBuffers({ refreshFileTree, workspaceRoot });
+    } = useEditorBuffers({
+        refreshFileTree,
+        workspaceRoot,
+        onFileSaved: handleFileSaved,
+    });
 
     // Audio state
     const [isClockRunning, setIsClockRunning] = useState(true);
@@ -930,6 +945,33 @@ function App() {
         createUntitledFileRef.current = createUntitledFile;
     }, [createUntitledFile]);
 
+    // Ensure the keybindings.json exists (seeding a template if needed) and
+    // open it as a normal editor buffer; saving it reloads the keymap live.
+    const handleOpenKeybindings = useCallback(async () => {
+        try {
+            const path = await electronAPI.keybindings.ensureFile();
+            keybindingsPathRef.current = path;
+            await openAbsoluteFile(path);
+        } catch (err) {
+            setError(getErrorMessage(err, 'Failed to open keybindings'));
+        }
+    }, [openAbsoluteFile]);
+    const handleOpenKeybindingsRef = useRef(handleOpenKeybindings);
+    useEffect(() => {
+        handleOpenKeybindingsRef.current = handleOpenKeybindings;
+    }, [handleOpenKeybindings]);
+
+    // Resolve the keybindings.json path up front so saves to it (even a
+    // session-restored buffer) are recognized and trigger a keymap reload.
+    useEffect(() => {
+        electronAPI.keybindings
+            .getPath()
+            .then((path) => {
+                keybindingsPathRef.current = path;
+            })
+            .catch(() => {});
+    }, []);
+
     // Register operator.* commands in the global registry. The Electron menu
     // IPC dispatchers below, the cmdk palette, the editor context menu, and
     // the tinykeys keymap all dispatch through `executeCommand` — single
@@ -1011,7 +1053,18 @@ function App() {
             () => {
                 setIsPaletteOpen(true);
             },
-            { label: 'Show Command Palette', category: 'View' },
+            {
+                label: 'Show Command Palette',
+                category: 'View',
+                contextMenu: { group: 'z_commands', order: 1 },
+            },
+        );
+        registerCommand(
+            'operator.openKeybindings',
+            () => {
+                void handleOpenKeybindingsRef.current();
+            },
+            { label: 'Open Keyboard Shortcuts (JSON)', category: 'Preferences' },
         );
 
         return () => {
@@ -1024,6 +1077,7 @@ function App() {
             unregisterCommand('operator.openWorkspace');
             unregisterCommand('operator.openSettings');
             unregisterCommand('operator.showCommandPalette');
+            unregisterCommand('operator.openKeybindings');
         };
     }, []);
 
@@ -1136,19 +1190,31 @@ function App() {
     useEffect(() => {
         let disposed = false;
         let disposer: (() => void) | null = null;
-        loadAndInstallKeymap()
-            .then((result) => {
-                if (disposed) {
-                    result.dispose();
-                } else {
+        // Gate keybinding dispatch on the context-key service so VS Code-style
+        // `when` clauses (editorTextFocus, etc.) are honored.
+        setWhenEvaluator(evaluateWhen);
+        const install = () => {
+            loadAndInstallKeymap()
+                .then((result) => {
+                    if (disposed) {
+                        result.dispose();
+                        return;
+                    }
+                    // Drop the previous binding before swapping in the new one.
+                    disposer?.();
                     disposer = result.dispose;
-                }
-            })
-            .catch((err) => {
-                console.error('[keymap] failed to install keymap:', err);
-            });
+                })
+                .catch((err) => {
+                    console.error('[keymap] failed to install keymap:', err);
+                });
+        };
+        install();
+        // Re-read and re-install when the user saves keybindings.json.
+        const onChanged = () => install();
+        window.addEventListener('operator:keybindings-changed', onChanged);
         return () => {
             disposed = true;
+            window.removeEventListener('operator:keybindings-changed', onChanged);
             disposer?.();
         };
     }, []);

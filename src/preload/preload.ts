@@ -238,6 +238,7 @@ export interface ElectronAPI {
         getPath: () => Promise<string>;
         readUser: () => Promise<KeybindingOverride[]>;
         writeUser: (overrides: KeybindingOverride[]) => Promise<void>;
+        ensureFile: () => Promise<string>;
     };
 
     // Wavs folder change notification
@@ -486,6 +487,7 @@ const electronAPI: ElectronAPI = {
         readUser: () => invokeIPC('KEYBINDINGS_READ_USER'),
         writeUser: (overrides) =>
             invokeIPC('KEYBINDINGS_WRITE_USER', overrides),
+        ensureFile: () => invokeIPC('KEYBINDINGS_ENSURE_FILE'),
     },
 
     // Main process log forwarding

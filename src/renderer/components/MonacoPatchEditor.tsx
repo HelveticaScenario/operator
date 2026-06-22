@@ -24,13 +24,15 @@ import {
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
 import {
+    bindEditorContextConstants,
     bindEditorFocus,
     bindEditorWidgetVisibility,
 } from '../keybindings/contextKeyBootstrap';
 import electronAPI from '../electronAPI';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
-import { executeCommand, getCommand } from '../keybindings/commands';
+import { executeCommand } from '../keybindings/commands';
 import { buildEditorMenuItems } from '../keybindings/editorMenuItems';
+import { dispatchCommand, setActiveEditor } from '../keybindings/dispatch';
 
 export interface PatchEditorProps {
     value: string;
@@ -94,8 +96,12 @@ export function MonacoPatchEditor({
     // falsy).
     useEffect(() => {
         onEditorChange?.(editor);
+        // Make this editor the dispatch target for window-level keybindings
+        // and the context menu (see keybindings/dispatch).
+        setActiveEditor(editor);
         return () => {
             onEditorChange?.(null);
+            setActiveEditor(null);
         };
     }, [editor, onEditorChange]);
 
@@ -194,18 +200,20 @@ export function MonacoPatchEditor({
             }
             void electronAPI.showContextMenu({
                 type: 'editor',
-                items: buildEditorMenuItems(),
+                items: buildEditorMenuItems(editor),
             });
         });
         const disposeCommandSub = electronAPI.onContextMenuCommand((action) => {
             if (action.command !== 'editor' || !action.commandId) {
                 return;
             }
-            // Only registry-command items round-trip; clipboard roles are
-            // handled natively in the main process.
-            if (getCommand(action.commandId)) {
-                void executeCommand(action.commandId);
-            }
+            // Registry commands run via the registry; editor actions and core
+            // editor commands are triggered on this editor. Clipboard roles
+            // never round-trip — they are handled natively in the main process.
+            // Refocus first: the native menu took focus, and editor commands
+            // (Go to Definition, etc.) need the editor focused to act.
+            editor.focus();
+            dispatchCommand(action.commandId);
         });
         return () => {
             contextSub.dispose();
@@ -284,9 +292,11 @@ export function MonacoPatchEditor({
         if (!editor) return;
         const stopFocus = bindEditorFocus(editor);
         const stopWidgets = bindEditorWidgetVisibility(editor);
+        const stopConstants = bindEditorContextConstants();
         return () => {
             stopFocus();
             stopWidgets();
+            stopConstants();
         };
     }, [editor]);
 
