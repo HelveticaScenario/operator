@@ -47,6 +47,9 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: 'F2', command: 'editor.action.rename' },
     { key: '$mod+F2', command: 'editor.action.changeAll' },
     { key: 'Shift+Alt+f', command: 'editor.action.formatDocument' },
+    // Go to Line/Column — physical Ctrl+G on every platform (VS Code's and
+    // Monaco's macOS default), opening Monaco's go-to-line quick input.
+    { key: 'Control+g', command: 'editor.action.gotoLine' },
 ];
 
 /**
