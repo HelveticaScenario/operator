@@ -3,7 +3,10 @@ import type { Monaco } from '../../hooks/useCustomMonaco';
 export function registerConfigSchema(monaco: Monaco, schema: object) {
     const { jsonDefaults } = monaco.json;
     jsonDefaults.setDiagnosticsOptions({
+        // Operator's JSON buffers (keybindings.json, config.json) are JSONC:
+        // tolerate comments and trailing commas so they don't show as errors.
         allowComments: true,
+        trailingCommas: 'ignore',
         schemas: [
             {
                 uri: 'modular://config-schema.json',
@@ -29,6 +32,7 @@ export function registerConfigSchemaForFile(
     const fileUri = `file://${currentFile}`;
     jsonDefaults.setDiagnosticsOptions({
         allowComments: true,
+        trailingCommas: 'ignore',
         schemas: [
             {
                 uri: 'modular://config-schema.json',
