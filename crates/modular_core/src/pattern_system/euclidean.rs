@@ -6,7 +6,7 @@
 //! The Bjorklund algorithm implementation is ported from the Haskell Music
 //! Theory module by Rohan Drape.
 
-use super::{Pattern, combinators::fastcat, constructors::pure};
+use super::Pattern;
 
 /// Generate a Euclidean rhythm pattern using the Bjorklund algorithm.
 ///
@@ -140,88 +140,64 @@ pub fn euclidean_rhythm(pulses: i32, steps: u32, rotation: Option<i32>) -> Vec<b
     }
 }
 
-/// Create a pattern from a Euclidean rhythm.
-///
-/// Returns a pattern that plays the value at pulse positions and is silent elsewhere.
-pub fn euclid<T: Clone + Send + Sync + 'static>(
-    value: T,
-    pulses: i32,
-    steps: u32,
-    rotation: Option<i32>,
-) -> Pattern<T> {
-    let rhythm = euclidean_rhythm(pulses, steps, rotation);
-    let patterns: Vec<Pattern<Option<T>>> = rhythm
-        .into_iter()
-        .map(|is_pulse| {
-            if is_pulse {
-                pure(Some(value.clone()))
-            } else {
-                pure(None)
-            }
-        })
-        .collect();
-
-    fastcat(patterns)
-        .filter_values(|v| v.is_some())
-        .fmap(|v| v.clone().unwrap())
-}
-
 /// Create a boolean pattern from a Euclidean rhythm.
 ///
-/// Useful for gating/triggering.
+/// Useful for gating/triggering. Specialised arena-direct construction:
+/// emits N slot haps with their bool values directly, skipping the
+/// `fastcat(N pures)` chain.
 pub fn euclid_bool(pulses: i32, steps: u32, rotation: Option<i32>) -> Pattern<bool> {
+    use crate::pattern_system::Fraction;
     let rhythm = euclidean_rhythm(pulses, steps, rotation);
-    let patterns: Vec<Pattern<bool>> = rhythm.into_iter().map(pure).collect();
-    fastcat(patterns)
-}
+    let n = rhythm.len();
+    if n == 0 {
+        return super::constructors::silence();
+    }
 
-/// Struct pattern from Euclidean rhythm.
-///
-/// Creates a pattern that has events only at the pulse positions.
-pub fn euclid_struct(pulses: i32, steps: u32, rotation: Option<i32>) -> Pattern<()> {
-    let rhythm = euclidean_rhythm(pulses, steps, rotation);
-    let patterns: Vec<Pattern<Option<()>>> = rhythm
-        .into_iter()
-        .map(
-            |is_pulse| {
-                if is_pulse { pure(Some(())) } else { pure(None) }
-            },
-        )
-        .collect();
+    let n_frac = Fraction::from_integer(n as i64);
+    // Pre-compute (begin_offset, end_offset, is_pulse) per slot.
+    let slot_data: std::sync::Arc<[(Fraction, Fraction, bool)]> = rhythm
+        .iter()
+        .enumerate()
+        .map(|(i, &is_pulse)| {
+            let i_frac = Fraction::from_integer(i as i64);
+            let begin = &i_frac / &n_frac;
+            let end = (&i_frac + Fraction::from_integer(1)) / &n_frac;
+            (begin, end, is_pulse)
+        })
+        .collect::<Vec<_>>()
+        .into();
 
-    fastcat(patterns)
-        .filter_values(|v| v.is_some())
-        .fmap(|_| ())
+    Pattern::new_into(
+        move |state: &crate::pattern_system::State,
+              _bump: &bumpalo::Bump,
+              out: &mut bumpalo::collections::Vec<
+            '_,
+            crate::pattern_system::ArenaHap<'_, bool>,
+        >| {
+            use crate::pattern_system::{ArenaHap, ArenaHapContext, TimeSpan};
+            let empty = ArenaHapContext::empty_ref();
+            state.span.for_each_cycle_span(|cycle_span| {
+                let cycle_start = cycle_span.begin.floor();
+                for (begin_off, end_off, is_pulse) in slot_data.iter() {
+                    let part_begin = &cycle_start + begin_off;
+                    let part_end = &cycle_start + end_off;
+                    let whole_span = TimeSpan::new(part_begin, part_end);
+                    if let Some(part) = cycle_span.intersection(&whole_span) {
+                        out.push(ArenaHap {
+                            whole: Some(whole_span),
+                            part,
+                            value: *is_pulse,
+                            context: empty,
+                        });
+                    }
+                }
+            });
+        },
+    )
+    .with_steps(n_frac)
 }
 
 impl<T: Clone + Send + Sync + 'static> Pattern<T> {
-    /// Apply Euclidean rhythm structure to this pattern.
-    ///
-    /// The pattern's events are distributed according to the Euclidean rhythm.
-    /// Non-pulse positions are filtered out (no hap returned).
-    ///
-    /// For patterns that support rests, use `euclid_with_rest` instead to
-    /// ensure queries always return a hap.
-    pub fn euclid(&self, pulses: i32, steps: u32) -> Pattern<T> {
-        self.euclid_rot(pulses, steps, 0)
-    }
-
-    /// Apply Euclidean rhythm structure with rotation.
-    ///
-    /// Non-pulse positions are filtered out (no hap returned).
-    /// For patterns that support rests, use `euclid_rot_with_rest` instead.
-    pub fn euclid_rot(&self, pulses: i32, steps: u32, rotation: i32) -> Pattern<T> {
-        let struct_pat = euclid_struct(pulses, steps, Some(rotation));
-        self.app_left(&struct_pat, |val, _| val.clone())
-    }
-
-    /// Apply Euclidean rhythm structure with rest values at non-pulse positions.
-    ///
-    /// This ensures the pattern always returns a hap when queried.
-    pub fn euclid_with_rest(&self, pulses: i32, steps: u32, rest: T) -> Pattern<T> {
-        self.euclid_rot_with_rest(pulses, steps, 0, rest)
-    }
-
     /// Apply Euclidean rhythm structure with rotation and rest values.
     ///
     /// Non-pulse positions produce the rest value instead of being filtered.
@@ -254,21 +230,13 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     /// All parameters (pulses, steps, rotation) can be patterns.
     /// This allows rhythms like `c([2 3], 8)` that alternate between
     /// 2-in-8 and 3-in-8 euclidean patterns.
-    pub fn euclid_pat_with_rest<P, S, R>(
+    pub fn euclid_pat_with_rest(
         &self,
-        pulses: P,
-        steps: S,
-        rotation: R,
+        pulses_pat: Pattern<i32>,
+        steps_pat: Pattern<u32>,
+        rotation_pat: Pattern<i32>,
         rest: T,
-    ) -> Pattern<T>
-    where
-        P: super::IntoPattern<i32> + 'static,
-        S: super::IntoPattern<u32> + 'static,
-        R: super::IntoPattern<i32> + 'static,
-    {
-        let pulses_pat = pulses.into_pattern();
-        let steps_pat = steps.into_pattern();
-        let rotation_pat = rotation.into_pattern();
+    ) -> Pattern<T> {
         let pat = self.clone();
 
         // Combine the three parameter patterns into one pattern of (pulses, steps, rotation)
@@ -356,18 +324,6 @@ mod tests {
     }
 
     #[test]
-    fn test_euclid_pattern() {
-        let pat = euclid(42, 3, 8, None);
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        // Should have 3 events (pulses)
-        assert_eq!(haps.len(), 3);
-        for hap in &haps {
-            assert_eq!(hap.value, 42);
-        }
-    }
-
-    #[test]
     fn test_euclid_bool_pattern() {
         let pat = euclid_bool(3, 8, None);
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
@@ -378,13 +334,5 @@ mod tests {
         // 3 should be true
         let true_count = haps.iter().filter(|h| h.value).count();
         assert_eq!(true_count, 3);
-    }
-
-    #[test]
-    fn test_pattern_euclid_method() {
-        let pat = pure(100).euclid(3, 8);
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-
-        assert_eq!(haps.len(), 3);
     }
 }

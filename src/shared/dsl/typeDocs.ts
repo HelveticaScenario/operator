@@ -151,6 +151,15 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
                     'The callback receives this collection and returns a second signal; both are passed as inputs to $mix.',
                 example: "$c(osc1, osc2).pipeMix(s => $lpf(s, '1000hz')).out()",
             },
+            {
+                name: 'mix',
+                signature:
+                    'mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection',
+                description:
+                    "Fold this collection's channels down to a target channel count by panning them evenly across the output field (equal-power). " +
+                    'Builds a $mixDown module. channels defaults to 1 (mono); mode controls how channels landing on the same output combine.',
+                example: '$saw($spread(0, 5, 3)).mix(2).out()',
+            },
         ],
         name: 'Collection',
         seeAlso: ['CollectionWithRange', 'ModuleOutput', 'Poly<Signal>'],
@@ -169,7 +178,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>): Collection',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange',
                 description:
                     'Remap all outputs from their native ranges to a new range. ' +
                     "Uses each output's stored minValue/maxValue.",
@@ -311,9 +320,18 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
                 example: "$saw('c4').pipeMix(s => $lpf(s, '1000hz')).out()",
             },
             {
+                name: 'mix',
+                signature:
+                    'mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection',
+                description:
+                    "Fold this output's channels down to a target channel count by panning them evenly across the output field (equal-power). " +
+                    'Builds a $mixDown module. channels defaults to 1 (mono); mode controls how channels landing on the same output combine.',
+                example: '$saw($spread(0, 5, 3)).mix(2).out()',
+            },
+            {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): ModuleOutput',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): CollectionWithRange',
                 description:
                     'Remap this output from an explicit input range to a new output range. Creates a $remap module internally.',
                 example: "$sine('c4').range(0, 1, -5, 5)",
@@ -325,7 +343,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
 
     ModuleOutputWithRange: {
         definition:
-            'interface extends ModuleOutput { minValue: number; maxValue: number; range(...): ModuleOutput }',
+            'interface extends ModuleOutput { minValue: Signal; maxValue: Signal; range(...): CollectionWithRange }',
         description:
             'An extension of ModuleOutput that knows its output value range (minValue, maxValue). ' +
             'Typically returned by LFOs, envelopes, and other modulation sources. ' +
@@ -337,7 +355,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'range',
                 signature:
-                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>): ModuleOutput',
+                    'range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange',
                 description:
                     'Remap the output from its native range (minValue, maxValue) to a new range (outMin, outMax). ' +
                     'Unlike Collection.range(), this uses the stored min/max values automatically.',
@@ -616,9 +634,10 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             { name: 'min', type: 'number', description: 'Minimum value' },
             { name: 'max', type: 'number', description: 'Maximum value' },
         ],
-        returns: 'ModuleOutput carrying the current slider value',
+        returns:
+            'CollectionWithRange carrying the current slider value (range [min, max])',
         signature:
-            '$slider(label: string, value: number, min: number, max: number): ModuleOutput',
+            '$slider(label: string, value: number, min: number, max: number): CollectionWithRange',
     },
     // ---- Advanced ----
     {
@@ -633,7 +652,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             {
                 name: 'channels',
                 type: 'number',
-                description: 'Number of deferred outputs (1-16, default 1)',
+                description: 'Number of deferred outputs (1-64, default 1)',
             },
         ],
         returns: 'DeferredCollection',

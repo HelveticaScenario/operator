@@ -14,7 +14,7 @@ fn default_count() -> usize {
 struct UnisonParams {
     /// input signal to expand (typically V/Oct pitch)
     input: PolySignal,
-    /// number of unison voices per input channel (1–16)
+    /// number of unison voices per input channel (1–64)
     #[serde(default = "default_count")]
     #[deserr(default = default_count())]
     count: usize,
@@ -23,7 +23,7 @@ struct UnisonParams {
     spread: Option<PolySignal>,
 }
 
-/// Custom channel count: max(all PolySignal channels) * count, clamped to 16.
+/// Custom channel count: max(all PolySignal channels) * count, clamped to 64.
 #[allow(private_interfaces)]
 pub fn unison_derive_channel_count(params: &UnisonParams) -> usize {
     let fields = params.poly_signal_fields();
@@ -46,10 +46,10 @@ struct UnisonOutputs {
 /// Takes a signal (typically V/Oct pitch) and multiplies channels by the
 /// unison count, applying symmetric detuning controlled by the spread parameter.
 ///
-/// - **count** — number of detuned copies per input channel (1–16)
+/// - **count** — number of detuned copies per input channel (1–64)
 /// - **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)
 ///
-/// Output channels = `input_channels × count`, clamped to 16.
+/// Output channels = `input_channels × count`, clamped to 64.
 ///
 /// ## Example
 ///
@@ -202,20 +202,16 @@ mod tests {
     }
 
     #[test]
-    fn test_clamp_to_16_channels() {
-        // 4-channel input, count=5 -> 20 desired, clamped to 16
+    fn test_clamp_to_max_channels() {
+        // 16-channel input, count=5 -> 80 desired, clamped to PORT_MAX_CHANNELS
+        let input: Vec<Signal> = (0..16).map(|i| Signal::Volts(i as f32)).collect();
         let mut u = make_unison(UnisonParams {
-            input: PolySignal::poly(&[
-                Signal::Volts(0.0),
-                Signal::Volts(1.0),
-                Signal::Volts(2.0),
-                Signal::Volts(3.0),
-            ]),
+            input: PolySignal::poly(&input),
             count: 5,
             spread: None,
         });
         u.update(48000.0);
-        assert_eq!(u.outputs.sample.channels(), 16);
+        assert_eq!(u.outputs.sample.channels(), PORT_MAX_CHANNELS);
     }
 
     #[test]
@@ -236,13 +232,13 @@ mod tests {
         };
         assert_eq!(unison_derive_channel_count(&params), 15);
 
-        // 3 channels * 6 = 18, clamped to 16
+        // 3 channels * 6 = 18, within the PORT_MAX_CHANNELS cap
         let params = UnisonParams {
             input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(0.0), Signal::Volts(0.0)]),
             count: 6,
             spread: None,
         };
-        assert_eq!(unison_derive_channel_count(&params), 16);
+        assert_eq!(unison_derive_channel_count(&params), 18);
     }
 
     #[test]

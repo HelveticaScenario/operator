@@ -39,6 +39,70 @@ export function setActiveSpanRegistry(registry: SpanRegistry | null): void {
 export type ArgumentSpans = Record<string, SourceSpan>;
 
 /**
+ * Structural check for a `ParsedPattern` — kept here (rather than imported
+ * from `miniNotation/`) to avoid a circular dependency between factories and
+ * the mini-notation helper module that imports `lookupArgumentSpan` below.
+ */
+function isParsedPatternLike(
+    value: unknown,
+): value is { argument_span?: SourceSpan } {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === 'ParsedPattern'
+    );
+}
+
+/**
+ * Structural check for a chained `SpPattern` (returned by `$p.s().add(...)` /
+ * `.sub(...)`). Each chained source has a parallel `argument_spans[i]`
+ * entry used to map runtime per-source highlights back to editor literals.
+ */
+function isSpPatternLike(
+    value: unknown,
+): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === 'SpPattern'
+    );
+}
+
+/**
+ * Structural check for an `ArrangePattern` (returned by `$p.arrange(...)`).
+ * Like `SpPattern`, it carries a flat `argument_spans[i]` list — one per source
+ * across all sections, in order — used to map runtime per-source highlights
+ * back to editor literals.
+ */
+function isArrangePatternLike(
+    value: unknown,
+): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === 'ArrangePattern'
+    );
+}
+
+/**
+ * Structural check for a `.fast(...)` / `.slow(...)` wrapper. Like `SpPattern`
+ * and `ArrangePattern`, it carries a flat `argument_spans[i]` list — the wrapped
+ * pattern's per-source spans — used to map runtime per-source highlights back to
+ * editor literals.
+ */
+function isFastOrSlowPatternLike(
+    value: unknown,
+): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
+    if (typeof value !== 'object' || value === null || !('__kind' in value)) {
+        return false;
+    }
+    return value.__kind === 'FastPattern' || value.__kind === 'SlowPattern';
+}
+
+/**
  * Look up argument spans from the active span registry using the source location.
  * Returns undefined if no registry is set or no spans found for this call site.
  *
@@ -68,6 +132,21 @@ function captureArgumentSpans(
     }
 
     return spans;
+}
+
+/**
+ * Look up a single argument span by source location and arg name.
+ *
+ * Exported for `$p()` so it can embed its own source literal span into the
+ * returned `ParsedPattern` — highlighting is then the $p function's own
+ * responsibility rather than something each module factory must unwrap.
+ */
+export function lookupArgumentSpan(
+    sourceLocation: { line: number; column: number } | undefined,
+    argName: string,
+): SourceSpan | undefined {
+    const spans = captureArgumentSpans(sourceLocation);
+    return spans ? spans[argName] : undefined;
 }
 
 // Return type for module factories - varies by output configuration
@@ -243,10 +322,51 @@ export class DSLContext {
                 }
             }
 
+            // Merge argument_span fields carried by any ParsedPattern params
+            // ($p() embeds its own source-literal span so highlighting stays
+            // attached through const indirections — `const p = $p(...); $cycle(p)`
+            // works without the static analyzer having to reason about $p).
+            //
+            // $p.s(...).add(...) chains arrive as SpPattern objects whose
+            // `argument_spans[i]` lines up with `sources[i]`. Emit those
+            // as `<paramName>.0`, `<paramName>.1`, ... matching the multi-
+            // source `pattern.<i>` keys the Rust side puts on `param_spans`.
+            const mergedArgumentSpans: ArgumentSpans = {
+                ...(argumentSpans ?? {}),
+            };
+            for (const [paramName, value] of Object.entries(params)) {
+                if (
+                    isSpPatternLike(value) ||
+                    isArrangePatternLike(value) ||
+                    isFastOrSlowPatternLike(value)
+                ) {
+                    // Both carry a flat `argument_spans[i]` list lining up with
+                    // the Rust per-source order; emit `<paramName>.<i>` keys.
+                    const argSpans = value.argument_spans;
+                    if (argSpans && argSpans.length > 0) {
+                        argSpans.forEach((span, j) => {
+                            if (span && (span.start !== 0 || span.end !== 0)) {
+                                mergedArgumentSpans[`${paramName}.${j}`] = span;
+                            }
+                        });
+                    }
+                } else if (isParsedPatternLike(value) && value.argument_span) {
+                    mergedArgumentSpans[paramName] = value.argument_span;
+                } else if (Array.isArray(value)) {
+                    for (let j = 0; j < value.length; j++) {
+                        const elem = value[j];
+                        if (isParsedPatternLike(elem) && elem.argument_span) {
+                            mergedArgumentSpans[`${paramName}.${j}`] =
+                                elem.argument_span;
+                        }
+                    }
+                }
+            }
+
             // Attach argument spans to params if available
             // This allows Rust-side modules to access source locations for highlighting
-            if (argumentSpans && Object.keys(argumentSpans).length > 0) {
-                params[ARGUMENT_SPANS_KEY] = argumentSpans;
+            if (Object.keys(mergedArgumentSpans).length > 0) {
+                params[ARGUMENT_SPANS_KEY] = mergedArgumentSpans;
             }
 
             // Create the module node internally, passing source location

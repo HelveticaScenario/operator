@@ -380,6 +380,10 @@ export function MonacoPatchEditor({
     const editorOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(
         () => ({
             minimap: { enabled: false },
+            // The transparent editor background lets the scrolled lines bleed
+            // through a pinned sticky header as a ghosted duplicate, so the
+            // sticky-scroll feature is disabled here.
+            stickyScroll: { enabled: false },
             lineNumbers: 'on',
             folding: false,
             matchBrackets: 'always',

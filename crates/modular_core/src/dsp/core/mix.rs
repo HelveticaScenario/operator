@@ -33,7 +33,7 @@ pub struct MixParams {
     /// How inputs are combined.
     #[serde(default)]
     #[deserr(default)]
-    mode: MixMode,
+    pub mode: MixMode,
     /// Final output level (perceptual curve, exponent 3).
     #[signal(default = 5.0, range = (0.0, 10.0))]
     #[deserr(default)]
@@ -87,33 +87,39 @@ pub fn mix_derive_channel_count(params: &MixParams) -> usize {
 pub struct Mix {
     outputs: MixOutputs,
     params: MixParams,
-    state: MixState,
-}
-
-/// State for the Mix module.
-#[derive(Default)]
-struct MixState {
-    gain_buffer: [Clickless; PORT_MAX_CHANNELS],
+    channel_state: Box<[Clickless]>,
 }
 
 message_handlers!(impl Mix {});
 
+#[doc(hidden)]
+pub fn __bench_make_mix(params: MixParams) -> Mix {
+    use crate::types::OutputStruct;
+    let channels = mix_derive_channel_count(&params);
+    let mut outputs = MixOutputs::default();
+    outputs.set_all_channels(channels);
+    Mix {
+        params,
+        outputs,
+        _channel_count: channels,
+        _block_index: Default::default(),
+        channel_state: vec![Clickless::default(); channels].into_boxed_slice(),
+    }
+}
+
 impl Mix {
+    #[doc(hidden)]
+    pub fn __bench_update(&mut self, sample_rate: f32) {
+        self.update(sample_rate);
+    }
+
     fn update(&mut self, _sample_rate: f32) {
         let inputs = &self.params.inputs;
         let gain = &self.params.gain;
 
-        let input_refs: Vec<&PolySignal> = self.params.inputs.iter().collect();
-
-        let max_input_channels = if self.params.inputs.is_empty() {
-            0usize
-        } else {
-            PolySignal::max_channels(&input_refs) as usize
-        };
-
         let output_channels = self.channel_count();
 
-        // Handle empty inputs case - output silence
+        // Empty inputs case — output silence.
         if inputs.is_empty() {
             for i in 0..output_channels {
                 self.outputs.sample.set(i, 0.0);
@@ -121,68 +127,105 @@ impl Mix {
             return;
         }
 
-        // Pre-compute mixed values for each input channel (no cycling on inputs)
-        let mut pre_gain_values = [0.0f32; PORT_MAX_CHANNELS];
-        for channel in 0..max_input_channels {
-            // Collect values from each input at this channel index
-            // Inputs with fewer channels contribute 0.0 (no cycling)
-            let values: Vec<f32> = inputs
-                .iter()
-                .map(|input| {
-                    if channel < input.channels() as usize {
-                        input.get_value(channel)
-                    } else {
-                        0.0
-                    }
-                })
-                .collect();
-
-            // Count non-zero contributors for averaging
-            let contributor_count = inputs
-                .iter()
-                .filter(|input| channel < input.channels() as usize)
-                .count();
-
-            pre_gain_values[channel] = match self.params.mode {
-                MixMode::Sum => values.iter().sum::<f32>(),
-                MixMode::Average => {
-                    if contributor_count > 0 {
-                        values.iter().sum::<f32>() / contributor_count as f32
-                    } else {
-                        0.0
-                    }
-                }
-                MixMode::Max => values
-                    .iter()
-                    .max_by(|a, b| {
-                        a.abs()
-                            .partial_cmp(&b.abs())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .unwrap_or(0.0),
-                MixMode::Min => values
-                    .iter()
-                    .filter(|&&v| v != 0.0) // Exclude zero-contributors for min
-                    .min_by(|a, b| {
-                        a.abs()
-                            .partial_cmp(&b.abs())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .copied()
-                    .unwrap_or(0.0),
-            };
+        // Max channel count over all inputs.
+        let mut max_input_channels: usize = 0;
+        for input in inputs.iter() {
+            let c = input.channels();
+            if c > max_input_channels {
+                max_input_channels = c;
+            }
         }
 
-        // Apply gain with cycling on pre_gain_values
+        // Pre-compute mixed values per channel. The mode match is hoisted
+        // out of the per-channel loop so we don't compute sum + max-by-abs
+        // + min-by-abs accumulators on every iteration when only one is
+        // selected. Each branch's inner loop carries only the state its
+        // mode needs.
+        let mut pre_gain_values = [0.0f32; PORT_MAX_CHANNELS];
+        match self.params.mode {
+            MixMode::Sum => {
+                for channel in 0..max_input_channels {
+                    let mut sum: f32 = 0.0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        sum += input.get_value(channel);
+                    }
+                    pre_gain_values[channel] = sum;
+                }
+            }
+            MixMode::Average => {
+                for channel in 0..max_input_channels {
+                    let mut sum: f32 = 0.0;
+                    let mut count: u32 = 0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        sum += input.get_value(channel);
+                        count += 1;
+                    }
+                    pre_gain_values[channel] = if count > 0 { sum / count as f32 } else { 0.0 };
+                }
+            }
+            MixMode::Max => {
+                for channel in 0..max_input_channels {
+                    let mut best_abs: f32 = -1.0;
+                    let mut best_val: f32 = 0.0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        let v = input.get_value(channel);
+                        let av = v.abs();
+                        // NaN comparisons return false, so NaN never replaces
+                        // a finite best — matches the old `partial_cmp().
+                        // unwrap_or(Equal)` semantics enough for no-panic.
+                        if av > best_abs {
+                            best_abs = av;
+                            best_val = v;
+                        }
+                    }
+                    pre_gain_values[channel] = if best_abs >= 0.0 { best_val } else { 0.0 };
+                }
+            }
+            MixMode::Min => {
+                for channel in 0..max_input_channels {
+                    let mut best_abs: f32 = f32::INFINITY;
+                    let mut best_val: f32 = 0.0;
+                    for input in inputs.iter() {
+                        if channel >= input.channels() {
+                            continue;
+                        }
+                        let v = input.get_value(channel);
+                        if v == 0.0 {
+                            continue;
+                        }
+                        let av = v.abs();
+                        if av < best_abs {
+                            best_abs = av;
+                            best_val = v;
+                        }
+                    }
+                    pre_gain_values[channel] = if best_abs.is_finite() { best_val } else { 0.0 };
+                }
+            }
+        }
+
+        // Apply gain with cycling on pre_gain_values. `powf(3.0)` is
+        // replaced with `n * n * n` — the exponent is a compile-time
+        // integer so the multiplication form gives identical bit-pattern
+        // results for finite inputs while sidestepping the generic powf
+        // dispatch.
         for i in 0..output_channels {
             let pre_gain_index = i % max_input_channels;
             let pre_gain_value = pre_gain_values[pre_gain_index];
             let amp_val = gain.value_or(i, 5.0);
-            let normalized = (amp_val.abs() / 5.0).max(0.0);
-            let curved = amp_val.signum() * normalized.powf(3.0);
-            self.state.gain_buffer[i].update(curved);
-            let gain_value = *self.state.gain_buffer[i];
+            let normalized = (amp_val.abs() * (1.0 / 5.0)).max(0.0);
+            let curved = amp_val.signum() * (normalized * normalized * normalized);
+            self.channel_state[i].update(curved);
+            let gain_value = *self.channel_state[i];
             self.outputs.sample.set(i, pre_gain_value * gain_value);
         }
     }
@@ -199,13 +242,14 @@ mod tests {
         let channels = mix_derive_channel_count(&params);
         let mut outputs = MixOutputs::default();
         outputs.set_all_channels(channels);
-        Mix {
+        let mixer = Mix {
             params,
             outputs,
             _channel_count: channels,
             _block_index: Default::default(),
-            state: MixState::default(),
-        }
+            channel_state: vec![Clickless::default(); channels].into_boxed_slice(),
+        };
+        mixer
     }
 
     #[test]

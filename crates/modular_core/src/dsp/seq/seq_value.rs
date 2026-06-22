@@ -4,18 +4,17 @@
 //! - Voltage values (V/Oct, pre-converted at parse time)
 //! - Rests
 
-use std::sync::Arc;
-
-use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
+use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, Map, Sequence, ValuePointerRef};
 use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     Patch,
     dsp::utils::midi_to_voct_f64,
     pattern_system::{
-        DspHap, Pattern,
+        Pattern,
         mini::{
-            FromMiniAtom,
+            FromMiniAtom, MiniAST,
             ast::AtomValue,
             convert::{ConvertError, HasRest},
         },
@@ -23,12 +22,67 @@ use crate::{
     types::Connect,
 };
 
+use super::cache::{
+    CycleStorage, MIN_HAPS_CAP_HINT, SPANS_RESERVE_PER_HAP,
+    populate_cycle_storage as cache_populate,
+};
+
+/// Scalar cached hap data. No `Vec` or `Arc` — voices can hold these
+/// by value without keeping cycle storage alive.
+#[derive(Clone, Debug)]
+pub(crate) struct SeqCycleHap {
+    pub whole_begin: f64,
+    pub whole_end: f64,
+    pub part_begin: f64,
+    pub part_end: f64,
+    pub value: SeqValue,
+    pub has_onset: bool,
+    /// Range into the owning [`SeqCycleStorage::span_arena`].
+    pub span_offset: u32,
+    pub span_len: u32,
+}
+
+/// Per-cycle storage for Seq. Scalar haps + flat span arena. Each
+/// `FlatSpan` carries the `pattern_idx` so a chained `$p.s` payload's
+/// multi-source highlights know which input string each leaf came from.
+pub(crate) type SeqCycleStorage = CycleStorage<SeqCycleHap, super::cache::FlatSpan>;
+
+/// Fill `storage` with the pattern's haps for `cycle`.
+pub(crate) fn populate_cycle_storage(
+    pattern: &Pattern<SeqValue>,
+    cycle: i64,
+    bump: &mut bumpalo::Bump,
+    storage: &mut SeqCycleStorage,
+) {
+    cache_populate(pattern, cycle, bump, storage, |hap, haps, span_arena| {
+        let span_offset = span_arena.len() as u32;
+        hap.context.walk(&mut |pattern_idx, span| {
+            span_arena.push(super::cache::FlatSpan {
+                pattern_idx,
+                start: span.start as u32,
+                end: span.end as u32,
+            });
+        });
+        let span_len = span_arena.len() as u32 - span_offset;
+        haps.push(SeqCycleHap {
+            whole_begin: hap.whole_begin_f64(),
+            whole_end: hap.whole_end_f64(),
+            part_begin: hap.part_begin_f64(),
+            part_end: hap.part_end_f64(),
+            value: hap.value,
+            has_onset: hap.has_onset(),
+            span_offset,
+            span_len,
+        });
+    });
+}
+
 /// A value in a sequence pattern.
 ///
 /// Represents the different types of values that can be sequenced:
 /// - Voltage (V/Oct, pre-converted from MIDI/note at parse time)
 /// - Rests (silence/no output)
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum SeqValue {
     /// Pre-converted V/Oct voltage value.
     /// This replaces both Midi and Note variants - conversion happens at parse time.
@@ -82,28 +136,19 @@ impl FromMiniAtom for SeqValue {
     fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
         match atom {
             AtomValue::Number(n) => {
-                // Treat number as MIDI note, convert to voltage at parse time
-                Ok(SeqValue::Voltage(midi_to_voct_f64(*n)))
-            }
-            AtomValue::Midi(m) => {
-                // Convert MIDI to voltage at parse time
-                Ok(SeqValue::Voltage(midi_to_voct_f64(*m as f64)))
+                // Bare numbers are voltages directly (1V/oct CV).
+                Ok(SeqValue::Voltage(*n))
             }
             AtomValue::Hz(hz) => {
-                // Convert Hz to MIDI then to voltage
+                // Convert Hz to MIDI then to voltage.
                 let midi = 12.0 * (hz / 440.0).log2() + 69.0;
                 Ok(SeqValue::Voltage(midi_to_voct_f64(midi)))
-            }
-            AtomValue::Volts(v) => {
-                // Direct voltage value
-                Ok(SeqValue::Voltage(*v))
             }
             AtomValue::Note {
                 letter,
                 accidental,
                 octave,
             } => {
-                // Convert note to voltage at parse time
                 if let Some(midi) = note_to_midi(*letter, *accidental, *octave) {
                     Ok(SeqValue::Voltage(midi_to_voct_f64(midi)))
                 } else {
@@ -118,25 +163,6 @@ impl FromMiniAtom for SeqValue {
                     )))
                 }
             }
-            AtomValue::Identifier(s) => {
-                // Otherwise treat as note without octave if single letter
-                if s.len() == 1 {
-                    let c = s.chars().next().unwrap().to_ascii_lowercase();
-                    if ('a'..='g').contains(&c)
-                        && let Some(midi) = note_to_midi(c, None, None)
-                    {
-                        return Ok(SeqValue::Voltage(midi_to_voct_f64(midi)));
-                    }
-                }
-                Err(ConvertError::InvalidAtom(format!(
-                    "Cannot convert '{}' to SeqValue",
-                    s
-                )))
-            }
-            AtomValue::String(s) => Err(ConvertError::InvalidAtom(format!(
-                "Cannot convert string '{}' to SeqValue",
-                s
-            ))),
         }
     }
 
@@ -170,64 +196,729 @@ impl HasRest for SeqValue {
     }
 }
 
-/// A pattern parameter that wraps a pattern string and its parsed components.
-///
-/// This struct is serialized as a simple string but contains the parsed pattern
-/// and cached query results.
-#[derive(Clone, Default, JsonSchema, Debug)]
-#[serde(transparent)]
-#[schemars(transparent)]
-pub struct SeqPatternParam {
-    /// The source pattern string (used for serialization)
-    #[allow(dead_code)]
-    source: String,
+/// JSON payload shape delivered in the patch graph for
+/// `SeqPatternParam`. Produced client-side by
+/// the TypeScript `$p(...)` helper in `src/main/dsl/miniNotation/`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct ParsedPatternPayload {
+    /// The parsed AST.
+    pub ast: MiniAST,
+    /// The original mini-notation source string.
+    pub source: String,
+    /// Pre-computed leaf spans (used for Monaco tracked decorations).
+    pub all_spans: Vec<(usize, usize)>,
+}
 
-    /// The parsed pattern (skipped in serialization)
-    #[serde(skip, default)]
-    #[schemars(skip)]
+impl ParsedPatternPayload {
+    /// Build a payload by parsing a mini-notation string via the in-crate
+    /// test parser. Integration tests in `tests/` need this (they're a
+    /// separate crate, so `#[cfg(test)]` items in the lib aren't visible).
+    /// The production path is the TypeScript `$p()` helper; this exists
+    /// only so existing Rust fixtures don't need to hand-build ASTs.
+    #[doc(hidden)]
+    pub fn parse_for_test(source: &str) -> Self {
+        // An empty or whitespace-only source has no atoms to parse. Build a
+        // payload that preserves the original string so the `from_*`
+        // ingestion paths can reject it via their `trim().is_empty()` guard
+        // (the production parser rejects such input outright).
+        if source.trim().is_empty() {
+            return Self {
+                ast: MiniAST::Sequence(Vec::new()),
+                source: source.to_string(),
+                all_spans: Vec::new(),
+            };
+        }
+        let ast = crate::pattern_system::mini::parse_ast(source)
+            .expect("test_parser should parse the fixture source");
+        let all_spans = crate::pattern_system::mini::collect_leaf_spans(&ast);
+        ParsedPatternPayload {
+            ast,
+            source: source.to_string(),
+            all_spans,
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<&str> for ParsedPatternPayload {
+    fn from(source: &str) -> Self {
+        Self::parse_for_test(source)
+    }
+}
+
+#[cfg(test)]
+impl From<String> for ParsedPatternPayload {
+    fn from(source: String) -> Self {
+        Self::parse_for_test(&source)
+    }
+}
+
+/// Deserr bridge — round-trip via `serde_json::Value`. The payload is
+/// structurally complex (recursive `MiniAST`), so a hand-rolled deserr
+/// impl would duplicate the existing serde `Deserialize` impl. deserr's
+/// `IntoValue` is trivially convertible to `serde_json::Value`, so we
+/// lean on that.
+impl<E: DeserializeError> Deserr<E> for ParsedPatternPayload {
+    fn deserialize_from_value<V: IntoValue>(
+        value: deserr::Value<V>,
+        location: ValuePointerRef<'_>,
+    ) -> Result<Self, E> {
+        let json = value_to_json(value);
+        serde_json::from_value::<ParsedPatternPayload>(json).map_err(|e| {
+            deserr::take_cf_content(E::error::<V>(
+                None,
+                ErrorKind::Unexpected {
+                    msg: format!("invalid parsed pattern payload: {e}"),
+                },
+                location,
+            ))
+        })
+    }
+}
+
+fn value_to_json<V: IntoValue>(value: deserr::Value<V>) -> serde_json::Value {
+    match value {
+        deserr::Value::Null => serde_json::Value::Null,
+        deserr::Value::Boolean(b) => serde_json::Value::Bool(b),
+        deserr::Value::Integer(i) => serde_json::Value::Number(i.into()),
+        deserr::Value::NegativeInteger(i) => serde_json::Value::Number(i.into()),
+        deserr::Value::Float(f) => serde_json::Number::from_f64(f)
+            .map(serde_json::Value::Number)
+            .unwrap_or(serde_json::Value::Null),
+        deserr::Value::String(s) => serde_json::Value::String(s),
+        deserr::Value::Sequence(seq) => serde_json::Value::Array(
+            seq.into_iter()
+                .map(|v: V| value_to_json::<V>(v.into_value()))
+                .collect(),
+        ),
+        deserr::Value::Map(map) => {
+            let mut out = serde_json::Map::new();
+            for (k, v) in map.into_iter() {
+                out.insert(k, value_to_json::<V>(v.into_value()));
+            }
+            serde_json::Value::Object(out)
+        }
+    }
+}
+
+/// Default for `MiniAST` — empty sequence. Required so
+/// `ParsedPatternPayload` can derive `Default`; deserialization always
+/// overwrites the default.
+impl Default for MiniAST {
+    fn default() -> Self {
+        MiniAST::Sequence(Vec::new())
+    }
+}
+
+/// Arithmetic operation kind for chained `$p.s` ops. Wire form uses
+/// lowercase strings (`"add"`, `"sub"`) to match the TS builder.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SpOpKind {
+    Add,
+    Sub,
+}
+
+/// Strudel-style alignment mode for chained `$p.s` ops. Wire form uses
+/// lowercase strings (`"in"`, `"out"`, `"mix"`, `"squeeze"`,
+/// `"squeezeout"`, `"reset"`, `"restart"`) to match the TS builder.
+/// Mirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SpAlignmentMode {
+    In,
+    Out,
+    Mix,
+    Squeeze,
+    SqueezeOut,
+    Reset,
+    Restart,
+}
+
+impl SpAlignmentMode {
+    fn to_rt(self) -> crate::pattern_system::sp_combine::SpAlignmentMode {
+        use crate::pattern_system::sp_combine::SpAlignmentMode as Rt;
+        match self {
+            Self::In => Rt::In,
+            Self::Out => Rt::Out,
+            Self::Mix => Rt::Mix,
+            Self::Squeeze => Rt::Squeeze,
+            Self::SqueezeOut => Rt::SqueezeOut,
+            Self::Reset => Rt::Reset,
+            Self::Restart => Rt::Restart,
+        }
+    }
+}
+
+/// One chained op in an `$p.s` payload: arithmetic op + alignment mode.
+/// Paired positionally with `sources[i+1]` for `i = 0..ops.len()`.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct SpOp {
+    pub op: SpOpKind,
+    pub mode: SpAlignmentMode,
+}
+
+/// Source span used as an editor argument-span anchor.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ArgumentSpan {
+    pub start: usize,
+    pub end: usize,
+}
+
+/// JSON payload shape delivered for chained `$p.s(...).add(...)` patterns.
+/// First entry of `sources` is the left pattern; subsequent entries are
+/// chained RHS patterns combined via the parallel `ops` slot.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema)]
+pub struct SpPatternPayload {
+    /// Discriminator — TS-side `$p.s` builds objects with this set so the
+    /// `SeqPatternSource` untagged enum picks the `Sp` variant.
+    #[serde(rename = "__kind")]
+    pub kind: SpKindTag,
+    pub sources: Vec<ParsedPatternPayload>,
+    pub scale: String,
+    pub ops: Vec<SpOp>,
+    /// Per-source editor argument spans. Consumed entirely TS-side (merged
+    /// into the params' `__argument_spans` before IPC) and never read here;
+    /// optional on the wire so a hand-built payload may omit it.
+    #[serde(default)]
+    pub argument_spans: Vec<ArgumentSpan>,
+}
+
+/// Phantom-style discriminator that matches the literal `"SpPattern"`
+/// string in JSON.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum SpKindTag {
+    #[default]
+    SpPattern,
+}
+
+/// Cycle count for an `$p.arrange(...)` section: a finite positive integer, or
+/// the sentinel string `"Infinity"` for an infinite tail section. JSON can't
+/// carry a numeric infinity, so the TS `$p.arrange` helper emits the string
+/// `"Infinity"`; any finite count arrives as a JSON number.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SectionCycles {
+    Finite(f64),
+    Infinite(InfinityTag),
+}
+
+/// Phantom discriminator matching the literal `"Infinity"` string.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+pub enum InfinityTag {
+    #[serde(rename = "Infinity")]
+    Infinity,
+}
+
+/// Largest finite section length, mirroring `MAX_RIBBON_OFFSET` — keeps cycle
+/// sums well within `i64`/`f64`-exact range.
+const MAX_SECTION_CYCLES: f64 = 1_000_000.0;
+
+impl SectionCycles {
+    /// Resolve to a validated positive-integer `Fraction`, or `None` for the
+    /// infinite sentinel. Rejects non-finite, non-integer, ≤ 0, and over-cap.
+    fn to_finite_cycles(self) -> Result<Option<crate::pattern_system::Fraction>, String> {
+        match self {
+            SectionCycles::Infinite(_) => Ok(None),
+            SectionCycles::Finite(n) => {
+                // Non-finite values need no explicit guard: NaN and +∞ fail the
+                // `fract` check below and -∞ fails the `<= 0` check, so each is
+                // rejected before the `n as i64` cast.
+                if n <= 0.0 {
+                    return Err(format!(
+                        "$p.arrange cycle count must be a positive integer, got {n}"
+                    ));
+                }
+                if n.fract() != 0.0 {
+                    return Err(format!(
+                        "$p.arrange cycle count must be a whole number of cycles, got {n}"
+                    ));
+                }
+                if n > MAX_SECTION_CYCLES {
+                    return Err(format!(
+                        "$p.arrange cycle count must be {MAX_SECTION_CYCLES} cycles or fewer"
+                    ));
+                }
+                Ok(Some(crate::pattern_system::Fraction::from_integer(
+                    n as i64,
+                )))
+            }
+        }
+    }
+}
+
+/// Phantom discriminator matching the literal `"ArrangePattern"` string.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum ArrangeKindTag {
+    ArrangePattern,
+}
+
+/// One section of an `$p.arrange(...)` payload: a cycle budget plus a pattern.
+/// `pattern` is any [`SeqPatternSource`] (recursively), so a section may be a
+/// `$p`, a `$p.s`, or a nested `$p.arrange`.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ArrangeSectionPayload {
+    pub cycles: SectionCycles,
+    pub pattern: SeqPatternSource,
+}
+
+/// JSON payload for `$cycle($p.arrange(...))`. Sections play in order, each for
+/// its cycle budget; the whole loops with period `Σ cycles`. A trailing section
+/// with `cycles == "Infinity"` loops forever once reached.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ArrangePatternPayload {
+    /// Discriminator — TS-side `$p.arrange` sets this so the `SeqPatternSource`
+    /// untagged enum picks the `Arrange` variant.
+    #[serde(rename = "__kind")]
+    pub kind: ArrangeKindTag,
+    pub sections: Vec<ArrangeSectionPayload>,
+}
+
+/// Phantom discriminator matching the literal `"FastPattern"` string.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum FastKindTag {
+    FastPattern,
+}
+
+/// Phantom discriminator matching the literal `"SlowPattern"` string.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum SlowKindTag {
+    SlowPattern,
+}
+
+/// A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —
+/// not a highlightable source. A parsed pattern (`.fast("2 4")`) becomes its own
+/// highlightable source, so its active value lights up in the editor as it
+/// drives the speed. A non-positive factor (`0` or negative) yields silence,
+/// matching how the in-string `*`/`/` operators lower the same factors.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum FactorPayload {
+    /// `.fast(2)` — a constant. JSON numbers match this before `Pattern`.
+    Const(f64),
+    /// `.fast("2 4")` — a parsed number pattern.
+    Pattern(ParsedPatternPayload),
+}
+
+/// JSON payload for `$p(...).fast(factor)`: speed `pattern` up by `factor`.
+/// `pattern` is any [`SeqPatternSource`] (recursively), so `.fast` chains and
+/// nests over `$p`, `$p.s`, `$p.arrange`, and other `.fast`/`.slow` wrappers.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct FastPatternPayload {
+    /// Discriminator — TS-side `.fast` sets this so the `SeqPatternSource`
+    /// untagged enum picks the `Fast` variant.
+    #[serde(rename = "__kind")]
+    pub kind: FastKindTag,
+    pub pattern: Box<SeqPatternSource>,
+    pub factor: FactorPayload,
+}
+
+/// JSON payload for `$p(...).slow(factor)`: the time-inverse of
+/// [`FastPatternPayload`]. See it for `pattern`/`factor` semantics.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct SlowPatternPayload {
+    /// Discriminator — TS-side `.slow` sets this so the `SeqPatternSource`
+    /// untagged enum picks the `Slow` variant.
+    #[serde(rename = "__kind")]
+    pub kind: SlowKindTag,
+    pub pattern: Box<SeqPatternSource>,
+    pub factor: FactorPayload,
+}
+
+/// Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`
+/// payload, a chained `$p.s` payload with multi-source highlighting, or a
+/// single `ParsedPatternPayload` (the legacy single-source path used by
+/// `$cycle($p(...))`).
+///
+/// The `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before
+/// the untagged `Single`; each carries a distinct required `__kind` literal, so
+/// the untagged enum disambiguates them unambiguously before falling back to
+/// `Single`.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum SeqPatternSource {
+    Fast(FastPatternPayload),
+    Slow(SlowPatternPayload),
+    Arrange(ArrangePatternPayload),
+    Sp(SpPatternPayload),
+    Single(ParsedPatternPayload),
+}
+
+impl Default for SeqPatternSource {
+    fn default() -> Self {
+        Self::Single(ParsedPatternPayload::default())
+    }
+}
+
+/// Per-source metadata retained for span tracking — one entry per source in
+/// a chained `$p.s(...)` payload, used to highlight each input pattern string.
+#[derive(Clone, Debug, Default)]
+pub struct SeqSourceMeta {
+    pub source: String,
+    pub all_spans: Vec<(usize, usize)>,
+}
+
+/// A pattern parameter that wraps a parsed pattern payload and its
+/// derived runtime state.
+///
+/// Wire shape is [`SeqPatternSource`] — either a single
+/// [`ParsedPatternPayload`] (the existing single-source path for
+/// `$cycle($p(...))`) or an [`SpPatternPayload`] carrying multiple
+/// degree patterns + scale + chain ops for `$cycle($p.s(...).add(...))`.
+/// Either way the resolved runtime is a [`Pattern<SeqValue>`] plus
+/// per-cycle hap storage.
+#[derive(Clone, Default, Debug)]
+pub struct SeqPatternParam {
+    /// Per-source metadata (always at least one entry once parsed).
+    /// Chained `$p.s` payloads push one entry per chained RHS.
+    pub(crate) per_source: Vec<SeqSourceMeta>,
+
+    /// True when the original payload was an `Sp` (chained), so
+    /// `get_state` emits `pattern.0`, `pattern.1`, ... rather than the
+    /// single `pattern` key.
+    pub(crate) is_multi_source: bool,
+
+    /// The parsed pattern.
     pub(crate) pattern: Option<Pattern<SeqValue>>,
 
-    /// All leaf spans in the pattern (character offsets within the pattern string).
-    /// Computed once at parse time for creating Monaco tracked decorations.
-    ///
-    /// These differ from the "spans" returned in module state:
-    /// - `all_spans`: All pattern leaves, used to create decorations that track edits
-    /// - `spans` (in get_state): Currently active/playing spans, used for highlighting
-    #[serde(skip, default)]
-    #[schemars(skip)]
-    pub(crate) all_spans: Vec<(usize, usize)>,
+    /// Baked haps for the ribbon window `[offset, offset+length)`, one
+    /// `SeqCycleStorage` per cycle. Filled by [`SeqPatternParam::bake`].
+    pub(crate) cached_haps: Vec<SeqCycleStorage>,
+}
 
-    /// Pre-computed haps for cycles 0..999, populated at parse time.
-    /// Each element is an Arc-wrapped Vec of all haps intersecting that cycle.
-    #[serde(skip, default)]
-    #[schemars(skip)]
-    pub(crate) cached_haps: Vec<Arc<Vec<DspHap<SeqValue>>>>,
+impl JsonSchema for SeqPatternParam {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        SeqPatternSource::schema_name()
+    }
+    fn schema_id() -> std::borrow::Cow<'static, str> {
+        // schemars keys definitions by `schema_id`, not `schema_name`. Delegate
+        // the id too so this param and the real `SeqPatternSource` enum share one
+        // definition. Without this, the param's default id (the bare
+        // `"SeqPatternSource"`) differs from the derived enum's module-path-
+        // qualified id, so the recursive `pattern` fields that reference the enum
+        // (arrange sections, `.fast`/`.slow` wrappers) spawn a byte-identical
+        // duplicate definition named `SeqPatternSource2`.
+        SeqPatternSource::schema_id()
+    }
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Delegate the inline content directly (not `subschema_for`): with a
+        // shared `schema_id`, a `subschema_for::<SeqPatternSource>()` here would
+        // return a `$ref` to the definition currently being built, making the
+        // definition body a self-reference.
+        SeqPatternSource::json_schema(generator)
+    }
 }
 
 impl SeqPatternParam {
-    /// Parse a pattern string.
-    fn parse(source: &str) -> Result<Self, String> {
-        // Parse mini notation AST first (for span collection)
-        let ast = crate::pattern_system::mini::parse_ast(source).map_err(|e| e.to_string())?;
+    fn from_payload(payload: ParsedPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_single(payload)?;
+        // Parse-only: leave `cached_haps` empty. `Seq`'s `validate` hook
+        // bakes the ribbon window once both `pattern` and `ribbon` are known.
+        Ok(Self {
+            per_source,
+            is_multi_source: false,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
 
-        // Collect all leaf spans from AST
-        let all_spans = crate::pattern_system::mini::collect_leaf_spans(&ast);
+    /// Lower a single `$p(...)` payload to a runtime pattern + its one source
+    /// metadata entry. Shared by `from_payload` and `lower_source` (arrange).
+    fn lower_single(
+        payload: ParsedPatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        if payload.source.trim().is_empty() {
+            return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
+        }
+        // Strip modifier spans so intra-pattern modifier spans (euclidean
+        // operands, patterned `*`/`/` factors) fold into the source's
+        // primary chain at pattern_idx 0. Without this they keep pattern_idx
+        // >= 1 and `Seq::get_state`'s `idx < num_sources` filter discards them
+        // for a single source, so they never highlight. Mirrors the per-source
+        // strip in `lower_sp`.
+        let pattern = crate::pattern_system::mini::convert::<SeqValue>(&payload.ast)
+            .map_err(|e| e.to_string())?
+            .strip_modifier_spans();
 
-        // Convert AST to pattern
-        let pattern =
-            crate::pattern_system::mini::convert::<SeqValue>(&ast).map_err(|e| e.to_string())?;
+        let per_source = vec![SeqSourceMeta {
+            source: payload.source,
+            all_spans: payload.all_spans,
+        }];
 
-        // Pre-compute and cache haps for cycles 0..999
-        let cached_haps: Vec<Arc<Vec<DspHap<SeqValue>>>> = (0..1000)
-            .map(|cycle| Arc::new(pattern.query_cycle_all(cycle)))
+        Ok((pattern, per_source))
+    }
+
+    /// Dispatch any wire source shape to its runtime pattern + flat per-source
+    /// metadata. Recurses for nested `$p.arrange`.
+    fn lower_source(
+        source: SeqPatternSource,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        match source {
+            SeqPatternSource::Fast(p) => Self::lower_fast(p),
+            SeqPatternSource::Slow(p) => Self::lower_slow(p),
+            SeqPatternSource::Single(p) => Self::lower_single(p),
+            SeqPatternSource::Sp(p) => Self::lower_sp(p),
+            SeqPatternSource::Arrange(p) => Self::lower_arrange(p),
+        }
+    }
+
+    /// Lower an `$p.arrange(...)` payload: lower each section independently
+    /// (so each `$p.s` section carries its own scale), offset each section's
+    /// pattern indices to its slot in the flat `per_source` list, then stitch
+    /// the sections in time with the `arrange` combinator. Validates the cycle
+    /// counts (positive integers, or a single trailing `Infinity`).
+    fn lower_arrange(
+        payload: ArrangePatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        if payload.sections.is_empty() {
+            return Err("$p.arrange requires at least one section".to_string());
+        }
+        let section_count = payload.sections.len();
+        let mut per_source: Vec<SeqSourceMeta> = Vec::new();
+        let mut sections: Vec<(Option<crate::pattern_system::Fraction>, Pattern<SeqValue>)> =
+            Vec::with_capacity(section_count);
+
+        for (i, section) in payload.sections.into_iter().enumerate() {
+            let cycles = section.cycles.to_finite_cycles()?;
+            if cycles.is_none() && i + 1 != section_count {
+                return Err(
+                    "$p.arrange: an Infinity section must be the last section (sections after it \
+                     can never play)"
+                        .to_string(),
+                );
+            }
+            let (mut pat, metas) = Self::lower_source(section.pattern)?;
+            let offset = per_source.len();
+            if offset > 0 {
+                pat = pat.offset_pattern_idx(offset as u32);
+            }
+            per_source.extend(metas);
+            sections.push((cycles, pat));
+        }
+
+        Ok((crate::pattern_system::arrange(sections), per_source))
+    }
+
+    /// Build a `SeqPatternParam` from an `$p.arrange(...)` payload.
+    pub fn from_arrange_payload(payload: ArrangePatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_arrange(payload)?;
+        Ok(Self {
+            per_source,
+            is_multi_source: true,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
+
+    /// Lower a `.fast(...)` wrapper: lower the inner pattern, build the factor
+    /// as a `Pattern<Fraction>`, and speed the inner pattern up by it. A pattern
+    /// factor (`.fast("2 4")`) is appended to `per_source` as its own
+    /// highlightable source (its slot is `inner.per_source.len()`), so the active
+    /// factor value lights up in the editor as it drives the speed — `inner_join`
+    /// carries the factor's span context onto every output hap it covers. A
+    /// constant factor (`.fast(2)`) is span-free and adds no source.
+    fn lower_fast(
+        payload: FastPatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        let (inner, mut per_source) = Self::lower_source(*payload.pattern)?;
+        let (factor, factor_meta) = Self::lower_factor(payload.factor, per_source.len())?;
+        if let Some(meta) = factor_meta {
+            per_source.push(meta);
+        }
+        Ok((inner.fast(factor), per_source))
+    }
+
+    /// Lower a `.slow(...)` wrapper — the time-inverse of [`Self::lower_fast`].
+    fn lower_slow(
+        payload: SlowPatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        let (inner, mut per_source) = Self::lower_source(*payload.pattern)?;
+        let (factor, factor_meta) = Self::lower_factor(payload.factor, per_source.len())?;
+        if let Some(meta) = factor_meta {
+            per_source.push(meta);
+        }
+        Ok((inner.slow(factor), per_source))
+    }
+
+    /// Lower a `.fast`/`.slow` factor into a `Pattern<Fraction>` plus an optional
+    /// source metadata entry.
+    ///
+    /// A [`FactorPayload::Const`] becomes a span-free `pure` constant — no
+    /// highlightable source (`None`). A [`FactorPayload::Pattern`] is built with
+    /// the generic `f64` mini-notation converter; internal modifier spans are
+    /// stripped so its primary atoms sit at `pattern_idx 0` (mirroring
+    /// `lower_single`), then `offset` shifts them to the factor's slot in the flat
+    /// `per_source` list so its highlights land on the right source string.
+    fn lower_factor(
+        factor: FactorPayload,
+        offset: usize,
+    ) -> Result<
+        (
+            Pattern<crate::pattern_system::Fraction>,
+            Option<SeqSourceMeta>,
+        ),
+        String,
+    > {
+        match factor {
+            FactorPayload::Const(n) => {
+                if !n.is_finite() {
+                    return Err("fast/slow factor must be a finite number".to_string());
+                }
+                Ok((
+                    crate::pattern_system::pure(crate::pattern_system::Fraction::from(n)),
+                    None,
+                ))
+            }
+            FactorPayload::Pattern(payload) => {
+                if payload.source.trim().is_empty() {
+                    return Err(
+                        crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string()
+                    );
+                }
+                let mut pattern = crate::pattern_system::mini::convert::<f64>(&payload.ast)
+                    .map_err(|e| e.to_string())?
+                    .fmap(|v| crate::pattern_system::Fraction::from(*v))
+                    .strip_modifier_spans();
+                if offset > 0 {
+                    pattern = pattern.offset_pattern_idx(offset as u32);
+                }
+                let meta = SeqSourceMeta {
+                    source: payload.source,
+                    all_spans: payload.all_spans,
+                };
+                Ok((pattern, Some(meta)))
+            }
+        }
+    }
+
+    /// Build a `SeqPatternParam` from a `.fast(...)` payload.
+    ///
+    /// `is_multi_source` is always `true` so `get_state` keys highlights by
+    /// `pattern.0`, `pattern.1`, … — the TS factory registers a `.fast`/`.slow`
+    /// wrapper's argument spans under those same keys (like `$p.s`/`$p.arrange`),
+    /// so a single-source `pattern` key would never match and the wrapped
+    /// pattern wouldn't highlight.
+    pub fn from_fast_payload(payload: FastPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_fast(payload)?;
+        Ok(Self {
+            per_source,
+            is_multi_source: true,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
+
+    /// Build a `SeqPatternParam` from a `.slow(...)` payload. `is_multi_source`
+    /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
+    pub fn from_slow_payload(payload: SlowPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_slow(payload)?;
+        Ok(Self {
+            per_source,
+            is_multi_source: true,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn from_sp_payload(payload: SpPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_sp(payload)?;
+        Ok(Self {
+            per_source,
+            is_multi_source: true,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
+
+    fn lower_sp(
+        payload: SpPatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        use crate::dsp::seq::interval_value::{
+            IntervalValue, add_interval_values, sub_interval_values,
+        };
+        use crate::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
+        use crate::pattern_system::sp_combine::combine_sp;
+
+        if payload.sources.is_empty() {
+            return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
+        }
+        if payload.ops.len() + 1 != payload.sources.len() {
+            return Err(format!(
+                "$p.s payload mismatch: {} sources but {} ops (expected ops.len() == sources.len() - 1)",
+                payload.sources.len(),
+                payload.ops.len()
+            ));
+        }
+
+        // An empty or whitespace-only source anywhere in the chain is a hard
+        // error — a pattern string must contain at least one atom (a rest `~`
+        // counts). This covers the leftmost source and every chained RHS.
+        for src in &payload.sources {
+            if src.source.trim().is_empty() {
+                return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
+            }
+        }
+
+        // Parse scale up front so a bad scale string fails before we do
+        // any pattern work.
+        let scale = ScaleParam::parse(&payload.scale)
+            .ok_or_else(|| format!("invalid scale: {}", payload.scale))?;
+        let base_midi = scale.base_midi();
+        let (intervals, tuning): (Vec<i8>, [f64; 12]) = match scale.snapper() {
+            Some(s) => (s.scale_intervals().iter().copied().collect(), *s.tuning()),
+            None => (
+                (0i8..12).collect(),
+                std::array::from_fn(|i| i as f64 / 12.0),
+            ),
+        };
+
+        // Lower each source AST into a Pattern<IntervalValue>. Strip
+        // modifier spans before combining so each input's span tree
+        // becomes its own primary chain — the walk emitter then assigns
+        // pattern_idx = 0 to source[0], 1 to source[1], etc.
+        let mut patterns: Vec<crate::pattern_system::Pattern<IntervalValue>> =
+            Vec::with_capacity(payload.sources.len());
+        for src in &payload.sources {
+            let p = crate::pattern_system::mini::convert::<IntervalValue>(&src.ast)
+                .map_err(|e| e.to_string())?;
+            patterns.push(p.strip_modifier_spans());
+        }
+
+        // Fold left.
+        let mut combined = patterns[0].clone();
+        for (i, op) in payload.ops.iter().enumerate() {
+            let rhs = &patterns[i + 1];
+            let f: fn(&IntervalValue, &IntervalValue) -> IntervalValue = match op.op {
+                SpOpKind::Add => add_interval_values,
+                SpOpKind::Sub => sub_interval_values,
+            };
+            combined = combine_sp(&combined, rhs, op.mode.to_rt(), f);
+        }
+
+        // Resolve degrees -> SeqValue voltages, then cache cycles.
+        let resolver = move |v: &IntervalValue| match v {
+            IntervalValue::Degree(d) => {
+                SeqValue::Voltage(degree_to_voltage(*d, base_midi, &intervals, &tuning))
+            }
+            IntervalValue::Rest => SeqValue::Rest,
+        };
+        let voltage_pattern = combined.fmap(resolver);
+
+        let per_source: Vec<SeqSourceMeta> = payload
+            .sources
+            .iter()
+            .map(|s| SeqSourceMeta {
+                source: s.source.clone(),
+                all_spans: s.all_spans.clone(),
+            })
             .collect();
 
-        Ok(Self {
-            source: source.to_string(),
-            pattern: Some(pattern),
-            all_spans,
-            cached_haps,
-        })
+        Ok((voltage_pattern, per_source))
     }
 
     /// Get the parsed pattern.
@@ -235,39 +926,123 @@ impl SeqPatternParam {
         self.pattern.as_ref()
     }
 
-    /// Get the source pattern string (the evaluated pattern passed to the parser).
-    pub fn source(&self) -> &str {
-        &self.source
+    /// Per-source metadata. Single-source legacy payloads return a
+    /// one-element slice; chained `$p.s` payloads return one entry per
+    /// source string in the chain.
+    pub(crate) fn per_source(&self) -> &[SeqSourceMeta] {
+        &self.per_source
     }
 
-    /// Get all leaf spans in the pattern (for frontend tracked decorations).
-    pub fn all_spans(&self) -> &[(usize, usize)] {
-        &self.all_spans
+    /// `true` when the payload was an `Sp` chain (multi-source param
+    /// span output keyed by `pattern.0`, `pattern.1`, ...).
+    pub(crate) fn is_multi_source(&self) -> bool {
+        self.is_multi_source
     }
 
-    /// Get the pre-computed cached haps for cycles 0..999.
-    pub fn cached_haps(&self) -> &[Arc<Vec<DspHap<SeqValue>>>] {
+    /// Get the baked cycle storages for the ribbon window.
+    pub(crate) fn cached_haps(&self) -> &[SeqCycleStorage] {
         &self.cached_haps
+    }
+
+    /// Bake every integer cycle the ribbon window `[offset, offset+length)`
+    /// touches into `cached_haps`, replacing any previous bake. Runs on the
+    /// main thread at parse time (from `Seq`'s `validate` hook), never on the
+    /// audio thread.
+    pub(crate) fn bake(&mut self, offset: f64, length: f64) {
+        if let Some(pattern) = self.pattern.as_ref() {
+            self.cached_haps = bake_cycles(pattern, offset, length);
+        }
     }
 }
 
-// deserr implementation for SeqPatternParam - transparent string wrapper that parses.
-impl<E: DeserializeError> deserr::Deserr<E> for SeqPatternParam {
+/// Bake the integer cycles the ribbon window `[offset, offset+length)` touches
+/// — `[floor(offset), ceil(offset+length))` — into one `SeqCycleStorage` per
+/// cycle (`cached_haps[i]` holds cycle `floor(offset) + i`). Runs on the main
+/// thread, so allocation here is fine; the audio thread only ever reads the
+/// result.
+fn bake_cycles(pattern: &Pattern<SeqValue>, offset: f64, length: f64) -> Vec<SeqCycleStorage> {
+    let base = offset.floor() as i64;
+    let end = (offset + length).ceil() as i64; // exclusive
+    let count = (end - base).max(0) as usize;
+    let mut bump = bumpalo::Bump::new();
+    let mut cached_haps: Vec<SeqCycleStorage> = Vec::with_capacity(count);
+    for i in 0..count {
+        let cycle = base + i as i64;
+        let mut storage = SeqCycleStorage::with_capacity(
+            MIN_HAPS_CAP_HINT,
+            MIN_HAPS_CAP_HINT * SPANS_RESERVE_PER_HAP,
+        );
+        populate_cycle_storage(pattern, cycle, &mut bump, &mut storage);
+        cached_haps.push(storage);
+    }
+    cached_haps
+}
+
+// deserr implementation: reads either a plain `ParsedPatternPayload`
+// (`{ ast, source, all_spans }`) or the chained `SpPatternPayload`
+// (`{ __kind: 'SpPattern', sources, scale, ops, argument_spans }`).
+impl<E: DeserializeError> Deserr<E> for SeqPatternParam {
     fn deserialize_from_value<V: IntoValue>(
         value: deserr::Value<V>,
         location: ValuePointerRef<'_>,
     ) -> Result<Self, E> {
-        let source = String::deserialize_from_value(value, location)?;
-        if source.is_empty() {
-            return Ok(Self::default());
-        }
-        Self::parse(&source).map_err(|e| {
+        let json = value_to_json(value);
+        let parsed: SeqPatternSource = serde_json::from_value(json.clone()).map_err(|e| {
+            let preview = serde_json::to_string(&json)
+                .ok()
+                .map(|s| {
+                    let mut t: String = s.chars().take(4000).collect();
+                    if s.len() > 4000 {
+                        t.push_str("...");
+                    }
+                    t
+                })
+                .unwrap_or_else(|| "<unserializable>".to_string());
             deserr::take_cf_content(E::error::<V>(
                 None,
-                ErrorKind::Unexpected { msg: e },
+                ErrorKind::Unexpected {
+                    msg: format!("invalid seq pattern payload: {e}\n  payload: {preview}"),
+                },
                 location,
             ))
-        })
+        })?;
+        match parsed {
+            SeqPatternSource::Fast(p) => Self::from_fast_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+            SeqPatternSource::Slow(p) => Self::from_slow_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+            SeqPatternSource::Single(p) => Self::from_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+            SeqPatternSource::Sp(p) => Self::from_sp_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+            SeqPatternSource::Arrange(p) => Self::from_arrange_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+        }
     }
 }
 
@@ -280,6 +1055,767 @@ impl Connect for SeqPatternParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pattern_system::Fraction;
+
+    #[test]
+    fn test_sp_no_chain_two_atoms() {
+        let p = ParsedPatternPayload::parse_for_test("0 1");
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![p],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+        let pattern = parsed.pattern().expect("should have pattern");
+        let haps = pattern.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(haps.len(), 2, "expected 2 haps");
+        // Degrees 0 and 1 in C major → voltages 0 and 2/12.
+        let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
+        assert!((v[0] - 0.0).abs() < 1e-9);
+        assert!((v[1] - 2.0 / 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_sp_chain_add_in() {
+        let l = ParsedPatternPayload::parse_for_test("0 1");
+        let r = ParsedPatternPayload::parse_for_test("1");
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![l, r],
+            scale: "c(maj)".to_string(),
+            ops: vec![SpOp {
+                op: SpOpKind::Add,
+                mode: SpAlignmentMode::In,
+            }],
+            argument_spans: vec![],
+        };
+        let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+        let pattern = parsed.pattern().expect("should have pattern");
+        let haps = pattern.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(haps.len(), 2, "expected 2 haps");
+        // Left degrees [0, 1] + right degree 1 → [1, 2] → voltages 2/12, 4/12.
+        let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
+        assert!((v[0] - 2.0 / 12.0).abs() < 1e-9, "v[0]={}", v[0]);
+        assert!((v[1] - 4.0 / 12.0).abs() < 1e-9, "v[1]={}", v[1]);
+    }
+
+    // ===== $p.arrange tests =====
+
+    fn sp_source(src: &str, scale: &str) -> SeqPatternSource {
+        SeqPatternSource::Sp(SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test(src)],
+            scale: scale.to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        })
+    }
+
+    fn single_source(src: &str) -> SeqPatternSource {
+        SeqPatternSource::Single(ParsedPatternPayload::parse_for_test(src))
+    }
+
+    /// A two-source chained `$p.s(a, scale).add(b)` — both sources are active
+    /// within every cycle (combined), so its `per_source` has two entries
+    /// highlighting at pattern_idx 0 and 1.
+    fn sp_source_2(a: &str, b: &str, scale: &str) -> SeqPatternSource {
+        SeqPatternSource::Sp(SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![
+                ParsedPatternPayload::parse_for_test(a),
+                ParsedPatternPayload::parse_for_test(b),
+            ],
+            scale: scale.to_string(),
+            ops: vec![SpOp {
+                op: SpOpKind::Add,
+                mode: SpAlignmentMode::In,
+            }],
+            argument_spans: vec![],
+        })
+    }
+
+    fn section(cycles: f64, pattern: SeqPatternSource) -> ArrangeSectionPayload {
+        ArrangeSectionPayload {
+            cycles: SectionCycles::Finite(cycles),
+            pattern,
+        }
+    }
+
+    fn arrange_payload(sections: Vec<ArrangeSectionPayload>) -> ArrangePatternPayload {
+        ArrangePatternPayload {
+            kind: ArrangeKindTag::ArrangePattern,
+            sections,
+        }
+    }
+
+    fn cycle_voltages(param: &SeqPatternParam, cycle: i64) -> Vec<f64> {
+        param
+            .pattern()
+            .expect("pattern")
+            .query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            )
+            .into_iter()
+            .filter(|h| h.has_onset())
+            .filter_map(|h| h.value.to_voltage())
+            .collect()
+    }
+
+    fn approx_eq(a: &[f64], b: &[f64]) -> bool {
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9)
+    }
+
+    #[test]
+    fn test_arrange_switches_scale_per_section() {
+        // [2, "0 2 4" @ c major], [2, "0 2 4" @ a minor] — same degrees, but each
+        // section resolves through its own scale, so the voltages differ.
+        let payload = arrange_payload(vec![
+            section(2.0, sp_source("0 2 4", "c(maj)")),
+            section(2.0, sp_source("0 2 4", "a(min)")),
+        ]);
+        let param = SeqPatternParam::from_arrange_payload(payload).unwrap();
+
+        // c major degrees 0,2,4 → 0, 4/12, 7/12 V.
+        let c_major = cycle_voltages(&param, 0);
+        assert!(
+            approx_eq(&c_major, &[0.0, 4.0 / 12.0, 7.0 / 12.0]),
+            "c major section voltages: {c_major:?}"
+        );
+        // The pattern has no slow elements, so both cycles of a section match.
+        assert!(approx_eq(&cycle_voltages(&param, 1), &c_major));
+        let a_minor = cycle_voltages(&param, 2);
+        assert!(approx_eq(&cycle_voltages(&param, 3), &a_minor));
+        // Different scales → different voltages at the section seam.
+        assert!(
+            !approx_eq(&c_major, &a_minor),
+            "expected scale switch at cycle 2, got {c_major:?} vs {a_minor:?}"
+        );
+        // Period 4: cycle 4 wraps to the c major section.
+        assert!(approx_eq(&cycle_voltages(&param, 4), &c_major));
+    }
+
+    #[test]
+    fn test_arrange_flat_per_source_and_offset_indices() {
+        // Two single-source $p.s sections; the flat per_source list is their
+        // sources in order, and each section's haps carry pattern indices
+        // offset to their slot in that flat list.
+        let payload = arrange_payload(vec![
+            section(1.0, sp_source("0", "c(maj)")),
+            section(1.0, sp_source("5", "c(maj)")),
+        ]);
+        let mut param = SeqPatternParam::from_arrange_payload(payload).unwrap();
+
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["0", "5"], "flat per_source in section order");
+
+        param.bake(0.0, 4.0);
+        let storages = param.cached_haps();
+        let pidx = |cycle: usize| -> Vec<u32> {
+            storages[cycle]
+                .span_arena
+                .iter()
+                .map(|s| s.pattern_idx)
+                .collect()
+        };
+        assert!(
+            pidx(0).iter().all(|&p| p == 0),
+            "section 0 highlights at flat idx 0, got {:?}",
+            pidx(0)
+        );
+        assert!(
+            !pidx(1).is_empty() && pidx(1).iter().all(|&p| p == 1),
+            "section 1 highlights offset to flat idx 1, got {:?}",
+            pidx(1)
+        );
+    }
+
+    #[test]
+    fn test_arrange_baked_haps_carry_scale_switched_voltages() {
+        // The audio thread reads `cached_haps`, not the live pattern. Bake the
+        // two-scale arrangement and confirm the baked per-cycle storage (what
+        // `Seq::update` consumes) carries c major in section 0 and a minor in
+        // section 1 — i.e. the scale actually switches at the seam.
+        let payload = arrange_payload(vec![
+            section(2.0, sp_source("0 2 4", "c(maj)")),
+            section(2.0, sp_source("0 2 4", "a(min)")),
+        ]);
+        let mut param = SeqPatternParam::from_arrange_payload(payload).unwrap();
+        param.bake(0.0, 4.0);
+        let storages = param.cached_haps();
+
+        let baked_volts = |cycle: usize| -> Vec<f64> {
+            storages[cycle]
+                .haps
+                .iter()
+                .filter(|h| h.has_onset)
+                .filter_map(|h| h.value.to_voltage())
+                .collect()
+        };
+
+        let c_major = baked_volts(0);
+        assert!(
+            approx_eq(&c_major, &[0.0, 4.0 / 12.0, 7.0 / 12.0]),
+            "baked c major voltages: {c_major:?}"
+        );
+        assert!(
+            approx_eq(&baked_volts(1), &c_major),
+            "section 0 spans cycles 0..2"
+        );
+        assert!(
+            !approx_eq(&baked_volts(2), &c_major),
+            "baked storage must switch scale at the section seam"
+        );
+        assert!(
+            approx_eq(&baked_volts(3), &baked_volts(2)),
+            "section 1 spans cycles 2..4"
+        );
+    }
+
+    #[test]
+    fn test_arrange_nests() {
+        // A section may itself be an arrange. per_source flattens depth-first
+        // in section order: "0", then the nested arrange's "7" and "c4".
+        let nested = SeqPatternSource::Arrange(arrange_payload(vec![
+            section(1.0, sp_source("7", "c(maj)")),
+            section(1.0, single_source("c4")),
+        ]));
+        let payload = arrange_payload(vec![
+            section(2.0, sp_source("0", "c(maj)")),
+            section(2.0, nested),
+        ]);
+        let param = SeqPatternParam::from_arrange_payload(payload).unwrap();
+
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(
+            sources,
+            vec!["0", "7", "c4"],
+            "nested per_source flattens in order"
+        );
+        // Builds a queryable pattern across the whole period.
+        assert_eq!(cycle_voltages(&param, 0).len(), 1);
+    }
+
+    #[test]
+    fn test_arrange_infinity_tail_loops_last_section() {
+        // [2, "c4"], [Infinity, "e4"] — c4 for cycles 0..2, e4 forever after.
+        let payload = ArrangePatternPayload {
+            kind: ArrangeKindTag::ArrangePattern,
+            sections: vec![
+                section(2.0, single_source("c4")),
+                ArrangeSectionPayload {
+                    cycles: SectionCycles::Infinite(InfinityTag::Infinity),
+                    pattern: single_source("e4"),
+                },
+            ],
+        };
+        let param = SeqPatternParam::from_arrange_payload(payload).unwrap();
+
+        let c4 = cycle_voltages(&param, 0);
+        assert!(approx_eq(&cycle_voltages(&param, 1), &c4));
+        let e4 = cycle_voltages(&param, 2);
+        assert!(!approx_eq(&c4, &e4), "tail section differs from prefix");
+        // The tail loops forever — far-future cycles still play e4.
+        assert!(approx_eq(&cycle_voltages(&param, 5), &e4));
+        assert!(approx_eq(&cycle_voltages(&param, 100), &e4));
+    }
+
+    #[test]
+    fn test_arrange_rejects_bad_cycle_counts() {
+        // Non-integer, zero, and negative finite counts are rejected.
+        for bad in [2.5, 0.0, -1.0] {
+            let payload = arrange_payload(vec![section(bad, single_source("c4"))]);
+            assert!(
+                SeqPatternParam::from_arrange_payload(payload).is_err(),
+                "cycle count {bad} should be rejected"
+            );
+        }
+        // Empty arrangement is rejected.
+        assert!(SeqPatternParam::from_arrange_payload(arrange_payload(vec![])).is_err());
+    }
+
+    #[test]
+    fn test_arrange_rejects_infinity_not_last() {
+        let payload = ArrangePatternPayload {
+            kind: ArrangeKindTag::ArrangePattern,
+            sections: vec![
+                ArrangeSectionPayload {
+                    cycles: SectionCycles::Infinite(InfinityTag::Infinity),
+                    pattern: single_source("c4"),
+                },
+                section(2.0, single_source("e4")),
+            ],
+        };
+        assert!(
+            SeqPatternParam::from_arrange_payload(payload).is_err(),
+            "an Infinity section before the end must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_arrange_wire_json_dispatches_to_arrange_variant() {
+        // The untagged `SeqPatternSource` (the same serde dispatch the deserr
+        // path runs) must pick `Arrange` for an `__kind: "ArrangePattern"`
+        // payload, with a nested `$p.s` section and the `"Infinity"` sentinel.
+        let c4 = serde_json::to_value(ParsedPatternPayload::parse_for_test("c4")).unwrap();
+        let degrees = serde_json::to_value(ParsedPatternPayload::parse_for_test("0 2 4")).unwrap();
+        let sp = serde_json::json!({
+            "__kind": "SpPattern",
+            "sources": [degrees],
+            "scale": "a(min)",
+            "ops": []
+        });
+        let json = serde_json::json!({
+            "__kind": "ArrangePattern",
+            "sections": [
+                { "cycles": 2, "pattern": c4 },
+                { "cycles": "Infinity", "pattern": sp }
+            ]
+        });
+
+        let parsed: SeqPatternSource =
+            serde_json::from_value(json).expect("arrange wire json should parse");
+        let arrange = match parsed {
+            SeqPatternSource::Arrange(a) => a,
+            other => panic!("expected Arrange variant, got {other:?}"),
+        };
+        assert_eq!(arrange.sections.len(), 2);
+        assert!(matches!(
+            arrange.sections[0].cycles,
+            SectionCycles::Finite(n) if (n - 2.0).abs() < 1e-9
+        ));
+        assert!(matches!(
+            arrange.sections[1].cycles,
+            SectionCycles::Infinite(_)
+        ));
+        // And it lowers into a usable param.
+        let param = SeqPatternParam::from_arrange_payload(arrange).unwrap();
+        assert!(param.is_multi_source());
+        assert_eq!(param.per_source().len(), 2);
+    }
+
+    // ===== .fast / .slow tests =====
+
+    // String-factor helpers build a `Pattern` factor (a highlightable source);
+    // `*_const_payload` build a `Const` factor (no source).
+    fn fast_payload(factor: &str, pattern: SeqPatternSource) -> FastPatternPayload {
+        FastPatternPayload {
+            kind: FastKindTag::FastPattern,
+            pattern: Box::new(pattern),
+            factor: FactorPayload::Pattern(ParsedPatternPayload::parse_for_test(factor)),
+        }
+    }
+
+    fn slow_payload(factor: &str, pattern: SeqPatternSource) -> SlowPatternPayload {
+        SlowPatternPayload {
+            kind: SlowKindTag::SlowPattern,
+            pattern: Box::new(pattern),
+            factor: FactorPayload::Pattern(ParsedPatternPayload::parse_for_test(factor)),
+        }
+    }
+
+    fn fast_const_payload(factor: f64, pattern: SeqPatternSource) -> FastPatternPayload {
+        FastPatternPayload {
+            kind: FastKindTag::FastPattern,
+            pattern: Box::new(pattern),
+            factor: FactorPayload::Const(factor),
+        }
+    }
+
+    fn slow_const_payload(factor: f64, pattern: SeqPatternSource) -> SlowPatternPayload {
+        SlowPatternPayload {
+            kind: SlowKindTag::SlowPattern,
+            pattern: Box::new(pattern),
+            factor: FactorPayload::Const(factor),
+        }
+    }
+
+    #[test]
+    fn test_fast_doubles_onset_count() {
+        // "c4 e4" has two onsets per cycle; fast(2) packs the pattern twice → 4.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_payload("2", single_source("c4 e4"))).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 4);
+    }
+
+    #[test]
+    fn test_fast_single_source_keys_highlights_by_pattern_index() {
+        // Highlight contract: the TS factory registers a `.fast`/`.slow` wrapper's
+        // spans under `pattern.0` (like `$p.s`/`$p.arrange`), so the param must be
+        // multi-source even when wrapping a single `$p` with a constant factor
+        // (one source) — otherwise `get_state` would key the active highlight
+        // under `pattern` and never match.
+        let fast =
+            SeqPatternParam::from_fast_payload(fast_const_payload(2.0, single_source("c4 e4")))
+                .unwrap();
+        assert_eq!(fast.per_source().len(), 1, "a const factor adds no source");
+        assert!(
+            fast.is_multi_source(),
+            "fast must key highlights by pattern.0"
+        );
+    }
+
+    #[test]
+    fn test_fast_const_factor_is_not_a_highlightable_source() {
+        // `.fast(2)` (a number) is a constant: it doubles the pattern but adds no
+        // per_source entry and contributes no span context, so only the wrapped
+        // pattern (idx 0) highlights — never the bare number.
+        let mut param =
+            SeqPatternParam::from_fast_payload(fast_const_payload(2.0, single_source("c4 e4")))
+                .unwrap();
+        assert_eq!(
+            cycle_voltages(&param, 0).len(),
+            4,
+            "const factor still doubles"
+        );
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["c4 e4"], "no factor source is added");
+
+        param.bake(0.0, 1.0);
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
+            .span_arena
+            .iter()
+            .map(|s| s.pattern_idx)
+            .collect();
+        assert_eq!(
+            pidxs,
+            std::collections::BTreeSet::from([0]),
+            "only the wrapped pattern highlights (idx 0), got {pidxs:?}"
+        );
+    }
+
+    #[test]
+    fn test_slow_stretches_across_cycles() {
+        // slow(2) stretches "c4 e4" over two cycles: c4 in cycle 0, e4 in cycle 1.
+        let param =
+            SeqPatternParam::from_slow_payload(slow_payload("2", single_source("c4 e4"))).unwrap();
+        let c0 = cycle_voltages(&param, 0);
+        let c1 = cycle_voltages(&param, 1);
+        assert_eq!(c0.len(), 1, "cycle 0 holds a single onset, got {c0:?}");
+        assert_eq!(c1.len(), 1, "cycle 1 holds a single onset, got {c1:?}");
+        assert!(
+            (c0[0] - c1[0]).abs() > 1e-9,
+            "the two cycles play different notes, got {c0:?} vs {c1:?}"
+        );
+    }
+
+    #[test]
+    fn test_fast_accepts_patterned_factor() {
+        // Mirrors strudel's `pure('a').fast(sequence(1, 4))` → 3 events in cycle 0:
+        // the ×1 half contributes one, the ×4 half contributes two.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_payload("1 4", single_source("c4"))).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 3);
+    }
+
+    #[test]
+    fn test_fast_zero_factor_is_silence() {
+        // Lenient edge behavior (mirrors the in-string `*0`): factor 0 → silence.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_payload("0", single_source("c4 e4"))).unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "fast(0) produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_fast_negative_factor_is_silence() {
+        // A negative factor reverses the query span, and reversed spans yield no
+        // haps — so `.fast(-2)` is silence, not reversed playback. Pins the
+        // documented non-positive-factor behavior so the docs can't drift.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_const_payload(-2.0, single_source("c4 e4")))
+                .unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "fast(-2) produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_slow_negative_factor_is_silence() {
+        // The slow side mirrors fast: a negative factor yields silence.
+        let param =
+            SeqPatternParam::from_slow_payload(slow_const_payload(-2.0, single_source("c4 e4")))
+                .unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "slow(-2) produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_fast_pattern_negative_factor_is_silence() {
+        // The pattern-string factor path mirrors the const path: a negative
+        // factor (`.fast("-2")`) reverses the query span and yields silence,
+        // matching the const-factor and zero-factor cases.
+        let param =
+            SeqPatternParam::from_fast_payload(fast_payload("-2", single_source("c4 e4"))).unwrap();
+        assert!(
+            cycle_voltages(&param, 0).is_empty(),
+            "fast(\"-2\") produces no haps"
+        );
+    }
+
+    #[test]
+    fn test_lower_factor_rejects_non_finite_const() {
+        // The const-factor finiteness guard is unreachable over the wire (JSON
+        // cannot carry NaN/∞), so exercise it directly. `Fraction::from(f64)`
+        // maps a non-finite value to 0, so without the guard a non-finite factor
+        // would be silently accepted as factor 0 (silence); the guard rejects it
+        // with an explicit error instead.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(
+                SeqPatternParam::lower_factor(FactorPayload::Const(bad), 0).is_err(),
+                "non-finite const factor {bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fast_per_source_appends_factor_after_inner() {
+        // The wrapped pattern's per_source flows through, then the factor is
+        // appended as its own highlightable source: `["0", "5", "2"]`. The
+        // factory keys these by `pattern.0` / `pattern.1` / `pattern.2`.
+        let arr = SeqPatternSource::Arrange(arrange_payload(vec![
+            section(1.0, sp_source("0", "c(maj)")),
+            section(1.0, sp_source("5", "c(maj)")),
+        ]));
+        let param = SeqPatternParam::from_fast_payload(fast_payload("2", arr)).unwrap();
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["0", "5", "2"]);
+        assert!(param.is_multi_source());
+    }
+
+    #[test]
+    fn test_fast_factor_is_a_highlightable_source() {
+        // `$p("c4 e4").fast("2 4")`: the factor "2 4" is the last per_source
+        // entry, and baking the cycle proves the active factor atoms light up
+        // at the factor's flat slot (pattern_idx == inner source count == 1).
+        let mut param =
+            SeqPatternParam::from_fast_payload(fast_payload("2 4", single_source("c4 e4")))
+                .unwrap();
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["c4 e4", "2 4"]);
+
+        param.bake(0.0, 1.0);
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
+            .span_arena
+            .iter()
+            .map(|s| s.pattern_idx)
+            .collect();
+        // Inner notes highlight at idx 0; the active factor atom at idx 1.
+        assert!(pidxs.contains(&0), "inner pattern highlights at idx 0");
+        assert!(
+            pidxs.contains(&1),
+            "factor atoms highlight at their slot idx 1, got {pidxs:?}"
+        );
+    }
+
+    #[test]
+    fn test_fast_factor_slot_equals_multi_source_inner_count() {
+        // `$p.s("0 2 4", ...).add("0 5").fast("2 4")`: the wrapped pattern is a
+        // *two-source* `$p.s`, both active within every cycle. The factor's
+        // highlightable slot must therefore be the inner source COUNT (2), not a
+        // fixed 1 — `lower_fast` passes `inner.per_source.len()` as the offset.
+        // Baking a cycle proves all three sources light up at their flat slots:
+        // the two inner sources at idx 0 and 1, and the factor "2 4" at idx 2.
+        let inner = sp_source_2("0 2 4", "0 5", "c(maj)");
+        let mut param = SeqPatternParam::from_fast_payload(fast_payload("2 4", inner)).unwrap();
+
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["0 2 4", "0 5", "2 4"]);
+
+        param.bake(0.0, 1.0);
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
+            .span_arena
+            .iter()
+            .map(|s| s.pattern_idx)
+            .collect();
+        assert_eq!(
+            pidxs,
+            std::collections::BTreeSet::from([0, 1, 2]),
+            "inner sources highlight at idx 0/1, factor at idx 2 (== inner count), got {pidxs:?}"
+        );
+    }
+
+    #[test]
+    fn test_fast_rejects_empty_factor() {
+        let payload = fast_payload("  ", single_source("c4"));
+        assert!(SeqPatternParam::from_fast_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_fast_wire_json_dispatches_to_fast_variant() {
+        // The untagged `SeqPatternSource` must pick `Fast` for an
+        // `__kind: "FastPattern"` payload, with the inner pattern and factor
+        // embedded as parsed-pattern payloads.
+        let inner = serde_json::to_value(ParsedPatternPayload::parse_for_test("c4 e4")).unwrap();
+        let factor = serde_json::to_value(ParsedPatternPayload::parse_for_test("2")).unwrap();
+        let json = serde_json::json!({
+            "__kind": "FastPattern",
+            "pattern": inner,
+            "factor": factor,
+        });
+        let parsed: SeqPatternSource =
+            serde_json::from_value(json).expect("fast wire json should parse");
+        let fast = match parsed {
+            SeqPatternSource::Fast(f) => f,
+            other => panic!("expected Fast variant, got {other:?}"),
+        };
+        // And it lowers into a usable, doubled param.
+        let param = SeqPatternParam::from_fast_payload(fast).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 4);
+    }
+
+    #[test]
+    fn test_fast_wire_numeric_factor_is_const() {
+        // A bare JSON number for `factor` deserializes as `FactorPayload::Const`
+        // (the untagged enum tries `Const(f64)` before `Pattern`), so the factor
+        // is a constant with no highlightable source.
+        let inner = serde_json::to_value(ParsedPatternPayload::parse_for_test("c4 e4")).unwrap();
+        let json = serde_json::json!({
+            "__kind": "FastPattern",
+            "pattern": inner,
+            "factor": 2,
+        });
+        let parsed: SeqPatternSource =
+            serde_json::from_value(json).expect("fast wire json should parse");
+        let fast = match parsed {
+            SeqPatternSource::Fast(f) => f,
+            other => panic!("expected Fast variant, got {other:?}"),
+        };
+        assert!(matches!(fast.factor, FactorPayload::Const(n) if (n - 2.0).abs() < 1e-9));
+        let param = SeqPatternParam::from_fast_payload(fast).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 4);
+        assert_eq!(param.per_source().len(), 1, "const factor adds no source");
+    }
+
+    #[test]
+    fn test_slow_wire_json_dispatches_to_slow_variant() {
+        let inner = serde_json::to_value(ParsedPatternPayload::parse_for_test("c4")).unwrap();
+        let factor = serde_json::to_value(ParsedPatternPayload::parse_for_test("2")).unwrap();
+        let json = serde_json::json!({
+            "__kind": "SlowPattern",
+            "pattern": inner,
+            "factor": factor,
+        });
+        let parsed: SeqPatternSource =
+            serde_json::from_value(json).expect("slow wire json should parse");
+        assert!(matches!(parsed, SeqPatternSource::Slow(_)));
+    }
+
+    #[test]
+    fn test_fast_slow_chain_round_trips() {
+        // `.fast(3).slow(3)` nests a Slow around a Fast; the net onset count
+        // returns to the un-sped pattern's two onsets per cycle.
+        let inner = single_source("c4 e4");
+        let fast = SeqPatternSource::Fast(fast_payload("3", inner));
+        let param = SeqPatternParam::from_slow_payload(slow_payload("3", fast)).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 2);
+    }
+
+    #[test]
+    fn test_from_payload_rejects_empty() {
+        // Single-source $cycle($p("")) — empty string is a hard error.
+        assert!(SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("")).is_err());
+        // Whitespace-only is rejected the same way.
+        assert!(
+            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("   ")).is_err()
+        );
+    }
+
+    #[test]
+    fn test_from_payload_rest_is_accepted() {
+        // A rest `~` is a real atom, not empty — must parse fine.
+        let parsed =
+            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("~")).unwrap();
+        assert!(parsed.pattern().is_some());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rejects_empty_leftmost() {
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("")],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rejects_empty_chained_rhs() {
+        // An empty source in a non-leftmost chain slot must error too.
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![
+                ParsedPatternPayload::parse_for_test("0 1"),
+                ParsedPatternPayload::parse_for_test(""),
+            ],
+            scale: "c(maj)".to_string(),
+            ops: vec![SpOp {
+                op: SpOpKind::Add,
+                mode: SpAlignmentMode::In,
+            }],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rejects_whitespace_source() {
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("   ")],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_from_sp_payload_rest_is_accepted() {
+        // A rest `~` source is valid (not empty).
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("~")],
+            scale: "c(maj)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+        assert!(parsed.pattern().is_some());
+    }
 
     #[test]
     fn test_seq_value_to_voltage() {
@@ -314,10 +1850,9 @@ mod tests {
 
     #[test]
     fn test_from_atom() {
-        // Number is treated as MIDI and converted to voltage
-        let n = SeqValue::from_atom(&AtomValue::Number(60.0)).unwrap();
-        let expected_voltage = midi_to_voct_f64(60.0);
-        assert!(matches!(n, SeqValue::Voltage(v) if (v - expected_voltage).abs() < 0.001));
+        // Bare numbers are voltages directly (1V/oct).
+        let n = SeqValue::from_atom(&AtomValue::Number(2.0)).unwrap();
+        assert!(matches!(n, SeqValue::Voltage(v) if (v - 2.0).abs() < 0.001));
 
         // Note is converted to voltage at parse time
         let note = SeqValue::from_atom(&AtomValue::Note {
@@ -328,14 +1863,6 @@ mod tests {
         .unwrap();
         let expected_a4_voltage = midi_to_voct_f64(69.0); // A4 = MIDI 69
         assert!(matches!(note, SeqValue::Voltage(v) if (v - expected_a4_voltage).abs() < 0.001));
-
-        assert!(
-            SeqValue::from_atom(&AtomValue::Identifier("module(src:output:0)".to_string()))
-                .is_err()
-        );
-        assert!(
-            SeqValue::from_atom(&AtomValue::String("module(src:output:0)".to_string())).is_err()
-        );
     }
 
     #[test]
@@ -424,6 +1951,55 @@ mod tests {
     }
 
     #[test]
+    fn single_source_euclidean_highlights_operand_spans() {
+        use crate::pattern_system::Fraction;
+        use crate::pattern_system::mini::{collect_leaf_spans, parse_ast};
+
+        // Regression: the single-source `$p()` path must strip modifier spans
+        // so euclidean operand spans (the pulses/steps inside the parens)
+        // report at pattern_idx 0. Otherwise `Seq::get_state`'s
+        // `idx < num_sources` filter drops every span at pattern_idx >= 1 for a
+        // single-source pattern, and the operands never highlight.
+        //
+        // `0(3,8)`: base atom `0` at span 0..1, pulses `3` at 2..3, steps `8`
+        // at 4..5.
+        let ast = parse_ast("0(3,8)").expect("parse euclidean");
+        let all_spans = collect_leaf_spans(&ast);
+        let payload = ParsedPatternPayload {
+            ast,
+            source: "0(3,8)".to_string(),
+            all_spans,
+        };
+        let param = SeqPatternParam::from_payload(payload).expect("from_payload");
+        let pattern = param.pattern.as_ref().expect("pattern");
+        let haps = pattern.query_arc(Fraction::from(0), Fraction::from(1));
+        let ctx = &haps[0].context;
+
+        // Every source span (base + operands) must live at pattern_idx 0:
+        // in source_span / source_extra_spans, with nothing left in
+        // modifier_spans (which the highlight filter discards).
+        assert!(
+            ctx.modifier_spans.is_empty(),
+            "operand spans must not sit at pattern_idx >= 1: {:?}",
+            ctx.modifier_spans
+        );
+        let idx0: Vec<(usize, usize)> = ctx
+            .source_span
+            .iter()
+            .chain(ctx.source_extra_spans.iter())
+            .map(|s| (s.start, s.end))
+            .collect();
+        assert!(
+            idx0.contains(&(2, 3)),
+            "pulses operand span missing from pattern_idx 0: {idx0:?}"
+        );
+        assert!(
+            idx0.contains(&(4, 5)),
+            "steps operand span missing from pattern_idx 0: {idx0:?}"
+        );
+    }
+
+    #[test]
     fn test_seq_value_rest_in_pattern() {
         use crate::pattern_system::Fraction;
         use crate::pattern_system::mini::parse;
@@ -477,5 +2053,118 @@ mod tests {
         // Count pulses (non-rests)
         let pulse_count = haps.iter().filter(|h| !h.value.is_rest()).count();
         assert_eq!(pulse_count, 3, "Should have 3 pulses");
+    }
+
+    #[test]
+    fn replicate_in_sequence_expands_to_siblings() {
+        use crate::pattern_system::Fraction;
+        use crate::pattern_system::mini::parse;
+
+        // Strudel semantics: `!n` inside a sequence replicates the element into
+        // `n` sibling steps that share the parent's stepping, NOT one step
+        // crammed with a fastcat. So `[c5@1.5 c5!2]` == `[c5@1.5 c5 c5]`
+        // (total weight 3.5): c5 at [0,3/7), [3/7,5/7), [5/7,1).
+        let pat: crate::pattern_system::Pattern<SeqValue> =
+            parse("[c5@1.5 c5!2]").expect("should parse");
+        let haps = pat.query_arc(Fraction::from(0), Fraction::from_integer(1));
+        let spans: Vec<(String, String)> = haps
+            .iter()
+            .map(|h| (h.part.begin.to_string(), h.part.end.to_string()))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![
+                ("0".to_string(), "3/7".to_string()),
+                ("3/7".to_string(), "5/7".to_string()),
+                ("5/7".to_string(), "1".to_string()),
+            ],
+            "[c5@1.5 c5!2] should split 1.5:1:1 (total 3.5)"
+        );
+
+        // Unweighted: `[0 1!2 2]` == `[0 1 1 2]` — four equal quarter steps.
+        let pat2: crate::pattern_system::Pattern<SeqValue> =
+            parse("[0 1!2 2]").expect("should parse");
+        let haps2 = pat2.query_arc(Fraction::from(0), Fraction::from_integer(1));
+        assert_eq!(haps2.len(), 4, "[0 1!2 2] should produce four steps");
+        assert!(
+            haps2
+                .iter()
+                .all(|h| h.part.duration() == Fraction::new(1, 4)),
+            "all four steps should be 1/4 wide"
+        );
+    }
+
+    #[test]
+    fn nested_slowcat_fastcat_matches_strudel() {
+        use crate::pattern_system::Fraction;
+        use crate::pattern_system::mini::parse;
+
+        fn note_name(v: f64) -> String {
+            let midi = (v * 12.0 + 60.0).round() as i64;
+            let names = [
+                "c", "c#", "d", "d#", "e", "f", "f#", "g", "g#", "a", "a#", "b",
+            ];
+            format!("{}{}", names[midi.rem_euclid(12) as usize], midi / 12 - 1)
+        }
+
+        // Captured verbatim from Strudel (`@strudel/mini`) for this exact
+        // source over [0, 5/2) — one full period. `~` produces silence in
+        // Strudel, so rests are absent here (the local engine emits explicit
+        // gate-low Rest haps, filtered out below before comparing).
+        let src = "<\n  [c5, e, c]@1.5\n  [c5, e, c]!2\n  [c5, f, c#]!2\n  [c5, g, d#]\n  [\n    [c5@1.5 c5!2],\n    [g!2  a#@1.5],\n    [d#@2 ~@1.5]\n  ]@3.5\n  >*4";
+        let expected: &[(&str, &str, &str)] = &[
+            ("0", "3/8", "c5"),
+            ("0", "3/8", "e4"),
+            ("0", "3/8", "c4"),
+            ("3/8", "5/8", "c5"),
+            ("3/8", "5/8", "e4"),
+            ("3/8", "5/8", "c4"),
+            ("5/8", "7/8", "c5"),
+            ("5/8", "7/8", "e4"),
+            ("5/8", "7/8", "c4"),
+            ("7/8", "9/8", "c5"),
+            ("7/8", "9/8", "f4"),
+            ("7/8", "9/8", "c#4"),
+            ("9/8", "11/8", "c5"),
+            ("9/8", "11/8", "f4"),
+            ("9/8", "11/8", "c#4"),
+            ("11/8", "13/8", "c5"),
+            ("11/8", "13/8", "g4"),
+            ("11/8", "13/8", "d#4"),
+            ("13/8", "15/8", "g4"),
+            ("13/8", "2", "c5"),
+            ("13/8", "17/8", "d#4"),
+            ("15/8", "17/8", "g4"),
+            ("2", "9/4", "c5"),
+            ("17/8", "5/2", "a#4"),
+            ("9/4", "5/2", "c5"),
+        ];
+
+        // Compare onset haps by their `whole` span. The engine is consumed
+        // one cycle at a time (`query_cycle_all_into`), so a hap whose `whole`
+        // crosses an integer boundary is returned as `part` fragments with a
+        // shared `whole`; only the onset fragment carries the note. Strudel's
+        // one-shot arc query returns those same notes unsplit — matching the
+        // onset `whole`s here.
+        let pattern: crate::pattern_system::Pattern<SeqValue> = parse(src).expect("should parse");
+        let mut actual: Vec<(String, String, String)> = pattern
+            .query_arc(Fraction::from(0), Fraction::new(5, 2))
+            .into_iter()
+            .filter(|h| h.has_onset() && !h.value.is_rest())
+            .map(|h| {
+                let whole = h.whole.as_ref().unwrap();
+                let v = h.value.to_voltage().unwrap();
+                (whole.begin.to_string(), whole.end.to_string(), note_name(v))
+            })
+            .collect();
+        actual.sort();
+
+        let mut expected_sorted: Vec<(String, String, String)> = expected
+            .iter()
+            .map(|(b, e, n)| (b.to_string(), e.to_string(), n.to_string()))
+            .collect();
+        expected_sorted.sort();
+
+        assert_eq!(actual, expected_sorted);
     }
 }

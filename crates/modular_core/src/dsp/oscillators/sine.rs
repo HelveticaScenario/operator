@@ -1,10 +1,10 @@
 use crate::{
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
-        oscillators::{FmMode, apply_fm},
-        utils::interpolate,
+        oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
+        utils::{SchmittTrigger, interpolate},
     },
-    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -24,6 +24,13 @@ struct SineOscillatorParams {
     #[serde(default)]
     #[deserr(default)]
     fm_mode: FmMode,
+    /// hard sync source — rising edges reset the oscillator phase
+    #[deserr(default)]
+    sync: Option<PolySignal>,
+    /// phase offset in [0, 1) added to the internal phase before sampling
+    #[signal(default = 0.0, range = (0.0, 1.0))]
+    #[deserr(default)]
+    phase_offset: Option<PolySignal>,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -37,12 +44,12 @@ struct SineOscillatorOutputs {
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
     phase: f32,
-}
-
-/// State for the SineOscillator module.
-#[derive(Default)]
-struct SineOscillatorState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
+    /// Edge detector for the sync input.
+    sync_schmitt: SchmittTrigger,
+    /// Previous sync-input sample, for subsample edge interpolation.
+    sync_prev: f32,
+    /// PolyBLEP residual carried into the next sample from a sync reset.
+    blep_carry: f32,
 }
 
 /// A sine wave oscillator.
@@ -55,7 +62,7 @@ struct SineOscillatorState {
 #[module(name = "$sine", args(freq))]
 pub struct SineOscillator {
     outputs: SineOscillatorOutputs,
-    state: SineOscillatorState,
+    channel_state: Box<[ChannelState]>,
     params: SineOscillatorParams,
 }
 
@@ -64,7 +71,7 @@ impl SineOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
@@ -72,8 +79,35 @@ impl SineOscillator {
             state.phase += frequency;
             // Wrap phase to [0, 1) — supports negative increments (through-zero FM)
             state.phase = state.phase.rem_euclid(1.0);
-            let sine = interpolate(LUT_SINE, state.phase, LUT_SINE_SIZE);
-            self.outputs.sample.set(ch, sine * 5.0);
+
+            // Phase offset shifts the read position without altering the
+            // accumulator, so it never drifts.
+            let offset = self.params.phase_offset.value_or(ch, 0.0);
+            let read_phase = (state.phase + offset).rem_euclid(1.0);
+
+            // Naive sample at the (pre-reset) phase, plus any residual carried
+            // from a sync reset on the previous sample.
+            let body = interpolate(LUT_SINE, read_phase, LUT_SINE_SIZE);
+            let pending = state.blep_carry;
+            state.blep_carry = 0.0;
+
+            // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
+            // at the subsample crossing to band-limit the discontinuity.
+            let mut now = 0.0;
+            if let Some(sync) = &self.params.sync {
+                let v = sync.get_value(ch);
+                if state.sync_schmitt.process(v) {
+                    let frac = sync_edge_fraction(state.sync_prev, v);
+                    state.phase = 0.0;
+                    let after = interpolate(LUT_SINE, offset.rem_euclid(1.0), LUT_SINE_SIZE);
+                    let (n, carry) = sync_blep(after - body, frac);
+                    now = n;
+                    state.blep_carry = carry;
+                }
+                state.sync_prev = v;
+            }
+
+            self.outputs.sample.set(ch, (body + pending + now) * 5.0);
         }
     }
 }

@@ -28,7 +28,31 @@ export declare class Synthesizer {
    */
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
-  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null): PatchUpdateResult
+  /**
+   * Drain the per-module profiler snapshot accumulated since the last
+   * call. Returns one entry per module instance that did work in that
+   * window. No-op (returns empty) when profiling is disabled.
+   */
+  getModuleProfile(): Array<ModuleProfileSample>
+  /**
+   * Turn per-module profiling on or off. Off by default. Disabled-cost is
+   * a single TLS bool read per `ensure_processed_to` did-work entry.
+   */
+  setModuleProfilingEnabled(enabled: boolean): void
+  /**
+   * Profile only 1-of-N audio callbacks. `rate` of 1 means every
+   * callback; higher values reduce overhead proportionally at the cost
+   * of statistical smoothing in the UI.
+   */
+  setModuleProfilingSampleRate(rate: number): void
+  /**
+   * Snapshot every active $scopeXY pair as (key, x samples, y samples,
+   * ranges). Samples are chronological — element 0 is the oldest of the
+   * window, the last element the newest — and `ranges` is the per-axis volt
+   * window the renderer maps into clip space.
+   */
+  getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges]>
+  updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
   /** Set the workspace root directory for WAV file loading. */
@@ -107,6 +131,13 @@ export declare class Synthesizer {
    * Note: MIDI messages are polled automatically in the audio thread.
    */
   tryReconnectMidi(): void
+  /**
+   * Close any MIDI devices whose deferred disconnect is now safe (their patch
+   * update has been applied on the audio thread). Called periodically from the
+   * main process so a device a patch dropped still closes even if no further
+   * patch updates arrive. Idempotent.
+   */
+  pruneDisconnectedMidi(): void
 }
 
 export interface ApplyPatchError {
@@ -208,22 +239,6 @@ export interface DeviceCacheSnapshot {
 }
 
 /**
- * Parse a mini notation pattern and return all leaf spans.
- *
- * This is used by the Monaco editor to create tracked decorations
- * that move with text edits.
- */
-export declare function getMiniLeafSpans(source: string): Array<Array<number>>
-
-/**
- * Analyze a mini notation pattern and return the maximum polyphony needed.
- *
- * Queries 90 cycles (3 min at 120 BPM) and counts the maximum number of simultaneous haps,
- * capping at 16 (the poly voice limit). Logs timing for profiling.
- */
-export declare function getPatternPolyphony(source: string): number
-
-/**
  * Returns the list of reserved output names that cannot be used as module output port names.
  * These are names that conflict with built-in properties/methods on ModuleOutput, Collection, etc.
  */
@@ -249,6 +264,30 @@ export interface HostInfo {
 export interface MidiInputInfo {
   name: string
   index: number
+}
+
+/**
+ * Per-module audio-thread profile sample. `self_ns` excludes time spent
+ * recursively pulling upstream params; `total_ns - self_ns` is that pull
+ * cost. Counts cover one drain window.
+ */
+export interface ModuleProfileSample {
+  moduleId: string
+  /** Time inside this module's own DSP, excluding recursive upstream pulls. */
+  selfNs: number
+  /** Total time, including recursive upstream pulls. */
+  totalNs: number
+  /** Calls to `ensure_processed_to` that advanced the per-block cursor. */
+  ensureCallsDidWork: number
+  /** Sample slots processed in this window. */
+  samplesProcessed: number
+  /**
+   * Processing mode of this module: "block" for acyclic subgraphs (whole
+   * block computed per call) or "sample" for modules inside feedback
+   * cycles (one sample per call). Sample-mode modules pay wrapper +
+   * profiler overhead per sample, not per block.
+   */
+  mode: string
 }
 
 /** Result of a patch update, including any validation errors and the assigned update ID. */
@@ -393,7 +432,7 @@ export interface ModuleSchema {
   channelsParamDefault?: number
 }
 
-export interface ModuleState {
+export interface ModuleSpec {
   id: string
   moduleType: string
   idIsExplicit?: boolean
@@ -414,9 +453,10 @@ export interface OutputSchema {
 }
 
 export interface PatchGraph {
-  modules: Array<ModuleState>
+  modules: Array<ModuleSpec>
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
+  scopeXy?: ScopeXy
 }
 
 export interface PositionalArg {
@@ -454,6 +494,40 @@ export interface ScopeStats {
   max: number
   peakToPeak: number
   readOffset: number
+}
+
+export interface ScopeXy {
+  pairs: Array<ScopeXyPair>
+  /** (xMin, xMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
+  xRange: [number, number]
+  /** (yMin, yMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
+  yRange: [number, number]
+}
+
+export interface ScopeXyBufferKey {
+  /** Index of this pair inside the active `$scopeXY` call. */
+  index: number
+  pair: ScopeXyPair
+}
+
+export interface ScopeXyPair {
+  x: ScopeChannel
+  y: ScopeChannel
+}
+
+/**
+ * Per-axis display window shipped alongside each `$scopeXY` snapshot so the
+ * renderer maps sampled volts to the configured clip-space window.
+ */
+export interface ScopeXyRanges {
+  /** Horizontal voltage window minimum. */
+  xMin: number
+  /** Horizontal voltage window maximum. */
+  xMax: number
+  /** Vertical voltage window minimum. */
+  yMin: number
+  /** Vertical voltage window maximum. */
+  yMax: number
 }
 
 export interface SignalParamSchema {

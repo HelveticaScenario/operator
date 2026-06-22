@@ -1,4 +1,5 @@
 import { getReservedOutputNames } from '@modular/core';
+import type { ModuleSchema } from '@modular/core';
 import type {
     JSONSchema,
     Schemas,
@@ -8,6 +9,11 @@ import {
     schemaToTypeExpr,
     getEnumVariants,
 } from '../../shared/dsl/schemaTypeResolver';
+import {
+    dollarMethodName,
+    processModuleSchema,
+    qualifiesForDollarChain,
+} from './paramsSchema';
 import type { WavsFolderNode } from './executor';
 export type { WavsFolderNode } from './executor';
 
@@ -341,6 +347,288 @@ type BufferOutputRef = {
 };
 
 /**
+ * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
+ * \`$cycle\` as its pattern argument. Opaque to user code; construct with
+ * \`$p(...)\` and chain \`.fast\`/\`.slow\`. Never build one by hand.
+ */
+type ParsedPattern = {
+  /**
+   * Speed this pattern up by \`factor\`, mirroring Strudel's \`fast\`. The factor
+   * is a constant (\`2\`) or a mini-notation number pattern (\`"2 4"\` → ×2 for
+   * the first half of the cycle, ×4 for the second). A non-positive factor
+   * (\`fast(0)\` or negative) is silence. Chains and nests with the other
+   * pattern builders.
+   */
+  fast(factor: number | string): FastPattern;
+  /**
+   * Slow this pattern down by \`factor\` — the time-inverse of \`fast\`.
+   * \`slow(n)\` equals \`fast(1 / n)\`. The factor may be a constant or a
+   * mini-notation number pattern.
+   */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * Parse a mini-notation source string into a \`ParsedPattern\` suitable
+ * for \`$cycle\`. Every mini-notation literal in the DSL flows through
+ * \`$p()\` — \`$cycle\` accepts a \`ParsedPattern\`, not a raw string.
+ *
+ * \`\`\`js
+ * $cycle($p("c4 e4 g4"))                    // basic sequence
+ * const bass = $p("c2 [c2 g2] c2 e2");      // reuse a parsed pattern
+ * $cycle(bass)
+ * \`\`\`
+ *
+ * The returned object is opaque (JSON-serializable; carries source +
+ * span info for editor highlighting). Binding to a \`const\` preserves
+ * highlighting through the indirection. Throws if \`source\` is not a
+ * string or fails to parse.
+ *
+ * ### Atoms
+ *
+ * | Form | Meaning | Example |
+ * |------|---------|---------|
+ * | Bare number | Direct V/Oct voltage (1 V/oct CV) | \`0\`, \`1.5\`, \`-0.25\` |
+ * | \`<n>hz\` | Frequency in Hz (converted to V/Oct) | \`440hz\`, \`220hz\` |
+ * | Note letter (+ accidental, + octave) | Pitched note | \`c4\`, \`d#3\`, \`eb5\` |
+ * | \`~\` or \`-\` | Rest (gate low) | \`'c4 ~ e4'\`, \`'c4 - e4'\` |
+ *
+ * ### Mini-notation
+ *
+ * | Syntax | Meaning | Example |
+ * |--------|---------|---------|
+ * | \`a b c\` | Sequence — one element per time slot | \`'c4 e4 g4'\` |
+ * | \`[a b c]\` | Fast subsequence — subdivides parent slot | \`'c4 [e4 g4]'\` |
+ * | \`<a b c>\` | Slow / alternating — one element per cycle | \`'<c4 e4 g4>'\` |
+ * | \`a|b|c\` | Random choice each time the slot is reached | \`'c4|e4|g4'\` |
+ * | \`a, b\` | Stack — comma-separated patterns play simultaneously | \`'c4 e4, g4 b4'\` |
+ * | \`{a b, c d e}\` | Polymeter — children scaled to a shared step count, then stacked. \`%n\` overrides the step count: \`{a b c}%4\` | \`'{c4 e4, g4 b4 d5}'\` |
+ * | \`a . b c\` | Feet — split the slot at \`.\` boundaries (useful for aligning polymeter children) | \`'{c4 . e4 g4, f4 a4 . b4}'\` |
+ *
+ * Grouping, stacks, polymeter, and random choice nest arbitrarily.
+ *
+ * ### Per-element modifiers
+ *
+ * Modifiers attach directly to an element (no spaces) and chain in any order.
+ *
+ * | Modifier | Syntax | Meaning |
+ * |----------|--------|---------|
+ * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'c4 _ _'\` is the same as \`'c4@3'\` |
+ * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
+ * | Slow down | \`/n\` | Stretch over \`n\` cycles |
+ * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
+ * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * @param source - mini-notation source string
+ */
+declare function $p(source: string): ParsedPattern;
+
+declare namespace $p {
+/**
+ * Parse a scale-degree mini-notation source and resolve each integer
+ * degree to its V/Oct voltage against \`scale\`, returning a
+ * \`ParsedPattern\` suitable for \`$cycle\`. Invoked as \`$p.s(source, scale)\`.
+ *
+ * Atoms are **0-indexed scale degrees** rather than absolute pitches:
+ * \`0\` is the scale's root, \`1\` is the second scale tone, \`2\` the third,
+ * and so on. Negative values move downward. Values beyond the scale
+ * length wrap into higher/lower octaves automatically. Hz and note
+ * atoms are rejected.
+ *
+ * \`\`\`js
+ * $cycle($p.s("0 2 4 7", "c(major)"))       // C-major arpeggio
+ * $cycle($p.s("-1 0 2 4", "a3(min)"))       // negative degrees wrap below the root
+ * $cycle($p.s("0 1 2 3 4", "c(0 2 4 7 9)")) // custom intervals (pentatonic)
+ * $cycle($p.s("0 4 7", "c(just)"))          // just intonation
+ * \`\`\`
+ *
+ * ### Atoms
+ *
+ * | Form | Meaning | Example |
+ * |------|---------|---------|
+ * | Bare integer | Scale degree (0-indexed) | \`0\`, \`2\`, \`-1\` |
+ * | \`~\` or \`-\` | Rest (gate low, no pitch change) | \`'0 ~ 2 ~'\`, \`'0 - 2 -'\` |
+ *
+ * ### Mini-notation
+ *
+ * | Syntax | Meaning | Example |
+ * |--------|---------|---------|
+ * | \`a b c\` | Sequence — one degree per time slot | \`'0 2 4'\` |
+ * | \`[a b c]\` | Fast subsequence — subdivides parent slot | \`'0 [2 4]'\` |
+ * | \`<a b c>\` | Slow / alternating — one element per cycle | \`'<0 4 7>'\` |
+ * | \`a|b|c\` | Random choice each time the slot is reached | \`'0|2|4'\` |
+ * | \`a, b\` | Stack — comma-separated patterns play simultaneously | \`'0 2, 4 7'\` |
+ * | \`{a b, c d e}\` | Polymeter — children scaled to a shared step count, then stacked. \`%n\` overrides the step count: \`{a b c}%4\` | \`'{0 2, 4 5 7}'\` |
+ * | \`a . b c\` | Feet — split the slot at \`.\` boundaries (useful for aligning polymeter children) | \`'{0 . 2 4, 5 7 . 9}'\` |
+ *
+ * Grouping, stacks, polymeter, and random choice nest arbitrarily.
+ * Modifiers attach directly to an element (no spaces) and chain in any
+ * order:
+ *
+ * | Modifier | Syntax | Meaning |
+ * |----------|--------|---------|
+ * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'0 _ _'\` is the same as \`'0@3'\` |
+ * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
+ * | Slow down | \`/n\` | Stretch over \`n\` cycles |
+ * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
+ * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * ### Scale strings
+ *
+ * | Form | Example | Meaning |
+ * |------|---------|---------|
+ * | \`tonic(name)\` | \`"c(major)"\`, \`"d#(min)"\`, \`"f(dorian)"\` | Named scale type rooted at the tonic |
+ * | \`tonic<octave>(name)\` | \`"c3(major)"\`, \`"D#4(min)"\` | Same with an explicit octave (default 4 → root = C4 = 0 V) |
+ * | \`tonic(custom intervals)\` | \`"c(0 2 4 5 7 9 11)"\` | Custom semitone offsets from the tonic |
+ * | \`tonic(just)\` / \`tonic(pythagorean)\` | \`"c(just)"\`, \`"a(pythag)"\` | Non-equal 12-tone tunings |
+ * | \`chromatic\` | \`"chromatic"\` | All 12 semitones, 12-TET |
+ *
+ * Recognized scale names include major, minor, ionian, dorian, phrygian,
+ * lydian, mixolydian, aeolian, locrian, harmonic/melodic minor,
+ * pentatonic major/minor, blues, whole tone.
+ *
+ * ### Chaining
+ *
+ * The returned \`SpPattern\` is chainable with \`.add(...)\` and \`.sub(...)\`.
+ * Each accepts another scale-degree mini-notation string and combines
+ * the two patterns. Bare \`.add(x)\` defaults to \`.add.in(x)\`; explicit
+ * mode methods cover all seven Strudel alignments:
+ *
+ * | Mode | Behaviour |
+ * |------|-----------|
+ * | \`.in\` (default) | Left pattern's onsets drive timing; right is sampled at each left event. |
+ * | \`.out\` | Right pattern's onsets drive timing; left is sampled at each right event. |
+ * | \`.mix\` | Output events at every intersection of left + right onsets. |
+ * | \`.squeeze\` | Each left event nests a full cycle of the right pattern. |
+ * | \`.squeezeout\` | Each right event nests a full cycle of the left pattern. |
+ * | \`.reset\` | Right pattern retriggers the left, aligned to cycle position. |
+ * | \`.restart\` | Right pattern retriggers the left, aligned to cycle 0. |
+ *
+ * \`\`\`js
+ * $cycle($p.s("0 1 2", "c(maj)").add("0 2"))               // .add defaults to .add.in
+ * $cycle($p.s("0 1 2", "d#(min)").add.in("10 20"))
+ * $cycle($p.s("0 1 2", "c(maj)").sub.squeeze("1 2 3"))
+ * \`\`\`
+ *
+ * @param source - integer scale-degree mini-notation source
+ * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
+ */
+function s(source: string, scale: string): SpPattern;
+
+/**
+ * Arrange patterns over multiple cycles, mirroring Strudel's \`arrange\`.
+ * Each argument is a \`[cycles, pattern]\` tuple: the \`pattern\` (a \`$p(...)\`,
+ * \`$p.s(...)\`, or nested \`$p.arrange(...)\`) plays for \`cycles\` cycles, and
+ * the sections play back-to-back, looping with period \`Σ cycles\`.
+ *
+ * Because each \`$p.s\` section resolves through its own scale, an arrangement
+ * can switch scales (or keys) between sections.
+ *
+ * \`\`\`js
+ * // 4 cycles of a C-major arp, then 2 of an A-minor arp, looping every 6
+ * $cycle($p.arrange(
+ *   [4, $p.s("0 2 4 7", "c(major)")],
+ *   [2, $p.s("0 2 4",   "a(min)")],
+ * ))
+ * \`\`\`
+ *
+ * Cycle counts must be **positive integers**, except a single **trailing**
+ * section may use \`Infinity\` to loop forever once reached (any section after
+ * an \`Infinity\` section could never play and is rejected):
+ *
+ * \`\`\`js
+ * $cycle($p.arrange(
+ *   [2, $p("c4 e4 g4")],            // intro, played once
+ *   [Infinity, $p.s("0 2 4", "f(lydian)")],  // then loops forever
+ * ))
+ * \`\`\`
+ *
+ * The result is an \`ArrangePattern\`, itself usable as a section of another
+ * \`$p.arrange(...)\` (arrangements nest) or as a \`$cycle\` argument.
+ *
+ * @param sections - \`[cycles, pattern]\` tuples, in play order
+ */
+function arrange(
+  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern][]
+): ArrangePattern;
+}
+
+/**
+ * One Strudel-style alignment for a \`$p.s\` chain op.
+ */
+type SpAlignmentMode =
+  | 'in'
+  | 'out'
+  | 'mix'
+  | 'squeeze'
+  | 'squeezeout'
+  | 'reset'
+  | 'restart';
+
+/**
+ * Callable + method-bag returned by \`.add\` / \`.sub\` on an \`SpPattern\`.
+ * Bare invocation aliases the \`.in\` method.
+ */
+type SpCombineBuilder = ((rhs: string) => SpPattern) & {
+  readonly [M in SpAlignmentMode]: (rhs: string) => SpPattern;
+};
+
+/**
+ * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
+ * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`.
+ * Opaque to user code — chain methods return fresh patterns.
+ */
+type SpPattern = {
+  add: SpCombineBuilder;
+  sub: SpCombineBuilder;
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * An arrangement returned by \`$p.arrange(...)\`. Pass directly to \`$cycle\`'s
+ * \`pattern\` param, or nest it as a section of another \`$p.arrange(...)\`.
+ * Opaque to user code — construct with \`$p.arrange(...)\`; never build one by
+ * hand. A \`cycles\` of \`'Infinity'\` (only the last section) loops forever.
+ */
+type ArrangePattern = {
+  /** Speed this arrangement up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this arrangement down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * A sped-up pattern returned by \`pattern.fast(factor)\` (Strudel's \`fast\`).
+ * Pass directly to \`$cycle\`'s \`pattern\` param, nest it as an \`$p.arrange(...)\`
+ * section, or chain further \`.fast\`/\`.slow\`. Opaque to user code — construct
+ * with \`.fast(...)\`; never build one by hand.
+ */
+type FastPattern = {
+  /** Speed this pattern up further by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
+ * A slowed-down pattern returned by \`pattern.slow(factor)\` (Strudel's \`slow\`).
+ * The time-inverse of \`FastPattern\`; same composition rules.
+ */
+type SlowPattern = {
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down further by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+};
+
+/**
  * A loaded WAV sample handle — returned by \`$wavs()\`, passed to \`$sampler()\` as the \`wav\` param.
  */
 type WavHandle = {
@@ -435,6 +723,26 @@ interface ModuleOutput {
    * @example lfo.shift(2.5)  // Shift to 0-5V range
    */
   shift(offset: Poly<Signal>): Collection;
+
+  /**
+   * Offset this pitch by an absolute frequency amount, in Hz. The V/Oct signal
+   * is converted to Hz, the offset added, then converted back. Creates an
+   * $addHz module internally.
+   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @returns The retuned {@link Collection} for chaining
+   * @example $saw('C4').addHz(0.5)  // slight detune
+   */
+  addHz(offset: Poly<Signal>): Collection;
+
+  /**
+   * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
+   * The V/Oct signal is converted to Hz, multiplied, then converted back.
+   * Creates a $mulHz module internally.
+   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @returns The retuned {@link Collection} for chaining
+   * @example $saw('C4').mulHz(1.5)  // up a just fifth
+   */
+  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale the signal by a factor with a perceptual (audio taper) curve
@@ -539,16 +847,31 @@ interface ModuleOutput {
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
 
   /**
+   * Fold this output's channels down to a target channel count by panning them
+   * evenly across the output field with an equal-power law. Creates a \\$mixDown
+   * module internally.
+   *
+   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @returns A Collection from the \\$mixDown output
+   *
+   * @example
+   * // Fold a 3-voice spread down to stereo
+   * $saw($spread(0, 5, 3)).mix(2).out()
+   */
+  mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection;
+
+  /**
    * Remap this output from an explicit input range to a new output range.
    * Creates a $remap module internally.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @param inMin - Input minimum as {@link Poly<Signal>}
    * @param inMax - Input maximum as {@link Poly<Signal>}
-   * @returns A {@link ModuleOutput} with the remapped signal
+   * @returns A {@link CollectionWithRange} carrying the remapped signal
    * @example $sine('c4').range(0, 1, -5, 5)
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): ModuleOutput;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): CollectionWithRange;
 
   /**
    * Register this output as a send to a bus, with optional gain.
@@ -557,6 +880,22 @@ interface ModuleOutput {
    * @returns This output for chaining
    */
   send(bus: Bus, gain?: Poly<Signal>): this;
+
+  /**
+   * Chainable module namespace. Every module whose first argument is a
+   * {@link Poly<Signal>} becomes a method here, receiving this output as that
+   * argument.
+   * @example $sine(0).$.lpf('100hz')  // ≡ $lpf($sine(0), '100hz')
+   */
+  readonly $: DollarChain;
+
+  /**
+   * Like {@link $}, but each method takes a leading \`mix\` signal that
+   * crossfades the dry input against the wet result (0 = dry, 5 = wet,
+   * 2.5 = equal).
+   * @example $sine(0).$m.lpf(2.5, '100hz')
+   */
+  readonly $m: DollarMixChain;
 }
 
 /**
@@ -588,19 +927,19 @@ interface DeferredModuleOutput extends ModuleOutput {
  */
 interface ModuleOutputWithRange extends ModuleOutput {
   /** The minimum value this output produces */
-  readonly minValue: number;
+  readonly minValue: Signal;
   /** The maximum value this output produces */
-  readonly maxValue: number;
+  readonly maxValue: Signal;
   
   /**
    * Remap the output from its native range to a new range.
    * Uses the stored minValue/maxValue automatically.
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
-   * @returns A {@link ModuleOutput} with the remapped signal
+   * @returns A {@link CollectionWithRange} carrying the remapped signal
    * @example lfo.range(note("C3"), note("C5"))
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>): ModuleOutput;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 }
 
 
@@ -629,6 +968,20 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @see {@link ModuleOutput.shift}
    */
   shift(offset: Poly<Signal>): Collection;
+
+  /**
+   * Offset all pitches by an absolute frequency amount, in Hz.
+   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @see {@link ModuleOutput.addHz}
+   */
+  addHz(offset: Poly<Signal>): Collection;
+
+  /**
+   * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
+   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @see {@link ModuleOutput.mulHz}
+   */
+  mulHz(factor: Poly<Signal>): Collection;
 
     /**
      * Scale all signals by a factor with a perceptual (audio taper) curve
@@ -680,7 +1033,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @param outMax - Output maximum as {@link Poly<Signal>}
    * @see {@link CollectionWithRange.range} - for automatic input range
    */
-  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): Collection;
+  range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): CollectionWithRange;
 
   /**
    * Pipe this collection through a transform function.
@@ -740,12 +1093,43 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
 
   /**
+   * Fold this collection's channels down to a target channel count by panning
+   * them evenly across the output field with an equal-power law. Creates a
+   * \\$mixDown module internally.
+   *
+   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @returns A Collection from the \\$mixDown output
+   *
+   * @example
+   * // Fold a 3-voice spread down to stereo
+   * $saw($spread(0, 5, 3)).mix(2).out()
+   */
+  mix(channels?: number, mode?: "sum" | "average" | "max" | "min"): Collection;
+
+  /**
    * Register all outputs in this collection as a send to a bus, with optional gain.
    * @param bus - The {@link Bus} to send to
    * @param gain - Send level as {@link Poly<Signal>}
    * @returns This collection for chaining
    */
   send(bus: Bus, gain?: Poly<Signal>): this;
+
+  /**
+   * Chainable module namespace. Every module whose first argument is a
+   * {@link Poly<Signal>} becomes a method here, receiving this collection as
+   * that argument.
+   * @example $c(a, b).$.lpf('100hz')  // ≡ $lpf($c(a, b), '100hz')
+   */
+  readonly $: DollarChain;
+
+  /**
+   * Like {@link $}, but each method takes a leading \`mix\` signal that
+   * crossfades the dry input against the wet result (0 = dry, 5 = wet,
+   * 2.5 = equal).
+   * @example $c(a, b).$m.lpf(2.5, '100hz')
+   */
+  readonly $m: DollarMixChain;
 }
 
 /**
@@ -792,7 +1176,7 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    * @param outMax - Output maximum as {@link Poly<Signal>}
    * @see {@link Collection.range} - for explicit input range
    */
-  override range(outMin: Poly<Signal>, outMax: Poly<Signal>): Collection;
+  override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 }
 
 /**
@@ -873,6 +1257,23 @@ function $setTempo(tempo: number): void;
 function $setOutputGain(gain: Mono<Signal>): void;
 
 /**
+ * Render a Lissajous-style XY oscilloscope as the editor background.
+ * Each axis is cycled to the longer arity, producing one trace per pair.
+ * Last call wins; only one global XY scope can be active at a time.
+ * @param x - Horizontal channel(s)
+ * @param y - Vertical channel(s)
+ * @param config.xRange - Horizontal voltage window (default [-5, 5])
+ * @param config.yRange - Vertical voltage window (default [-5, 5])
+ * @example $scopeXY($sine($hz(440)), $sine($hz(311)))
+ * @example $scopeXY($c(osc1, osc2), osc3) // 2 traces, both share osc3 as Y
+ */
+function $scopeXY(
+  x: Poly<Signal>,
+  y: Poly<Signal>,
+  config?: { xRange?: [number, number]; yRange?: [number, number] },
+): void;
+
+/**
  * Set the time signature for the root clock.
  * Both values must be positive integers.
  * @param numerator - Beats per bar (e.g. 3, 4, 6, 7)
@@ -888,7 +1289,7 @@ function $setTimeSignature(numerator: number, denominator: number): void;
 /**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
  * Useful for feedback loops and forward references.
- * @param channels - Number of deferred outputs (1-16, default 1)
+ * @param channels - Number of deferred outputs (1-64, default 1)
  * @example
  * const feedback = $deferred();
  * const delayed = $delay(osc.out, feedback[0]);
@@ -906,13 +1307,13 @@ function $deferred(channels?: number): DeferredCollection;
  * @param value - Initial value (must be a numeric literal)
  * @param min - Minimum slider value
  * @param max - Maximum slider value
- * @returns A ModuleOutput carrying the slider's current value as a signal
+ * @returns A CollectionWithRange carrying the slider's current value (range [min, max])
  *
  * @example
  * const vol = $slider("Volume", 0.5, 0, 1);
  * $sine(440).amplitude(vol).out();
  */
-function $slider(label: string, value: number, min: number, max: number): ModuleOutput;
+function $slider(label: string, value: number, min: number, max: number): CollectionWithRange;
 
 /**
  * A send-return bus. Create one with {@link $bus}, then call \`.send(bus, gain)\` on
@@ -956,35 +1357,26 @@ function $bus(cb: (mixed: Collection) => unknown): Bus;
  */
 function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection | CollectionWithRange): void;
 
-/** Create a buffer module that captures an input signal into a circular audio buffer. */
-function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;
-
 /**
- * Delay with feedback. Mixes \`input\` with a deferred feedback signal,
- * captures the mix into a buffer of \`length\` seconds, and routes the
- * buffer through \`feedbackCb\` to produce the feedback signal.
+ * Compute the Cartesian product of the given arrays.
  *
- * Returns the wet+dry \\$mix output (same shape as \\$mix) augmented with a
- * \`buffer\` property referencing the captured buffer for further reads.
+ * Returns every possible combination of one element from each array,
+ * as a typed tuple array. Pairs well with the array overload of \`.pipe()\`
+ * to fan a signal across multiple parameter dimensions.
  *
- * @param input - Dry signal collection. Channel count of the feedback path
- *                matches \`input.length\` or 1 if input is a ModuleOutput.
- * @param feedbackCb - Receives the captured buffer ref and returns the
- *                     feedback signal mixed back into the input.
- * @param length - Buffer length in seconds.
+ * @param arrays - Zero or more arrays to combine
+ * @returns Array of typed tuples, one per combination
  *
- * \`\`\`
- *   // simple feedback delay
- *   $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()
- * \`\`\`
+ * @example
+ * // Fan an oscillator across every combination of frequency and waveform
+ * $cartesian([220, 440, 880], ['sine', 'saw']).pipe(
+ *   (osc, [freq, shape]) => $oscillator({ freq, shape }).out(),
+ * ).out();
  *
- * \`\`\`ts
- *   // tap the buffer for an additional read
- *   const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)
- *   $delayRead(d.buffer, 0.75).out()
- * \`\`\`
+ * @example $cartesian([1, 2], ['a', 'b'])
+ * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
-function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): ReturnType<typeof $mix> & { buffer: BufferOutputRef };
+function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
 
 /**
  * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
@@ -1037,27 +1429,6 @@ function $ott(input: Collection | ModuleOutput, config?: {
     highGain?: Poly<Signal>;
     id?: string;
 }): Collection;
-
-/**
- * Compute the Cartesian product of the given arrays.
- *
- * Returns every possible combination of one element from each array,
- * as a typed tuple array. Pairs well with the array overload of \`.pipe()\`
- * to fan a signal across multiple parameter dimensions.
- *
- * @param arrays - Zero or more arrays to combine
- * @returns Array of typed tuples, one per combination
- *
- * @example
- * // Fan an oscillator across every combination of frequency and waveform
- * $cartesian([220, 440, 880], ['sine', 'saw']).pipe(
- *   (osc, [freq, shape]) => $oscillator({ freq, shape }).out(),
- * ).out();
- *
- * @example $cartesian([1, 2], ['a', 'b'])
- * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
- */
-function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
 
 /**
  * @param count - Size of the output
@@ -1157,7 +1528,7 @@ export function buildLibSource(
 ): string {
     const schemaLib = generateDSL(schemas);
     const wavsDecl = generateWavsTypeDeclaration(wavsFolderTree ?? null);
-    return `declare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
+    return `/* oxlint-disable */\ndeclare global {\n${BASE_LIB_SOURCE}\n\n${schemaLib}\n\n${wavsDecl}\n}\n\nexport {};\n`;
 }
 
 interface NamespaceNode {
@@ -1347,104 +1718,54 @@ function getFactoryReturnType(moduleSchema: Schema): string {
     return getMultiOutputInterfaceName(moduleSchema);
 }
 
-function renderFactoryFunction(
-    moduleSchema: Schema,
-    _interfaceName: string,
-    indent: string,
-): string[] {
-    const functionName = moduleSchema.name.split('.').pop()!;
+/**
+ * Build the trailing `config?: { ... }` argument shared by the factory-function
+ * and `.$.`-method renderers: every non-positional param, plus an optional
+ * `id`. `config` is required only when some non-positional param is required.
+ * Returns the rendered argument and the nested `@param config` doc lines.
+ */
+function buildConfigArg(moduleSchema: Schema): {
+    arg: string;
+    paramDocs: string[];
+} {
     const { paramsSchema } = moduleSchema;
     const schemaProperties = paramsSchema.properties as
         | Record<string, JSONSchema | undefined>
         | undefined;
-
-    const args: string[] = [];
-    const positionalArgs = moduleSchema.positionalArgs || [];
     const schemaRequired: readonly string[] = paramsSchema.required || [];
-    // Build docstring lines
-    const docLines: string[] = [];
-    if (moduleSchema.documentation) {
-        docLines.push(...moduleSchema.documentation.split(/\r?\n/));
-    }
-
-    const positionalRequiredness = positionalArgs.map((a) =>
-        schemaRequired.includes(a.name),
+    const positionalKeys = new Set(
+        (moduleSchema.positionalArgs || []).map((a) => a.name),
     );
+    const allParamKeys = Object.keys(paramsSchema.properties || {});
 
-    for (let i = 0; i < positionalArgs.length; i++) {
-        const arg = positionalArgs[i];
-        const propSchema = schemaProperties?.[arg.name];
-        const type = propSchema
-            ? schemaToTypeExpr(propSchema, paramsSchema)
-            : 'any';
+    const configProps: string[] = [];
+    const paramDocs: string[] = [];
 
-        const isRequired = positionalRequiredness[i];
-
-        if (isRequired) {
-            args.push(`${arg.name}: ${type}`);
-        } else {
-            // Check if all subsequent positional args are also optional
-            const allSubsequentOptional = positionalRequiredness
-                .slice(i + 1)
-                .every((r: boolean) => !r);
-            if (allSubsequentOptional) {
-                args.push(`${arg.name}?: ${type}`);
-            } else {
-                args.push(`${arg.name}: ${type} | undefined`);
-            }
+    for (const key of allParamKeys) {
+        if (positionalKeys.has(key)) {
+            continue;
         }
+        const propSchema = schemaProperties?.[key];
+        if (!propSchema) {
+            continue;
+        }
+        const type = schemaToTypeExpr(propSchema, paramsSchema);
+        const optionalMark = schemaRequired.includes(key) ? '' : '?';
+        configProps.push(`${key}${optionalMark}: ${type}`);
 
-        // Add @param for positional arg
+        // Collect config param descriptions
         const description = propSchema?.description;
         if (description) {
             const firstLine = description.split(/\r?\n/)[0];
-            docLines.push(`@param ${arg.name} - ${firstLine}`);
-        } else {
-            docLines.push(`@param ${arg.name}`);
+            paramDocs.push(`${key} - ${firstLine}`);
         }
 
         // Append enum variant descriptions as sub-bullets
-        if (propSchema) {
-            const variants = getEnumVariants(propSchema, paramsSchema);
-            if (variants && variants.some((v) => v.description)) {
-                for (const v of variants) {
-                    const desc = v.description ? ` — ${v.description}` : '';
-                    docLines.push(`  - \`${v.value}\`${desc}`);
-                }
-            }
-        }
-    }
-
-    const allParamKeys = Object.keys(paramsSchema.properties || {});
-    const positionalKeys = new Set(positionalArgs.map((a) => a.name));
-
-    const configProps: string[] = [];
-    const configParamDocs: string[] = [];
-
-    for (const key of allParamKeys) {
-        if (!positionalKeys.has(key)) {
-            const propSchema = schemaProperties?.[key];
-            if (!propSchema) {
-                continue;
-            }
-            const type = schemaToTypeExpr(propSchema, paramsSchema);
-            const optionalMark = schemaRequired.includes(key) ? '' : '?';
-            configProps.push(`${key}${optionalMark}: ${type}`);
-
-            // Collect config param descriptions
-            const description = propSchema?.description;
-            if (description) {
-                const firstLine = description.split(/\r?\n/)[0];
-                configParamDocs.push(`${key} - ${firstLine}`);
-            }
-
-            // Append enum variant descriptions as sub-bullets
-            const variants = getEnumVariants(propSchema, paramsSchema);
-            if (variants && variants.some((v) => v.description)) {
-                for (const v of variants) {
-                    const desc = v.description ? ` — ${v.description}` : '';
-                    configParamDocs.push(`    - \`${v.value}\`${desc}`);
-                }
+        const variants = getEnumVariants(propSchema, paramsSchema);
+        if (variants && variants.some((v) => v.description)) {
+            for (const v of variants) {
+                const desc = v.description ? ` — ${v.description}` : '';
+                paramDocs.push(`    - \`${v.value}\`${desc}`);
             }
         }
     }
@@ -1459,19 +1780,172 @@ function renderFactoryFunction(
             !positionalKeys.has(key) && schemaRequired.includes(key),
     );
     const configOptional = hasRequiredConfigProps ? '' : '?';
-    args.push(`config${configOptional}: ${configType}`);
+    return { arg: `config${configOptional}: ${configType}`, paramDocs };
+}
 
-    // Add @param config with nested property descriptions
-    if (configParamDocs.length > 0) {
+/**
+ * Build the parameter list and JSDoc lines shared by the factory-function and
+ * `.$.`-method renderers. `positionalStart` drops leading positionals (1 for
+ * `.$.`, whose receiver is injected as the first argument); `leadParams` are
+ * prepended to the parameter list (the `.$m.` `mix` crossfade); `leadDocLines`
+ * are prepended before the module's own documentation. The module's full
+ * documentation and every `@param` are always included, so the factory and
+ * `.$.` surfaces carry identical docs and cannot drift.
+ */
+function buildSignature(
+    moduleSchema: Schema,
+    opts: {
+        positionalStart: number;
+        leadParams?: { decl: string; doc: string }[];
+        leadDocLines?: string[];
+    },
+): { args: string[]; docLines: string[] } {
+    const { paramsSchema } = moduleSchema;
+    const schemaProperties = paramsSchema.properties as
+        | Record<string, JSONSchema | undefined>
+        | undefined;
+    const schemaRequired: readonly string[] = paramsSchema.required || [];
+    const positionals = (moduleSchema.positionalArgs || []).slice(
+        opts.positionalStart,
+    );
+    const requiredness = positionals.map((a) =>
+        schemaRequired.includes(a.name),
+    );
+
+    const args: string[] = [];
+    const docLines: string[] = [...(opts.leadDocLines ?? [])];
+    if (moduleSchema.documentation) {
+        docLines.push(...moduleSchema.documentation.split(/\r?\n/));
+    }
+
+    for (const lead of opts.leadParams ?? []) {
+        args.push(lead.decl);
+        docLines.push(lead.doc);
+    }
+
+    for (let i = 0; i < positionals.length; i++) {
+        const arg = positionals[i];
+        const propSchema = schemaProperties?.[arg.name];
+        const type = propSchema
+            ? schemaToTypeExpr(propSchema, paramsSchema)
+            : 'any';
+
+        if (requiredness[i]) {
+            args.push(`${arg.name}: ${type}`);
+        } else {
+            // Stay before any required arg: emit `| undefined` rather than `?`.
+            const allSubsequentOptional = requiredness
+                .slice(i + 1)
+                .every((r) => !r);
+            args.push(
+                allSubsequentOptional
+                    ? `${arg.name}?: ${type}`
+                    : `${arg.name}: ${type} | undefined`,
+            );
+        }
+
+        const description = propSchema?.description;
+        if (description) {
+            const firstLine = description.split(/\r?\n/)[0];
+            docLines.push(`@param ${arg.name} - ${firstLine}`);
+        } else {
+            docLines.push(`@param ${arg.name}`);
+        }
+
+        if (propSchema) {
+            const variants = getEnumVariants(propSchema, paramsSchema);
+            if (variants && variants.some((v) => v.description)) {
+                for (const v of variants) {
+                    const desc = v.description ? ` — ${v.description}` : '';
+                    docLines.push(`  - \`${v.value}\`${desc}`);
+                }
+            }
+        }
+    }
+
+    const { arg: configArg, paramDocs } = buildConfigArg(moduleSchema);
+    args.push(configArg);
+    if (paramDocs.length > 0) {
         docLines.push(`@param config - Configuration object`);
-        for (const doc of configParamDocs) {
+        for (const doc of paramDocs) {
             docLines.push(`  - ${doc}`);
         }
     } else {
         docLines.push(`@param config - Configuration object`);
     }
 
-    // Get return type based on outputs
+    return { args, docLines };
+}
+
+/**
+ * Render one method of the `.$.` (or `.$m.` when `withMix`) chainable namespace
+ * for `moduleSchema`: the module's factory with its first positional dropped
+ * (it becomes the chained signal receiver). For `.$m.`, a required leading
+ * `mix` signal crossfades dry/wet and the return type collapses to
+ * `Collection`. Carries the module's full documentation, like the factory.
+ *
+ * Only called on schemas passing `qualifiesForDollarChain`, which guarantees
+ * `dollarMethodName` yields a valid TS identifier for the interface member.
+ */
+function renderDollarMethod(
+    moduleSchema: Schema,
+    withMix: boolean,
+    indent: string,
+): string[] {
+    const rawName = moduleSchema.name.split('.').pop()!;
+    const methodName = dollarMethodName(moduleSchema.name);
+
+    const leadDocLines = withMix
+        ? [
+              `Chain through \`${rawName}\`, crossfading the dry input against`,
+              'the wet result by a leading `mix` signal (0 = dry, 5 = wet,',
+              '2.5 = equal). Equivalent to `.pipeMix(s => ' +
+                  `${rawName}(s, ...), mix)\`.`,
+              '',
+          ]
+        : [
+              `Chain through \`${rawName}\` with this signal as its first`,
+              `argument. Equivalent to \`${rawName}(this, ...)\`.`,
+              '',
+          ];
+
+    const leadParams = withMix
+        ? [
+              {
+                  decl: 'mix: Poly<Signal>',
+                  doc: '@param mix - Dry/wet crossfade as {@link Poly<Signal>}. 0 = dry input only, 5 = wet result only, 2.5 = equal.',
+              },
+          ]
+        : [];
+
+    const { args, docLines } = buildSignature(moduleSchema, {
+        positionalStart: 1,
+        leadParams,
+        leadDocLines,
+    });
+
+    const returnType = withMix
+        ? 'Collection'
+        : getFactoryReturnType(moduleSchema);
+
+    const lines: string[] = [`${indent}/**`];
+    for (const line of docLines) {
+        lines.push(`${indent} * ${line}`);
+    }
+    lines.push(`${indent} */`);
+    lines.push(`${indent}${methodName}(${args.join(', ')}): ${returnType};`);
+    return lines;
+}
+
+function renderFactoryFunction(
+    moduleSchema: Schema,
+    _interfaceName: string,
+    indent: string,
+): string[] {
+    const functionName = moduleSchema.name.split('.').pop()!;
+    const { args, docLines } = buildSignature(moduleSchema, {
+        positionalStart: 0,
+    });
     const returnType = getFactoryReturnType(moduleSchema);
 
     const lines: string[] = [];
@@ -1540,8 +2014,7 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (declared in BASE_LIB_SOURCE
-    // with a custom BufferOutputRef return type)
+    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
     const userFacingSchemas = schemas.filter(
         (s) => s.name !== '_clock' && s.name !== '$buffer',
     );
@@ -1572,6 +2045,80 @@ export function generateDSL(schemas: Schemas): string {
         const signalReturnType = getFactoryReturnType(signalSchema);
         lines.push(`export const $input: Readonly<${signalReturnType}>;`);
     }
+
+    lines.push('');
+    lines.push(
+        '/** Create a buffer module that captures an input signal into a circular audio buffer. */',
+    );
+    lines.push(
+        'export function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;',
+    );
+    lines.push('');
+    lines.push('/**');
+    lines.push(
+        ' * Delay with feedback. Mixes `input` with a deferred feedback signal,',
+    );
+    lines.push(
+        ' * captures the mix into a buffer of `length` seconds, and routes the',
+    );
+    lines.push(
+        ' * buffer through `feedbackCb` to produce the feedback signal.',
+    );
+    lines.push(' *');
+    lines.push(
+        ' * Returns the wet+dry $mix output augmented with a `buffer` property',
+    );
+    lines.push(' * referencing the captured buffer for further reads.');
+    lines.push(' *');
+    lines.push(' * @example');
+    lines.push(' * ```js');
+    lines.push(' * // simple feedback delay');
+    lines.push(
+        " * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()",
+    );
+    lines.push(' * ```');
+    lines.push(' *');
+    lines.push(' * @example');
+    lines.push(' * ```ts');
+    lines.push(' * // tap the buffer for an additional read');
+    lines.push(
+        ' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)',
+    );
+    lines.push(' * $delayRead(d.buffer, 0.75).out()');
+    lines.push(' * ```');
+    lines.push(' */');
+    lines.push(
+        'export function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): Collection & { buffer: BufferOutputRef };',
+    );
+
+    // `.$.` / `.$m.` chainable module namespaces. The qualifying set matches the
+    // runtime `dollarLookup` exactly (shared `qualifiesForDollarChain` predicate
+    // over the same schemas), so the two cannot drift.
+    const dollarSchemas = userFacingSchemas.filter((s) =>
+        qualifiesForDollarChain(
+            processModuleSchema(s as unknown as ModuleSchema),
+        ),
+    );
+
+    lines.push('');
+    lines.push(
+        '/** Methods of the `.$` chainable module namespace (see {@link ModuleOutput.$}). */',
+    );
+    lines.push('interface DollarChain {');
+    for (const s of dollarSchemas) {
+        lines.push(...renderDollarMethod(s, false, '  '));
+    }
+    lines.push('}');
+
+    lines.push('');
+    lines.push(
+        '/** Methods of the `.$m` chainable module namespace (see {@link ModuleOutput.$m}). */',
+    );
+    lines.push('interface DollarMixChain {');
+    for (const s of dollarSchemas) {
+        lines.push(...renderDollarMethod(s, true, '  '));
+    }
+    lines.push('}');
 
     return lines.join('\n') + '\n';
 }

@@ -6,7 +6,9 @@
 //! - `fastcat` - Concatenate patterns within one cycle
 //! - `timecat` - Concatenate patterns with explicit weights
 
-use super::{Fraction, Hap, Pattern, State, TimeSpan};
+use super::{ArenaHap, Fraction, Pattern, State};
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 
 /// Play multiple patterns simultaneously.
 ///
@@ -31,14 +33,7 @@ pub fn stack<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Pattern
             Some(a) => Some(lcm(&a, s)),
         });
 
-    let mut result =
-        Pattern::new(move |state: &State| pats.iter().flat_map(|pat| pat.query(state)).collect());
-
-    if let Some(s) = steps {
-        result.set_steps(s);
-    }
-
-    result
+    Pattern::new_stack(pats, steps)
 }
 
 /// Concatenate patterns, one pattern per cycle (slowcat).
@@ -58,38 +53,7 @@ pub fn slowcat<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Patte
     if pats.is_empty() {
         return super::constructors::silence();
     }
-
-    let n = pats.len();
-
-    Pattern::new(move |state: &State| {
-        // Split the query at cycle boundaries first
-        state
-            .span
-            .span_cycles()
-            .into_iter()
-            .flat_map(|subspan| {
-                // Which pattern for this cycle?
-                let cycle_num = subspan.begin.sam().to_f64() as i64;
-                let pat_idx = ((cycle_num % n as i64) + n as i64) as usize % n;
-                let pat = &pats[pat_idx];
-
-                // Calculate offset to adjust times
-                // Each pattern should see its own cycle count: floor(global_cycle / n)
-                // So we offset by: global_cycle - floor(global_cycle / n)
-                let n_frac = Fraction::from_integer(n as i64);
-                let offset = subspan.begin.floor() - (&subspan.begin / &n_frac).floor();
-
-                // Query with adjusted time
-                let query_span = subspan.with_time(|t| t - &offset);
-                let haps = pat.query(&state.set_span(query_span));
-
-                // Adjust result times back
-                haps.into_iter()
-                    .map(|hap| hap.with_span_transform(|span| span.with_time(|t| t + &offset)))
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    })
+    Pattern::new_slowcat(pats)
 }
 
 /// Concatenate patterns within one cycle (fastcat/sequence).
@@ -115,67 +79,11 @@ pub fn fastcat<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Patte
     }
 
     let n = pats.len();
-    let n_frac = Fraction::from_integer(n as i64);
-    let steps = n_frac.clone();
+    let steps = Fraction::from_integer(n as i64);
 
-    // Direct implementation: each pattern takes 1/n of each cycle
-    // This avoids the time distortion issues with slowcat + fast
-    let mut result = Pattern::new(move |state: &State| {
-        state
-            .span
-            .span_cycles()
-            .into_iter()
-            .flat_map(|cycle_span| {
-                // For each cycle, split into n equal parts
-                (0..n)
-                    .flat_map(|i| {
-                        let i_frac = Fraction::from_integer(i as i64);
-                        let cycle_start = cycle_span.begin.floor();
-
-                        // This pattern's portion: [cycle + i/n, cycle + (i+1)/n)
-                        let part_begin = &cycle_start + &i_frac / &n_frac;
-                        let part_end =
-                            &cycle_start + (&i_frac + Fraction::from_integer(1)) / &n_frac;
-                        let part_span = TimeSpan {
-                            begin: part_begin.clone(),
-                            end: part_end.clone(),
-                        };
-
-                        // Intersect with the query span
-                        if let Some(query_part) = cycle_span.intersection(&part_span) {
-                            // Transform times so pattern sees [cycle, cycle+1)
-                            // i.e., stretch by n and shift
-                            let query_transformed = query_part.with_time(|t| {
-                                (t - &cycle_start) * &n_frac - &i_frac + &cycle_start
-                            });
-
-                            let haps = pats[i].query(&state.set_span(query_transformed));
-
-                            // Transform results back
-                            haps.into_iter()
-                                .map(|hap| {
-                                    hap.with_span_transform(|span| {
-                                        span.with_time(|t| {
-                                            (t - &cycle_start + &i_frac) / &n_frac + &cycle_start
-                                        })
-                                    })
-                                })
-                                .collect::<Vec<_>>()
-                        } else {
-                            Vec::new()
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .collect()
-    });
-    result.set_steps(steps);
-    result
-}
-
-/// Alias for fastcat (Tidal/Strudel naming).
-pub fn sequence<T: Clone + Send + Sync + 'static>(pats: Vec<Pattern<T>>) -> Pattern<T> {
-    fastcat(pats)
+    // Each pattern occupies 1/n of the cycle directly. Composing
+    // slowcat + fast for the same effect would warp event times.
+    Pattern::new_fastcat(pats, steps)
 }
 
 /// Concatenate patterns with explicit weights (timeCat).
@@ -219,9 +127,11 @@ pub fn timecat<T: Clone + Send + Sync + 'static>(
         let start_frac = &begin / &total;
         let end_frac = &end / &total;
 
+        if start_frac >= end_frac {
+            continue;
+        }
         // Compress this pattern to fit in its time slot
-        let compressed_pat = pat.compress(&start_frac, &end_frac);
-        compressed.push(compressed_pat);
+        compressed.push(Pattern::new_compress(pat, start_frac, end_frac));
 
         begin = end;
     }
@@ -229,54 +139,178 @@ pub fn timecat<T: Clone + Send + Sync + 'static>(
     stack(compressed).with_steps(total)
 }
 
+/// Arrange patterns over multiple cycles (Strudel's `arrange`).
+///
+/// Each section is `(Some(cycles), pat)` for a finite section occupying
+/// `cycles` whole cycles, or `(None, pat)` for an **infinite tail** that loops
+/// forever once reached. A `None` section must be unique and last (the caller
+/// validates this; sections after it can never play).
+///
+/// Finite arrangement mirrors Strudel bit-for-bit:
+/// `timecat(sections.map(|(n,p)| (n, p.fast(n))))._slow(total)`, where
+/// `total = Σ cycles`. Each section plays at its native rate, progressing
+/// through its own cycles, and the whole loops with period `total`. The
+/// per-section `fast(n)` is what makes a section advance through `n` of its
+/// own cycles rather than repeating its cycle 0.
+///
+/// With an infinite tail, the finite prefix plays once over cycles
+/// `[0, Σ prefix)`, then the tail section loops forever from cycle `Σ prefix`.
+pub fn arrange<T: Clone + Send + Sync + 'static>(
+    sections: Vec<(Option<Fraction>, Pattern<T>)>,
+) -> Pattern<T> {
+    if sections.is_empty() {
+        return super::constructors::silence();
+    }
+
+    match sections.iter().position(|(cycles, _)| cycles.is_none()) {
+        Some(inf_idx) => {
+            // Split into the finite prefix and the infinite tail section.
+            // Anything after the tail is unreachable; the caller rejects it,
+            // so we simply drop it here.
+            let mut sections = sections;
+            let inf_pat = sections.remove(inf_idx).1;
+            sections.truncate(inf_idx);
+            let finite: Vec<(Fraction, Pattern<T>)> = sections
+                .into_iter()
+                .map(|(cycles, pat)| (cycles.expect("prefix sections are finite"), pat))
+                .collect();
+            let s_k = sum_fractions(finite.iter().map(|(c, _)| c));
+            let prefix = if finite.is_empty() {
+                None
+            } else {
+                Some(arrange_finite(finite))
+            };
+            arrange_with_tail(prefix, s_k, inf_pat)
+        }
+        None => {
+            let finite: Vec<(Fraction, Pattern<T>)> = sections
+                .into_iter()
+                .map(|(cycles, pat)| (cycles.expect("all sections finite"), pat))
+                .collect();
+            arrange_finite(finite)
+        }
+    }
+}
+
+fn sum_fractions<'a, I: Iterator<Item = &'a Fraction>>(iter: I) -> Fraction {
+    iter.fold(Fraction::from_integer(0), |acc, c| acc + c.clone())
+}
+
+/// Finite arrangement: `timecat([(n, p.fast(n)) …])._slow(total)`.
+fn arrange_finite<T: Clone + Send + Sync + 'static>(
+    sections: Vec<(Fraction, Pattern<T>)>,
+) -> Pattern<T> {
+    if sections.is_empty() {
+        return super::constructors::silence();
+    }
+    let total = sum_fractions(sections.iter().map(|(c, _)| c));
+    if total.is_zero() {
+        return super::constructors::silence();
+    }
+    let weighted: Vec<(Fraction, Pattern<T>)> = sections
+        .into_iter()
+        .map(|(n, pat)| (n.clone(), Pattern::new_fast_const(pat, n)))
+        .collect();
+    timecat(weighted)._slow(total)
+}
+
+/// Infinite-tail arrangement: play `prefix` (a finite arrangement) over cycles
+/// `[0, s_k)`, then `inf_pat` shifted to start at cycle `s_k` and loop forever.
+fn arrange_with_tail<T: Clone + Send + Sync + 'static>(
+    prefix: Option<Pattern<T>>,
+    s_k: Fraction,
+    inf_pat: Pattern<T>,
+) -> Pattern<T> {
+    Pattern::new_into(
+        move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, T>>| {
+            state.span.for_each_cycle_span(|sub| {
+                // Each sub-span lies within one integer cycle; route by it. The
+                // finite prefix and the infinite tail meet exactly at cycle s_k.
+                let cycle = sub.begin.floor();
+                if cycle < s_k {
+                    if let Some(prefix) = &prefix {
+                        prefix.query_into(&State::new(sub.clone()), bump, out);
+                    }
+                } else {
+                    // Query the tail at its own frame (shifted back by s_k), then
+                    // map results forward by s_k. Context passes through, so the
+                    // tail section keeps its highlight offset.
+                    let qspan = sub.with_time(|t| t - &s_k);
+                    let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                    inf_pat.query_into(&State::new(qspan), bump, &mut scratch);
+                    out.reserve(scratch.len());
+                    for hap in scratch {
+                        let new_part = hap.part.with_time(|t| t + &s_k);
+                        let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t + &s_k));
+                        out.push(ArenaHap {
+                            whole: new_whole,
+                            part: new_part,
+                            value: hap.value,
+                            context: hap.context,
+                        });
+                    }
+                }
+            });
+        },
+    )
+}
+
 // ===== Helper implementations on Pattern =====
 
 impl<T: Clone + Send + Sync + 'static> Pattern<T> {
-    /// Speed up the pattern by a factor.
-    ///
-    /// Accepts both constant values and patterns:
-    /// - `pattern.fast(2)` - constant 2x speed
-    /// - `pattern.fast(Fraction::from(2))` - constant 2x speed
-    /// - `pattern.fast(some_pattern)` - patterned speed factor
-    pub fn fast<F: super::IntoPattern<Fraction> + 'static>(&self, factor: F) -> Pattern<T> {
-        let factor_pat = factor.into_pattern();
+    /// Speed up the pattern by a `Pattern<Fraction>` factor.
+    pub fn fast(&self, factor_pat: Pattern<Fraction>) -> Pattern<T> {
         let pat = self.clone();
 
-        factor_pat.inner_join(move |f| pat._fast(f.clone()))
-    }
-
-    /// Internal constant-factor fast (no pattern overhead).
-    pub(crate) fn _fast(&self, factor: Fraction) -> Pattern<T> {
-        if factor.is_zero() {
-            return super::constructors::silence();
-        }
-
-        let query = self.query.clone();
-        let factor_clone = factor.clone();
-
-        Pattern::new(move |state: &State| {
-            // Speed up queries
+        factor_pat.inner_join_into(move |f, state, bump, out| {
+            if f.is_zero() {
+                return;
+            }
+            let factor_clone = f.clone();
             let new_span = state.span.with_time(|t| t * &factor_clone);
-            let haps = query(&state.set_span(new_span));
-
-            // Slow down results
-            haps.into_iter()
-                .map(|hap| hap.with_span_transform(|span| span.with_time(|t| t / &factor_clone)))
-                .collect()
+            let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+            pat.query_into(&State::new(new_span), bump, &mut scratch);
+            out.reserve(scratch.len());
+            for hap in scratch {
+                let new_part = hap.part.with_time(|t| t / &factor_clone);
+                let new_whole = hap
+                    .whole
+                    .as_ref()
+                    .map(|w| w.with_time(|t| t / &factor_clone));
+                out.push(crate::pattern_system::ArenaHap {
+                    whole: new_whole,
+                    part: new_part,
+                    value: hap.value,
+                    context: hap.context,
+                });
+            }
         })
     }
 
-    /// Slow down the pattern by a factor.
-    ///
-    /// Accepts both constant values and patterns:
-    /// - `pattern.slow(2)` - constant half speed
-    /// - `pattern.slow(Fraction::from(2))` - constant half speed
-    /// - `pattern.slow(some_pattern)` - patterned slow factor
-    pub fn slow<F: super::IntoPattern<Fraction> + 'static>(&self, factor: F) -> Pattern<T> {
-        let factor_pat = factor.into_pattern();
+    /// Slow down the pattern by a `Pattern<Fraction>` factor.
+    pub fn slow(&self, factor_pat: Pattern<Fraction>) -> Pattern<T> {
         let pat = self.clone();
 
-        factor_pat.inner_join(move |f| pat._slow(f.clone()))
+        factor_pat.inner_join_into(move |f, state, bump, out| {
+            if f.is_zero() {
+                return;
+            }
+            let inv = Fraction::from_integer(1) / f.clone();
+            let new_span = state.span.with_time(|t| t * &inv);
+            let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+            pat.query_into(&State::new(new_span), bump, &mut scratch);
+            out.reserve(scratch.len());
+            for hap in scratch {
+                let new_part = hap.part.with_time(|t| t / &inv);
+                let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t / &inv));
+                out.push(crate::pattern_system::ArenaHap {
+                    whole: new_whole,
+                    part: new_part,
+                    value: hap.value,
+                    context: hap.context,
+                });
+            }
+        })
     }
 
     /// Internal constant-factor slow (no pattern overhead).
@@ -284,81 +318,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         if factor.is_zero() {
             return super::constructors::silence();
         }
-
-        self._fast(Fraction::from_integer(1) / factor)
-    }
-
-    /// Compress a pattern to fit within a portion of each cycle.
-    ///
-    /// The pattern's first cycle is squeezed into the range [begin, end) of each cycle.
-    pub fn compress(&self, begin: &Fraction, end: &Fraction) -> Pattern<T> {
-        if begin >= end {
-            return super::constructors::silence();
-        }
-
-        let duration = end - begin;
-        let begin_clone = begin.clone();
-        let end_clone = end.clone();
-        let query = self.query.clone();
-
-        Pattern::new(move |state: &State| {
-            // For each cycle in the query
-            state
-                .span
-                .span_cycles()
-                .into_iter()
-                .flat_map(|cycle_span| {
-                    let cycle = cycle_span.begin.sam();
-
-                    // Calculate the compressed span within this cycle
-                    let compressed_begin = &cycle + &begin_clone;
-                    let compressed_end = &cycle + &end_clone;
-                    let compressed_span = TimeSpan::new(compressed_begin.clone(), compressed_end);
-
-                    // Intersect with the query span
-                    if let Some(intersect) = cycle_span.intersection(&compressed_span) {
-                        // Transform to query the inner pattern
-                        let inner_begin =
-                            (&intersect.begin - &compressed_begin) / &duration + &cycle;
-                        let inner_end = (&intersect.end - &compressed_begin) / &duration + &cycle;
-                        let inner_span = TimeSpan::new(inner_begin, inner_end);
-
-                        let haps = query(&state.set_span(inner_span));
-
-                        // Transform results back
-                        haps.into_iter()
-                            .filter_map(|hap| {
-                                let new_part = TimeSpan::new(
-                                    (&hap.part.begin - &cycle) * &duration + &compressed_begin,
-                                    (&hap.part.end - &cycle) * &duration + &compressed_begin,
-                                );
-
-                                let new_whole = hap.whole.map(|w| {
-                                    TimeSpan::new(
-                                        (&w.begin - &cycle) * &duration + &compressed_begin,
-                                        (&w.end - &cycle) * &duration + &compressed_begin,
-                                    )
-                                });
-
-                                // Only include if part intersects original query
-                                if let Some(final_part) = new_part.intersection(&cycle_span) {
-                                    Some(Hap::with_context(
-                                        new_whole,
-                                        final_part,
-                                        hap.value.clone(),
-                                        hap.context.clone(),
-                                    ))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    }
-                })
-                .collect()
-        })
+        Pattern::new_fast_const(self.clone(), Fraction::from_integer(1) / factor)
     }
 }
 
@@ -455,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_fast() {
-        let pat = pure(42).fast(Fraction::from_integer(2));
+        let pat = pure(42).fast(pure(Fraction::from_integer(2)));
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
         // Should get 2 events in one cycle
@@ -464,7 +424,7 @@ mod tests {
 
     #[test]
     fn test_slow() {
-        let pat = pure(42).slow(Fraction::from_integer(2));
+        let pat = pure(42).slow(pure(Fraction::from_integer(2)));
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
 
         // Event should span 2 cycles, so querying 1 cycle should give 1 partial event
@@ -486,6 +446,152 @@ mod tests {
             lcm(&Fraction::from_integer(6), &Fraction::from_integer(4)),
             Fraction::from_integer(12)
         );
+    }
+
+    /// Query one integer cycle and return the values of its onset haps.
+    fn onset_values(pat: &Pattern<&'static str>, cycle: i64) -> Vec<&'static str> {
+        pat.query_arc(
+            Fraction::from_integer(cycle),
+            Fraction::from_integer(cycle + 1),
+        )
+        .into_iter()
+        .filter(|h| h.has_onset())
+        .map(|h| h.value)
+        .collect()
+    }
+
+    #[test]
+    fn test_arrange_finite_advances_sections() {
+        // A plays one cycle per result cycle while in its window; B likewise.
+        // Crucially, after the arrangement loops (period 6), section A resumes
+        // at its cycle 4 — it advances, it does not repeat its cycle 0.
+        let a = slowcat(vec![
+            pure("a0"),
+            pure("a1"),
+            pure("a2"),
+            pure("a3"),
+            pure("a4"),
+            pure("a5"),
+        ]);
+        let b = slowcat(vec![pure("b0"), pure("b1"), pure("b2"), pure("b3")]);
+        let arr = arrange(vec![
+            (Some(Fraction::from_integer(4)), a),
+            (Some(Fraction::from_integer(2)), b),
+        ]);
+
+        assert_eq!(onset_values(&arr, 0), vec!["a0"]);
+        assert_eq!(onset_values(&arr, 1), vec!["a1"]);
+        assert_eq!(onset_values(&arr, 2), vec!["a2"]);
+        assert_eq!(onset_values(&arr, 3), vec!["a3"]);
+        assert_eq!(onset_values(&arr, 4), vec!["b0"]);
+        assert_eq!(onset_values(&arr, 5), vec!["b1"]);
+        // Loop boundary: A advances to its cycle 4, B to its cycle 2.
+        assert_eq!(onset_values(&arr, 6), vec!["a4"]);
+        assert_eq!(onset_values(&arr, 7), vec!["a5"]);
+        assert_eq!(onset_values(&arr, 10), vec!["b2"]);
+    }
+
+    #[test]
+    fn test_arrange_infinite_tail_loops_forever() {
+        let a = slowcat(vec![pure("a0"), pure("a1")]);
+        let b = slowcat(vec![
+            pure("b0"),
+            pure("b1"),
+            pure("b2"),
+            pure("b3"),
+            pure("b4"),
+        ]);
+        let arr = arrange(vec![(Some(Fraction::from_integer(2)), a), (None, b)]);
+
+        // Finite prefix plays once over cycles 0..2.
+        assert_eq!(onset_values(&arr, 0), vec!["a0"]);
+        assert_eq!(onset_values(&arr, 1), vec!["a1"]);
+        // Tail starts at cycle 2 and advances through its own cycles forever.
+        assert_eq!(onset_values(&arr, 2), vec!["b0"]);
+        assert_eq!(onset_values(&arr, 3), vec!["b1"]);
+        assert_eq!(onset_values(&arr, 6), vec!["b4"]);
+        // cycle 10 → tail cycle 8 → 8 mod 5 = 3.
+        assert_eq!(onset_values(&arr, 10), vec!["b3"]);
+    }
+
+    #[test]
+    fn test_arrange_single_infinite_is_identity() {
+        let p = slowcat(vec![pure("p0"), pure("p1")]);
+        let arr = arrange(vec![(None, p.clone())]);
+        for c in 0..5 {
+            assert_eq!(
+                onset_values(&arr, c),
+                onset_values(&p, c),
+                "arrange([Infinity, P]) must equal P at cycle {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_arrange_single_finite_section_budget_is_noop() {
+        // A lone finite section reduces to `timecat([(n, p.fast(n))])._slow(n)`,
+        // which equals `p` exactly: the cycle budget `n` does not gate playback,
+        // so the section keeps advancing through its own cycles past cycle `n`
+        // rather than resetting at the budget.
+        let p = slowcat(vec![
+            pure("p0"),
+            pure("p1"),
+            pure("p2"),
+            pure("p3"),
+            pure("p4"),
+        ]);
+        let arr = arrange(vec![(Some(Fraction::from_integer(3)), p.clone())]);
+        for c in 0..5 {
+            assert_eq!(
+                onset_values(&arr, c),
+                onset_values(&p, c),
+                "lone finite section equals p (budget is a no-op) at cycle {c}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_arrange_drops_sections_after_infinite_tail() {
+        // `arrange` is public and takes raw cycle counts; the DSL validator
+        // rejects sections after an infinite tail upstream, but the combinator
+        // also drops them defensively (they could never play). Only the finite
+        // prefix and the tail are reachable here — the trailing section never is.
+        let a = slowcat(vec![pure("a0"), pure("a1")]);
+        let b = slowcat(vec![pure("b0"), pure("b1")]);
+        let c = slowcat(vec![pure("c0"), pure("c1")]);
+        let arr = arrange(vec![
+            (Some(Fraction::from_integer(2)), a),
+            (None, b),
+            (Some(Fraction::from_integer(3)), c),
+        ]);
+
+        // Prefix a over cycles [0, 2), then b loops forever from cycle 2.
+        assert_eq!(onset_values(&arr, 0), vec!["a0"]);
+        assert_eq!(onset_values(&arr, 1), vec!["a1"]);
+        assert_eq!(onset_values(&arr, 2), vec!["b0"]);
+        assert_eq!(onset_values(&arr, 3), vec!["b1"]);
+        assert_eq!(onset_values(&arr, 50), vec!["b0"]); // (50 - 2) mod 2 = 0
+        // The dropped section never plays at any queried cycle.
+        let played: Vec<&str> = (0..24).flat_map(|cyc| onset_values(&arr, cyc)).collect();
+        assert!(
+            !played.iter().any(|v| v.starts_with('c')),
+            "dropped trailing section must never play, got {played:?}"
+        );
+    }
+
+    #[test]
+    fn test_arrange_finite_zero_sum_is_silence() {
+        // A finite arrangement whose cycle counts sum to zero lowers to silence,
+        // guarding the subsequent `_slow(0)`. The DSL validator rejects 0-cycle
+        // sections upstream, so this is reachable only via the public combinator.
+        let p = slowcat(vec![pure("p0"), pure("p1")]);
+        let arr = arrange(vec![(Some(Fraction::from_integer(0)), p)]);
+        for c in 0..3 {
+            assert!(
+                onset_values(&arr, c).is_empty(),
+                "zero-sum arrange is silent at cycle {c}"
+            );
+        }
     }
 
     #[test]

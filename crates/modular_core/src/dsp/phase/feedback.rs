@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 
 use crate::dsp::fx::enosc_tables::aa_feedback;
 use crate::dsp::utils::{sanitize, voct_to_hz};
-use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -43,12 +43,6 @@ struct ChannelState {
     lp_state: f32, // One-pole LP filter state (matches IOnePoleLp<s1_15, 2>)
 }
 
-/// State for the Feedback module.
-#[derive(Default)]
-struct FeedbackState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Phase effect: FM feedback distortion.
 ///
 /// Transforms a 0–1 phase signal by feeding the output back into itself,
@@ -66,7 +60,7 @@ struct FeedbackState {
 #[module(name = "$feedback", args(input, amount))]
 pub struct Feedback {
     outputs: FeedbackOutputs,
-    state: FeedbackState,
+    channel_state: Box<[ChannelState]>,
     params: FeedbackParams,
 }
 
@@ -76,7 +70,7 @@ impl Feedback {
         let freq_connected = !self.params.freq.is_disconnected();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);

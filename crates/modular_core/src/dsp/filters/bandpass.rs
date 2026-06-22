@@ -2,7 +2,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    PORT_MAX_CHANNELS,
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -94,13 +93,12 @@ fn compute_bpf_biquad(center: f32, resonance: f32, sample_rate: f32) -> BiquadCo
 pub struct BandpassFilter {
     outputs: BandpassFilterOutputs,
     state: BandpassFilterState,
+    channel_state: Box<[BpfChannelState]>,
     params: BandpassFilterParams,
 }
 
 /// State for the BandpassFilter module.
 struct BandpassFilterState {
-    /// Per-channel state
-    channels: [BpfChannelState; PORT_MAX_CHANNELS],
     /// Mono optimization
     coeffs_mono: BiquadCoeffs,
     last_center_mono: f32,
@@ -112,7 +110,6 @@ struct BandpassFilterState {
 impl Default for BandpassFilterState {
     fn default() -> Self {
         Self {
-            channels: [BpfChannelState::default(); PORT_MAX_CHANNELS],
             coeffs_mono: BiquadCoeffs::default(),
             last_center_mono: f32::NAN,
             last_q_mono: f32::NAN,
@@ -125,7 +122,6 @@ impl Default for BandpassFilterState {
 impl BandpassFilter {
     fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
-        let state = &mut self.state;
 
         let center_mono = self.params.center.is_monophonic();
         let resonance_mono = self
@@ -136,36 +132,37 @@ impl BandpassFilter {
 
         // Update coefficients with smoothed params to prevent clicks
         if center_mono && resonance_mono {
-            state
+            self.state
                 .smooth_center_mono
                 .update(self.params.center.get_value(0));
-            state
+            self.state
                 .smooth_resonance_mono
                 .update(self.params.resonance.value_or(0, 1.0));
-            let c = *state.smooth_center_mono;
-            let r = *state.smooth_resonance_mono;
+            let c = *self.state.smooth_center_mono;
+            let r = *self.state.smooth_resonance_mono;
 
-            if changed(c, state.last_center_mono) || changed(r, state.last_q_mono) {
-                state.coeffs_mono = compute_bpf_biquad(c, r, sample_rate);
-                state.last_center_mono = c;
-                state.last_q_mono = r;
+            if changed(c, self.state.last_center_mono) || changed(r, self.state.last_q_mono) {
+                self.state.coeffs_mono = compute_bpf_biquad(c, r, sample_rate);
+                self.state.last_center_mono = c;
+                self.state.last_q_mono = r;
             }
         } else {
             for i in 0..num_channels {
-                state.channels[i]
+                self.channel_state[i]
                     .smooth_center
                     .update(self.params.center.get_value(i));
-                state.channels[i]
+                self.channel_state[i]
                     .smooth_resonance
                     .update(self.params.resonance.value_or(i, 1.0));
-                let c = *state.channels[i].smooth_center;
-                let r = *state.channels[i].smooth_resonance;
+                let c = *self.channel_state[i].smooth_center;
+                let r = *self.channel_state[i].smooth_resonance;
 
-                if changed(c, state.channels[i].last_center) || changed(r, state.channels[i].last_q)
+                if changed(c, self.channel_state[i].last_center)
+                    || changed(r, self.channel_state[i].last_q)
                 {
-                    state.channels[i].coeffs = compute_bpf_biquad(c, r, sample_rate);
-                    state.channels[i].last_center = c;
-                    state.channels[i].last_q = r;
+                    self.channel_state[i].coeffs = compute_bpf_biquad(c, r, sample_rate);
+                    self.channel_state[i].last_center = c;
+                    self.channel_state[i].last_q = r;
                 }
             }
         }
@@ -174,12 +171,12 @@ impl BandpassFilter {
             let input = self.params.input.get_value(i);
 
             let c = if center_mono && resonance_mono {
-                state.coeffs_mono
+                self.state.coeffs_mono
             } else {
-                state.channels[i].coeffs
+                self.channel_state[i].coeffs
             };
 
-            let ch_state = &mut state.channels[i];
+            let ch_state = &mut self.channel_state[i];
             let w = input - c.a1 * ch_state.z1 - c.a2 * ch_state.z2;
             let w = sanitize(w);
             let y = c.b0 * w + c.b1 * ch_state.z1 + c.b2 * ch_state.z2;

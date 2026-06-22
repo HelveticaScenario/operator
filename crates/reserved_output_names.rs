@@ -21,17 +21,22 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     "exp",
     "gain",
     "shift",
+    "addHz",
+    "mulHz",
     "scope",
     "out",
     "outMono",
     "pipe",
     "pipeMix",
+    "mix",
     "toString",
     // ModuleOutputWithRange properties
     "minValue",
     "maxValue",
     // ModuleOutputWithRange methods
     "range",
+    // ModuleOutput / BaseCollection internal converter methods
+    "withRange",
     // BaseCollection / Collection / CollectionWithRange properties
     "items",
     "length",

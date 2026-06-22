@@ -1,0 +1,198 @@
+import { useEffect, useRef } from 'react';
+import electronAPI from '../../electronAPI';
+import { createScopeXY, type ScopeXYPairData, type ScopeXY } from './pipeline';
+
+type Rgb = [number, number, number];
+
+const DEFAULT_BEAM: Rgb = [0.05, 1.0, 0.35];
+const DEFAULT_BG: Rgb = [0.005, 0.008, 0.012];
+
+function parseCssColor(value: string, fallback: Rgb): Rgb {
+    const trimmed = value.trim();
+    if (!trimmed) return fallback;
+    if (trimmed.startsWith('#')) {
+        const hex = trimmed.slice(1);
+        let r: number;
+        let g: number;
+        let b: number;
+        if (hex.length === 3) {
+            r = parseInt(hex[0] + hex[0], 16);
+            g = parseInt(hex[1] + hex[1], 16);
+            b = parseInt(hex[2] + hex[2], 16);
+        } else if (hex.length === 6 || hex.length === 8) {
+            r = parseInt(hex.slice(0, 2), 16);
+            g = parseInt(hex.slice(2, 4), 16);
+            b = parseInt(hex.slice(4, 6), 16);
+        } else {
+            return fallback;
+        }
+        if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
+            return fallback;
+        }
+        return [r / 255, g / 255, b / 255];
+    }
+    const match = trimmed.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i);
+    if (match) {
+        return [
+            parseInt(match[1], 10) / 255,
+            parseInt(match[2], 10) / 255,
+            parseInt(match[3], 10) / 255,
+        ];
+    }
+    return fallback;
+}
+
+function readScopeColorsRgb(): { beam: Rgb; background: Rgb } {
+    const styles = getComputedStyle(document.documentElement);
+    return {
+        beam: parseCssColor(
+            styles.getPropertyValue('--accent-primary'),
+            DEFAULT_BEAM,
+        ),
+        background: parseCssColor(
+            styles.getPropertyValue('--bg-primary'),
+            DEFAULT_BG,
+        ),
+    };
+}
+
+interface ScopeXYBackgroundProps {
+    /** Beam intensity multiplier (0..1). */
+    intensity?: number;
+    /**
+     * Phosphor persistence (0..1). 1 = no fade (infinite trail), 0 = full
+     * clear each frame. Converted internally to `fadeAmount = 1 - persistence`.
+     */
+    persistence?: number;
+    /** Toggle GPU Lanczos upscaling. */
+    upsample?: boolean;
+    /** Beam half-width in clip-space units. */
+    lineWidth?: number;
+}
+
+const DEFAULT_INTENSITY = 0.6;
+// Maps to fadeAmount = 1 - persistence = 0.4 per frame. Higher values
+// retain trails for many frames; 0 clears every frame.
+const DEFAULT_PERSISTENCE = 0.6;
+const DEFAULT_UPSAMPLE = true;
+const DEFAULT_LINE_WIDTH = 0.012;
+
+/**
+ * Full-bleed XY scope canvas that lives behind the editor. Polls
+ * `synthesizer.getScopeXy()` on every RAF tick and redraws. See
+ * pipeline.ts for the pass-by-pass breakdown.
+ */
+export function ScopeXYBackground({
+    intensity = DEFAULT_INTENSITY,
+    persistence = DEFAULT_PERSISTENCE,
+    upsample = DEFAULT_UPSAMPLE,
+    lineWidth = DEFAULT_LINE_WIDTH,
+}: ScopeXYBackgroundProps = {}) {
+    const canvasRef = useRef<HTMLCanvasElement | null>(null);
+    const pipelineRef = useRef<ScopeXY | null>(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+        canvas.height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+
+        const initialColors = readScopeColorsRgb();
+        let pipeline: ScopeXY;
+        try {
+            pipeline = createScopeXY(canvas, {
+                color: initialColors.beam,
+                background: initialColors.background,
+                intensity,
+                fadeAmount: 1 - persistence,
+                upsample,
+                beamSize: lineWidth,
+            });
+        } catch (err) {
+            console.warn('xy scope: failed to initialise WebGL', err);
+            return;
+        }
+        pipelineRef.current = pipeline;
+
+        const ro = new ResizeObserver(() => {
+            const d = window.devicePixelRatio || 1;
+            const w = Math.max(1, Math.floor(canvas.clientWidth * d));
+            const h = Math.max(1, Math.floor(canvas.clientHeight * d));
+            pipeline.resize(w, h);
+        });
+        ro.observe(canvas);
+
+        return () => {
+            ro.disconnect();
+            pipeline.dispose();
+            pipelineRef.current = null;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- initial intensity/persistence applied on mount; runtime changes are picked up via the setIntensity / setFadeAmount effects below.
+    }, []);
+
+    useEffect(() => {
+        pipelineRef.current?.setIntensity(intensity);
+    }, [intensity]);
+
+    useEffect(() => {
+        pipelineRef.current?.setFadeAmount(1 - persistence);
+    }, [persistence]);
+
+    useEffect(() => {
+        pipelineRef.current?.setUpsample(upsample);
+    }, [upsample]);
+
+    useEffect(() => {
+        pipelineRef.current?.setLineWidth(lineWidth);
+    }, [lineWidth]);
+
+    useEffect(() => {
+        let cancelled = false;
+        let rafId = 0;
+        // The audio thread publishes each buffer to a lock-free SeqLock region,
+        // so an empty result means the engine is stopped or the patch has no
+        // $scopeXY. Clear immediately on empty.
+        const tick = () => {
+            if (cancelled) return;
+            const pipeline = pipelineRef.current;
+            if (!pipeline) {
+                rafId = requestAnimationFrame(tick);
+                return;
+            }
+            electronAPI.synthesizer
+                .getScopeXy()
+                .then((rows) => {
+                    if (cancelled) return;
+                    const { beam, background } = readScopeColorsRgb();
+                    pipeline.setColors(beam, background);
+                    if (rows.length === 0) {
+                        pipeline.draw([]);
+                    } else {
+                        const pairs: ScopeXYPairData[] = rows.map(
+                            ([, x, y, ranges]) => ({
+                                x,
+                                y,
+                                xRange: [ranges.xMin, ranges.xMax],
+                                yRange: [ranges.yMin, ranges.yMax],
+                            }),
+                        );
+                        pipeline.draw(pairs);
+                    }
+                    rafId = requestAnimationFrame(tick);
+                })
+                .catch((err) => {
+                    if (cancelled) return;
+                    console.error('xy scope: getScopeXy failed', err);
+                    rafId = requestAnimationFrame(tick);
+                });
+        };
+        rafId = requestAnimationFrame(tick);
+        return () => {
+            cancelled = true;
+            cancelAnimationFrame(rafId);
+        };
+    }, []);
+
+    return <canvas ref={canvasRef} className="scope-xy-background" />;
+}

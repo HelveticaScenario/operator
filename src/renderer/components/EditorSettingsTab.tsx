@@ -201,6 +201,92 @@ export function EditorSettingsTab({
                     ))}
                 </select>
             </div>
+
+            {/* XY Scope Intensity */}
+            <div className="settings-section">
+                <h3>XY Scope Beam Intensity</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={config.xyScopeIntensity ?? 0.6}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopeIntensity: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.xyScopeIntensity ?? 0.6).toFixed(2)}
+                    </span>
+                </div>
+            </div>
+
+            {/* XY Scope Persistence */}
+            <div className="settings-section">
+                <h3>XY Scope Persistence</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={config.xyScopePersistence ?? 0.6}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopePersistence: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.xyScopePersistence ?? 0.6).toFixed(2)}
+                    </span>
+                </div>
+            </div>
+
+            {/* XY Scope Upscaling */}
+            <div className="settings-section">
+                <h3>XY Scope Upscaling</h3>
+                <label className="settings-toggle-label">
+                    <input
+                        type="checkbox"
+                        className="settings-toggle"
+                        checked={config.xyScopeUpsample ?? true}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopeUpsample: e.target.checked,
+                            })
+                        }
+                    />
+                </label>
+            </div>
+
+            {/* XY Scope Line Width */}
+            <div className="settings-section">
+                <h3>XY Scope Line Width</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0.002}
+                        max={0.06}
+                        step={0.001}
+                        value={config.xyScopeLineWidth ?? 0.012}
+                        onChange={(e) =>
+                            onConfigChange({
+                                xyScopeLineWidth: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.xyScopeLineWidth ?? 0.012).toFixed(3)}
+                    </span>
+                </div>
+            </div>
         </div>
     );
 }

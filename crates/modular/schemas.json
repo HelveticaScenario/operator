@@ -1,5 +1,180 @@
 [
   {
+    "name": "$lorenz",
+    "documentation": "Chaotic signal source based on the Lorenz strange attractor.\n\nSimulates the Lorenz system continuously — changing any parameter pulls the\ntrajectory in a new direction rather than restarting from scratch. Outputs x\n(default) and y coordinates normalized to **±5V**, and z normalized to **0–5V**\n(z is always positive in the Lorenz system).\n\n## Parameters (all 0–5 CV)\n\n| param | mapped range | default | chaotic butterfly |\n|-------|-------------|---------|-------------------|\n| sigma | σ 0–30      | 1.667 → σ=10   | stays chaotic for σ > 0 |\n| rho   | ρ 0–60      | 2.333 → ρ=28   | chaos requires ρ > ~24.74 (CV > ~2.06V) |\n| beta  | β 0–10      | 1.333 → β=8/3  | classic shape near 2.667 |\n| rate  | 0–200 t/s   | 0.1   → 4 t/s  | audio-rate at ≥ ~50 t/s |\n\n## Example\n\n```js\n// Classic Lorenz butterfly at default params\n$lorenz()\n\n// Access all three outputs\nconst l = $lorenz()\nl    // x coordinate (±5V)\nl.y  // y coordinate (±5V)\nl.z  // z coordinate (0–5V)\n\n// Modulate rho — nudges the attractor without resetting it\n$lorenz({ rho: $sine('1hz').range(0, 5), rate: 0.5 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "LorenzParams",
+      "type": "object",
+      "properties": {
+        "beta": {
+          "description": "Beta (β) — geometry of the attractor.\nInput 0–5 maps to β 0–10; default 1.333 → β=8/3 ≈ 2.667.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rate": {
+          "description": "Simulation speed — Lorenz time-units advanced per second of audio.\nInput 0–5 maps to 0–200 t/s; default 0.1 → 4 t/s (slow LFO-rate butterfly).\nHigher values push outputs toward audio-rate chaos.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rho": {
+          "description": "Rho (ρ) — distance from the origin to the critical points.\nInput 0–5 maps to ρ 0–60; default 2.333 → ρ=28.\nChaos requires ρ > 24.74 (→ CV > ~2.06V); below that the system spirals to a fixed point.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sigma": {
+          "description": "Sigma (σ) — rate of divergence between the x and y variables.\nInput 0–5 maps to σ 0–30; default 1.667 → σ=10.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "x",
+        "description": "X coordinate, normalized to ±5V",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "y",
+        "description": "Y coordinate, normalized to ±5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "z",
+        "description": "Z coordinate, normalized to 0–5V",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "sigma",
+        "description": "Sigma (σ) — rate of divergence between the x and y variables.\nInput 0–5 maps to σ 0–30; default 1.667 → σ=10.",
+        "signalType": "control",
+        "defaultValue": 1.6667,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rho",
+        "description": "Rho (ρ) — distance from the origin to the critical points.\nInput 0–5 maps to ρ 0–60; default 2.333 → ρ=28.\nChaos requires ρ > 24.74 (→ CV > ~2.06V); below that the system spirals to a fixed point.",
+        "signalType": "control",
+        "defaultValue": 2.3333,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "beta",
+        "description": "Beta (β) — geometry of the attractor.\nInput 0–5 maps to β 0–10; default 1.333 → β=8/3 ≈ 2.667.",
+        "signalType": "control",
+        "defaultValue": 1.3333,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "rate",
+        "description": "Simulation speed — Lorenz time-units advanced per second of audio.\nInput 0–5 maps to 0–200 t/s; default 0.1 → 4 t/s (slow LFO-rate butterfly).\nHigher values push outputs toward audio-rate chaos.",
+        "signalType": "control",
+        "defaultValue": 0.1,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": []
+  },
+  {
     "name": "$signal",
     "documentation": "Utility module for routing, naming, and exposing signals in a patch.",
     "paramsSchema": {
@@ -243,6 +418,146 @@
     ]
   },
   {
+    "name": "$mixDown",
+    "documentation": "Folds a polyphonic input down to an arbitrary target channel count.\n\nUnlike `$mix` (which mixes channel `n` of every input into output channel\n`n`), `$mixDown` takes a single poly signal and distributes its `N` channels\nacross `M` output channels by panning them evenly over the output field with\nan equal-power crossfade. With the default `channels = 1` it is a plain mono\nsum; `channels = 2` produces an equal-power stereo fold-down. When the target\nexceeds the input channel count, the input is instead spread to fill every\noutput channel (equal-power interpolation) so no channel is left silent.\n\n- **channels** — target output channel count (1–64, default 1)\n- **mode** — how channels landing on the same output combine (sum / average /\n  max / min); applies only when folding down (target ≤ input channels)\n\n## Example\n\n```js\n// Fold a 3-voice spread down to stereo\n$saw($spread(0, 5, 3)).mix(2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MixDownParams",
+      "type": "object",
+      "properties": {
+        "channels": {
+          "description": "Target output channel count (1–64). Defaults to 1 (mono).",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
+        "input": {
+          "description": "Polyphonic input whose channels are folded down.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "How channels that land on the same output channel are combined.",
+          "$ref": "#/$defs/MixMode"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MixMode": {
+          "description": "Mixing mode for combining input signals.",
+          "oneOf": [
+            {
+              "description": "Sum all inputs.",
+              "type": "string",
+              "const": "sum"
+            },
+            {
+              "description": "Average all inputs.",
+              "type": "string",
+              "const": "average"
+            },
+            {
+              "description": "Keep the strongest input.",
+              "type": "string",
+              "const": "max"
+            },
+            {
+              "description": "Keep the weakest non-zero input.",
+              "type": "string",
+              "const": "min"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "fold-down output: input channels panned evenly across the output channels",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "Polyphonic input whose channels are folded down.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "channels"
+      }
+    ],
+    "channelsParam": "channels"
+  },
+  {
     "name": "$stereoMix",
     "documentation": "Pan and spread a signal into stereo.",
     "paramsSchema": {
@@ -266,7 +581,7 @@
           ]
         },
         "width": {
-          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position.",
+          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
           "anyOf": [
             {
               "$ref": "#/$defs/MonoSignal"
@@ -380,7 +695,7 @@
       },
       {
         "name": "width",
-        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position.",
+        "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
@@ -1973,6 +2288,28 @@
         "freq": {
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
+        },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2084,6 +2421,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2120,8 +2473,30 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "shape": {
           "description": "waveform shape: 0=saw, 2.5=triangle, 5=ramp",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2249,6 +2624,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2285,8 +2676,30 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pwm": {
           "description": "pulse width modulation CV — added to the width parameter",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2433,6 +2846,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -2806,12 +3235,19 @@
   },
   {
     "name": "$noise",
-    "documentation": "Noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
       "type": "object",
       "properties": {
+        "channels": {
+          "description": "number of independent noise channels (1–64), each a different sequence",
+          "type": "integer",
+          "format": "uint",
+          "default": 1,
+          "minimum": 0
+        },
         "color": {
           "description": "color of the noise: white, pink, brown",
           "$ref": "#/$defs/NoiseKind"
@@ -2843,7 +3279,7 @@
       {
         "name": "output",
         "description": "signal output",
-        "polyphonic": false,
+        "polyphonic": true,
         "default": true,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -2854,7 +3290,8 @@
       {
         "name": "color"
       }
-    ]
+    ],
+    "channelsParam": "channels"
   },
   {
     "name": "$macro",
@@ -3196,8 +3633,8 @@
     },
     "outputs": [
       {
-        "name": "mix",
-        "description": "mixed synthesis output",
+        "name": "output",
+        "description": "mixed synthesis output (main/aux crossfade)",
         "polyphonic": true,
         "default": true,
         "minValue": -5.0,
@@ -3337,7 +3774,7 @@
   },
   {
     "name": "$supersaw",
-    "documentation": "Supersaw oscillator with multiple detuned sawtooth voices and PolyBLEP anti-aliasing.\n\nGenerates a classic supersaw sound by stacking multiple sawtooth oscillators\nwith symmetric detuning. Each input channel is processed by all voices,\ncreating a rich, full sound.\n\n- **freq** — pitch in V/Oct (0V = C4)\n- **voices** — number of detuned saw voices (1–16, default 5)\n- **detune** — detune spread in semitones (default 0.18)\n\nOutput range is **±5V** with gain compensation for input channel count.\n\n## Example\n\n```js\n$supersaw('c3').out()\n$supersaw('c3', { voices: 7, detune: 0.3 }).out()\n```",
+    "documentation": "Supersaw oscillator with multiple detuned sawtooth voices and PolyBLEP anti-aliasing.\n\nGenerates a classic supersaw sound by stacking multiple sawtooth oscillators\nwith symmetric detuning. Each input channel is processed by all voices,\ncreating a rich, full sound.\n\n- **freq** — pitch in V/Oct (0V = C4)\n- **voices** — number of detuned saw voices (1–64, default 5)\n- **detune** — detune spread in semitones (default 0.18)\n\nOutput range is **±5V** with gain compensation for input channel count.\n\n## Example\n\n```js\n$supersaw('c3').out()\n$supersaw('c3', { voices: 7, detune: 0.3 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SupersawParams",
@@ -3374,8 +3811,19 @@
           "description": "pitch in V/Oct (0V = C4)",
           "$ref": "#/$defs/PolySignal"
         },
+        "sync": {
+          "description": "hard sync source — rising edges reset every detuned voice's phase",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "voices": {
-          "description": "number of supersaw voices (1–16)",
+          "description": "number of supersaw voices (1–64)",
           "type": "integer",
           "format": "uint",
           "default": 5,
@@ -3499,6 +3947,14 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset every detuned voice's phase",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3542,12 +3998,34 @@
             }
           ]
         },
+        "phaseOffset": {
+          "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "pitch": {
           "description": "Pitch in V/Oct (0V = C4).",
           "$ref": "#/$defs/PolySignal"
         },
         "position": {
           "description": "Frame position as a signal. 0V maps to the first frame, 5V maps to\nthe last frame. Values are clamped to [0, 5] before being normalized.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sync": {
+          "description": "hard sync source — rising edges reset the oscillator phase.",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3820,6 +4298,22 @@
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "sync",
+        "description": "hard sync source — rising edges reset the oscillator phase.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "phaseOffset",
+        "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
       }
     ],
     "positionalArgs": [
@@ -4921,6 +5415,122 @@
     "positionalArgs": [
       {
         "name": "freq"
+      }
+    ]
+  },
+  {
+    "name": "$addHz",
+    "documentation": "Offsets a pitch by an absolute frequency amount, in Hz.\n\nThe input V/Oct pitch is converted to Hz, **offset** Hz is added, then the\nresult is converted back to V/Oct. Useful for audible beating detune.\n\n```js\n// detune a saw by +0.5 Hz for slow beating\n$addHz($saw('C4'), 0.5)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "AddHzParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "V/Oct pitch signal to detune",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "offset": {
+          "description": "frequency offset added to the input pitch, in Hz",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input",
+        "offset"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "V/Oct pitch output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "V/Oct pitch signal to detune",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "offset",
+        "description": "frequency offset added to the input pitch, in Hz",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "offset"
       }
     ]
   },
@@ -6341,6 +6951,122 @@
     ]
   },
   {
+    "name": "$mulHz",
+    "documentation": "Multiplies a pitch's frequency by a factor.\n\nThe input V/Oct pitch is converted to Hz, multiplied by **factor**, then the\nresult is converted back to V/Oct. A factor of 1.5 is a just perfect fifth.\n\n```js\n// up a just fifth\n$mulHz($saw('C4'), 1.5)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MulHzParams",
+      "type": "object",
+      "properties": {
+        "factor": {
+          "description": "frequency multiplier (1 = unity, 2 = octave up, 0.5 = octave down)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "V/Oct pitch signal to scale",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input",
+        "factor"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "V/Oct pitch output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "V/Oct pitch signal to scale",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "factor",
+        "description": "frequency multiplier (1 = unity, 2 = octave up, 0.5 = octave down)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "factor"
+      }
+    ]
+  },
+  {
     "name": "$remap",
     "documentation": "Linearly rescales a signal from one voltage range to another.\n\nMaps **input** from \\[inMin, inMax\\] to \\[outMin, outMax\\]. Useful for\nconverting between different voltage standards or reshaping control\nsignals.\n\n```js\n// convert a 0–5 V envelope to a -5–5 V bipolar signal\n$remap(env, -5, 5, 0, 5)\n\n// convert a -5–5 V signal to 0–1 V\n$remap(signal, 0, 1, -5, 5)\n```",
     "paramsSchema": {
@@ -6859,7 +7585,7 @@
   },
   {
     "name": "$quantizer",
-    "documentation": "Snaps a V/Oct signal to the nearest note in a given scale.\n\nFeed any continuous pitch signal into **input** and choose a **scale** —\nthe output locks to the closest scale degree. A **trig** pulse fires\nwhenever the quantized note changes, useful for re-triggering envelopes.\n\nScale format examples:\n- `\"chromatic\"` — all 12 semitones\n- `\"C(major)\"` — C major scale\n- `\"C#(minor)\"` — C# minor scale\n- `\"D(0 2 4 5 7 9 11)\"` — custom intervals from root\n\n```js\n// quantize a random signal to C major\n$sine($quantizer($sine(\".1hz\").range(0,3), \"C(major)\"))\n```",
+    "documentation": "Snaps a V/Oct signal to the nearest note in a given scale.\n\nFeed any continuous pitch signal into **input** and choose a **scale** —\nthe output locks to the closest scale degree. A **trig** pulse fires\nwhenever the quantized note changes, useful for re-triggering envelopes.\n\nScale format examples:\n- `\"chromatic\"` — all 12 semitones\n- `\"C(major)\"` — C major scale\n- `\"C#(minor)\"` — C# minor scale\n- `\"D(0 2 4 5 7 9 11)\"` — custom intervals from root\n- `\"C(just)\"` / `\"C(pythagorean)\"` — 12-tone non-equal tunings\n- `\"C(just 0 3 4 8)\"` — custom intervals tuned with just intonation\n\n```js\n// quantize a random signal to C major\n$sine($quantizer($sine(\".1hz\").range(0,3), \"C(major)\"))\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "QuantizerParams",
@@ -7158,7 +7884,7 @@
           ]
         },
         "count": {
-          "description": "number of output channels (1–16)",
+          "description": "number of output channels (1–64)",
           "type": "integer",
           "format": "uint",
           "minimum": 0
@@ -7286,14 +8012,14 @@
   },
   {
     "name": "$unison",
-    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–16)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 16.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()\n```",
+    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–64)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 64.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "UnisonParams",
       "type": "object",
       "properties": {
         "count": {
-          "description": "number of unison voices per input channel (1–16)",
+          "description": "number of unison voices per input channel (1–64)",
           "type": "integer",
           "format": "uint",
           "default": 1,
@@ -7418,7 +8144,7 @@
   },
   {
     "name": "$wrap",
-    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n```",
+    "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\nSet **octave** to `true` to shift by whole integers instead, preserving the\nfractional part (pitch class in V/Oct signals). Always exact when\n`max − min ≥ 1`; makes the closest-octave attempt otherwise.\n\n```js\n// wrap a ramp into 0–5 V\n$wrap(ramp, 0, 5)\n// keep pitch class, clamp to octave range 0–2 V\n$wrap(voct, 0, 2, { octave: true })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "WrapParams",
@@ -7435,6 +8161,11 @@
         "min": {
           "description": "lower bound of the wrap range",
           "$ref": "#/$defs/PolySignal"
+        },
+        "octave": {
+          "description": "when true, shifts by whole integers to preserve the fractional part (pitch class in V/Oct)",
+          "type": "boolean",
+          "default": false
         }
       },
       "required": [
@@ -7557,7 +8288,7 @@
       "type": "object",
       "properties": {
         "channels": {
-          "description": "Number of polyphonic voices (1-16)",
+          "description": "Number of polyphonic voices (1-64)",
           "type": [
             "integer",
             "null"
@@ -7567,7 +8298,7 @@
         },
         "pattern": {
           "description": "pattern string in mini-notation",
-          "$ref": "#/$defs/SeqPatternParam"
+          "$ref": "#/$defs/SeqPatternSource"
         },
         "playhead": {
           "description": "playhead position (driven by the global clock)",
@@ -7579,12 +8310,1776 @@
               "type": "null"
             }
           ]
+        },
+        "ribbon": {
+          "description": "loop window [offset, length] in cycles (fractional allowed)",
+          "type": "array",
+          "default": [
+            0.0,
+            1024.0
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "number",
+              "format": "double"
+            }
+          ]
         }
       },
       "required": [
         "pattern"
       ],
       "$defs": {
+        "ArgumentSpan": {
+          "description": "Source span used as an editor argument-span anchor.",
+          "type": "object",
+          "properties": {
+            "end": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "start": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        },
+        "ArrangeKindTag": {
+          "description": "Phantom discriminator matching the literal `\"ArrangePattern\"` string.",
+          "type": "string",
+          "enum": [
+            "ArrangePattern"
+          ]
+        },
+        "ArrangePatternPayload": {
+          "description": "JSON payload for `$cycle($p.arrange(...))`. Sections play in order, each for\nits cycle budget; the whole loops with period `Σ cycles`. A trailing section\nwith `cycles == \"Infinity\"` loops forever once reached.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `$p.arrange` sets this so the `SeqPatternSource`\nuntagged enum picks the `Arrange` variant.",
+              "$ref": "#/$defs/ArrangeKindTag"
+            },
+            "sections": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ArrangeSectionPayload"
+              }
+            }
+          },
+          "required": [
+            "__kind",
+            "sections"
+          ]
+        },
+        "ArrangeSectionPayload": {
+          "description": "One section of an `$p.arrange(...)` payload: a cycle budget plus a pattern.\n`pattern` is any [`SeqPatternSource`] (recursively), so a section may be a\n`$p`, a `$p.s`, or a nested `$p.arrange`.",
+          "type": "object",
+          "properties": {
+            "cycles": {
+              "$ref": "#/$defs/SectionCycles"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "cycles",
+            "pattern"
+          ]
+        },
+        "AtomValue": {
+          "description": "Atomic value types produced by the `$p()` DSL parser.\n\nThe reduced set from strudel's krill grammar: `Number` covers bare\nnumeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), and\n`Note` covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`).\nEvery other atom form (`m60` midi shorthand, sample-name identifiers,\n`2v` voltage, module references, quoted strings) has been removed from\nthe grammar and is not representable here.",
+          "oneOf": [
+            {
+              "description": "Numeric value. Module-level semantics decide the interpretation:\n`$cycle($p(...))` maps a bare `Number` to volts (1V/oct); `$p.s(...)`\nmaps it to an integer scale degree.",
+              "type": "object",
+              "properties": {
+                "Number": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Number"
+              ]
+            },
+            {
+              "description": "Frequency in Hz.",
+              "type": "object",
+              "properties": {
+                "Hz": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Hz"
+              ]
+            },
+            {
+              "description": "Musical note (e.g., c4, a#3, bb5).",
+              "type": "object",
+              "properties": {
+                "Note": {
+                  "type": "object",
+                  "properties": {
+                    "accidental": {
+                      "description": "Accidental: '#' for sharp, 'b' for flat.",
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "maxLength": 1,
+                      "minLength": 1
+                    },
+                    "letter": {
+                      "type": "string",
+                      "maxLength": 1,
+                      "minLength": 1
+                    },
+                    "octave": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "format": "int32"
+                    }
+                  },
+                  "required": [
+                    "letter"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Note"
+              ]
+            }
+          ]
+        },
+        "FactorPayload": {
+          "description": "A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —\nnot a highlightable source. A parsed pattern (`.fast(\"2 4\")`) becomes its own\nhighlightable source, so its active value lights up in the editor as it\ndrives the speed. A non-positive factor (`0` or negative) yields silence,\nmatching how the in-string `*`/`/` operators lower the same factors.",
+          "anyOf": [
+            {
+              "description": "`.fast(2)` — a constant. JSON numbers match this before `Pattern`.",
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "description": "`.fast(\"2 4\")` — a parsed number pattern.",
+              "$ref": "#/$defs/ParsedPatternPayload"
+            }
+          ]
+        },
+        "FastKindTag": {
+          "description": "Phantom discriminator matching the literal `\"FastPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "FastPattern"
+          ]
+        },
+        "FastPatternPayload": {
+          "description": "JSON payload for `$p(...).fast(factor)`: speed `pattern` up by `factor`.\n`pattern` is any [`SeqPatternSource`] (recursively), so `.fast` chains and\nnests over `$p`, `$p.s`, `$p.arrange`, and other `.fast`/`.slow` wrappers.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.fast` sets this so the `SeqPatternSource`\nuntagged enum picks the `Fast` variant.",
+              "$ref": "#/$defs/FastKindTag"
+            },
+            "factor": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "factor"
+          ]
+        },
+        "InfinityTag": {
+          "description": "Phantom discriminator matching the literal `\"Infinity\"` string.",
+          "type": "string",
+          "enum": [
+            "Infinity"
+          ]
+        },
+        "Located": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "$ref": "#/$defs/AtomValue"
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located2": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MiniAST"
+              }
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located3": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "number",
+              "format": "double"
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located4": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MiniASTF64"
+              }
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located5": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located6": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MiniASTU32"
+              }
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located7": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "integer",
+              "format": "int32"
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "Located8": {
+          "description": "Source location in the original pattern string.\n\nSerialized as `{ \"node\": ..., \"span\": {...} }` to match the TS\n`Located<T>` shape.",
+          "type": "object",
+          "properties": {
+            "node": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/MiniASTI32"
+              }
+            },
+            "span": {
+              "$ref": "#/$defs/SourceSpan"
+            }
+          },
+          "required": [
+            "node",
+            "span"
+          ]
+        },
+        "MiniAST": {
+          "description": "The main AST node type.",
+          "oneOf": [
+            {
+              "description": "A single value atom.",
+              "type": "object",
+              "properties": {
+                "Pure": {
+                  "$ref": "#/$defs/Located"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Pure"
+              ]
+            },
+            {
+              "description": "Rest/silence.",
+              "type": "object",
+              "properties": {
+                "Rest": {
+                  "$ref": "#/$defs/SourceSpan"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Rest"
+              ]
+            },
+            {
+              "description": "A list of patterns (from tail syntax: c:e:g or c:[e f]).\nElements can be atoms or subpatterns.",
+              "type": "object",
+              "properties": {
+                "List": {
+                  "$ref": "#/$defs/Located2"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "List"
+              ]
+            },
+            {
+              "description": "Sequence of patterns (space-separated, played in order).",
+              "type": "object",
+              "properties": {
+                "Sequence": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniAST"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Sequence"
+              ]
+            },
+            {
+              "description": "Fast subsequence from [...] syntax (explicit fastcat).\nUnlike Sequence which is the implicit result of space-separated elements,\nFastCat preserves that this came from explicit [...] grouping.\nThis distinction matters for nesting: `<[c e]>` should be slowcat of one fastcat,\nnot slowcat of two elements.",
+              "type": "object",
+              "properties": {
+                "FastCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniAST"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "FastCat"
+              ]
+            },
+            {
+              "description": "Slow subsequence (one item per cycle, with optional @ weight).",
+              "type": "object",
+              "properties": {
+                "SlowCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniAST"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "SlowCat"
+              ]
+            },
+            {
+              "description": "Stack: comma-separated patterns play simultaneously.",
+              "type": "object",
+              "properties": {
+                "Stack": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/MiniAST"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Stack"
+              ]
+            },
+            {
+              "description": "Random choice between values.",
+              "type": "object",
+              "properties": {
+                "RandomChoice": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniAST"
+                      }
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "RandomChoice"
+              ]
+            },
+            {
+              "description": "Fast modifier: pattern * factor.",
+              "type": "object",
+              "properties": {
+                "Fast": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniAST"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Fast"
+              ]
+            },
+            {
+              "description": "Slow modifier: pattern / factor.",
+              "type": "object",
+              "properties": {
+                "Slow": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniAST"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Slow"
+              ]
+            },
+            {
+              "description": "Replicate: pattern ! n (repeat n times).\nCount is a plain u32 since Strudel doesn't support patterned replicate counts.",
+              "type": "object",
+              "properties": {
+                "Replicate": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniAST"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint32",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Replicate"
+              ]
+            },
+            {
+              "description": "Degrade: pattern ? prob (randomly drop with probability).",
+              "type": "object",
+              "properties": {
+                "Degrade": {
+                  "type": "array",
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniAST"
+                    },
+                    {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "format": "double"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Degrade"
+              ]
+            },
+            {
+              "description": "Euclidean rhythm: pattern(pulses, steps, rotation?).",
+              "type": "object",
+              "properties": {
+                "Euclidean": {
+                  "type": "object",
+                  "properties": {
+                    "pattern": {
+                      "$ref": "#/$defs/MiniAST"
+                    },
+                    "pulses": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    "rotation": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTI32"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    }
+                  },
+                  "required": [
+                    "pattern",
+                    "pulses",
+                    "steps"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Euclidean"
+              ]
+            },
+            {
+              "description": "Polymeter: `{a b, c d e}` with optional `%n` steps-per-cycle override.\nEach child pattern is scaled so its step count maps to\n`steps_per_cycle`; all scaled children are stacked. Default\n`steps_per_cycle` is the step-count of the first child sequence.\nAdapted from strudel's `polymeter` alignment in `packages/mini/mini.mjs`.",
+              "type": "object",
+              "properties": {
+                "Polymeter": {
+                  "type": "object",
+                  "properties": {
+                    "children": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniAST"
+                      }
+                    },
+                    "steps_per_cycle": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTF64"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "children"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Polymeter"
+              ]
+            }
+          ]
+        },
+        "MiniASTF64": {
+          "description": "AST for f64-valued patterns (used for fast/slow factors).",
+          "oneOf": [
+            {
+              "description": "A single value atom.",
+              "type": "object",
+              "properties": {
+                "Pure": {
+                  "$ref": "#/$defs/Located3"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Pure"
+              ]
+            },
+            {
+              "description": "Rest/silence.",
+              "type": "object",
+              "properties": {
+                "Rest": {
+                  "$ref": "#/$defs/SourceSpan"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Rest"
+              ]
+            },
+            {
+              "description": "A list of patterns (from tail syntax: c:e:g or c:[e f]).\nElements can be atoms or subpatterns.",
+              "type": "object",
+              "properties": {
+                "List": {
+                  "$ref": "#/$defs/Located4"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "List"
+              ]
+            },
+            {
+              "description": "Sequence of patterns (space-separated, played in order).",
+              "type": "object",
+              "properties": {
+                "Sequence": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTF64"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Sequence"
+              ]
+            },
+            {
+              "description": "Fast subsequence from [...] syntax (explicit fastcat).",
+              "type": "object",
+              "properties": {
+                "FastCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTF64"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "FastCat"
+              ]
+            },
+            {
+              "description": "Slow subsequence (one item per cycle, with optional @ weight).",
+              "type": "object",
+              "properties": {
+                "SlowCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTF64"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "SlowCat"
+              ]
+            },
+            {
+              "description": "Stack: comma-separated patterns play simultaneously.",
+              "type": "object",
+              "properties": {
+                "Stack": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/MiniASTF64"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Stack"
+              ]
+            },
+            {
+              "description": "Random choice between values.",
+              "type": "object",
+              "properties": {
+                "RandomChoice": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniASTF64"
+                      }
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "RandomChoice"
+              ]
+            },
+            {
+              "description": "Fast modifier: pattern * factor.",
+              "type": "object",
+              "properties": {
+                "Fast": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Fast"
+              ]
+            },
+            {
+              "description": "Slow modifier: pattern / factor.",
+              "type": "object",
+              "properties": {
+                "Slow": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Slow"
+              ]
+            },
+            {
+              "description": "Replicate: pattern ! n (repeat n times).\nCount is a plain u32 since Strudel doesn't support patterned replicate counts.",
+              "type": "object",
+              "properties": {
+                "Replicate": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint32",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Replicate"
+              ]
+            },
+            {
+              "description": "Degrade: pattern ? prob (randomly drop with probability).",
+              "type": "object",
+              "properties": {
+                "Degrade": {
+                  "type": "array",
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    },
+                    {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "format": "double"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Degrade"
+              ]
+            },
+            {
+              "description": "Euclidean rhythm: pattern(pulses, steps, rotation?).",
+              "type": "object",
+              "properties": {
+                "Euclidean": {
+                  "type": "object",
+                  "properties": {
+                    "pattern": {
+                      "$ref": "#/$defs/MiniASTF64"
+                    },
+                    "pulses": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    "rotation": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTI32"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    }
+                  },
+                  "required": [
+                    "pattern",
+                    "pulses",
+                    "steps"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Euclidean"
+              ]
+            },
+            {
+              "description": "Polymeter: `{...}` with optional `%n`. See `MiniAST::Polymeter`.",
+              "type": "object",
+              "properties": {
+                "Polymeter": {
+                  "type": "object",
+                  "properties": {
+                    "children": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniASTF64"
+                      }
+                    },
+                    "steps_per_cycle": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTF64"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "children"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Polymeter"
+              ]
+            }
+          ]
+        },
+        "MiniASTI32": {
+          "description": "AST for signed integer patterns (used for euclidean rotation).",
+          "oneOf": [
+            {
+              "description": "A single value atom.",
+              "type": "object",
+              "properties": {
+                "Pure": {
+                  "$ref": "#/$defs/Located7"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Pure"
+              ]
+            },
+            {
+              "description": "Rest/silence.",
+              "type": "object",
+              "properties": {
+                "Rest": {
+                  "$ref": "#/$defs/SourceSpan"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Rest"
+              ]
+            },
+            {
+              "description": "A list of patterns (from tail syntax).",
+              "type": "object",
+              "properties": {
+                "List": {
+                  "$ref": "#/$defs/Located8"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "List"
+              ]
+            },
+            {
+              "description": "Sequence of patterns (space-separated, played in order).",
+              "type": "object",
+              "properties": {
+                "Sequence": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTI32"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Sequence"
+              ]
+            },
+            {
+              "description": "Fast subsequence from [...] syntax (explicit fastcat).",
+              "type": "object",
+              "properties": {
+                "FastCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTI32"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "FastCat"
+              ]
+            },
+            {
+              "description": "Slow subsequence (one item per cycle, with optional @ weight).",
+              "type": "object",
+              "properties": {
+                "SlowCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTI32"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "SlowCat"
+              ]
+            },
+            {
+              "description": "Stack: comma-separated patterns play simultaneously.",
+              "type": "object",
+              "properties": {
+                "Stack": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/MiniASTI32"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Stack"
+              ]
+            },
+            {
+              "description": "Random choice between values.",
+              "type": "object",
+              "properties": {
+                "RandomChoice": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniASTI32"
+                      }
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "RandomChoice"
+              ]
+            },
+            {
+              "description": "Fast modifier: pattern * factor.",
+              "type": "object",
+              "properties": {
+                "Fast": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTI32"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Fast"
+              ]
+            },
+            {
+              "description": "Slow modifier: pattern / factor.",
+              "type": "object",
+              "properties": {
+                "Slow": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTI32"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Slow"
+              ]
+            },
+            {
+              "description": "Replicate: pattern ! n (repeat n times).",
+              "type": "object",
+              "properties": {
+                "Replicate": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTI32"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint32",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Replicate"
+              ]
+            },
+            {
+              "description": "Degrade: pattern ? prob (randomly drop with probability).",
+              "type": "object",
+              "properties": {
+                "Degrade": {
+                  "type": "array",
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTI32"
+                    },
+                    {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "format": "double"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Degrade"
+              ]
+            },
+            {
+              "description": "Euclidean rhythm: pattern(pulses, steps, rotation?).",
+              "type": "object",
+              "properties": {
+                "Euclidean": {
+                  "type": "object",
+                  "properties": {
+                    "pattern": {
+                      "$ref": "#/$defs/MiniASTI32"
+                    },
+                    "pulses": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    "rotation": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTI32"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    }
+                  },
+                  "required": [
+                    "pattern",
+                    "pulses",
+                    "steps"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Euclidean"
+              ]
+            },
+            {
+              "description": "Polymeter: `{a b, c d e}` or `{...}%n`. Each child sequence is scaled\nso that all children fit into `steps_per_cycle` steps per cycle, then\nstacked. Default `steps_per_cycle` is the step-count of the first\nchild.",
+              "type": "object",
+              "properties": {
+                "Polymeter": {
+                  "type": "object",
+                  "properties": {
+                    "children": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniASTI32"
+                      }
+                    },
+                    "steps_per_cycle": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTF64"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "children"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Polymeter"
+              ]
+            }
+          ]
+        },
+        "MiniASTU32": {
+          "description": "AST for unsigned integer patterns (used for euclidean pulses/steps).",
+          "oneOf": [
+            {
+              "description": "A single value atom.",
+              "type": "object",
+              "properties": {
+                "Pure": {
+                  "$ref": "#/$defs/Located5"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Pure"
+              ]
+            },
+            {
+              "description": "Rest/silence.",
+              "type": "object",
+              "properties": {
+                "Rest": {
+                  "$ref": "#/$defs/SourceSpan"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Rest"
+              ]
+            },
+            {
+              "description": "A list of patterns (from tail syntax: c:e:g or c:[e f]).\nElements can be atoms or subpatterns.",
+              "type": "object",
+              "properties": {
+                "List": {
+                  "$ref": "#/$defs/Located6"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "List"
+              ]
+            },
+            {
+              "description": "Sequence of patterns (space-separated, played in order).",
+              "type": "object",
+              "properties": {
+                "Sequence": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTU32"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Sequence"
+              ]
+            },
+            {
+              "description": "Fast subsequence from [...] syntax (explicit fastcat).",
+              "type": "object",
+              "properties": {
+                "FastCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTU32"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "FastCat"
+              ]
+            },
+            {
+              "description": "Slow subsequence (one item per cycle, with optional @ weight).",
+              "type": "object",
+              "properties": {
+                "SlowCat": {
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "maxItems": 2,
+                    "minItems": 2,
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/MiniASTU32"
+                      },
+                      {
+                        "type": [
+                          "number",
+                          "null"
+                        ],
+                        "format": "double"
+                      }
+                    ]
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "SlowCat"
+              ]
+            },
+            {
+              "description": "Stack: comma-separated patterns play simultaneously.",
+              "type": "object",
+              "properties": {
+                "Stack": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/MiniASTU32"
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Stack"
+              ]
+            },
+            {
+              "description": "Random choice between values.",
+              "type": "object",
+              "properties": {
+                "RandomChoice": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniASTU32"
+                      }
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "RandomChoice"
+              ]
+            },
+            {
+              "description": "Fast modifier: pattern * factor.",
+              "type": "object",
+              "properties": {
+                "Fast": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Fast"
+              ]
+            },
+            {
+              "description": "Slow modifier: pattern / factor.",
+              "type": "object",
+              "properties": {
+                "Slow": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    {
+                      "$ref": "#/$defs/MiniASTF64"
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Slow"
+              ]
+            },
+            {
+              "description": "Replicate: pattern ! n (repeat n times).\nCount is a plain u32 since Strudel doesn't support patterned replicate counts.",
+              "type": "object",
+              "properties": {
+                "Replicate": {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint32",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Replicate"
+              ]
+            },
+            {
+              "description": "Degrade: pattern ? prob (randomly drop with probability).",
+              "type": "object",
+              "properties": {
+                "Degrade": {
+                  "type": "array",
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    {
+                      "type": [
+                        "number",
+                        "null"
+                      ],
+                      "format": "double"
+                    },
+                    {
+                      "type": "integer",
+                      "format": "uint64",
+                      "minimum": 0
+                    }
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Degrade"
+              ]
+            },
+            {
+              "description": "Euclidean rhythm: pattern(pulses, steps, rotation?).",
+              "type": "object",
+              "properties": {
+                "Euclidean": {
+                  "type": "object",
+                  "properties": {
+                    "pattern": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    "pulses": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    },
+                    "rotation": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTI32"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "steps": {
+                      "$ref": "#/$defs/MiniASTU32"
+                    }
+                  },
+                  "required": [
+                    "pattern",
+                    "pulses",
+                    "steps"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Euclidean"
+              ]
+            },
+            {
+              "description": "Polymeter: `{...}` with optional `%n`. See `MiniAST::Polymeter`.",
+              "type": "object",
+              "properties": {
+                "Polymeter": {
+                  "type": "object",
+                  "properties": {
+                    "children": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/$defs/MiniASTU32"
+                      }
+                    },
+                    "steps_per_cycle": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/$defs/MiniASTF64"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "children"
+                  ]
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "Polymeter"
+              ]
+            }
+          ]
+        },
         "MonoSignal": {
           "anyOf": [
             {
@@ -7598,9 +10093,77 @@
             }
           ]
         },
-        "SeqPatternParam": {
-          "description": "A pattern parameter that wraps a pattern string and its parsed components.\n\nThis struct is serialized as a simple string but contains the parsed pattern\nand cached query results.",
-          "type": "string"
+        "ParsedPatternPayload": {
+          "description": "JSON payload shape delivered in the patch graph for\n`SeqPatternParam`. Produced client-side by\nthe TypeScript `$p(...)` helper in `src/main/dsl/miniNotation/`.",
+          "type": "object",
+          "properties": {
+            "all_spans": {
+              "description": "Pre-computed leaf spans (used for Monaco tracked decorations).",
+              "type": "array",
+              "items": {
+                "type": "array",
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "integer",
+                    "format": "uint",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "integer",
+                    "format": "uint",
+                    "minimum": 0
+                  }
+                ]
+              }
+            },
+            "ast": {
+              "description": "The parsed AST.",
+              "$ref": "#/$defs/MiniAST"
+            },
+            "source": {
+              "description": "The original mini-notation source string.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "ast",
+            "source",
+            "all_spans"
+          ]
+        },
+        "SectionCycles": {
+          "description": "Cycle count for an `$p.arrange(...)` section: a finite positive integer, or\nthe sentinel string `\"Infinity\"` for an infinite tail section. JSON can't\ncarry a numeric infinity, so the TS `$p.arrange` helper emits the string\n`\"Infinity\"`; any finite count arrives as a JSON number.",
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "$ref": "#/$defs/InfinityTag"
+            }
+          ]
+        },
+        "SeqPatternSource": {
+          "description": "Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`\npayload, a chained `$p.s` payload with multi-source highlighting, or a\nsingle `ParsedPatternPayload` (the legacy single-source path used by\n`$cycle($p(...))`).\n\nThe `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before\nthe untagged `Single`; each carries a distinct required `__kind` literal, so\nthe untagged enum disambiguates them unambiguously before falling back to\n`Single`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FastPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/SlowPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ArrangePatternPayload"
+            },
+            {
+              "$ref": "#/$defs/SpPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/ParsedPatternPayload"
+            }
+          ]
         },
         "Signal": {
           "anyOf": [
@@ -7644,6 +10207,139 @@
                 "port"
               ]
             }
+          ]
+        },
+        "SlowKindTag": {
+          "description": "Phantom discriminator matching the literal `\"SlowPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "SlowPattern"
+          ]
+        },
+        "SlowPatternPayload": {
+          "description": "JSON payload for `$p(...).slow(factor)`: the time-inverse of\n[`FastPatternPayload`]. See it for `pattern`/`factor` semantics.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.slow` sets this so the `SeqPatternSource`\nuntagged enum picks the `Slow` variant.",
+              "$ref": "#/$defs/SlowKindTag"
+            },
+            "factor": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "factor"
+          ]
+        },
+        "SourceSpan": {
+          "description": "Source location in the original pattern string.\nUsed for editor highlighting.",
+          "type": "object",
+          "properties": {
+            "end": {
+              "description": "End offset in the source string (exclusive).",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            },
+            "start": {
+              "description": "Start offset in the source string (0-indexed).",
+              "type": "integer",
+              "format": "uint",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "start",
+            "end"
+          ]
+        },
+        "SpAlignmentMode": {
+          "description": "Strudel-style alignment mode for chained `$p.s` ops. Wire form uses\nlowercase strings (`\"in\"`, `\"out\"`, `\"mix\"`, `\"squeeze\"`,\n`\"squeezeout\"`, `\"reset\"`, `\"restart\"`) to match the TS builder.\nMirrors [`crate::pattern_system::sp_combine::SpAlignmentMode`].",
+          "type": "string",
+          "enum": [
+            "in",
+            "out",
+            "mix",
+            "squeeze",
+            "squeezeout",
+            "reset",
+            "restart"
+          ]
+        },
+        "SpKindTag": {
+          "description": "Phantom-style discriminator that matches the literal `\"SpPattern\"`\nstring in JSON.",
+          "type": "string",
+          "enum": [
+            "SpPattern"
+          ]
+        },
+        "SpOp": {
+          "description": "One chained op in an `$p.s` payload: arithmetic op + alignment mode.\nPaired positionally with `sources[i+1]` for `i = 0..ops.len()`.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/SpAlignmentMode"
+            },
+            "op": {
+              "$ref": "#/$defs/SpOpKind"
+            }
+          },
+          "required": [
+            "op",
+            "mode"
+          ]
+        },
+        "SpOpKind": {
+          "description": "Arithmetic operation kind for chained `$p.s` ops. Wire form uses\nlowercase strings (`\"add\"`, `\"sub\"`) to match the TS builder.",
+          "type": "string",
+          "enum": [
+            "add",
+            "sub"
+          ]
+        },
+        "SpPatternPayload": {
+          "description": "JSON payload shape delivered for chained `$p.s(...).add(...)` patterns.\nFirst entry of `sources` is the left pattern; subsequent entries are\nchained RHS patterns combined via the parallel `ops` slot.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `$p.s` builds objects with this set so the\n`SeqPatternSource` untagged enum picks the `Sp` variant.",
+              "$ref": "#/$defs/SpKindTag"
+            },
+            "argument_spans": {
+              "description": "Per-source editor argument spans. Consumed entirely TS-side (merged\ninto the params' `__argument_spans` before IPC) and never read here;\noptional on the wire so a hand-built payload may omit it.",
+              "type": "array",
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/ArgumentSpan"
+              }
+            },
+            "ops": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/SpOp"
+              }
+            },
+            "scale": {
+              "type": "string"
+            },
+            "sources": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ParsedPatternPayload"
+              }
+            }
+          },
+          "required": [
+            "__kind",
+            "sources",
+            "scale",
+            "ops"
           ]
         }
       }
@@ -7863,165 +10559,6 @@
     ]
   },
   {
-    "name": "$iCycle",
-    "documentation": "Scale-degree sequencer using a compact text syntax ported\nfrom TidalCycles/Strudel.\n\nWorks with **scale degree numbers** instead of note names. One or more\n**patterns** are combined by recursively folding the patterns into each other.\nThis is adapted from the default way that patterns are combined in Strudel:\n2 patterns are aligned in a cycle and the events of the second pattern are applied to the first.\nHere this happens recursively (where n pattern is applied to n-1), adding\nthe values of those patterns' events together. The result is a single combined\npattern of scale degrees that can be sampled at the current playhead position to produce output CV/gate/trig.\nScale degrees outside the configured **scale** are automatically wrapped into the appropriate octave.\n\n## Cycles\n\nA **cycle** is one full traversal of a pattern. The playhead position\ndetermines timing: its integer part selects the current cycle number and\nthe fractional part selects the position within that cycle.\nAll patterns share the same cycle clock.\n\n## Scale degrees\n\nValues are **0-indexed** degrees of the chosen scale. `0` is the root,\n`1` is the second scale tone, `2` the third, and so on. Negative values\nmove downward; values beyond the scale length wrap into higher/lower\noctaves automatically.\n\n## Mini-notation\n\n| Syntax | Meaning | Example |\n|--------|---------|---------|\n| Bare number | Scale degree (0-indexed) | `0`, `2`, `4` |\n| `~` | Rest (gate low, no change in pitch) | `'0 ~ 2 ~'` |\n| `[a b c]` | Fast subsequence — subdivides parent time slot | `'[0 2 4]'` |\n| `<a b c>` | Slow / alternating — one element per cycle | `'<0 4 7>'` |\n| `a\\|b\\|c` | Random choice each time the slot is reached | `'0\\|2\\|4'` |\n| `a, b` | Stack — comma-separated patterns play simultaneously | `'0 2, 4 7'` |\n\nGrouping, stacks, and random choice nest arbitrarily.\n\n## Per-element modifiers\n\nModifiers attach directly to an element (no spaces). Multiple modifiers\ncan be chained in any order.\n\n| Modifier | Syntax | Meaning |\n|----------|--------|---------|\n| Weight | `@n` | Relative duration within a sequence (default 1). `0@2 2` gives `0` twice the time. |\n| Speed up | `*n` | Repeat/subdivide `n` times within the slot. `0*3` plays degree 0 three times. |\n| Slow down | `/n` | Stretch over `n` cycles. `0/2` plays every other cycle. |\n| Replicate | `!n` | Duplicate the element `n` times (default 2). `0!3` is equivalent to `0 0 0`. |\n| Degrade | `?` or `?n` | Randomly drop the element. `0?` drops ~50 % of the time; `0?0.8` drops 80 %. |\n| Euclidean | `(k,n)` or `(k,n,offset)` | Distribute `k` pulses over `n` steps (Bjorklund algorithm). |\n\nModifier operands can also be subpatterns: `0*[2 3]` alternates between\ndoubling and tripling each slot.\n\n## Polyphony\n\nThe first pattern's structure is preserved. When subsequent patterns\ncontain stacks (simultaneous events), one combined\nevent is created per left×right pair, all sharing the first pattern's timing. This\ncan create polyphonic output.\n\n```js\n// first pattern: one note per slot\n// second pattern: two simultaneous offsets → two voices per slot\n$iCycle([\"0 2 4\", \"0,4\"], \"c4(major)\")\n```\n\n```js\n// slow alternation in second pattern shifts the chord each cycle\n$iCycle([\"0,2,4\", \"<0 3>\"], \"c4(major)\")\n```\n\n## Outputs\n\n- **cv** — V/Oct pitch quantized to the scale (C4 = 0 V).\n- **gate** — 5 V while a note is active, 0 V otherwise.\n- **trig** — single-sample 5 V pulse at each note onset.",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "IntervalSeqParams",
-      "type": "object",
-      "properties": {
-        "channels": {
-          "description": "number of polyphonic voices (1–16)",
-          "type": "integer",
-          "format": "uint",
-          "default": 4,
-          "minimum": 0
-        },
-        "patterns": {
-          "description": "patterns to combine (left-fold with appLeft addition); accepts a single\npattern string or an array of pattern strings",
-          "$ref": "#/$defs/IntervalPatternSource"
-        },
-        "playhead": {
-          "description": "playhead position",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MonoSignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "scale": {
-          "description": "scale for quantizing degrees to pitches (supports optional octave, e.g. \"c3(major)\")",
-          "$ref": "#/$defs/IntervalScaleParam"
-        }
-      },
-      "required": [
-        "patterns",
-        "scale"
-      ],
-      "$defs": {
-        "IntervalPatternSource": {
-          "description": "Source representation for interval patterns: either a single pattern\nstring or an array of strings that get combined via `app_left` addition.",
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ]
-        },
-        "IntervalScaleParam": {
-          "type": "string"
-        },
-        "MonoSignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-            }
-          ]
-        },
-        "Signal": {
-          "anyOf": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "outputs": [
-      {
-        "name": "cv",
-        "description": "pitch output in V/Oct (quantized to scale)",
-        "polyphonic": true,
-        "default": true
-      },
-      {
-        "name": "gate",
-        "description": "high (5 V) while a note is active, low (0 V) otherwise",
-        "polyphonic": true,
-        "default": false,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      },
-      {
-        "name": "trig",
-        "description": "short pulse (5 V) at the start of each note",
-        "polyphonic": true,
-        "default": false,
-        "minValue": 0.0,
-        "maxValue": 5.0
-      }
-    ],
-    "signalParams": [
-      {
-        "name": "playhead",
-        "description": "playhead position",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": 0.0,
-        "maxValue": 1.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "patterns"
-      },
-      {
-        "name": "scale"
-      }
-    ]
-  },
-  {
     "name": "$step",
     "documentation": "Step sequencer",
     "paramsSchema": {
@@ -8166,7 +10703,7 @@
   },
   {
     "name": "$midiCV",
-    "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 16 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// 4-voice polyphonic MIDI synth\nconst midi = $midiCV({ channels: 4 });\n$sine(midi.pitch).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n\n// Mono lead with pitch bend\nconst lead = $midiCV({ channels: 1, pitchBendRange: 12 });\n$saw(lead.pitch).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n```",
+    "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 64 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// 4-voice polyphonic MIDI synth\nconst midi = $midiCV({ channels: 4 });\n$sine(midi.pitch).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n\n// Mono lead with pitch bend\nconst lead = $midiCV({ channels: 1, pitchBendRange: 12 });\n$saw(lead.pitch).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "MidiCvParams",
@@ -8183,7 +10720,7 @@
           "minimum": 0
         },
         "channels": {
-          "description": "Number of polyphonic voices (1-16)",
+          "description": "Number of polyphonic voices (1-64)",
           "type": "integer",
           "format": "uint",
           "default": 1,
@@ -8388,6 +10925,284 @@
     ],
     "signalParams": [],
     "positionalArgs": []
+  },
+  {
+    "name": "$grains",
+    "documentation": "Granular sampler. Continuously spawns short, windowed grains from a WAV\nfile, enabling time-stretching, pitch-shifting independent of time, and\ncloud textures.\n\nEach polyphonic channel maintains up to 64 concurrent grains. Spawned grains\ncapture their pitch, start position, and length at spawn time, so live\nparameter changes only affect new grains.\n\nAmplitude is normalised using the Mutable Instruments Clouds formula:\n`gain = 1/√(max(1, smoothed_active_grains − 1))`.\n\n```js\n$grains('c4', $wavs().pad, $clock.beat)\n$grains(voct, $wavs().strings, gate, { density: 3, shape: 'bell', length: 2 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GrainsParams",
+      "type": "object",
+      "properties": {
+        "density": {
+          "description": "Grain spawn rate: grains/sec = value × 10. Default 2.5 V = 25 grains/sec.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "directionBias": {
+          "description": "Reverse probability: 0 V = always forward, 5 V = always reverse.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gate": {
+          "description": "Gate: rising edge resets the loop counter; high level enables grain spawning.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "length": {
+          "description": "Grain length: 1 V ≈ 100 ms, 0.01 V ≈ 1 ms. Clamped to sample duration.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "loopCount": {
+          "description": "Max grains per gate-high. Absent/null = infinite.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "pitch": {
+          "description": "Pitch of spawned grains in V/Oct. 0 V = native speed, 1 V = 2×, −1 V = 0.5×.",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "shape": {
+          "description": "Amplitude window function applied to each grain.",
+          "$ref": "#/$defs/GrainShape"
+        },
+        "start": {
+          "description": "Read position within the sample: 0 V = start, 5 V = end.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "wav": {
+          "description": "WAV file to granulate.",
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "pitch",
+        "wav",
+        "gate"
+      ],
+      "$defs": {
+        "GrainShape": {
+          "description": "Amplitude windowing function applied to each grain.",
+          "oneOf": [
+            {
+              "description": "Symmetric triangle: linear rise and fall meeting at the centre.",
+              "type": "string",
+              "const": "triangle"
+            },
+            {
+              "description": "Linear rise to peak then a sharp 1 ms linear fall at the tail.",
+              "type": "string",
+              "const": "ramp"
+            },
+            {
+              "description": "1 ms linear attack, sustain at peak, 1 ms linear decay.",
+              "type": "string",
+              "const": "square"
+            },
+            {
+              "description": "1 ms linear attack followed by exponential decay matching `$perc`.",
+              "type": "string",
+              "const": "decay"
+            },
+            {
+              "description": "Gaussian bell curve; endpoints ≈ 0.01 (−40 dB).",
+              "type": "string",
+              "const": "bell"
+            },
+            {
+              "description": "Lanczos-windowed sinc, 3 lobes per side.",
+              "type": "string",
+              "const": "sinc"
+            },
+            {
+              "description": "Cosine-tapered flat-top (Tukey) window, α = 0.5.",
+              "type": "string",
+              "const": "tukey"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "granular synthesis output",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "pitch",
+        "description": "Pitch of spawned grains in V/Oct. 0 V = native speed, 1 V = 2×, −1 V = 0.5×.",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -4.0,
+        "maxValue": 4.0
+      },
+      {
+        "name": "gate",
+        "description": "Gate: rising edge resets the loop counter; high level enables grain spawning.",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "start",
+        "description": "Read position within the sample: 0 V = start, 5 V = end.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "length",
+        "description": "Grain length: 1 V ≈ 100 ms, 0.01 V ≈ 1 ms. Clamped to sample duration.",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.01,
+        "maxValue": 10.0
+      },
+      {
+        "name": "density",
+        "description": "Grain spawn rate: grains/sec = value × 10. Default 2.5 V = 25 grains/sec.",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0001,
+        "maxValue": 100.0
+      },
+      {
+        "name": "directionBias",
+        "description": "Reverse probability: 0 V = always forward, 5 V = always reverse.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "pitch"
+      },
+      {
+        "name": "wav"
+      },
+      {
+        "name": "gate"
+      }
+    ]
   },
   {
     "name": "$sampler",

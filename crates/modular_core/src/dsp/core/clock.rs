@@ -117,6 +117,18 @@ impl Clock {
         self.state.external_sync = None;
     }
 
+    /// Zero the bar (loop) index without touching the bar phase. Called when a
+    /// buffer switch is applied under Ableton Link: the shared timeline drives
+    /// `phase` via external sync, so only the locally-accumulated bar count is
+    /// reset, restarting the incoming song at bar 0. The next `update` recomputes
+    /// `playhead` channel 1 from this value; a backward phase step from the
+    /// post-swap re-fill is not a bar wrap, so the index stays at zero until a
+    /// genuine wrap advances it.
+    pub fn reset_loop_index_impl(&mut self) {
+        self.state.loop_index = 0;
+        self.outputs.playhead.set(1, 0.0);
+    }
+
     fn update(&mut self, sample_rate: f32) {
         // External clock sync: override free-running clock with Link data.
         if let Some(sync) = self.state.external_sync.take() {
@@ -128,7 +140,18 @@ impl Clock {
 
             let old_phase = self.state.phase;
             self.state.phase = sync.bar_phase;
-            self.state.loop_index = if sync.bar_phase < old_phase && old_phase > 0.5 {
+            // A genuine Link bar wrap drops the phase by nearly a full cycle
+            // (from ~1.0 back to ~0.0). Detect the wrap by the *size* of that
+            // drop rather than merely "the old phase was past the midpoint":
+            // a small backward step is not a wrap. This matters when a patch
+            // swap re-fills ROOT_CLOCK from an earlier slot — the audio
+            // callback speculatively advances the clock across the whole block,
+            // then on an immediate swap rewinds and re-syncs from slot 0, so
+            // `old_phase` (the block's last slot) sits just ahead of the
+            // incoming `bar_phase`. The old `old_phase > 0.5` test misread that
+            // tiny rewind as a bar boundary, double-counting `loop_index`.
+            let bar_wrapped = old_phase - sync.bar_phase > 0.5;
+            self.state.loop_index = if bar_wrapped {
                 self.state.loop_index + 1
             } else {
                 self.state.loop_index
@@ -144,7 +167,7 @@ impl Clock {
 
             // Detect bar boundary crossing
             let hold = min_gate_samples(sample_rate);
-            if sync.bar_phase < old_phase && old_phase > 0.5 {
+            if bar_wrapped {
                 self.state
                     .bar_gate
                     .set_state(TempGateState::High, TempGateState::Low, hold);
@@ -155,10 +178,7 @@ impl Clock {
             let old_beat = (old_phase / beat_period).floor();
             let new_beat = (sync.bar_phase / beat_period).floor();
             let first_sync_frame = old_phase == 0.0 && self.state.loop_index == 0;
-            if new_beat != old_beat
-                || (sync.bar_phase < old_phase && old_phase > 0.5)
-                || first_sync_frame
-            {
+            if new_beat != old_beat || bar_wrapped || first_sync_frame {
                 self.state
                     .beat_gate
                     .set_state(TempGateState::High, TempGateState::Low, hold);
@@ -168,7 +188,7 @@ impl Clock {
             // Detect PPQ boundary crossing
             let old_ppq = (old_phase / ppq_period).floor();
             let new_ppq = (sync.bar_phase / ppq_period).floor();
-            if new_ppq != old_ppq || (sync.bar_phase < old_phase && old_phase > 0.5) {
+            if new_ppq != old_ppq || bar_wrapped {
                 self.state
                     .ppq_gate
                     .set_state(TempGateState::High, TempGateState::Low, hold);
@@ -653,6 +673,212 @@ mod tests {
             beat_triggers, 4,
             "External sync should generate 4 beat triggers per bar in 4/4, got {}",
             beat_triggers
+        );
+    }
+
+    #[test]
+    fn clock_external_sync_rewind_does_not_increment_loop_index() {
+        // Reproduces the Link patch-update bug: the audio callback
+        // speculatively advances ROOT_CLOCK across the whole block, then on an
+        // immediate patch swap rewinds and re-syncs from an earlier slot. The
+        // resulting tiny backward phase step must NOT be read as a bar wrap.
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        // Land the clock in the upper half of the bar (simulating the block's
+        // last speculatively-filled slot).
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.70,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        let loop_before = c.state.loop_index;
+
+        // Re-sync from a phase a hair earlier in the same bar (the swap re-fill
+        // restarting at slot 0). A backward step of a few samples is not a wrap.
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.6993,
+            bpm: 120.0,
+        });
+        c.update(sr);
+
+        assert_eq!(
+            c.state.loop_index, loop_before,
+            "small backward phase step from a patch-swap re-fill must not increment loop_index"
+        );
+        assert_eq!(
+            c.outputs.bar_trigger, 0.0,
+            "a re-fill rewind must not fire a spurious bar trigger"
+        );
+    }
+
+    #[test]
+    fn clock_external_sync_genuine_wrap_increments_loop_index() {
+        // Regression guard for the rewind fix: a real bar wrap (phase dropping
+        // from ~1.0 back to ~0.0) must still advance loop_index exactly once.
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.99,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        let loop_before = c.state.loop_index;
+
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.01,
+            bpm: 120.0,
+        });
+        c.update(sr);
+
+        assert_eq!(
+            c.state.loop_index,
+            loop_before + 1,
+            "a genuine bar wrap must increment loop_index"
+        );
+    }
+
+    #[test]
+    fn clock_reset_loop_index_zeroes_bar_count_then_resumes() {
+        // Mirrors a buffer switch applied under Link: the shared timeline keeps
+        // driving the bar phase, but the incoming song's bar count restarts at
+        // zero. Reset must not disturb the phase, and a later genuine wrap must
+        // resume counting from one.
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        // Drive one full bar wrap so loop_index lands on 1.
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.99,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.05,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        assert_eq!(c.state.loop_index, 1, "one wrap should advance loop_index");
+
+        // Reset (as the apply does on a buffer switch under Link).
+        c.reset_loop_index_impl();
+        assert_eq!(c.state.loop_index, 0, "reset must zero the bar count");
+
+        // Continuing forward in the same bar (no wrap) keeps it at zero — a
+        // small forward step is not a wrap.
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.10,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        assert_eq!(
+            c.state.loop_index, 0,
+            "no wrap after reset must keep loop_index at zero"
+        );
+        assert_eq!(
+            c.outputs.playhead.get(1),
+            0.0,
+            "playhead bar-count channel must read zero after reset"
+        );
+
+        // The next genuine wrap resumes counting from one.
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.99,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.02,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        assert_eq!(
+            c.state.loop_index, 1,
+            "first wrap after reset must count from one"
+        );
+    }
+
+    #[test]
+    fn clock_reset_loop_index_does_not_immediately_reincrement() {
+        // Reproduces the exact apply-at-bar-boundary sequence under Link. The
+        // swap is quantized to NextBar, so at the apply slot the clock has just
+        // wrapped: loop_index was incremented and the internal phase sits just
+        // past zero. The apply resets the bar count to zero, then the post-swap
+        // eager-fill keeps syncing the *opening* of the new bar. Those tiny
+        // forward steps must NOT be misread as another wrap — if they were, the
+        // freshly-zeroed loop_index would pop straight back to 1, exposing the
+        // clock's internal phase re-driving the bar count right after the reset.
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        // 120 BPM, 4/4 → one bar is 96_000 samples, so the per-sample phase
+        // step is ~1/96_000. Drive a genuine wrap into the new bar.
+        let step = 1.0 / 96_000.0;
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 1.0 - step,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.0,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        assert_eq!(
+            c.state.loop_index, 1,
+            "the wrap should advance the bar count"
+        );
+
+        // Apply lands here: zero the bar count for the incoming song.
+        c.reset_loop_index_impl();
+        assert_eq!(c.state.loop_index, 0);
+
+        // The swap-site eager-fill re-syncs the boundary slot itself (phase
+        // ~0.0) right after the reset. Re-presenting the same boundary phase
+        // must not be read as a fresh wrap.
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.0,
+            bpm: 120.0,
+        });
+        c.update(sr);
+        assert_eq!(
+            c.state.loop_index, 0,
+            "re-syncing the boundary slot after reset must not re-increment"
+        );
+
+        // Post-swap re-fill: continue syncing the start of the new bar, one
+        // sample at a time. None of these is a wrap, so the bar count must stay
+        // pinned at zero. The genuine wrap above legitimately raised the bar
+        // pulse, which holds for a few samples; what must NOT happen is a *new*
+        // rising edge (a spurious wrap re-firing the trigger), so count rising
+        // edges across the window and require zero.
+        let mut was_high = c.outputs.bar_trigger == 5.0;
+        let mut spurious_bar_edges = 0;
+        for i in 1..2_000 {
+            c.sync_external_clock_impl(ExternalClockState {
+                bar_phase: i as f64 * step,
+                bpm: 120.0,
+            });
+            c.update(sr);
+            assert_eq!(
+                c.state.loop_index, 0,
+                "loop_index must stay 0 across the new bar's opening (sample {i})"
+            );
+            assert_eq!(
+                c.outputs.playhead.get(1),
+                0.0,
+                "playhead bar-count must read 0 right after reset (sample {i})"
+            );
+            let is_high = c.outputs.bar_trigger == 5.0;
+            if is_high && !was_high {
+                spurious_bar_edges += 1;
+            }
+            was_high = is_high;
+        }
+        assert_eq!(
+            spurious_bar_edges, 0,
+            "no new bar trigger may fire after the reset within the same bar"
         );
     }
 

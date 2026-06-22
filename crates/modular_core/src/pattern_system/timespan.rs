@@ -18,51 +18,68 @@ impl TimeSpan {
         Self { begin, end }
     }
 
-    /// Create a timespan from integer values.
-    pub fn from_integers(begin: i64, end: i64) -> Self {
-        Self {
-            begin: Fraction::from_integer(begin),
-            end: Fraction::from_integer(end),
-        }
-    }
-
     /// Duration of this span (end - begin).
     pub fn duration(&self) -> Fraction {
         &self.end - &self.begin
     }
 
-    /// Split a span at cycle boundaries.
-    ///
-    /// Returns a list of spans, each contained within a single cycle.
-    /// For example, [0.5, 2.3) becomes [[0.5, 1), [1, 2), [2, 2.3)].
-    pub fn span_cycles(&self) -> Vec<TimeSpan> {
-        let mut spans = Vec::new();
-        let mut begin = self.begin.clone();
-
-        // Handle zero-width (point) spans
-        if begin == self.end {
-            return vec![TimeSpan::new(begin, self.end.clone())];
+    /// Split a span at cycle boundaries, calling `f` once per sub-span.
+    /// Each emitted span lies within a single cycle. For [0.5, 2.3) the
+    /// callback receives [0.5, 1), [1, 2), [2, 2.3).
+    #[inline]
+    pub fn for_each_cycle_span<F: FnMut(&TimeSpan)>(&self, mut f: F) {
+        // Fast path: integer-aligned query (the DSP common case — playhead
+        // queries one cycle at a time at [N, N+1)).
+        if self.begin.is_integer() && self.end.is_integer() {
+            let begin_int = self.begin.integer_value();
+            let end_int = self.end.integer_value();
+            if end_int == begin_int + 1 {
+                f(self);
+                return;
+            }
+            if end_int > begin_int {
+                let mut i = begin_int;
+                while i < end_int {
+                    let span = TimeSpan::new(
+                        super::Fraction::from_integer(i),
+                        super::Fraction::from_integer(i + 1),
+                    );
+                    f(&span);
+                    i += 1;
+                }
+                return;
+            }
+            if end_int == begin_int {
+                f(self);
+                return;
+            }
+            return;
         }
 
-        // Handle reverse spans (shouldn't happen but be defensive)
+        let mut begin = self.begin.clone();
+
+        if begin == self.end {
+            let span = TimeSpan::new(begin, self.end.clone());
+            f(&span);
+            return;
+        }
         if begin > self.end {
-            return spans;
+            return;
         }
 
         let end_sam = self.end.sam();
 
         while self.end > begin {
             if begin.sam() == end_sam {
-                // We're in the final cycle
-                spans.push(TimeSpan::new(begin, self.end.clone()));
+                let span = TimeSpan::new(begin.clone(), self.end.clone());
+                f(&span);
                 break;
             }
             let next_begin = begin.next_sam();
-            spans.push(TimeSpan::new(begin.clone(), next_begin.clone()));
+            let span = TimeSpan::new(begin.clone(), next_begin.clone());
+            f(&span);
             begin = next_begin;
         }
-
-        spans
     }
 
     /// Intersection of two spans, returns None if disjoint.
@@ -90,41 +107,12 @@ impl TimeSpan {
         Some(TimeSpan::new(intersect_begin, intersect_end))
     }
 
-    /// Returns the intersection or panics if none exists.
-    pub fn intersection_e(&self, other: &TimeSpan) -> TimeSpan {
-        self.intersection(other)
-            .expect("TimeSpan intersection failed - spans are disjoint")
-    }
-
     /// Apply a function to both begin and end times.
     pub fn with_time<F>(&self, f: F) -> TimeSpan
     where
         F: Fn(&Fraction) -> Fraction,
     {
         TimeSpan::new(f(&self.begin), f(&self.end))
-    }
-
-    /// Shift span to cycle zero while preserving duration.
-    /// Returns a span starting at the cycle position within [0, 1).
-    pub fn cycle_arc(&self) -> TimeSpan {
-        let b = self.begin.cycle_pos();
-        let e = &b + &self.duration();
-        TimeSpan::new(b, e)
-    }
-
-    /// Check if a time is within this span [begin, end).
-    pub fn contains(&self, time: &Fraction) -> bool {
-        time >= &self.begin && time < &self.end
-    }
-
-    /// Check if this span is zero-width (a point).
-    pub fn is_point(&self) -> bool {
-        self.begin == self.end
-    }
-
-    /// Midpoint of the span.
-    pub fn midpoint(&self) -> Fraction {
-        (&self.begin + &self.end) / Fraction::from_integer(2)
     }
 
     // ===== f64 Fast-Path Methods for DSP =====
@@ -140,35 +128,22 @@ impl TimeSpan {
     pub fn end_f64(&self) -> f64 {
         self.end.to_f64()
     }
-
-    /// Get duration as f64.
-    #[inline]
-    pub fn duration_f64(&self) -> f64 {
-        self.end_f64() - self.begin_f64()
-    }
-
-    /// Fast containment check using f64.
-    /// Checks if time t is within [begin, end).
-    #[inline]
-    pub fn contains_f64(&self, t: f64) -> bool {
-        t >= self.begin_f64() && t < self.end_f64()
-    }
-}
-
-impl Default for TimeSpan {
-    fn default() -> Self {
-        TimeSpan::new(Fraction::from_integer(0), Fraction::from_integer(1))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn collect_cycles(span: &TimeSpan) -> Vec<TimeSpan> {
+        let mut out = Vec::new();
+        span.for_each_cycle_span(|s| out.push(s.clone()));
+        out
+    }
+
     #[test]
     fn test_span_cycles_single_cycle() {
         let span = TimeSpan::new(Fraction::new(1, 4), Fraction::new(3, 4));
-        let cycles = span.span_cycles();
+        let cycles = collect_cycles(&span);
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0], span);
     }
@@ -176,7 +151,7 @@ mod tests {
     #[test]
     fn test_span_cycles_multi_cycle() {
         let span = TimeSpan::new(Fraction::new(1, 2), Fraction::new(5, 2));
-        let cycles = span.span_cycles();
+        let cycles = collect_cycles(&span);
 
         assert_eq!(cycles.len(), 3);
         assert_eq!(
@@ -196,7 +171,7 @@ mod tests {
     #[test]
     fn test_span_cycles_point() {
         let span = TimeSpan::new(Fraction::new(1, 2), Fraction::new(1, 2));
-        let cycles = span.span_cycles();
+        let cycles = collect_cycles(&span);
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0], span);
     }
@@ -235,14 +210,5 @@ mod tests {
     fn test_duration() {
         let span = TimeSpan::new(Fraction::new(1, 4), Fraction::new(3, 4));
         assert_eq!(span.duration(), Fraction::new(1, 2));
-    }
-
-    #[test]
-    fn test_cycle_arc() {
-        let span = TimeSpan::new(Fraction::new(5, 4), Fraction::new(7, 4));
-        let arc = span.cycle_arc();
-
-        assert_eq!(arc.begin, Fraction::new(1, 4));
-        assert_eq!(arc.duration(), Fraction::new(1, 2));
     }
 }

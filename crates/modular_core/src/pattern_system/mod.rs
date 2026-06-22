@@ -37,14 +37,14 @@ pub mod euclidean;
 pub mod mini;
 pub mod monadic;
 pub mod random;
-pub mod temporal;
+pub mod sp_combine;
 
 pub use fraction::Fraction;
-pub use hap::{DspHap, Hap, HapContext, SourceSpan};
-pub use state::{Controls, State};
+pub use hap::{ArenaHap, ArenaHapContext, DspHap, Hap, HapContext, SourceSpan};
+pub use state::State;
 pub use timespan::TimeSpan;
 
-pub use combinators::{fastcat, slowcat, stack, timecat};
+pub use combinators::{arrange, fastcat, slowcat, stack, timecat};
 pub use constructors::{pure, pure_with_span, signal, silence};
 
 // Re-export mini notation types
@@ -52,62 +52,115 @@ pub use mini::{FromMiniAtom, HasRest};
 
 use std::sync::Arc;
 
-// ===== IntoPattern Trait =====
+#[allow(unused_imports)]
+use bumpalo::collections::CollectIn;
 
-/// Trait for types that can be converted into a Pattern.
-/// Enables generic methods that accept both constant values and patterns.
-///
-/// This allows temporal methods like `fast`, `slow`, `early`, `late` to accept
-/// either a direct value (which becomes a `pure` pattern) or a pattern argument
-/// for patterned parameters.
-///
-/// # Example
-/// ```ignore
-/// // Both of these work:
-/// pattern.fast(Fraction::from(2))           // Constant: 2x speed
-/// pattern.fast(some_fraction_pattern)       // Pattern: varying speed
-/// ```
-pub trait IntoPattern<T> {
-    fn into_pattern(self) -> Pattern<T>;
+/// Query function that pushes haps into a caller-supplied bumpalo arena
+/// buffer, allowing intermediate haps to live in arena memory.
+pub type ArenaQueryFn<T> = Arc<
+    dyn for<'b> Fn(&State, &'b bumpalo::Bump, &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>)
+        + Send
+        + Sync,
+>;
+
+/// Backing implementation for [`Pattern`]. `Arena` wraps a closure that
+/// writes haps into an arena buffer; every other variant is a specialised
+/// shape with an inline query body in [`Pattern::query`] /
+/// [`Pattern::query_into`].
+#[derive(Clone)]
+enum PatternImpl<T> {
+    Arena(ArenaQueryFn<T>),
+    /// A single value, emitted once per cycle. Used by `pure` /
+    /// `pure_with_span`.
+    PureSpan {
+        value: T,
+        source_span: Option<SourceSpan>,
+    },
+    /// A pattern that emits no haps.
+    Silence,
+    /// Stack of patterns — every child contributes its haps at the query
+    /// time span.
+    Stack(Arc<[Pattern<T>]>),
+    /// Fastcat (sequence) — each child plays in its 1/n slot of every
+    /// cycle. Slot offsets are pre-computed at construction.
+    Fastcat(Arc<FastcatData<T>>),
+    /// Slowcat — one child per cycle, looping through `pats` mod n.
+    Slowcat(Arc<SlowcatData<T>>),
+    /// Constant-factor time scaling for `_fast(factor)`.
+    FastConst(Arc<FastConstData<T>>),
+    /// `strip_modifier_spans` wrapper — folds each hap's modifier-side
+    /// spans back into the source side at extract time.
+    StripModifierSpans(Arc<Pattern<T>>),
+    /// `offset_pattern_idx` wrapper — shifts every hap's pattern indices up
+    /// by `k` (via an `ArenaHapContext::Rebased`) so an arranged section's
+    /// highlights land in the right slot of the flat `per_source` list.
+    OffsetPatternIdx(Arc<OffsetPatternIdxData<T>>),
+    /// `with_modifier_span` wrapper — combines each hap's context with a
+    /// leaf context carrying the modifier span.
+    WithModifierSpan(Arc<WithModifierSpanData<T>>),
+    /// `compress(begin, end)` — pattern squeezed into [begin, end) of every
+    /// cycle. Used by `timecat` (mini-notation `[a@N b@M]/X` weighted seqs).
+    Compress(Arc<CompressData<T>>),
+    /// Constant-arg Euclidean rhythm: emits N slot haps per cycle, each
+    /// holding `value` or `rest` according to the Bjorklund rhythm, with
+    /// the (K, N, R) source spans attached as modifier spans.
+    EuclidConst(Arc<EuclidConstData<T>>),
 }
 
-/// Pattern<T> -> identity (just return self)
-impl<T: Clone + Send + Sync + 'static> IntoPattern<T> for Pattern<T> {
-    fn into_pattern(self) -> Pattern<T> {
-        self
-    }
+/// Backing data for [`PatternImpl::EuclidConst`].
+pub(crate) struct EuclidConstData<T> {
+    pub value: T,
+    pub rest: T,
+    pub value_span: SourceSpan,
+    /// Source spans for the (K, N, R) atoms, attached as modifier spans
+    /// on each emitted hap.
+    pub pulses_span: SourceSpan,
+    pub steps_span: SourceSpan,
+    pub rotation_span: Option<SourceSpan>,
+    /// Pre-computed slot data: (begin_offset, end_offset, is_pulse).
+    pub slots: Arc<[(Fraction, Fraction, bool)]>,
 }
 
-/// Fraction -> pure pattern of Fraction
-impl IntoPattern<Fraction> for Fraction {
-    fn into_pattern(self) -> Pattern<Fraction> {
-        pure(self)
-    }
+/// Backing data for [`PatternImpl::Compress`].
+pub(crate) struct CompressData<T> {
+    pub pat: Pattern<T>,
+    pub begin: Fraction,
+    pub end: Fraction,
+    pub duration: Fraction,
 }
 
-/// i64 -> pure pattern of Fraction
-impl IntoPattern<Fraction> for i64 {
-    fn into_pattern(self) -> Pattern<Fraction> {
-        pure(Fraction::from_integer(self))
-    }
+/// Backing data for [`PatternImpl::WithModifierSpan`].
+pub(crate) struct WithModifierSpanData<T> {
+    pub pat: Pattern<T>,
+    pub span: SourceSpan,
 }
 
-/// i32 -> pure pattern of Fraction
-impl IntoPattern<Fraction> for i32 {
-    fn into_pattern(self) -> Pattern<Fraction> {
-        pure(Fraction::from_integer(self as i64))
-    }
+/// Backing data for [`PatternImpl::OffsetPatternIdx`].
+pub(crate) struct OffsetPatternIdxData<T> {
+    pub pat: Pattern<T>,
+    pub k: u32,
 }
 
-/// f64 -> pure pattern of Fraction
-impl IntoPattern<Fraction> for f64 {
-    fn into_pattern(self) -> Pattern<Fraction> {
-        pure(Fraction::from(self))
-    }
+/// Backing data for [`PatternImpl::FastConst`].
+pub(crate) struct FastConstData<T> {
+    pub pat: Pattern<T>,
+    pub factor: Fraction,
 }
 
-/// The query function type: takes a State, returns events.
-pub type QueryFn<T> = Arc<dyn Fn(&State) -> Vec<Hap<T>> + Send + Sync>;
+/// Backing data for [`PatternImpl::Fastcat`].
+pub(crate) struct FastcatData<T> {
+    pub pats: Arc<[Pattern<T>]>,
+    pub n: usize,
+    pub n_frac: Fraction,
+    pub slot_offsets: Arc<[(Fraction, Fraction)]>,
+}
+
+/// Backing data for [`PatternImpl::Slowcat`].
+pub(crate) struct SlowcatData<T> {
+    pub pats: Arc<[Pattern<T>]>,
+    pub n: usize,
+    pub n_frac: Fraction,
+}
 
 /// A pattern is a lazy, query-based generator of time-varying values.
 ///
@@ -117,31 +170,258 @@ pub type QueryFn<T> = Arc<dyn Fn(&State) -> Vec<Hap<T>> + Send + Sync>;
 #[derive(Clone)]
 pub struct Pattern<T> {
     /// The query function that generates events.
-    query: QueryFn<T>,
+    query: PatternImpl<T>,
     /// Number of steps per cycle (for alignment operations).
     steps: Option<Fraction>,
 }
 
 impl<T: Clone + Send + Sync + 'static> Pattern<T> {
-    /// Create a pattern from a query function.
-    pub fn new<F>(query: F) -> Self
-    where
-        F: Fn(&State) -> Vec<Hap<T>> + Send + Sync + 'static,
-    {
+    /// Build a `pure` / `pure_with_span` leaf pattern: one hap per cycle
+    /// holding `value`, optionally tagged with `source_span`.
+    pub fn new_pure(value: T, source_span: Option<SourceSpan>) -> Self {
         Pattern {
-            query: Arc::new(query),
+            query: PatternImpl::PureSpan { value, source_span },
+            steps: Some(Fraction::from_integer(1)),
+        }
+    }
+
+    /// Build a silence pattern that emits no haps. `steps` becomes the
+    /// pattern's per-cycle step count.
+    pub fn new_silence(steps: Fraction) -> Self {
+        Pattern {
+            query: PatternImpl::Silence,
+            steps: Some(steps),
+        }
+    }
+
+    /// Build a stack pattern from a list of children. `steps` is the LCM of
+    /// the children's step counts (None if any child is step-less).
+    pub fn new_stack(pats: Vec<Pattern<T>>, steps: Option<Fraction>) -> Self {
+        Pattern {
+            query: PatternImpl::Stack(pats.into()),
+            steps,
+        }
+    }
+
+    /// Build a slowcat pattern: one child per cycle, looping through the
+    /// list.
+    pub fn new_slowcat(pats: Vec<Pattern<T>>) -> Self {
+        let n = pats.len();
+        let n_frac = Fraction::from_integer(n as i64);
+        Pattern {
+            query: PatternImpl::Slowcat(Arc::new(SlowcatData {
+                pats: pats.into(),
+                n,
+                n_frac,
+            })),
             steps: None,
         }
     }
 
-    /// Query the pattern for haps within the state's time span.
-    pub fn query(&self, state: &State) -> Vec<Hap<T>> {
-        (self.query)(state)
+    /// Build a `_fast(factor)` pattern with a constant time-scale factor.
+    /// Used by `*N` in mini-notation when N is a literal.
+    pub fn new_fast_const(pat: Pattern<T>, factor: Fraction) -> Self {
+        let steps = pat.steps.clone();
+        Pattern {
+            query: PatternImpl::FastConst(Arc::new(FastConstData { pat, factor })),
+            steps,
+        }
     }
 
-    /// Query for a specific time range.
+    /// Build a constant-arg Euclidean pattern for `value(K, N[, R])` in
+    /// mini-notation. Each cycle emits N slot haps holding `value` or
+    /// `rest` per the Bjorklund rhythm, with the (K, N, R) source spans
+    /// attached as modifier spans on each hap.
+    pub fn new_euclid_const(
+        value: T,
+        rest: T,
+        value_span: SourceSpan,
+        pulses: i32,
+        steps: u32,
+        rotation: i32,
+        pulses_span: SourceSpan,
+        steps_span: SourceSpan,
+        rotation_span: Option<SourceSpan>,
+    ) -> Self {
+        let n = steps as usize;
+        let n_frac = Fraction::from_integer(n as i64);
+        // Pre-compute (begin_off, end_off, is_pulse) per slot.
+        let rhythm =
+            crate::pattern_system::euclidean::euclidean_rhythm(pulses, steps, Some(rotation));
+        let slots: Arc<[(Fraction, Fraction, bool)]> = rhythm
+            .iter()
+            .enumerate()
+            .map(|(i, &is_pulse)| {
+                let i_frac = Fraction::from_integer(i as i64);
+                let begin = &i_frac / &n_frac;
+                let end = (&i_frac + Fraction::from_integer(1)) / &n_frac;
+                (begin, end, is_pulse)
+            })
+            .collect::<Vec<_>>()
+            .into();
+        Pattern {
+            query: PatternImpl::EuclidConst(Arc::new(EuclidConstData {
+                value,
+                rest,
+                value_span,
+                pulses_span,
+                steps_span,
+                rotation_span,
+                slots,
+            })),
+            steps: Some(n_frac),
+        }
+    }
+
+    /// Build a `compress(begin, end)` pattern: squeeze the source pattern
+    /// into the [begin, end) sub-interval of every cycle.
+    pub fn new_compress(pat: Pattern<T>, begin: Fraction, end: Fraction) -> Self {
+        let duration = &end - &begin;
+        Pattern {
+            query: PatternImpl::Compress(Arc::new(CompressData {
+                pat,
+                begin,
+                end,
+                duration,
+            })),
+            steps: None,
+        }
+    }
+
+    /// Build a fastcat pattern: each child plays in its 1/n slot of every
+    /// cycle. Slot offsets are pre-computed at construction. `steps` is
+    /// the pattern's per-cycle step count.
+    pub fn new_fastcat(pats: Vec<Pattern<T>>, steps: Fraction) -> Self {
+        let n = pats.len();
+        let n_frac = Fraction::from_integer(n as i64);
+        let slot_offsets: Arc<[(Fraction, Fraction)]> = (0..n)
+            .map(|i| {
+                let i_frac = Fraction::from_integer(i as i64);
+                let begin = &i_frac / &n_frac;
+                let end = (&i_frac + Fraction::from_integer(1)) / &n_frac;
+                (begin, end)
+            })
+            .collect::<Vec<_>>()
+            .into();
+        Pattern {
+            query: PatternImpl::Fastcat(Arc::new(FastcatData {
+                pats: pats.into(),
+                n,
+                n_frac,
+                slot_offsets,
+            })),
+            steps: Some(steps),
+        }
+    }
+
+    pub fn new_into<F>(query: F) -> Self
+    where
+        F: for<'b> Fn(
+                &State,
+                &'b bumpalo::Bump,
+                &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+            ) + Send
+            + Sync
+            + 'static,
+    {
+        Pattern {
+            query: PatternImpl::Arena(Arc::new(query)),
+            steps: None,
+        }
+    }
+
+    /// Push haps directly into a caller-supplied bumpalo arena buffer.
+    /// Each variant writes haps into `out` using arena storage for any
+    /// intermediate state.
+    pub fn query_into<'b>(
+        &self,
+        state: &State,
+        bump: &'b bumpalo::Bump,
+        out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+    ) {
+        match &self.query {
+            PatternImpl::Arena(f) => f(state, bump, out),
+            PatternImpl::PureSpan { value, source_span } => {
+                let leaf = match source_span {
+                    Some(s) => ArenaHapContext::with_span_in(s.clone(), bump),
+                    None => ArenaHapContext::empty_ref(),
+                };
+                state.span.for_each_cycle_span(|subspan| {
+                    let whole = subspan.begin.whole_cycle();
+                    out.push(ArenaHap {
+                        whole: Some(whole),
+                        part: subspan.clone(),
+                        value: value.clone(),
+                        context: leaf,
+                    });
+                });
+            }
+            PatternImpl::Silence => {}
+            PatternImpl::Stack(pats) => {
+                for pat in pats.iter() {
+                    pat.query_into(state, bump, out);
+                }
+            }
+            PatternImpl::Fastcat(data) => {
+                fastcat_query_into(data, state, bump, out);
+            }
+            PatternImpl::Slowcat(data) => {
+                slowcat_query_into(data, state, bump, out);
+            }
+            PatternImpl::FastConst(data) => {
+                fast_const_query_into(data, state, bump, out);
+            }
+            PatternImpl::StripModifierSpans(inner) => {
+                let start = out.len();
+                inner.query_into(state, bump, out);
+                // Walk the haps we just pushed and wrap their contexts so
+                // that any modifier-side spans extract as source.
+                for hap in &mut out[start..] {
+                    hap.context = ArenaHapContext::strip_in(hap.context, bump);
+                }
+            }
+            PatternImpl::WithModifierSpan(data) => {
+                let start = out.len();
+                data.pat.query_into(state, bump, out);
+                // Construct the modifier leaf once and combine into each hap's context.
+                let leaf = ArenaHapContext::with_span_in(data.span.clone(), bump);
+                for hap in &mut out[start..] {
+                    hap.context = ArenaHapContext::combine_in(hap.context, leaf, bump);
+                }
+            }
+            PatternImpl::OffsetPatternIdx(data) => {
+                let start = out.len();
+                data.pat.query_into(state, bump, out);
+                // Wrap each hap's context so its pattern indices shift up by k.
+                // A k of 0 is a no-op the constructor skips, so wrapping here is
+                // always meaningful.
+                for hap in &mut out[start..] {
+                    hap.context = bump.alloc(ArenaHapContext::Rebased {
+                        base: data.k,
+                        inner: hap.context,
+                    });
+                }
+            }
+            PatternImpl::Compress(data) => {
+                compress_query_into(data, state, bump, out);
+            }
+            PatternImpl::EuclidConst(data) => {
+                euclid_const_query_into(data, state, bump, out);
+            }
+        }
+    }
+
+    /// Query for a specific time range, materialising haps into a
+    /// heap-allocated `Vec<Hap<T>>`. The arena-aware
+    /// [`Pattern::query_cycle_all_into`] / [`Pattern::query_into`] is the
+    /// zero-allocation alternative.
     pub fn query_arc(&self, begin: Fraction, end: Fraction) -> Vec<Hap<T>> {
-        self.query(&State::new(TimeSpan::new(begin, end)))
+        let state = State::new(TimeSpan::new(begin, end));
+        let bump = bumpalo::Bump::new();
+        let mut out: bumpalo::collections::Vec<'_, ArenaHap<'_, T>> =
+            bumpalo::collections::Vec::new_in(&bump);
+        self.query_into(&state, &bump, &mut out);
+        out.iter().map(|h| h.to_owned()).collect()
     }
 
     /// Get the number of steps per cycle (if set).
@@ -155,11 +435,6 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         self
     }
 
-    /// Set the number of steps per cycle (internal mutable version).
-    pub fn set_steps(&mut self, steps: Fraction) {
-        self.steps = Some(steps);
-    }
-
     // ===== Functor Operations =====
 
     /// Map a function over the values (functor fmap).
@@ -168,44 +443,42 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
         U: Clone + Send + Sync + 'static,
         F: Fn(&T) -> U + Clone + Send + Sync + 'static,
     {
-        let query = self.query.clone();
+        let pat = self.clone();
         let steps = self.steps.clone();
-        let mut result = Pattern::new(move |state| {
-            query(state)
-                .into_iter()
-                .map(|hap| hap.with_value(&f))
-                .collect()
-        });
+        let mut result = Pattern::new_into(
+            move |state: &State,
+                  bump: &bumpalo::Bump,
+                  out: &mut bumpalo::collections::Vec<'_, ArenaHap<'_, U>>| {
+                let mut scratch: bumpalo::collections::Vec<'_, ArenaHap<'_, T>> =
+                    bumpalo::collections::Vec::new_in(bump);
+                pat.query_into(state, bump, &mut scratch);
+                out.reserve(scratch.len());
+                for hap in scratch {
+                    out.push(ArenaHap {
+                        whole: hap.whole,
+                        part: hap.part,
+                        value: f(&hap.value),
+                        context: hap.context,
+                    });
+                }
+            },
+        );
         if let Some(s) = steps {
             result.steps = Some(s);
         }
         result
-    }
-
-    /// Alias for fmap.
-    pub fn with_value<U, F>(&self, f: F) -> Pattern<U>
-    where
-        U: Clone + Send + Sync + 'static,
-        F: Fn(&T) -> U + Clone + Send + Sync + 'static,
-    {
-        self.fmap(f)
     }
 
     /// Add a modifier span to all haps in this pattern.
     /// Used for tracking which operators are active during editor highlighting.
     pub fn with_modifier_span(&self, span: SourceSpan) -> Pattern<T> {
-        let query = self.query.clone();
-        let steps = self.steps.clone();
-        let mut result = Pattern::new(move |state| {
-            query(state)
-                .into_iter()
-                .map(|hap| hap.add_modifier_span(span.clone()))
-                .collect()
-        });
-        if let Some(s) = steps {
-            result.steps = Some(s);
+        Pattern {
+            query: PatternImpl::WithModifierSpan(Arc::new(WithModifierSpanData {
+                pat: self.clone(),
+                span,
+            })),
+            steps: self.steps.clone(),
         }
-        result
     }
 
     /// Remove all modifier spans from haps in this pattern.
@@ -213,229 +486,40 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     /// (e.g. from euclidean sub-expressions) don't shift the positional
     /// index that `extract_pattern_spans` relies on.
     pub fn strip_modifier_spans(&self) -> Pattern<T> {
-        let query = self.query.clone();
-        let steps = self.steps.clone();
-        let mut result = Pattern::new(move |state| {
-            query(state)
-                .into_iter()
-                .map(|mut hap| {
-                    // Move modifier_spans → source_extra_spans so they're
-                    // preserved for highlighting but don't interfere with
-                    // the positional index that extract_pattern_spans uses.
-                    hap.context
-                        .source_extra_spans
-                        .extend(hap.context.modifier_spans.drain(..));
-                    // Also flatten any existing modifier_extra_spans
-                    for extras in hap.context.modifier_extra_spans.drain(..) {
-                        hap.context.source_extra_spans.extend(extras);
-                    }
-                    hap
-                })
-                .collect()
-        });
-        if let Some(s) = steps {
-            result.steps = Some(s);
+        Pattern {
+            query: PatternImpl::StripModifierSpans(Arc::new(self.clone())),
+            steps: self.steps.clone(),
         }
-        result
     }
 
-    // ===== Query Transformations =====
-
-    /// Transform the query span before querying.
-    pub fn with_query_span<F>(&self, f: F) -> Pattern<T>
-    where
-        F: Fn(&TimeSpan) -> TimeSpan + Clone + Send + Sync + 'static,
-    {
-        let query = self.query.clone();
-        let steps = self.steps.clone();
-        let mut result = Pattern::new(move |state| {
-            let new_span = f(&state.span);
-            query(&state.set_span(new_span))
-        });
-        if let Some(s) = steps {
-            result.steps = Some(s);
+    /// Shift every hap's pattern indices up by `k`. Used by `arrange` so that
+    /// each section's source-span highlights land at their slot in the flat
+    /// `per_source` list (section 0's sources at `[0, …)`, section 1's after,
+    /// …). Nests additively, so an arranged section that is itself an arrange
+    /// composes correctly. `k == 0` is the identity.
+    pub fn offset_pattern_idx(&self, k: u32) -> Pattern<T> {
+        if k == 0 {
+            return self.clone();
         }
-        result
-    }
-
-    /// Transform query time (both begin and end).
-    pub fn with_query_time<F>(&self, f: F) -> Pattern<T>
-    where
-        F: Fn(&Fraction) -> Fraction + Clone + Send + Sync + 'static,
-    {
-        let f_clone = f.clone();
-        self.with_query_span(move |span| span.with_time(|t| f_clone(t)))
-    }
-
-    /// Transform hap spans after querying.
-    pub fn with_hap_span<F>(&self, f: F) -> Pattern<T>
-    where
-        F: Fn(&TimeSpan) -> TimeSpan + Clone + Send + Sync + 'static,
-    {
-        let query = self.query.clone();
-        let steps = self.steps.clone();
-        let mut result = Pattern::new(move |state| {
-            query(state)
-                .into_iter()
-                .map(|hap| hap.with_span_transform(&f))
-                .collect()
-        });
-        if let Some(s) = steps {
-            result.steps = Some(s);
+        Pattern {
+            query: PatternImpl::OffsetPatternIdx(Arc::new(OffsetPatternIdxData {
+                pat: self.clone(),
+                k,
+            })),
+            steps: self.steps.clone(),
         }
-        result
-    }
-
-    /// Transform hap times (both begin and end of both whole and part).
-    pub fn with_hap_time<F>(&self, f: F) -> Pattern<T>
-    where
-        F: Fn(&Fraction) -> Fraction + Clone + Send + Sync + 'static,
-    {
-        let f_clone = f.clone();
-        self.with_hap_span(move |span| span.with_time(|t| f_clone(t)))
-    }
-
-    /// Split queries at cycle boundaries.
-    ///
-    /// This ensures each sub-query is contained within a single cycle,
-    /// which is necessary for operations like `rev` that work per-cycle.
-    pub fn split_queries(&self) -> Pattern<T> {
-        let query = self.query.clone();
-        let steps = self.steps.clone();
-        let mut result = Pattern::new(move |state| {
-            state
-                .span
-                .span_cycles()
-                .into_iter()
-                .flat_map(|subspan| query(&state.set_span(subspan)))
-                .collect()
-        });
-        if let Some(s) = steps {
-            result.steps = Some(s);
-        }
-        result
-    }
-
-    // ===== Filtering =====
-
-    /// Filter haps by a predicate.
-    pub fn filter_haps<F>(&self, pred: F) -> Pattern<T>
-    where
-        F: Fn(&Hap<T>) -> bool + Clone + Send + Sync + 'static,
-    {
-        let query = self.query.clone();
-        let steps = self.steps.clone();
-        let mut result =
-            Pattern::new(move |state| query(state).into_iter().filter(|hap| pred(hap)).collect());
-        if let Some(s) = steps {
-            result.steps = Some(s);
-        }
-        result
-    }
-
-    /// Filter haps by value.
-    pub fn filter_values<F>(&self, pred: F) -> Pattern<T>
-    where
-        F: Fn(&T) -> bool + Clone + Send + Sync + 'static,
-    {
-        self.filter_haps(move |hap| pred(&hap.value))
-    }
-
-    /// Keep only discrete haps (those with whole spans).
-    pub fn discrete_only(&self) -> Pattern<T> {
-        self.filter_haps(|hap| hap.is_discrete())
-    }
-
-    /// Keep only haps with onsets (where part.begin == whole.begin).
-    pub fn onsets_only(&self) -> Pattern<T> {
-        self.filter_haps(|hap| hap.has_onset())
-    }
-
-    /// Keep only continuous haps (those without whole spans).
-    pub fn continuous_only(&self) -> Pattern<T> {
-        self.filter_haps(|hap| hap.is_continuous())
     }
 
     // ===== DSP Fast-Path Methods =====
     //
-    // These methods use f64 for efficient sample-rate queries.
-    // The pattern is still constructed with exact rational arithmetic,
-    // but these methods avoid repeated BigRational→f64 conversion.
-
-    /// Query for a time range using f64 (DSP fast-path).
-    ///
-    /// Converts f64 to Fraction internally, but the returned haps
-    /// can use the fast f64 accessor methods.
-    pub fn query_arc_f64(&self, begin: f64, end: f64) -> Vec<Hap<T>> {
-        self.query_arc(Fraction::from(begin), Fraction::from(end))
-    }
-
-    /// Query at a specific point in time (DSP fast-path).
-    ///
-    /// Returns haps whose part span contains the given time.
-    /// This queries a tiny window around `t` and filters to haps containing it.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let haps = pattern.query_at(0.5);
-    /// for hap in haps {
-    ///     println!("Value at t=0.5: {:?}", hap.value);
-    /// }
-    /// ```
-    pub fn query_at(&self, t: f64) -> Vec<Hap<T>> {
-        // Query the cycle containing t
-        let cycle = t.floor();
-        let haps = self.query_arc_f64(cycle, cycle + 1.0);
-
-        // Filter to haps whose part contains t
-        haps.into_iter()
-            .filter(|hap| hap.part_contains_f64(t))
-            .collect()
-    }
+    // f64-flavoured wrappers used by DSP code. The pattern itself runs
+    // exact rational arithmetic; these wrappers convert at the boundary.
 
     /// Query at a point and return the first matching hap (if any).
-    ///
-    /// This is the most common case for DSP - getting a single active event.
-    #[inline]
     pub fn query_at_first(&self, t: f64) -> Option<Hap<T>> {
-        // Query the cycle containing t
         let cycle = t.floor();
-        let haps = self.query_arc_f64(cycle, cycle + 1.0);
-
-        // Find first hap whose part contains t
+        let haps = self.query_arc(Fraction::from(cycle), Fraction::from(cycle + 1.0));
         haps.into_iter().find(|hap| hap.part_contains_f64(t))
-    }
-
-    /// Query at a point and return as DspHap for cached DSP use.
-    ///
-    /// The returned DspHap has pre-computed f64 bounds for fast comparisons.
-    #[inline]
-    pub fn query_at_dsp(&self, t: f64) -> Option<DspHap<T>> {
-        self.query_at_first(t).map(|h| h.to_dsp_hap())
-    }
-
-    /// Query a time range and return as DspHaps.
-    ///
-    /// Useful for pre-computing events for a render buffer.
-    pub fn query_arc_dsp(&self, begin: f64, end: f64) -> Vec<DspHap<T>> {
-        self.query_arc_f64(begin, end)
-            .into_iter()
-            .map(|h| h.to_dsp_hap())
-            .collect()
-    }
-
-    /// Get all events (with onsets) in a cycle as DspHaps.
-    ///
-    /// This is useful for pre-computing a cycle's worth of events.
-    pub fn query_cycle_dsp(&self, cycle: i64) -> Vec<DspHap<T>> {
-        let begin = cycle as f64;
-        let end = (cycle + 1) as f64;
-
-        self.query_arc_f64(begin, end)
-            .into_iter()
-            .filter(|h| h.has_onset())
-            .map(|h| h.to_dsp_hap())
-            .collect()
     }
 
     /// Get ALL events in a cycle as DspHaps (including fragments without onsets).
@@ -444,56 +528,289 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     /// not just those with onsets. This is useful for caching where you need to
     /// handle haps that span across cycle boundaries.
     pub fn query_cycle_all(&self, cycle: i64) -> Vec<DspHap<T>> {
-        let begin = cycle as f64;
-        let end = (cycle + 1) as f64;
-
-        self.query_arc_f64(begin, end)
+        let begin = Fraction::from_integer(cycle);
+        let end = Fraction::from_integer(cycle + 1);
+        self.query_arc(begin, end)
             .into_iter()
             .map(|h| h.to_dsp_hap())
             .collect()
     }
+
+    /// Arena-aware variant of [`query_cycle_all`]. Writes the cycle's haps
+    /// directly into the caller's bumpalo arena.
+    pub fn query_cycle_all_into<'b>(
+        &self,
+        cycle: i64,
+        bump: &'b bumpalo::Bump,
+        out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+    ) {
+        let begin = Fraction::from_integer(cycle);
+        let end = Fraction::from_integer(cycle + 1);
+        self.query_into(&State::new(TimeSpan::new(begin, end)), bump, out);
+    }
 }
 
-// ===== HasRest-specific methods for DSP caching =====
+/// Arena-direct query body for [`PatternImpl::Fastcat`].
+fn fastcat_query_into<'b, T: Clone + Send + Sync + 'static>(
+    data: &FastcatData<T>,
+    state: &State,
+    bump: &'b bumpalo::Bump,
+    out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+) {
+    let n = data.n;
+    let pats = &data.pats;
+    let n_frac = &data.n_frac;
+    let slot_offsets = &data.slot_offsets;
+    // Both the per-slot query and the result mapping are linear in t.
+    // Compute their constants once per cycle so the per-slot work is
+    // a single multiply + add.
+    //
+    // Forward (query):  t' = n*t - cs*(n-1) - i        ↔  t' = a_q * t + b_q
+    //   where a_q = n, b_q = -(cs*(n-1) + i)
+    // Inverse (result): t' = (t + i)/n + cs*(n-1)/n     ↔  t' = a_r * t + b_r
+    //   where a_r = 1/n, b_r = (i + cs*(n-1)) / n
+    state.span.for_each_cycle_span(|cycle_span| {
+        let cycle_start = cycle_span.begin.floor();
+        let cs_times_nm1 = &cycle_start * &(n_frac - Fraction::from_integer(1));
+        let inv_n = Fraction::from_integer(1) / n_frac.clone();
+        // When the cycle span is an integer-aligned [N, N+1) interval, each
+        // part_span lies wholly inside it and the intersect collapses to
+        // part_span itself.
+        let full_cycle = cycle_span.begin.is_integer()
+            && cycle_span.end.is_integer()
+            && cycle_span.end.numer() == cycle_span.begin.numer() + 1;
+        for i in 0..n {
+            let i_frac = Fraction::from_integer(i as i64);
+            let (begin_off, end_off) = &slot_offsets[i];
+            let part_begin = &cycle_start + begin_off;
+            let part_end = &cycle_start + end_off;
+            let part_span = TimeSpan {
+                begin: part_begin,
+                end: part_end,
+            };
+            let query_part = if full_cycle {
+                part_span.clone()
+            } else {
+                let Some(qp) = cycle_span.intersection(&part_span) else {
+                    continue;
+                };
+                qp
+            };
 
-impl<T: HasRest> Pattern<T> {
-    /// Query at a point and return a DspHap suitable for caching.
-    ///
-    /// Unlike `query_at_dsp`, this method handles fragments by converting them
-    /// to rest haps with `whole = part`. This ensures that every point in time
-    /// has a cacheable hap with correct bounds.
-    ///
-    /// A fragment is a hap where `whole.begin < part.begin` (onset before visible portion).
-    /// These represent events that started earlier but are partially visible in the query.
-    /// For DSP caching, fragments are converted to rests so they don't trigger sounds
-    /// but still provide valid cache bounds.
-    #[inline]
-    pub fn query_at_dsp_cached(&self, t: f64) -> Option<DspHap<T>> {
-        let cycle = t.floor();
-        let haps = self.query_arc_f64(cycle, cycle + 1.0);
+            // Forward transform: t' = n*t - (cs*(n-1) + i)
+            let b_q = &cs_times_nm1 + &i_frac;
+            let query_transformed = query_part.with_time(|t| t * n_frac - &b_q);
 
-        // Find first hap whose part contains t
-        haps.into_iter()
-            .find(|hap| hap.part_contains_f64(t))
-            .map(|hap| {
-                if hap.has_onset() {
-                    // Normal hap with onset - use as-is
-                    hap.to_dsp_hap()
-                } else {
-                    // Fragment: convert to rest with whole = part
-                    // This fills the gap with a cacheable rest hap
-                    DspHap {
-                        whole_begin: hap.part_begin_f64(),
-                        whole_end: hap.part_end_f64(),
-                        part_begin: hap.part_begin_f64(),
-                        part_end: hap.part_end_f64(),
-                        value: T::rest_value(),
-                        context: hap.context.clone(),
-                        has_whole: true,
-                    }
-                }
-            })
+            let mut scratch: bumpalo::collections::Vec<'_, ArenaHap<'_, T>> =
+                bumpalo::collections::Vec::new_in(bump);
+            pats[i].query_into(&State::new(query_transformed), bump, &mut scratch);
+
+            // Inverse transform: t' = (t + i + cs*(n-1)) / n
+            //                       = t * (1/n) + (i + cs*(n-1)) / n
+            let b_r_num = &cs_times_nm1 + &i_frac;
+            let b_r = &b_r_num / n_frac;
+            out.reserve(scratch.len());
+            for hap in scratch {
+                let new_part = hap.part.with_time(|t| t * &inv_n + &b_r);
+                let new_whole = hap
+                    .whole
+                    .as_ref()
+                    .map(|w| w.with_time(|t| t * &inv_n + &b_r));
+                out.push(ArenaHap {
+                    whole: new_whole,
+                    part: new_part,
+                    value: hap.value,
+                    context: hap.context,
+                });
+            }
+        }
+    });
+}
+
+/// Arena-direct query body for [`PatternImpl::Slowcat`]: pick child
+/// `cycle mod n` and shift its haps back into the requested cycle.
+fn slowcat_query_into<'b, T: Clone + Send + Sync + 'static>(
+    data: &SlowcatData<T>,
+    state: &State,
+    bump: &'b bumpalo::Bump,
+    out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+) {
+    let n = data.n;
+    if n == 0 {
+        return;
     }
+    let pats = &data.pats;
+    let n_frac = &data.n_frac;
+    state.span.for_each_cycle_span(|subspan| {
+        // When the subspan begins on an integer, the cycle number, modulo
+        // and offset can all be derived from i64 math.
+        let begin_is_integer = subspan.begin.is_integer();
+        let cycle_num = if begin_is_integer {
+            subspan.begin.numer()
+        } else {
+            subspan.begin.floor().numer()
+        };
+        let pat_idx = ((cycle_num % n as i64) + n as i64) as usize % n;
+        let pat = &pats[pat_idx];
+
+        let offset = if begin_is_integer {
+            Fraction::from_integer(cycle_num - cycle_num.div_euclid(n as i64))
+        } else {
+            let begin_floor = Fraction::from_integer(cycle_num);
+            &begin_floor - (&subspan.begin / n_frac).floor()
+        };
+
+        let query_span = subspan.with_time(|t| t - &offset);
+        let mut scratch: bumpalo::collections::Vec<'_, ArenaHap<'_, T>> =
+            bumpalo::collections::Vec::new_in(bump);
+        pat.query_into(&State::new(query_span), bump, &mut scratch);
+
+        out.reserve(scratch.len());
+        for hap in scratch {
+            let new_part = hap.part.with_time(|t| t + &offset);
+            let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t + &offset));
+            out.push(ArenaHap {
+                whole: new_whole,
+                part: new_part,
+                value: hap.value,
+                context: hap.context,
+            });
+        }
+    });
+}
+
+/// Arena-direct query body for [`PatternImpl::FastConst`]: scale the
+/// query span up by `factor`, then map result spans back down by it.
+fn fast_const_query_into<'b, T: Clone + Send + Sync + 'static>(
+    data: &FastConstData<T>,
+    state: &State,
+    bump: &'b bumpalo::Bump,
+    out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+) {
+    let pat = &data.pat;
+    let factor = &data.factor;
+    let new_span = state.span.with_time(|t| t * factor);
+    let mut scratch: bumpalo::collections::Vec<'_, ArenaHap<'_, T>> =
+        bumpalo::collections::Vec::new_in(bump);
+    pat.query_into(&State::new(new_span), bump, &mut scratch);
+    out.reserve(scratch.len());
+    for hap in scratch {
+        let new_part = hap.part.with_time(|t| t / factor);
+        let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t / factor));
+        out.push(ArenaHap {
+            whole: new_whole,
+            part: new_part,
+            value: hap.value,
+            context: hap.context,
+        });
+    }
+}
+
+/// Arena-direct query body for [`PatternImpl::Compress`]: query the source
+/// at the time-stretch that fills [begin, end), then map results back
+/// into that sub-interval of each cycle.
+fn compress_query_into<'b, T: Clone + Send + Sync + 'static>(
+    data: &CompressData<T>,
+    state: &State,
+    bump: &'b bumpalo::Bump,
+    out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+) {
+    let pat = &data.pat;
+    let begin_clone = &data.begin;
+    let end_clone = &data.end;
+    let duration = &data.duration;
+    // Forward and inverse mappings are both linear in t.
+    //   Forward (query):  t' = (t - cb)/d + cycle   ↔  t' = a_q * t + b_q
+    //     a_q = 1/d,  b_q = cycle - cb/d
+    //   Inverse (result): t' = (t - cycle)*d + cb   ↔  t' = a_r * t + b_r
+    //     a_r = d,    b_r = cb - cycle*d
+    let inv_d = Fraction::from_integer(1) / duration.clone();
+    state.span.for_each_cycle_span(|cycle_span| {
+        let cycle = cycle_span.begin.sam();
+        let compressed_begin = &cycle + begin_clone;
+        let compressed_end = &cycle + end_clone;
+        let compressed_span = TimeSpan::new(compressed_begin.clone(), compressed_end);
+        // For an integer-aligned cycle_span, compressed_span (a sub-range
+        // of the same cycle) lies wholly inside it.
+        let full_cycle = cycle_span.begin.is_integer()
+            && cycle_span.end.is_integer()
+            && cycle_span.end.numer() == cycle_span.begin.numer() + 1;
+        let intersect = if full_cycle {
+            compressed_span.clone()
+        } else {
+            let Some(i) = cycle_span.intersection(&compressed_span) else {
+                return;
+            };
+            i
+        };
+        let b_q = &cycle - &(&compressed_begin * &inv_d);
+        let inner_span = intersect.with_time(|t| t * &inv_d + &b_q);
+
+        let mut scratch: bumpalo::collections::Vec<'_, ArenaHap<'_, T>> =
+            bumpalo::collections::Vec::new_in(bump);
+        pat.query_into(&State::new(inner_span), bump, &mut scratch);
+
+        let b_r = &compressed_begin - &(&cycle * duration);
+        for hap in scratch {
+            let new_part = hap.part.with_time(|t| t * duration + &b_r);
+            let new_whole = hap
+                .whole
+                .as_ref()
+                .map(|w| w.with_time(|t| t * duration + &b_r));
+            if let Some(final_part) = new_part.intersection(&cycle_span) {
+                out.push(ArenaHap {
+                    whole: new_whole,
+                    part: final_part,
+                    value: hap.value.clone(),
+                    context: hap.context,
+                });
+            }
+        }
+    });
+}
+
+/// Arena-direct query body for [`PatternImpl::EuclidConst`]. Each cycle
+/// emits `N` slot haps holding `value` or `rest` per the precomputed
+/// Bjorklund slots, tagged with the (value, K, N, R) modifier spans.
+fn euclid_const_query_into<'b, T: Clone + Send + Sync + 'static>(
+    data: &EuclidConstData<T>,
+    state: &State,
+    bump: &'b bumpalo::Bump,
+    out: &mut bumpalo::collections::Vec<'b, ArenaHap<'b, T>>,
+) {
+    // Build the per-hap context tree once. Every emitted hap shares it:
+    //   ((value_leaf · pulses_mod) · steps_mod) · rotation_mod
+    let value_leaf = ArenaHapContext::with_span_in(data.value_span.clone(), bump);
+    let p_leaf = ArenaHapContext::with_span_in(data.pulses_span.clone(), bump);
+    let s_leaf = ArenaHapContext::with_span_in(data.steps_span.clone(), bump);
+    let mut ctx = ArenaHapContext::combine_in(value_leaf, p_leaf, bump);
+    ctx = ArenaHapContext::combine_in(ctx, s_leaf, bump);
+    if let Some(rs) = &data.rotation_span {
+        let r_leaf = ArenaHapContext::with_span_in(rs.clone(), bump);
+        ctx = ArenaHapContext::combine_in(ctx, r_leaf, bump);
+    }
+
+    state.span.for_each_cycle_span(|cycle_span| {
+        let cycle_start = cycle_span.begin.floor();
+        for (begin_off, end_off, is_pulse) in data.slots.iter() {
+            let part_begin = &cycle_start + begin_off;
+            let part_end = &cycle_start + end_off;
+            let whole_span = TimeSpan::new(part_begin, part_end);
+            if let Some(part) = cycle_span.intersection(&whole_span) {
+                let value = if *is_pulse {
+                    data.value.clone()
+                } else {
+                    data.rest.clone()
+                };
+                out.push(ArenaHap {
+                    whole: Some(whole_span),
+                    part,
+                    value,
+                    context: ctx,
+                });
+            }
+        }
+    });
 }
 
 impl<T: Clone + Send + Sync + 'static> std::fmt::Debug for Pattern<T> {
@@ -585,70 +902,6 @@ mod tests {
     // ===== DSP Fast-Path Pattern Methods =====
 
     #[test]
-    fn test_query_arc_f64() {
-        let pat = fastcat(vec![pure(0), pure(1), pure(2), pure(3)]);
-        let haps = pat.query_arc_f64(0.0, 1.0);
-
-        assert_eq!(haps.len(), 4);
-        assert_eq!(haps[0].value, 0);
-        assert_eq!(haps[1].value, 1);
-        assert_eq!(haps[2].value, 2);
-        assert_eq!(haps[3].value, 3);
-    }
-
-    #[test]
-    fn test_query_arc_f64_fractional_range() {
-        let pat = fastcat(vec![pure(0), pure(1), pure(2), pure(3)]);
-        // Query just the middle half
-        let haps = pat.query_arc_f64(0.25, 0.75);
-
-        // Should capture events 1 and 2 (at 0.25-0.5 and 0.5-0.75)
-        assert_eq!(haps.len(), 2);
-        assert_eq!(haps[0].value, 1);
-        assert_eq!(haps[1].value, 2);
-    }
-
-    #[test]
-    fn test_query_at() {
-        let pat = fastcat(vec![pure(0), pure(1), pure(2), pure(3)]);
-
-        // Query at different points
-        let h0 = pat.query_at(0.1);
-        assert_eq!(h0.len(), 1);
-        assert_eq!(h0[0].value, 0);
-
-        let h1 = pat.query_at(0.3);
-        assert_eq!(h1.len(), 1);
-        assert_eq!(h1[0].value, 1);
-
-        let h3 = pat.query_at(0.9);
-        assert_eq!(h3.len(), 1);
-        assert_eq!(h3[0].value, 3);
-    }
-
-    #[test]
-    fn test_query_at_boundary() {
-        let pat = fastcat(vec![pure(0), pure(1)]);
-
-        // At 0.0 should be in event 0
-        let h0 = pat.query_at(0.0);
-        assert_eq!(h0.len(), 1);
-        assert_eq!(h0[0].value, 0);
-
-        // At exactly 0.5 should be in event 1 (half-open interval [0.5, 1.0))
-        let h1 = pat.query_at(0.5);
-        assert_eq!(h1.len(), 1);
-        assert_eq!(h1[0].value, 1);
-    }
-
-    #[test]
-    fn test_query_at_silence() {
-        let pat: Pattern<i32> = silence();
-        let haps = pat.query_at(0.5);
-        assert!(haps.is_empty());
-    }
-
-    #[test]
     fn test_query_at_first() {
         let pat = fastcat(vec![pure(0), pure(1), pure(2)]);
 
@@ -665,92 +918,6 @@ mod tests {
     }
 
     #[test]
-    fn test_query_at_dsp() {
-        let pat = fastcat(vec![pure(10), pure(20), pure(30)]);
-
-        let dsp = pat.query_at_dsp(0.5);
-        assert!(dsp.is_some());
-        let dsp = dsp.unwrap();
-        assert_eq!(dsp.value, 20);
-        assert!(dsp.is_discrete());
-        // Check f64 bounds are pre-computed
-        assert!((dsp.part_begin - (1.0 / 3.0)).abs() < 1e-10);
-        assert!((dsp.part_end - (2.0 / 3.0)).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_query_at_dsp_none() {
-        let pat: Pattern<i32> = silence();
-        let dsp = pat.query_at_dsp(0.5);
-        assert!(dsp.is_none());
-    }
-
-    #[test]
-    fn test_query_arc_dsp() {
-        let pat = fastcat(vec![pure(1), pure(2)]);
-        let dsps = pat.query_arc_dsp(0.0, 1.0);
-
-        assert_eq!(dsps.len(), 2);
-        assert_eq!(dsps[0].value, 1);
-        assert_eq!(dsps[1].value, 2);
-
-        // Check bounds are pre-computed
-        assert!((dsps[0].part_begin - 0.0).abs() < 1e-10);
-        assert!((dsps[0].part_end - 0.5).abs() < 1e-10);
-        assert!((dsps[1].part_begin - 0.5).abs() < 1e-10);
-        assert!((dsps[1].part_end - 1.0).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_query_cycle_dsp() {
-        let pat = fastcat(vec![pure(1), pure(2), pure(3)]);
-
-        let cycle0 = pat.query_cycle_dsp(0);
-        assert_eq!(cycle0.len(), 3);
-        assert_eq!(cycle0[0].value, 1);
-        assert_eq!(cycle0[1].value, 2);
-        assert_eq!(cycle0[2].value, 3);
-
-        // Check all have onsets (should be filtered)
-        for dsp in &cycle0 {
-            assert!(dsp.is_discrete());
-        }
-    }
-
-    #[test]
-    fn test_query_cycle_dsp_different_cycles() {
-        let pat = slowcat(vec![pure(10), pure(20), pure(30)]);
-
-        let c0 = pat.query_cycle_dsp(0);
-        assert_eq!(c0.len(), 1);
-        assert_eq!(c0[0].value, 10);
-
-        let c1 = pat.query_cycle_dsp(1);
-        assert_eq!(c1.len(), 1);
-        assert_eq!(c1[0].value, 20);
-
-        let c2 = pat.query_cycle_dsp(2);
-        assert_eq!(c2.len(), 1);
-        assert_eq!(c2[0].value, 30);
-
-        // Should wrap
-        let c3 = pat.query_cycle_dsp(3);
-        assert_eq!(c3.len(), 1);
-        assert_eq!(c3[0].value, 10);
-    }
-
-    #[test]
-    fn test_query_cycle_dsp_filters_non_onsets() {
-        // Using a pattern where some haps may not have onsets due to slicing
-        // pure() patterns always have onsets when queried within their whole,
-        // but this confirms the filter is working
-        let pat = pure(42);
-        let events = pat.query_cycle_dsp(0);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].value, 42);
-    }
-
-    #[test]
     fn test_query_cycle_all_includes_fragments() {
         // query_cycle_all should include all haps intersecting the cycle,
         // including fragments (haps without onsets that started in a prior cycle)
@@ -763,94 +930,70 @@ mod tests {
     }
 
     #[test]
-    fn test_dsp_methods_with_stack() {
-        // Stack overlays patterns, so both should be active at any time point
-        let pat = stack(vec![pure(100), pure(200)]);
+    fn test_offset_pattern_idx_shifts_walk_indices() {
+        use crate::pattern_system::constructors::pure_with_span;
+        use crate::pattern_system::hap::SourceSpan;
 
-        let at_half = pat.query_at(0.5);
-        assert_eq!(at_half.len(), 2);
-        let values: Vec<_> = at_half.iter().map(|h| h.value).collect();
-        assert!(values.contains(&100));
-        assert!(values.contains(&200));
+        // A single leaf span normally walks at pattern_idx 0; offsetting by 3
+        // shifts it to 3, and a second offset composes additively (3 + 2 = 5).
+        let base = pure_with_span(1.0f64, SourceSpan::new(0, 1));
+        let collect = |pat: &Pattern<f64>| -> Vec<(u32, (usize, usize))> {
+            let bump = bumpalo::Bump::new();
+            let mut out: bumpalo::collections::Vec<'_, ArenaHap<'_, f64>> =
+                bumpalo::collections::Vec::new_in(&bump);
+            pat.query_into(
+                &State::new(TimeSpan::new(
+                    Fraction::from_integer(0),
+                    Fraction::from_integer(1),
+                )),
+                &bump,
+                &mut out,
+            );
+            let mut spans = Vec::new();
+            for hap in &out {
+                hap.context
+                    .walk(&mut |idx, span| spans.push((idx, (span.start, span.end))));
+            }
+            spans
+        };
 
-        // DSP version
-        let dsps = pat.query_arc_dsp(0.0, 1.0);
-        assert_eq!(dsps.len(), 2);
-        let dsp_values: Vec<_> = dsps.iter().map(|d| d.value).collect();
-        assert!(dsp_values.contains(&100));
-        assert!(dsp_values.contains(&200));
+        assert_eq!(collect(&base), vec![(0, (0, 1))]);
+        assert_eq!(collect(&base.offset_pattern_idx(3)), vec![(3, (0, 1))]);
+        assert_eq!(
+            collect(&base.offset_pattern_idx(3).offset_pattern_idx(2)),
+            vec![(5, (0, 1))],
+            "nested offsets compose additively"
+        );
+        // k == 0 is the identity.
+        assert_eq!(collect(&base.offset_pattern_idx(0)), vec![(0, (0, 1))]);
     }
 
     #[test]
-    fn test_query_across_cycle_boundary() {
-        let pat = pure(42);
+    fn test_offset_pattern_idx_shifts_multi_index_context() {
+        use crate::pattern_system::constructors::pure_with_span;
+        use crate::pattern_system::hap::SourceSpan;
 
-        // Query across cycle boundary
-        let haps = pat.query_arc_f64(0.5, 1.5);
-
-        // Should get partial events from both cycles
-        assert!(haps.len() >= 1);
-    }
-
-    #[test]
-    fn test_dsp_fast_path_preserves_value_types() {
-        // Test with different value types
-        let str_pat = pure("hello".to_string());
-        let dsp = str_pat.query_at_dsp(0.5);
-        assert!(dsp.is_some());
-        assert_eq!(dsp.unwrap().value, "hello");
-
-        // Test with tuple
-        let tuple_pat = pure((1, 2, 3));
-        let dsp = tuple_pat.query_at_dsp(0.5);
-        assert!(dsp.is_some());
-        assert_eq!(dsp.unwrap().value, (1, 2, 3));
-    }
-
-    #[test]
-    fn test_query_at_dsp_cached_converts_fragments_to_rests() {
-        // Test that fragments are converted to rests with whole=part
-        // We use Option<f64> which implements HasRest (rest_value = None)
-
-        // Create a pattern: 1*[2 3]
-        // This produces:
-        //   - hap at 0→1/2 (speed 2)
-        //   - fragment at 1/3→2/3 with part 1/2→2/3 (speed 3, onset before query)
-        //   - hap at 2/3→1 (speed 3)
-
-        // Build pattern programmatically: pure(1).fast(fastcat([2, 3]))
-        let factor_pat = fastcat(vec![
-            pure(Fraction::from_integer(2)),
-            pure(Fraction::from_integer(3)),
-        ]);
-        let base: Pattern<Option<f64>> = pure(Some(1.0));
-        let pat = base.fast(factor_pat);
-
-        // Query at 0.55 - should find the fragment
-        let dsp = pat.query_at_dsp_cached(0.55);
-        assert!(dsp.is_some());
-        let dsp = dsp.unwrap();
-
-        // The fragment should be converted to a rest with whole=part
-        assert_eq!(dsp.value, None); // rest value
-        assert!((dsp.whole_begin - 0.5).abs() < 0.001); // whole starts at 1/2
-        assert!((dsp.whole_end - 2.0 / 3.0).abs() < 0.001); // whole ends at 2/3
-
-        // Query at 0.1 - should find the real hap
-        let dsp2 = pat.query_at_dsp_cached(0.1);
-        assert!(dsp2.is_some());
-        let dsp2 = dsp2.unwrap();
-        assert_eq!(dsp2.value, Some(1.0)); // actual value
-        assert!((dsp2.whole_begin - 0.0).abs() < 0.001); // whole starts at 0
-        assert!((dsp2.whole_end - 0.5).abs() < 0.001); // whole ends at 1/2
-
-        // Query at 0.8 - should find the third hap
-        let dsp3 = pat.query_at_dsp_cached(0.8);
-        assert!(dsp3.is_some());
-        let dsp3 = dsp3.unwrap();
-        assert_eq!(dsp3.value, Some(1.0)); // actual value
-        assert!((dsp3.whole_begin - 2.0 / 3.0).abs() < 0.001); // whole starts at 2/3
-        assert!((dsp3.whole_end - 1.0).abs() < 0.001); // whole ends at 1
+        // A combined context has spans at idx 0 (source) and idx 1 (modifier).
+        // Offsetting by 4 shifts the whole chain to 4 and 5.
+        let pat = pure_with_span(1.0f64, SourceSpan::new(0, 1))
+            .with_modifier_span(SourceSpan::new(5, 6))
+            .offset_pattern_idx(4);
+        let bump = bumpalo::Bump::new();
+        let mut out: bumpalo::collections::Vec<'_, ArenaHap<'_, f64>> =
+            bumpalo::collections::Vec::new_in(&bump);
+        pat.query_into(
+            &State::new(TimeSpan::new(
+                Fraction::from_integer(0),
+                Fraction::from_integer(1),
+            )),
+            &bump,
+            &mut out,
+        );
+        let mut spans = Vec::new();
+        out[0]
+            .context
+            .walk(&mut |idx, span| spans.push((idx, (span.start, span.end))));
+        assert_eq!(spans, vec![(4, (0, 1)), (5, (5, 6))]);
     }
 
     #[test]
@@ -858,29 +1001,15 @@ mod tests {
         use crate::pattern_system::constructors::pure_with_span;
         use crate::pattern_system::hap::SourceSpan;
 
-        // Create a pattern with a modifier span (simulating fast(<4 6>))
-        let pat = pure_with_span(1.0f64, SourceSpan::new(0, 1));
-        // Manually add a modifier span via a wrapping query
-        let query = pat.query.clone();
-        let pat_with_mod = Pattern::new(move |state: &State| {
-            query(state)
-                .into_iter()
-                .map(|mut hap| {
-                    hap.context.add_modifier_span(SourceSpan::new(5, 6));
-                    hap
-                })
-                .collect()
-        });
-
-        let stripped = pat_with_mod.strip_modifier_spans();
+        let pat =
+            pure_with_span(1.0f64, SourceSpan::new(0, 1)).with_modifier_span(SourceSpan::new(5, 6));
+        let stripped = pat.strip_modifier_spans();
         let haps = stripped.query_arc(
             Fraction::from_integer(0.into()),
             Fraction::from_integer(1.into()),
         );
         assert_eq!(haps.len(), 1);
-        // modifier_spans should be empty
         assert!(haps[0].context.modifier_spans.is_empty());
-        // source_extra_spans should contain the preserved span
         assert_eq!(haps[0].context.source_extra_spans.len(), 1);
         assert_eq!(haps[0].context.source_extra_spans[0].to_tuple(), (5, 6));
     }

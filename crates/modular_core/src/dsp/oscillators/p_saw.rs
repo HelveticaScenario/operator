@@ -1,6 +1,6 @@
 use crate::{
     dsp::utils::wrap,
-    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
 use deserr::Deserr;
@@ -34,12 +34,6 @@ struct ChannelState {
     prev_phase: f32,
 }
 
-/// State for the PSawOscillator module.
-#[derive(Default)]
-struct PSawOscillatorState {
-    channels: [ChannelState; PORT_MAX_CHANNELS],
-}
-
 /// Phase-driven variable-symmetry triangle oscillator.
 ///
 /// Instead of a frequency input, this oscillator is driven by an external
@@ -56,7 +50,7 @@ struct PSawOscillatorState {
 #[module(name = "$pSaw", args(phase))]
 pub struct PSawOscillator {
     outputs: PSawOscillatorOutputs,
-    state: PSawOscillatorState,
+    channel_state: Box<[ChannelState]>,
     params: PSawOscillatorParams,
 }
 
@@ -65,7 +59,7 @@ impl PSawOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let state = &mut self.state.channels[ch];
+            let state = &mut self.channel_state[ch];
 
             // Update shape with smoothing - clamp to valid range
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);

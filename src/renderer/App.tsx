@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
 import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
@@ -6,9 +6,14 @@ import { ErrorDisplay } from './components/ErrorDisplay';
 import { Settings } from './components/Settings';
 import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
+import { ModuleProfile } from './components/ModuleProfile';
+import { MigrationDiffModal } from './components/MigrationDiffModal';
+import type { MigrationModalSummary } from './components/MigrationDiffModal';
+import { migrateCycleCalls } from './dsl/migrateCycleCalls';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
+import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
 import './App.css';
 // Import type { editor } from 'monaco-editor';
 import { editor } from 'monaco-editor';
@@ -22,7 +27,6 @@ import type { QueuedTrigger } from '@modular/core';
 import type {
     FileTreeEntry,
     SourceLocationInfo,
-    TransportSnapshot,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
@@ -43,6 +47,13 @@ import {
     unregisterCommand,
 } from './keybindings/commands';
 import { loadAndInstallKeymap } from './keybindings/keymap';
+import { getBufferId } from './app/buffers';
+import {
+    setTransport,
+    updateTransport,
+    useTransportLinkEnabled,
+} from './app/transportStore';
+import { useTheme } from './themes/ThemeContext';
 
 /**
  * Transform validation errors to use source line numbers instead of module IDs
@@ -93,6 +104,13 @@ function transformErrorsWithSourceLocations(
 }
 
 function App() {
+    const {
+        xyScopeIntensity,
+        xyScopePersistence,
+        xyScopeUpsample,
+        xyScopeLineWidth,
+    } = useTheme();
+
     // Workspace & filesystem
     const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
     const [fileTree, setFileTree] = useState<FileTreeEntry[]>([]);
@@ -132,6 +150,13 @@ function App() {
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
+    const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
+    const [migrationState, setMigrationState] = useState<{
+        bufferId: string;
+        original: string;
+        migrated: string;
+        summary: MigrationModalSummary;
+    } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
         ValidationError[] | null
@@ -140,8 +165,12 @@ function App() {
     const [scopeViews, setScopeViews] = useState<ScopeView[]>([]);
     const [runningBufferId, setRunningBufferId] = useState<string | null>(null);
     const [sliderDefs, setSliderDefs] = useState<SliderDefinition[]>([]);
-    const [transportState, setTransportState] =
-        useState<TransportSnapshot | null>(null);
+    // Per-frame transport lives in an external store (see transportStore) so
+    // updating it ~60×/s does not re-render the whole App tree — only the
+    // transport display, which subscribes directly. App only needs to know
+    // whether Link is enabled (to drive the Link-only poll loop below); that
+    // selector re-renders App only when the flag flips.
+    const linkEnabled = useTransportLinkEnabled();
 
     const [updateState, setUpdateState] = useState<UpdateNotificationState>({
         status: 'idle',
@@ -407,6 +436,12 @@ function App() {
                 version: pendingUpdateVersion.current,
             });
         });
+        const unsubPreparing = electronAPI.update.onPreparing(() => {
+            setUpdateState({
+                status: 'preparing',
+                version: pendingUpdateVersion.current,
+            });
+        });
         const unsubDownloaded = electronAPI.update.onDownloaded(() => {
             setUpdateState({ status: 'ready' });
         });
@@ -417,6 +452,7 @@ function App() {
         return () => {
             unsubAvailable();
             unsubDownloading();
+            unsubPreparing();
             unsubDownloaded();
             unsubError();
         };
@@ -458,6 +494,20 @@ function App() {
     useEffect(() => {
         patchCodeRef.current = patchCode;
     }, [patchCode]);
+
+    // Stable per-buffer identity (the tab's id) used as the patch source id.
+    // Unlike activeBufferId — a file's mutable path — this survives rename and
+    // save, so reconciliation/clock-reset key on the buffer, not its path.
+    const activeSourceId = useMemo(
+        () =>
+            buffers.find((b) => getBufferId(b) === activeBufferId)?.id ??
+            activeBufferId,
+        [buffers, activeBufferId],
+    );
+    const activeSourceIdRef = useRef(activeSourceId);
+    useEffect(() => {
+        activeSourceIdRef.current = activeSourceId;
+    }, [activeSourceId]);
 
     const isClockRunningRef = useRef(isClockRunning);
     useEffect(() => {
@@ -550,7 +600,7 @@ function App() {
                         }
                     }
 
-                    setTransportState(transport);
+                    setTransport(transport);
 
                     // Check if a pending UI state should be committed
                     const pending = pendingUIStateRef.current;
@@ -593,7 +643,6 @@ function App() {
     // The main tick loop only runs when isClockRunning; this fills the gap so
     // the phase indicator stays animated even before the user presses play.
     useEffect(() => {
-        const linkEnabled = transportState?.linkEnabled ?? false;
         if (!linkEnabled || isClockRunning) return;
         let cancelled = false;
         let rafId = 0;
@@ -601,7 +650,7 @@ function App() {
             if (cancelled) return;
             void electronAPI.synthesizer.getTransportState().then((t) => {
                 if (cancelled) return;
-                setTransportState(t);
+                setTransport(t);
                 rafId = requestAnimationFrame(tick);
             });
         };
@@ -610,7 +659,7 @@ function App() {
             cancelled = true;
             cancelAnimationFrame(rafId);
         };
-    }, [transportState?.linkEnabled, isClockRunning]);
+    }, [linkEnabled, isClockRunning]);
 
     const handleSaveFile = useCallback(
         async (id?: string) => {
@@ -646,10 +695,12 @@ function App() {
             try {
                 const patchCodeValue = patchCodeRef.current;
 
-                // Execute DSL in main process (has direct N-API access)
+                // Execute DSL in main process (has direct N-API access).
+                // Use the stable buffer id (not activeBufferId, a file's mutable
+                // path) so reconciliation/clock-reset key on the buffer itself.
                 const result = await electronAPI.executeDSL(
                     patchCodeValue,
-                    activeBufferId,
+                    activeSourceIdRef.current,
                     trigger,
                 );
                 lastPatchResultRef.current = result;
@@ -816,6 +867,7 @@ function App() {
             getScopeData: () => electronAPI.synthesizer.getScopes(),
             isClockRunning: () => isClockRunningRef.current,
             openEngineHealth: () => setIsEngineHealthOpen(true),
+            openModuleProfile: () => setIsModuleProfileOpen(true),
             setEditorValue: (code: string) => editorRef.current?.setValue(code),
         };
         return () => {
@@ -840,10 +892,25 @@ function App() {
 
     const handleCloseBuffer = useCallback(
         async (id: string) => {
+            setMigrationState(null);
             await closeBuffer(id);
         },
         [closeBuffer],
     );
+
+    const handleSelectBuffer = useCallback(
+        (id: string) => {
+            setMigrationState(null);
+            setActiveBufferId(id);
+        },
+        [setActiveBufferId],
+    );
+
+    useEffect(() => {
+        setMigrationState((prev) =>
+            prev && prev.bufferId !== activeBufferId ? null : prev,
+        );
+    }, [activeBufferId]);
 
     // Refs keep command handlers stable across renders so the registration
     // effect below only needs to run once. Anything captured by closure must
@@ -995,6 +1062,44 @@ function App() {
                 setIsEngineHealthOpen(true);
             },
         );
+        const cleanupOpenModuleProfile = electronAPI.onMenuOpenModuleProfile(
+            () => {
+                setIsModuleProfileOpen(true);
+            },
+        );
+        const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
+            const ed = editorRef.current;
+            if (!ed || !activeBufferId) {
+                console.warn('Migrate buffer: no editor available');
+                setMigrationState({
+                    bufferId: activeBufferId ?? '',
+                    original: '',
+                    migrated: '',
+                    summary: {
+                        callsChanged: 0,
+                        assignmentsChanged: 0,
+                        commentsChanged: 0,
+                        skippedVariables: [],
+                        error: 'No editor available',
+                    },
+                });
+                return;
+            }
+            const original = ed.getValue();
+            const result = migrateCycleCalls(original);
+            setMigrationState({
+                bufferId: activeBufferId,
+                original,
+                migrated: result.migrated,
+                summary: {
+                    callsChanged: result.callsChanged,
+                    assignmentsChanged: result.assignmentsChanged,
+                    commentsChanged: result.commentsChanged,
+                    skippedVariables: result.skippedVariables,
+                    error: result.error,
+                },
+            });
+        });
 
         return () => {
             cleanupNewFile();
@@ -1007,6 +1112,8 @@ function App() {
             cleanupToggleRecording();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
+            cleanupOpenModuleProfile();
+            cleanupMigrateBuffer();
         };
     }, [isRecording]);
 
@@ -1060,19 +1167,14 @@ function App() {
         <div className="app">
             <header className="app-header">
                 <TransportDisplay
-                    transport={transportState}
                     onToggleLink={(enabled) => {
                         void electronAPI.synthesizer.enableLink(enabled);
                         // Optimistically update UI — polling only runs while playing
-                        setTransportState((prev) =>
-                            prev
-                                ? {
-                                      ...prev,
-                                      linkEnabled: enabled,
-                                      linkPeers: enabled ? prev.linkPeers : 0,
-                                  }
-                                : prev,
-                        );
+                        updateTransport((prev) => ({
+                            ...prev,
+                            linkEnabled: enabled,
+                            linkPeers: enabled ? prev.linkPeers : 0,
+                        }));
                     }}
                 />
                 <AudioControls
@@ -1107,6 +1209,11 @@ function App() {
                 onClose={() => setIsEngineHealthOpen(false)}
             />
 
+            <ModuleProfile
+                isOpen={isModuleProfileOpen}
+                onClose={() => setIsModuleProfileOpen(false)}
+            />
+
             <AudioPanicDialog />
 
             <CommandPalette
@@ -1114,6 +1221,42 @@ function App() {
                 onOpenChange={setIsPaletteOpen}
                 editor={paletteEditor}
             />
+
+            {migrationState && (
+                <MigrationDiffModal
+                    isOpen
+                    original={migrationState.original}
+                    migrated={migrationState.migrated}
+                    summary={migrationState.summary}
+                    onCancel={() => setMigrationState(null)}
+                    onApply={() => {
+                        const ed = editorRef.current;
+                        const model = ed?.getModel();
+                        if (!ed || !model) {
+                            setMigrationState(null);
+                            return;
+                        }
+                        if (migrationState.bufferId !== activeBufferId) {
+                            console.warn(
+                                'Migrate apply: active buffer changed since modal opened; aborting',
+                            );
+                            setMigrationState(null);
+                            return;
+                        }
+                        model.pushEditOperations(
+                            [],
+                            [
+                                {
+                                    range: model.getFullModelRange(),
+                                    text: migrationState.migrated,
+                                },
+                            ],
+                            () => null,
+                        );
+                        setMigrationState(null);
+                    }}
+                />
+            )}
 
             <main className="app-main">
                 {!workspaceRoot ? (
@@ -1128,6 +1271,16 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
+                            {/* One shared canvas behind the editor. $scopeXY is
+                                global, so every buffer would render identical
+                                content; a single canvas (one WebGL context)
+                                avoids exhausting the browser's context budget. */}
+                            <ScopeXYBackground
+                                intensity={xyScopeIntensity}
+                                persistence={xyScopePersistence}
+                                upsample={xyScopeUpsample}
+                                lineWidth={xyScopeLineWidth}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}
@@ -1153,7 +1306,7 @@ function App() {
                                     runningBufferId={runningBufferId}
                                     renamingPath={renamingPath}
                                     formatLabel={formatLabel}
-                                    onSelectBuffer={setActiveBufferId}
+                                    onSelectBuffer={handleSelectBuffer}
                                     onOpenFile={handleOpenFile}
                                     onCreateFile={createUntitledFile}
                                     onSaveFile={handleSaveFileStable}

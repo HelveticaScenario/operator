@@ -1,0 +1,241 @@
+.module-profile-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.module-profile-panel {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 8px;
+    width: 820px;
+    max-width: 95vw;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    outline: none;
+}
+
+.module-profile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-default);
+}
+
+.module-profile-header h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.module-profile-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.module-profile-rate-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.module-profile-rate-select {
+    background: var(--bg-secondary, rgba(255, 255, 255, 0.05));
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 12px;
+}
+
+.module-profile-unit-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.module-profile-unit-toggle button {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    padding: 2px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+}
+
+.module-profile-unit-toggle button + button {
+    border-left: 1px solid var(--border-default);
+}
+
+.module-profile-unit-toggle button.active {
+    background: var(--accent, #3b82f6);
+    color: white;
+}
+
+.module-profile-unit-toggle button:hover:not(.active) {
+    color: var(--text-primary);
+}
+
+.module-profile-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 0 4px;
+}
+
+.module-profile-close-btn:hover {
+    color: var(--text-primary);
+}
+
+.module-profile-body {
+    padding: 12px 16px 16px;
+    overflow: auto;
+    flex: 1;
+}
+
+.module-profile-loading {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 24px 0;
+}
+
+.module-profile-legend {
+    margin: 0 0 12px 0;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-muted);
+}
+
+.module-profile-legend strong {
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.module-profile-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+    table-layout: fixed;
+}
+
+.module-profile-table col.col-module {
+    width: auto;
+}
+.module-profile-table col.col-mode {
+    width: 80px;
+}
+.module-profile-table col.col-self {
+    width: 200px;
+}
+.module-profile-table col.col-params,
+.module-profile-table col.col-total {
+    width: 110px;
+}
+
+.module-profile-mode {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+    border: 1px solid var(--border-default);
+    color: var(--text-muted);
+}
+
+.module-profile-mode-sample {
+    color: #f59e0b;
+    border-color: rgba(245, 158, 11, 0.4);
+    background: rgba(245, 158, 11, 0.08);
+}
+
+.module-profile-mode-block {
+    color: #34d399;
+    border-color: rgba(52, 211, 153, 0.4);
+    background: rgba(52, 211, 153, 0.08);
+}
+
+.module-profile-table thead th {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-default);
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.module-profile-table thead th.numeric {
+    text-align: right;
+}
+
+.module-profile-table thead th.active {
+    color: var(--text-primary);
+}
+
+.module-profile-table thead th:hover {
+    color: var(--text-primary);
+}
+
+.module-profile-table tbody td {
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.06));
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.module-profile-table tbody td.numeric {
+    text-align: right;
+}
+
+.module-profile-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 170px;
+}
+
+.module-profile-cell > span:last-child {
+    margin-left: auto;
+    text-align: right;
+}
+
+.module-profile-bar {
+    display: inline-block;
+    width: 80px;
+    height: 6px;
+    background: var(--border-subtle, rgba(255, 255, 255, 0.08));
+    border-radius: 3px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.module-profile-bar-fill {
+    display: block;
+    height: 100%;
+    background: var(--accent, #3b82f6);
+}

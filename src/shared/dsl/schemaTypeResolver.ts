@@ -63,7 +63,12 @@ export function resolveRef(
     | 'Poly<Signal>'
     | 'Mono<Signal>'
     | 'Buffer'
-    | 'Table' {
+    | 'Table'
+    | 'ParsedPattern'
+    | 'SpPattern'
+    | 'ArrangePattern'
+    | 'FastPattern'
+    | 'SlowPattern' {
     if (ref === 'Signal') {
         return 'Signal';
     }
@@ -72,6 +77,21 @@ export function resolveRef(
     }
     if (ref === 'Table') {
         return 'Table';
+    }
+    if (ref === 'ParsedPatternPayload') {
+        return 'ParsedPattern';
+    }
+    if (ref === 'SpPatternPayload') {
+        return 'SpPattern';
+    }
+    if (ref === 'ArrangePatternPayload') {
+        return 'ArrangePattern';
+    }
+    if (ref === 'FastPatternPayload') {
+        return 'FastPattern';
+    }
+    if (ref === 'SlowPatternPayload') {
+        return 'SlowPattern';
     }
 
     const defsPrefix = '#/$defs/';
@@ -94,6 +114,33 @@ export function resolveRef(
     }
     if (defName === 'Table') {
         return 'Table';
+    }
+    // ParsedPatternPayload is recursive (MiniAST references itself via
+    // List/Sequence/...); the DSL exposes it as an opaque `ParsedPattern`
+    // named type, constructed by `$p(...)` and consumed by $cycle/$p.s.
+    if (defName === 'ParsedPatternPayload') {
+        return 'ParsedPattern';
+    }
+    // SpPatternPayload is the chained `$p.s(...).add(...)` shape; the DSL
+    // exposes it as the named `SpPattern` type rather than an inlined
+    // structural literal.
+    if (defName === 'SpPatternPayload') {
+        return 'SpPattern';
+    }
+    // ArrangePatternPayload is the `$p.arrange(...)` shape; it recurses
+    // (sections carry `SeqPatternSource`), so the DSL exposes it as the named
+    // `ArrangePattern` type to break the cycle, like ParsedPattern/SpPattern.
+    if (defName === 'ArrangePatternPayload') {
+        return 'ArrangePattern';
+    }
+    // FastPatternPayload / SlowPatternPayload are the `.fast(...)` / `.slow(...)`
+    // wrappers; they recurse (the wrapped `pattern` is a `SeqPatternSource`), so
+    // the DSL exposes them as named types like the others above.
+    if (defName === 'FastPatternPayload') {
+        return 'FastPattern';
+    }
+    if (defName === 'SlowPatternPayload') {
+        return 'SlowPattern';
     }
 
     const defs = rootSchema?.$defs;
@@ -120,6 +167,21 @@ export function resolveRef(
     }
     if (resolved?.title === 'Table') {
         return 'Table';
+    }
+    if (resolved?.title === 'ParsedPatternPayload') {
+        return 'ParsedPattern';
+    }
+    if (resolved?.title === 'SpPatternPayload') {
+        return 'SpPattern';
+    }
+    if (resolved?.title === 'ArrangePatternPayload') {
+        return 'ArrangePattern';
+    }
+    if (resolved?.title === 'FastPatternPayload') {
+        return 'FastPattern';
+    }
+    if (resolved?.title === 'SlowPatternPayload') {
+        return 'SlowPattern';
     }
     return resolved;
 }
@@ -296,6 +358,21 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'Table') {
             return 'Table';
+        }
+        if (resolved === 'ParsedPattern') {
+            return 'ParsedPattern';
+        }
+        if (resolved === 'SpPattern') {
+            return 'SpPattern';
+        }
+        if (resolved === 'ArrangePattern') {
+            return 'ArrangePattern';
+        }
+        if (resolved === 'FastPattern') {
+            return 'FastPattern';
+        }
+        if (resolved === 'SlowPattern') {
+            return 'SlowPattern';
         }
         return schemaToTypeExpr(resolved, rootSchema);
     }

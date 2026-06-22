@@ -8,7 +8,7 @@
 
 use std::cmp::Ordering;
 use std::fmt;
-use std::ops::{Add, Div, Mul, Neg, Sub};
+use std::ops::{Add, Div, Mul, Sub};
 
 /// GCD via Euclidean algorithm (always returns non-negative).
 #[inline]
@@ -75,17 +75,21 @@ impl Fraction {
         }
     }
 
-    /// Position within the current cycle [0, 1).
-    /// Returns the fractional part after subtracting sam.
+    /// Position within the current cycle: `self - self.sam()`. Always in
+    /// `[0, 1)`. Used by `reset_join` to align an inner pattern's cycle 0
+    /// to the cycle-relative onset of an outer hap.
     #[inline]
     pub fn cycle_pos(&self) -> Fraction {
-        let f = self.floor_value();
-        Fraction::new(self.num - f * self.den, self.den)
+        let sam = self.floor_value();
+        Fraction::new(self.num - sam * self.den, self.den)
     }
 
     /// TimeSpan representing the full cycle containing this time.
+    #[inline]
     pub fn whole_cycle(&self) -> super::TimeSpan {
-        super::TimeSpan::new(self.sam(), self.next_sam())
+        // Share floor_value between sam and next_sam.
+        let f = self.floor_value();
+        super::TimeSpan::new(Fraction { num: f, den: 1 }, Fraction { num: f + 1, den: 1 })
     }
 
     /// Convert to f64 (lossy).
@@ -116,18 +120,6 @@ impl Fraction {
         }
     }
 
-    /// Ceiling to nearest integer.
-    #[inline]
-    pub fn ceil(&self) -> Fraction {
-        // ceil(a/b) for b > 0: if a%b == 0 then a/b else floor(a/b) + 1
-        let f = self.floor_value();
-        if f * self.den == self.num {
-            Fraction { num: f, den: 1 }
-        } else {
-            Fraction { num: f + 1, den: 1 }
-        }
-    }
-
     /// Maximum of two fractions (by reference).
     #[inline]
     pub fn max_of(&self, other: &Fraction) -> Fraction {
@@ -148,16 +140,21 @@ impl Fraction {
         }
     }
 
-    /// Check if this fraction is zero.
+    /// True if this fraction equals an integer (denominator is 1).
     #[inline]
-    pub fn is_zero(&self) -> bool {
-        self.num == 0
+    pub fn is_integer(&self) -> bool {
+        self.den == 1
     }
 
-    /// Check if this fraction is one.
+    /// Numerator (only meaningful when `is_integer()` is true).
     #[inline]
-    pub fn is_one(&self) -> bool {
-        self.num == 1 && self.den == 1
+    pub fn integer_value(&self) -> i64 {
+        debug_assert_eq!(self.den, 1, "integer_value on non-integer fraction");
+        self.num
+    }
+
+    pub fn is_zero(&self) -> bool {
+        self.num == 0
     }
 
     /// Returns the numerator.
@@ -182,37 +179,9 @@ impl Fraction {
     }
 }
 
-impl Default for Fraction {
-    #[inline]
-    fn default() -> Self {
-        Fraction { num: 0, den: 1 }
-    }
-}
-
-impl From<i64> for Fraction {
-    #[inline]
-    fn from(n: i64) -> Self {
-        Fraction::from_integer(n)
-    }
-}
-
 impl From<i32> for Fraction {
     #[inline]
     fn from(n: i32) -> Self {
-        Fraction::from_integer(n as i64)
-    }
-}
-
-impl From<u32> for Fraction {
-    #[inline]
-    fn from(n: u32) -> Self {
-        Fraction::from_integer(n as i64)
-    }
-}
-
-impl From<usize> for Fraction {
-    #[inline]
-    fn from(n: usize) -> Self {
         Fraction::from_integer(n as i64)
     }
 }
@@ -260,16 +229,56 @@ impl Ord for Fraction {
 }
 
 // ===== Arithmetic Operations =====
-// All operations normalize the result via Fraction::new.
+// Operations normalize via Fraction::new. Matched-denominator and
+// integer-denominator branches construct results directly without a GCD pass,
+// since those inputs are already in lowest terms.
+
+#[inline]
+fn frac_add(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
+    if a_den == 1 && b_den == 1 {
+        return Fraction {
+            num: a_num + b_num,
+            den: 1,
+        };
+    }
+    if a_den == b_den {
+        return Fraction::new(a_num + b_num, a_den);
+    }
+    // One-integer denominator: only one cross-multiplication needed.
+    if a_den == 1 {
+        return Fraction::new(a_num * b_den + b_num, b_den);
+    }
+    if b_den == 1 {
+        return Fraction::new(a_num + b_num * a_den, a_den);
+    }
+    Fraction::new(a_num * b_den + b_num * a_den, a_den * b_den)
+}
+
+#[inline]
+fn frac_sub(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
+    if a_den == 1 && b_den == 1 {
+        return Fraction {
+            num: a_num - b_num,
+            den: 1,
+        };
+    }
+    if a_den == b_den {
+        return Fraction::new(a_num - b_num, a_den);
+    }
+    if a_den == 1 {
+        return Fraction::new(a_num * b_den - b_num, b_den);
+    }
+    if b_den == 1 {
+        return Fraction::new(a_num - b_num * a_den, a_den);
+    }
+    Fraction::new(a_num * b_den - b_num * a_den, a_den * b_den)
+}
 
 impl Add for Fraction {
     type Output = Fraction;
     #[inline]
     fn add(self, other: Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den + other.num * self.den,
-            self.den * other.den,
-        )
+        frac_add(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -277,10 +286,7 @@ impl Add<&Fraction> for Fraction {
     type Output = Fraction;
     #[inline]
     fn add(self, other: &Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den + other.num * self.den,
-            self.den * other.den,
-        )
+        frac_add(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -288,10 +294,7 @@ impl Add<Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn add(self, other: Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den + other.num * self.den,
-            self.den * other.den,
-        )
+        frac_add(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -299,10 +302,7 @@ impl Add<&Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn add(self, other: &Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den + other.num * self.den,
-            self.den * other.den,
-        )
+        frac_add(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -310,10 +310,7 @@ impl Sub for Fraction {
     type Output = Fraction;
     #[inline]
     fn sub(self, other: Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den - other.num * self.den,
-            self.den * other.den,
-        )
+        frac_sub(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -321,10 +318,7 @@ impl Sub<&Fraction> for Fraction {
     type Output = Fraction;
     #[inline]
     fn sub(self, other: &Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den - other.num * self.den,
-            self.den * other.den,
-        )
+        frac_sub(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -332,10 +326,7 @@ impl Sub<Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn sub(self, other: Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den - other.num * self.den,
-            self.den * other.den,
-        )
+        frac_sub(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -343,18 +334,53 @@ impl Sub<&Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn sub(self, other: &Fraction) -> Fraction {
-        Fraction::new(
-            self.num * other.den - other.num * self.den,
-            self.den * other.den,
-        )
+        frac_sub(self.num, self.den, other.num, other.den)
     }
+}
+
+#[inline]
+fn frac_mul(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
+    if a_den == 1 && b_den == 1 {
+        return Fraction {
+            num: a_num * b_num,
+            den: 1,
+        };
+    }
+    // One denominator is 1: result denominator equals the other.
+    if a_den == 1 {
+        return Fraction::new(a_num * b_num, b_den);
+    }
+    if b_den == 1 {
+        return Fraction::new(a_num * b_num, a_den);
+    }
+    Fraction::new(a_num * b_num, a_den * b_den)
+}
+
+#[inline]
+fn frac_div(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
+    assert!(b_num != 0, "Division by zero fraction");
+    // a/1 ÷ b/1 = a/b — Fraction::new still reduces since a/b may not be in
+    // lowest terms.
+    if a_den == 1 && b_den == 1 {
+        return Fraction::new(a_num, b_num);
+    }
+    // One denominator is 1.
+    if b_den == 1 {
+        // (a/d) / b = a / (d*b)
+        return Fraction::new(a_num, a_den * b_num);
+    }
+    if a_den == 1 {
+        // a / (b/d) = a*d / b
+        return Fraction::new(a_num * b_den, b_num);
+    }
+    Fraction::new(a_num * b_den, a_den * b_num)
 }
 
 impl Mul for Fraction {
     type Output = Fraction;
     #[inline]
     fn mul(self, other: Fraction) -> Fraction {
-        Fraction::new(self.num * other.num, self.den * other.den)
+        frac_mul(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -362,7 +388,7 @@ impl Mul<&Fraction> for Fraction {
     type Output = Fraction;
     #[inline]
     fn mul(self, other: &Fraction) -> Fraction {
-        Fraction::new(self.num * other.num, self.den * other.den)
+        frac_mul(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -370,7 +396,7 @@ impl Mul<Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn mul(self, other: Fraction) -> Fraction {
-        Fraction::new(self.num * other.num, self.den * other.den)
+        frac_mul(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -378,7 +404,7 @@ impl Mul<&Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn mul(self, other: &Fraction) -> Fraction {
-        Fraction::new(self.num * other.num, self.den * other.den)
+        frac_mul(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -386,8 +412,7 @@ impl Div for Fraction {
     type Output = Fraction;
     #[inline]
     fn div(self, other: Fraction) -> Fraction {
-        assert!(other.num != 0, "Division by zero fraction");
-        Fraction::new(self.num * other.den, self.den * other.num)
+        frac_div(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -395,8 +420,7 @@ impl Div<&Fraction> for Fraction {
     type Output = Fraction;
     #[inline]
     fn div(self, other: &Fraction) -> Fraction {
-        assert!(other.num != 0, "Division by zero fraction");
-        Fraction::new(self.num * other.den, self.den * other.num)
+        frac_div(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -404,8 +428,7 @@ impl Div<Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn div(self, other: Fraction) -> Fraction {
-        assert!(other.num != 0, "Division by zero fraction");
-        Fraction::new(self.num * other.den, self.den * other.num)
+        frac_div(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -413,30 +436,7 @@ impl Div<&Fraction> for &Fraction {
     type Output = Fraction;
     #[inline]
     fn div(self, other: &Fraction) -> Fraction {
-        assert!(other.num != 0, "Division by zero fraction");
-        Fraction::new(self.num * other.den, self.den * other.num)
-    }
-}
-
-impl Neg for Fraction {
-    type Output = Fraction;
-    #[inline]
-    fn neg(self) -> Fraction {
-        Fraction {
-            num: -self.num,
-            den: self.den,
-        }
-    }
-}
-
-impl Neg for &Fraction {
-    type Output = Fraction;
-    #[inline]
-    fn neg(self) -> Fraction {
-        Fraction {
-            num: -self.num,
-            den: self.den,
-        }
+        frac_div(self.num, self.den, other.num, other.den)
     }
 }
 
@@ -466,13 +466,6 @@ mod tests {
     fn test_next_sam() {
         assert_eq!(Fraction::new(5, 3).next_sam(), Fraction::from_integer(2));
         assert_eq!(Fraction::new(0, 1).next_sam(), Fraction::from_integer(1));
-    }
-
-    #[test]
-    fn test_cycle_pos() {
-        assert_eq!(Fraction::new(5, 3).cycle_pos(), Fraction::new(2, 3));
-        assert_eq!(Fraction::new(7, 4).cycle_pos(), Fraction::new(3, 4));
-        assert_eq!(Fraction::new(3, 1).cycle_pos(), Fraction::from_integer(0));
     }
 
     #[test]
@@ -515,13 +508,10 @@ mod tests {
     }
 
     #[test]
-    fn test_floor_ceil() {
+    fn test_floor() {
         assert_eq!(Fraction::new(5, 3).floor(), Fraction::from_integer(1));
-        assert_eq!(Fraction::new(5, 3).ceil(), Fraction::from_integer(2));
         assert_eq!(Fraction::new(6, 3).floor(), Fraction::from_integer(2));
-        assert_eq!(Fraction::new(6, 3).ceil(), Fraction::from_integer(2));
         assert_eq!(Fraction::new(-1, 3).floor(), Fraction::from_integer(-1));
-        assert_eq!(Fraction::new(-1, 3).ceil(), Fraction::from_integer(0));
     }
 
     #[test]

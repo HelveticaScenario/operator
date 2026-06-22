@@ -5,11 +5,15 @@
 import { test, expect } from '../fixtures';
 
 test.describe('engine health modal', () => {
-    test('engine health modal opens and displays content', async ({ window }) => {
+    test('engine health modal opens and displays content', async ({
+        window,
+    }) => {
         await window.waitForTimeout(2000);
 
         // Open via test API
-        await window.evaluate(() => (window as any).__TEST_API__.openEngineHealth());
+        await window.evaluate(() =>
+            (window as any).__TEST_API__.openEngineHealth(),
+        );
         await window.waitForTimeout(500);
 
         const panel = window.locator('.engine-health-panel');
@@ -23,7 +27,9 @@ test.describe('engine health modal', () => {
     test('engine health modal closes on Escape', async ({ window }) => {
         await window.waitForTimeout(2000);
 
-        await window.evaluate(() => (window as any).__TEST_API__.openEngineHealth());
+        await window.evaluate(() =>
+            (window as any).__TEST_API__.openEngineHealth(),
+        );
         await window.waitForTimeout(500);
 
         const panel = window.locator('.engine-health-panel');

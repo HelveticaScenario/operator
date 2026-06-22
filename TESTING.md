@@ -19,7 +19,7 @@ This project is an Electron app (React/TypeScript renderer) + Rust DSP engine wi
     - `src/main/__tests__/patchSimilarityRemap.test.ts` — patch similarity remapping
     - `src/renderer/__tests__/interpolationMapping.test.ts` — interpolation mapping
     - `src/main/dsl/__tests__/executor.test.ts` — DSL → PatchGraph pipeline (exercises full DSL without Electron)
-    - `crates/modular/__test__/napi.test.ts` — N-API integration tests (getSchemas, validatePatchGraph, deriveChannelCount, getMiniLeafSpans, getPatternPolyphony)
+    - `crates/modular/__test__/napi.test.ts` — N-API integration tests (getSchemas, validatePatchGraph, deriveChannelCount)
 - **When to run:** After DSL/factory changes, schema changes, or N-API binding changes
 
 ### Layer 3: Playwright E2E Tests
