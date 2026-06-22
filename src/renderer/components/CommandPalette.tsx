@@ -8,7 +8,7 @@
  *
  * See `~/.claude/plans/operator-is-at-its-goofy-mist.md` Phase 2.1a.
  */
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { Command } from 'cmdk';
 import type { editor } from 'monaco-editor';
 
@@ -46,6 +46,8 @@ export function CommandPalette({
         return buildPaletteItems(editor);
     }, [open, editor]);
 
+    const listRef = useRef<HTMLDivElement>(null);
+
     return (
         <Command.Dialog
             open={open}
@@ -58,8 +60,14 @@ export function CommandPalette({
                 placeholder="Type a command…"
                 className="command-palette-input"
                 autoFocus
+                onValueChange={() => {
+                    // Editing the query re-ranks the list; jump back to the
+                    // top so the best match is visible (cmdk keeps the prior
+                    // scroll position otherwise).
+                    listRef.current?.scrollTo({ top: 0 });
+                }}
             />
-            <Command.List className="command-palette-list">
+            <Command.List ref={listRef} className="command-palette-list">
                 <Command.Empty className="command-palette-empty">
                     No matching commands.
                 </Command.Empty>

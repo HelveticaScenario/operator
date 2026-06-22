@@ -24,6 +24,21 @@
     outline: none;
 }
 
+/*
+ * cmdk nests the input and list inside a [cmdk-root] wrapper, so the flex
+ * column must live there (not just on the dialog content) for the list to get
+ * a bounded height and scroll. Without this the wrapper grows to full content
+ * height and is clipped, so the list never scrolls and the input is not a
+ * stable header.
+ */
+.command-palette-content [cmdk-root] {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
 .command-palette-input {
     background: transparent;
     border: none;
@@ -34,6 +49,8 @@
     padding: 12px 16px;
     outline: none;
     width: 100%;
+    /* Fixed header: never shrinks or scrolls with the list below. */
+    flex: 0 0 auto;
 }
 
 .command-palette-input::placeholder {
