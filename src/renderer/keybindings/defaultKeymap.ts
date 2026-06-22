@@ -20,9 +20,13 @@ export type DefaultKeybinding = {
 };
 
 export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
-    { key: '$mod+Enter', command: 'operator.updatePatch' },
-    { key: '$mod+Shift+Enter', command: 'operator.updatePatchNextBeat' },
-    { key: '$mod+.', command: 'operator.stop' },
+    // Transport commands use physical Control on every platform (Ctrl+Enter,
+    // not Cmd+Enter on macOS) — the long-standing Operator convention, and it
+    // leaves Cmd+Enter free for Monaco's "insert line below". File commands
+    // below use $mod (Cmd on macOS) per platform convention.
+    { key: 'Control+Enter', command: 'operator.updatePatch' },
+    { key: 'Control+Shift+Enter', command: 'operator.updatePatchNextBeat' },
+    { key: 'Control+.', command: 'operator.stop' },
     { key: '$mod+n', command: 'operator.newFile' },
     { key: '$mod+o', command: 'operator.openWorkspace' },
     { key: '$mod+s', command: 'operator.save' },

@@ -2163,7 +2163,7 @@ const createMenu = (): void => {
                 {
                     accelerator: menuAccelerator(
                         'operator.updatePatch',
-                        'CmdOrCtrl+Enter',
+                        'Ctrl+Enter',
                     ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
@@ -2177,7 +2177,7 @@ const createMenu = (): void => {
                 {
                     accelerator: menuAccelerator(
                         'operator.updatePatchNextBeat',
-                        'CmdOrCtrl+Shift+Enter',
+                        'Ctrl+Shift+Enter',
                     ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
@@ -2191,7 +2191,7 @@ const createMenu = (): void => {
                     label: 'Update Patch (Next Beat)',
                 },
                 {
-                    accelerator: menuAccelerator('operator.stop', 'CmdOrCtrl+.'),
+                    accelerator: menuAccelerator('operator.stop', 'Ctrl+.'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
