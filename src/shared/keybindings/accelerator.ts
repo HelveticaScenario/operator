@@ -98,3 +98,59 @@ export function toElectronAccelerator(binding: string): string | null {
     parts.push(key);
     return parts.join('+');
 }
+
+// tinykeys modifier token -> display symbol, in macOS display order (⌃⌥⇧⌘).
+const MOD_TO_SYMBOL: Array<[string, string]> = [
+    ['Control', '⌃'],
+    ['Alt', '⌥'],
+    ['Shift', '⇧'],
+    ['Meta', '⌘'],
+];
+
+// Friendly chip labels for named keys; anything else falls back to electronKey.
+const KEY_TO_SYMBOL: Record<string, string> = {
+    ArrowUp: '↑',
+    ArrowDown: '↓',
+    ArrowLeft: '←',
+    ArrowRight: '→',
+    Enter: '↵',
+    Escape: '⎋',
+    Backspace: '⌫',
+    Delete: '⌦',
+    Tab: '⇥',
+    Space: '␣',
+};
+
+function chipKey(token: string): string {
+    return KEY_TO_SYMBOL[token] ?? electronKey(token) ?? token;
+}
+
+/**
+ * Split a tinykeys binding into display chip groups — one group per chord
+ * press, each group an ordered list of key chips. e.g. `Meta+k Meta+i` ->
+ * `[['⌘','K'], ['⌘','I']]`. Unlike `toElectronAccelerator`, this handles chord
+ * sequences, so the palette can render multi-press bindings as chips.
+ */
+export function toKeyChipGroups(binding: string): string[][] {
+    return binding
+        .trim()
+        .split(/\s+/)
+        .filter((press) => press.length > 0)
+        .map((press) => {
+            const tokens = press.split('+').filter((t) => t.length > 0);
+            if (tokens.length === 0) {
+                return [];
+            }
+            const keyToken = tokens[tokens.length - 1];
+            const mods = new Set(tokens.slice(0, -1));
+            const chips: string[] = [];
+            for (const [mod, symbol] of MOD_TO_SYMBOL) {
+                if (mods.has(mod)) {
+                    chips.push(symbol);
+                }
+            }
+            chips.push(chipKey(keyToken));
+            return chips;
+        })
+        .filter((group) => group.length > 0);
+}

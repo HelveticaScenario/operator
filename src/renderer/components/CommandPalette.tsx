@@ -13,6 +13,7 @@ import { Command } from 'cmdk';
 import type { editor } from 'monaco-editor';
 
 import { buildPaletteItems, type PaletteItem } from '../keybindings/paletteItems';
+import { toKeyChipGroups } from '../../shared/keybindings/accelerator';
 import './CommandPalette.css';
 
 export interface CommandPaletteProps {
@@ -31,25 +32,6 @@ function itemValue(item: PaletteItem): string {
     return `${item.category ?? ''} ${item.label} ${item.id}`;
 }
 
-// Display symbols for accelerator tokens, rendered as individual key chips.
-const KEY_SYMBOLS: Record<string, string> = {
-    Cmd: '⌘',
-    Command: '⌘',
-    Ctrl: '⌃',
-    Control: '⌃',
-    Alt: '⌥',
-    Option: '⌥',
-    Shift: '⇧',
-    Enter: '↵',
-    Return: '↵',
-};
-
-/** Split an Electron accelerator (`Cmd+Shift+P`) into display key chips. */
-function keybindingChips(accelerator: string): string[] {
-    return accelerator
-        .split('+')
-        .map((token) => KEY_SYMBOLS[token] ?? token);
-}
 
 export function CommandPalette({
     open,
@@ -115,14 +97,21 @@ export function CommandPalette({
                         </span>
                         {item.keybinding && (
                             <span className="command-palette-item-keys">
-                                {keybindingChips(item.keybinding).map(
-                                    (key, i) => (
-                                        <kbd
-                                            key={i}
-                                            className="command-palette-key"
+                                {toKeyChipGroups(item.keybinding).map(
+                                    (group, gi) => (
+                                        <span
+                                            key={gi}
+                                            className="command-palette-key-group"
                                         >
-                                            {key}
-                                        </kbd>
+                                            {group.map((key, ki) => (
+                                                <kbd
+                                                    key={ki}
+                                                    className="command-palette-key"
+                                                >
+                                                    {key}
+                                                </kbd>
+                                            ))}
+                                        </span>
                                     ),
                                 )}
                             </span>

@@ -2,7 +2,7 @@
  * Tests for tinykeys binding -> Electron accelerator formatting.
  */
 import { describe, expect, test } from 'vitest';
-import { toElectronAccelerator } from './accelerator';
+import { toElectronAccelerator, toKeyChipGroups } from './accelerator';
 
 describe('toElectronAccelerator', () => {
     test('maps modifiers and plain keys', () => {
@@ -37,5 +37,33 @@ describe('toElectronAccelerator', () => {
 
     test('returns null for empty input', () => {
         expect(toElectronAccelerator('')).toBeNull();
+    });
+});
+
+describe('toKeyChipGroups', () => {
+    test('single combo -> one group of chips (macOS symbols, ⌃⌥⇧⌘ order)', () => {
+        expect(toKeyChipGroups('Meta+Enter')).toEqual([['⌘', '↵']]);
+        expect(toKeyChipGroups('Shift+Meta+p')).toEqual([['⇧', '⌘', 'P']]);
+        expect(toKeyChipGroups('Control+g')).toEqual([['⌃', 'G']]);
+        expect(toKeyChipGroups('Alt+Shift+(KeyF)')).toEqual([['⌥', '⇧', 'F']]);
+    });
+
+    test('chord sequence -> one group per press', () => {
+        expect(toKeyChipGroups('Meta+k Meta+i')).toEqual([
+            ['⌘', 'K'],
+            ['⌘', 'I'],
+        ]);
+        expect(toKeyChipGroups('Meta+k Meta+s')).toEqual([
+            ['⌘', 'K'],
+            ['⌘', 'S'],
+        ]);
+    });
+
+    test('named keys and code forms decode to readable chips', () => {
+        expect(toKeyChipGroups('Meta+ArrowRight')).toEqual([['⌘', '→']]);
+        expect(toKeyChipGroups('Shift+Meta+(Digit0)')).toEqual([
+            ['⇧', '⌘', '0'],
+        ]);
+        expect(toKeyChipGroups('F12')).toEqual([['F12']]);
     });
 });

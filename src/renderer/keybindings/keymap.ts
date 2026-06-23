@@ -190,7 +190,7 @@ export function installKeymap(
     entries: readonly ResolvedKeybinding[],
     target: Window | HTMLElement = window,
 ): InstallKeymapResult {
-    commandAccelerators = buildAcceleratorMap(entries);
+    commandBindings = buildCommandBindings(entries);
     const groups = groupByKey(entries);
     const map = buildBindingMap(groups);
     // Capture phase: Monaco's editor keybindings listen on the editor DOM node
@@ -203,34 +203,48 @@ export function installKeymap(
     return { entries: [...entries], dispose };
 }
 
-// Command id -> Electron accelerator for the bound key, rebuilt on each
-// install. The single source of truth for the shortcut shown next to a
-// command in both the editor context menu and the application menu.
-let commandAccelerators: Record<string, string> = {};
+// Command id -> resolved tinykeys binding (e.g. `Meta+Enter`, `Meta+k Meta+i`),
+// rebuilt on each install. Single source of truth for the shortcut shown next
+// to a command. The raw binding (chord-capable) drives the palette's key
+// chips; the application menu derives a single-combo Electron accelerator.
+let commandBindings: Record<string, string> = {};
 
-function buildAcceleratorMap(
+function buildCommandBindings(
     entries: readonly ResolvedKeybinding[],
 ): Record<string, string> {
     const map: Record<string, string> = {};
+    // Last binding for a command wins (user overrides come after defaults).
     for (const entry of entries) {
-        const accel = toElectronAccelerator(entry.key);
-        // Last formattable binding for a command wins (user overrides come
-        // after defaults); chord sequences format to null and are skipped.
-        if (accel) {
-            map[entry.command] = accel;
-        }
+        map[entry.command] = entry.key;
     }
     return map;
 }
 
-/** Electron accelerator for a command's current binding, if any. */
-export function getCommandAccelerator(commandId: string): string | undefined {
-    return commandAccelerators[commandId];
+/** Resolved tinykeys binding for a command, if any (chord-capable). */
+export function getCommandBinding(commandId: string): string | undefined {
+    return commandBindings[commandId];
 }
 
-/** Snapshot of every command's accelerator (for the application menu). */
+/**
+ * Electron accelerator for a command's binding, if it is a single combo
+ * (Electron accelerators cannot express chord sequences) — used by the
+ * application menu.
+ */
+export function getCommandAccelerator(commandId: string): string | undefined {
+    const binding = commandBindings[commandId];
+    return binding ? (toElectronAccelerator(binding) ?? undefined) : undefined;
+}
+
+/** Snapshot of every command's Electron accelerator (for the application menu). */
 export function getCommandAccelerators(): Record<string, string> {
-    return { ...commandAccelerators };
+    const out: Record<string, string> = {};
+    for (const [id, binding] of Object.entries(commandBindings)) {
+        const accel = toElectronAccelerator(binding);
+        if (accel) {
+            out[id] = accel;
+        }
+    }
+    return out;
 }
 
 /**
@@ -253,7 +267,7 @@ export async function loadAndInstallKeymap(
             };
         }
     ).electronAPI;
-    api?.menu?.setAccelerators?.(commandAccelerators);
+    api?.menu?.setAccelerators?.(getCommandAccelerators());
     return result;
 }
 

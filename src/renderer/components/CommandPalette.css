@@ -99,12 +99,19 @@
     color: var(--text-muted);
 }
 
-/* Bound keybinding, right-aligned, rendered as individual key chips. */
+/* Bound keybinding, right-aligned. Chord presses are separate groups, with a
+ * wider gap between presses than between keys within a press. */
 .command-palette-item-keys {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: 8px;
     flex-shrink: 0;
+}
+
+.command-palette-key-group {
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
 .command-palette-key {
