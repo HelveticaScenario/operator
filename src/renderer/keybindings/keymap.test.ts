@@ -9,11 +9,7 @@ import { registerCommand, unregisterCommand } from './commands';
 import { setActiveEditor } from './dispatch';
 import type { editor } from 'monaco-editor';
 import type { DefaultKeybinding } from './defaultKeymap';
-import {
-    installKeymap,
-    mergeKeymap,
-    setWhenEvaluator,
-} from './keymap';
+import { installKeymap, mergeKeymap, setWhenEvaluator } from './keymap';
 
 const SAMPLE_DEFAULTS: DefaultKeybinding[] = [
     { key: '$mod+Enter', command: 'operator.updatePatch' },
@@ -90,7 +86,11 @@ describe('mergeKeymap', () => {
 
     test('an empty key with a mac override binds only on darwin', () => {
         const defaults: DefaultKeybinding[] = [
-            { key: '', mac: 'ctrl+t', command: 'editor.action.transposeLetters' },
+            {
+                key: '',
+                mac: 'ctrl+t',
+                command: 'editor.action.transposeLetters',
+            },
         ];
         expect(mergeKeymap(defaults, [], 'darwin')).toEqual([
             { key: 'Control+t', command: 'editor.action.transposeLetters' },
@@ -319,6 +319,70 @@ describe('installKeymap', () => {
         // Nothing dispatched it, so the keymap leaves the event alone for
         // other listeners rather than preventing its default.
         expect(event.defaultPrevented).toBe(false);
+        dispose();
+    });
+
+    test('a completed chord does not also fire the single-press binding for its terminal press', () => {
+        const single = vi.fn();
+        const chord = vi.fn();
+        registerCommand('test.keymap.single', single, { label: 'Single' });
+        registerCommand('test.keymap.chord', chord, { label: 'Chord' });
+        const { dispose } = installKeymap(
+            [
+                { key: 'Meta+,', command: 'test.keymap.single' },
+                { key: 'Meta+k Meta+,', command: 'test.keymap.chord' },
+            ],
+            target,
+        );
+
+        // Leader, then the terminal press that completes the chord. tinykeys
+        // would otherwise fire both the chord and the standalone `Meta+,`.
+        target.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: 'k',
+                metaKey: true,
+                bubbles: true,
+            }),
+        );
+        target.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: ',',
+                metaKey: true,
+                bubbles: true,
+            }),
+        );
+
+        expect(chord).toHaveBeenCalledTimes(1);
+        expect(single).not.toHaveBeenCalled();
+
+        unregisterCommand('test.keymap.single');
+        unregisterCommand('test.keymap.chord');
+        dispose();
+    });
+
+    test('a standalone press still fires when not completing a chord', () => {
+        const single = vi.fn();
+        registerCommand('test.keymap.single', single, { label: 'Single' });
+        const { dispose } = installKeymap(
+            [
+                { key: 'Meta+,', command: 'test.keymap.single' },
+                { key: 'Meta+k Meta+,', command: 'test.keymap.fire' },
+            ],
+            target,
+        );
+
+        // `Meta+,` pressed on its own (no preceding leader) must dispatch.
+        target.dispatchEvent(
+            new KeyboardEvent('keydown', {
+                key: ',',
+                metaKey: true,
+                bubbles: true,
+            }),
+        );
+
+        expect(single).toHaveBeenCalledTimes(1);
+
+        unregisterCommand('test.keymap.single');
         dispose();
     });
 });

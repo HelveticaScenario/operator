@@ -1730,10 +1730,7 @@ function loadUserKeybindings(): KeybindingOverride[] {
             allowTrailingComma: true,
         });
         if (errors.length > 0) {
-            console.error(
-                'keybindings.json has JSON syntax errors:',
-                errors,
-            );
+            console.error('keybindings.json has JSON syntax errors:', errors);
         }
         if (!Array.isArray(parsed)) {
             console.error('keybindings.json must be a JSON array; ignoring.');
@@ -1888,6 +1885,26 @@ function menuAccelerator(
 }
 
 /**
+ * Accelerator fields for an application-menu item. The renderer keymap
+ * (tinykeys) is the single dispatcher for every shortcut, so the menu displays
+ * the resolved accelerator but does NOT register it. Registering would make the
+ * accelerator fire on Windows/Linux *in addition to* the keydown reaching the
+ * renderer, double-dispatching the command (e.g. two buffers per Ctrl+N).
+ */
+function menuShortcut(
+    commandId: string,
+    fallback: string,
+): Pick<
+    Electron.MenuItemConstructorOptions,
+    'accelerator' | 'registerAccelerator'
+> {
+    return {
+        accelerator: menuAccelerator(commandId, fallback),
+        registerAccelerator: false,
+    };
+}
+
+/**
  * Create the application menu
  */
 const createMenu = (): void => {
@@ -1910,10 +1927,7 @@ const createMenu = (): void => {
                           },
                           { type: 'separator' },
                           {
-                              accelerator: menuAccelerator(
-                                  'operator.openSettings',
-                                  'Cmd+,',
-                              ),
+                              ...menuShortcut('operator.openSettings', 'Cmd+,'),
                               click: () => {
                                   if (mainWindow && !mainWindow.isDestroyed()) {
                                       mainWindow.webContents.send(
@@ -1940,10 +1954,7 @@ const createMenu = (): void => {
             label: 'File',
             submenu: [
                 {
-                    accelerator: menuAccelerator(
-                        'operator.newFile',
-                        'CmdOrCtrl+N',
-                    ),
+                    ...menuShortcut('operator.newFile', 'CmdOrCtrl+N'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1954,10 +1965,7 @@ const createMenu = (): void => {
                     label: 'New File',
                 },
                 {
-                    accelerator: menuAccelerator(
-                        'operator.openWorkspace',
-                        'CmdOrCtrl+O',
-                    ),
+                    ...menuShortcut('operator.openWorkspace', 'CmdOrCtrl+O'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1969,7 +1977,7 @@ const createMenu = (): void => {
                 },
                 { type: 'separator' },
                 {
-                    accelerator: menuAccelerator('operator.save', 'CmdOrCtrl+S'),
+                    ...menuShortcut('operator.save', 'CmdOrCtrl+S'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1980,10 +1988,7 @@ const createMenu = (): void => {
                     label: 'Save',
                 },
                 {
-                    accelerator: menuAccelerator(
-                        'operator.closeBuffer',
-                        'CmdOrCtrl+W',
-                    ),
+                    ...menuShortcut('operator.closeBuffer', 'CmdOrCtrl+W'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1998,7 +2003,7 @@ const createMenu = (): void => {
                     ? []
                     : ([
                           {
-                              accelerator: menuAccelerator(
+                              ...menuShortcut(
                                   'operator.openSettings',
                                   'Ctrl+,',
                               ),
@@ -2079,10 +2084,7 @@ const createMenu = (): void => {
             label: 'Run',
             submenu: [
                 {
-                    accelerator: menuAccelerator(
-                        'operator.updatePatch',
-                        'Ctrl+Enter',
-                    ),
+                    ...menuShortcut('operator.updatePatch', 'Ctrl+Enter'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -2093,7 +2095,7 @@ const createMenu = (): void => {
                     label: 'Update Patch',
                 },
                 {
-                    accelerator: menuAccelerator(
+                    ...menuShortcut(
                         'operator.updatePatchNextBeat',
                         'Ctrl+Shift+Enter',
                     ),
@@ -2109,7 +2111,7 @@ const createMenu = (): void => {
                     label: 'Update Patch (Next Beat)',
                 },
                 {
-                    accelerator: menuAccelerator('operator.stop', 'Ctrl+.'),
+                    ...menuShortcut('operator.stop', 'Ctrl+.'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(

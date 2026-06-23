@@ -13,11 +13,7 @@ import { tinykeys, parseKeybinding, matchKeyBindingPress } from 'tinykeys';
 import type { KeybindingOverride } from '../../shared/ipcTypes';
 import { dispatchCommand, getActiveEditor } from './dispatch';
 import { DEFAULT_KEYMAP, type DefaultKeybinding } from './defaultKeymap';
-import {
-    normalizeOverride,
-    toTinykeys,
-    type Platform,
-} from './vscodeKeys';
+import { normalizeOverride, toTinykeys, type Platform } from './vscodeKeys';
 import { toElectronAccelerator } from '../../shared/keybindings/accelerator';
 
 export type ResolvedKeybinding = {
@@ -128,17 +124,40 @@ function groupByKey(
     return groups;
 }
 
+// The keydown for which a chord (multi-press) binding has already dispatched.
+// tinykeys fires every sequence whose current press matches on a given keydown,
+// so a completed chord and a single-press binding equal to the chord's terminal
+// press (e.g. `$mod+k $mod+,` folding and `$mod+,` opening Settings) both run.
+// preventDefault/stopPropagation inside one handler does not stop the others, so
+// the single-press handler consults this — set by the chord that fired on the
+// same event object — to decline the duplicate dispatch.
+let chordHandledEvent: KeyboardEvent | null = null;
+
 /**
  * Build the `tinykeys` binding map from grouped entries. Each handler walks
  * its candidates and fires the first whose when-clause passes; if none pass
  * the event is left alone so other listeners (e.g. Monaco) can handle it.
+ *
+ * Chord (multi-press) bindings are registered before single-press bindings so
+ * that, within tinykeys' per-keydown sweep, a completed chord runs first and
+ * marks the event handled before the single-press binding for the chord's
+ * terminal press gets its turn.
  */
 function buildBindingMap(
     groups: Map<string, ResolvedKeybinding[]>,
 ): KeyBindingMap {
     const map: KeyBindingMap = {};
-    for (const [key, candidates] of groups) {
+    const chordsFirst = [...groups].sort(
+        ([a], [b]) => Number(b.includes(' ')) - Number(a.includes(' ')),
+    );
+    for (const [key, candidates] of chordsFirst) {
+        const isChord = key.includes(' ');
         map[key] = (event) => {
+            if (!isChord && chordHandledEvent === event) {
+                // A chord already dispatched on this keystroke; don't also fire
+                // the single-press binding equal to the chord's terminal press.
+                return;
+            }
             for (const candidate of candidates) {
                 if (!whenEvaluator(candidate.when)) {
                     continue;
@@ -151,9 +170,13 @@ function buildBindingMap(
                     // text focus), so the event falls through to other
                     // listeners — keystrokes are never swallowed for an editor
                     // command while focus is elsewhere.
-                    handled = dispatchCommand(candidate.command, candidate.args, {
-                        requireEditorFocus: true,
-                    });
+                    handled = dispatchCommand(
+                        candidate.command,
+                        candidate.args,
+                        {
+                            requireEditorFocus: true,
+                        },
+                    );
                 } catch (error) {
                     console.error(
                         `[keymap] error executing command "${candidate.command}":`,
@@ -163,6 +186,9 @@ function buildBindingMap(
                 }
                 if (!handled) {
                     continue;
+                }
+                if (isChord) {
+                    chordHandledEvent = event;
                 }
                 event.preventDefault();
                 event.stopPropagation();
@@ -318,7 +344,9 @@ export async function loadAndInstallKeymap(
     const api = (
         window as unknown as {
             electronAPI?: {
-                menu?: { setAccelerators?: (m: Record<string, string>) => void };
+                menu?: {
+                    setAccelerators?: (m: Record<string, string>) => void;
+                };
             };
         }
     ).electronAPI;
