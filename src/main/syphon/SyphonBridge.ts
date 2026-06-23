@@ -110,12 +110,12 @@ export class SyphonBridge {
     /** Path to the bundled helper binary, dev vs packaged. */
     private helperPath(): string {
         if (app.isPackaged) {
-            // Contents/MacOS/operator-syphon, alongside the Electron binary;
-            // Syphon.framework sits at Contents/Frameworks (resolved via @rpath).
-            return path.join(
-                path.dirname(app.getPath('exe')),
-                'operator-syphon',
-            );
+            // Contents/Resources/operator-syphon (NOT Contents/MacOS — see the
+            // staging hook in forge.config.ts for why a second Mach-O beside the
+            // main executable breaks codesign). Syphon.framework sits at
+            // Contents/Frameworks, resolved via @rpath = @executable_path/../Frameworks,
+            // which points there from Resources just as it did from MacOS.
+            return path.join(process.resourcesPath, 'operator-syphon');
         }
         // Dev: the dist/ mirror produced by scripts/build-syphon-bridge.mjs.
         // __dirname is <root>/.vite/build in the forge+vite dev build.

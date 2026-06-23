@@ -34,6 +34,12 @@ const config: ForgeConfig = {
         },
         osxSign: {
             identity: 'Developer ID Application: Daniel Lewis (HA98TTLCR7)',
+            // Fail the build if any file fails to codesign. @electron/packager
+            // defaults this to true, which silently downgrades a signing failure
+            // to a warning and ships an unsigned app on to notarization, where it
+            // surfaces as a confusing "code has no resources" rejection instead of
+            // the real codesign error. Fail loudly at the sign step instead.
+            continueOnError: false,
             optionsForFile: (filePath: string) => {
                 // The headless Syphon helper and its framework need none of the
                 // Electron app's entitlements (JIT, unsigned-executable memory,
@@ -41,7 +47,7 @@ const config: ForgeConfig = {
                 // entitlement — so sign them least-privilege under the hardened
                 // runtime instead of inheriting the app's broad set.
                 const isSyphon =
-                    filePath.endsWith('/MacOS/operator-syphon') ||
+                    filePath.endsWith('/Resources/operator-syphon') ||
                     filePath.includes('/Frameworks/Syphon.framework');
                 const entitlements = isSyphon
                     ? 'native/syphon-bridge/syphon-entitlements.plist'
@@ -136,6 +142,17 @@ const config: ForgeConfig = {
 
             // macOS: stage the headless Syphon companion into the app bundle.
             // buildPath is Contents/Resources/app, so Contents is two levels up.
+            // The helper goes in Contents/Resources (NOT Contents/MacOS): a second
+            // Mach-O sitting beside the main executable is treated as bundle code
+            // that codesign requires already-signed when it seals the main binary,
+            // and @electron/osx-sign signs same-depth files in directory order — so
+            // whenever it reached Operator before operator-syphon the seal failed
+            // ("code object is not signed at all"), the failure was swallowed by
+            // packager's continueOnError, and notarization then rejected the unsigned
+            // app. In Resources the helper is sealed as a resource and signed as its
+            // own nested code, with no ordering constraint. @rpath stays
+            // @executable_path/../Frameworks, which resolves to Contents/Frameworks
+            // from Resources just as it did from MacOS.
             // @electron/osx-sign runs after this hook and signs the helper +
             // Syphon.framework (inside-out, hardened runtime, our Developer ID),
             // so library validation passes without extra entitlements.
@@ -164,7 +181,7 @@ const config: ForgeConfig = {
                     // framework's Versions structure.
                     const helperDest = path.join(
                         contents,
-                        'MacOS',
+                        'Resources',
                         'operator-syphon',
                     );
                     execFileSync('ditto', [helperSrc, helperDest]);
