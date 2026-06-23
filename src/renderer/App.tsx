@@ -15,7 +15,6 @@ import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
 import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
 import './App.css';
-// Import type { editor } from 'monaco-editor';
 import { editor } from 'monaco-editor';
 import { getErrorMessage } from './utils/errorUtils';
 import { FileExplorer } from './components/FileExplorer';
