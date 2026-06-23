@@ -35,12 +35,20 @@ jobs:
               if: matrix.os == 'macos-latest'
               run: rustup target add aarch64-apple-darwin
 
-            # Building the Syphon framework compiles a Metal shader, which on
-            # Xcode 26+ needs the separately-installed Metal Toolchain. Without it
-            # `yarn build-syphon-bridge --require` aborts the release build.
+            # Building the Syphon framework compiles a Metal shader. The Metal
+            # compiler is bundled in Xcode <= 16 but split into a separately
+            # downloadable component in Xcode 26+ (where -downloadComponent also
+            # first appears). Only fetch it when `metal` is actually missing, so
+            # this step is a no-op on the current runner image and starts working
+            # automatically once macos-latest moves to Xcode 26.
             - name: Install Metal Toolchain
               if: matrix.os == 'macos-latest'
-              run: xcodebuild -downloadComponent MetalToolchain
+              run: |
+                  if xcrun --find metal >/dev/null 2>&1; then
+                      echo "Metal toolchain already present; skipping download."
+                  else
+                      xcodebuild -downloadComponent MetalToolchain
+                  fi
 
             - name: Install dependencies
               run: yarn install --frozen-lockfile
