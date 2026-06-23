@@ -20,6 +20,7 @@ import {
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
 import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
+import { registerKeybindingsDiagnostics } from './monaco/keybindingsDiagnostics';
 import {
     bindEditorContextConstants,
     bindEditorFocus,
@@ -339,13 +340,18 @@ export function MonacoPatchEditor({
     }, [monaco]);
 
     // Autocomplete command ids and `when` context keys in the keybindings.json
-    // buffer (provider scopes itself to that model).
+    // buffer, and flag unsupported `when` operators as warnings. Both scope
+    // themselves to that model.
     useEffect(() => {
         if (!monaco) {
             return;
         }
         const provider = registerKeybindingsCompletionProvider(monaco);
-        return () => provider.dispose();
+        const diagnostics = registerKeybindingsDiagnostics(monaco);
+        return () => {
+            provider.dispose();
+            diagnostics.dispose();
+        };
     }, [monaco]);
 
     // Define Monaco theme from the current app theme
