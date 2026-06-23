@@ -81,8 +81,14 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: '$mod+alt+up', command: 'editor.action.insertCursorAbove', when: 'editorTextFocus' },
     { key: 'shift+alt+i', command: 'editor.action.insertCursorAtEndOfEachLineSelected', when: 'editorTextFocus' },
     { key: '$mod+alt+down', command: 'editor.action.insertCursorBelow', when: 'editorTextFocus' },
-    { key: '$mod+enter', command: 'editor.action.insertLineAfter', when: '!editorReadonly && editorTextFocus' },
-    { key: '$mod+shift+enter', command: 'editor.action.insertLineBefore', when: '!editorReadonly && editorTextFocus' },
+    // mac-only: on Windows/Linux $mod resolves to Control, which would
+    // collapse onto the transport bindings (Ctrl+Enter = Update Patch,
+    // Ctrl+Shift+Enter = Next Beat) and shadow them while editing. On macOS
+    // these are Cmd+Enter / Cmd+Shift+Enter, distinct from the Ctrl transport
+    // keys. (On non-mac, Monaco's own Ctrl+Enter is pre-empted by the
+    // capture-phase Update Patch binding anyway.)
+    { key: '', mac: '$mod+enter', command: 'editor.action.insertLineAfter', when: '!editorReadonly && editorTextFocus' },
+    { key: '', mac: '$mod+shift+enter', command: 'editor.action.insertLineBefore', when: '!editorReadonly && editorTextFocus' },
     { key: '$mod+shift+\\', command: 'editor.action.jumpToBracket', when: 'editorTextFocus' },
     { key: '$mod+shift+f2', command: 'editor.action.linkedEditing', when: '!editorReadonly && editorHasRenameProvider && editorTextFocus' },
     { key: 'alt+f8', command: 'editor.action.marker.next', when: 'editorFocus' },
@@ -96,7 +102,9 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: 'shift+alt+o', command: 'editor.action.organizeImports', when: '!editorReadonly && textInputFocus' },
     { key: '$mod+[', command: 'editor.action.outdentLines', when: '!editorReadonly && editorTextFocus' },
     { key: '$mod+shift+f3', command: 'editor.action.previousSelectionMatchFindAction', when: 'editorFocus' },
-    { key: '$mod+.', command: 'editor.action.quickFix', when: '!editorReadonly && editorHasCodeActionsProvider && textInputFocus' },
+    // mac-only: on non-mac $mod+. resolves to Ctrl+. which is Operator's Stop
+    // transport binding; keep Stop authoritative there.
+    { key: '', mac: '$mod+.', command: 'editor.action.quickFix', when: '!editorReadonly && editorHasCodeActionsProvider && textInputFocus' },
     { key: '$mod+shift+r', mac: 'ctrl+shift+r', command: 'editor.action.refactor', when: '!editorReadonly && editorHasCodeActionsProvider && textInputFocus' },
     { key: '$mod+alt+backspace', command: 'editor.action.removeBrackets', when: 'editorTextFocus' },
     { key: '$mod+k $mod+u', command: 'editor.action.removeCommentLine', when: '!editorReadonly && editorTextFocus' },

@@ -98,6 +98,29 @@ describe('mergeKeymap', () => {
         expect(mergeKeymap(defaults, [], 'other')).toEqual([]);
     });
 
+    test('a mac-only line-insert default never shadows the Ctrl transport key off darwin', () => {
+        const defaults: DefaultKeybinding[] = [
+            { key: 'Control+Enter', command: 'operator.updatePatch' },
+            {
+                key: '',
+                mac: '$mod+enter',
+                command: 'editor.action.insertLineAfter',
+                when: '!editorReadonly && editorTextFocus',
+            },
+        ];
+        // Non-darwin: the line-insert default is dropped, so Ctrl+Enter is
+        // Update Patch only.
+        expect(
+            mergeKeymap(defaults, [], 'other').map((e) => e.command),
+        ).toEqual(['operator.updatePatch']);
+        // darwin: both bound, on distinct physical keys.
+        const mac = Object.fromEntries(
+            mergeKeymap(defaults, [], 'darwin').map((e) => [e.key, e.command]),
+        );
+        expect(mac['Control+Enter']).toBe('operator.updatePatch');
+        expect(mac['Meta+Enter']).toBe('editor.action.insertLineAfter');
+    });
+
     test('order-sensitive removal: a later -command cancels an earlier bind', () => {
         const overrides: KeybindingOverride[] = [
             { key: 'cmd+e', command: 'editor.action.showHover' },

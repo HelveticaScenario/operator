@@ -10,10 +10,10 @@
  * installs the real context-key parser; until then the default evaluator
  * treats every when-clause as true.
  */
-import type { KeyBindingMap } from 'tinykeys';
-import { tinykeys } from 'tinykeys';
+import type { KeyBindingMap, KeyBindingPress } from 'tinykeys';
+import { tinykeys, parseKeybinding, matchKeyBindingPress } from 'tinykeys';
 import type { KeybindingOverride } from '../../shared/ipcTypes';
-import { dispatchCommand } from './dispatch';
+import { dispatchCommand, getActiveEditor } from './dispatch';
 import {
     DEFAULT_KEYMAP,
     defaultKeymapAsOverrides,
@@ -197,6 +197,9 @@ export function installKeymap(
     commandBindings = buildCommandBindings(entries);
     const groups = groupByKey(entries);
     const map = buildBindingMap(groups);
+    // Stop chord leaders (e.g. the Cmd+K of "Cmd+K Cmd+C") from reaching Monaco
+    // so it never enters a hanging chord state when Operator drives the chord.
+    const disposeLeaderGuard = installChordLeaderGuard(entries, target);
     // Capture phase: Monaco's editor keybindings listen on the editor DOM node
     // in the bubble phase and stopPropagation() the keys they handle, which
     // would otherwise shadow our window-level bindings (e.g. Cmd+Enter, which
@@ -204,7 +207,62 @@ export function installKeymap(
     // Operator binding intercept its key before Monaco; keys we don't bind, or
     // don't handle (when-clause false), fall through untouched.
     const dispose = tinykeys(target, map, { capture: true });
-    return { entries: [...entries], dispose };
+    return {
+        entries: [...entries],
+        dispose: () => {
+            dispose();
+            disposeLeaderGuard();
+        },
+    };
+}
+
+/**
+ * Capture chord leaders (the first press of a multi-press binding) before they
+ * bubble to Monaco. Monaco's keybinding service treats Cmd+K as a chord prefix
+ * and enters a pending state; if Operator then handles the chord's second
+ * press in capture (stopPropagation), Monaco stays stuck and swallows the next
+ * keystroke. Stopping the leader here keeps Monaco out of chord mode. tinykeys
+ * (same window+capture target) still sees the leader and advances its own
+ * chord state — stopPropagation does not stop same-target listeners.
+ */
+function installChordLeaderGuard(
+    entries: readonly ResolvedKeybinding[],
+    target: Window | HTMLElement,
+): () => void {
+    const leaders = new Set<string>();
+    for (const entry of entries) {
+        const presses = entry.key.split(' ');
+        if (presses.length > 1 && presses[0]) {
+            leaders.add(presses[0]);
+        }
+    }
+    if (leaders.size === 0) {
+        return () => {};
+    }
+    const parsed: KeyBindingPress[] = [...leaders]
+        .map((leader) => parseKeybinding(leader)[0])
+        .filter((press): press is KeyBindingPress => Boolean(press));
+
+    const onKeyDown = (event: Event) => {
+        if (!(event instanceof KeyboardEvent)) {
+            return;
+        }
+        // Chords are editor-context; only intercept the leader while the
+        // editor has focus so other inputs are unaffected.
+        const editor = getActiveEditor();
+        if (!editor || !editor.hasTextFocus()) {
+            return;
+        }
+        for (const press of parsed) {
+            if (matchKeyBindingPress(event, press)) {
+                event.stopPropagation();
+                return;
+            }
+        }
+    };
+    target.addEventListener('keydown', onKeyDown, { capture: true });
+    return () =>
+        target.removeEventListener('keydown', onKeyDown, { capture: true });
 }
 
 // Command id -> resolved tinykeys binding (e.g. `Meta+Enter`, `Meta+k Meta+i`),
