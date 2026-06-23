@@ -18,6 +18,11 @@ interface Props {
     original: string;
     migrated: string;
     summary: MigrationModalSummary;
+    /** Heading shown in the modal and as the diff's purpose. */
+    title?: string;
+    /** Label prefixing the list of `skippedVariables` (calls/variables that
+     *  could not be rewritten automatically). */
+    skippedLabel?: string;
     onApply: () => void;
     onCancel: () => void;
 }
@@ -27,6 +32,8 @@ export function MigrationDiffModal({
     original,
     migrated,
     summary,
+    title = 'Migrate $cycle / $iCycle to $p / $p.s',
+    skippedLabel = 'Skipped variables (non-string or mixed assignments):',
     onApply,
     onCancel,
 }: Props) {
@@ -70,7 +77,7 @@ export function MigrationDiffModal({
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="migration-header">
-                    <h2>Migrate $cycle / $iCycle to $p / $p.s</h2>
+                    <h2>{title}</h2>
                     <button className="close-btn" onClick={onCancel}>
                         ×
                     </button>
@@ -87,8 +94,7 @@ export function MigrationDiffModal({
                     </span>
                     {summary.skippedVariables.length > 0 && (
                         <div className="migration-summary-warning">
-                            Skipped variables (non-string or mixed assignments):{' '}
-                            {summary.skippedVariables.join(', ')}
+                            {skippedLabel} {summary.skippedVariables.join(', ')}
                         </div>
                     )}
                     {summary.error && (

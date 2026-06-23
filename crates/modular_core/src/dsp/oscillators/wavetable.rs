@@ -133,13 +133,13 @@ pub fn wavetable_derive_channel_count(params: &WavetableOscParams) -> usize {
 /// ## Example
 ///
 /// ```js
-/// $wavetable($wavs().tables.pad, 'c4').out()
-/// $wavetable(wav, 'c2', { position: lfo }).out()
+/// $wavetable('c4', $wavs().tables.pad).out()
+/// $wavetable('c2', wav, lfo).out()
 /// ```
 #[module(
     name = "$wavetable",
     channels_derive = wavetable_derive_channel_count,
-    args(wav, pitch, position),
+    args(pitch, wav, position),
     has_prepare_resources,
 )]
 pub struct WavetableOsc {

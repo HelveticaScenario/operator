@@ -1612,7 +1612,7 @@ describe('$table helpers', () => {
 
     test('$table.mirror serializes a numeric amount', () => {
         const patch = execWithWavs(
-            '$wavetable($wavs().wt, 0, 0, { phase: $table.mirror(0.5) }).out()',
+            '$wavetable(0, $wavs().wt, 0, { phase: $table.mirror(0.5) }).out()',
         ).patch;
         const wt = findModules(patch, '$wavetable');
         expect(wt.length).toBe(1);
@@ -1621,7 +1621,7 @@ describe('$table helpers', () => {
 
     test('$table.bend serializes a ModuleOutput as a cable reference', () => {
         const patch = execWithWavs(
-            'const lfo = $sine(0)\n$wavetable($wavs().wt, 0, 0, { phase: $table.bend(lfo) }).out()',
+            'const lfo = $sine(0)\n$wavetable(0, $wavs().wt, 0, { phase: $table.bend(lfo) }).out()',
         ).patch;
         const wt = findModules(patch, '$wavetable');
         expect(wt.length).toBe(1);
@@ -1641,9 +1641,9 @@ describe('$table helpers', () => {
 
     test('$table variants use camelCase tags matching Rust deserializer', () => {
         const patch = execWithWavs(
-            `const a = $wavetable($wavs().wt, 0, 0, { phase: $table.sync(1) }).out()
-             const b = $wavetable($wavs().wt, 0, 0, { phase: $table.fold(0.2) }).out()
-             const c = $wavetable($wavs().wt, 0, 0, { phase: $table.pwm(0.5) }).out()`,
+            `const a = $wavetable(0, $wavs().wt, 0, { phase: $table.sync(1) }).out()
+             const b = $wavetable(0, $wavs().wt, 0, { phase: $table.fold(0.2) }).out()
+             const c = $wavetable(0, $wavs().wt, 0, { phase: $table.pwm(0.5) }).out()`,
         ).patch;
         const tables = findModules(patch, '$wavetable').map(
             (m) => m.params.phase,
@@ -1659,7 +1659,7 @@ describe('$table helpers', () => {
 
     test('optional second param composes two tables into a pipe descriptor', () => {
         const patch = execWithWavs(
-            `$wavetable($wavs().wt, 0, 0, {
+            `$wavetable(0, $wavs().wt, 0, {
                 phase: $table.mirror(0.5, $table.bend(0.3))
             }).out()`,
         ).patch;
@@ -1674,7 +1674,7 @@ describe('$table helpers', () => {
 
     test('second param chains left-to-right: mirror -> bend -> fold', () => {
         const patch = execWithWavs(
-            `$wavetable($wavs().wt, 0, 0, {
+            `$wavetable(0, $wavs().wt, 0, {
                 phase: $table.mirror(0.5, $table.bend(0.3, $table.fold(0.2)))
             }).out()`,
         ).patch;
@@ -1692,7 +1692,7 @@ describe('$table helpers', () => {
 
     test('.pipe passes table to closure and returns result', () => {
         const patch = execWithWavs(
-            `$wavetable($wavs().wt, 0, 0, {
+            `$wavetable(0, $wavs().wt, 0, {
                 phase: $table.mirror(0.5).pipe(t => t)
             }).out()`,
         ).patch;
@@ -1702,7 +1702,7 @@ describe('$table helpers', () => {
 
     test('.pipe closure can build a pipe descriptor', () => {
         const patch = execWithWavs(
-            `$wavetable($wavs().wt, 0, 0, {
+            `$wavetable(0, $wavs().wt, 0, {
                 phase: $table.mirror(0.5).pipe(t => $table.bend(0.3, t))
             }).out()`,
         ).patch;

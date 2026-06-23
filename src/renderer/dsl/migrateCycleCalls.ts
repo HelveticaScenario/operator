@@ -37,6 +37,7 @@ import type {
 import { collectCommentEdits } from './migrateCycleCalls.comments';
 import type { Edit } from './migrateCycleCalls.shared';
 import { buildSpReplacement, wrapP } from './migrateCycleCalls.shared';
+import { applyEdits } from './migrationEdits';
 
 export interface MigrationResult {
     migrated: string;
@@ -428,24 +429,4 @@ function push(
     } else {
         map.set(name, [site]);
     }
-}
-
-function applyEdits(
-    source: string,
-    edits: Edit[],
-): { source: string; conflict: boolean } {
-    if (edits.length === 0) return { source, conflict: false };
-    const sorted = [...edits].sort((a, b) => a.start - b.start);
-    let out = '';
-    let cursor = 0;
-    for (const edit of sorted) {
-        if (edit.start < cursor) {
-            return { source, conflict: true };
-        }
-        out += source.slice(cursor, edit.start);
-        out += edit.replacement;
-        cursor = edit.end;
-    }
-    out += source.slice(cursor);
-    return { source: out, conflict: false };
 }
