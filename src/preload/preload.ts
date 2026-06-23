@@ -10,6 +10,7 @@ import {
     IPCRequest,
     IPCResponse,
     IPC_CHANNELS,
+    KeybindingOverride,
     MENU_CHANNELS,
     MainLogEntry,
     Promisify,
@@ -200,11 +201,6 @@ export interface ElectronAPI {
     onMenuOpenModuleProfile: (callback: () => void) => () => void;
     onMenuMigrateBuffer: (callback: () => void) => () => void;
     onMenuMigrateWavetable: (callback: () => void) => () => void;
-    /**
-     * Trigger a menu action programmatically (e.g., from Monaco keybindings).
-     * This emits the same IPC event that the Electron menu would send.
-     */
-    triggerMenuAction: (action: keyof typeof MENU_CHANNELS) => void;
     // UI operations
     showContextMenu: (options: ContextMenuOptions) => Promise<void>;
     onContextMenuCommand: (
@@ -231,6 +227,19 @@ export interface ElectronAPI {
         read: () => Promise<AppConfig>;
         write: (config: Partial<AppConfig>) => Promise<void>;
         onChange: (callback: (config: AppConfig) => void) => () => void;
+    };
+
+    // Keybinding overrides (read `<userData>/keybindings.json`)
+    keybindings: {
+        getPath: () => Promise<string>;
+        readUser: () => Promise<KeybindingOverride[]>;
+        ensureFile: () => Promise<string>;
+    };
+
+    // Application (top bar) menu integration
+    menu: {
+        /** Push command -> accelerator so the app menu shows live shortcuts. */
+        setAccelerators: (accelerators: Record<string, string>) => void;
     };
 
     // Wavs folder change notification
@@ -449,14 +458,6 @@ const electronAPI: ElectronAPI = {
     ),
     onMenuMigrateBuffer: menuEventHandler(MENU_CHANNELS.MIGRATE_BUFFER),
     onMenuMigrateWavetable: menuEventHandler(MENU_CHANNELS.MIGRATE_WAVETABLE),
-    // Programmatically trigger a menu action (for Monaco keybindings on Windows)
-    triggerMenuAction: (action: keyof typeof MENU_CHANNELS) => {
-        const channel = MENU_CHANNELS[action];
-        if (channel) {
-            // Emit the event locally so registered listeners receive it
-            ipcRenderer.emit(channel, { sender: ipcRenderer });
-        }
-    },
 
     // UI operations
     showContextMenu: (options) => invokeIPC('SHOW_CONTEXT_MENU', options),
@@ -472,6 +473,20 @@ const electronAPI: ElectronAPI = {
         onChange: menuEventHandler(IPC_CHANNELS.CONFIG_ON_CHANGE),
         read: () => invokeIPC('CONFIG_READ'),
         write: (config) => invokeIPC('CONFIG_WRITE', config),
+    },
+
+    // Keybinding overrides
+    keybindings: {
+        getPath: () => invokeIPC('KEYBINDINGS_GET_PATH'),
+        readUser: () => invokeIPC('KEYBINDINGS_READ_USER'),
+        ensureFile: () => invokeIPC('KEYBINDINGS_ENSURE_FILE'),
+    },
+
+    // Application (top bar) menu integration
+    menu: {
+        setAccelerators: (accelerators) => {
+            void invokeIPC('MENU_SET_ACCELERATORS', accelerators);
+        },
     },
 
     // Main process log forwarding

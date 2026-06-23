@@ -25,7 +25,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseMini } from '../parser';
-import type { MiniAST } from '../ast';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = resolve(
@@ -129,7 +128,7 @@ function normalizeSeeds(node: any): any {
 describe('peggy parser parity fixture', () => {
     test('emits canonical fixture for Rust cross-parser comparison', () => {
         const rows = PARITY_CASES.map(({ label, input }) => {
-            const peggyAst = parseMini(input) as MiniAST;
+            const peggyAst = parseMini(input);
             const normalized = normalizeSeeds(peggyAst);
             return { label, input, peggy_ast: normalized };
         });
@@ -139,7 +138,7 @@ describe('peggy parser parity fixture', () => {
         // same normalized shape (catches non-deterministic re-runs at
         // the source).
         for (const { input, peggy_ast } of rows) {
-            const re = normalizeSeeds(parseMini(input) as MiniAST);
+            const re = normalizeSeeds(parseMini(input));
             expect(re).toEqual(peggy_ast);
         }
         // Sanity on case-count so the fixture stays a meaningful sample.

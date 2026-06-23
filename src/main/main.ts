@@ -12,11 +12,14 @@ import {
 import type { PatchGraph, AudioConfigOptions } from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
+import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
 import type {
     IPCHandlers,
     FileTreeEntry,
     ContextMenuOptions,
+    EditorContextMenuOptions,
     DSLExecuteResult,
+    KeybindingOverride,
     MainLogLevel,
     MainLogEntry,
     UpdateAvailableInfo,
@@ -388,6 +391,16 @@ try {
 } catch (error) {
     console.error('Error determining config file path:', error);
     CONFIG_FILE = 'config.json';
+}
+
+// User keybinding overrides live alongside the main config file. The renderer
+// loader merges them on top of the default keymap shipped in defaultKeymap.ts.
+let KEYBINDINGS_FILE: string;
+try {
+    KEYBINDINGS_FILE = path.join(app.getPath('userData'), 'keybindings.json');
+} catch (error) {
+    console.error('Error determining keybindings file path:', error);
+    KEYBINDINGS_FILE = 'keybindings.json';
 }
 
 const AppConfigSchema = z.object({
@@ -1283,6 +1296,51 @@ registerIPCHandler('SHOW_CONTEXT_MENU', (options: ContextMenuOptions) => {
                 label: 'Reveal in Finder/Explorer',
             }),
         );
+    } else if (options.type === 'editor') {
+        // Materialize the renderer-built descriptors, recursing into submenus.
+        const buildEditorItems = (
+            items: EditorContextMenuOptions['items'],
+        ): Menu => {
+            const target = new Menu();
+            for (const item of items) {
+                if (item === null) {
+                    target.append(new MenuItem({ type: 'separator' }));
+                } else if (item.kind === 'role') {
+                    // Native clipboard: the OS acts on the focused editor.
+                    target.append(new MenuItem({ role: item.role }));
+                } else if (item.kind === 'submenu') {
+                    target.append(
+                        new MenuItem({
+                            label: item.label,
+                            submenu: buildEditorItems(item.items),
+                        }),
+                    );
+                } else {
+                    target.append(
+                        new MenuItem({
+                            label: item.label,
+                            enabled: item.enabled,
+                            // Display-only: dispatch is handled in the renderer
+                            // (tinykeys / Monaco), so do not register a global.
+                            accelerator: item.accelerator,
+                            registerAccelerator: false,
+                            click: () =>
+                                webContents.send(
+                                    IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND,
+                                    {
+                                        command: 'editor',
+                                        commandId: item.commandId,
+                                    },
+                                ),
+                        }),
+                    );
+                }
+            }
+            return target;
+        };
+        for (const child of buildEditorItems(options.items).items) {
+            menu.append(child);
+        }
     }
 
     menu.popup();
@@ -1627,6 +1685,94 @@ registerIPCHandler('CONFIG_WRITE', (partial: Partial<AppConfig>) => {
     saveConfig(merged);
 });
 
+// User keybinding overrides. The file is VS Code-style `keybindings.json`,
+// which is JSONC (comments + trailing commas), so it is tolerated here.
+// `args` is passed through verbatim, so it accepts any JSON value.
+const KeybindingOverrideSchema = z.object({
+    key: z.string().min(1),
+    command: z.string().nullable(),
+    when: z.string().optional(),
+    args: z.unknown().optional(),
+});
+
+const KEYBINDINGS_TEMPLATE = `// Operator keybindings — VS Code keybindings.json format.
+//
+// "key" uses VS Code syntax: cmd / ctrl / alt / shift, and chords separated
+// by spaces (e.g. "cmd+k cmd+i"). "command" is an Operator command
+// (operator.*) or a Monaco editor command (editor.action.revealDefinition,
+// cursorDown, ...). Prefix a command with "-" to remove a binding. Changes
+// take effect when you save this file.
+[
+    // { "key": "cmd+enter", "command": "operator.updatePatch" },
+    // { "key": "cmd+.", "command": "operator.stop" },
+    // { "key": "cmd+p", "command": "operator.showCommandPalette" },
+    // {
+    //     "key": "f12",
+    //     "command": "editor.action.revealDefinition",
+    //     "when": "editorTextFocus"
+    // }
+]
+`;
+
+function loadUserKeybindings(): KeybindingOverride[] {
+    try {
+        if (!fs.existsSync(KEYBINDINGS_FILE)) {
+            return [];
+        }
+        const raw = fs.readFileSync(KEYBINDINGS_FILE, 'utf-8').trim();
+        if (raw.length === 0) {
+            return [];
+        }
+        // VS Code's keybindings.json is JSONC (comments + trailing commas);
+        // jsonc-parser tolerates both and recovers from minor syntax errors.
+        const errors: ParseError[] = [];
+        const parsed: unknown = parseJsonc(raw, errors, {
+            allowTrailingComma: true,
+        });
+        if (errors.length > 0) {
+            console.error('keybindings.json has JSON syntax errors:', errors);
+        }
+        if (!Array.isArray(parsed)) {
+            console.error('keybindings.json must be a JSON array; ignoring.');
+            return [];
+        }
+        // Validate per entry so one malformed binding does not discard the
+        // rest of the file (matches VS Code's lenient behaviour).
+        const out: KeybindingOverride[] = [];
+        for (const entry of parsed) {
+            const result = KeybindingOverrideSchema.safeParse(entry);
+            if (result.success) {
+                out.push(result.data);
+            } else {
+                console.warn(
+                    '[keybindings] dropping invalid entry:',
+                    result.error.flatten(),
+                );
+            }
+        }
+        return out;
+    } catch (error) {
+        console.error('Error loading user keybindings:', error);
+        return [];
+    }
+}
+
+/** Create the keybindings file with a commented template if it is missing. */
+function ensureKeybindingsFile(): string {
+    try {
+        if (!fs.existsSync(KEYBINDINGS_FILE)) {
+            fs.writeFileSync(KEYBINDINGS_FILE, KEYBINDINGS_TEMPLATE, 'utf-8');
+        }
+    } catch (error) {
+        console.error('Error creating keybindings.json:', error);
+    }
+    return KEYBINDINGS_FILE;
+}
+
+registerIPCHandler('KEYBINDINGS_GET_PATH', () => KEYBINDINGS_FILE);
+registerIPCHandler('KEYBINDINGS_READ_USER', () => loadUserKeybindings());
+registerIPCHandler('KEYBINDINGS_ENSURE_FILE', () => ensureKeybindingsFile());
+
 // Update operations
 ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, async () => {
     await checkForUpdateAvailability();
@@ -1718,6 +1864,46 @@ const createWindow = (): void => {
     startConfigWatcher();
 };
 
+// Command id -> Electron accelerator, pushed from the renderer's resolved
+// keymap so the application menu shows the same shortcuts as the editor
+// context menu (and reflects user keybindings.json overrides).
+let menuAccelerators: Record<string, string> = {};
+let menuAcceleratorsReceived = false;
+
+/**
+ * Accelerator for a command. Until the renderer pushes the resolved keymap,
+ * fall back to the built-in default so the menu isn't blank at startup.
+ * Once pushed, the map is authoritative: a command it omits (a binding the
+ * user removed) gets no accelerator, so removals take effect and the
+ * application menu stays in sync with the editor context menu.
+ */
+function menuAccelerator(
+    commandId: string,
+    fallback: string,
+): string | undefined {
+    return menuAcceleratorsReceived ? menuAccelerators[commandId] : fallback;
+}
+
+/**
+ * Accelerator fields for an application-menu item. The renderer keymap
+ * (tinykeys) is the single dispatcher for every shortcut, so the menu displays
+ * the resolved accelerator but does NOT register it. Registering would make the
+ * accelerator fire on Windows/Linux *in addition to* the keydown reaching the
+ * renderer, double-dispatching the command (e.g. two buffers per Ctrl+N).
+ */
+function menuShortcut(
+    commandId: string,
+    fallback: string,
+): Pick<
+    Electron.MenuItemConstructorOptions,
+    'accelerator' | 'registerAccelerator'
+> {
+    return {
+        accelerator: menuAccelerator(commandId, fallback),
+        registerAccelerator: false,
+    };
+}
+
 /**
  * Create the application menu
  */
@@ -1741,7 +1927,7 @@ const createMenu = (): void => {
                           },
                           { type: 'separator' },
                           {
-                              accelerator: 'Cmd+,',
+                              ...menuShortcut('operator.openSettings', 'Cmd+,'),
                               click: () => {
                                   if (mainWindow && !mainWindow.isDestroyed()) {
                                       mainWindow.webContents.send(
@@ -1768,7 +1954,7 @@ const createMenu = (): void => {
             label: 'File',
             submenu: [
                 {
-                    accelerator: 'CmdOrCtrl+N',
+                    ...menuShortcut('operator.newFile', 'CmdOrCtrl+N'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1779,7 +1965,7 @@ const createMenu = (): void => {
                     label: 'New File',
                 },
                 {
-                    accelerator: 'CmdOrCtrl+O',
+                    ...menuShortcut('operator.openWorkspace', 'CmdOrCtrl+O'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1791,7 +1977,7 @@ const createMenu = (): void => {
                 },
                 { type: 'separator' },
                 {
-                    accelerator: 'CmdOrCtrl+S',
+                    ...menuShortcut('operator.save', 'CmdOrCtrl+S'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1802,7 +1988,7 @@ const createMenu = (): void => {
                     label: 'Save',
                 },
                 {
-                    accelerator: 'CmdOrCtrl+W',
+                    ...menuShortcut('operator.closeBuffer', 'CmdOrCtrl+W'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1817,7 +2003,10 @@ const createMenu = (): void => {
                     ? []
                     : ([
                           {
-                              accelerator: 'Ctrl+,',
+                              ...menuShortcut(
+                                  'operator.openSettings',
+                                  'Ctrl+,',
+                              ),
                               click: () => {
                                   if (mainWindow && !mainWindow.isDestroyed()) {
                                       mainWindow.webContents.send(
@@ -1895,7 +2084,7 @@ const createMenu = (): void => {
             label: 'Run',
             submenu: [
                 {
-                    accelerator: 'Ctrl+Enter',
+                    ...menuShortcut('operator.updatePatch', 'Ctrl+Enter'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1906,7 +2095,10 @@ const createMenu = (): void => {
                     label: 'Update Patch',
                 },
                 {
-                    accelerator: 'Ctrl+Shift+Enter',
+                    ...menuShortcut(
+                        'operator.updatePatchNextBeat',
+                        'Ctrl+Shift+Enter',
+                    ),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1919,7 +2111,7 @@ const createMenu = (): void => {
                     label: 'Update Patch (Next Beat)',
                 },
                 {
-                    accelerator: 'Ctrl+.',
+                    ...menuShortcut('operator.stop', 'Ctrl+.'),
                     click: (_item, focusedWindow) => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
@@ -1992,6 +2184,15 @@ const createMenu = (): void => {
     const menu = Menu.buildFromTemplate(template);
     Menu.setApplicationMenu(menu);
 };
+
+// The renderer pushes resolved accelerators once the keymap loads (and on
+// every change); rebuild the application menu so its shortcuts stay in sync
+// with the editor context menu and the user's keybindings.json.
+registerIPCHandler('MENU_SET_ACCELERATORS', (accelerators) => {
+    menuAccelerators = accelerators ?? {};
+    menuAcceleratorsReceived = true;
+    createMenu();
+});
 
 // This method will be called when Electron has finished
 // Initialization and is ready to create browser windows.
