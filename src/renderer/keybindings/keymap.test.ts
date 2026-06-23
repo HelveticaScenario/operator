@@ -75,6 +75,29 @@ describe('mergeKeymap', () => {
         expect(merged).toHaveLength(SAMPLE_DEFAULTS.length + 1);
     });
 
+    test('uses the mac override on darwin and the key elsewhere', () => {
+        const defaults: DefaultKeybinding[] = [
+            { key: '$mod+shift+[', mac: '$mod+alt+[', command: 'editor.fold' },
+        ];
+        // Alt / Shift compose punctuation, so the key matches by event.code.
+        expect(mergeKeymap(defaults, [], 'darwin')[0].key).toBe(
+            'Alt+Meta+(BracketLeft)',
+        );
+        expect(mergeKeymap(defaults, [], 'other')[0].key).toBe(
+            'Control+Shift+(BracketLeft)',
+        );
+    });
+
+    test('an empty key with a mac override binds only on darwin', () => {
+        const defaults: DefaultKeybinding[] = [
+            { key: '', mac: 'ctrl+t', command: 'editor.action.transposeLetters' },
+        ];
+        expect(mergeKeymap(defaults, [], 'darwin')).toEqual([
+            { key: 'Control+t', command: 'editor.action.transposeLetters' },
+        ]);
+        expect(mergeKeymap(defaults, [], 'other')).toEqual([]);
+    });
+
     test('order-sensitive removal: a later -command cancels an earlier bind', () => {
         const overrides: KeybindingOverride[] = [
             { key: 'cmd+e', command: 'editor.action.showHover' },

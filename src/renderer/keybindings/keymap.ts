@@ -71,7 +71,11 @@ export function mergeKeymap(
 ): ResolvedKeybinding[] {
     let list: ResolvedKeybinding[] = [];
     for (const entry of defaults) {
-        const key = toTinykeys(entry.key, platform);
+        // A default may carry a macOS-specific binding; an empty source means
+        // the binding does not exist on this platform.
+        const source =
+            platform === 'darwin' && entry.mac ? entry.mac : entry.key;
+        const key = toTinykeys(source, platform);
         if (key === null) {
             continue;
         }

@@ -113,7 +113,15 @@ export const contextKeys = new ContextKeyService();
  * for empty / null / undefined inputs.
  */
 export function evaluateWhen(source: string | undefined | null): boolean {
-    return parseWhen(source).evaluate(contextKeys);
+    try {
+        return parseWhen(source).evaluate(contextKeys);
+    } catch (err) {
+        // A malformed when-clause (e.g. an unsupported operator in a
+        // user's keybindings.json) must never break dispatch — treat it as
+        // not-applicable so the binding falls through.
+        console.warn('[contextKey] invalid when-clause:', source, err);
+        return false;
+    }
 }
 
 export type { WhenExpr };
