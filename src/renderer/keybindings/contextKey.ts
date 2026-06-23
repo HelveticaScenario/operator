@@ -13,8 +13,6 @@
  *   - findWidgetVisible      (Monaco find widget open)
  *   - inSettingsModal        (settings modal is open)
  *   - fileExplorerFocused    (file explorer tree has focus)
- *
- * See `~/.claude/plans/operator-is-at-its-goofy-mist.md` Phase 2.2.
  */
 
 import { parseWhen, type IContextReader, type WhenExpr } from './whenParser';
@@ -81,13 +79,6 @@ class ContextKeyService implements IContextReader {
     reset(): void {
         this.values.clear();
         this.listeners.clear();
-    }
-
-    /** Snapshot for inspection (devtools, palette filter debugging). */
-    snapshot(): Record<string, ContextKeyValue> {
-        const out: Record<string, ContextKeyValue> = {};
-        for (const [key, value] of this.values) out[key] = value;
-        return out;
     }
 
     private emit(changedKeys: ReadonlySet<string>): void {

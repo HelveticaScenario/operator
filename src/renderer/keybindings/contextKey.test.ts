@@ -87,15 +87,6 @@ describe('ContextKeyService', () => {
         consoleErr.mockRestore();
     });
 
-    test('snapshot returns a shallow copy of current values', () => {
-        contextKeys.setMany({ a: 1, b: 'two' });
-        const snap = contextKeys.snapshot();
-        expect(snap).toEqual({ a: 1, b: 'two' });
-
-        snap.a = 999;
-        expect(contextKeys.get('a')).toBe(1);
-    });
-
     test('evaluateWhen reads through the global service', () => {
         contextKeys.set('editorFocused', true);
         expect(evaluateWhen('editorFocused')).toBe(true);

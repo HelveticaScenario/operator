@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * Tests for the Phase 2.3 keymap loader: pure merge semantics plus the
- * installer's dispatch + when-clause gating behaviour.
+ * Tests for the keymap loader: pure merge semantics plus the installer's
+ * dispatch + when-clause gating behaviour.
  */
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { KeybindingOverride } from '../../shared/ipcTypes';

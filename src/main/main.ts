@@ -1760,20 +1760,6 @@ function loadUserKeybindings(): KeybindingOverride[] {
     }
 }
 
-function saveUserKeybindings(overrides: KeybindingOverride[]) {
-    try {
-        const validated = z.array(KeybindingOverrideSchema).parse(overrides);
-        fs.writeFileSync(
-            KEYBINDINGS_FILE,
-            JSON.stringify(validated, null, 2),
-            'utf-8',
-        );
-    } catch (error) {
-        console.error('Error saving user keybindings:', error);
-        throw error;
-    }
-}
-
 /** Create the keybindings file with a commented template if it is missing. */
 function ensureKeybindingsFile(): string {
     try {
@@ -1788,12 +1774,6 @@ function ensureKeybindingsFile(): string {
 
 registerIPCHandler('KEYBINDINGS_GET_PATH', () => KEYBINDINGS_FILE);
 registerIPCHandler('KEYBINDINGS_READ_USER', () => loadUserKeybindings());
-registerIPCHandler(
-    'KEYBINDINGS_WRITE_USER',
-    (overrides: KeybindingOverride[]) => {
-        saveUserKeybindings(overrides);
-    },
-);
 registerIPCHandler('KEYBINDINGS_ENSURE_FILE', () => ensureKeybindingsFile());
 
 // Update operations

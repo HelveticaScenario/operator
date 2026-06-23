@@ -5,8 +5,6 @@
  * is currently mounted. Sources its rows from `buildPaletteItems` — Operator
  * registry commands plus, when an editor exists, every supported Monaco
  * editor action.
- *
- * See `~/.claude/plans/operator-is-at-its-goofy-mist.md` Phase 2.1a.
  */
 import { useMemo, useRef } from 'react';
 import { Command } from 'cmdk';
@@ -14,7 +12,11 @@ import type { editor } from 'monaco-editor';
 
 import { buildPaletteItems, type PaletteItem } from '../keybindings/paletteItems';
 import { toKeyChipGroups } from '../../shared/keybindings/accelerator';
+import electronAPI from '../electronAPI';
 import './CommandPalette.css';
+
+// Chip rendering differs per platform (glyphs on macOS, text elsewhere).
+const PLATFORM = electronAPI.platform === 'darwin' ? 'darwin' : 'other';
 
 export interface CommandPaletteProps {
     open: boolean;
@@ -31,7 +33,6 @@ export interface CommandPaletteProps {
 function itemValue(item: PaletteItem): string {
     return `${item.category ?? ''} ${item.label} ${item.id}`;
 }
-
 
 export function CommandPalette({
     open,
@@ -97,7 +98,7 @@ export function CommandPalette({
                         </span>
                         {item.keybinding && (
                             <span className="command-palette-item-keys">
-                                {toKeyChipGroups(item.keybinding).map(
+                                {toKeyChipGroups(item.keybinding, PLATFORM).map(
                                     (group, gi) => (
                                         <span
                                             key={gi}

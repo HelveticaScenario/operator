@@ -9,8 +9,6 @@
  * Monaco actions get a fixed `"Editor"` category badge so they sort together
  * in the palette UI and so users can quickly tell them apart from Operator
  * commands.
- *
- * See `~/.claude/plans/operator-is-at-its-goofy-mist.md` Phase 2.1a.
  */
 import type { editor } from 'monaco-editor';
 

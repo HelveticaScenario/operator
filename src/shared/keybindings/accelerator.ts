@@ -9,6 +9,8 @@
  * null (the shortcut is simply not shown — the binding still works).
  */
 
+export type Platform = 'darwin' | 'other';
+
 // tinykeys modifier token -> Electron modifier, in a stable display order.
 const MOD_TO_ELECTRON: Array<[string, string]> = [
     ['Control', 'Ctrl'],
@@ -40,6 +42,20 @@ const KEY_TO_ELECTRON: Record<string, string> = {
     ArrowRight: 'Right',
     Escape: 'Esc',
 };
+
+/** Split one tinykeys press (`Shift+Meta+k`) into its modifier set and key. */
+function splitPress(
+    press: string,
+): { mods: Set<string>; keyToken: string } | null {
+    const tokens = press.split('+').filter((t) => t.length > 0);
+    if (tokens.length === 0) {
+        return null;
+    }
+    return {
+        keyToken: tokens[tokens.length - 1],
+        mods: new Set(tokens.slice(0, -1)),
+    };
+}
 
 function electronKey(token: string): string | null {
     // Code-regex form, e.g. `(KeyI)` / `(Digit2)` / `(BracketLeft)`.
@@ -79,19 +95,17 @@ export function toElectronAccelerator(binding: string): string | null {
         // Empty or a multi-press chord — not representable.
         return null;
     }
-    const tokens = trimmed.split('+').filter((t) => t.length > 0);
-    if (tokens.length === 0) {
+    const press = splitPress(trimmed);
+    if (!press) {
         return null;
     }
-    const keyToken = tokens[tokens.length - 1];
-    const mods = new Set(tokens.slice(0, -1));
-    const key = electronKey(keyToken);
+    const key = electronKey(press.keyToken);
     if (key === null) {
         return null;
     }
     const parts: string[] = [];
     for (const [token, electron] of MOD_TO_ELECTRON) {
-        if (mods.has(token)) {
+        if (press.mods.has(token)) {
             parts.push(electron);
         }
     }
@@ -99,7 +113,7 @@ export function toElectronAccelerator(binding: string): string | null {
     return parts.join('+');
 }
 
-// tinykeys modifier token -> display symbol, in macOS display order (⌃⌥⇧⌘).
+// tinykeys modifier token -> macOS display symbol, in macOS order (⌃⌥⇧⌘).
 const MOD_TO_SYMBOL: Array<[string, string]> = [
     ['Control', '⌃'],
     ['Alt', '⌥'],
@@ -107,7 +121,15 @@ const MOD_TO_SYMBOL: Array<[string, string]> = [
     ['Meta', '⌘'],
 ];
 
-// Friendly chip labels for named keys; anything else falls back to electronKey.
+// tinykeys modifier token -> Windows/Linux display text, in the same order.
+const MOD_TO_TEXT: Array<[string, string]> = [
+    ['Control', 'Ctrl'],
+    ['Alt', 'Alt'],
+    ['Shift', 'Shift'],
+    ['Meta', 'Win'],
+];
+
+// Friendly macOS chip glyphs for named keys; anything else falls back to electronKey.
 const KEY_TO_SYMBOL: Record<string, string> = {
     ArrowUp: '↑',
     ArrowDown: '↓',
@@ -121,7 +143,7 @@ const KEY_TO_SYMBOL: Record<string, string> = {
     Space: '␣',
 };
 
-function chipKey(token: string): string {
+function macChipKey(token: string): string {
     return KEY_TO_SYMBOL[token] ?? electronKey(token) ?? token;
 }
 
@@ -130,26 +152,34 @@ function chipKey(token: string): string {
  * press, each group an ordered list of key chips. e.g. `Meta+k Meta+i` ->
  * `[['⌘','K'], ['⌘','I']]`. Unlike `toElectronAccelerator`, this handles chord
  * sequences, so the palette can render multi-press bindings as chips.
+ *
+ * macOS renders modifiers as glyphs (⌃⌥⇧⌘); Windows/Linux render them as text
+ * (Ctrl/Alt/Shift/Win), matching what those platforms' users expect.
  */
-export function toKeyChipGroups(binding: string): string[][] {
+export function toKeyChipGroups(
+    binding: string,
+    platform: Platform,
+): string[][] {
+    const mac = platform === 'darwin';
+    const modTable = mac ? MOD_TO_SYMBOL : MOD_TO_TEXT;
+    const keyChip = (token: string) =>
+        mac ? macChipKey(token) : (electronKey(token) ?? token);
     return binding
         .trim()
         .split(/\s+/)
         .filter((press) => press.length > 0)
         .map((press) => {
-            const tokens = press.split('+').filter((t) => t.length > 0);
-            if (tokens.length === 0) {
+            const split = splitPress(press);
+            if (!split) {
                 return [];
             }
-            const keyToken = tokens[tokens.length - 1];
-            const mods = new Set(tokens.slice(0, -1));
             const chips: string[] = [];
-            for (const [mod, symbol] of MOD_TO_SYMBOL) {
-                if (mods.has(mod)) {
-                    chips.push(symbol);
+            for (const [mod, label] of modTable) {
+                if (split.mods.has(mod)) {
+                    chips.push(label);
                 }
             }
-            chips.push(chipKey(keyToken));
+            chips.push(keyChip(split.keyToken));
             return chips;
         })
         .filter((group) => group.length > 0);

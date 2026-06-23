@@ -5,7 +5,7 @@
  * in the keybindings editor.
  *
  * Keep this in sync with the keys actually published by
- * [[contextKeyBootstrap]] — a key listed here but never set always evaluates
+ * `contextKeyBootstrap.ts` — a key listed here but never set always evaluates
  * falsy, and a key set there but missing here simply won't autocomplete.
  */
 

@@ -227,8 +227,8 @@ export function MonacoPatchEditor({
         // No editor-level keybindings are registered here: the capture-phase
         // window keymap (keybindings/keymap) owns every shortcut and runs
         // before Monaco, so it is the single source of truth. Hardcoding
-        // editor bindings here (previously Ctrl+Enter etc.) would shadow the
-        // keymap and could not be rebound or removed via keybindings.json.
+        // editor bindings here would shadow the keymap and could not be
+        // rebound or removed via keybindings.json.
     };
 
     useEffect(() => {
@@ -241,7 +241,7 @@ export function MonacoPatchEditor({
     }, [monaco, libSource, schemas]);
 
     // Mirror Monaco focus and suggest/find widget visibility into the
-    // context-key service so when-clauses (Phase 2.x) can react.
+    // context-key service so when-clauses can react.
     useEffect(() => {
         if (!editor) return;
         const stopFocus = bindEditorFocus(editor);

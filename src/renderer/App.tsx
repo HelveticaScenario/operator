@@ -1083,9 +1083,9 @@ function App() {
 
     useEffect(() => {
         // Electron menu items dispatch through the registry so each handler
-        // body lives in exactly one place. Recording is not (yet) in the
-        // registry — toggling it depends on render-state isRecording, which
-        // belongs to Phase 2.2's context-key service.
+        // body lives in exactly one place. Recording is not in the registry —
+        // toggling it reads render-state isRecording directly, hence this
+        // effect's dependency on it.
         const cleanupNewFile = electronAPI.onMenuNewFile(() => {
             executeCommand('operator.newFile');
         });

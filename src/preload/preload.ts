@@ -228,11 +228,10 @@ export interface ElectronAPI {
         onChange: (callback: (config: AppConfig) => void) => () => void;
     };
 
-    // Keybinding overrides (read/write `<userData>/keybindings.json`)
+    // Keybinding overrides (read `<userData>/keybindings.json`)
     keybindings: {
         getPath: () => Promise<string>;
         readUser: () => Promise<KeybindingOverride[]>;
-        writeUser: (overrides: KeybindingOverride[]) => Promise<void>;
         ensureFile: () => Promise<string>;
     };
 
@@ -478,8 +477,6 @@ const electronAPI: ElectronAPI = {
     keybindings: {
         getPath: () => invokeIPC('KEYBINDINGS_GET_PATH'),
         readUser: () => invokeIPC('KEYBINDINGS_READ_USER'),
-        writeUser: (overrides) =>
-            invokeIPC('KEYBINDINGS_WRITE_USER', overrides),
         ensureFile: () => invokeIPC('KEYBINDINGS_ENSURE_FILE'),
     },
 

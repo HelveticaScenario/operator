@@ -5,7 +5,7 @@ import { useTheme } from '../themes/ThemeContext';
 import { type AudioSettingsHandle, AudioSettingsTab } from './AudioSettings';
 import { EditorSettingsTab } from './EditorSettingsTab';
 import { FormatterSettingsTab } from './FormatterSettingsTab';
-import { contextKeys } from '../keybindings/contextKey';
+import { bindSettingsModal } from '../keybindings/contextKeyBootstrap';
 import './Settings.css';
 
 type SettingsTabId = 'editor' | 'audio' | 'formatter';
@@ -116,12 +116,7 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
     }, [isOpen]);
 
     // Mirror modal state into the context-key service for when-clauses.
-    useEffect(() => {
-        contextKeys.set('inSettingsModal', isOpen);
-        return () => {
-            contextKeys.set('inSettingsModal', false);
-        };
-    }, [isOpen]);
+    useEffect(() => bindSettingsModal(isOpen), [isOpen]);
 
     if (!isOpen) {
         return null;

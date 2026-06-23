@@ -4,21 +4,15 @@
  * through `executeCommand` so every surface (palette, context menu, OS menu,
  * keymap) shares one command path.
  *
- * Phase 2.3 from `~/.claude/plans/operator-is-at-its-goofy-mist.md`.
- *
- * When-clause evaluation is delegated through `setWhenEvaluator`. Phase 2.2
- * installs the real context-key parser; until then the default evaluator
- * treats every when-clause as true.
+ * When-clause evaluation is delegated through `setWhenEvaluator`; `App` wires
+ * in the context-key service's evaluator. The default (used before install and
+ * in tests) treats every when-clause as true.
  */
 import type { KeyBindingMap, KeyBindingPress } from 'tinykeys';
 import { tinykeys, parseKeybinding, matchKeyBindingPress } from 'tinykeys';
 import type { KeybindingOverride } from '../../shared/ipcTypes';
 import { dispatchCommand, getActiveEditor } from './dispatch';
-import {
-    DEFAULT_KEYMAP,
-    defaultKeymapAsOverrides,
-    type DefaultKeybinding,
-} from './defaultKeymap';
+import { DEFAULT_KEYMAP, type DefaultKeybinding } from './defaultKeymap';
 import {
     normalizeOverride,
     toTinykeys,
@@ -44,9 +38,8 @@ type WhenEvaluator = (when: string | undefined) => boolean;
 let whenEvaluator: WhenEvaluator = () => true;
 
 /**
- * Replace the when-clause evaluator. Called by the context-key service
- * (Phase 2.2) once its parser is wired up. Tests use this to assert that
- * dispatch is gated correctly.
+ * Replace the when-clause evaluator. `App` calls this with the context-key
+ * service's evaluator; tests use it to assert dispatch is gated correctly.
  */
 export function setWhenEvaluator(evaluator: WhenEvaluator): void {
     whenEvaluator = evaluator;
@@ -352,7 +345,3 @@ type ElectronAPILike = {
         readUser?: () => Promise<KeybindingOverride[]>;
     };
 };
-
-// Re-export for callers that want to expose the active default set to UI
-// (e.g. the read-only Keyboard Shortcuts tab in Phase 2.5).
-export { DEFAULT_KEYMAP, defaultKeymapAsOverrides };

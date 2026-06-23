@@ -1,5 +1,5 @@
 /**
- * Wires the bootstrap context keys consumed by Phase 2.x `when` clauses:
+ * Wires the bootstrap context keys consumed by `when` clauses:
  *   - editorFocused          (Monaco editor widget has focus)
  *   - suggestWidgetVisible   (Monaco suggest widget on screen)
  *   - findWidgetVisible      (Monaco find widget on screen)
@@ -24,35 +24,42 @@ export type Teardown = () => void;
 // VS Code names several focus context keys that map onto Operator's single
 // editor; keep them in lock-step so VS Code-authored `when` clauses gate
 // correctly. `editorFocused` is Operator's own; the rest are VS Code aliases.
-const EDITOR_FOCUS_KEYS = [
+// Widget focus spans the editor and its peripheral inputs (find / suggest);
+// `editorTextFocus` is narrower — true only while the main text input holds
+// focus, so it drops to false when, e.g., the find box is focused.
+const WIDGET_FOCUS_KEYS = [
     'editorFocused',
     'editorFocus',
-    'editorTextFocus',
     'textInputFocus',
     'inputFocus',
 ] as const;
 
-function setEditorFocus(focused: boolean): void {
+function setWidgetFocus(focused: boolean): void {
     const next: Record<string, boolean> = {};
-    for (const key of EDITOR_FOCUS_KEYS) {
+    for (const key of WIDGET_FOCUS_KEYS) {
         next[key] = focused;
     }
     contextKeys.setMany(next);
 }
 
-/** Mirror Monaco focus state into `editorFocused` and its VS Code aliases. */
+/** Mirror Monaco focus state into the editor focus keys and VS Code aliases. */
 export function bindEditorFocus(ed: editor.IStandaloneCodeEditor): Teardown {
-    setEditorFocus(ed.hasWidgetFocus());
-    const focusSub = ed.onDidFocusEditorWidget(() => {
-        setEditorFocus(true);
-    });
-    const blurSub = ed.onDidBlurEditorWidget(() => {
-        setEditorFocus(false);
-    });
+    setWidgetFocus(ed.hasWidgetFocus());
+    contextKeys.set('editorTextFocus', ed.hasTextFocus());
+    const subs = [
+        ed.onDidFocusEditorWidget(() => setWidgetFocus(true)),
+        ed.onDidBlurEditorWidget(() => setWidgetFocus(false)),
+        ed.onDidFocusEditorText(() => contextKeys.set('editorTextFocus', true)),
+        ed.onDidBlurEditorText(() =>
+            contextKeys.set('editorTextFocus', false),
+        ),
+    ];
     return () => {
-        focusSub.dispose();
-        blurSub.dispose();
-        setEditorFocus(false);
+        for (const sub of subs) {
+            sub.dispose();
+        }
+        setWidgetFocus(false);
+        contextKeys.set('editorTextFocus', false);
     };
 }
 
@@ -87,9 +94,9 @@ export function bindEditorContextConstants(): Teardown {
  * Watch the editor DOM for the suggest / find widgets and mirror their
  * visibility into the context-key service. Returns a teardown.
  *
- * Implementation: a single `MutationObserver` on the editor root,
- * triggered on subtree class changes. We then re-scan for the two
- * widgets we care about — cheap because the widget count is small.
+ * Monaco mutates this subtree on every keystroke and scroll, so the observer
+ * only schedules a rescan; the scan itself (two `querySelector`s) runs at most
+ * once per animation frame regardless of how many mutations land.
  */
 export function bindEditorWidgetVisibility(
     ed: editor.IStandaloneCodeEditor,
@@ -97,21 +104,25 @@ export function bindEditorWidgetVisibility(
     const root = ed.getDomNode();
     if (!root) return () => {};
 
+    let raf: number | null = null;
     const scan = () => {
+        raf = null;
         const suggest = root.querySelector('.suggest-widget');
         const find = root.querySelector('.find-widget');
         contextKeys.setMany({
             suggestWidgetVisible: !!(
                 suggest && suggest.classList.contains('visible')
             ),
-            findWidgetVisible: !!(
-                find && find.classList.contains('visible')
-            ),
+            findWidgetVisible: !!(find && find.classList.contains('visible')),
         });
+    };
+    const schedule = () => {
+        if (raf != null) return;
+        raf = requestAnimationFrame(scan);
     };
     scan();
 
-    const observer = new MutationObserver(scan);
+    const observer = new MutationObserver(schedule);
     observer.observe(root, {
         subtree: true,
         attributes: true,
@@ -120,6 +131,7 @@ export function bindEditorWidgetVisibility(
     });
 
     return () => {
+        if (raf != null) cancelAnimationFrame(raf);
         observer.disconnect();
         contextKeys.setMany({
             suggestWidgetVisible: false,

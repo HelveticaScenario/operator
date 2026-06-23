@@ -6,13 +6,10 @@
  * to `Cmd` on macOS and `Ctrl` everywhere else, matching Electron's
  * `CmdOrCtrl` accelerator semantics.
  *
- * `when` is stored verbatim. Until Phase 2.2 (context-key service) lands,
- * the keymap loader treats unset / unparseable when-clauses as always true.
- *
- * Phase 2.3 from `~/.claude/plans/operator-is-at-its-goofy-mist.md`.
+ * `when` is stored verbatim and evaluated against the context-key service at
+ * dispatch. An unset or empty clause is always true; a malformed clause is
+ * treated as not matching, so the binding falls through.
  */
-import type { KeybindingOverride } from '../../shared/ipcTypes';
-
 export type DefaultKeybinding = {
     key: string;
     /**
@@ -143,16 +140,3 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: '$mod+k $mod+9', command: 'editor.unfoldAllMarkerRegions', when: 'foldingEnabled && editorTextFocus' },
     { key: '$mod+k $mod+]', command: 'editor.unfoldRecursively', when: 'foldingEnabled && editorTextFocus' },
 ];
-
-/**
- * Convenience for tests / settings UI: produce the default map as
- * `KeybindingOverride` records so it can flow through the same merge path
- * as user overrides.
- */
-export function defaultKeymapAsOverrides(): KeybindingOverride[] {
-    return DEFAULT_KEYMAP.map((entry) => ({
-        key: entry.key,
-        command: entry.command,
-        ...(entry.when ? { when: entry.when } : {}),
-    }));
-}

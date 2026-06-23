@@ -9,8 +9,6 @@
  * tinykeys keymap, Electron menu IPC, in-editor key bindings) all funnel
  * through `executeCommand` so the body of each operation lives in exactly
  * one place.
- *
- * See `~/.claude/plans/operator-is-at-its-goofy-mist.md` Phase 2.1.
  */
 
 export type CommandHandler = (...args: unknown[]) => void | Promise<void>;
@@ -21,8 +19,8 @@ export type CommandMetadata = {
     /** Optional grouping label, e.g. "Patch", "File". */
     category?: string;
     /**
-     * Optional when-clause string. Stored verbatim here; parsed and
-     * evaluated against the context-key service in Phase 2.2.
+     * Optional when-clause string. Stored verbatim; parsed and evaluated
+     * against the context-key service at dispatch.
      */
     when?: string;
     /**

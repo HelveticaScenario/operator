@@ -377,7 +377,6 @@ export const IPC_CHANNELS = {
     // Keybinding operations
     KEYBINDINGS_GET_PATH: 'modular:keybindings:get-path',
     KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
-    KEYBINDINGS_WRITE_USER: 'modular:keybindings:write-user',
     KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
     // Main process logging
@@ -556,9 +555,6 @@ export interface IPCHandlers {
     // Keybinding operations
     [IPC_CHANNELS.KEYBINDINGS_GET_PATH]: () => string;
     [IPC_CHANNELS.KEYBINDINGS_READ_USER]: () => KeybindingOverride[];
-    [IPC_CHANNELS.KEYBINDINGS_WRITE_USER]: (
-        overrides: KeybindingOverride[],
-    ) => void;
     [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
 
     // Main process logging

@@ -16,9 +16,6 @@
  * `getAction` does not expose, so their enabled state is read from the
  * matching provider context key (`requires`) instead. A separator is drawn
  * between groups; `null` marks a separator.
- *
- * Phase 2.1b: the editor context menu surface from
- * `~/.claude/plans/operator-is-at-its-goofy-mist.md`.
  */
 import type { editor } from 'monaco-editor';
 

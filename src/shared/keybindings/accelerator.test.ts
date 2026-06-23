@@ -42,28 +42,51 @@ describe('toElectronAccelerator', () => {
 
 describe('toKeyChipGroups', () => {
     test('single combo -> one group of chips (macOS symbols, ⌃⌥⇧⌘ order)', () => {
-        expect(toKeyChipGroups('Meta+Enter')).toEqual([['⌘', '↵']]);
-        expect(toKeyChipGroups('Shift+Meta+p')).toEqual([['⇧', '⌘', 'P']]);
-        expect(toKeyChipGroups('Control+g')).toEqual([['⌃', 'G']]);
-        expect(toKeyChipGroups('Alt+Shift+(KeyF)')).toEqual([['⌥', '⇧', 'F']]);
+        expect(toKeyChipGroups('Meta+Enter', 'darwin')).toEqual([['⌘', '↵']]);
+        expect(toKeyChipGroups('Shift+Meta+p', 'darwin')).toEqual([
+            ['⇧', '⌘', 'P'],
+        ]);
+        expect(toKeyChipGroups('Control+g', 'darwin')).toEqual([['⌃', 'G']]);
+        expect(toKeyChipGroups('Alt+Shift+(KeyF)', 'darwin')).toEqual([
+            ['⌥', '⇧', 'F'],
+        ]);
     });
 
     test('chord sequence -> one group per press', () => {
-        expect(toKeyChipGroups('Meta+k Meta+i')).toEqual([
+        expect(toKeyChipGroups('Meta+k Meta+i', 'darwin')).toEqual([
             ['⌘', 'K'],
             ['⌘', 'I'],
         ]);
-        expect(toKeyChipGroups('Meta+k Meta+s')).toEqual([
+        expect(toKeyChipGroups('Meta+k Meta+s', 'darwin')).toEqual([
             ['⌘', 'K'],
             ['⌘', 'S'],
         ]);
     });
 
     test('named keys and code forms decode to readable chips', () => {
-        expect(toKeyChipGroups('Meta+ArrowRight')).toEqual([['⌘', '→']]);
-        expect(toKeyChipGroups('Shift+Meta+(Digit0)')).toEqual([
+        expect(toKeyChipGroups('Meta+ArrowRight', 'darwin')).toEqual([
+            ['⌘', '→'],
+        ]);
+        expect(toKeyChipGroups('Shift+Meta+(Digit0)', 'darwin')).toEqual([
             ['⇧', '⌘', '0'],
         ]);
-        expect(toKeyChipGroups('F12')).toEqual([['F12']]);
+        expect(toKeyChipGroups('F12', 'darwin')).toEqual([['F12']]);
+    });
+
+    test('non-darwin renders modifier + key as text, not macOS glyphs', () => {
+        expect(toKeyChipGroups('Control+s', 'other')).toEqual([['Ctrl', 'S']]);
+        expect(toKeyChipGroups('Control+Enter', 'other')).toEqual([
+            ['Ctrl', 'Enter'],
+        ]);
+        expect(toKeyChipGroups('Alt+Shift+(KeyF)', 'other')).toEqual([
+            ['Alt', 'Shift', 'F'],
+        ]);
+        expect(toKeyChipGroups('Control+ArrowRight', 'other')).toEqual([
+            ['Ctrl', 'Right'],
+        ]);
+        expect(toKeyChipGroups('Control+k Control+i', 'other')).toEqual([
+            ['Ctrl', 'K'],
+            ['Ctrl', 'I'],
+        ]);
     });
 });
