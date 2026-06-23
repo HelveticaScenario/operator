@@ -1,4 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import Form, { type IChangeEvent } from '@rjsf/core';
+import type { RJSFSchema, UiSchema } from '@rjsf/utils';
+import validator from '@rjsf/validator-ajv8';
 import type {
     AppConfig,
     BundledFont,
@@ -6,14 +9,7 @@ import type {
     SystemFont,
 } from '../../shared/ipcTypes';
 import type { AppTheme } from '../themes/types';
-
-type CursorStyle =
-    | 'line'
-    | 'block'
-    | 'underline'
-    | 'line-thin'
-    | 'block-outline'
-    | 'underline-thin';
+import { configSchema } from '../configSchema';
 
 const BUNDLED_FONTS: BundledFont[] = [
     'Fira Code',
@@ -43,14 +39,13 @@ const BUNDLED_FONTS: BundledFont[] = [
 
 const SYSTEM_FONTS: SystemFont[] = ['SF Mono', 'Monaco', 'Menlo', 'Consolas'];
 
-const CURSOR_STYLES: CursorStyle[] = [
-    'line',
-    'block',
-    'underline',
-    'line-thin',
-    'block-outline',
-    'underline-thin',
-];
+interface EditorFormData {
+    theme?: string;
+    font?: MonospaceFont;
+    fontSize?: number;
+    fontLigatures?: boolean;
+    cursorStyle?: AppConfig['cursorStyle'];
+}
 
 interface EditorSettingsTabProps {
     config: AppConfig;
@@ -58,10 +53,6 @@ interface EditorSettingsTabProps {
     onConfigChange: (partial: Partial<AppConfig>) => void;
 }
 
-/**
- * Detect whether a font is installed by measuring text against baseline fonts.
- * If the candidate font renders at a different width than all baselines, it's installed.
- */
 function isFontInstalled(fontName: string): boolean {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -87,120 +78,101 @@ function isFontInstalled(fontName: string): boolean {
     return false;
 }
 
+const uiSchema: UiSchema = {
+    'ui:submitButtonOptions': { norender: true },
+    fontSize: { 'ui:widget': 'range' },
+};
+
 export function EditorSettingsTab({
     config,
     themes,
     onConfigChange,
 }: EditorSettingsTabProps) {
     const [availableSystemFonts] = useState<SystemFont[]>(() =>
-        // Detect which system fonts are actually installed via canvas measurement
         SYSTEM_FONTS.filter(isFontInstalled),
     );
 
+    const schema: RJSFSchema = useMemo(() => {
+        const base = configSchema.properties;
+        const fontEnum: MonospaceFont[] = [
+            ...BUNDLED_FONTS,
+            ...availableSystemFonts,
+        ];
+        return {
+            type: 'object',
+            properties: {
+                theme: {
+                    type: 'string',
+                    title: 'Color Theme',
+                    description: base.theme.description,
+                    default: base.theme.default,
+                    oneOf: themes.map((t) => ({
+                        const: t.id,
+                        title: t.name,
+                    })),
+                },
+                font: {
+                    type: 'string',
+                    title: 'Font',
+                    description: base.font.description,
+                    default: base.font.default,
+                    enum: fontEnum,
+                },
+                fontSize: {
+                    type: 'number',
+                    title: 'Font Size',
+                    description: base.fontSize.description,
+                    default: base.fontSize.default,
+                    minimum: base.fontSize.minimum,
+                    maximum: base.fontSize.maximum,
+                },
+                fontLigatures: {
+                    type: 'boolean',
+                    title: 'Font Ligatures',
+                    description: base.fontLigatures.description,
+                    default: base.fontLigatures.default,
+                },
+                cursorStyle: {
+                    type: 'string',
+                    title: 'Cursor Style',
+                    description: base.cursorStyle.description,
+                    default: base.cursorStyle.default,
+                    enum: base.cursorStyle.enum,
+                },
+            },
+        };
+    }, [themes, availableSystemFonts]);
+
+    const formData: EditorFormData = {
+        theme: config.theme,
+        font: config.font,
+        fontSize: config.fontSize,
+        fontLigatures: config.fontLigatures,
+        cursorStyle: config.cursorStyle,
+    };
+
+    const handleChange = (e: IChangeEvent) => {
+        const data: EditorFormData = e.formData ?? {};
+        onConfigChange({
+            theme: data.theme,
+            font: data.font,
+            fontSize: data.fontSize,
+            fontLigatures: data.fontLigatures,
+            cursorStyle: data.cursorStyle,
+        });
+    };
+
     return (
-        <div className="settings-tab-content">
-            {/* Theme */}
-            <div className="settings-section">
-                <h3>Color Theme</h3>
-                <select
-                    className="device-select"
-                    value={config.theme || 'modular-dark'}
-                    onChange={(e) => onConfigChange({ theme: e.target.value })}
-                >
-                    {themes.map((t) => (
-                        <option key={t.id} value={t.id}>
-                            {t.name}
-                        </option>
-                    ))}
-                </select>
-            </div>
-
-            {/* Font */}
-            <div className="settings-section">
-                <h3>Font</h3>
-                <select
-                    className="device-select"
-                    value={config.font || 'Fira Code'}
-                    onChange={(e) =>
-                        onConfigChange({
-                            font: e.target.value as MonospaceFont,
-                        })
-                    }
-                >
-                    <optgroup label="Bundled">
-                        {BUNDLED_FONTS.map((f) => (
-                            <option key={f} value={f}>
-                                {f}
-                            </option>
-                        ))}
-                    </optgroup>
-                    {availableSystemFonts.length > 0 && (
-                        <optgroup label="System">
-                            {availableSystemFonts.map((f) => (
-                                <option key={f} value={f}>
-                                    {f}
-                                </option>
-                            ))}
-                        </optgroup>
-                    )}
-                </select>
-            </div>
-
-            {/* Font Size */}
-            <div className="settings-section">
-                <h3>Font Size</h3>
-                <div className="settings-row">
-                    <input
-                        type="range"
-                        className="settings-range"
-                        min={8}
-                        max={72}
-                        step={1}
-                        value={config.fontSize ?? 17}
-                        onChange={(e) =>
-                            onConfigChange({ fontSize: Number(e.target.value) })
-                        }
-                    />
-                    <span className="settings-range-value">
-                        {config.fontSize ?? 17}px
-                    </span>
-                </div>
-            </div>
-
-            {/* Font Ligatures */}
-            <div className="settings-section">
-                <h3>Font Ligatures</h3>
-                <label className="settings-toggle-label">
-                    <input
-                        type="checkbox"
-                        className="settings-toggle"
-                        checked={config.fontLigatures ?? true}
-                        onChange={(e) =>
-                            onConfigChange({ fontLigatures: e.target.checked })
-                        }
-                    />
-                </label>
-            </div>
-
-            {/* Cursor Style */}
-            <div className="settings-section">
-                <h3>Cursor Style</h3>
-                <select
-                    className="device-select"
-                    value={config.cursorStyle || 'block'}
-                    onChange={(e) =>
-                        onConfigChange({
-                            cursorStyle: e.target.value as CursorStyle,
-                        })
-                    }
-                >
-                    {CURSOR_STYLES.map((s) => (
-                        <option key={s} value={s}>
-                            {s}
-                        </option>
-                    ))}
-                </select>
-            </div>
+        <div className="settings-tab-content settings-rjsf">
+            <Form
+                schema={schema}
+                uiSchema={uiSchema}
+                validator={validator}
+                formData={formData}
+                onChange={handleChange}
+                liveValidate={false}
+                showErrorList={false}
+            />
         </div>
     );
 }
