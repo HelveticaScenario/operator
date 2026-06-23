@@ -94,10 +94,28 @@
     white-space: nowrap;
 }
 
+/* Context shown as a dimmed prefix before the command name. */
 .command-palette-item-category {
     color: var(--text-muted);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+}
+
+/* Bound keybinding, right-aligned, rendered as individual key chips. */
+.command-palette-item-keys {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     flex-shrink: 0;
+}
+
+.command-palette-key {
+    font-family: inherit;
+    font-size: 11px;
+    line-height: 1;
+    min-width: 18px;
+    padding: 3px 5px;
+    text-align: center;
+    color: var(--text-secondary, var(--text-muted));
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
 }

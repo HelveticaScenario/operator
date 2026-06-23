@@ -19,6 +19,7 @@ import {
     listCommands,
     type CommandMetadata,
 } from './commands';
+import { getCommandAccelerator } from './keymap';
 
 /**
  * A single row in the cmdk palette. `kind` discriminates between the two
@@ -31,6 +32,8 @@ export type PaletteItem =
           id: string;
           label: string;
           category?: string;
+          /** Electron accelerator for the bound key, if any (e.g. `Cmd+Enter`). */
+          keybinding?: string;
           when?: string;
           run: () => void;
       }
@@ -39,6 +42,7 @@ export type PaletteItem =
           id: string;
           label: string;
           category: 'Editor';
+          keybinding?: string;
           run: () => void;
       };
 
@@ -51,6 +55,7 @@ function operatorItem(
         id,
         label: metadata?.label ?? id,
         category: metadata?.category,
+        keybinding: getCommandAccelerator(id),
         when: metadata?.when,
         run: () => {
             executeCommand(id);
@@ -71,6 +76,7 @@ function editorActionItem(
         id: action.id,
         label,
         category: 'Editor',
+        keybinding: getCommandAccelerator(action.id),
         run: () => {
             // Some actions (e.g. Go to Line) open their own focused widget,
             // which needs the editor to hold focus when the action runs — the

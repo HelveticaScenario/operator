@@ -24,11 +24,31 @@ export interface CommandPaletteProps {
 
 /**
  * Stable item value for cmdk's filter. cmdk filters on this string, so we
- * concatenate label + id (so e.g. "Go to Line" matches and the internal id
- * `editor.action.gotoLine` matches too).
+ * concatenate category + label + id — so "Go to Line" matches, the category
+ * ("editor") matches, and the internal id `editor.action.gotoLine` matches.
  */
 function itemValue(item: PaletteItem): string {
-    return `${item.label} ${item.id}`;
+    return `${item.category ?? ''} ${item.label} ${item.id}`;
+}
+
+// Display symbols for accelerator tokens, rendered as individual key chips.
+const KEY_SYMBOLS: Record<string, string> = {
+    Cmd: '⌘',
+    Command: '⌘',
+    Ctrl: '⌃',
+    Control: '⌃',
+    Alt: '⌥',
+    Option: '⌥',
+    Shift: '⇧',
+    Enter: '↵',
+    Return: '↵',
+};
+
+/** Split an Electron accelerator (`Cmd+Shift+P`) into display key chips. */
+function keybindingChips(accelerator: string): string[] {
+    return accelerator
+        .split('+')
+        .map((token) => KEY_SYMBOLS[token] ?? token);
 }
 
 export function CommandPalette({
@@ -86,11 +106,25 @@ export function CommandPalette({
                         className="command-palette-item"
                     >
                         <span className="command-palette-item-label">
+                            {item.category && (
+                                <span className="command-palette-item-category">
+                                    {item.category}:{' '}
+                                </span>
+                            )}
                             {item.label}
                         </span>
-                        {item.category && (
-                            <span className="command-palette-item-category">
-                                {item.category}
+                        {item.keybinding && (
+                            <span className="command-palette-item-keys">
+                                {keybindingChips(item.keybinding).map(
+                                    (key, i) => (
+                                        <kbd
+                                            key={i}
+                                            className="command-palette-key"
+                                        >
+                                            {key}
+                                        </kbd>
+                                    ),
+                                )}
                             </span>
                         )}
                     </Command.Item>
