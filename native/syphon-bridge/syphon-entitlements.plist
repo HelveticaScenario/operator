@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <!--
+    Least-privilege entitlements for the headless operator-syphon helper and the
+    Syphon framework it links. The helper only captures a window via
+    ScreenCaptureKit (a TCC runtime grant, not an entitlement) and publishes
+    frames over Syphon (Mach/IOSurface, no network), so it needs none of the
+    Electron app's JIT / unsigned-memory / network / audio entitlements. It is
+    still signed with the hardened runtime; library validation passes because the
+    framework is re-signed with the same Developer ID team.
+  -->
+  <dict/>
+</plist>

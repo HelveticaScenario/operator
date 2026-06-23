@@ -9,13 +9,14 @@
         "url": "https://github.com/HelveticaScenario/operator"
     },
     "scripts": {
-        "start": "yarn build-native && concurrently --handle-input --default-input-target app -n app,rust -c blue,yellow 'node scripts/start-dev.mjs' 'yarn watch-native'",
+        "start": "yarn build-native && yarn build-syphon-bridge && concurrently --handle-input --default-input-target app -n app,rust -c blue,yellow 'node scripts/start-dev.mjs' 'yarn watch-native'",
         "start:debug": "yarn build-native-debug && electron-forge start --inspect-electron",
         "start:no-watch": "yarn build-native && electron-forge start",
         "profile": "yarn build-native-profile && electron-forge start",
-        "package": "yarn build-native && electron-forge package",
-        "make": "yarn build-native && electron-forge make",
-        "forge-publish": "yarn build-native && electron-forge publish",
+        "package": "yarn build-native && yarn build-syphon-bridge --require && electron-forge package",
+        "make": "yarn build-native && yarn build-syphon-bridge --require --universal && electron-forge make",
+        "forge-publish": "yarn build-native && yarn build-syphon-bridge --require --universal && electron-forge publish",
+        "build-syphon-bridge": "node scripts/build-syphon-bridge.mjs",
         "deploy": "./release.sh",
         "test": "yarn test:unit",
         "test:unit": "vitest run",
