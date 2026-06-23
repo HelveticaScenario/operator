@@ -7,7 +7,6 @@ import { configSchema } from '../configSchema';
 import { formatPath } from './monaco/monacoHelpers';
 import type { ScopeView } from '../types/editor';
 import { setupMonacoJavascript } from './monaco/monacoLanguage';
-import { buildSymbolSets } from './monaco/definitionProvider';
 import {
     DEFAULT_PRETTIER_OPTIONS,
     registerDslFormattingProvider,
@@ -277,8 +276,6 @@ export function MonacoPatchEditor({
         if (!editor || !monaco || schemas.length === 0) {
             return;
         }
-        const { moduleNames: _moduleNames, namespaceNames: _namespaceNames } =
-            buildSymbolSets(schemas);
         const disposable = editor.onMouseDown((e) => {
             // Check for Cmd (Mac) / Ctrl (Win/Linux) + primary button click
             if (!e.event.metaKey && !e.event.ctrlKey) {
@@ -295,18 +292,6 @@ export function MonacoPatchEditor({
 
             editor.focus();
             editor.trigger('api', 'editor.action.peekDefinition', {});
-
-            // Console.log({ model, e });
-
-            // Const match = resolveDslSymbolAtPosition(
-            //     Model,
-            //     E.target.position,
-            //     ModuleNames,
-            //     NamespaceNames,
-            // );
-            // If (match) {
-            //     ElectronAPI.openHelpForSymbol(match.symbolType, match.symbolName);
-            // }
         });
         return () => disposable.dispose();
     }, [editor, monaco, schemas]);

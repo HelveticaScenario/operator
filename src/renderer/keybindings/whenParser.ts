@@ -7,7 +7,7 @@
  *   orExpr     := andExpr ( "||" andExpr )*
  *   andExpr    := unary ( "&&" unary )*
  *   unary      := "!" unary | equality
- *   equality   := primary ( ("==" | "!=") cmpValue )*
+ *   equality   := primary ( ("==" | "!=") cmpValue )?
  *   cmpValue   := literal | identifier   (a bare identifier here is a string)
  *   primary    := "(" expression ")" | literal | identifier
  *   literal    := true | false | "..." | '...' | number

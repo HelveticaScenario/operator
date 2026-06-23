@@ -28,9 +28,7 @@ interface SettingsProps {
 
 export function Settings({ isOpen, onClose }: SettingsProps) {
     const [activeTab, setActiveTab] = useState<SettingsTabId>('editor');
-    // Saved config (what's on disk)
-    const [_savedConfig, setSavedConfig] = useState<AppConfig>({});
-    // Draft config (local edits, not yet persisted)
+    // Draft config (local edits, persisted immediately on change)
     const [draftConfig, setDraftConfig] = useState<AppConfig>({});
     const [saving, setSaving] = useState(false);
     const { themes } = useTheme();
@@ -46,7 +44,6 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
         electronAPI.config
             .read()
             .then((cfg) => {
-                setSavedConfig(cfg);
                 setDraftConfig(cfg);
             })
             .catch(console.error);
@@ -58,7 +55,6 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
             return;
         }
         const unsubscribe = electronAPI.config.onChange((newConfig) => {
-            setSavedConfig(newConfig);
             setDraftConfig(newConfig);
         });
         return unsubscribe;
@@ -68,12 +64,7 @@ export function Settings({ isOpen, onClose }: SettingsProps) {
         setDraftConfig((prev) => {
             const updated = { ...prev, ...partial };
             // Auto-save editor/formatter config changes immediately
-            electronAPI.config
-                .write(updated)
-                .then(() => {
-                    setSavedConfig(updated);
-                })
-                .catch(console.error);
+            electronAPI.config.write(updated).catch(console.error);
             return updated;
         });
     }, []);

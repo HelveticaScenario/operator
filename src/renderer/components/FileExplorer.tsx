@@ -280,10 +280,6 @@ export function FileExplorer({
     onRenameCancel,
     onKeepBuffer,
 }: FileExplorerProps) {
-    const _activeBuffer = buffers.find(
-        (b) => getBufferId(b) === activeBufferId,
-    );
-
     const rootRef = useRef<HTMLDivElement>(null);
     useEffect(() => {
         const el = rootRef.current;
