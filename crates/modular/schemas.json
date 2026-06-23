@@ -1,25 +1,5 @@
 [
   {
-    "name": "$signal",
-    "documentation": "Utility module for routing, naming, and exposing signals in a patch.",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "SignalParams",
-      "type": "object",
-      "properties": {
-        "source": {
-          "description": "Input signal to forward.",
-          "$ref": "#/$defs/PolySignal"
-        }
-      },
-      "required": [
-        "source"
-      ],
-      "$defs": {
-        "PolySignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
     "name": "$lorenz",
     "documentation": "Chaotic signal source based on the Lorenz strange attractor.\n\nSimulates the Lorenz system continuously — changing any parameter pulls the\ntrajectory in a new direction rather than restarting from scratch. Outputs x\n(default) and y coordinates normalized to **±5V**, and z normalized to **0–5V**\n(z is always positive in the Lorenz system).\n\n## Parameters (all 0–5 CV)\n\n| param | mapped range | default | chaotic butterfly |\n|-------|-------------|---------|-------------------|\n| sigma | σ 0–30      | 1.667 → σ=10   | stays chaotic for σ > 0 |\n| rho   | ρ 0–60      | 2.333 → ρ=28   | chaos requires ρ > ~24.74 (CV > ~2.06V) |\n| beta  | β 0–10      | 1.333 → β=8/3  | classic shape near 2.667 |\n| rate  | 0–200 t/s   | 0.1   → 4 t/s  | audio-rate at ≥ ~50 t/s |\n\n## Example\n\n```js\n// Classic Lorenz butterfly at default params\n$lorenz()\n\n// Access all three outputs\nconst l = $lorenz()\nl    // x coordinate (±5V)\nl.y  // y coordinate (±5V)\nl.z  // z coordinate (0–5V)\n\n// Modulate rho — nudges the attractor without resetting it\n$lorenz({ rho: $sine('1hz').range(0, 5), rate: 0.5 }).out()\n```",
     "paramsSchema": {
@@ -34,103 +14,25 @@
               "$ref": "#/$defs/PolySignal"
             },
             {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
               "type": "null"
             }
           ]
         },
-        "Signal": {
         "rate": {
           "description": "Simulation speed — Lorenz time-units advanced per second of audio.\nInput 0–5 maps to 0–200 t/s; default 0.1 → 4 t/s (slow LFO-rate butterfly).\nHigher values push outputs toward audio-rate chaos.",
           "anyOf": [
             {
-              "type": "number",
-              "format": "double"
               "$ref": "#/$defs/PolySignal"
             },
             {
-              "type": "string"
-            },
-            {
-              "$ref": "#/$defs/SignalTaggedSchema"
               "type": "null"
             }
           ]
         },
-        "SignalTaggedSchema": {
-          "oneOf": [
         "rho": {
           "description": "Rho (ρ) — distance from the origin to the critical points.\nInput 0–5 maps to ρ 0–60; default 2.333 → ρ=28.\nChaos requires ρ > 24.74 (→ CV > ~2.06V); below that the system spirals to a fixed point.",
           "anyOf": [
             {
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        }
-      }
-    },
-    "outputs": [
-      {
-        "name": "output",
-        "description": "forwarded signal",
-        "polyphonic": true,
-        "default": true
-      }
-    ],
-    "signalParams": [
-      {
-        "name": "source",
-        "description": "Input signal to forward.",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": -5.0,
-        "maxValue": 5.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "source"
-      }
-    ]
-  },
-  {
-    "name": "$mix",
-    "documentation": "Mix module for combining multiple signals into a single mix bus.\n\nUse this when you want to blend several multichannel modulation/audio sources.\nIt mixes channel `n` across all inputs into output channel `n`, rather than\nfolding all channels into a single mono channel.",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "MixParams",
-      "type": "object",
-      "properties": {
-        "gain": {
-          "description": "Final output level (perceptual curve, exponent 3).",
-          "anyOf": [
-            {
               "$ref": "#/$defs/PolySignal"
             },
             {
@@ -138,12 +40,6 @@
             }
           ]
         },
-        "inputs": {
-          "description": "Input signals to mix channel-by-channel.\n\nChannel `n` from every input is mixed into output channel `n`.",
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/PolySignal"
-          }
         "sigma": {
           "description": "Sigma (σ) — rate of divergence between the x and y variables.\nInput 0–5 maps to σ 0–30; default 1.667 → σ=10.",
           "anyOf": [
@@ -170,85 +66,6 @@
             }
           ]
         },
-        "mode": {
-          "description": "How inputs are combined.",
-          "$ref": "#/$defs/MixMode"
-        }
-      },
-      "required": [
-        "inputs"
-      ],
-      "$defs": {
-        "MixMode": {
-          "description": "Mixing mode for combining input signals.",
-          "oneOf": [
-        "Signal": {
-          "anyOf": [
-            {
-              "description": "Sum all inputs.",
-              "type": "string",
-              "const": "sum"
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "description": "Average all inputs.",
-              "type": "string",
-              "const": "average"
-              "type": "string"
-            },
-            {
-              "description": "Keep the strongest input.",
-              "type": "string",
-              "const": "max"
-            },
-            {
-              "description": "Keep the weakest non-zero input.",
-              "type": "string",
-              "const": "min"
-              "$ref": "#/$defs/SignalTaggedSchema"
-            }
-          ]
-        },
-        "PolySignal": {
-          "anyOf": [
-        "SignalTaggedSchema": {
-          "oneOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
-              "type": "object",
-              "properties": {
-                "channel": {
-                  "type": "integer",
-                  "format": "uint",
-                  "default": 0,
-                  "minimum": 0
-                },
-                "module": {
-                  "type": "string"
-                },
-                "port": {
-                  "type": "string"
-                },
-                "type": {
-                  "type": "string",
-                  "const": "cable"
-                }
-              },
-              "required": [
-                "type",
-                "module",
-                "port"
-              ]
-            }
-          ]
-        },
         "Signal": {
           "anyOf": [
             {
@@ -297,81 +114,6 @@
     },
     "outputs": [
       {
-        "name": "output",
-        "description": "multichannel mix: each output channel mixes the same channel index from all inputs (not a mono fold-down)",
-        "polyphonic": true,
-        "default": true
-      }
-    ],
-    "signalParams": [
-      {
-        "name": "gain",
-        "description": "Final output level (perceptual curve, exponent 3).",
-        "signalType": "control",
-        "defaultValue": 5.0,
-        "minValue": 0.0,
-        "maxValue": 10.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "inputs"
-      }
-    ]
-  },
-  {
-    "name": "$mixDown",
-    "documentation": "Folds a polyphonic input down to an arbitrary target channel count.\n\nUnlike `$mix` (which mixes channel `n` of every input into output channel\n`n`), `$mixDown` takes a single poly signal and distributes its `N` channels\nacross `M` output channels by panning them evenly over the output field with\nan equal-power crossfade. With the default `channels = 1` it is a plain mono\nsum; `channels = 2` produces an equal-power stereo fold-down. When the target\nexceeds the input channel count, the input is instead spread to fill every\noutput channel (equal-power interpolation) so no channel is left silent.\n\n- **channels** — target output channel count (1–64, default 1)\n- **mode** — how channels landing on the same output combine (sum / average /\n  max / min); applies only when folding down (target ≤ input channels)\n\n## Example\n\n```js\n// Fold a 3-voice spread down to stereo\n$saw($spread(0, 5, 3)).mix(2).out()\n```",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "MixDownParams",
-      "type": "object",
-      "properties": {
-        "channels": {
-          "description": "Target output channel count (1–64). Defaults to 1 (mono).",
-          "type": "integer",
-          "format": "uint",
-          "default": 1,
-          "minimum": 0
-        },
-        "input": {
-          "description": "Polyphonic input whose channels are folded down.",
-          "$ref": "#/$defs/PolySignal"
-        },
-        "mode": {
-          "description": "How channels that land on the same output channel are combined.",
-          "$ref": "#/$defs/MixMode"
-        }
-      },
-      "required": [
-        "input"
-      ],
-      "$defs": {
-        "MixMode": {
-          "description": "Mixing mode for combining input signals.",
-          "oneOf": [
-            {
-              "description": "Sum all inputs.",
-              "type": "string",
-              "const": "sum"
-            },
-            {
-              "description": "Average all inputs.",
-              "type": "string",
-              "const": "average"
-            },
-            {
-              "description": "Keep the strongest input.",
-              "type": "string",
-              "const": "max"
-            },
-            {
-              "description": "Keep the weakest non-zero input.",
-              "type": "string",
-              "const": "min"
-            }
-          ]
-        },
         "name": "x",
         "description": "X coordinate, normalized to ±5V",
         "polyphonic": true,
@@ -511,80 +253,6 @@
     "outputs": [
       {
         "name": "output",
-        "description": "fold-down output: input channels panned evenly across the output channels",
-        "polyphonic": true,
-        "default": true
-      }
-    ],
-    "signalParams": [
-      {
-        "name": "input",
-        "description": "Polyphonic input whose channels are folded down.",
-        "signalType": "control",
-        "defaultValue": 0.0,
-        "minValue": -5.0,
-        "maxValue": 5.0
-      }
-    ],
-    "positionalArgs": [
-      {
-        "name": "input"
-      },
-      {
-        "name": "channels"
-      }
-    ],
-    "channelsParam": "channels"
-  },
-  {
-    "name": "$stereoMix",
-    "documentation": "Pan and spread a signal into stereo.",
-    "paramsSchema": {
-      "$schema": "https://json-schema.org/draft/2020-12/schema",
-      "title": "StereoMixerParams",
-      "type": "object",
-      "properties": {
-        "input": {
-          "description": "Input signal to place in the stereo field.",
-          "$ref": "#/$defs/PolySignal"
-        },
-        "pan": {
-          "description": "Pan position per channel (-5 = left, 0 = center, +5 = right).",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PolySignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "width": {
-          "description": "Stereo spread across channels (0 = no spread, 5 = widest spread).\nWidth offsets each channel around its base pan position. Defaults to 0\n(no spread) when omitted.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MonoSignal"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "input"
-      ],
-      "$defs": {
-        "MonoSignal": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Signal"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/Signal"
-              }
         "description": "forwarded signal",
         "polyphonic": true,
         "default": true

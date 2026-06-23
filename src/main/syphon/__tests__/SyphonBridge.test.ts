@@ -98,8 +98,17 @@ afterEach(() => {
     if (platformDescriptor) {
         Object.defineProperty(process, 'platform', platformDescriptor);
     }
+    delete (process as { getSystemVersion?: () => string }).getSystemVersion;
     vi.useRealTimers();
 });
+
+/** Stub Electron's process.getSystemVersion (absent in the node test runtime). */
+function setMacOSVersion(version: string): void {
+    Object.defineProperty(process, 'getSystemVersion', {
+        value: () => version,
+        configurable: true,
+    });
+}
 
 describe('SyphonBridge', () => {
     test('start spawns the helper with parsed window id, name, fps', () => {
@@ -317,5 +326,90 @@ describe('SyphonBridge', () => {
         bridge.dispose();
         vi.advanceTimersByTime(RESTART_DELAY_MS);
         expect(spawnMock).toHaveBeenCalledTimes(1); // the pending restart was cancelled
+    });
+
+    test('supported is false and start refuses below macOS 14', () => {
+        setMacOSVersion('13.6');
+        expect(SyphonBridge.supported).toBe(false);
+
+        const { bridge } = makeBridge();
+        const res = bridge.start(makeWindow());
+        expect(res.ok).toBe(false);
+        expect(res.reason).toMatch(/macOS 14/);
+        expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    test('supported is true on macOS 14+', () => {
+        setMacOSVersion('14.0');
+        expect(SyphonBridge.supported).toBe(true);
+    });
+
+    test('isEnabled tracks intent across a crash-restart trough', () => {
+        const { bridge } = makeBridge();
+        bridge.start(makeWindow());
+        expect(bridge.isEnabled).toBe(true);
+
+        last().emit('exit', 1, null); // crash → backoff, child momentarily gone
+        expect(bridge.isActive).toBe(false);
+        expect(bridge.isEnabled).toBe(true); // still on, just restarting
+    });
+
+    test('toggle during crash backoff turns the feature off (cancels the restart loop)', () => {
+        const { bridge } = makeBridge();
+        bridge.toggle(makeWindow()); // on → spawn 1
+        last().emit('exit', 1, null); // crash → restart scheduled, child null
+
+        bridge.toggle(makeWindow()); // intent is still on → this turns it OFF
+        expect(bridge.isEnabled).toBe(false);
+
+        vi.advanceTimersByTime(RESTART_DELAY_MS);
+        expect(spawnMock).toHaveBeenCalledTimes(1); // the scheduled restart was cancelled
+    });
+
+    test('giving up after the restart cap clears intent', () => {
+        const { bridge } = makeBridge();
+        bridge.start(makeWindow());
+        for (let i = 0; i < 8; i++) {
+            last().emit('exit', 1, null);
+            vi.advanceTimersByTime(RESTART_DELAY_MS);
+        }
+        expect(bridge.currentStatus).toBe('error');
+        expect(bridge.isEnabled).toBe(false); // unchecks the menu; next click is a fresh start
+    });
+
+    test('give-up fires its final status with intent already cleared (menu unchecks)', () => {
+        // syncSyphonMenuItem/applySyphonRenderTuning only run from onStatusChange,
+        // so the give-up must flip intent BEFORE its status fires or the checkbox
+        // stays checked and throttling stays off until the next interaction.
+        const snapshots: { status: SyphonStatus; enabled: boolean }[] = [];
+        const bridge = new SyphonBridge({
+            onStatusChange: (status) =>
+                snapshots.push({ status, enabled: bridge.isEnabled }),
+        });
+        bridge.start(makeWindow());
+        for (let i = 0; i < 8; i++) {
+            last().emit('exit', 1, null);
+            vi.advanceTimersByTime(RESTART_DELAY_MS);
+        }
+        const final = snapshots[snapshots.length - 1];
+        expect(final.status).toBe('error');
+        expect(final.enabled).toBe(false);
+    });
+
+    test('re-enable during the stop teardown grace respawns once the child exits', () => {
+        const { bridge } = makeBridge();
+        bridge.start(makeWindow()); // spawn 1
+        const dying = last();
+
+        bridge.stop(); // SIGTERM sent; child still draining, not yet exited
+        expect(bridge.isEnabled).toBe(false);
+
+        bridge.start(makeWindow()); // re-enable while the old child drains
+        expect(bridge.isEnabled).toBe(true);
+        expect(spawnMock).toHaveBeenCalledTimes(1); // deferred — no second helper yet
+
+        dying.emit('exit', null, 'SIGTERM'); // old child finally exits
+        expect(spawnMock).toHaveBeenCalledTimes(2); // queued respawn fires now
+        expect(bridge.isActive).toBe(true);
     });
 });

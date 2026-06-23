@@ -29,6 +29,13 @@ if (process.platform !== 'darwin') {
     process.exit(0);
 }
 
+// Opt out of the helper entirely (e.g. packaging without Syphon on a machine
+// that lacks the Metal Toolchain). forge.config.ts honors the same flag.
+if (process.env.SYPHON_SKIP === '1') {
+    console.warn('[syphon-bridge] SYPHON_SKIP=1 — skipping helper build.');
+    process.exit(0);
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const BRIDGE = join(ROOT, 'native', 'syphon-bridge');
@@ -49,9 +56,18 @@ const SYPHON_PRODUCT = join(
 const STAGED_FW = join(BRIDGE, 'Frameworks', 'Syphon.framework');
 const DIST = join(BRIDGE, 'dist');
 
-const UNIVERSAL = process.env.UNIVERSAL === '1';
+const UNIVERSAL =
+    process.env.UNIVERSAL === '1' || process.argv.includes('--universal');
 const FORCE = process.argv.includes('--force');
+// Packaging/release scripts pass --require so a missing Metal Toolchain aborts the
+// build loudly instead of silently shipping an app without the Syphon helper.
+const REQUIRE = process.argv.includes('--require');
 const archFlags = UNIVERSAL ? ['--arch', 'arm64', '--arch', 'x86_64'] : [];
+// Archs the staged framework + helper must cover: both slices when universal,
+// else the host arch (node reports x86_64 as 'x64').
+const requestedArchs = UNIVERSAL
+    ? ['arm64', 'x86_64']
+    : [process.arch === 'arm64' ? 'arm64' : 'x86_64'];
 
 function run(cmd, args) {
     console.log(`[syphon-bridge] ${cmd} ${args.join(' ')}`);
@@ -67,6 +83,22 @@ function metalToolchainAvailable() {
     }
 }
 
+/** Whether the staged framework binary already includes every requested arch. */
+function frameworkCoversArchs(frameworkPath, archs) {
+    try {
+        const have = execFileSync('lipo', [
+            '-archs',
+            join(frameworkPath, 'Syphon'),
+        ])
+            .toString()
+            .trim()
+            .split(/\s+/);
+        return archs.every((a) => have.includes(a));
+    } catch {
+        return false;
+    }
+}
+
 if (!existsSync(VENDOR_PROJ)) {
     console.error(
         '[syphon-bridge] Syphon submodule missing. Run: git submodule update --init --recursive',
@@ -74,20 +106,33 @@ if (!existsSync(VENDOR_PROJ)) {
     process.exit(1);
 }
 
-// 1) Build + stage Syphon.framework (cached unless --force).
+// 1) Build + stage Syphon.framework (cached unless --force or a requested arch
+// is missing — the cache must track arch so a host-only build isn't reused when a
+// universal one is requested).
 //
 // Building Syphon compiles a Metal shader, which on Xcode 26+ needs the
-// separately-installed Metal Toolchain. If it is missing and we have no
-// previously-staged framework, soft-skip so `yarn start` still works — the app
-// runs fine, the Syphon menu item is just unavailable until the helper is built.
-if (FORCE || !existsSync(STAGED_FW)) {
+// separately-installed Metal Toolchain. If it is missing and we have no usable
+// staged framework, soft-skip so `yarn start` still works — the app runs fine,
+// the Syphon menu item is just unavailable until the helper is built. Under
+// --require (packaging/release) that same case is fatal instead.
+const needFramework =
+    FORCE ||
+    !existsSync(STAGED_FW) ||
+    !frameworkCoversArchs(STAGED_FW, requestedArchs);
+if (needFramework) {
     if (!metalToolchainAvailable()) {
-        console.warn(
+        const hint = [
             '[syphon-bridge] Metal Toolchain not installed (needed to compile Syphon shaders on Xcode 26+).',
-        );
-        console.warn(
             '[syphon-bridge] Install it once with: xcodebuild -downloadComponent MetalToolchain',
-        );
+        ];
+        if (REQUIRE) {
+            for (const line of hint) console.error(line);
+            console.error(
+                '[syphon-bridge] --require set — refusing to package without the Syphon helper. Aborting.',
+            );
+            process.exit(1);
+        }
+        for (const line of hint) console.warn(line);
         console.warn('[syphon-bridge] Skipping Syphon helper build for now.');
         process.exit(0);
     }

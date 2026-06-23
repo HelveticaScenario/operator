@@ -68,10 +68,17 @@ final class BridgeRunner: @unchecked Sendable {
         capture.onTexture = { [publisher] texture, hold in
             publisher.publish(texture: texture, hold: hold)
         }
+        // SCStreamDelegate callbacks arrive on SCStream's private queue, not the
+        // main queue, so hop to main before touching lifecycle state — shutDown()'s
+        // isShuttingDown guard is lock-free and relies on every caller running on
+        // the main queue (alongside the signal handlers and watchdog).
         capture.onStop = { [weak self] reason in
-            log("capture stopped: \(reason)")
-            emitStatus("stopped")
-            self?.shutDown()
+            guard let self else { return }
+            DispatchQueue.main.async {
+                log("capture stopped: \(reason)")
+                emitStatus("stopped")
+                self.shutDown()
+            }
         }
 
         installSignalHandlers()

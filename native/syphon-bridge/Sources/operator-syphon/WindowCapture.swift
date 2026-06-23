@@ -38,7 +38,16 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     init(device: MTLDevice) {
         self.device = device
         super.init()
-        CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
+        let status = CVMetalTextureCacheCreate(
+            kCFAllocatorDefault, nil, device, nil, &textureCache)
+        // Without the cache every frame's texture lookup fails and the source
+        // would publish nothing while still reporting "ready" — fail loudly
+        // instead, matching the other fatal setup guards in main.swift.
+        if status != kCVReturnSuccess || textureCache == nil {
+            log("CVMetalTextureCacheCreate failed: \(status)")
+            emitStatus("error")
+            exit(70)  // EX_SOFTWARE
+        }
     }
 
     func start(windowID: CGWindowID, fps: Int32) async throws {
@@ -68,6 +77,12 @@ final class WindowCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
 
     func stop() async {
         try? await stream?.stopCapture()
+        // stopCapture() halts delivery, but a sample handler may still be running
+        // on sampleQueue. Drain it (the queue is serial) so no publish() is in
+        // flight before the caller retires the Syphon server, otherwise that copy
+        // would race server.stop(). stop() runs off the sample queue, so this
+        // cannot deadlock.
+        sampleQueue.sync {}
         stream = nil
     }
 

@@ -34,11 +34,22 @@ const config: ForgeConfig = {
         },
         osxSign: {
             identity: 'Developer ID Application: Daniel Lewis (HA98TTLCR7)',
-            optionsForFile: () => {
+            optionsForFile: (filePath: string) => {
+                // The headless Syphon helper and its framework need none of the
+                // Electron app's entitlements (JIT, unsigned-executable memory,
+                // network, audio) — screen capture is a TCC grant, not an
+                // entitlement — so sign them least-privilege under the hardened
+                // runtime instead of inheriting the app's broad set.
+                const isSyphon =
+                    filePath.endsWith('/MacOS/operator-syphon') ||
+                    filePath.includes('/Frameworks/Syphon.framework');
+                const entitlements = isSyphon
+                    ? 'native/syphon-bridge/syphon-entitlements.plist'
+                    : 'entitlements.plist';
                 return {
                     hardenedRuntime: true,
-                    entitlements: 'entitlements.plist',
-                    'entitlements-inherit': 'entitlements.plist',
+                    entitlements,
+                    'entitlements-inherit': entitlements,
                     signatureFlags: 'library',
                 };
             },
@@ -66,6 +77,7 @@ const config: ForgeConfig = {
             buildPath,
             _electronVersion,
             platform,
+            arch,
         ) => {
             const sourceDir = path.join(__dirname, 'crates', 'modular');
             const targetDir = path.join(
@@ -150,20 +162,55 @@ const config: ForgeConfig = {
                     fs.mkdirSync(frameworksDir, { recursive: true });
                     // ditto preserves the executable bit, symlinks, and the
                     // framework's Versions structure.
-                    execFileSync('ditto', [
-                        helperSrc,
-                        path.join(contents, 'MacOS', 'operator-syphon'),
-                    ]);
+                    const helperDest = path.join(
+                        contents,
+                        'MacOS',
+                        'operator-syphon',
+                    );
+                    execFileSync('ditto', [helperSrc, helperDest]);
                     execFileSync('ditto', [
                         frameworkSrc,
                         path.join(frameworksDir, 'Syphon.framework'),
                     ]);
+
+                    // Fail loudly if the helper doesn't cover every arch the app
+                    // ships; otherwise the missing slice silently fails to exec on
+                    // that arch. The main app binary is still named "Electron" at
+                    // this hook (renamed to Operator later), so derive the target
+                    // archs from the `arch` argument instead of reading it. Fix:
+                    // build universal (yarn build-syphon-bridge --require --universal).
+                    const requiredArchs =
+                        arch === 'universal'
+                            ? ['arm64', 'x86_64']
+                            : arch === 'x64'
+                              ? ['x86_64']
+                              : [arch];
+                    const helperArchs = execFileSync('lipo', [
+                        '-archs',
+                        helperDest,
+                    ])
+                        .toString()
+                        .trim()
+                        .split(/\s+/);
+                    const missing = requiredArchs.filter(
+                        (a) => !helperArchs.includes(a),
+                    );
+                    if (missing.length > 0) {
+                        throw new Error(
+                            `[forge] Syphon helper is missing arch(es) ${missing.join(', ')} for a ${arch} build (helper=[${helperArchs.join(', ')}]). Rebuild universal: yarn build-syphon-bridge --require --universal`,
+                        );
+                    }
                     console.log(
                         '[forge] staged Syphon companion (operator-syphon + Syphon.framework)',
                     );
-                } else {
+                } else if (process.env.SYPHON_SKIP === '1') {
                     console.warn(
-                        '[forge] native/syphon-bridge/dist not found — run `yarn build-syphon-bridge` before packaging. Skipping Syphon helper.',
+                        '[forge] SYPHON_SKIP=1 — packaging without the Syphon helper.',
+                    );
+                } else {
+                    // Don't silently ship a release whose Syphon menu item is dead.
+                    throw new Error(
+                        '[forge] native/syphon-bridge/dist not found — run `yarn build-syphon-bridge` (needs the Xcode Metal Toolchain) before packaging, or set SYPHON_SKIP=1 to ship without Syphon.',
                     );
                 }
             }

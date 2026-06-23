@@ -66,17 +66,16 @@ let syphonBridge: SyphonBridge | null = null;
 const SYPHON_MENU_ITEM_ID = 'syphon-toggle';
 
 /**
- * Reflect publishing state in the View-menu checkbox. Driven by status (on only
- * while starting/ready), not by child-process presence — the helper exits
- * asynchronously, so `isActive` lags a stop/permission-denial and would leave the
- * box stuck checked.
+ * Reflect publishing state in the View-menu checkbox. Driven by the bridge's
+ * enabled intent, not by child-process presence — the helper exits asynchronously
+ * and crash-restarts with the child momentarily absent, either of which would
+ * make `isActive` misreport the box. Intent stays steady across both.
  */
 function syncSyphonMenuItem(): void {
     const item =
         Menu.getApplicationMenu()?.getMenuItemById(SYPHON_MENU_ITEM_ID);
     if (!item) return;
-    const status = syphonBridge?.currentStatus ?? 'stopped';
-    item.checked = status === 'starting' || status === 'ready';
+    item.checked = syphonBridge?.isEnabled ?? false;
 }
 
 /**
@@ -88,8 +87,7 @@ function syncSyphonMenuItem(): void {
  */
 function applySyphonRenderTuning(): void {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    const status = syphonBridge?.currentStatus ?? 'stopped';
-    const publishing = status === 'starting' || status === 'ready';
+    const publishing = syphonBridge?.isEnabled ?? false;
     mainWindow.webContents.setBackgroundThrottling(!publishing);
 }
 
@@ -1987,8 +1985,9 @@ const createMenu = (): void => {
                     },
                     label: 'Module Profile...',
                 },
-                // Publish the window as a Syphon source (macOS only).
-                ...(isMac
+                // Publish the window as a Syphon source (macOS 14+ only; hidden
+                // elsewhere so the helper never crash-loops on an unsupported OS).
+                ...(SyphonBridge.supported
                     ? ([
                           { type: 'separator' },
                           {

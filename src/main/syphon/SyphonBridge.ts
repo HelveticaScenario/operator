@@ -38,7 +38,17 @@ export class SyphonBridge {
     private child: ChildProcess | null = null;
     private status: SyphonStatus = 'stopped';
     private restartTimer: ReturnType<typeof setTimeout> | null = null;
-    private intentionalStop = false;
+    /**
+     * User intent: true from a user start() until the matching stop()/dispose()
+     * or until the helper gives up on its own (clean exit, permission denial, or
+     * exhausting the restart budget). This is the source of truth for the toggle
+     * and the menu checkbox — it stays steady across the transient windows where
+     * `child` is momentarily null (crash backoff) or momentarily lingering (the
+     * post-stop SIGTERM grace), which process presence alone cannot represent.
+     */
+    private enabled = false;
+    /** A start() that raced a still-draining child queues the respawn here. */
+    private pendingStart: { window: BrowserWindow } | null = null;
     /** Timestamps (ms) of recent automatic restarts, for the rolling-window cap. */
     private restartTimes: number[] = [];
     private readonly fps: number;
@@ -60,8 +70,41 @@ export class SyphonBridge {
         return this.child !== null;
     }
 
+    /** Whether the feature is turned on (user intent), independent of the helper
+     *  process's transient presence during crash backoff or stop teardown. */
+    get isEnabled(): boolean {
+        return this.enabled;
+    }
+
     static get supported(): boolean {
-        return process.platform === 'darwin';
+        if (process.platform !== 'darwin') return false;
+        // ScreenCaptureKit's desktop-independent window capture and the helper's
+        // deployment target both require macOS 14+; below that the helper can't
+        // launch, so gate the whole feature rather than crash-loop the helper.
+        return SyphonBridge.macOSMajor() >= 14;
+    }
+
+    /** Reason the feature is unavailable, for surfacing in the UI. */
+    static get unsupportedReason(): string {
+        if (process.platform !== 'darwin')
+            return 'Syphon output is macOS only.';
+        return 'Syphon output requires macOS 14 or later.';
+    }
+
+    /**
+     * macOS major version. Returns Infinity when it can't be determined (e.g. the
+     * non-Electron unit-test runtime, where `process.getSystemVersion` is absent),
+     * so the platform check alone governs there.
+     */
+    private static macOSMajor(): number {
+        const getSystemVersion = (
+            process as NodeJS.Process & { getSystemVersion?: () => string }
+        ).getSystemVersion;
+        if (typeof getSystemVersion !== 'function') {
+            return Number.POSITIVE_INFINITY;
+        }
+        const major = parseInt(getSystemVersion().split('.')[0] ?? '', 10);
+        return Number.isNaN(major) ? Number.POSITIVE_INFINITY : major;
     }
 
     /** Path to the bundled helper binary, dev vs packaged. */
@@ -97,12 +140,11 @@ export class SyphonBridge {
         return id && id !== '-1' ? id : null;
     }
 
-    /** Begin publishing `window`. No-op if already active. */
+    /** Begin publishing `window`. No-op if already on and running. */
     start(window: BrowserWindow): { ok: boolean; reason?: string } {
         if (!SyphonBridge.supported) {
-            return { ok: false, reason: 'Syphon output is macOS only.' };
+            return { ok: false, reason: SyphonBridge.unsupportedReason };
         }
-        if (this.child) return { ok: true };
 
         const windowId = this.cgWindowId(window);
         if (!windowId) {
@@ -112,7 +154,20 @@ export class SyphonBridge {
             };
         }
 
-        this.intentionalStop = false;
+        const wasEnabled = this.enabled;
+        this.enabled = true;
+
+        if (this.child) {
+            // Already on and running — nothing to do.
+            if (wasEnabled) return { ok: true };
+            // A previous child is still draining from a just-issued stop(). Don't
+            // launch a second helper on the same Syphon name; queue the respawn so
+            // the exit handler starts it once the old one is gone.
+            this.pendingStart = { window };
+            this.setStatus('starting');
+            return { ok: true };
+        }
+
         // Fresh user action — clear the crash-restart history.
         this.restartTimes = [];
         this.spawn(window, windowId);
@@ -121,7 +176,8 @@ export class SyphonBridge {
 
     /** Stop publishing. */
     stop(): void {
-        this.intentionalStop = true;
+        this.enabled = false;
+        this.pendingStart = null;
         if (this.restartTimer) {
             clearTimeout(this.restartTimer);
             this.restartTimer = null;
@@ -141,7 +197,9 @@ export class SyphonBridge {
     }
 
     toggle(window: BrowserWindow): { ok: boolean; reason?: string } {
-        if (this.isActive) {
+        // Keyed on intent, not child presence, so a click during crash backoff (no
+        // child) turns the feature OFF rather than re-arming the restart loop.
+        if (this.enabled) {
             this.stop();
             return { ok: true };
         }
@@ -154,7 +212,8 @@ export class SyphonBridge {
      * 1s backstop + getppid watchdog guarantee it terminates even if we don't wait.
      */
     dispose(): void {
-        this.intentionalStop = true;
+        this.enabled = false;
+        this.pendingStart = null;
         if (this.restartTimer) {
             clearTimeout(this.restartTimer);
             this.restartTimer = null;
@@ -178,8 +237,14 @@ export class SyphonBridge {
         });
         this.child = child;
 
+        // stdout is a byte stream: a `STATUS=…` line can split across `data`
+        // events, so carry the trailing partial line over to the next chunk.
+        let stdoutResidual = '';
         child.stdout?.on('data', (buf: Buffer) => {
-            for (const line of buf.toString().split('\n')) {
+            stdoutResidual += buf.toString();
+            const lines = stdoutResidual.split('\n');
+            stdoutResidual = lines.pop() ?? '';
+            for (const line of lines) {
                 const match = line.match(/^STATUS=(\w+)/);
                 if (match) this.handleStatusToken(match[1]);
             }
@@ -196,6 +261,7 @@ export class SyphonBridge {
                 err.message,
             );
             this.child = null;
+            this.enabled = false;
             this.setStatus('error');
         });
 
@@ -207,13 +273,37 @@ export class SyphonBridge {
             console.log(
                 `[syphon-bridge] exited code=${code ?? '-'} signal=${signal ?? '-'}`,
             );
-            if (this.intentionalStop) {
+
+            // A start() that raced this child's teardown queued a respawn; honor it
+            // now the old helper is gone (whatever its exit reason was). Handle it
+            // entirely here — never fall through to crash handling, which would
+            // restart against the stale spawn-closure window instead of the queued
+            // one.
+            const pending = this.pendingStart;
+            this.pendingStart = null;
+            if (pending && this.enabled) {
+                const nextId = this.cgWindowId(pending.window);
+                if (nextId) {
+                    this.restartTimes = [];
+                    this.spawn(pending.window, nextId);
+                } else {
+                    // The window isn't capturable right now; settle into a clean
+                    // stopped state so the user can re-enable once it is.
+                    this.enabled = false;
+                    this.setStatus('stopped');
+                }
+                return;
+            }
+
+            // User/app turned the feature off (stop/dispose).
+            if (!this.enabled) {
                 this.setStatus('stopped');
                 return;
             }
             // Clean self-exit (code 0): the helper tore itself down on its own —
             // e.g. the captured window closed. Not a crash, so don't restart.
             if (code === 0) {
+                this.enabled = false;
                 this.setStatus('stopped');
                 return;
             }
@@ -221,13 +311,13 @@ export class SyphonBridge {
             // already triggered the prompt. Don't auto-restart (it would loop on
             // the prompt) — wait for the user to grant and re-enable.
             if (code === 2) {
+                this.enabled = false;
                 this.setStatus('permission_required');
                 return;
             }
             // Otherwise treat it as a crash and restart while the feature is on,
             // but only within the rolling restart budget so a helper that can
             // never start — or that flaps — doesn't loop forever.
-            this.setStatus('error');
             const now = Date.now();
             this.restartTimes = this.restartTimes.filter(
                 (t) => now - t < RESTART_WINDOW_MS,
@@ -236,12 +326,19 @@ export class SyphonBridge {
                 console.error(
                     `[syphon-bridge] giving up after ${this.restartTimes.length} restarts within ${RESTART_WINDOW_MS / 1000}s`,
                 );
+                // Stopped trying — drop intent BEFORE the status fires so the
+                // listener unchecks the menu and restores throttling; the next
+                // click is then a fresh start rather than a stop.
+                this.enabled = false;
+                this.setStatus('error');
                 return;
             }
+            // Transient error before the scheduled restart — intent stays on.
+            this.setStatus('error');
             this.restartTimes.push(now);
             this.restartTimer = setTimeout(() => {
                 this.restartTimer = null;
-                if (this.intentionalStop) return;
+                if (!this.enabled) return;
                 const nextId = this.cgWindowId(window);
                 if (nextId) this.spawn(window, nextId);
             }, RESTART_DELAY_MS);
