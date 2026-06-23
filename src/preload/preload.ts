@@ -14,6 +14,7 @@ import {
     MENU_CHANNELS,
     MainLogEntry,
     Promisify,
+    SyphonToggleResult,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { QueuedTrigger } from '../shared/ipcTypes';
@@ -234,6 +235,15 @@ export interface ElectronAPI {
         getPath: () => Promise<string>;
         readUser: () => Promise<KeybindingOverride[]>;
         ensureFile: () => Promise<string>;
+    };
+
+    // Syphon window output (macOS): the helper lives in the main process, so the
+    // renderer's command toggles it over IPC.
+    syphon: {
+        /** Whether Syphon output is available (macOS 14+). */
+        isSupported: () => Promise<boolean>;
+        /** Toggle publishing; resolves with the result (main shows any dialog). */
+        toggle: () => Promise<SyphonToggleResult>;
     };
 
     // Application (top bar) menu integration
@@ -480,6 +490,12 @@ const electronAPI: ElectronAPI = {
         getPath: () => invokeIPC('KEYBINDINGS_GET_PATH'),
         readUser: () => invokeIPC('KEYBINDINGS_READ_USER'),
         ensureFile: () => invokeIPC('KEYBINDINGS_ENSURE_FILE'),
+    },
+
+    // Syphon window output (macOS)
+    syphon: {
+        isSupported: () => invokeIPC('SYPHON_IS_SUPPORTED'),
+        toggle: () => invokeIPC('SYPHON_TOGGLE'),
     },
 
     // Application (top bar) menu integration

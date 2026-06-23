@@ -127,6 +127,13 @@ export interface AppConfig {
     xyScopeLineWidth?: number;
 }
 
+/** Result of toggling the macOS Syphon window-output helper. */
+export interface SyphonToggleResult {
+    ok: boolean;
+    /** Present when `ok` is false — a user-facing reason. */
+    reason?: string;
+}
+
 /**
  * Log level for main process logs forwarded to renderer
  */
@@ -379,6 +386,10 @@ export const IPC_CHANNELS = {
     KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
     KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
+    // Syphon window output (macOS)
+    SYPHON_TOGGLE: 'modular:syphon:toggle',
+    SYPHON_IS_SUPPORTED: 'modular:syphon:is-supported',
+
     // Main process logging
     MAIN_LOG: 'modular:main:log',
 
@@ -557,6 +568,10 @@ export interface IPCHandlers {
     [IPC_CHANNELS.KEYBINDINGS_GET_PATH]: () => string;
     [IPC_CHANNELS.KEYBINDINGS_READ_USER]: () => KeybindingOverride[];
     [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
+
+    // Syphon window output (macOS)
+    [IPC_CHANNELS.SYPHON_TOGGLE]: () => SyphonToggleResult;
+    [IPC_CHANNELS.SYPHON_IS_SUPPORTED]: () => boolean;
 
     // Main process logging
     [IPC_CHANNELS.MAIN_LOG]: (entry: MainLogEntry) => void;
