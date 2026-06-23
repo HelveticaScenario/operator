@@ -14,3 +14,9 @@ dist
 playwright-report
 target
 .vite
+
+# Generated files written verbatim by their generators (yarn build:grammar,
+# the peggy-parity fixture test). CI regenerates them and fails on any diff,
+# so prettier must not reformat the committed copies.
+src/main/dsl/miniNotation/grammar.generated.ts
+crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json

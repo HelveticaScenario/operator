@@ -29,7 +29,15 @@ export function formatPath(currentFile: string) {
     if (!currentFile.startsWith('/')) {
         currentFile = '/' + currentFile;
     }
-    if (!currentFile.endsWith('.js') && !currentFile.endsWith('.mjs')) {
+    // Append .mjs so extensionless/untitled buffers are treated as ES modules
+    // by Monaco's TypeScript tooling. Real extensions are left intact — in
+    // particular .json keeps a JSON model URI (keybindings.json, config.json),
+    // rather than becoming a misleading .json.mjs.
+    if (
+        !currentFile.endsWith('.js') &&
+        !currentFile.endsWith('.mjs') &&
+        !currentFile.endsWith('.json')
+    ) {
         currentFile += '.mjs';
     }
     return `file://${currentFile}`;

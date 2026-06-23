@@ -259,6 +259,11 @@ export function ModuleProfile({ isOpen, onClose }: ModuleProfileProps) {
         [maxSelfNsPerSample, unit, sampleRateHz],
     );
 
+    // TanStack Table's useReactTable() is flagged by the React Compiler as an
+    // incompatible library (it returns non-memoizable functions). Its return is
+    // not passed into other memoized hooks/components, so skipping memoization
+    // here is safe.
+    // eslint-disable-next-line react-hooks-js/incompatible-library
     const table = useReactTable({
         data,
         columns,

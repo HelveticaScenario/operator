@@ -12,7 +12,15 @@
         "moduleResolution": "bundler",
         "resolveJsonModule": true,
         "jsx": "react-jsx",
-        "strict": true
+        "strict": true,
+        // tinykeys ships `dist/tinykeys.d.ts` but its package.json `exports`
+        // map omits a `types` condition and routes imports to
+        // `tinykeys.module.js` (no sibling `.d.ts`), so `moduleResolution:
+        // bundler` can't find the declarations. Point the bare specifier at the
+        // real built entry so tsc resolves the upstream types.
+        "paths": {
+            "tinykeys": ["./node_modules/tinykeys/dist/tinykeys"]
+        }
     },
     "include": ["src/**/*"]
 }

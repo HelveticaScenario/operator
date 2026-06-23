@@ -14,11 +14,14 @@ import {
 interface UseEditorBuffersParams {
     workspaceRoot: string | null;
     refreshFileTree: () => Promise<void>;
+    /** Called with the absolute path after a buffer is successfully saved. */
+    onFileSaved?: (filePath: string) => void;
 }
 
 export function useEditorBuffers({
     workspaceRoot,
     refreshFileTree,
+    onFileSaved,
 }: UseEditorBuffersParams) {
     const [buffers, setBuffers] = useState<EditorBuffer[]>(() => {
         const saved = readUnsavedBuffers();
@@ -132,6 +135,33 @@ export function useEditorBuffers({
         [buffers, workspaceRoot],
     );
 
+    // Open a file by absolute path, bypassing the workspace-relative path
+    // join used by `openFile`. Used for files outside the workspace such as
+    // the user keybindings.json in userData.
+    const openAbsoluteFile = useCallback(
+        async (absPath: string) => {
+            const existing = buffers.find(
+                (b) => b.kind === 'file' && b.filePath === absPath,
+            );
+            if (existing) {
+                setActiveBufferId(getBufferId(existing));
+                return;
+            }
+            const content = await electronAPI.filesystem.readFile(absPath);
+            const newBuffer: EditorBuffer = {
+                content,
+                dirty: false,
+                filePath: absPath,
+                id: v4(),
+                isPreview: false,
+                kind: 'file',
+            };
+            setBuffers((prev) => [...prev, newBuffer]);
+            setActiveBufferId(absPath);
+        },
+        [buffers],
+    );
+
     const createUntitledFile = useCallback(() => {
         setBuffers((prev) => {
             // Derive next ID from current state to avoid race conditions
@@ -211,6 +241,7 @@ export function useEditorBuffers({
                         setActiveBufferId(normalized);
                     }
                     await refreshFileTree();
+                    onFileSaved?.(normalized);
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
@@ -228,12 +259,13 @@ export function useEditorBuffers({
                                 : b,
                         ),
                     );
+                    onFileSaved?.(buffer.filePath);
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
             }
         },
-        [activeBufferId, buffers, refreshFileTree],
+        [activeBufferId, buffers, refreshFileTree, onFileSaved],
     );
 
     const renameFile = useCallback(
@@ -509,6 +541,7 @@ export function useEditorBuffers({
         handlePatchChange,
         handleRenameCommit,
         keepBuffer,
+        openAbsoluteFile,
         openFile,
         patchCode,
         renameFile,
