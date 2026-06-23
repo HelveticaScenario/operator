@@ -7,7 +7,7 @@ import {
     type SpAlignmentMode,
     type SpPattern,
 } from '../index';
-import type { MiniAST, ParsedPattern } from '../ast';
+import type { ParsedPattern } from '../ast';
 import { parseMini } from '../parser';
 import { replaceSignals } from '../../GraphBuilder';
 
@@ -167,7 +167,7 @@ describe('$p.s JSON serialization', () => {
 describe('$p.s source AST integrity', () => {
     test('rest atoms pass through into the source AST', () => {
         const r = $p.s('0 ~ 4', 'c(maj)');
-        const ast = r.sources[0].ast as MiniAST;
+        const ast = r.sources[0].ast;
         if ('Sequence' in ast) {
             expect('Rest' in ast.Sequence[1][0]).toBe(true);
         } else {
@@ -178,13 +178,13 @@ describe('$p.s source AST integrity', () => {
     test('chain RHS is parsed into its own AST', () => {
         const r = $p.s('0 2 4', 'c(maj)').add('1 3');
         expect(r.sources[1].source).toBe('1 3');
-        const ast = r.sources[1].ast as MiniAST;
+        const ast = r.sources[1].ast;
         expect('Sequence' in ast).toBe(true);
     });
 
     test('euclidean modifier in source preserved', () => {
         const r = $p.s('0(3,8)', 'c(maj)');
-        const ast = r.sources[0].ast as MiniAST;
+        const ast = r.sources[0].ast;
         expect('Euclidean' in ast).toBe(true);
     });
 });

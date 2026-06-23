@@ -1064,7 +1064,10 @@ function App() {
             () => {
                 void handleOpenKeybindingsRef.current();
             },
-            { label: 'Open Keyboard Shortcuts (JSON)', category: 'Preferences' },
+            {
+                label: 'Open Keyboard Shortcuts (JSON)',
+                category: 'Preferences',
+            },
         );
 
         return () => {
@@ -1135,10 +1138,14 @@ function App() {
         );
         const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
             const ed = editorRef.current;
-            if (!ed || !activeBufferId) {
+            // Read the live id from the ref: this listener is registered once
+            // (deps below), so closing over the `activeBufferId` state would
+            // migrate a stale buffer after the user switches buffers.
+            const activeId = activeBufferIdRef.current;
+            if (!ed || !activeId) {
                 console.warn('Migrate buffer: no editor available');
                 setMigrationState({
-                    bufferId: activeBufferId ?? '',
+                    bufferId: activeId ?? '',
                     original: '',
                     migrated: '',
                     summary: {
@@ -1154,7 +1161,7 @@ function App() {
             const original = ed.getValue();
             const result = migrateCycleCalls(original);
             setMigrationState({
-                bufferId: activeBufferId,
+                bufferId: activeId,
                 original,
                 migrated: result.migrated,
                 summary: {
@@ -1214,7 +1221,10 @@ function App() {
         window.addEventListener('operator:keybindings-changed', onChanged);
         return () => {
             disposed = true;
-            window.removeEventListener('operator:keybindings-changed', onChanged);
+            window.removeEventListener(
+                'operator:keybindings-changed',
+                onChanged,
+            );
             disposer?.();
         };
     }, []);
