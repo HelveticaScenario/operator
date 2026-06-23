@@ -77,7 +77,11 @@ export function CommandPalette({
                         value={itemValue(item)}
                         onSelect={() => {
                             onOpenChange(false);
-                            item.run();
+                            // Defer until the dialog (and its focus trap) has
+                            // actually closed, so a command that opens its own
+                            // focused UI — e.g. Go to Line's input — isn't
+                            // immediately robbed of focus by the open palette.
+                            requestAnimationFrame(() => item.run());
                         }}
                         className="command-palette-item"
                     >

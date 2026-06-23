@@ -59,6 +59,7 @@ function operatorItem(
 }
 
 function editorActionItem(
+    activeEditor: editor.ICodeEditor,
     action: editor.IEditorAction,
 ): PaletteItem | null {
     if (!action.isSupported()) {
@@ -71,6 +72,10 @@ function editorActionItem(
         label,
         category: 'Editor',
         run: () => {
+            // Some actions (e.g. Go to Line) open their own focused widget,
+            // which needs the editor to hold focus when the action runs — the
+            // palette had focus until it closed.
+            activeEditor.focus();
             void action.run();
         },
     };
@@ -92,7 +97,7 @@ export function buildPaletteItems(
 
     if (activeEditor) {
         for (const action of activeEditor.getSupportedActions()) {
-            const item = editorActionItem(action);
+            const item = editorActionItem(activeEditor, action);
             if (item) {
                 items.push(item);
             }
