@@ -251,15 +251,52 @@ function push(
 
 // ─── Comments ────────────────────────────────────────────────────────────
 
-const COMMENT_RE = /(\/\/[^\n]*)|(\/\*[\s\S]*?\*\/)/g;
+/**
+ * Extract comment spans from `source`, skipping string literals so that
+ * comment-like text inside a string (a `"…// …"` doc string, an `https://`
+ * URL) is never mistaken for a comment. Single-pass: at each position a string
+ * literal is consumed whole — via {@link skipString} — before `//` or `/*` can
+ * open a comment.
+ */
+function scanComments(source: string): { start: number; text: string }[] {
+    const comments: { start: number; text: string }[] = [];
+    const n = source.length;
+    let i = 0;
+    while (i < n) {
+        const strEnd = skipString(source, i);
+        if (strEnd !== -1) {
+            i = strEnd;
+            continue;
+        }
+        if (source[i] === '/' && source[i + 1] === '/') {
+            let j = i + 2;
+            while (j < n && source[j] !== '\n') j += 1;
+            comments.push({ start: i, text: source.slice(i, j) });
+            i = j;
+            continue;
+        }
+        if (source[i] === '/' && source[i + 1] === '*') {
+            let j = i + 2;
+            while (j < n && !(source[j] === '*' && source[j + 1] === '/')) {
+                j += 1;
+            }
+            const end = j < n ? j + 2 : n;
+            comments.push({ start: i, text: source.slice(i, end) });
+            i = end;
+            continue;
+        }
+        i += 1;
+    }
+    return comments;
+}
 
 /**
  * Swap `$wavetable(wav, pitch, …)` → `$wavetable(pitch, wav, …)` inside
  * comments. ts-morph doesn't expose comments as expression nodes, so they're
- * scanned as raw text: each `$wavetable(` is matched to its closing paren
- * (respecting nested brackets and string literals), its top-level arguments
- * are split, and the first two are swapped when the first is a `$wavs()`
- * handle and the second is not.
+ * scanned as raw text (string literals excluded): each `$wavetable(` is matched
+ * to its closing paren (respecting nested brackets and string literals), its
+ * top-level arguments are split, and the first two are swapped when the first
+ * is a `$wavs()` handle and the second is not.
  */
 function collectCommentEdits(source: string): {
     commentEdits: Edit[];
@@ -268,9 +305,9 @@ function collectCommentEdits(source: string): {
     const edits: Edit[] = [];
     let count = 0;
 
-    for (const commentMatch of source.matchAll(COMMENT_RE)) {
-        const commentText = commentMatch[0];
-        const commentStart = commentMatch.index ?? 0;
+    for (const comment of scanComments(source)) {
+        const commentText = comment.text;
+        const commentStart = comment.start;
 
         for (const call of scanCalls(commentText, '$wavetable')) {
             const argSpans = splitTopLevelArgs(

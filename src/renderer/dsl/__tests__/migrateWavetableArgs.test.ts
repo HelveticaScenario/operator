@@ -223,4 +223,12 @@ describe('migrateWavetableArgs', () => {
         expect(result.migrated).toBe(source);
         expect(result.commentsChanged).toBe(0);
     });
+
+    test('does not rewrite a $wavetable call embedded in a string literal', () => {
+        const source = `const doc = "see // $wavetable($wavs().a, 'c4')"`;
+        const result = migrateWavetableArgs(source);
+        expect(result.migrated).toBe(source);
+        expect(result.commentsChanged).toBe(0);
+        expect(result.callsChanged).toBe(0);
+    });
 });

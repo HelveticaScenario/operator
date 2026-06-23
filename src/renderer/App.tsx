@@ -1001,7 +1001,6 @@ function App() {
                         title: wavetableTitle,
                         summary: {
                             callsChanged: 0,
-                            assignmentsChanged: 0,
                             commentsChanged: 0,
                             skippedVariables: [],
                             error: 'No editor available',
@@ -1019,7 +1018,6 @@ function App() {
                     skippedLabel: 'Needs manual review:',
                     summary: {
                         callsChanged: result.callsChanged,
-                        assignmentsChanged: 0,
                         commentsChanged: result.commentsChanged,
                         skippedVariables: result.skipped,
                         error: result.error,

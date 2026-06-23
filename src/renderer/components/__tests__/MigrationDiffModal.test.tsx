@@ -277,6 +277,54 @@ describe('MigrationDiffModal', () => {
         expect(onCancel).not.toHaveBeenCalled();
     });
 
+    test('hides the assignments segment when assignmentsChanged is undefined', () => {
+        const collectText = (root: AnyEl): string => {
+            const out: string[] = [];
+            for (const el of walkElements(root)) {
+                const children = (el.props as { children?: unknown }).children;
+                const items = Array.isArray(children) ? children : [children];
+                for (const c of items) if (typeof c === 'string') out.push(c);
+            }
+            return out.join(' ');
+        };
+
+        const withAssignments = renderModal({
+            summary: { callsChanged: 1, assignmentsChanged: 0 },
+        });
+        expect(collectText(withAssignments!)).toContain('assignment');
+
+        const withoutAssignments = renderModal({
+            summary: { callsChanged: 1, assignmentsChanged: undefined },
+        });
+        expect(collectText(withoutAssignments!)).not.toContain('assignment');
+    });
+
+    test('shows manual-review empty-state when only skipped items, no auto changes', () => {
+        const tree = renderModal({
+            original: 'x',
+            migrated: 'x',
+            summary: {
+                callsChanged: 0,
+                assignmentsChanged: undefined,
+                commentsChanged: 0,
+                skippedVariables: ['line 3: $wavetable(getWav(), 0)'],
+            },
+        });
+        expect(findDiffEditorStub(tree!)).toBeNull();
+
+        const texts: string[] = [];
+        for (const el of walkElements(tree!)) {
+            const children = (el.props as { children?: unknown }).children;
+            if (typeof children === 'string') texts.push(children);
+        }
+        expect(texts.some((t) => t.includes('No automatic changes'))).toBe(
+            true,
+        );
+        expect(texts.some((t) => t.includes('Buffer already migrated'))).toBe(
+            false,
+        );
+    });
+
     test('renders skipped-variable warning when list non-empty', () => {
         const tree = renderModal({
             summary: {

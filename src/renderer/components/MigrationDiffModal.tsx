@@ -7,7 +7,9 @@ import './MigrationDiffModal.css';
 
 export interface MigrationModalSummary {
     callsChanged: number;
-    assignmentsChanged: number;
+    /** Omit for migrations that have no notion of assignment rewrites; the
+     *  assignments segment is then hidden from the summary line. */
+    assignmentsChanged?: number;
     commentsChanged: number;
     skippedVariables: string[];
     error?: string;
@@ -43,7 +45,7 @@ export function MigrationDiffModal({
 
     const totalChanges =
         summary.callsChanged +
-        summary.assignmentsChanged +
+        (summary.assignmentsChanged ?? 0) +
         summary.commentsChanged;
     const noChanges = totalChanges === 0;
     const canApply = !noChanges && !summary.error;
@@ -87,8 +89,13 @@ export function MigrationDiffModal({
                     <span className="migration-summary-counts">
                         {summary.callsChanged} call
                         {summary.callsChanged === 1 ? '' : 's'} ·{' '}
-                        {summary.assignmentsChanged} assignment
-                        {summary.assignmentsChanged === 1 ? '' : 's'} ·{' '}
+                        {summary.assignmentsChanged !== undefined && (
+                            <>
+                                {summary.assignmentsChanged} assignment
+                                {summary.assignmentsChanged === 1 ? '' : 's'} ·
+                                {' '}
+                            </>
+                        )}
                         {summary.commentsChanged} comment
                         {summary.commentsChanged === 1 ? '' : 's'} rewritten
                     </span>
@@ -107,7 +114,9 @@ export function MigrationDiffModal({
                 <div className="migration-body">
                     {noChanges ? (
                         <div className="migration-empty">
-                            Buffer already migrated — no changes to apply.
+                            {summary.skippedVariables.length > 0
+                                ? 'No automatic changes to apply — see the flagged items above.'
+                                : 'Buffer already migrated — no changes to apply.'}
                         </div>
                     ) : (
                         <DiffEditor
