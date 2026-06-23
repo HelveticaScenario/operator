@@ -40,9 +40,7 @@ describe('parseWhen', () => {
 
     test('&& short-circuits and respects truthiness of both sides', () => {
         const expr = parseWhen('editorFocused && !suggestWidgetVisible');
-        expect(
-            expr.evaluate(reader({ editorFocused: true })),
-        ).toBe(true);
+        expect(expr.evaluate(reader({ editorFocused: true }))).toBe(true);
         expect(
             expr.evaluate(
                 reader({ editorFocused: true, suggestWidgetVisible: true }),
@@ -53,9 +51,7 @@ describe('parseWhen', () => {
 
     test('|| evaluates either side', () => {
         const expr = parseWhen('editorFocused || fileExplorerFocused');
-        expect(
-            expr.evaluate(reader({ fileExplorerFocused: true })),
-        ).toBe(true);
+        expect(expr.evaluate(reader({ fileExplorerFocused: true }))).toBe(true);
         expect(expr.evaluate(reader({}))).toBe(false);
     });
 
@@ -100,11 +96,28 @@ describe('parseWhen', () => {
         expect(expr.evaluate(reader({ mode: 'edit' }))).toBe(true);
     });
 
+    test('an unquoted equality RHS is a string literal, not a key lookup', () => {
+        const expr = parseWhen('editorLangId == javascript');
+        expect(expr.evaluate(reader({ editorLangId: 'javascript' }))).toBe(
+            true,
+        );
+        expect(expr.evaluate(reader({ editorLangId: 'typescript' }))).toBe(
+            false,
+        );
+        // The bare RHS must not resolve as a context key: even if a key named
+        // `javascript` exists, the comparison is against the literal string.
+        expect(
+            parseWhen('editorLangId != javascript').evaluate(
+                reader({ editorLangId: 'json', javascript: 'json' }),
+            ),
+        ).toBe(true);
+    });
+
     test('dotted identifiers are valid', () => {
         const expr = parseWhen('editor.cursor.atStart');
-        expect(
-            expr.evaluate(reader({ 'editor.cursor.atStart': true })),
-        ).toBe(true);
+        expect(expr.evaluate(reader({ 'editor.cursor.atStart': true }))).toBe(
+            true,
+        );
     });
 
     test('throws on unterminated string', () => {

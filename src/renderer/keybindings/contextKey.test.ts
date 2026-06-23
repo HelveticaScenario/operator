@@ -3,7 +3,7 @@
  * so each test calls `reset()` in afterEach.
  */
 
-import { afterEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test } from 'vitest';
 
 import { contextKeys, evaluateWhen } from './contextKey';
 
@@ -26,65 +26,12 @@ describe('ContextKeyService', () => {
         expect(contextKeys.get('inSettingsModal')).toBeUndefined();
     });
 
-    test('setting the same value does not fire a change event', () => {
-        const listener = vi.fn();
-        contextKeys.onDidChange(listener);
-
-        contextKeys.set('a', 1);
-        contextKeys.set('a', 1);
-
-        expect(listener).toHaveBeenCalledTimes(1);
-        expect(listener).toHaveBeenCalledWith(new Set(['a']));
-    });
-
-    test('setMany emits a single change event listing changed keys only', () => {
-        contextKeys.set('a', 1);
-        const listener = vi.fn();
-        contextKeys.onDidChange(listener);
-
+    test('setMany sets every entry at once', () => {
         contextKeys.setMany({ a: 1, b: 2, c: 3 });
 
-        expect(listener).toHaveBeenCalledTimes(1);
-        expect(listener).toHaveBeenCalledWith(new Set(['b', 'c']));
-    });
-
-    test('setMany skips emit when nothing changed', () => {
-        contextKeys.setMany({ a: 1, b: 2 });
-        const listener = vi.fn();
-        contextKeys.onDidChange(listener);
-
-        contextKeys.setMany({ a: 1, b: 2 });
-
-        expect(listener).not.toHaveBeenCalled();
-    });
-
-    test('onDidChange returns a Disposable that detaches the listener', () => {
-        const listener = vi.fn();
-        const handle = contextKeys.onDidChange(listener);
-
-        contextKeys.set('a', 1);
-        handle.dispose();
-        contextKeys.set('a', 2);
-
-        expect(listener).toHaveBeenCalledTimes(1);
-    });
-
-    test('listener exceptions do not break notification of other listeners', () => {
-        const consoleErr = vi
-            .spyOn(console, 'error')
-            .mockImplementation(() => {});
-        const a = vi.fn(() => {
-            throw new Error('boom');
-        });
-        const b = vi.fn();
-        contextKeys.onDidChange(a);
-        contextKeys.onDidChange(b);
-
-        contextKeys.set('a', 1);
-
-        expect(a).toHaveBeenCalled();
-        expect(b).toHaveBeenCalled();
-        consoleErr.mockRestore();
+        expect(contextKeys.get('a')).toBe(1);
+        expect(contextKeys.get('b')).toBe(2);
+        expect(contextKeys.get('c')).toBe(3);
     });
 
     test('evaluateWhen reads through the global service', () => {

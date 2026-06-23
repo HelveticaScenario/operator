@@ -19,76 +19,35 @@ import { parseWhen, type IContextReader, type WhenExpr } from './whenParser';
 
 export type ContextKeyValue = boolean | number | string | null | undefined;
 
-/** Listener invoked once per `set` call. `changedKeys` is non-empty. */
-export type ContextChangeListener = (changedKeys: ReadonlySet<string>) => void;
-
-export interface Disposable {
-    dispose(): void;
-}
-
 class ContextKeyService implements IContextReader {
     private readonly values = new Map<string, ContextKeyValue>();
-    private readonly listeners = new Set<ContextChangeListener>();
 
     get(key: string): ContextKeyValue {
         return this.values.get(key);
     }
 
     set(key: string, value: ContextKeyValue): void {
-        const prev = this.values.get(key);
-        if (Object.is(prev, value)) return;
         this.values.set(key, value);
-        this.emit(new Set([key]));
     }
 
     /**
-     * Batch update — emits a single change event listing every key that
-     * actually changed. Useful when several keys flip in response to one
-     * focus / modal transition.
+     * Batch update — sets every entry. Convenient when several keys flip in
+     * response to one focus / modal / model transition.
      */
     setMany(entries: Record<string, ContextKeyValue>): void {
-        const changed = new Set<string>();
         for (const key of Object.keys(entries)) {
-            const value = entries[key];
-            const prev = this.values.get(key);
-            if (!Object.is(prev, value)) {
-                this.values.set(key, value);
-                changed.add(key);
-            }
+            this.values.set(key, entries[key]);
         }
-        if (changed.size > 0) this.emit(changed);
     }
 
-    /** Remove a key entirely. Treated as a change to `undefined`. */
+    /** Remove a key entirely. */
     unset(key: string): void {
-        if (!this.values.has(key)) return;
         this.values.delete(key);
-        this.emit(new Set([key]));
     }
 
-    onDidChange(listener: ContextChangeListener): Disposable {
-        this.listeners.add(listener);
-        return {
-            dispose: () => {
-                this.listeners.delete(listener);
-            },
-        };
-    }
-
-    /** Test hook — drops every key and every listener. */
+    /** Test hook — drops every key. */
     reset(): void {
         this.values.clear();
-        this.listeners.clear();
-    }
-
-    private emit(changedKeys: ReadonlySet<string>): void {
-        for (const listener of this.listeners) {
-            try {
-                listener(changedKeys);
-            } catch (err) {
-                console.error('[contextKey] listener threw', err);
-            }
-        }
     }
 }
 

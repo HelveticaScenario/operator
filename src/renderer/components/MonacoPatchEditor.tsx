@@ -13,10 +13,7 @@ import {
     registerDslFormattingProvider,
 } from './monaco/formattingProvider';
 import { applyMonacoTheme } from './monaco/theme';
-import {
-    registerConfigSchema,
-    registerConfigSchemaForFile,
-} from './monaco/jsonSchema';
+import { registerConfigSchema } from './monaco/jsonSchema';
 import {
     type ScopeViewZoneHandle,
     createScopeViewZones,
@@ -224,6 +221,17 @@ export function MonacoPatchEditor({
     const handleMount: OnMount = (ed) => {
         setEditor(ed);
         editorRef.current = ed;
+        // When the inner <Editor> unmounts (e.g. the last buffer closes and
+        // currentFile goes falsy) Monaco disposes this editor. Drop our
+        // references so the mirror effect below clears the parent's
+        // paletteEditor and the dispatch target instead of leaving them
+        // pointing at a disposed editor.
+        ed.onDidDispose(() => {
+            setEditor((current) => (current === ed ? null : current));
+            if (editorRef.current === ed) {
+                editorRef.current = null;
+            }
+        });
         // No editor-level keybindings are registered here: the capture-phase
         // window keymap (keybindings/keymap) owns every shortcut and runs
         // before Monaco, so it is the single source of truth. Hardcoding
@@ -246,7 +254,7 @@ export function MonacoPatchEditor({
         if (!editor) return;
         const stopFocus = bindEditorFocus(editor);
         const stopWidgets = bindEditorWidgetVisibility(editor);
-        const stopConstants = bindEditorContextConstants();
+        const stopConstants = bindEditorContextConstants(editor);
         return () => {
             stopFocus();
             stopWidgets();
@@ -371,14 +379,6 @@ export function MonacoPatchEditor({
         registerConfigSchema(monaco, configSchema);
     }, [monaco]);
 
-    // Also configure schema when editing config file specifically
-    useEffect(() => {
-        if (!monaco || !currentFile?.endsWith('config.json')) {
-            return;
-        }
-        registerConfigSchemaForFile(monaco, configSchema, currentFile);
-    }, [monaco, currentFile]);
-
     // Determine language based on file extension
     const editorLanguage = useMemo(() => {
         if (!currentFile) {
@@ -393,9 +393,11 @@ export function MonacoPatchEditor({
     // Memoize options so the @monaco-editor/react wrapper's [options] effect
     // does not fire on every parent render (App.tsx re-renders at ~60Hz via
     // the scope-polling RAF loop, which would otherwise cause a constant
-    // editor.updateOptions storm). Also: fixedOverflowWidgets lets the
-    // suggest widget escape the .app-main { overflow: hidden } clipping
-    // ancestor by reparenting to document.body.
+    // editor.updateOptions storm). Also: fixedOverflowWidgets renders the
+    // overflowing widgets (suggest, hover, parameter hints) with
+    // position: fixed so they escape the .app-main { overflow: hidden }
+    // clipping ancestor. The widgets stay inside the editor's DOM node, so
+    // contextKeyBootstrap's widget-visibility observer still sees them.
     const editorOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(
         () => ({
             minimap: { enabled: false },

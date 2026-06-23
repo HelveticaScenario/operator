@@ -67,6 +67,39 @@ export const CONTEXT_KEY_INFO: readonly ContextKeyInfo[] = [
         description: 'A document-symbol (Go to Symbol) provider is available.',
     },
     {
+        key: 'editorHasCompletionItemProvider',
+        type: 'boolean',
+        description: 'A completion (suggestion) provider is available.',
+    },
+    {
+        key: 'editorHasSignatureHelpProvider',
+        type: 'boolean',
+        description:
+            'A signature-help (parameter hints) provider is available.',
+    },
+    {
+        key: 'editorHasCodeActionsProvider',
+        type: 'boolean',
+        description:
+            'A code-actions (quick fix / refactor) provider is available.',
+    },
+    {
+        key: 'editorHasRenameProvider',
+        type: 'boolean',
+        description: 'A rename provider is available.',
+    },
+    {
+        key: 'editorHasDocumentSelectionFormattingProvider',
+        type: 'boolean',
+        description:
+            'A range-formatting (Format Selection) provider is available.',
+    },
+    {
+        key: 'foldingEnabled',
+        type: 'boolean',
+        description: "Code folding is enabled by the editor's folding option.",
+    },
+    {
         key: 'suggestWidgetVisible',
         type: 'boolean',
         description: 'The editor suggestion widget is visible.',

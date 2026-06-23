@@ -17,7 +17,7 @@
 
 import type { editor } from 'monaco-editor';
 
-import { contextKeys } from './contextKey';
+import { contextKeys, type ContextKeyValue } from './contextKey';
 
 export type Teardown = () => void;
 
@@ -50,9 +50,7 @@ export function bindEditorFocus(ed: editor.IStandaloneCodeEditor): Teardown {
         ed.onDidFocusEditorWidget(() => setWidgetFocus(true)),
         ed.onDidBlurEditorWidget(() => setWidgetFocus(false)),
         ed.onDidFocusEditorText(() => contextKeys.set('editorTextFocus', true)),
-        ed.onDidBlurEditorText(() =>
-            contextKeys.set('editorTextFocus', false),
-        ),
+        ed.onDidBlurEditorText(() => contextKeys.set('editorTextFocus', false)),
     ];
     return () => {
         for (const sub of subs) {
@@ -63,30 +61,66 @@ export function bindEditorFocus(ed: editor.IStandaloneCodeEditor): Teardown {
     };
 }
 
+// Provider context keys that monaco-editor's bundled TypeScript/JavaScript
+// language service registers by default (its default modeConfiguration enables
+// completion, signatureHelp, definitions, references, documentSymbols, rename,
+// codeActions, and range formatting). They are live while a js/ts model is
+// active and absent for other languages (e.g. the keybindings.json buffer), so
+// they track the active model's language rather than being constant.
+const JS_TS_PROVIDER_KEYS = [
+    'editorHasDefinitionProvider',
+    'editorHasReferenceProvider',
+    'editorHasDocumentSymbolProvider',
+    'editorHasCompletionItemProvider',
+    'editorHasSignatureHelpProvider',
+    'editorHasCodeActionsProvider',
+    'editorHasRenameProvider',
+    'editorHasDocumentSelectionFormattingProvider',
+] as const;
+
 /**
- * Seed the static editor context keys VS Code `when` clauses commonly test.
- * Operator's editor is always editable JavaScript with a definition provider,
- * so these are constant; provider keys we do not satisfy stay unset (falsy),
- * which simply means those bindings never fire.
+ * Mirror the editor context keys that VS Code `when` clauses commonly test:
+ *   - editorReadonly  — always false (Operator's buffers are editable)
+ *   - foldingEnabled  — reflects the editor's `folding` option
+ *   - editorLangId    — the active model's language id
+ *   - editorHas<X>Provider — true while a js/ts model is active (see above)
+ *
+ * The provider/language keys track the model so they stay accurate as buffers
+ * (the js patch, the keybindings.json editor) swap in and out of the one editor.
  */
-export function bindEditorContextConstants(): Teardown {
-    contextKeys.setMany({
-        editorReadonly: false,
-        editorHasDefinitionProvider: true,
-        // Operator registers no reference / document-symbol providers yet, so
-        // these are published as false (defined but unsatisfied): menu items
-        // and `when` clauses gated on them stay disabled, and flipping to true
-        // here is all that's needed once such providers are added.
-        editorHasReferenceProvider: false,
-        editorHasDocumentSymbolProvider: false,
-        editorLangId: 'javascript',
-    });
+export function bindEditorContextConstants(
+    ed: editor.IStandaloneCodeEditor,
+): Teardown {
+    // `folding` is an editor-construction option, not per-model. Monaco's
+    // default is on, so treat anything but an explicit false as enabled.
+    contextKeys.set('foldingEnabled', ed.getRawOptions().folding !== false);
+    contextKeys.set('editorReadonly', false);
+
+    const applyLanguage = () => {
+        const langId = ed.getModel()?.getLanguageId() ?? 'plaintext';
+        const isJsTs = langId === 'javascript' || langId === 'typescript';
+        const next: Record<string, ContextKeyValue> = { editorLangId: langId };
+        for (const key of JS_TS_PROVIDER_KEYS) {
+            next[key] = isJsTs;
+        }
+        contextKeys.setMany(next);
+    };
+    applyLanguage();
+    const subs = [
+        ed.onDidChangeModel(applyLanguage),
+        ed.onDidChangeModelLanguage(applyLanguage),
+    ];
+
     return () => {
+        for (const sub of subs) {
+            sub.dispose();
+        }
+        contextKeys.unset('foldingEnabled');
         contextKeys.unset('editorReadonly');
-        contextKeys.unset('editorHasDefinitionProvider');
-        contextKeys.unset('editorHasReferenceProvider');
-        contextKeys.unset('editorHasDocumentSymbolProvider');
         contextKeys.unset('editorLangId');
+        for (const key of JS_TS_PROVIDER_KEYS) {
+            contextKeys.unset(key);
+        }
     };
 }
 
@@ -161,7 +195,10 @@ export function bindFileExplorerFocus(el: HTMLElement): Teardown {
     let raf: number | null = null;
     const apply = () => {
         raf = null;
-        contextKeys.set('fileExplorerFocused', el.contains(document.activeElement));
+        contextKeys.set(
+            'fileExplorerFocused',
+            el.contains(document.activeElement),
+        );
     };
     const schedule = () => {
         if (raf != null) return;

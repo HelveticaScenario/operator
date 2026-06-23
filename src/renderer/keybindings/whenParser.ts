@@ -7,14 +7,16 @@
  *   orExpr     := andExpr ( "||" andExpr )*
  *   andExpr    := unary ( "&&" unary )*
  *   unary      := "!" unary | equality
- *   equality   := primary ( ("==" | "!=") primary )*
+ *   equality   := primary ( ("==" | "!=") cmpValue )*
+ *   cmpValue   := literal | identifier   (a bare identifier here is a string)
  *   primary    := "(" expression ")" | literal | identifier
  *   literal    := true | false | "..." | '...' | number
  *   identifier := [a-zA-Z_] [a-zA-Z0-9_.]*
  *
- * Identifiers reference context keys. A bare identifier evaluates as
- * truthy iff its value is truthy. Equality compares the looked-up value
- * to a literal (or to another key) using JS `==` / `!=`.
+ * Identifiers reference context keys, except on the right of `==` / `!=`,
+ * where a bare word is a string literal (vscode semantics). A bare
+ * identifier evaluates as truthy iff its value is truthy. Equality compares
+ * the left key's value to the right literal using JS `==` / `!=`.
  */
 
 export interface IContextReader {
@@ -88,7 +90,9 @@ function tokenize(input: string): Token[] {
             let j = i + 1;
             while (j < input.length && input[j] !== quote) j++;
             if (j >= input.length) {
-                throw new Error(`[whenParser] unterminated string starting at index ${i}`);
+                throw new Error(
+                    `[whenParser] unterminated string starting at index ${i}`,
+                );
             }
             tokens.push({ kind: 'string', value: input.slice(i + 1, j) });
             i = j + 1;
@@ -106,12 +110,15 @@ function tokenize(input: string): Token[] {
             while (j < input.length && /[a-zA-Z0-9_.]/.test(input[j])) j++;
             const word = input.slice(i, j);
             if (word === 'true') tokens.push({ kind: 'bool', value: true });
-            else if (word === 'false') tokens.push({ kind: 'bool', value: false });
+            else if (word === 'false')
+                tokens.push({ kind: 'bool', value: false });
             else tokens.push({ kind: 'ident', value: word });
             i = j;
             continue;
         }
-        throw new Error(`[whenParser] unexpected character "${ch}" at index ${i}`);
+        throw new Error(
+            `[whenParser] unexpected character "${ch}" at index ${i}`,
+        );
     }
     return tokens;
 }
@@ -152,7 +159,9 @@ class Parser {
         return this.tokens[this.pos];
     }
 
-    private consumeOp(value: '&&' | '||' | '!' | '==' | '!=' | '(' | ')'): boolean {
+    private consumeOp(
+        value: '&&' | '||' | '!' | '==' | '!=' | '(' | ')',
+    ): boolean {
         const t = this.peek();
         if (t && t.kind === 'op' && t.value === value) {
             this.pos++;
@@ -211,7 +220,7 @@ class Parser {
         if (t && t.kind === 'op' && (t.value === '==' || t.value === '!=')) {
             const op = t.value;
             this.pos++;
-            const right = this.parsePrimary();
+            const right = this.parseComparisonValue();
             const evalBool = (ctx: IContextReader): boolean => {
                 const a = left.raw(ctx);
                 const b = right.raw(ctx);
@@ -227,9 +236,28 @@ class Parser {
         return left;
     }
 
+    /**
+     * The right-hand side of `==` / `!=`. A bare identifier here is a string
+     * literal — `editorLangId == javascript` compares to the string
+     * "javascript" (vscode semantics), not to a context key. Quoted strings,
+     * numbers, and booleans fall through to `parsePrimary` as literals.
+     */
+    private parseComparisonValue(): Node {
+        const t = this.peek();
+        if (t && t.kind === 'ident') {
+            this.pos++;
+            const v = t.value;
+            return { source: v, bool: () => v.length > 0, raw: () => v };
+        }
+        return this.parsePrimary();
+    }
+
     private parsePrimary(): Node {
         const t = this.peek();
-        if (!t) throw new Error(`[whenParser] unexpected end of input in "${this.source}"`);
+        if (!t)
+            throw new Error(
+                `[whenParser] unexpected end of input in "${this.source}"`,
+            );
 
         if (t.kind === 'op' && t.value === '(') {
             this.pos++;
@@ -267,7 +295,9 @@ class Parser {
                 raw: (ctx) => ctx.get(key),
             };
         }
-        throw new Error(`[whenParser] unexpected token ${JSON.stringify(t)} in "${this.source}"`);
+        throw new Error(
+            `[whenParser] unexpected token ${JSON.stringify(t)} in "${this.source}"`,
+        );
     }
 }
 
