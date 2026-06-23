@@ -7,30 +7,41 @@ import { configSchema } from '../configSchema';
 import { formatPath } from './monaco/monacoHelpers';
 import type { ScopeView } from '../types/editor';
 import { setupMonacoJavascript } from './monaco/monacoLanguage';
-import { buildSymbolSets } from './monaco/definitionProvider';
 import {
     DEFAULT_PRETTIER_OPTIONS,
     registerDslFormattingProvider,
 } from './monaco/formattingProvider';
 import { applyMonacoTheme } from './monaco/theme';
-import {
-    registerConfigSchema,
-    registerConfigSchemaForFile,
-} from './monaco/jsonSchema';
+import { registerConfigSchema } from './monaco/jsonSchema';
 import {
     type ScopeViewZoneHandle,
     createScopeViewZones,
 } from './monaco/scopeViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
+import { registerKeybindingsDiagnostics } from './monaco/keybindingsDiagnostics';
+import {
+    bindEditorContextConstants,
+    bindEditorFocus,
+    bindEditorWidgetVisibility,
+} from '../keybindings/contextKeyBootstrap';
 import electronAPI from '../electronAPI';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
+import { buildEditorMenuItems } from '../keybindings/editorMenuItems';
+import { dispatchCommand, setActiveEditor } from '../keybindings/dispatch';
 
 export interface PatchEditorProps {
     value: string;
     currentFile?: string;
     onChange: (value: string) => void;
     editorRef: React.RefObject<editor.IStandaloneCodeEditor | null>;
+    /**
+     * Notified when the editor instance becomes available (mount) or goes
+     * away (unmount, e.g. last buffer closed). Lets parents subscribe via
+     * state instead of reading `editorRef.current` during render.
+     */
+    onEditorChange?: (editor: editor.IStandaloneCodeEditor | null) => void;
     scopeViews?: ScopeView[];
     /** Tracked decoration collection whose ranges correspond 1:1 with scopeViews. */
     scopeDecorations?: editor.IEditorDecorationsCollection | null;
@@ -44,6 +55,7 @@ export function MonacoPatchEditor({
     currentFile,
     onChange,
     editorRef,
+    onEditorChange,
     scopeViews = [],
     scopeDecorations = null,
     onRegisterScopeCanvas,
@@ -74,6 +86,21 @@ export function MonacoPatchEditor({
     const [editor, setEditor] = useState<editor.IStandaloneCodeEditor | null>(
         null,
     );
+
+    // Mirror the local `editor` state up to the parent (for the command
+    // palette etc.). Cleans up to `null` when the inner Monaco Editor
+    // unmounts (e.g., when the last buffer closes and `currentFile` goes
+    // falsy).
+    useEffect(() => {
+        onEditorChange?.(editor);
+        // Make this editor the dispatch target for window-level keybindings
+        // and the context menu (see keybindings/dispatch).
+        setActiveEditor(editor);
+        return () => {
+            onEditorChange?.(null);
+            setActiveEditor(null);
+        };
+    }, [editor, onEditorChange]);
 
     // Decoration collection for active module state highlighting (seq steps, etc.)
     const activeDecorationRef =
@@ -145,46 +172,71 @@ export function MonacoPatchEditor({
         return () => disposable.dispose();
     }, [editor]);
 
-    const handleMount: OnMount = (ed, _monacoInstance) => {
+    // Native editor context menu (right-click). Monaco's built-in menu is
+    // disabled (it hosts a "Command Palette" entry that bypasses our keymap),
+    // so we pop a native Electron menu built from the command registry and
+    // dispatch the chosen item through the shared command path.
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        const contextSub = editor.onContextMenu((e) => {
+            // Focus on every right-click (editor convention) so the native
+            // clipboard roles act on this editor.
+            editor.focus();
+            const position = e.target.position;
+            const selection = editor.getSelection();
+            // Right-clicking outside the current selection collapses the caret
+            // to the click point so paste lands where the user clicked; an
+            // existing selection is preserved so copy/cut act on it.
+            if (
+                position &&
+                (!selection || !selection.containsPosition(position))
+            ) {
+                editor.setPosition(position);
+            }
+            void electronAPI.showContextMenu({
+                type: 'editor',
+                items: buildEditorMenuItems(editor),
+            });
+        });
+        const disposeCommandSub = electronAPI.onContextMenuCommand((action) => {
+            if (action.command !== 'editor' || !action.commandId) {
+                return;
+            }
+            // Registry commands run via the registry; editor actions and core
+            // editor commands are triggered on this editor. Clipboard roles
+            // never round-trip — they are handled natively in the main process.
+            // Refocus first: the native menu took focus, and editor commands
+            // (Go to Definition, etc.) need the editor focused to act.
+            editor.focus();
+            dispatchCommand(action.commandId);
+        });
+        return () => {
+            contextSub.dispose();
+            disposeCommandSub();
+        };
+    }, [editor]);
+
+    const handleMount: OnMount = (ed) => {
         setEditor(ed);
         editorRef.current = ed;
-
-        // On Windows/Linux, use Ctrl; on macOS, use WinCtrl (physical Ctrl)
-        // This ensures all shortcuts use the Control key on all platforms.
-        const ctrl =
-            electronAPI.platform === 'darwin'
-                ? _monacoInstance.KeyMod.WinCtrl
-                : _monacoInstance.KeyMod.CtrlCmd;
-
-        // On Windows, Monaco swallows global accelerators, so we need to
-        // Register them as Monaco keybindings that trigger the Electron menu actions.
-        // Ctrl+Enter -> Update Patch (next bar; if already queued, Rust discards old + applies new immediately)
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.Enter, () => {
-            window.electronAPI.triggerMenuAction('UPDATE_PATCH');
+        // When the inner <Editor> unmounts (e.g. the last buffer closes and
+        // currentFile goes falsy) Monaco disposes this editor. Drop our
+        // references so the mirror effect below clears the parent's
+        // paletteEditor and the dispatch target instead of leaving them
+        // pointing at a disposed editor.
+        ed.onDidDispose(() => {
+            setEditor((current) => (current === ed ? null : current));
+            if (editorRef.current === ed) {
+                editorRef.current = null;
+            }
         });
-
-        // Ctrl+Shift+Enter -> Update Patch (next beat)
-        ed.addCommand(
-            ctrl | _monacoInstance.KeyMod.Shift | _monacoInstance.KeyCode.Enter,
-            () => {
-                window.electronAPI.triggerMenuAction('UPDATE_PATCH_NEXT_BEAT');
-            },
-        );
-
-        // Ctrl+. -> Stop Sound
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.Period, () => {
-            window.electronAPI.triggerMenuAction('STOP');
-        });
-
-        // Ctrl+N -> New File
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.KeyN, () => {
-            window.electronAPI.triggerMenuAction('NEW_FILE');
-        });
-
-        // Ctrl+W -> Close Buffer
-        ed.addCommand(ctrl | _monacoInstance.KeyCode.KeyW, () => {
-            window.electronAPI.triggerMenuAction('CLOSE_BUFFER');
-        });
+        // No editor-level keybindings are registered here: the capture-phase
+        // window keymap (keybindings/keymap) owns every shortcut and runs
+        // before Monaco, so it is the single source of truth. Hardcoding
+        // editor bindings here would shadow the keymap and could not be
+        // rebound or removed via keybindings.json.
     };
 
     useEffect(() => {
@@ -195,6 +247,20 @@ export function MonacoPatchEditor({
             schemas,
         });
     }, [monaco, libSource, schemas]);
+
+    // Mirror Monaco focus and suggest/find widget visibility into the
+    // context-key service so when-clauses can react.
+    useEffect(() => {
+        if (!editor) return;
+        const stopFocus = bindEditorFocus(editor);
+        const stopWidgets = bindEditorWidgetVisibility(editor);
+        const stopConstants = bindEditorContextConstants(editor);
+        return () => {
+            stopFocus();
+            stopWidgets();
+            stopConstants();
+        };
+    }, [editor]);
 
     const {
         theme: appTheme,
@@ -211,8 +277,6 @@ export function MonacoPatchEditor({
         if (!editor || !monaco || schemas.length === 0) {
             return;
         }
-        const { moduleNames: _moduleNames, namespaceNames: _namespaceNames } =
-            buildSymbolSets(schemas);
         const disposable = editor.onMouseDown((e) => {
             // Check for Cmd (Mac) / Ctrl (Win/Linux) + primary button click
             if (!e.event.metaKey && !e.event.ctrlKey) {
@@ -229,18 +293,6 @@ export function MonacoPatchEditor({
 
             editor.focus();
             editor.trigger('api', 'editor.action.peekDefinition', {});
-
-            // Console.log({ model, e });
-
-            // Const match = resolveDslSymbolAtPosition(
-            //     Model,
-            //     E.target.position,
-            //     ModuleNames,
-            //     NamespaceNames,
-            // );
-            // If (match) {
-            //     ElectronAPI.openHelpForSymbol(match.symbolType, match.symbolName);
-            // }
         });
         return () => disposable.dispose();
     }, [editor, monaco, schemas]);
@@ -287,6 +339,21 @@ export function MonacoPatchEditor({
         return () => midiProvider.dispose();
     }, [monaco]);
 
+    // Autocomplete command ids and `when` context keys in the keybindings.json
+    // buffer, and flag unsupported `when` operators as warnings. Both scope
+    // themselves to that model.
+    useEffect(() => {
+        if (!monaco) {
+            return;
+        }
+        const provider = registerKeybindingsCompletionProvider(monaco);
+        const diagnostics = registerKeybindingsDiagnostics(monaco);
+        return () => {
+            provider.dispose();
+            diagnostics.dispose();
+        };
+    }, [monaco]);
+
     // Define Monaco theme from the current app theme
     useEffect(() => {
         if (!monaco) {
@@ -303,14 +370,6 @@ export function MonacoPatchEditor({
         registerConfigSchema(monaco, configSchema);
     }, [monaco]);
 
-    // Also configure schema when editing config file specifically
-    useEffect(() => {
-        if (!monaco || !currentFile?.endsWith('config.json')) {
-            return;
-        }
-        registerConfigSchemaForFile(monaco, configSchema, currentFile);
-    }, [monaco, currentFile]);
-
     // Determine language based on file extension
     const editorLanguage = useMemo(() => {
         if (!currentFile) {
@@ -325,9 +384,11 @@ export function MonacoPatchEditor({
     // Memoize options so the @monaco-editor/react wrapper's [options] effect
     // does not fire on every parent render (App.tsx re-renders at ~60Hz via
     // the scope-polling RAF loop, which would otherwise cause a constant
-    // editor.updateOptions storm). Also: fixedOverflowWidgets lets the
-    // suggest widget escape the .app-main { overflow: hidden } clipping
-    // ancestor by reparenting to document.body.
+    // editor.updateOptions storm). Also: fixedOverflowWidgets renders the
+    // overflowing widgets (suggest, hover, parameter hints) with
+    // position: fixed so they escape the .app-main { overflow: hidden }
+    // clipping ancestor. The widgets stay inside the editor's DOM node, so
+    // contextKeyBootstrap's widget-visibility observer still sees them.
     const editorOptions = useMemo<editor.IStandaloneEditorConstructionOptions>(
         () => ({
             minimap: { enabled: false },
@@ -339,6 +400,11 @@ export function MonacoPatchEditor({
             folding: false,
             matchBrackets: 'always',
             automaticLayout: true,
+            // Monaco's built-in menu hosts a "Command Palette" entry that
+            // invokes `editor.action.quickCommand` directly, bypassing our
+            // keymap. Disable it; the native right-click menu wired up in the
+            // onContextMenu effect above replaces it.
+            contextmenu: false,
             fontFamily: `${font}, monospace`,
             fontLigatures: fontLigatures,
             fontSize: fontSize,

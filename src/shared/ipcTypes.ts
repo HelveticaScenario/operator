@@ -86,6 +86,21 @@ export interface PrettierConfig {
     [key: string]: unknown;
 }
 
+/**
+ * One user-keybinding entry persisted in `<userData>/keybindings.json`.
+ *
+ * Format mirrors VS Code's `keybindings.json`: `key` accepts VS Code chord
+ * syntax (`cmd+k cmd+i`), and a `command` prefixed with `-` (or set to `null`)
+ * removes a matching binding. `args` is passed verbatim to the command — an
+ * object for editor commands (e.g. `{ snippet }`) or omitted.
+ */
+export interface KeybindingOverride {
+    key: string;
+    command: string | null;
+    when?: string;
+    args?: unknown;
+}
+
 export interface AppConfig {
     theme?: string;
     cursorStyle?:
@@ -213,7 +228,7 @@ export interface WorkspaceFolder {
     path: string;
 }
 
-export interface ContextMenuOptions {
+export interface FileContextMenuOptions {
     type: 'file' | 'directory' | 'unknown' | 'untitled';
     path?: string;
     bufferId?: string;
@@ -223,12 +238,50 @@ export interface ContextMenuOptions {
     y?: number;
 }
 
-export type ContextMenuCommand = 'save' | 'rename' | 'delete';
+/**
+ * One row in the editor context menu, built in the renderer and shipped to
+ * the main process, which materializes a native menu.
+ *
+ *  - `command`: an Operator registry command. Clicking echoes `commandId`
+ *    back via ON_CONTEXT_MENU_COMMAND and the renderer runs `executeCommand`.
+ *  - `role`: a native Electron clipboard role. The OS performs cut/copy/paste
+ *    against the focused editor directly — no round-trip — which is also why
+ *    they work even though Monaco does not expose clipboard via `getAction`.
+ */
+export type ContextMenuItemDescriptor =
+    | {
+          kind: 'command';
+          commandId: string;
+          label: string;
+          enabled: boolean;
+          /** Electron accelerator to display (not registered); e.g. `Shift+F12`. */
+          accelerator?: string;
+      }
+    | { kind: 'role'; role: 'cut' | 'copy' | 'paste' }
+    | {
+          kind: 'submenu';
+          label: string;
+          items: (ContextMenuItemDescriptor | null)[];
+      };
+
+export interface EditorContextMenuOptions {
+    type: 'editor';
+    /** Items in display order; a `null` entry renders as a separator. */
+    items: (ContextMenuItemDescriptor | null)[];
+}
+
+export type ContextMenuOptions =
+    | FileContextMenuOptions
+    | EditorContextMenuOptions;
+
+export type ContextMenuCommand = 'save' | 'rename' | 'delete' | 'editor';
 
 export interface ContextMenuAction {
     command: ContextMenuCommand;
     path?: string;
     bufferId?: string;
+    /** Set when `command === 'editor'`: the id to dispatch in the renderer. */
+    commandId?: string;
 }
 
 /**
@@ -308,6 +361,7 @@ export const IPC_CHANNELS = {
     // UI operations
     SHOW_CONTEXT_MENU: 'ui:show-context-menu',
     ON_CONTEXT_MENU_COMMAND: 'ui:on-context-menu-command',
+    MENU_SET_ACCELERATORS: 'ui:menu-set-accelerators',
     SHOW_UNSAVED_CHANGES_DIALOG: 'ui:show-unsaved-changes-dialog',
 
     // Window operations
@@ -319,6 +373,11 @@ export const IPC_CHANNELS = {
     CONFIG_READ: 'modular:config:read',
     CONFIG_WRITE: 'modular:config:write',
     CONFIG_ON_CHANGE: 'modular:config:on-change',
+
+    // Keybinding operations
+    KEYBINDINGS_GET_PATH: 'modular:keybindings:get-path',
+    KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
+    KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
     // Main process logging
     MAIN_LOG: 'modular:main:log',
@@ -473,6 +532,9 @@ export interface IPCHandlers {
     // UI operations
     [IPC_CHANNELS.SHOW_CONTEXT_MENU]: (options: ContextMenuOptions) => void;
     [IPC_CHANNELS.ON_CONTEXT_MENU_COMMAND]: (action: ContextMenuAction) => void;
+    [IPC_CHANNELS.MENU_SET_ACCELERATORS]: (
+        accelerators: Record<string, string>,
+    ) => void;
     [IPC_CHANNELS.SHOW_UNSAVED_CHANGES_DIALOG]: (
         fileName: string,
     ) => Promise<number>;
@@ -489,6 +551,11 @@ export interface IPCHandlers {
     [IPC_CHANNELS.CONFIG_READ]: () => AppConfig;
     [IPC_CHANNELS.CONFIG_WRITE]: (config: Partial<AppConfig>) => void;
     [IPC_CHANNELS.CONFIG_ON_CHANGE]: (config: AppConfig) => void;
+
+    // Keybinding operations
+    [IPC_CHANNELS.KEYBINDINGS_GET_PATH]: () => string;
+    [IPC_CHANNELS.KEYBINDINGS_READ_USER]: () => KeybindingOverride[];
+    [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
 
     // Main process logging
     [IPC_CHANNELS.MAIN_LOG]: (entry: MainLogEntry) => void;

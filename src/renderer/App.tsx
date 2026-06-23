@@ -12,6 +12,7 @@ import type { MigrationModalSummary } from './components/MigrationDiffModal';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
+import { CommandPalette } from './components/CommandPalette';
 import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
 import './App.css';
 // Import type { editor } from 'monaco-editor';
@@ -40,6 +41,13 @@ import {
     scopeBufferKeyToString,
 } from './app/oscilloscope';
 import { useEditorBuffers } from './app/hooks/useEditorBuffers';
+import {
+    executeCommand,
+    registerCommand,
+    unregisterCommand,
+} from './keybindings/commands';
+import { loadAndInstallKeymap, setWhenEvaluator } from './keybindings/keymap';
+import { evaluateWhen } from './keybindings/contextKey';
 import { getBufferId } from './app/buffers';
 import {
     setTransport,
@@ -117,6 +125,15 @@ function App() {
         }
     }, []);
 
+    // Absolute path to the user keybindings.json, resolved once. Used to
+    // detect when that file is saved so the keymap can be reloaded live.
+    const keybindingsPathRef = useRef<string | null>(null);
+    const handleFileSaved = useCallback((filePath: string) => {
+        if (filePath === keybindingsPathRef.current) {
+            window.dispatchEvent(new Event('operator:keybindings-changed'));
+        }
+    }, []);
+
     const {
         buffers,
         setBuffers,
@@ -125,6 +142,7 @@ function App() {
         patchCode,
         handlePatchChange,
         openFile,
+        openAbsoluteFile,
         createUntitledFile,
         saveFile,
         renameFile,
@@ -135,13 +153,18 @@ function App() {
         setRenamingPath,
         handleRenameCommit,
         formatFileLabel,
-    } = useEditorBuffers({ refreshFileTree, workspaceRoot });
+    } = useEditorBuffers({
+        refreshFileTree,
+        workspaceRoot,
+        onFileSaved: handleFileSaved,
+    });
 
     // Audio state
     const [isClockRunning, setIsClockRunning] = useState(true);
     const [isRecording, setIsRecording] = useState(false);
     const [isSettingsOpen, setIsSettingsOpen] = useState(false);
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+    const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
     const [migrationState, setMigrationState] = useState<{
         bufferId: string;
@@ -171,6 +194,11 @@ function App() {
     const pendingUpdateVersion = useRef('');
 
     const editorRef = useRef<editor.IStandaloneCodeEditor>(null);
+    // Mirror of editorRef as state so children that need to react when the
+    // editor mounts/unmounts (e.g., the command palette enumerating Monaco
+    // editor actions) can subscribe instead of reading the ref during render.
+    const [paletteEditor, setPaletteEditor] =
+        useState<editor.IStandaloneCodeEditor | null>(null);
     const scopeCanvasMapRef = useRef(new Map<string, HTMLCanvasElement>());
     const lastPatchResultRef = useRef<any>(null);
 
@@ -899,32 +927,190 @@ function App() {
         );
     }, [activeBufferId]);
 
+    // Refs keep command handlers stable across renders so the registration
+    // effect below only needs to run once. Anything captured by closure must
+    // funnel through a ref or it goes stale between renders.
+    const activeBufferIdRef = useRef(activeBufferId);
     useEffect(() => {
-        const cleanupNewFile = electronAPI.onMenuNewFile(() => {
-            createUntitledFile();
-        });
-        const cleanupSave = electronAPI.onMenuSave(() => {
-            handleSaveFileRef.current();
-        });
-        const cleanupStop = electronAPI.onMenuStop(() => {
-            handleStopRef.current();
-        });
-        const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
-            handleSubmitRef.current('NextBar');
-        });
-        const cleanupUpdateNextBeat = electronAPI.onMenuUpdatePatchNextBeat(
+        activeBufferIdRef.current = activeBufferId;
+    }, [activeBufferId]);
+
+    const handleCloseBufferRef = useRef(handleCloseBuffer);
+    useEffect(() => {
+        handleCloseBufferRef.current = handleCloseBuffer;
+    }, [handleCloseBuffer]);
+
+    const createUntitledFileRef = useRef(createUntitledFile);
+    useEffect(() => {
+        createUntitledFileRef.current = createUntitledFile;
+    }, [createUntitledFile]);
+
+    // Ensure the keybindings.json exists (seeding a template if needed) and
+    // open it as a normal editor buffer; saving it reloads the keymap live.
+    const handleOpenKeybindings = useCallback(async () => {
+        try {
+            const path = await electronAPI.keybindings.ensureFile();
+            keybindingsPathRef.current = path;
+            await openAbsoluteFile(path);
+        } catch (err) {
+            setError(getErrorMessage(err, 'Failed to open keybindings'));
+        }
+    }, [openAbsoluteFile]);
+    const handleOpenKeybindingsRef = useRef(handleOpenKeybindings);
+    useEffect(() => {
+        handleOpenKeybindingsRef.current = handleOpenKeybindings;
+    }, [handleOpenKeybindings]);
+
+    // Resolve the keybindings.json path up front so saves to it (even a
+    // session-restored buffer) are recognized and trigger a keymap reload.
+    useEffect(() => {
+        electronAPI.keybindings
+            .getPath()
+            .then((path) => {
+                keybindingsPathRef.current = path;
+            })
+            .catch(() => {});
+    }, []);
+
+    // Register operator.* commands in the global registry. The Electron menu
+    // IPC dispatchers below, the cmdk palette, the editor context menu, and
+    // the tinykeys keymap all dispatch through `executeCommand` — single
+    // source of truth for what each command does.
+    useEffect(() => {
+        registerCommand(
+            'operator.updatePatch',
+            () => {
+                handleSubmitRef.current('NextBar');
+            },
+            {
+                label: 'Update Patch',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 1 },
+            },
+        );
+        registerCommand(
+            'operator.updatePatchNextBeat',
             () => {
                 handleSubmitRef.current('NextBeat');
             },
+            {
+                label: 'Update Patch (Next Beat)',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 2 },
+            },
+        );
+        registerCommand(
+            'operator.stop',
+            () => {
+                handleStopRef.current();
+            },
+            {
+                label: 'Stop',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 3 },
+            },
+        );
+        registerCommand(
+            'operator.newFile',
+            () => {
+                createUntitledFileRef.current();
+            },
+            { label: 'New File', category: 'File' },
+        );
+        registerCommand(
+            'operator.closeBuffer',
+            () => {
+                const id = activeBufferIdRef.current;
+                if (id) {
+                    void handleCloseBufferRef.current(id);
+                }
+            },
+            { label: 'Close Buffer', category: 'File' },
+        );
+        registerCommand(
+            'operator.save',
+            () => {
+                handleSaveFileRef.current();
+            },
+            { label: 'Save', category: 'File' },
+        );
+        registerCommand(
+            'operator.openWorkspace',
+            () => {
+                handleOpenWorkspaceRef.current();
+            },
+            { label: 'Open Workspace…', category: 'File' },
+        );
+        registerCommand(
+            'operator.openSettings',
+            () => {
+                setIsSettingsOpen(true);
+            },
+            { label: 'Open Settings', category: 'Preferences' },
+        );
+        registerCommand(
+            'operator.showCommandPalette',
+            () => {
+                setIsPaletteOpen(true);
+            },
+            {
+                label: 'Show Command Palette',
+                category: 'View',
+                contextMenu: { group: 'z_commands', order: 1 },
+            },
+        );
+        registerCommand(
+            'operator.openKeybindings',
+            () => {
+                void handleOpenKeybindingsRef.current();
+            },
+            {
+                label: 'Open Keyboard Shortcuts (JSON)',
+                category: 'Preferences',
+            },
+        );
+
+        return () => {
+            unregisterCommand('operator.updatePatch');
+            unregisterCommand('operator.updatePatchNextBeat');
+            unregisterCommand('operator.stop');
+            unregisterCommand('operator.newFile');
+            unregisterCommand('operator.closeBuffer');
+            unregisterCommand('operator.save');
+            unregisterCommand('operator.openWorkspace');
+            unregisterCommand('operator.openSettings');
+            unregisterCommand('operator.showCommandPalette');
+            unregisterCommand('operator.openKeybindings');
+        };
+    }, []);
+
+    useEffect(() => {
+        // Electron menu items dispatch through the registry so each handler
+        // body lives in exactly one place. Recording is not in the registry —
+        // toggling it reads render-state isRecording directly, hence this
+        // effect's dependency on it.
+        const cleanupNewFile = electronAPI.onMenuNewFile(() => {
+            executeCommand('operator.newFile');
+        });
+        const cleanupSave = electronAPI.onMenuSave(() => {
+            executeCommand('operator.save');
+        });
+        const cleanupStop = electronAPI.onMenuStop(() => {
+            executeCommand('operator.stop');
+        });
+        const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
+            executeCommand('operator.updatePatch');
+        });
+        const cleanupUpdateNextBeat = electronAPI.onMenuUpdatePatchNextBeat(
+            () => {
+                executeCommand('operator.updatePatchNextBeat');
+            },
         );
         const cleanupOpenWorkspace = electronAPI.onMenuOpenWorkspace(() => {
-            handleOpenWorkspaceRef.current();
+            executeCommand('operator.openWorkspace');
         });
         const cleanupCloseBuffer = electronAPI.onMenuCloseBuffer(() => {
-            if (activeBufferId) {
-                setMigrationState(null);
-                void handleCloseBuffer(activeBufferId);
-            }
+            executeCommand('operator.closeBuffer');
         });
         const cleanupToggleRecording = electronAPI.onMenuToggleRecording(() => {
             if (isRecording) {
@@ -938,7 +1124,7 @@ function App() {
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
-            setIsSettingsOpen(true);
+            executeCommand('operator.openSettings');
         });
         const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(
             () => {
@@ -952,10 +1138,14 @@ function App() {
         );
         const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
             const ed = editorRef.current;
-            if (!ed || !activeBufferId) {
+            // Read the live id from the ref: this listener is registered once
+            // (deps below), so closing over the `activeBufferId` state would
+            // migrate a stale buffer after the user switches buffers.
+            const activeId = activeBufferIdRef.current;
+            if (!ed || !activeId) {
                 console.warn('Migrate buffer: no editor available');
                 setMigrationState({
-                    bufferId: activeBufferId ?? '',
+                    bufferId: activeId ?? '',
                     original: '',
                     migrated: '',
                     summary: {
@@ -971,7 +1161,7 @@ function App() {
             const original = ed.getValue();
             const result = migrateCycleCalls(original);
             setMigrationState({
-                bufferId: activeBufferId,
+                bufferId: activeId,
                 original,
                 migrated: result.migrated,
                 summary: {
@@ -998,13 +1188,46 @@ function App() {
             cleanupOpenModuleProfile();
             cleanupMigrateBuffer();
         };
-    }, [
-        activeBufferId,
-        handleCloseBuffer,
-        isRecording,
-        buffers,
-        createUntitledFile,
-    ]);
+    }, [isRecording]);
+
+    // Install the window-level tinykeys keymap. Runs after the operator.*
+    // commands above have been registered (effects fire in declaration order),
+    // so dispatch always finds a handler. The loader merges user overrides
+    // from `<userData>/keybindings.json` on top of `DEFAULT_KEYMAP`.
+    useEffect(() => {
+        let disposed = false;
+        let disposer: (() => void) | null = null;
+        // Gate keybinding dispatch on the context-key service so VS Code-style
+        // `when` clauses (editorTextFocus, etc.) are honored.
+        setWhenEvaluator(evaluateWhen);
+        const install = () => {
+            loadAndInstallKeymap()
+                .then((result) => {
+                    if (disposed) {
+                        result.dispose();
+                        return;
+                    }
+                    // Drop the previous binding before swapping in the new one.
+                    disposer?.();
+                    disposer = result.dispose;
+                })
+                .catch((err) => {
+                    console.error('[keymap] failed to install keymap:', err);
+                });
+        };
+        install();
+        // Re-read and re-install when the user saves keybindings.json.
+        const onChanged = () => install();
+        window.addEventListener('operator:keybindings-changed', onChanged);
+        return () => {
+            disposed = true;
+            window.removeEventListener(
+                'operator:keybindings-changed',
+                onChanged,
+            );
+            disposer?.();
+        };
+    }, []);
 
     // Ctrl+Enter (and Ctrl+Shift+Enter) are reserved for patch updates.
     // Browsers activate a focused <button> on Enter regardless of modifier
@@ -1081,6 +1304,12 @@ function App() {
 
             <AudioPanicDialog />
 
+            <CommandPalette
+                open={isPaletteOpen}
+                onOpenChange={setIsPaletteOpen}
+                editor={paletteEditor}
+            />
+
             {migrationState && (
                 <MigrationDiffModal
                     isOpen
@@ -1146,6 +1375,7 @@ function App() {
                                 currentFile={activeBufferId}
                                 onChange={handlePatchChange}
                                 editorRef={editorRef}
+                                onEditorChange={setPaletteEditor}
                                 scopeViews={scopeViews}
                                 // oxlint-disable-next-line react-hooks-js/refs -- intentional: live Monaco decoration collection mutated outside React
                                 scopeDecorations={scopeDecorationsRef.current}
