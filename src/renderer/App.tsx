@@ -1083,6 +1083,28 @@ function App() {
         };
     }, []);
 
+    // Register the macOS-only "Publish Window to Syphon" command when supported,
+    // so it shows in the palette and is bindable. The action lives in the main
+    // process (SyphonBridge), so the handler round-trips through IPC. Gating on
+    // support keeps it out of the palette where the menu item is also hidden.
+    useEffect(() => {
+        let active = true;
+        void electronAPI.syphon.isSupported().then((supported) => {
+            if (!active || !supported) return;
+            registerCommand(
+                'operator.toggleSyphon',
+                () => {
+                    void electronAPI.syphon.toggle();
+                },
+                { label: 'Publish Window to Syphon', category: 'View' },
+            );
+        });
+        return () => {
+            active = false;
+            unregisterCommand('operator.toggleSyphon');
+        };
+    }, []);
+
     useEffect(() => {
         // Electron menu items dispatch through the registry so each handler
         // body lives in exactly one place. Recording is not in the registry —

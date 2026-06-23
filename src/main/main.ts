@@ -22,6 +22,7 @@ import type {
     KeybindingOverride,
     MainLogLevel,
     MainLogEntry,
+    SyphonToggleResult,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
@@ -141,6 +142,31 @@ function promptScreenRecordingPermission(): void {
                 );
             }
         });
+}
+
+/**
+ * Toggle Syphon publishing. Single entry point shared by the View-menu item and
+ * the `operator.toggleSyphon` command (dispatched from the palette/keymap via
+ * IPC), so both surfaces behave identically — including the failure dialog.
+ */
+function toggleSyphonPublish(): SyphonToggleResult {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return { ok: false, reason: 'No window is available to publish.' };
+    }
+    const result = syphonBridge?.toggle(mainWindow) ?? {
+        ok: false,
+        reason: SyphonBridge.unsupportedReason,
+    };
+    syncSyphonMenuItem();
+    if (!result.ok && result.reason) {
+        void dialog.showMessageBox(mainWindow, {
+            buttons: ['OK'],
+            detail: result.reason,
+            message: 'Could not start Syphon output',
+            type: 'warning',
+        });
+    }
+    return result;
 }
 
 // ========================================================================
@@ -942,6 +968,11 @@ function registerIPCHandler<T extends keyof typeof IPC_CHANNELS>(
 // Note: do this instead of importing schemas in renderer to avoid hot-reloading schema changes before
 // Main process has restarted with the updated native module.
 registerIPCHandler('GET_SCHEMAS', () => schemas);
+
+// Syphon window output (macOS): the action lives here, so the renderer's
+// operator.toggleSyphon command (palette/keymap) round-trips through IPC.
+registerIPCHandler('SYPHON_TOGGLE', () => toggleSyphonPublish());
+registerIPCHandler('SYPHON_IS_SUPPORTED', () => SyphonBridge.supported);
 
 // DSL lib source for Monaco autocomplete - cached since schemas don't change at runtime
 let cachedLibSource: string | null = null;
@@ -2181,22 +2212,10 @@ const createMenu = (): void => {
                           { type: 'separator' },
                           {
                               checked: false,
+                              // Funnels through the same toggle as the
+                              // operator.toggleSyphon command (palette/keymap).
                               click: () => {
-                                  if (!mainWindow || mainWindow.isDestroyed()) {
-                                      return;
-                                  }
-                                  const result =
-                                      syphonBridge?.toggle(mainWindow);
-                                  syncSyphonMenuItem();
-                                  if (result && !result.ok && result.reason) {
-                                      void dialog.showMessageBox(mainWindow, {
-                                          buttons: ['OK'],
-                                          detail: result.reason,
-                                          message:
-                                              'Could not start Syphon output',
-                                          type: 'warning',
-                                      });
-                                  }
+                                  toggleSyphonPublish();
                               },
                               id: SYPHON_MENU_ITEM_ID,
                               label: 'Publish Window to Syphon',
