@@ -84,7 +84,8 @@ fn scale_samples(ref_samples: usize, sample_rate: f32) -> usize {
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct PlateParams {
-    /// audio input (even channels → left, odd channels → right)
+    /// audio input (even channels → left, odd channels → right; with an odd
+    /// channel count the last channel feeds both sides)
     input: PolySignal,
     /// input bandwidth — controls high-frequency content entering the tank.
     /// default 2.02V → coeff 0.7 (maps -5V..5V to 0.005..0.9999, clamped)
@@ -353,6 +354,11 @@ impl Plate {
             } else {
                 right_in += sample;
             }
+        }
+        // With an odd channel count the final channel has no stereo partner,
+        // so feed it to both sides (a mono input drives left and right equally).
+        if num_input_channels % 2 == 1 {
+            right_in += self.params.input.get_value(num_input_channels - 1);
         }
         let mono_in = (left_in + right_in) * 0.5;
 

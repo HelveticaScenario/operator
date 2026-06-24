@@ -1542,7 +1542,7 @@
   },
   {
     "name": "$dattorro",
-    "documentation": "Stereo plate reverb based on the Dattorro algorithm.\n\nImplements Jon Dattorro's plate reverberator with input diffusion,\na cross-coupled stereo tank, and multi-tap output. Even input\nchannels are summed to the left input, odd channels to the right.\nOutput is always 100% wet.\n\n```js\n$dattorro($saw('c3'), { decay: 3, damping: 1, size: 2 }).out()\n```",
+    "documentation": "Stereo plate reverb based on the Dattorro algorithm.\n\nImplements Jon Dattorro's plate reverberator with input diffusion,\na cross-coupled stereo tank, and multi-tap output. Even input\nchannels are summed to the left input, odd channels to the right;\nwith an odd channel count the last channel feeds both sides.\nOutput is always 100% wet.\n\n```js\n$dattorro($saw('c3'), { decay: 3, damping: 1, size: 2 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "DattorroParams",
@@ -1582,7 +1582,7 @@
           ]
         },
         "input": {
-          "description": "audio input (even channels → left, odd channels → right)",
+          "description": "audio input (even channels → left, odd channels → right; with an odd\nchannel count the last channel feeds both sides)",
           "$ref": "#/$defs/PolySignal"
         },
         "modulation": {
@@ -1706,7 +1706,7 @@
     "signalParams": [
       {
         "name": "input",
-        "description": "audio input (even channels → left, odd channels → right)",
+        "description": "audio input (even channels → left, odd channels → right; with an odd\nchannel count the last channel feeds both sides)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,
@@ -1976,7 +1976,7 @@
           ]
         },
         "input": {
-          "description": "audio input (even channels → left, odd channels → right)",
+          "description": "audio input (even channels → left, odd channels → right; with an odd\nchannel count the last channel feeds both sides)",
           "$ref": "#/$defs/PolySignal"
         },
         "modulation": {
@@ -2078,7 +2078,7 @@
     "signalParams": [
       {
         "name": "input",
-        "description": "audio input (even channels → left, odd channels → right)",
+        "description": "audio input (even channels → left, odd channels → right; with an odd\nchannel count the last channel feeds both sides)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": -5.0,

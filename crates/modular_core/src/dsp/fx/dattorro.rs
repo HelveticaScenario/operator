@@ -77,7 +77,8 @@ fn scale_delay_f(ref_samples: f32, sample_rate: f32, size: f32) -> f32 {
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct DattorroParams {
-    /// audio input (even channels → left, odd channels → right)
+    /// audio input (even channels → left, odd channels → right; with an odd
+    /// channel count the last channel feeds both sides)
     input: PolySignal,
     /// reverb decay time (-5 to 5, default 0)
     #[signal(default = 0.0, range = (-5.0, 5.0))]
@@ -179,7 +180,8 @@ struct DattorroState {
 ///
 /// Implements Jon Dattorro's plate reverberator with input diffusion,
 /// a cross-coupled stereo tank, and multi-tap output. Even input
-/// channels are summed to the left input, odd channels to the right.
+/// channels are summed to the left input, odd channels to the right;
+/// with an odd channel count the last channel feeds both sides.
 /// Output is always 100% wet.
 ///
 /// ```js
@@ -310,6 +312,11 @@ impl Dattorro {
             } else {
                 right_in += sample;
             }
+        }
+        // With an odd channel count the final channel has no stereo partner,
+        // so feed it to both sides (a mono input drives left and right equally).
+        if num_input_channels % 2 == 1 {
+            right_in += self.params.input.get_value(num_input_channels - 1);
         }
 
         // ── Predelay ─────────────────────────────────────────────────────
