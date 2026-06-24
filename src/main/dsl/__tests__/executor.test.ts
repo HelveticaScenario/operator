@@ -1232,6 +1232,131 @@ describe('$buffer()', () => {
     });
 });
 
+// ─── $delay ─────────────────────────────────────────────────────────────────
+
+describe('$delay', () => {
+    /** Constant signal params serialize as `[v]`; unwrap for comparison. */
+    const flat = (v: unknown) => (Array.isArray(v) ? v[0] : v);
+
+    test('builds the deferred feedback-delay graph', () => {
+        const patch = execPatch('$delay($sine("C4"), 0.25).out()');
+        expect(findModules(patch, '$delayRead').length).toBe(1);
+        expect(findModules(patch, '$buffer').length).toBe(1);
+        // dry + feedback mix written into the buffer
+        expect(findModules(patch, '$mix').length).toBeGreaterThanOrEqual(1);
+        // feedback is clamped then attenuated via $scaleAndShift
+        expect(findModules(patch, '$clamp').length).toBe(1);
+        expect(
+            findModules(patch, '$scaleAndShift').length,
+        ).toBeGreaterThanOrEqual(1);
+    });
+
+    test('maxTime defaults to 5 seconds (buffer length)', () => {
+        const patch = execPatch('$delay($sine("C4"), 0.25).out()');
+        expect(findModules(patch, '$buffer')[0].params.length).toBe(5);
+    });
+
+    test('maxTime overrides the buffer length', () => {
+        const patch = execPatch(
+            '$delay($sine("C4"), 0.25, { maxTime: 8 }).out()',
+        );
+        expect(findModules(patch, '$buffer')[0].params.length).toBe(8);
+    });
+
+    test('feedback defaults to 2.5 and is clamped to 0–5', () => {
+        const patch = execPatch('$delay($sine("C4"), 0.25).out()');
+        const clamp = findModules(patch, '$clamp')[0];
+        expect(flat(clamp.params.input)).toBe(2.5);
+        expect(flat(clamp.params.min)).toBe(0);
+        expect(flat(clamp.params.max)).toBe(5);
+    });
+
+    test('out-of-range feedback is fed through the 0–5 clamp', () => {
+        const patch = execPatch(
+            '$delay($sine("C4"), 0.25, { feedback: 9 }).out()',
+        );
+        const clamp = findModules(patch, '$clamp')[0];
+        expect(flat(clamp.params.input)).toBe(9);
+        expect(flat(clamp.params.min)).toBe(0);
+        expect(flat(clamp.params.max)).toBe(5);
+    });
+
+    test('feedbackCb processes the mix before it is written to the buffer', () => {
+        const patch = execPatch(
+            '$delay($sine("C4"), 0.25, { feedbackCb: (m) => m.$.lpf("800hz") }).out()',
+        );
+        const lpf = findModules(patch, '$lpf');
+        expect(lpf.length).toBe(1);
+        expect(findModules(patch, '$delayRead').length).toBe(1);
+        // the cb output (the lpf) is what gets written to the buffer — i.e. it
+        // sits between the dry+feedback mix and the buffer, not after the read.
+        const buffer = findModules(patch, '$buffer')[0];
+        const bufSrc = (buffer.params.input as Array<{ module: string }>)[0]
+            .module;
+        expect(bufSrc).toBe(lpf[0].id);
+    });
+
+    test('.$.delay is equivalent to $delay(self, ...)', () => {
+        const types = (p: PatchGraph) =>
+            p.modules.map((m) => m.moduleType).sort();
+        const direct = execPatch('$delay($sine("C4"), 0.25).out()');
+        const chained = execPatch('$sine("C4").$.delay(0.25).out()');
+        expect(types(chained)).toEqual(types(direct));
+    });
+
+    test('.$m.delay crossfades the dry signal against the wet delay', () => {
+        const patch = execPatch('$sine("C4").$m.delay(2.5, 0.25).out()');
+        expect(findModules(patch, '$delayRead').length).toBe(1);
+        // crossfadeMix remaps the dry leg — absent from the plain `.$.` form
+        expect(findModules(patch, '$remap').length).toBeGreaterThanOrEqual(1);
+    });
+
+    test('exposes the captured buffer for additional taps', () => {
+        const patch = execPatch(
+            'const d = $delay($sine("C4"), 0.25)\n$delayRead(d.buffer, 0.5).out()',
+        );
+        expect(findModules(patch, '$buffer').length).toBe(1);
+        // one read in the feedback loop, one for the external tap
+        expect(findModules(patch, '$delayRead').length).toBe(2);
+    });
+
+    test('sizes the feedback path to the widest polysignal param', () => {
+        // The $buffer's input channel count reflects the feedback width.
+        const bufWidth = (patch: PatchGraph) =>
+            (findModules(patch, '$buffer')[0].params.input as unknown[]).length;
+
+        // mono input/time/feedback → 1 channel
+        expect(bufWidth(execPatch('$delay($sine("C4"), 0.25).out()'))).toBe(1);
+        // a 3-channel `time` widens the feedback path to 3
+        expect(
+            bufWidth(execPatch('$delay($sine("C4"), [0.1, 0.2, 0.3]).out()')),
+        ).toBe(3);
+        // a 4-channel `feedback` widens it to 4
+        expect(
+            bufWidth(
+                execPatch(
+                    '$delay($sine("C4"), 0.25, { feedback: [1, 2, 3, 4] }).out()',
+                ),
+            ),
+        ).toBe(4);
+    });
+
+    test('broadcasts a narrower input across the feedback width', () => {
+        // mono input + 2-channel `time`: both channels must be fed the dry
+        // signal, else the extra channel is silent (pure feedback from
+        // silence, since $mix does not cycle a narrower input group).
+        const patch = execPatch('$delay($sine("C4"), [0.2, 0.5]).out()');
+        const buffer = findModules(patch, '$buffer')[0];
+        const mixId = (buffer.params.input as Array<{ module: string }>)[0]
+            .module;
+        const mix = patch.modules.find((m) => m.id === mixId)!;
+        // inputs = [dryGroup, feedbackGroup]; both broadcast to the 2-ch width
+        const groups = mix.params.inputs as unknown[][];
+        expect(groups[0].length).toBe(2);
+        expect(groups[1].length).toBe(2);
+    });
+});
+
 // ─── $wavs / $sampler ────────────────────────────────────────────────────────
 
 describe('$wavs() and $sampler', () => {

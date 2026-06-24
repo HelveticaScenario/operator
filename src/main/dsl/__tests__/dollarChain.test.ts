@@ -134,6 +134,35 @@ describe('.$m. mix namespace', () => {
     });
 });
 
+// ─── synthetic dollar methods (DSL sugar registered via registerDollarMethod) ─
+
+describe('synthetic dollar methods ($delay)', () => {
+    test('$sine(0).$.delay(0.25) is identical to $delay($sine(0), 0.25)', () => {
+        const viaDollar = execPatch('$sine(0).$.delay(0.25).out()');
+        const viaFactory = execPatch('$delay($sine(0), 0.25).out()');
+        expect(normalize(viaDollar)).toEqual(normalize(viaFactory));
+    });
+
+    test('.$.delay forwards options through to $delay', () => {
+        const viaDollar = execPatch(
+            '$sine(0).$.delay(0.25, { feedback: 4, maxTime: 2 }).out()',
+        );
+        const viaFactory = execPatch(
+            '$delay($sine(0), 0.25, { feedback: 4, maxTime: 2 }).out()',
+        );
+        expect(normalize(viaDollar)).toEqual(normalize(viaFactory));
+    });
+
+    test('.$m.delay crossfades the dry signal against the wet delay', () => {
+        const types = moduleTypes(
+            execPatch('$sine(0).$m.delay(2.5, 0.25).out()'),
+        );
+        expect(types).toContain('$delayRead'); // wet delay tap
+        expect(types).toContain('$remap'); // crossfade dry leg
+        expect(types).toContain('$scaleAndShift');
+    });
+});
+
 // ─── pipeMix regression: ModuleOutput.pipeMix now crossfades ─────────────────
 
 describe('ModuleOutput.pipeMix regression', () => {

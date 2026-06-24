@@ -25,6 +25,7 @@ import {
     DeferredCollection,
     Bus,
     ModuleOutput,
+    cycleToChannels,
     replaceSignals,
     PORT_MAX_CHANNELS,
 } from './GraphBuilder';
@@ -328,32 +329,105 @@ export function executePatchScript(
     };
 
     const $mix = userNamespaceTree['$mix'];
-    if (typeof $mix !== 'function') {
+    const $delayRead = userNamespaceTree['$delayRead'];
+    const $clamp = userNamespaceTree['$clamp'];
+    if (
+        typeof $mix !== 'function' ||
+        typeof $delayRead !== 'function' ||
+        typeof $clamp !== 'function'
+    ) {
         throw new Error(
-            'DSL execution error: "$mix" module not found in schemas',
+            'DSL execution error: "$delay" requires "$mix", "$delayRead", and "$clamp" modules',
         );
     }
 
+    interface DelayOptions {
+        /**
+         * Feedback amount, 0–5 (0 = no repeats, 5 = 100% = unity, default
+         * 2.5 = 50%). Clamped to 0–5. May be a signal for modulation.
+         */
+        feedback?: PolySignal;
+        /**
+         * Optional processor applied to the dry-plus-feedback mix before it is
+         * written to the buffer — e.g. a filter or saturator that colours every
+         * recirculation of the delay.
+         */
+        feedbackCb?: (mixed: Collection) => Collection | ModuleOutput;
+        /**
+         * Maximum delay time in seconds — sizes the underlying buffer and
+         * caps how long `time` can be (default 5).
+         */
+        maxTime?: number;
+    }
+
+    // Channel count of a polysignal argument: collections and arrays
+    // contribute their (flattened) length; a single output or scalar counts as
+    // one. Used to size the feedback `$deferred` to the widest param.
+    const polyChannels = (v: unknown): number => {
+        if (v instanceof BaseCollection) return Math.max(1, v.length);
+        if (Array.isArray(v)) {
+            return v.reduce((n, e) => n + polyChannels(e), 0);
+        }
+        return 1;
+    };
+
     /**
-     * Feedback delay sugar: mix `input` with a deferred feedback signal,
-     * capture the mix into a $buffer of `length` seconds, route the
-     * buffer through `feedbackCb` to produce the feedback signal, and
-     * return the wet+dry $mix output with the captured buffer attached
-     * as a `buffer` property for additional taps.
+     * Delay with feedback: sum `input` with the attenuated feedback, optionally
+     * process that mix through `feedbackCb`, write it into a `$buffer` of
+     * `maxTime` seconds, and read it back `time` seconds late. The delayed read
+     * is attenuated by `feedback` and summed back in, so a `feedbackCb` filter
+     * colours every recirculation. With `feedback = 0` you still hear the first
+     * echo; higher values repeat it.
+     *
+     * Returns the wet `$delayRead` output with the captured `buffer` attached
+     * as a property for additional taps. Mix the dry signal back yourself
+     * (`$mix([input, $delay(input, time)])`) or use `.$m.delay(mix, time)`.
      */
     const $delay = (
         input: Collection | ModuleOutput,
-        feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput,
-        length: number,
+        time: PolySignal,
+        opts?: DelayOptions,
     ): Collection & { buffer: BufferOutputRef } => {
-        const def = $deferred(
-            input instanceof BaseCollection ? input.length : 1,
+        const feedback = $clamp(opts?.feedback ?? 2.5, {
+            min: 0,
+            max: 5,
+        }) as Collection;
+        const maxTime = opts?.maxTime ?? 5;
+        // Size the feedback path to the widest polysignal param so a poly
+        // `time` or `feedback` is not truncated when it exceeds `input`.
+        const channels = Math.max(
+            1,
+            polyChannels(input),
+            polyChannels(time),
+            polyChannels(opts?.feedback ?? 2.5),
         );
-        const mixed = $mix([input, def]) as Collection;
-        const buf = $buffer(mixed, length);
-        def.set(feedbackCb(buf));
-        return Object.assign(mixed, { buffer: buf });
+        const def = $deferred(channels);
+        // Broadcast a narrower input across the feedback width so every channel
+        // is excited by the dry signal (otherwise the extra channels carry
+        // only feedback and decay to silence — `$mix` skips, not cycles, a
+        // narrower input group's missing channels).
+        const mixed = $mix([
+            cycleToChannels(input, channels),
+            def,
+        ]) as Collection;
+        // Colour every recirculation: process the dry-plus-feedback mix before
+        // it is written to the buffer.
+        const buffered = opts?.feedbackCb ? opts.feedbackCb(mixed) : mixed;
+        const buf = $buffer(buffered, maxTime);
+        const delayed = $delayRead(buf, time) as Collection;
+        def.set(delayed.amp(feedback as unknown as Signal));
+        return Object.assign(delayed, { buffer: buf });
     };
+
+    // Expose `$delay` on the `.$` / `.$m` chainable namespaces. It is DSL
+    // sugar rather than a module schema, so it is registered explicitly here
+    // instead of being discovered via `qualifiesForDollarChain`.
+    builder.registerDollarMethod('delay', (self, ...args) =>
+        $delay(
+            self as Collection | ModuleOutput,
+            ...(args as [PolySignal, DelayOptions?]),
+        ),
+    );
 
     interface OttConfig {
         /**

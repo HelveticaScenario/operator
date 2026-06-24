@@ -644,7 +644,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
         description:
             'Create placeholder signals that can be assigned later. Useful for feedback loops.',
         examples: [
-            'const feedback = $deferred();\nconst delayed = $delay(osc.out, feedback[0]);\nfeedback.set(delayed);',
+            "const fb = $deferred();\nconst echoed = $delay($noise('white').amp(fb[0]), 0.25);\nfb.set(echoed);\nechoed.out();",
         ],
         group: 'Advanced',
         name: '$deferred',

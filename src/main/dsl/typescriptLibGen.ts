@@ -1291,9 +1291,11 @@ function $setTimeSignature(numerator: number, denominator: number): void;
  * Useful for feedback loops and forward references.
  * @param channels - Number of deferred outputs (1-64, default 1)
  * @example
- * const feedback = $deferred();
- * const delayed = $delay(osc.out, feedback[0]);
- * feedback.set(delayed);
+ * const fb = $deferred();
+ * // the delay's buffer breaks the cycle, so the deferred can feed back in
+ * const echoed = $delay($noise('white').amp(fb[0]), 0.25);
+ * fb.set(echoed);
+ * echoed.out();
  */
 function $deferred(channels?: number): DeferredCollection;
 
@@ -2054,41 +2056,56 @@ export function generateDSL(schemas: Schemas): string {
         'export function $buffer(input: ModuleOutput | Collection | number, lengthSeconds: number, config?: { id?: string }): BufferOutputRef;',
     );
     lines.push('');
-    lines.push('/**');
+    // Shared inline options type for `$delay`, `.$.delay`, and `.$m.delay`.
+    const delayOpts =
+        'opts?: { feedback?: Poly<Signal>; feedbackCb?: (mixed: Collection) => Collection | ModuleOutput; maxTime?: number }';
+    // Shared documentation body for `$delay` / `.$.delay` / `.$m.delay`: all
+    // three render the same body, and the chain forms prepend a header for
+    // their call convention. These are synthetic chain methods, so the doc is
+    // hand-written rather than schema-derived.
+    const delayBody = [
+        'Delay with feedback: sum the input with the attenuated feedback,',
+        'optionally process that mix through `feedbackCb`, write it into a',
+        'buffer of `maxTime` seconds, and read it back `time` seconds late. The',
+        'delayed read is attenuated by `feedback` and summed back in, so a',
+        '`feedbackCb` filter colours every recirculation. With `feedback` 0 you',
+        'still hear the first echo; higher values repeat it.',
+        '',
+        '`feedback` is 0–5 (5 = unity), clamped, default 2.5. `maxTime` (default',
+        '5) sizes the buffer and caps how long `time` can be. Returns the wet',
+        'signal with the captured `buffer` attached for extra taps.',
+        '',
+        '```js',
+        '// mix the dry signal back in for a classic echo',
+        '$mix([src, $delay(src, 0.25, { feedback: 3 })]).out()',
+        '',
+        '// lowpass in the loop — echoes darken on every repeat',
+        "src.$.delay(0.5, { feedbackCb: (m) => m.$.lpf('800hz') }).out()",
+        '```',
+    ];
+    // Render the `$delay` doc at `indent`, prepending optional `header` lines
+    // (a chain-form intro) before the shared body.
+    const renderDelayDoc = (indent: string, header: string[]): string[] => {
+        const star = `${indent} *`;
+        const line = (text: string) => (text === '' ? star : `${star} ${text}`);
+        const out = [`${indent}/**`, ...header.map(line)];
+        if (header.length > 0) out.push(star);
+        out.push(...delayBody.map(line), `${indent} */`);
+        return out;
+    };
+    // Chain-form headers, mirroring `renderDollarMethod`'s lead docs.
+    const dollarDelayHeader = [
+        'Chain through `$delay` with this signal as its first argument.',
+        'Equivalent to `$delay(this, time, opts)`.',
+    ];
+    const dollarMixDelayHeader = [
+        'Chain through `$delay`, crossfading the dry input against the wet',
+        'result by a leading `mix` signal (0 = dry, 5 = wet, 2.5 = equal).',
+        'Equivalent to `.pipeMix(s => $delay(s, time, opts), mix)`.',
+    ];
+    lines.push(...renderDelayDoc('', []));
     lines.push(
-        ' * Delay with feedback. Mixes `input` with a deferred feedback signal,',
-    );
-    lines.push(
-        ' * captures the mix into a buffer of `length` seconds, and routes the',
-    );
-    lines.push(
-        ' * buffer through `feedbackCb` to produce the feedback signal.',
-    );
-    lines.push(' *');
-    lines.push(
-        ' * Returns the wet+dry $mix output augmented with a `buffer` property',
-    );
-    lines.push(' * referencing the captured buffer for further reads.');
-    lines.push(' *');
-    lines.push(' * @example');
-    lines.push(' * ```js');
-    lines.push(' * // simple feedback delay');
-    lines.push(
-        " * $delay($noise('white').amp($perc($pulse('1hz'))), (buf) => $delayRead(buf, 0.25).amp(4.5), 1).out()",
-    );
-    lines.push(' * ```');
-    lines.push(' *');
-    lines.push(' * @example');
-    lines.push(' * ```ts');
-    lines.push(' * // tap the buffer for an additional read');
-    lines.push(
-        ' * const d = $delay(src, (buf) => $delayRead(buf, 0.5).amp(2.0), 2)',
-    );
-    lines.push(' * $delayRead(d.buffer, 0.75).out()');
-    lines.push(' * ```');
-    lines.push(' */');
-    lines.push(
-        'export function $delay(input: Collection | ModuleOutput, feedbackCb: (buffer: BufferOutputRef) => Collection | ModuleOutput, length: number): Collection & { buffer: BufferOutputRef };',
+        `export function $delay(input: Collection | ModuleOutput, time: Poly<Signal>, ${delayOpts}): Collection & { buffer: BufferOutputRef };`,
     );
 
     // `.$.` / `.$m.` chainable module namespaces. The qualifying set matches the
@@ -2108,6 +2125,10 @@ export function generateDSL(schemas: Schemas): string {
     for (const s of dollarSchemas) {
         lines.push(...renderDollarMethod(s, false, '  '));
     }
+    lines.push(
+        ...renderDelayDoc('  ', dollarDelayHeader),
+        `  delay(time: Poly<Signal>, ${delayOpts}): Collection & { buffer: BufferOutputRef };`,
+    );
     lines.push('}');
 
     lines.push('');
@@ -2118,6 +2139,10 @@ export function generateDSL(schemas: Schemas): string {
     for (const s of dollarSchemas) {
         lines.push(...renderDollarMethod(s, true, '  '));
     }
+    lines.push(
+        ...renderDelayDoc('  ', dollarMixDelayHeader),
+        `  delay(mix: Poly<Signal>, time: Poly<Signal>, ${delayOpts}): Collection;`,
+    );
     lines.push('}');
 
     return lines.join('\n') + '\n';

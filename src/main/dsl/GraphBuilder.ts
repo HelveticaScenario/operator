@@ -590,6 +590,25 @@ export const $r = (
     );
 
 /**
+ * Broadcast a signal across `channels` channels by cycling its existing
+ * channels (channel `i` ← source channel `i % len`). Useful when a narrow
+ * input must excite a wider polyphonic structure: summing/buffering modules
+ * skip a narrower input group's missing channels rather than cycling them, so
+ * the extra channels would otherwise be silent. Returns the signal unchanged
+ * when it carries no channels.
+ */
+export const cycleToChannels = (
+    signal: ModuleOutput | Collection,
+    channels: number,
+): ModuleOutput | Collection => {
+    const items = signal instanceof BaseCollection ? [...signal] : [signal];
+    if (items.length === 0) return signal;
+    return $c(
+        ...Array.from({ length: channels }, (_, i) => items[i % items.length]),
+    );
+};
+
+/**
  * Factory function type for creating modules via DSL.
  * Returns the module's output(s) directly rather than the ModuleNode.
  */
@@ -623,6 +642,18 @@ export class GraphBuilder {
     private schemaByName = new Map<string, ProcessedModuleSchema>();
     /** Maps a `.$.` method name (e.g. `lpf`) to its module name (e.g. `$lpf`). */
     private dollarLookup = new Map<string, string>();
+    /**
+     * `.$.` / `.$m.` methods backed by DSL sugar rather than a module schema
+     * (e.g. `delay`). Each takes the chained signal as its first argument and
+     * returns the processed result, mirroring a module factory.
+     */
+    private syntheticDollarMethods = new Map<
+        string,
+        (
+            self: ModuleOutput | BaseCollection<ModuleOutput>,
+            ...args: unknown[]
+        ) => ModuleOutput | BaseCollection<ModuleOutput>
+    >();
     private scopes: ScopeWithLocation[] = [];
     /**
      * Latest call to `$scopeXY` — last-call-wins (only one global XY scope
@@ -684,7 +715,15 @@ export class GraphBuilder {
                 }
                 const moduleName = this.dollarLookup.get(prop);
                 if (moduleName === undefined) {
-                    return undefined;
+                    const synthetic = this.syntheticDollarMethods.get(prop);
+                    if (synthetic === undefined) {
+                        return undefined;
+                    }
+                    if (!withMix) {
+                        return (...args: unknown[]) => synthetic(self, ...args);
+                    }
+                    return (mix: PolySignal, ...args: unknown[]) =>
+                        crossfadeMix(this, self, synthetic(self, ...args), mix);
                 }
                 const factory = this.getFactory(moduleName);
                 if (!withMix) {
@@ -694,6 +733,21 @@ export class GraphBuilder {
                     crossfadeMix(this, self, factory(self, ...args), mix);
             },
         });
+    }
+
+    /**
+     * Register a `.$.` / `.$m.` method backed by DSL sugar (e.g. `delay`).
+     * `fn` receives the chained signal as its first argument, exactly like a
+     * module factory injects `self`. Resolved by {@link makeDollarChain}.
+     */
+    registerDollarMethod(
+        name: string,
+        fn: (
+            self: ModuleOutput | BaseCollection<ModuleOutput>,
+            ...args: unknown[]
+        ) => ModuleOutput | BaseCollection<ModuleOutput>,
+    ): void {
+        this.syntheticDollarMethods.set(name, fn);
     }
 
     /**
