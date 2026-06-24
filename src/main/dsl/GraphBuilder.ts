@@ -1782,6 +1782,11 @@ export class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
  * 2.5 = equal). The dry leg is amplitude-scaled by `mix` remapped 5→0, the wet
  * leg by `mix` clamped to 0–5, then both sum through `$mix`. Backs both
  * `.pipeMix` and the `.$m.` chainable namespace.
+ *
+ * Both legs are first broadcast to the wider of the two channel counts via
+ * {@link cycleToChannels} so a mismatched dry/wet width is not truncated — `$mix`
+ * skips, not cycles, a narrower group's missing channels, so the extra channels
+ * would otherwise drop one leg and decay to that of the other alone.
  */
 function crossfadeMix(
     builder: GraphBuilder,
@@ -1792,11 +1797,19 @@ function crossfadeMix(
     const clampFactory = builder.getFactory('$clamp');
     const remapFactory = builder.getFactory('$remap');
     const mixFactory = builder.getFactory('$mix');
+    const arity = (a: Amplifiable): number =>
+        a instanceof BaseCollection ? Math.max(1, a.length) : 1;
+    const channels = Math.max(arity(original), arity(result));
+    const dry = cycleToChannels(
+        original as ModuleOutput | Collection,
+        channels,
+    );
+    const wet = cycleToChannels(result as ModuleOutput | Collection, channels);
     return mixFactory([
-        original.amplitude(
+        dry.amplitude(
             clampFactory(remapFactory(mix, 5, 0, 0, 5), { max: 5, min: 0 }),
         ),
-        result.amplitude(clampFactory(mix, { max: 5, min: 0 }) as PolySignal),
+        wet.amplitude(clampFactory(mix, { max: 5, min: 0 }) as PolySignal),
     ]) as Collection;
 }
 
