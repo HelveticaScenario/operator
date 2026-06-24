@@ -13,7 +13,12 @@ import { tinykeys, parseKeybinding, matchKeyBindingPress } from 'tinykeys';
 import type { KeybindingOverride } from '../../shared/ipcTypes';
 import { dispatchCommand, getActiveEditor } from './dispatch';
 import { DEFAULT_KEYMAP, type DefaultKeybinding } from './defaultKeymap';
-import { normalizeOverride, toTinykeys, type Platform } from './vscodeKeys';
+import {
+    aliasCommand,
+    normalizeOverride,
+    toTinykeys,
+    type Platform,
+} from './vscodeKeys';
 import { toElectronAccelerator } from '../../shared/keybindings/accelerator';
 
 export type ResolvedKeybinding = {
@@ -42,9 +47,12 @@ export function setWhenEvaluator(evaluator: WhenEvaluator): void {
 }
 
 /**
- * Merge user overrides on top of the default keymap. Both sides are
- * translated to canonical tinykeys bindings (see `vscodeKeys`), so a default
- * and an override that denote the same physical chord collapse to one key.
+ * Merge user overrides on top of the default keymap. Both sides flow through
+ * the same normalization (see `vscodeKeys`): keys are translated to canonical
+ * tinykeys bindings and command ids are aliased to their dispatch form. So a
+ * default and an override that denote the same physical chord collapse to one
+ * key, and a default authored as a VS Code id (e.g. `workbench.action.gotoLine`)
+ * resolves to the same dispatch id as a user override naming it.
  *
  * Semantics mirror VS Code's `keybindings.json`, applied in file order:
  *   - A removal (`command: null`, or a `-`-prefixed command) drops every
@@ -70,7 +78,7 @@ export function mergeKeymap(
         }
         list.push({
             key,
-            command: entry.command,
+            command: aliasCommand(entry.command),
             ...(entry.when ? { when: entry.when } : {}),
         });
     }

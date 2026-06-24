@@ -3,7 +3,12 @@
  * Cases are drawn from the shapes in a real VS Code keybindings.json.
  */
 import { describe, expect, test } from 'vitest';
-import { normalizeOverride, toTinykeys } from './vscodeKeys';
+import {
+    aliasCommand,
+    authoringId,
+    normalizeOverride,
+    toTinykeys,
+} from './vscodeKeys';
 
 describe('toTinykeys', () => {
     test('maps VS Code modifiers to tinykeys tokens (darwin)', () => {
@@ -78,8 +83,96 @@ describe('toTinykeys', () => {
     });
 });
 
+describe('aliasCommand', () => {
+    test('rewrites workbench ids Monaco re-registers as editor actions', () => {
+        expect(aliasCommand('workbench.action.gotoLine')).toBe(
+            'editor.action.gotoLine',
+        );
+        expect(aliasCommand('workbench.action.gotoSymbol')).toBe(
+            'editor.action.quickOutline',
+        );
+    });
+
+    test('rewrites workbench ids Operator owns as registry commands', () => {
+        expect(aliasCommand('workbench.action.files.save')).toBe(
+            'operator.save',
+        );
+        expect(aliasCommand('workbench.action.showCommands')).toBe(
+            'operator.showCommandPalette',
+        );
+        expect(aliasCommand('workbench.action.files.openFolder')).toBe(
+            'operator.openWorkspace',
+        );
+    });
+
+    test('is identity for shared editor ids, operator-native ids, and unknown ids', () => {
+        // Shared with VS Code verbatim — dispatches to Monaco as-is.
+        expect(aliasCommand('editor.action.rename')).toBe(
+            'editor.action.rename',
+        );
+        // Operator-native — already in dispatch form.
+        expect(aliasCommand('operator.updatePatch')).toBe(
+            'operator.updatePatch',
+        );
+        // Feature-absent in Operator — passes through untouched.
+        expect(aliasCommand('workbench.action.showAllSymbols')).toBe(
+            'workbench.action.showAllSymbols',
+        );
+    });
+});
+
+describe('authoringId', () => {
+    test('offers the VS Code id for an aliased dispatch id', () => {
+        expect(authoringId('editor.action.gotoLine')).toBe(
+            'workbench.action.gotoLine',
+        );
+        expect(authoringId('editor.action.quickOutline')).toBe(
+            'workbench.action.gotoSymbol',
+        );
+        expect(authoringId('operator.save')).toBe(
+            'workbench.action.files.save',
+        );
+        expect(authoringId('operator.showCommandPalette')).toBe(
+            'workbench.action.showCommands',
+        );
+    });
+
+    test('picks the first-listed VS Code id when several alias to one command', () => {
+        // openKeybindings: the File (JSON) variant is listed first.
+        expect(authoringId('operator.openKeybindings')).toBe(
+            'workbench.action.openGlobalKeybindingsFile',
+        );
+        // openWorkspace: the Open Folder id is listed first.
+        expect(authoringId('operator.openWorkspace')).toBe(
+            'workbench.action.files.openFolder',
+        );
+    });
+
+    test('is identity for shared editor ids and operator-native ids', () => {
+        expect(authoringId('editor.action.rename')).toBe(
+            'editor.action.rename',
+        );
+        expect(authoringId('operator.updatePatch')).toBe(
+            'operator.updatePatch',
+        );
+    });
+
+    test('round-trips back to the dispatch id through aliasCommand', () => {
+        for (const dispatchId of [
+            'editor.action.gotoLine',
+            'editor.action.quickOutline',
+            'operator.save',
+            'operator.openWorkspace',
+            'operator.openKeybindings',
+        ]) {
+            expect(aliasCommand(authoringId(dispatchId))).toBe(dispatchId);
+        }
+    });
+});
+
 describe('normalizeOverride', () => {
     test('a plain entry becomes a bind with translated key', () => {
+        // showAllSymbols has no Operator equivalent, so the id passes through.
         expect(
             normalizeOverride(
                 { key: 'cmd+e', command: 'workbench.action.showAllSymbols' },
@@ -89,6 +182,34 @@ describe('normalizeOverride', () => {
             type: 'bind',
             key: 'Meta+e',
             command: 'workbench.action.showAllSymbols',
+        });
+    });
+
+    test('aliases an imported VS Code command to its dispatch id', () => {
+        expect(
+            normalizeOverride(
+                { key: 'cmd+shift+s', command: 'workbench.action.files.save' },
+                'darwin',
+            ),
+        ).toEqual({
+            type: 'bind',
+            key: 'Shift+Meta+s',
+            command: 'operator.save',
+        });
+    });
+
+    test('aliases a -prefixed VS Code removal to the dispatch id', () => {
+        // So `-workbench.action.gotoLine` cancels a default authored as the
+        // same VS Code id (which also resolves to editor.action.gotoLine).
+        expect(
+            normalizeOverride(
+                { key: 'ctrl+g', command: '-workbench.action.gotoLine' },
+                'darwin',
+            ),
+        ).toEqual({
+            type: 'remove',
+            key: 'Control+g',
+            command: 'editor.action.gotoLine',
         });
     });
 

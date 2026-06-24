@@ -4,7 +4,8 @@
  * neither, and what partial token to complete.
  */
 import { describe, expect, test } from 'vitest';
-import { detectKeybindingCompletion } from './keybindingsCompletion';
+import { detectKeybindingCompletion, knownCommands } from './keybindingsCompletion';
+import { registerCommand, unregisterCommand } from '../../keybindings/commands';
 
 describe('detectKeybindingCompletion', () => {
     test('detects an empty command value', () => {
@@ -58,5 +59,36 @@ describe('detectKeybindingCompletion', () => {
 
     test('returns null on an empty / structural line', () => {
         expect(detectKeybindingCompletion('  {')).toBeNull();
+    });
+});
+
+describe('knownCommands', () => {
+    test('offers an aliased registry command under its VS Code id', () => {
+        registerCommand('operator.save', () => {}, { label: 'Save' });
+        try {
+            const commands = knownCommands();
+            expect(commands).toContainEqual({
+                id: 'workbench.action.files.save',
+                label: 'Save',
+            });
+            expect(commands.some((c) => c.id === 'operator.save')).toBe(false);
+        } finally {
+            unregisterCommand('operator.save');
+        }
+    });
+
+    test('rewrites a catalog id VS Code names differently, leaves shared ids', () => {
+        const commands = knownCommands();
+        // editor.action.quickOutline -> workbench.action.gotoSymbol.
+        expect(commands.some((c) => c.id === 'workbench.action.gotoSymbol')).toBe(
+            true,
+        );
+        expect(commands.some((c) => c.id === 'editor.action.quickOutline')).toBe(
+            false,
+        );
+        // A shared editor id keeps its VS Code-identical id.
+        expect(
+            commands.some((c) => c.id === 'editor.action.revealDefinition'),
+        ).toBe(true);
     });
 });

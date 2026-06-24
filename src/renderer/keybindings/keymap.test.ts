@@ -173,6 +173,50 @@ describe('mergeKeymap', () => {
             },
         ]);
     });
+
+    test('aliases default command ids authored in VS Code vocabulary', () => {
+        const defaults: DefaultKeybinding[] = [
+            { key: '$mod+s', command: 'workbench.action.files.save' },
+            { key: 'Control+g', command: 'workbench.action.gotoLine' },
+            { key: '$mod+Shift+o', command: 'workbench.action.gotoSymbol' },
+            // Operator-native: no VS Code id, so it passes through unchanged.
+            { key: 'Control+.', command: 'operator.stop' },
+        ];
+        expect(mergeKeymap(defaults, [], 'darwin')).toEqual([
+            { key: 'Meta+s', command: 'operator.save' },
+            { key: 'Control+g', command: 'editor.action.gotoLine' },
+            { key: 'Shift+Meta+o', command: 'editor.action.quickOutline' },
+            { key: 'Control+.', command: 'operator.stop' },
+        ]);
+    });
+
+    test('an imported VS Code id removes a default authored in the same vocabulary', () => {
+        // The default and the `-` removal both name workbench.action.gotoLine;
+        // aliasing both to editor.action.gotoLine lets the removal match.
+        const defaults: DefaultKeybinding[] = [
+            { key: 'Control+g', command: 'workbench.action.gotoLine' },
+        ];
+        const overrides: KeybindingOverride[] = [
+            { key: 'ctrl+g', command: '-workbench.action.gotoLine' },
+        ];
+        expect(mergeKeymap(defaults, overrides, 'darwin')).toEqual([]);
+    });
+
+    test('a default and a user rebind of one action share a canonical command id', () => {
+        // Default binds Save under its VS Code id; the user rebinds Save to a
+        // new key, also under the VS Code id. Both resolve to operator.save.
+        const defaults: DefaultKeybinding[] = [
+            { key: '$mod+s', command: 'workbench.action.files.save' },
+        ];
+        const overrides: KeybindingOverride[] = [
+            { key: 'cmd+shift+s', command: 'workbench.action.files.save' },
+        ];
+        const merged = mergeKeymap(defaults, overrides, 'darwin');
+        expect(merged).toEqual([
+            { key: 'Meta+s', command: 'operator.save' },
+            { key: 'Shift+Meta+s', command: 'operator.save' },
+        ]);
+    });
 });
 
 describe('installKeymap', () => {

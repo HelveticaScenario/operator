@@ -8,6 +8,10 @@
  * provider; Operator unifies both into one Monaco completion provider scoped
  * to the keybindings buffer, which keeps the two sources of suggestions in
  * one place and avoids fighting the existing config.json schema registration.
+ *
+ * Command ids are offered in VS Code's vocabulary: each internal dispatch id is
+ * rewritten to its `authoringId` (see `vscodeKeys`), so a user completes (and
+ * copies) `workbench.action.files.save` rather than Operator's `operator.save`.
  */
 import type { Monaco } from '../../hooks/useCustomMonaco';
 import type { editor, languages, Position } from 'monaco-editor';
@@ -16,6 +20,7 @@ import { listCommands } from '../../keybindings/commands';
 import { getActiveEditor } from '../../keybindings/dispatch';
 import { EDITOR_COMMAND_CATALOG } from '../../keybindings/editorCommandCatalog';
 import { CONTEXT_KEY_INFO } from '../../keybindings/contextKeyInfo';
+import { authoringId } from '../../keybindings/vscodeKeys';
 
 export type KeybindingCompletion =
     | { kind: 'command'; word: string }
@@ -43,8 +48,14 @@ export function detectKeybindingCompletion(
     return null;
 }
 
-/** Every command id offerable in a `command` value, with a display label. */
-function knownCommands(): Array<{ id: string; label: string }> {
+/**
+ * Every command id offerable in a `command` value, with a display label. Ids
+ * are collected in Operator's internal dispatch form (registry, then the
+ * editor's supported actions, then the curated catalog — earlier sources win a
+ * label), then rewritten to VS Code's vocabulary via `authoringId` so an
+ * aliased command is offered under its VS Code id and not its dispatch target.
+ */
+export function knownCommands(): Array<{ id: string; label: string }> {
     const byId = new Map<string, string>();
     for (const { id, metadata } of listCommands()) {
         byId.set(id, metadata?.label ?? id);
@@ -62,7 +73,17 @@ function knownCommands(): Array<{ id: string; label: string }> {
             byId.set(command.id, command.label);
         }
     }
-    return [...byId].map(([id, label]) => ({ id, label }));
+    // Offer VS Code's id for each command; dedupe so a command and its alias
+    // (e.g. an internal id surfaced both by the registry and the catalog) don't
+    // both appear under the same authored id.
+    const offered = new Map<string, string>();
+    for (const [id, label] of byId) {
+        const authored = authoringId(id);
+        if (!offered.has(authored)) {
+            offered.set(authored, label);
+        }
+    }
+    return [...offered].map(([id, label]) => ({ id, label }));
 }
 
 function isKeybindingsModel(model: editor.ITextModel): boolean {

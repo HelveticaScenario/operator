@@ -215,10 +215,88 @@ export type NormalizedEntry =
     | ({ type: 'remove' } & NormalizedRemoval);
 
 /**
+ * VS Code command id → Operator dispatch id.
+ *
+ * Operator authors its default keymap and accepts user keymaps in VS Code's
+ * command vocabulary, so a VS Code `keybindings.json` drops in. Dispatch,
+ * however, resolves only an `operator.*` registry command or a Monaco editor
+ * action / core command (`dispatch.ts`). This table rewrites the handful of
+ * actions VS Code names differently from their Operator/Monaco dispatch id;
+ * every other id — the shared `editor.action.*` set, core commands, and
+ * Operator-native `operator.*` ids — has no entry and passes through unchanged.
+ *
+ * Two kinds of divergence are bridged:
+ *   - Workbench quick-inputs that Monaco's standalone editor re-registers under
+ *     an `editor.action.*` id (Go to Line, Go to Symbol).
+ *   - App-level actions Operator implements as `operator.*` registry commands
+ *     (save, new file, close, settings, command palette, keyboard shortcuts,
+ *     open folder).
+ */
+export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
+    // Monaco standalone re-registers these workbench quick-inputs as editor
+    // actions, so the VS Code id never resolves without the rewrite.
+    'workbench.action.gotoLine': 'editor.action.gotoLine',
+    'workbench.action.gotoSymbol': 'editor.action.quickOutline',
+    // App-level commands Operator owns in its registry.
+    'workbench.action.files.save': 'operator.save',
+    'workbench.action.files.newUntitledFile': 'operator.newFile',
+    'workbench.action.closeActiveEditor': 'operator.closeBuffer',
+    'workbench.action.showCommands': 'operator.showCommandPalette',
+    'workbench.action.openSettings': 'operator.openSettings',
+    // File (JSON) variant first — it matches Operator's "Open Keyboard
+    // Shortcuts (JSON)" behaviour and is the id autocomplete offers; the UI
+    // variant (the common Cmd+K Cmd+S default) still aliases on import.
+    'workbench.action.openGlobalKeybindingsFile': 'operator.openKeybindings',
+    'workbench.action.openGlobalKeybindings': 'operator.openKeybindings',
+    // Operator's "open" is a folder/workspace picker (main.ts FS_SELECT_WORKSPACE),
+    // matching VS Code's Open Folder; the mac "Open…" id maps here too.
+    'workbench.action.files.openFolder': 'operator.openWorkspace',
+    'workbench.action.files.openFileFolder': 'operator.openWorkspace',
+};
+
+/**
+ * Resolve an authored command id (VS Code or Operator vocabulary) to the id
+ * dispatch understands. Identity for any id without an alias — including ids
+ * that are already in Operator/Monaco dispatch form.
+ */
+export function aliasCommand(command: string): string {
+    return COMMAND_ALIASES[command] ?? command;
+}
+
+/**
+ * Reverse of `COMMAND_ALIASES`: dispatch id → the VS Code id to author it as.
+ * When several VS Code ids alias to one dispatch id, the first listed in
+ * `COMMAND_ALIASES` wins, so order that table most-preferred-first.
+ */
+function invertAliases(): Readonly<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const [vscodeId, dispatchId] of Object.entries(COMMAND_ALIASES)) {
+        if (!(dispatchId in out)) {
+            out[dispatchId] = vscodeId;
+        }
+    }
+    return out;
+}
+
+const DISPATCH_TO_VSCODE = invertAliases();
+
+/**
+ * The id a keybindings file should author a command as: the VS Code id when
+ * the command has one, else the id unchanged. Inverse of `aliasCommand` — what
+ * the keybindings autocomplete offers, so a user writes (and pastes) VS Code's
+ * vocabulary instead of Operator's internal dispatch id.
+ */
+export function authoringId(command: string): string {
+    return DISPATCH_TO_VSCODE[command] ?? command;
+}
+
+/**
  * Normalize one raw override into the internal entry form. Returns null when
  * the key cannot be translated (the entry is dropped rather than installed
- * wrong). Removal is signalled by `command: null` (Operator) or a `-` prefix
- * (VS Code).
+ * wrong). The command id is aliased to its dispatch form (see `aliasCommand`)
+ * so VS Code ids resolve. Removal is signalled by `command: null` (Operator)
+ * or a `-` prefix (VS Code); the removed id is aliased too, so a `-`-prefixed
+ * VS Code id cancels a default authored in the same VS Code vocabulary.
  */
 export function normalizeOverride(
     override: KeybindingOverride,
@@ -233,12 +311,12 @@ export function normalizeOverride(
         return { type: 'remove', key, command: null };
     }
     if (raw.startsWith('-')) {
-        return { type: 'remove', key, command: raw.slice(1) };
+        return { type: 'remove', key, command: aliasCommand(raw.slice(1)) };
     }
     return {
         type: 'bind',
         key,
-        command: raw,
+        command: aliasCommand(raw),
         ...(override.when ? { when: override.when } : {}),
         ...(override.args !== undefined ? { args: override.args } : {}),
     };

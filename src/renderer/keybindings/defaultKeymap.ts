@@ -6,6 +6,15 @@
  * to `Cmd` on macOS and `Ctrl` everywhere else, matching Electron's
  * `CmdOrCtrl` accelerator semantics.
  *
+ * `command` is authored in VS Code's command-id vocabulary — the same ids a
+ * user's imported `keybindings.json` would name — so the defaults and an
+ * import are one vocabulary. At load, `mergeKeymap` runs every command through
+ * `aliasCommand` (see `vscodeKeys`), rewriting the ids VS Code names
+ * differently from their dispatch target (e.g. `workbench.action.gotoLine` →
+ * `editor.action.gotoLine`, `workbench.action.files.save` → `operator.save`).
+ * Operator-native actions with no VS Code analogue (the transport commands)
+ * keep their `operator.*` id, which `aliasCommand` passes through untouched.
+ *
  * `when` is stored verbatim and evaluated against the context-key service at
  * dispatch. An unset or empty clause is always true; a malformed clause is
  * treated as not matching, so the binding falls through.
@@ -24,36 +33,42 @@ export type DefaultKeybinding = {
 };
 
 export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
-    // Transport commands use physical Control on every platform (Ctrl+Enter,
-    // not Cmd+Enter on macOS) — the long-standing Operator convention, and it
-    // leaves Cmd+Enter free for Monaco's "insert line below". File commands
-    // below use $mod (Cmd on macOS) per platform convention.
+    // Transport commands are Operator-native (no VS Code analogue) and use
+    // physical Control on every platform (Ctrl+Enter, not Cmd+Enter on macOS) —
+    // the long-standing Operator convention, and it leaves Cmd+Enter free for
+    // Monaco's "insert line below".
     { key: 'Control+Enter', command: 'operator.updatePatch' },
     { key: 'Control+Shift+Enter', command: 'operator.updatePatchNextBeat' },
     { key: 'Control+.', command: 'operator.stop' },
-    { key: '$mod+n', command: 'operator.newFile' },
-    { key: '$mod+o', command: 'operator.openWorkspace' },
-    { key: '$mod+s', command: 'operator.save' },
-    { key: '$mod+w', command: 'operator.closeBuffer' },
-    { key: '$mod+,', command: 'operator.openSettings' },
-    { key: 'F1', command: 'operator.showCommandPalette' },
-    { key: '$mod+Shift+p', command: 'operator.showCommandPalette' },
+    // File / app commands use $mod (Cmd on macOS) and are named with their VS
+    // Code command id; `aliasCommand` rewrites each to the `operator.*` it
+    // dispatches to. Operator's "Open Folder" is a workspace/folder picker.
+    { key: '$mod+n', command: 'workbench.action.files.newUntitledFile' },
+    { key: '$mod+o', command: 'workbench.action.files.openFolder' },
+    { key: '$mod+s', command: 'workbench.action.files.save' },
+    { key: '$mod+w', command: 'workbench.action.closeActiveEditor' },
+    { key: '$mod+,', command: 'workbench.action.openSettings' },
+    { key: 'F1', command: 'workbench.action.showCommands' },
+    { key: '$mod+Shift+p', command: 'workbench.action.showCommands' },
 
-    // Monaco's built-in editor commands. These mirror Monaco's own default
-    // keybindings so the editor context menu can display the shortcut. Monaco
-    // handles the key natively while the editor is focused (it stops event
-    // propagation, so this binding is shadowed there, not double-dispatched);
-    // the entry exists for display and as a fallback dispatch path.
+    // VS Code editor command ids that mirror VS Code's own default keybindings
+    // so the editor context menu can display the shortcut. Monaco handles the
+    // key natively while the editor is focused (it stops event propagation, so
+    // this binding is shadowed there, not double-dispatched); the entry exists
+    // for display and as a fallback dispatch path. Most ids are shared verbatim
+    // with Monaco; `gotoSymbol` is aliased to Monaco's standalone
+    // `editor.action.quickOutline`.
     { key: 'F12', command: 'editor.action.revealDefinition' },
-    { key: '$mod+Shift+o', command: 'editor.action.quickOutline' },
+    { key: '$mod+Shift+o', command: 'workbench.action.gotoSymbol' },
     { key: 'Shift+F12', command: 'editor.action.goToReferences' },
     { key: 'Alt+F12', command: 'editor.action.peekDefinition' },
     { key: 'F2', command: 'editor.action.rename' },
     { key: '$mod+F2', command: 'editor.action.changeAll' },
     { key: 'Shift+Alt+f', command: 'editor.action.formatDocument' },
     // Go to Line/Column — physical Ctrl+G on every platform (VS Code's and
-    // Monaco's macOS default), opening Monaco's go-to-line quick input.
-    { key: 'Control+g', command: 'editor.action.gotoLine' },
+    // Monaco's macOS default). VS Code names it `workbench.action.gotoLine`;
+    // `aliasCommand` rewrites it to Monaco's `editor.action.gotoLine`.
+    { key: 'Control+g', command: 'workbench.action.gotoLine' },
 
     // Remaining Monaco editor-action default bindings, extracted from the
     // monaco-editor source (kbOpts). They give every palette-visible editor
