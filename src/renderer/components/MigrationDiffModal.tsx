@@ -7,7 +7,9 @@ import './MigrationDiffModal.css';
 
 export interface MigrationModalSummary {
     callsChanged: number;
-    assignmentsChanged: number;
+    /** Omit for migrations that have no notion of assignment rewrites; the
+     *  assignments segment is then hidden from the summary line. */
+    assignmentsChanged?: number;
     commentsChanged: number;
     skippedVariables: string[];
     error?: string;
@@ -18,6 +20,11 @@ interface Props {
     original: string;
     migrated: string;
     summary: MigrationModalSummary;
+    /** Heading shown in the modal and as the diff's purpose. */
+    title?: string;
+    /** Label prefixing the list of `skippedVariables` (calls/variables that
+     *  could not be rewritten automatically). */
+    skippedLabel?: string;
     onApply: () => void;
     onCancel: () => void;
 }
@@ -27,6 +34,8 @@ export function MigrationDiffModal({
     original,
     migrated,
     summary,
+    title = 'Migrate $cycle / $iCycle to $p / $p.s',
+    skippedLabel = 'Skipped variables (non-string or mixed assignments):',
     onApply,
     onCancel,
 }: Props) {
@@ -36,7 +45,7 @@ export function MigrationDiffModal({
 
     const totalChanges =
         summary.callsChanged +
-        summary.assignmentsChanged +
+        (summary.assignmentsChanged ?? 0) +
         summary.commentsChanged;
     const noChanges = totalChanges === 0;
     const canApply = !noChanges && !summary.error;
@@ -70,7 +79,7 @@ export function MigrationDiffModal({
                 onClick={(e) => e.stopPropagation()}
             >
                 <div className="migration-header">
-                    <h2>Migrate $cycle / $iCycle to $p / $p.s</h2>
+                    <h2>{title}</h2>
                     <button className="close-btn" onClick={onCancel}>
                         ×
                     </button>
@@ -80,15 +89,19 @@ export function MigrationDiffModal({
                     <span className="migration-summary-counts">
                         {summary.callsChanged} call
                         {summary.callsChanged === 1 ? '' : 's'} ·{' '}
-                        {summary.assignmentsChanged} assignment
-                        {summary.assignmentsChanged === 1 ? '' : 's'} ·{' '}
+                        {summary.assignmentsChanged !== undefined && (
+                            <>
+                                {summary.assignmentsChanged} assignment
+                                {summary.assignmentsChanged === 1 ? '' : 's'} ·
+                                {' '}
+                            </>
+                        )}
                         {summary.commentsChanged} comment
                         {summary.commentsChanged === 1 ? '' : 's'} rewritten
                     </span>
                     {summary.skippedVariables.length > 0 && (
                         <div className="migration-summary-warning">
-                            Skipped variables (non-string or mixed assignments):{' '}
-                            {summary.skippedVariables.join(', ')}
+                            {skippedLabel} {summary.skippedVariables.join(', ')}
                         </div>
                     )}
                     {summary.error && (
@@ -101,7 +114,9 @@ export function MigrationDiffModal({
                 <div className="migration-body">
                     {noChanges ? (
                         <div className="migration-empty">
-                            Buffer already migrated — no changes to apply.
+                            {summary.skippedVariables.length > 0
+                                ? 'No automatic changes to apply — see the flagged items above.'
+                                : 'Buffer already migrated — no changes to apply.'}
                         </div>
                     ) : (
                         <DiffEditor

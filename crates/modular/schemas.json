@@ -3965,7 +3965,7 @@
   },
   {
     "name": "$wavetable",
-    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional phase-warp `Table`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable($wavs().tables.pad, 'c4').out()\n$wavetable(wav, 'c2', { position: lfo }).out()\n```",
+    "documentation": "A band-limited wavetable oscillator.\n\nReads a pre-built mipmap pyramid (FFT-filtered frame copies) and\nselects a level appropriate for the playback frequency to suppress\naliasing. Frame position can be swept across multi-frame tables for\nclassic wavetable timbral sweeps, and an optional phase-warp `Table`\nreshapes the read phase before sampling.\n\n## Example\n\n```js\n$wavetable('c4', $wavs().tables.pad).out()\n$wavetable('c2', wav, lfo).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "WavetableOscParams",
@@ -4318,10 +4318,10 @@
     ],
     "positionalArgs": [
       {
-        "name": "wav"
+        "name": "pitch"
       },
       {
-        "name": "pitch"
+        "name": "wav"
       },
       {
         "name": "position"

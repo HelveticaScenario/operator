@@ -10,6 +10,7 @@ import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
 import type { MigrationModalSummary } from './components/MigrationDiffModal';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
+import { migrateWavetableArgs } from './dsl/migrateWavetableArgs';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
@@ -170,6 +171,8 @@ function App() {
         original: string;
         migrated: string;
         summary: MigrationModalSummary;
+        title?: string;
+        skippedLabel?: string;
     } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
@@ -1195,6 +1198,45 @@ function App() {
             });
         });
 
+        const cleanupMigrateWavetable = electronAPI.onMenuMigrateWavetable(
+            () => {
+                const ed = editorRef.current;
+                const wavetableTitle =
+                    'Migrate $wavetable to pitch-first order';
+                if (!ed || !activeBufferId) {
+                    console.warn('Migrate wavetable: no editor available');
+                    setMigrationState({
+                        bufferId: activeBufferId ?? '',
+                        original: '',
+                        migrated: '',
+                        title: wavetableTitle,
+                        summary: {
+                            callsChanged: 0,
+                            commentsChanged: 0,
+                            skippedVariables: [],
+                            error: 'No editor available',
+                        },
+                    });
+                    return;
+                }
+                const original = ed.getValue();
+                const result = migrateWavetableArgs(original);
+                setMigrationState({
+                    bufferId: activeBufferId,
+                    original,
+                    migrated: result.migrated,
+                    title: wavetableTitle,
+                    skippedLabel: 'Needs manual review:',
+                    summary: {
+                        callsChanged: result.callsChanged,
+                        commentsChanged: result.commentsChanged,
+                        skippedVariables: result.skipped,
+                        error: result.error,
+                    },
+                });
+            },
+        );
+
         return () => {
             cleanupNewFile();
             cleanupSave();
@@ -1208,6 +1250,7 @@ function App() {
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
             cleanupMigrateBuffer();
+            cleanupMigrateWavetable();
         };
     }, [isRecording]);
 
@@ -1337,6 +1380,8 @@ function App() {
                     original={migrationState.original}
                     migrated={migrationState.migrated}
                     summary={migrationState.summary}
+                    title={migrationState.title}
+                    skippedLabel={migrationState.skippedLabel}
                     onCancel={() => setMigrationState(null)}
                     onApply={() => {
                         const ed = editorRef.current;

@@ -2300,6 +2300,18 @@ const createMenu = (): void => {
                     },
                     label: 'Migrate $cycle / $iCycle to $p / $p.s...',
                 },
+                {
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(
+                                MENU_CHANNELS.MIGRATE_WAVETABLE,
+                            );
+                        }
+                    },
+                    label: 'Migrate $wavetable to pitch-first order...',
+                },
                 ...(!isMac
                     ? ([
                           { type: 'separator' },

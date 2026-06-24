@@ -11,24 +11,24 @@ Add a `$wavetable` DSP module and a new `Table` param type to the modular synth.
 
 ```javascript
 // Basic: pitch + position
-$wavetable($wavs().pad, $note('C4'), 0.5).out();
+$wavetable($note('C4'), $wavs().pad, 0.5).out();
 
 // Modulated position via LFO
-$wavetable($wavs().strings.warm, note, lfo.sine(0.2).range(0, 5)).out();
+$wavetable(note, $wavs().strings.warm, lfo.sine(0.2).range(0, 5)).out();
 
 // Phase warping with static amount
-$wavetable($wavs().pad, note, position, { phase: $table.mirror(0.7) }).out();
+$wavetable(note, $wavs().pad, position, { phase: $table.mirror(0.7) }).out();
 
 // Phase warping with signal-driven amount
-$wavetable($wavs().pad, note, position, { phase: $table.bend(lfo.out) }).out();
+$wavetable(note, $wavs().pad, position, { phase: $table.bend(lfo.out) }).out();
 ```
 
-**Signature:** `$wavetable(wav, pitch, position, config?)`
+**Signature:** `$wavetable(pitch, wav, position, config?)`
 
 | Param          | Type               | Description                                                 |
 | -------------- | ------------------ | ----------------------------------------------------------- |
-| `wav`          | `WavHandle`        | From `$wavs()`. Triggers WAV loading via existing pipeline. |
 | `pitch`        | polysignal         | V/Oct pitch input (0V = C4).                                |
+| `wav`          | `WavHandle`        | From `$wavs()`. Triggers WAV loading via existing pipeline. |
 | `position`     | polysignal (0–5V)  | Frame morph position. 0V = first frame, 5V = last frame.    |
 | `config.phase` | `Table` (optional) | Phase warp table. Default: identity (linear).               |
 

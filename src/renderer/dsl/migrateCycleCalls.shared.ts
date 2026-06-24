@@ -4,11 +4,9 @@
  * import from here instead of each other.
  */
 
-export interface Edit {
-    start: number;
-    end: number;
-    replacement: string;
-}
+import type { Edit } from './migrationEdits';
+
+export type { Edit };
 
 // Legacy voltage atoms wrote the unit suffix `v` after a number (`5v`,
 // `0.5v`, `-3v`). The current grammar reads a bare number as the voltage,
