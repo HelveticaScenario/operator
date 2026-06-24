@@ -119,7 +119,8 @@
         "zod": "^4.3.5"
     },
     "workspaces": [
-        "crates/*"
+        "crates/*",
+        "crates/modular/dsl"
     ],
     "lint-staged": {
         "*.{ts,tsx,js,jsx,mjs,json,css,md}": [
