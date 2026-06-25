@@ -58,7 +58,10 @@ struct SawOscillatorOutputs {
 /// Per-channel oscillator state
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    phase: f32,
+    /// Phase accumulator in `[0, 1)`. Kept in f64 so the DPW differencing
+    /// (which divides a difference of near-equal integral values by the phase
+    /// increment) stays well-conditioned at low, LFO-rate frequencies.
+    phase: f64,
     shape: Clickless,
     /// False until the voice has seeded its starting phase to a zero crossing
     /// (done on the first `update`). A voice whose state was carried over by
@@ -109,7 +112,7 @@ impl SawOscillator {
         let num_channels = self.channel_count();
 
         // Pre-compute inverse sample rate for frequency calculation
-        let inv_sample_rate = 1.0 / sample_rate;
+        let inv_sample_rate = 1.0 / sample_rate as f64;
 
         let wait_for_zero_cross = self.params.wait_for_zero_cross;
 
@@ -123,16 +126,16 @@ impl SawOscillator {
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
             let frequency = apply_fm(pitch, fm, self.params.fm_mode);
-            let phase_increment = frequency * inv_sample_rate;
+            let phase_increment = frequency as f64 * inv_sample_rate;
 
             // Convert shape (0–5) to symmetry (peak position):
             // 0 = saw (peak at 1.0), 2.5 = triangle (peak at 0.5), 5 = ramp (peak at 0.0)
-            let s = (1.0 - *state.shape * 0.2).clamp(0.001, 0.999);
+            let s = (1.0 - *state.shape * 0.2).clamp(0.001, 0.999) as f64;
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.
             let offset = self.params.phase_offset.value_or(ch, 0.0);
-            let read_offset = offset.rem_euclid(1.0);
+            let read_offset = offset.rem_euclid(1.0) as f64;
 
             // Seed a fresh voice so its read position starts just before the
             // gentle zero crossing, then the mute below holds silence until it
@@ -156,7 +159,7 @@ impl SawOscillator {
                 // output reaches the crossing.
                 state.gate_open = !wait_for_zero_cross;
                 let read_start = (zero_cross - read_offset).rem_euclid(1.0);
-                state.prev_out = naive_triangle(read_start, s) * 5.0;
+                state.prev_out = naive_triangle(read_start, s) as f32 * 5.0;
             }
 
             // DPW: compute integral at current phase BEFORE advancing
@@ -172,11 +175,16 @@ impl SawOscillator {
             // upcoming interval, so the phase advanced normally here and the DPW
             // differentiation stays valid; the reset is band-limited separately.
             let body = if phase_increment.abs() > 1.0e-7 {
+                // The DPW slope is computed in f64: integral_new and
+                // integral_old are near-equal when the phase increment is small
+                // (low frequency), so the difference and its division must keep
+                // enough precision that f32 rounding does not get amplified into
+                // per-sample hash on slow, LFO-rate outputs.
                 let integral_new = triangle_integral(read_phase, s);
-                (integral_new - integral_old) / phase_increment
+                ((integral_new - integral_old) / phase_increment) as f32
             } else {
                 // Near-DC fallback: use naive waveform (no aliasing at low freq)
-                naive_triangle(read_phase, s)
+                naive_triangle(read_phase, s) as f32
             };
 
             let pending = state.blep_carry;
@@ -192,7 +200,7 @@ impl SawOscillator {
                     let before = naive_triangle(read_phase, s);
                     state.phase = 0.0;
                     let after = naive_triangle(read_offset, s);
-                    let (n, carry) = sync_blep(after - before, frac);
+                    let (n, carry) = sync_blep((after - before) as f32, frac);
                     now = n;
                     state.blep_carry = carry;
                 }
@@ -234,7 +242,7 @@ impl SawOscillator {
 /// `(F[n] - F[n-1]) / dt` naturally band-limits the output without requiring
 /// any explicit PolyBLEP/PolyBLAMP corrections.
 #[inline(always)]
-fn triangle_integral(phase: f32, s: f32) -> f32 {
+fn triangle_integral(phase: f64, s: f64) -> f64 {
     if phase < s {
         // Integral of rising segment: f(p) = 2p/s - 1  →  F(p) = p²/s - p
         phase * phase / s - phase
@@ -247,7 +255,7 @@ fn triangle_integral(phase: f32, s: f32) -> f32 {
 
 /// Naive variable-symmetry triangle (used as fallback at near-zero frequency).
 #[inline(always)]
-fn naive_triangle(phase: f32, s: f32) -> f32 {
+fn naive_triangle(phase: f64, s: f64) -> f64 {
     if phase < s {
         2.0 * phase / s - 1.0
     } else {
@@ -350,6 +358,38 @@ mod tests {
         assert!(
             release <= 1,
             "zero-offset voice should sound immediately, released at {release}"
+        );
+    }
+
+    #[test]
+    fn low_frequency_output_is_a_clean_ramp() {
+        // A sub-audio (LFO-rate) saw must be a smooth ramp. The DPW body divides
+        // a difference of near-equal integral values by the phase increment;
+        // when that increment is tiny (low frequency) the division must keep
+        // enough precision that f32 rounding does not blow up into per-sample
+        // hash. Regression for the audible high-frequency artifact heard when a
+        // 0.2 Hz saw is used as an amplitude LFO.
+        let v = (0.2_f32 / 261.625_58).log2(); // 0.2 Hz expressed in V/Oct
+        let mut osc = make_saw(0.0, true);
+        osc.params.freq = PolySignal::mono(Signal::Volts(v));
+
+        // 0.2 Hz ⇒ ~240k samples/cycle, so 2000 samples stay on the rising
+        // segment. Skip the seed/mute-release samples and measure the slope.
+        let out = run(&mut osc, 2000);
+        let diffs: Vec<f32> = out[50..].windows(2).map(|w| w[1] - w[0]).collect();
+        let mean = diffs.iter().sum::<f32>() / diffs.len() as f32;
+        let std =
+            (diffs.iter().map(|d| (d - mean).powi(2)).sum::<f32>() / diffs.len() as f32).sqrt();
+
+        assert!(
+            mean > 0.0,
+            "ramp should rise; mean per-sample step = {mean}"
+        );
+        // The pre-fix f32 DPW produced a step std ~0.04 (≈600x the true slope);
+        // a clean ramp has step std at the f32 output-quantization floor (~1e-6).
+        assert!(
+            std < 1.0e-3,
+            "per-sample step std {std} indicates high-frequency hash (clean ramp ≈ 0)"
         );
     }
 }
