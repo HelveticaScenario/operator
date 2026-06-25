@@ -50,6 +50,11 @@ struct SawOscillatorOutputs {
 struct ChannelState {
     phase: f32,
     shape: Clickless,
+    /// False until the voice has seeded its starting phase to a zero crossing
+    /// (done on the first `update`). A voice whose state was carried over by
+    /// `transfer_state_from` arrives with this already set, so it keeps its
+    /// phase for continuity instead of re-seeding.
+    seeded: bool,
     /// Edge detector for the sync input.
     sync_schmitt: SchmittTrigger,
     /// Previous sync-input sample, for subsample edge interpolation.
@@ -108,6 +113,20 @@ impl SawOscillator {
             // accumulator, so it never drifts.
             let offset = self.params.phase_offset.value_or(ch, 0.0);
             let read_offset = offset.rem_euclid(1.0);
+
+            // Seed a fresh voice so its first output sample is a zero crossing,
+            // preventing a click on note/voice start. The waveform crosses zero
+            // mid-rise (phase s/2) and mid-fall (phase (1+s)/2); start on the
+            // longer of the two segments so the voice begins on a gentle slope
+            // and the steep edge lands a half-cycle later (band-limited by DPW).
+            // Subtracting the read offset puts the read position at the crossing.
+            // Only fresh voices seed — carried-over state keeps its phase (see
+            // `seeded`).
+            if !state.seeded {
+                let zero_cross = if s >= 0.5 { s * 0.5 } else { (1.0 + s) * 0.5 };
+                state.phase = (zero_cross - read_offset).rem_euclid(1.0);
+                state.seeded = true;
+            }
 
             // DPW: compute integral at current phase BEFORE advancing
             let read_old = (state.phase + read_offset).rem_euclid(1.0);
