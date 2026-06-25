@@ -38,6 +38,16 @@ struct SupersawParams {
     /// hard sync source — rising edges reset every detuned voice's phase
     #[deserr(default)]
     sync: Option<PolySignal>,
+    /// when true, each freshly started voice stays silent until its output
+    /// first crosses zero. Because voices start at random phases, this prevents
+    /// a click when the patch begins. Default true.
+    #[serde(default = "default_true")]
+    #[deserr(default = default_true())]
+    wait_for_zero_cross: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -92,6 +102,13 @@ struct VoiceState {
     phase: f32,
     /// PolyBLEP residual carried into the next sample from a sync reset.
     blep_carry: f32,
+    /// Whether this voice's zero-cross mute has released. Stays false while the
+    /// voice is held silent after a fresh start, then latches true at the first
+    /// output zero crossing. Carried-over voices arrive with this true.
+    gate_open: bool,
+    /// Previous (un-muted) saw value, used to detect the releasing zero
+    /// crossing.
+    prev_out: f32,
 }
 
 /// Module-level state for the Supersaw module.
@@ -181,8 +198,16 @@ impl Supersaw {
         let voices = self.channel_count().max(1);
         self.channel_state =
             vec![VoiceState::default(); PORT_MAX_CHANNELS * voices].into_boxed_slice();
+        // Seed each fresh voice and arm its zero-cross mute. prev_out is the
+        // naive saw at the seeded phase so the mute holds until the output
+        // genuinely crosses zero (it would release immediately if left at 0).
+        // For carried-over voices these values are overwritten by
+        // `transfer_state_from`, keeping an already-sounding voice un-muted.
+        let gate_open = !self.params.wait_for_zero_cross;
         for cell in self.channel_state.iter_mut() {
             cell.phase = rand_phase(&mut self.state.rng_state);
+            cell.gate_open = gate_open;
+            cell.prev_out = 2.0 * cell.phase - 1.0;
         }
     }
 
@@ -283,7 +308,24 @@ impl Supersaw {
                 }
 
                 self.channel_state[state_idx].phase = phase;
-                accum += saw;
+
+                // Zero-cross mute: hold this voice silent until its saw rises
+                // through zero, then latch open. A saw also crosses zero on its
+                // steep wrap (positive→negative) — releasing there would click —
+                // so only the rising (negative→positive) crossing on the ramp
+                // counts. Releasing on the ramp means the first contributed
+                // sample is ~0.
+                let prev_out = self.channel_state[state_idx].prev_out;
+                let contribution = if self.channel_state[state_idx].gate_open {
+                    saw
+                } else if prev_out <= 0.0 && saw >= 0.0 {
+                    self.channel_state[state_idx].gate_open = true;
+                    saw
+                } else {
+                    0.0
+                };
+                self.channel_state[state_idx].prev_out = saw;
+                accum += contribution;
             }
 
             self.outputs.sample.set(voice, accum * gain);
@@ -338,6 +380,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         // Run several samples to get past initialization
         for _ in 0..100 {
@@ -357,6 +400,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         };
         assert_eq!(supersaw_derive_channel_count(&params), 7);
     }
@@ -370,6 +414,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         for _ in 0..1000 {
             s.update(48000.0);
@@ -392,6 +437,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         };
         assert_eq!(supersaw_derive_channel_count(&params), PORT_MAX_CHANNELS);
 
@@ -402,6 +448,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         };
         assert_eq!(supersaw_derive_channel_count(&params_zero), 1);
     }
@@ -416,6 +463,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         // Force known phases (overwrite whatever init set)
         for i in 0..s_no_detune.channel_state.len() {
@@ -429,6 +477,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         for i in 0..s_detune.channel_state.len() {
             s_detune.channel_state[i].phase = 0.25;
@@ -466,6 +515,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         // Trigger phase initialization via init()
         s.init(48000.0);
@@ -487,6 +537,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         // Force known phases, zero detune -> all voices should produce identical output
         for i in 0..s.channel_state.len() {
@@ -517,6 +568,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: Some(PolySignal::mono(Signal::Volts(0.0))),
+            wait_for_zero_cross: false,
         });
 
         // Advance so every voice phase is clearly non-zero and the sync edge
@@ -553,6 +605,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: Some(PolySignal::mono(Signal::Volts(0.0))),
+            wait_for_zero_cross: false,
         });
 
         // Toggle the sync input low/high every few samples to generate edges.
@@ -573,6 +626,44 @@ mod tests {
     }
 
     #[test]
+    fn wait_for_zero_cross_mutes_fresh_voice_until_crossing() {
+        // A fresh voice that does not start on a zero crossing is held silent
+        // until its saw crosses zero, then releases on a near-zero sample.
+        let mut s = make_supersaw(SupersawParams {
+            freq: PolySignal::mono(Signal::Volts(0.0)),
+            voices: 1,
+            detune: Some(PolySignal::mono(Signal::Volts(0.0))),
+            fm: None,
+            fm_mode: FmMode::default(),
+            sync: None,
+            wait_for_zero_cross: true,
+        });
+        // Force a known non-zero start: saw = 2*0.25 - 1 = -0.5, mute armed.
+        s.channel_state[0].phase = 0.25;
+        s.channel_state[0].prev_out = -0.5;
+        s.channel_state[0].gate_open = false;
+
+        let out: Vec<f32> = (0..200)
+            .map(|_| {
+                s.update(48_000.0);
+                s.outputs.sample.get(0)
+            })
+            .collect();
+
+        assert_eq!(out[0], 0.0, "first sample should be muted");
+        let release = out.iter().position(|&v| v != 0.0).expect("must release");
+        assert!(
+            release > 5,
+            "should hold silence while the saw climbs to zero, released at {release}"
+        );
+        assert!(
+            out[release].abs() < 0.5,
+            "release sample {} should be near zero (click-free)",
+            out[release]
+        );
+    }
+
+    #[test]
     fn test_gain_compensation() {
         // With 4 input channels, gain should be 5.0 / sqrt(4) = 2.5
         // With 1 input channel, gain should be 5.0 / sqrt(1) = 5.0
@@ -584,6 +675,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         // Set phase to 0.75 -> naive saw = 2*0.75 - 1 = 0.5
         s1.channel_state[0].phase = 0.75;
@@ -603,6 +695,7 @@ mod tests {
             fm: None,
             fm_mode: FmMode::default(),
             sync: None,
+            wait_for_zero_cross: false,
         });
         // Set all 4 input channel phases identically. Row stride is the voice
         // count (1 here), so channel `input_ch`'s single voice is at `input_ch`.

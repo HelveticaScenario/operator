@@ -2505,6 +2505,11 @@
               "type": "null"
             }
           ]
+        },
+        "waitForZeroCross": {
+          "description": "when true, a freshly started voice stays silent until its output first\ncrosses zero. This prevents a click when a phase offset starts the\nvoice away from a zero crossing. Default true.",
+          "type": "boolean",
+          "default": true
         }
       },
       "required": [
@@ -3828,6 +3833,11 @@
           "format": "uint",
           "default": 5,
           "minimum": 0
+        },
+        "waitForZeroCross": {
+          "description": "when true, each freshly started voice stays silent until its output\nfirst crosses zero. Because voices start at random phases, this prevents\na click when the patch begins. Default true.",
+          "type": "boolean",
+          "default": true
         }
       },
       "required": [

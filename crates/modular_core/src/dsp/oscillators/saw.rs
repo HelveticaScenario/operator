@@ -36,6 +36,16 @@ struct SawOscillatorParams {
     #[signal(default = 0.0, range = (0.0, 1.0))]
     #[deserr(default)]
     phase_offset: Option<PolySignal>,
+    /// when true, a freshly started voice stays silent until its output first
+    /// crosses zero. This prevents a click when a phase offset starts the
+    /// voice away from a zero crossing. Default true.
+    #[serde(default = "default_true")]
+    #[deserr(default = default_true())]
+    wait_for_zero_cross: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -55,6 +65,14 @@ struct ChannelState {
     /// `transfer_state_from` arrives with this already set, so it keeps its
     /// phase for continuity instead of re-seeding.
     seeded: bool,
+    /// Whether the zero-cross mute has released. Stays false while a freshly
+    /// started voice is held silent, then latches true at the first output
+    /// zero crossing. Carried-over (already-sounding) voices arrive with this
+    /// true, so they keep playing without re-muting.
+    gate_open: bool,
+    /// Previous (un-muted) output sample, used to detect the zero crossing that
+    /// releases the mute.
+    prev_out: f32,
     /// Edge detector for the sync input.
     sync_schmitt: SchmittTrigger,
     /// Previous sync-input sample, for subsample edge interpolation.
@@ -93,6 +111,8 @@ impl SawOscillator {
         // Pre-compute inverse sample rate for frequency calculation
         let inv_sample_rate = 1.0 / sample_rate;
 
+        let wait_for_zero_cross = self.params.wait_for_zero_cross;
+
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
@@ -114,18 +134,29 @@ impl SawOscillator {
             let offset = self.params.phase_offset.value_or(ch, 0.0);
             let read_offset = offset.rem_euclid(1.0);
 
-            // Seed a fresh voice so its first output sample is a zero crossing,
-            // preventing a click on note/voice start. The waveform crosses zero
-            // mid-rise (phase s/2) and mid-fall (phase (1+s)/2); start on the
-            // longer of the two segments so the voice begins on a gentle slope
-            // and the steep edge lands a half-cycle later (band-limited by DPW).
-            // Subtracting the read offset puts the read position at the crossing.
-            // Only fresh voices seed — carried-over state keeps its phase (see
-            // `seeded`).
+            // Seed a fresh voice so its read position starts just before the
+            // gentle zero crossing, then the mute below holds silence until it
+            // arrives. The waveform crosses zero mid-rise (phase s/2) and
+            // mid-fall (phase (1+s)/2); the crossing on the longer of the two
+            // segments is the gentle one (the other is the steep, band-limited
+            // edge). We start the read `read_offset` of a cycle before that
+            // crossing, so the wait equals the phase offset — a small offset
+            // gives a short wait, not nearly a whole cycle, while still honoring
+            // the offset in the running phase. The running read adds read_offset
+            // on top of the accumulator, so the seed subtracts twice it to land
+            // the read at `zero_cross - read_offset`. Only fresh voices seed;
+            // carried-over state keeps its phase (see `seeded`).
             if !state.seeded {
                 let zero_cross = if s >= 0.5 { s * 0.5 } else { (1.0 + s) * 0.5 };
-                state.phase = (zero_cross - read_offset).rem_euclid(1.0);
+                state.phase = (zero_cross - 2.0 * read_offset).rem_euclid(1.0);
                 state.seeded = true;
+                // Arm the zero-cross mute. With no offset the read starts on the
+                // crossing, so prev_out is 0 and the mute releases on the first
+                // sample; an offset starts it earlier, holding silence until the
+                // output reaches the crossing.
+                state.gate_open = !wait_for_zero_cross;
+                let read_start = (zero_cross - read_offset).rem_euclid(1.0);
+                state.prev_out = naive_triangle(read_start, s) * 5.0;
             }
 
             // DPW: compute integral at current phase BEFORE advancing
@@ -168,7 +199,30 @@ impl SawOscillator {
                 state.sync_prev = v;
             }
 
-            self.outputs.sample.set(ch, (body + pending + now) * 5.0);
+            let out = (body + pending + now) * 5.0;
+
+            // Zero-cross mute: hold silence until the output crosses zero on its
+            // gentle segment, then latch open. The waveform also crosses zero on
+            // its steep edge — releasing there would itself click — so only the
+            // crossing that matches the seed's longer segment counts: rising
+            // (negative→positive) for saw-side shapes, falling for ramp-side.
+            // Releasing on the gentle slope means the first audible sample is ~0.
+            let crossed = if s >= 0.5 {
+                state.prev_out <= 0.0 && out >= 0.0
+            } else {
+                state.prev_out >= 0.0 && out <= 0.0
+            };
+            let sample = if state.gate_open {
+                out
+            } else if crossed {
+                state.gate_open = true;
+                out
+            } else {
+                0.0
+            };
+            state.prev_out = out;
+
+            self.outputs.sample.set(ch, sample);
         }
     }
 }
@@ -202,3 +256,100 @@ fn naive_triangle(phase: f32, s: f32) -> f32 {
 }
 
 message_handlers!(impl SawOscillator {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::poly::PolySignal;
+    use crate::types::{OutputStruct, Signal};
+
+    fn make_saw(phase_offset: f32, wait_for_zero_cross: bool) -> SawOscillator {
+        let params = SawOscillatorParams {
+            freq: PolySignal::mono(Signal::Volts(0.0)), // C4 ≈ 261 Hz
+            shape: None,                                // 0 → saw
+            fm: None,
+            fm_mode: FmMode::default(),
+            sync: None,
+            phase_offset: Some(PolySignal::mono(Signal::Volts(phase_offset))),
+            wait_for_zero_cross,
+        };
+        let channels = params.freq.channels().max(1);
+        let mut outputs = SawOscillatorOutputs::default();
+        outputs.set_all_channels(channels);
+        SawOscillator {
+            params,
+            outputs,
+            _channel_count: channels,
+            _block_index: Default::default(),
+            channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
+        }
+    }
+
+    /// Collect `n` output samples from channel 0.
+    fn run(osc: &mut SawOscillator, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|_| {
+                osc.update(48_000.0);
+                osc.outputs.sample.get(0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn offset_start_is_muted_until_a_zero_crossing() {
+        // A phase offset starts the voice away from a zero crossing. With the
+        // mute on, the output is held silent for many samples and then releases
+        // on a near-zero sample (no click).
+        let mut osc = make_saw(0.25, true);
+        let out = run(&mut osc, 400);
+
+        assert_eq!(out[0], 0.0, "first sample should be muted");
+        let release = out.iter().position(|&v| v != 0.0).expect("must release");
+        assert!(
+            release > 1,
+            "should hold silence past the first sample, released at {release}"
+        );
+        assert!(
+            out[release].abs() < 0.5,
+            "release sample {} should be near zero (click-free)",
+            out[release]
+        );
+
+        // The wait tracks the offset itself (~0.25 of a cycle), not its
+        // complement: starting just before the gentle crossing avoids waiting
+        // nearly a whole extra oscillation. C4 ≈ 261.63 Hz → period ≈ 183.5
+        // samples, so 0.25 of a cycle ≈ 46 samples.
+        let period = 48_000.0 / 261.63;
+        let expected = 0.25 * period;
+        assert!(
+            (release as f32 - expected).abs() < 0.05 * period,
+            "release {release} should be ~{expected:.0} samples (offset·period), not its complement"
+        );
+    }
+
+    #[test]
+    fn offset_start_clicks_when_mute_disabled() {
+        // With the mute off, the same offset start emits its (non-zero) value
+        // immediately — the offset is honored at the cost of a click.
+        let mut osc = make_saw(0.25, false);
+        let out = run(&mut osc, 4);
+        assert!(
+            out[0].abs() > 0.5,
+            "first sample {} should be non-zero",
+            out[0]
+        );
+    }
+
+    #[test]
+    fn zero_offset_starts_immediately_on_the_crossing() {
+        // No offset: the seed already lands on a zero crossing, so the mute
+        // releases right away even though it is enabled.
+        let mut osc = make_saw(0.0, true);
+        let out = run(&mut osc, 8);
+        let release = out.iter().position(|&v| v != 0.0).expect("must release");
+        assert!(
+            release <= 1,
+            "zero-offset voice should sound immediately, released at {release}"
+        );
+    }
+}
