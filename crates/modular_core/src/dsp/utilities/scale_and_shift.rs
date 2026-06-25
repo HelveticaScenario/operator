@@ -33,7 +33,7 @@ struct ScaleAndShiftOutputs {
 ///
 /// ```js
 /// // invert a slow sine and shift it into 0–5 V range
-/// $scaleAndShift($sine('1hz'), -5, 2.5)
+/// $scaleAndShift($sine('1hz'), -2.5, 2.5)
 /// ```
 #[module(name = "$scaleAndShift", args(input, scale, shift))]
 pub struct ScaleAndShift {

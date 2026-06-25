@@ -960,20 +960,19 @@ export class GraphBuilder {
                         )[0];
 
                         // Apply gain if specified
-                        let finalOut: ModuleOutput;
                         if (group.gain !== undefined) {
                             const curvedAmp = curveFactory(
                                 group.gain,
                                 GAIN_CURVE_EXP,
                             );
-                            finalOut = scaleAndShiftFactory(
-                                mixOut,
+                            const gained = scaleAndShiftFactory(
+                                [mixOut],
                                 curvedAmp,
-                            ) as ModuleOutput;
+                            ) as Collection;
+                            outputSignals = [...gained];
                         } else {
-                            finalOut = mixOut;
+                            outputSignals = [mixOut];
                         }
-                        outputSignals = [finalOut];
                     }
 
                     // Build channel collection with baseChannel silent channels prepended

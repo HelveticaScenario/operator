@@ -42,10 +42,10 @@ struct WrapOutputs {
 /// `max − min ≥ 1`; makes the closest-octave attempt otherwise.
 ///
 /// ```js
-/// // wrap a ramp into 0–5 V
-/// $wrap(ramp, 0, 5)
+/// // wrap a saw into 0–5 V
+/// $wrap($saw('c3'), 0, 5)
 /// // keep pitch class, clamp to octave range 0–2 V
-/// $wrap(voct, 0, 2, { octave: true })
+/// $wrap($cycle($p('c2 c5 c3')), 0, 2, { octave: true })
 /// ```
 #[module(name = "$wrap", args(input, min, max))]
 pub struct Wrap {

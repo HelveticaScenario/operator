@@ -213,8 +213,9 @@ fn grains_derive_channel_count(params: &GrainsParams) -> usize {
 /// `gain = 1/√(max(1, smoothed_active_grains − 1))`.
 ///
 /// ```js
-/// $grains('c4', $wavs().pad, $clock.beat)
-/// $grains(voct, $wavs().strings, gate, { density: 3, shape: 'bell', length: 2 })
+/// $grains('c4', $wavs().pad, $pulse('2hz'))
+/// const seq = $cycle($p('c3 e3'))
+/// $grains(seq, $wavs().strings, seq.gate, { density: 3, shape: 'bell', length: 2 })
 /// ```
 #[module(
     name = "$grains",

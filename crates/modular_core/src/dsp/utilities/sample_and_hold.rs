@@ -38,7 +38,6 @@ struct SampleAndHoldChannelState {
 /// $sine(
 ///  $quantizer(
 ///    $sah($noise('white').range(0, 1), $pulse('2hz')),
-///    0,
 ///    'c(maj)',
 ///  ),
 /// )
@@ -106,7 +105,7 @@ struct TrackAndHoldChannelState {
 ///
 /// ```js
 /// // hold a slow sine value while the gate is high
-/// $tah($sine('2hz'), gate)
+/// $tah($sine('2hz'), $pulse('2hz'))
 /// ```
 #[module(name = "$tah", args(input, gate))]
 pub struct TrackAndHold {

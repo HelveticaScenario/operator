@@ -280,8 +280,8 @@ struct SeqOutputs {
 ///   advancing each time the pattern loops.
 ///
 /// ```js
-/// $cycle("c4 [d4 e4]")   // c4 for half the cycle, d4 & e4 share the other half
-/// $cycle("<c4 g4> e4")   // cycle 1: c4 e4, cycle 2: g4 e4, …
+/// $cycle($p("c4 [d4 e4]"))   // c4 for half the cycle, d4 & e4 share the other half
+/// $cycle($p("<c4 g4> e4"))   // cycle 1: c4 e4, cycle 2: g4 e4, …
 /// ```
 ///
 /// ## Stacks
@@ -290,8 +290,8 @@ struct SeqOutputs {
 /// Each sub-pattern has its own independent timing.
 ///
 /// ```js
-/// $cycle("c4 e4, g4 b4")   // two patterns layered on top of each other
-/// $cycle("c4 d4 e4, g3")   // three-note melody over a pedal tone
+/// $cycle($p("c4 e4, g4 b4"))   // two patterns layered on top of each other
+/// $cycle($p("c4 d4 e4, g3"))   // three-note melody over a pedal tone
 /// ```
 ///
 /// ## Random choice
@@ -299,7 +299,7 @@ struct SeqOutputs {
 /// **`a|b|c`** — randomly selects one option each time the slot is reached.
 ///
 /// ```js
-/// $cycle("c4|d4|e4 g4")  // first slot is a random pick each cycle
+/// $cycle($p("c4|d4|e4 g4"))  // first slot is a random pick each cycle
 /// ```
 ///
 /// ## Nesting
@@ -307,8 +307,8 @@ struct SeqOutputs {
 /// Grouping, stacks, and random choice nest arbitrarily:
 ///
 /// ```js
-/// $cycle("<c4 [d4 e4]> [f4|g4 a4]")  // slow + fast + random combined
-/// $cycle("[c4 e4, g4] a4")            // stack inside a fast subsequence
+/// $cycle($p("<c4 [d4 e4]> [f4|g4 a4]"))  // slow + fast + random combined
+/// $cycle($p("[c4 e4, g4] a4"))           // stack inside a fast subsequence
 /// ```
 ///
 /// ## Per-element modifiers
@@ -326,11 +326,11 @@ struct SeqOutputs {
 /// | Euclidean | `(k,n)` or `(k,n,offset)` | Distribute `k` pulses over `n` steps using the Bjorklund algorithm. Optional `offset` rotates the pattern. |
 ///
 /// ```js
-/// $cycle("c4*2 e4 g4")        // c4 plays twice in its slot
-/// $cycle("c4@3 e4 g4")        // c4 gets 3/5 of the cycle, e4 and g4 get 1/5 each
-/// $cycle("c4? e4 g4")         // c4 randomly drops out ~50 % of the time
-/// $cycle("c4(3,8) e4")        // Euclidean: 3 hits spread over 8 steps
-/// $cycle("[c4 d4 e4 f4](3,8)") // Euclidean applied to a subpattern
+/// $cycle($p("c4*2 e4 g4"))        // c4 plays twice in its slot
+/// $cycle($p("c4@3 e4 g4"))        // c4 gets 3/5 of the cycle, e4 and g4 get 1/5 each
+/// $cycle($p("c4? e4 g4"))         // c4 randomly drops out ~50 % of the time
+/// $cycle($p("c4(3,8) e4"))        // Euclidean: 3 hits spread over 8 steps
+/// $cycle($p("[c4 d4 e4 f4](3,8)")) // Euclidean applied to a subpattern
 /// ```
 ///
 /// Modifier operands can also be subpatterns: `c4*[2 3]` alternates between

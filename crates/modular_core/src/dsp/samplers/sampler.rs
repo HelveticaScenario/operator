@@ -50,7 +50,7 @@ struct SamplerState {
 ///
 /// ```js
 /// $sampler($wavs().kick, $pulse('4hz'))
-/// $sampler($wavs().tables.pad, $clock.beat, { speed: 0.5 })
+/// $sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })
 /// ```
 #[module(name = "$sampler", channels_derive = sampler_derive_channel_count, args(wav, gate), has_init, patch_update)]
 pub struct Sampler {

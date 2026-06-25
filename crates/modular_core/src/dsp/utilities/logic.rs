@@ -94,8 +94,8 @@ message_handlers!(impl RisingEdgeDetector {});
 /// on the downward slope of an LFO.
 ///
 /// ```js
-/// // trigger on every falling edge of a gate
-/// $perc($falling(gate))
+/// // trigger on every falling edge of a slow oscillator
+/// $perc($falling($sine('2hz')))
 /// ```
 #[module(name = "$falling", args(input))]
 pub struct FallingEdgeDetector {

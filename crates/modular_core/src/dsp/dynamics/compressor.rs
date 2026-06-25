@@ -216,24 +216,24 @@ struct CompressorOutputs {
 ///
 /// ```js
 /// // simple bus compressor
-/// $comp(input, { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })
+/// $comp($saw('c2'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })
 /// ```
 ///
 /// ```js
-/// // side-chain ducking — kick triggers gain reduction on pad
-/// $comp(pad, {
-///   sidechain: kick,
+/// // side-chain ducking — a kick envelope ducks a sustained pad
+/// $comp($saw('c3'), {
+///   sidechain: $perc($clock.beatTrigger, { decay: 0.2 }),
 ///   threshold: 1.0, ratio: 8, attack: 0.005, release: 0.2,
 /// })
 /// ```
 ///
 /// ```js
 /// // multiband compression using $xover + $comp
-/// let bands = $xover(input, { lowMidFreq: '200hz', midHighFreq: '2000hz' })
+/// let bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })
 /// let low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })
 /// let mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })
 /// let high = $comp(bands.high, { threshold: 2,   ratio: 6 })
-/// $mix(low, mid, high).out()
+/// $mix([low, mid, high]).out()
 /// ```
 #[module(name = "$comp", args(input))]
 pub struct Compressor {

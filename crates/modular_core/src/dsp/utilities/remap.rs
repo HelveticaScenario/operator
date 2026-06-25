@@ -47,10 +47,10 @@ struct RemapOutputs {
 ///
 /// ```js
 /// // convert a 0–5 V envelope to a -5–5 V bipolar signal
-/// $remap(env, -5, 5, 0, 5)
+/// $remap($adsr($clock.beatTrigger, {attack: 0.3, decay: 0.2, sustain: 4, release: 0.5}), -5, 5, 0, 5)
 ///
 /// // convert a -5–5 V signal to 0–1 V
-/// $remap(signal, 0, 1, -5, 5)
+/// $remap($sine('1hz'), 0, 1, -5, 5)
 /// ```
 #[module(name = "$remap", args(input, outMin, outMax, inMin, inMax))]
 pub struct Remap {

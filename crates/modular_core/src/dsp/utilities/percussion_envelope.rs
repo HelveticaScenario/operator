@@ -41,7 +41,7 @@ struct ChannelState {
 ///
 /// ```js
 /// // short percussive hit
-/// $noise("white").mul($perc($clock.gate, { decay: 0.1 }))
+/// $noise("white").amplitude($perc($clock.beatTrigger, { decay: 0.1 })).out()
 /// ```
 #[module(name = "$perc", args(trigger))]
 pub struct PercussionEnvelope {

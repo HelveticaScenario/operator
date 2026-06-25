@@ -58,7 +58,7 @@ struct UnisonOutputs {
 /// $saw($unison('c4', 7, 5)).out()
 ///
 /// // With modulated spread
-/// $saw($unison($midiCV().pitch, 5, $sine('0.2hz'))).out()
+/// $saw($unison($midiCV(), 5, $sine('0.2hz'))).out()
 /// ```
 #[module(name = "$unison", channels_derive = unison_derive_channel_count, args(input, count, spread))]
 pub struct Unison {

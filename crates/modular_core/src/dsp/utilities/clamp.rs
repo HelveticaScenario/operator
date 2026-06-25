@@ -34,7 +34,7 @@ struct ClampOutputs {
 /// $clamp($sine('440hz'), 0, 5)
 ///
 /// // one-sided: floor at 0 V, no ceiling
-/// $clamp(signal, { min: 0 })
+/// $clamp($sine('1hz'), { min: 0 })
 /// ```
 #[module(name = "$clamp", args(input))]
 pub struct Clamp {

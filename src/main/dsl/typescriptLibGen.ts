@@ -156,7 +156,7 @@ interface Array<T> {
    *
    * @example
    * // Pipe an array of outputs
-   * [osc1, osc2, osc3].pipe(all => $mix(all)).out()
+   * [$sine('c3'), $sine('e3'), $sine('g3')].pipe(all => $mix(all)).out()
    */
   pipe<U>(this: this, pipeFn: (self: this) => U): U;
 }
@@ -239,8 +239,8 @@ type ModeString =
 /**
  * A scale pattern string for generating multiple pitches.
  * Format: "{count}s({root}:{mode})"
- * @example "4s(C:major)" - 4 notes of C major scale
- * @example "8s(A:minor)" - 8 notes of A minor scale
+ * @example $sine("4s(C:major)").out()  // 4 notes of C major scale
+ * @example $sine("8s(A:minor)").out()  // 8 notes of A minor scale
  * @see {@link Signal}
  * @see {@link Note}
  */
@@ -269,10 +269,10 @@ type ElementsOf<T extends unknown[][]> = { [K in keyof T]: T[K] extends (infer E
  * - A **{@link Scale}** pattern like \`"4s(C:major)"\`
  * - A **{@link ModuleOutput}** from another module
  * 
- * @example sine("C4")        // Note string
- * @example sine(440)         // Number
- * @example sine("440hz")     // Hz string
- * @example sine(lfo.out)     // ModuleOutput
+ * @example $sine("C4")           // Note string
+ * @example $sine(2)              // Number
+ * @example $sine("440hz")        // Hz string
+ * @example $sine($signal('c').shift($sine("1hz").amp(0.1)))   // ModuleOutput (1Hz vibrato)
  * @see {@link Poly<Signal>} - for multi-channel signals
  * @see {@link ModuleOutput} - for module connections
  */
@@ -286,8 +286,8 @@ type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
  * - An array of {@link Signal}s (creates multiple voices)
  * - An iterable of {@link ModuleOutput}s
  * 
- * @example filter.lpf(["C3", "E3", "G3"]) // 3-voice chord
- * @example osc.saw([...seq.pitch])        // Spread sequencer outputs
+ * @example $saw(["C3", "E3", "G3"]).out()                    // 3-voice chord
+ * @example $saw([...$sine("1hz"), ...$sine("2hz")]).out()   // Spread outputs into voices
  * @see {@link Signal} - for single-channel signals
  * @see {@link Collection} - for grouping outputs
  */
@@ -299,8 +299,8 @@ type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
  * Structurally identical to {@link Poly}, but signals that the module
  * combines all voices into one control signal rather than preserving polyphony.
  *
- * @example $clock(120)                    // Constant tempo
- * @example $stereoMix(osc, { width: lfo }) // Width summed to mono
+ * @example $stereoMix($saw("c3"), { width: 0.8 })          // Constant width
+ * @example $stereoMix($saw("c3"), { width: $sine("1hz") }) // Oscillating stereo width
  * @see {@link Poly} - for polyphonic signals that preserve per-voice data
  * @see {@link Signal} - for single-channel signals
  */
@@ -685,11 +685,11 @@ interface StereoOutOptions {
  * return the same output for fluent API usage.
  * 
  * @example
- * const osc = osc.sine("C4")
- * osc.amplitude(0.5).out()           // Chain methods
+ * const osc = $sine("C4")
+ * osc.amplitude(0.5).out()      // Chain methods
  * osc.scope().out()             // Add visualization
- * filter.lpf(osc, { q: 4 })     // Use as input
- * 
+ * $lpf(osc, "800hz").out()      // Use as input
+ *
  * @see {@link ModuleOutputWithRange} - for outputs with known value ranges
  * @see {@link Collection} - for grouping multiple outputs
  * @see {@link Signal} - ModuleOutput is a valid Signal
@@ -709,7 +709,7 @@ interface ModuleOutput {
      * For perceptual (audio-taper) volume control, use {@link gain} instead.
      * @param factor - Scale factor as {@link Poly<Signal>}
      * @returns The scaled {@link Collection} for chaining
-     * @example osc.amplitude(2.5)  // Half amplitude
+     * @example $sine("c4").amplitude(2.5)  // Half amplitude
      */
    amplitude(factor: Poly<Signal>): Collection;
 
@@ -720,7 +720,7 @@ interface ModuleOutput {
    * Add a DC offset to the signal. Creates a $scaleAndShift module internally.
    * @param offset - Offset value as {@link Poly<Signal>}
    * @returns The shifted {@link Collection} for chaining
-   * @example lfo.shift(2.5)  // Shift to 0-5V range
+   * @example $sine("1hz").shift(2.5)  // Add a +2.5V DC offset
    */
   shift(offset: Poly<Signal>): Collection;
 
@@ -751,7 +751,7 @@ interface ModuleOutput {
      * For linear amplitude scaling, use {@link amplitude} instead.
      * @param level - Amplitude level as {@link Poly<Signal>}
      * @returns The scaled {@link Collection} for chaining
-     * @example osc.gain(2.5)
+     * @example $sine("c4").gain(2.5)
      */
    gain(level: Poly<Signal>): Collection;
 
@@ -759,7 +759,7 @@ interface ModuleOutput {
    * Apply a power curve to this signal. Creates a \\$curve module internally.
    * @param factor - Exponent for the curve (default 3)
    * @returns The curved {@link Collection} for chaining
-   * @example lfo.exp(2)  // Quadratic curve
+   * @example $sine("1hz").exp(2)  // Quadratic curve
    */
   exp(factor?: Poly<Signal>): Collection;
   
@@ -777,7 +777,7 @@ interface ModuleOutput {
   /**
    * Send this output to speakers as stereo.
    * @param options - Stereo output options ({@link StereoOutOptions})
-   * @example osc.out({ gain: 2.5, pan: -2 })
+   * @example $sine("c4").out({ gain: 2.5, pan: -2 })
    */
   out(options?: StereoOutOptions): this;
   
@@ -785,7 +785,7 @@ interface ModuleOutput {
    * Send this output to speakers as mono.
    * @param channel - Output channel (0-15, default 0)
     * @param gain - Output gain as {@link Poly<Signal>} (optional)
-    * @example lfo.outMono(2, 0.3)
+    * @example $sine("1hz").outMono(2, 0.3)
     */
    outMono(channel?: number, gain?: Poly<Signal>): this;
 
@@ -819,7 +819,7 @@ interface ModuleOutput {
    * @example
    * // 6 outputs
    * $sine(['C4', 'E4', 'G4']).pipe(
-   *   (s, cut) => $lph(s, cut),
+   *   (s, cut) => $lpf(s, cut),
    *   ['440hz', '880hz'],
    * ).out()
    */
@@ -918,10 +918,10 @@ interface DeferredModuleOutput extends ModuleOutput {
  * The range() method uses the stored min/max for automatic scaling.
  * 
  * @example
- * const lfo = lfo.sine(2)              // Outputs -5 to +5
+ * const lfo = $sine('2hz')             // Outputs -5 to +5
  * lfo.range(200, 2000)                 // Remap to 200-2000
- * env.adsr({ attack: 0.1 }).range(0, 1)
- * 
+ * $adsr($clock.beatTrigger, { attack: 0.1 }).range(0, 1)
+ *
  * @see {@link ModuleOutput} - base interface
  * @see {@link CollectionWithRange} - for collections of ranged outputs
  */
@@ -937,7 +937,7 @@ interface ModuleOutputWithRange extends ModuleOutput {
    * @param outMin - New minimum as {@link Poly<Signal>}
    * @param outMax - New maximum as {@link Poly<Signal>}
    * @returns A {@link CollectionWithRange} carrying the remapped signal
-   * @example lfo.range(note("C3"), note("C5"))
+   * @example $sine("1hz").range("C3", "C5")
    */
   range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
 }
@@ -1046,7 +1046,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    *
    * @example
    * // Inline transform on a collection
-   * $(osc1, osc2).pipe(all => all.amplitude(2.5)).out()
+   * $c($sine('c3'), $sine('e3')).pipe(all => all.amplitude(2.5)).out()
    *
    * @example
    * // Reusable helper applied to a collection
@@ -1064,7 +1064,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    *
    * @example
    * // Apply each filter cutoff to the whole collection
-   * $c(osc1, osc2).pipe(
+   * $c($sine('c3'), $sine('e3')).pipe(
    *   (col, cutoff) => $lpf(col, cutoff),
    *   ['200hz', '800hz', '3200hz'],
    * ).out()
@@ -1084,11 +1084,11 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    *
    * @example
    * // Mix collection with a filtered version
-   * $c(osc1, osc2).pipeMix(s => $lpf(s, '1000hz')).out()
+   * $c($sine('c3'), $sine('e3')).pipeMix(s => $lpf(s, '1000hz')).out()
    *
    * @example
    * // Mix with different balance
-   * $c(osc1, osc2).pipeMix(s => $lpf(s, '1000hz'), 1).out()
+   * $c($sine('c3'), $sine('e3')).pipeMix(s => $lpf(s, '1000hz'), 1).out()
    */
   pipeMix(pipeFn: (self: this) => ModuleOutput | Collection, mix?: Poly<Signal> ): Collection;
 
@@ -1119,7 +1119,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * Chainable module namespace. Every module whose first argument is a
    * {@link Poly<Signal>} becomes a method here, receiving this collection as
    * that argument.
-   * @example $c(a, b).$.lpf('100hz')  // ≡ $lpf($c(a, b), '100hz')
+   * @example $c($sine('c3'), $sine('e3')).$.lpf('100hz')  // ≡ $lpf($c($sine('c3'), $sine('e3')), '100hz')
    */
   readonly $: DollarChain;
 
@@ -1127,7 +1127,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * Like {@link $}, but each method takes a leading \`mix\` signal that
    * crossfades the dry input against the wet result (0 = dry, 5 = wet,
    * 2.5 = equal).
-   * @example $c(a, b).$m.lpf(2.5, '100hz')
+   * @example $c($sine('c3'), $sine('e3')).$m.lpf(2.5, '100hz')
    */
   readonly $m: DollarMixChain;
 }
@@ -1135,15 +1135,16 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 /**
  * A collection of {@link ModuleOutput} instances with chainable DSP methods.
  * 
- * Created with the $() helper function. Supports iteration, indexing, and spreading.
+ * Created with the $c() helper function. Supports iteration, indexing, and spreading.
  * Methods operate on all outputs in the collection.
  * 
  * @example
- * $(osc1, osc2, osc3).amplitude(0.5).out()  // Apply amplitude to all
- * for (const v of voices) { ... }      // Iterate
- * [...voices]                          // Spread to array
+ * const voices = $c($sine('c3'), $sine('e3'), $sine('g3'))
+ * voices.amplitude(0.5).out()          // Apply amplitude to all
+ * for (const v of voices) v.scope()    // Iterate
+ * const arr = [...voices]              // Spread to array
  * voices[0]                            // Index access
- * 
+ *
  * @see {@link CollectionWithRange} - for ranged outputs
  * @see {@link ModuleOutput} - individual outputs
  * @see {@link $} - helper to create Collection
@@ -1159,9 +1160,9 @@ class Collection extends BaseCollection<ModuleOutput> {
  * range() method uses stored min/max values from each output.
  * 
  * @example
- * $r(lfo1, lfo2).range(0, 5).out()     // Remap using stored ranges
- * $r(...seq.gates).range(0, 1)        // Spread and remap gates
- * 
+ * $r($sine('1hz'), $sine('2hz')).range(0, 5).out()  // Remap using stored ranges
+ * $r(...[$sine('3hz'), $sine('4hz')]).range(0, 1)   // Spread and remap
+ *
  * @see {@link Collection} - for outputs without known ranges
  * @see {@link ModuleOutputWithRange} - individual ranged outputs
  * @see {@link $r} - helper to create CollectionWithRange
@@ -1220,9 +1221,9 @@ function $note(noteName: string): number;
  * Collections support chainable DSP methods, iteration, indexing, and spreading.
  * @param args - One or more {@link ModuleOutput}s to group
  * @returns A {@link Collection} of the outputs
- * @example $c(osc1, osc2).amplitude(0.5).out()
- * @example $c(osc1, osc2, osc3)[0]  // Index access
- * @example [...$c(osc1, osc2)]      // Spread to array
+ * @example $c($sine('c3'), $sine('e3')).amplitude(0.5).out()
+ * @example $c($sine('c3'), $sine('e3'), $sine('g3'))[0]  // Index access
+ * @example [...$c($sine('c3'), $sine('e3'))]             // Spread to array
  * @see {@link $r} - for ranged outputs
  */
 function $c(...args: (ModuleOutput | Iterable<ModuleOutput>)[]): Collection;
@@ -1233,8 +1234,8 @@ function $c(...args: (ModuleOutput | Iterable<ModuleOutput>)[]): Collection;
  * Like $() but the range() method uses stored min/max values.
  * @param args - One or more {@link ModuleOutputWithRange}s to group
  * @returns A {@link CollectionWithRange} of the outputs
- * @example $r(lfo1, lfo2).range(0, 5)  // Uses stored ranges
- * @example $r(...seq.gates).range(0, 1)
+ * @example $r($sine('1hz'), $sine('2hz')).range(0, 5)  // Uses stored ranges
+ * @example $r(...[$sine('3hz'), $sine('4hz')]).range(0, 1)
  * @see {@link $c} - for outputs without known ranges
  */
 function $r(...args: (ModuleOutputWithRange | Iterable<ModuleOutputWithRange>)[]): CollectionWithRange;
@@ -1252,7 +1253,7 @@ function $setTempo(tempo: number): void;
  * @param gain - Gain as a Mono<Signal> (2.5 is default, 5.0 is unity)
  * @example $setOutputGain(2.5) // 50% gain (default)
  * @example $setOutputGain(5.0) // unity
- * @example $setOutputGain(env.out) // modulate gain from envelope
+ * @example $setOutputGain($adsr($clock.beatTrigger, {})) // modulate gain from envelope
  */
 function $setOutputGain(gain: Mono<Signal>): void;
 
@@ -1265,7 +1266,7 @@ function $setOutputGain(gain: Mono<Signal>): void;
  * @param config.xRange - Horizontal voltage window (default [-5, 5])
  * @param config.yRange - Vertical voltage window (default [-5, 5])
  * @example $scopeXY($sine($hz(440)), $sine($hz(311)))
- * @example $scopeXY($c(osc1, osc2), osc3) // 2 traces, both share osc3 as Y
+ * @example $scopeXY($c($sine('c3'), $sine('e3')), $sine('g3')) // 2 traces, both share the same Y
  */
 function $scopeXY(
   x: Poly<Signal>,
@@ -1340,9 +1341,9 @@ class Bus {
  * @returns A {@link Bus} handle passed to \`.send()\`
  *
  * @example
- * const reverb = \\$bus((mixed) => \\$reverb(mixed).out());
- * \\$saw('a').send(reverb, 0.6);
- * \\$sine('a2').send(reverb, 0.4);
+ * const reverb = $bus((mixed) => $plate(mixed).out());
+ * $saw('a').send(reverb, 0.6);
+ * $sine('a2').send(reverb, 0.4);
  */
 function $bus(cb: (mixed: Collection) => unknown): Bus;
 
@@ -1370,9 +1371,11 @@ function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection |
  * @returns Array of typed tuples, one per combination
  *
  * @example
- * // Fan an oscillator across every combination of frequency and waveform
- * $cartesian([220, 440, 880], ['sine', 'saw']).pipe(
- *   (osc, [freq, shape]) => $oscillator({ freq, shape }).out(),
+ * // Fan oscillators across every combination of frequency and waveform
+ * $mix(
+ *   $cartesian([220, 440], ['sine', 'saw']).map(([freq, shape]) =>
+ *     shape === 'sine' ? $sine($hz(freq)) : $saw($hz(freq)),
+ *   ),
  * ).out();
  *
  * @example $cartesian([1, 2], ['a', 'b'])
@@ -1392,8 +1395,8 @@ function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
  * \`$scaleAndShift\` convention: 5 V = unity, 0 V = silence, 10 V = +6 dB.
  *
  * \`\`\`js
- * $ott(drums).out()
- * $ott(bus, { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
+ * $ott($saw('c2')).out()
+ * $ott($mix([$saw('c2'), $noise('white')]), { depth: 4, lowGain: 6, highGain: 4, threshold: 1.5 }).out()
  * \`\`\`
  */
 function $ott(input: Collection | ModuleOutput, config?: {
@@ -2071,12 +2074,13 @@ export function generateDSL(schemas: Schemas): string {
         '`feedbackCb` filter colours every recirculation. With `feedback` 0 you',
         'still hear the first echo; higher values repeat it.',
         '',
-        '`feedback` is 0–5 (5 = unity), clamped, default 2.5. `maxTime` (default',
+        '`feedback` is 0-5 (5 = unity), clamped, default 2.5. `maxTime` (default',
         '5) sizes the buffer and caps how long `time` can be. Returns the wet',
         'signal with the captured `buffer` attached for extra taps.',
         '',
         '```js',
         '// mix the dry signal back in for a classic echo',
+        "let src = $saw('c3')",
         '$mix([src, $delay(src, 0.25, { feedback: 3 })]).out()',
         '',
         '// lowpass in the loop — echoes darken on every repeat',

@@ -134,7 +134,7 @@ pub fn wavetable_derive_channel_count(params: &WavetableOscParams) -> usize {
 ///
 /// ```js
 /// $wavetable('c4', $wavs().tables.pad).out()
-/// $wavetable('c2', wav, lfo).out()
+/// $wavetable('c2', $wavs().tables.pad, $sine('0.2hz').range(0, 5)).out()
 /// ```
 #[module(
     name = "$wavetable",
