@@ -33,6 +33,14 @@ function findModules(patch: PatchGraph, moduleType: string) {
     return patch.modules.filter((m) => m.moduleType === moduleType);
 }
 
+/** $signal modules created by the DSL, excluding the built-in I/O signals. */
+function liftedSignals(patch: PatchGraph) {
+    const builtIns = new Set(['ROOT_INPUT', 'ROOT_OUTPUT']);
+    return patch.modules.filter(
+        (m) => m.moduleType === '$signal' && !builtIns.has(m.id),
+    );
+}
+
 /** Count user-created modules (exclude well-known built-ins) */
 function userModules(patch: PatchGraph) {
     const builtIns = new Set(['ROOT_CLOCK', 'ROOT_INPUT', 'ROOT_OUTPUT']);
@@ -240,6 +248,24 @@ describe('collections', () => {
     test('collection indexing', () => {
         const patch = execPatch('$sine("C4")[0].out()');
         expect(findModules(patch, '$sine').length).toBe(1);
+    });
+
+    test('$c lifts bare numbers and strings into $signal modules', () => {
+        const patch = execPatch('$c(440, "c4", $sine("e3")).out()');
+        // Two scalars (number + note string) become two $signal modules.
+        expect(liftedSignals(patch).length).toBe(2);
+        expect(findModules(patch, '$sine').length).toBe(1);
+    });
+
+    test('$c lifts scalars nested inside an array argument', () => {
+        const patch = execPatch('$c([880, "100hz"], $saw("c3")).out()');
+        expect(liftedSignals(patch).length).toBe(2);
+        expect(findModules(patch, '$saw').length).toBe(1);
+    });
+
+    test('$c treats a bare string as one signal, not spread chars', () => {
+        const patch = execPatch('$c("100hz").out()');
+        expect(liftedSignals(patch).length).toBe(1);
     });
 });
 

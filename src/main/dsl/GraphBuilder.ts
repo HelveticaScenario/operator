@@ -192,7 +192,7 @@ export class Bus {
         const mixFactory = this.builder.getFactory('$mix');
         const mixed = mixFactory(
             this.sendGroups.map((e) => {
-                const coll = $c(e.outputs);
+                const coll = this.builder.$c(e.outputs);
                 if (e.gain !== undefined) {
                     return coll.gain(e.gain);
                 }
@@ -415,7 +415,7 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
         if (arrays.length === 0) {
             return pipelineFunc(this);
         }
-        return $c(
+        return this.items[0].builder.$c(
             ...arrays[0].map(
                 (item) =>
                     pipelineFunc(this, item) as
@@ -566,18 +566,6 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
 }
 
 /**
- * Create a Collection from ModuleOutput instances
- */
-export const $c = (
-    ...args: (ModuleOutput | Iterable<ModuleOutput>)[]
-): Collection =>
-    new Collection(
-        ...args.flatMap((arg) =>
-            arg instanceof ModuleOutput ? [arg] : [...arg],
-        ),
-    );
-
-/**
  * Create a CollectionWithRange from ModuleOutputWithRange instances
  */
 export const $r = (
@@ -603,7 +591,7 @@ export const cycleToChannels = (
 ): ModuleOutput | Collection => {
     const items = signal instanceof BaseCollection ? [...signal] : [signal];
     if (items.length === 0) return signal;
-    return $c(
+    return items[0].builder.$c(
         ...Array.from({ length: channels }, (_, i) => items[i % items.length]),
     );
 };
@@ -888,6 +876,31 @@ export class GraphBuilder {
             throw new Error(`Factory ${moduleType} not found`);
         }
         return factory;
+    }
+
+    /**
+     * Create a Collection from outputs. Each argument is flattened into the
+     * Collection's channels: ModuleOutputs pass through, iterables (other
+     * Collections, arrays) are spread, and bare Signal literals — numbers and
+     * note/Hz strings — are lifted into `$signal` modules, so `$c(440, 'c4',
+     * osc)` works alongside `$c(osc1, osc2)`. Lifting nests, so scalars inside
+     * an array argument are handled too. Needs the `$signal` factory, hence a
+     * builder method.
+     */
+    $c(...args: (Signal | Iterable<Signal>)[]): Collection {
+        const signal = this.getFactory('$signal');
+        const lift = (value: unknown): ModuleOutput[] => {
+            // Scalar literal checked before the iterable branch so a string is
+            // one signal rather than spread into characters.
+            if (typeof value === 'number' || typeof value === 'string') {
+                return [...(signal(value) as Collection)];
+            }
+            if (value instanceof ModuleOutput) {
+                return [value];
+            }
+            return [...(value as Iterable<unknown>)].flatMap(lift);
+        };
+        return new Collection(...args.flatMap(lift));
     }
 
     /**
@@ -1554,7 +1567,7 @@ export class ModuleOutput {
         if (arrays.length === 0) {
             return pipelineFunc(this);
         }
-        return $c(
+        return this.builder.$c(
             ...arrays[0].map(
                 (item) =>
                     pipelineFunc(this, item) as

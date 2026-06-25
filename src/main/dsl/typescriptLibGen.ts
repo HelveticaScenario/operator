@@ -1217,16 +1217,19 @@ function $note(noteName: string): number;
 
 /**
  * Create a {@link Collection} from {@link ModuleOutput} instances.
- * 
+ *
  * Collections support chainable DSP methods, iteration, indexing, and spreading.
- * @param args - One or more {@link ModuleOutput}s to group
+ * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
+ * $signal modules, so they can be mixed in alongside module outputs.
+ * @param args - One or more {@link ModuleOutput}s or {@link Signal} literals to group
  * @returns A {@link Collection} of the outputs
  * @example $c($sine('c3'), $sine('e3')).amplitude(0.5).out()
+ * @example $c(440, 'c4', $sine('e3'))  // Bare number/string lifted into $signal
  * @example $c($sine('c3'), $sine('e3'), $sine('g3'))[0]  // Index access
  * @example [...$c($sine('c3'), $sine('e3'))]             // Spread to array
  * @see {@link $r} - for ranged outputs
  */
-function $c(...args: (ModuleOutput | Iterable<ModuleOutput>)[]): Collection;
+function $c(...args: (Signal | Iterable<Signal>)[]): Collection;
 
 /**
  * Create a {@link CollectionWithRange} from {@link ModuleOutputWithRange} instances.

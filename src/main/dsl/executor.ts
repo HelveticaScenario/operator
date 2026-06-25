@@ -17,7 +17,6 @@ import type {
     CollectionWithRange,
 } from './GraphBuilder';
 import {
-    $c,
     $r,
     $cartesian,
     BaseCollection,
@@ -635,7 +634,7 @@ export function executePatchScript(
 
         sliders.push({ label, max, min, moduleId, value });
 
-        return $c(result).withRange(min, max);
+        return builder.$c(result).withRange(min, max);
     };
 
     /**
@@ -878,7 +877,7 @@ export function executePatchScript(
         // Phase-warp table descriptors for $wavetable
         $table,
         // Collection helpers
-        $c,
+        $c: builder.$c.bind(builder),
         $r,
         $cartesian,
         // Deferred signal helper
