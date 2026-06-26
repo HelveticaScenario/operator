@@ -30,9 +30,9 @@ struct QuantNoiseParams {
     #[signal(default = 0.25, range = (0.0, 5.0))]
     #[deserr(default)]
     step: Option<PolySignal>,
-    /// dither depth (0–1). At 0 the grit is a tonal staircase buzz that tracks
-    /// the signal; at 1 the quantization is fully dithered into broadband noise.
-    #[signal(default = 1.0, range = (0.0, 1.0))]
+    /// dither depth (0–5). At 0 the grit is a tonal staircase buzz that tracks
+    /// the signal; at 5 the quantization is fully dithered into broadband noise.
+    #[signal(default = 5.0, range = (0.0, 5.0))]
     #[deserr(default)]
     dither: Option<PolySignal>,
 }
@@ -127,7 +127,7 @@ impl QuantNoise {
             state.step.update(self.params.step.value_or(ch, 0.25));
             let amount = (*state.amount).max(0.0);
             let step = (*state.step).max(MIN_STEP);
-            let dither = self.params.dither.value_or(ch, 1.0).clamp(0.0, 1.0);
+            let dither = self.params.dither.value_or(ch, 5.0).clamp(0.0, 5.0) / 5.0;
 
             // Dither up to ±one step so rounding can flip to an adjacent level
             // anywhere in the grid, decorrelating the quantization error into
@@ -217,7 +217,7 @@ mod tests {
         // A constant input would sit on one quantization level (silent grit)
         // without dither; with dither it must produce a bright, bipolar,
         // non-trivial grit signal.
-        let mut m = make(2.0, 1.0, 0.25, 1.0);
+        let mut m = make(2.0, 1.0, 0.25, 5.0);
         let grit = grit_series(&mut m, 2.0, 4000);
         let rms = (grit.iter().map(|g| g * g).sum::<f32>() / grit.len() as f32).sqrt();
         assert!(rms > 1.0e-3, "dithered grit should be audible, rms={rms}");
