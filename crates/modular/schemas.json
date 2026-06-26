@@ -2242,7 +2242,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "dither": {
-          "description": "dither depth (0–1). At 0 the grit is a tonal staircase buzz that tracks\nthe signal; at 1 the quantization is fully dithered into broadband noise.",
+          "description": "dither depth (0–5). At 0 the grit is a tonal staircase buzz that tracks\nthe signal; at 5 the quantization is fully dithered into broadband noise.",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -2367,11 +2367,11 @@
       },
       {
         "name": "dither",
-        "description": "dither depth (0–1). At 0 the grit is a tonal staircase buzz that tracks\nthe signal; at 1 the quantization is fully dithered into broadband noise.",
+        "description": "dither depth (0–5). At 0 the grit is a tonal staircase buzz that tracks\nthe signal; at 5 the quantization is fully dithered into broadband noise.",
         "signalType": "control",
-        "defaultValue": 1.0,
+        "defaultValue": 5.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [

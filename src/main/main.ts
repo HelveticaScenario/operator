@@ -26,6 +26,11 @@ import type {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
+import {
+    isStampablePath,
+    stampPatchVersionSource,
+    stripPatchVersionStamp,
+} from '../shared/patchVersionStamp';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { isBufferSwitch } from './bufferSwitch';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
@@ -1524,7 +1529,12 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 
     try {
-        return fs.readFileSync(absolutePath, 'utf-8');
+        const content = fs.readFileSync(absolutePath, 'utf-8');
+        // Patch files carry an invisible version-stamp block at the top; strip
+        // it so the editor only ever sees the user's own source.
+        return isStampablePath(absolutePath)
+            ? stripPatchVersionStamp(content)
+            : content;
     } catch (error) {
         console.error('Error reading file:', error);
         throw new Error(`Failed to read file: ${relativePath}`, {
@@ -1549,7 +1559,13 @@ registerIPCHandler('FS_WRITE_FILE', (relativePath, content) => {
             fs.mkdirSync(dir, { recursive: true });
         }
 
-        fs.writeFileSync(absolutePath, content, 'utf-8');
+        // Record the app version that last wrote this patch as an invisible
+        // block at the top of the file (stripped again on read).
+        const toWrite = isStampablePath(absolutePath)
+            ? stampPatchVersionSource(content, app.getVersion())
+            : content;
+
+        fs.writeFileSync(absolutePath, toWrite, 'utf-8');
         return { success: true };
     } catch (error) {
         console.error('Error writing file:', error);
