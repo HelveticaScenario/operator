@@ -5,7 +5,7 @@
  * A migration is authored with `sinceVersion: 'next'` because the author can't
  * know which release will ship it. `release.sh` runs this after bumping the
  * version so every `'next'` marker becomes the exact release version, stamping
- * each migration with the release it ships in — no manual bookkeeping.
+ * each migration with the release it ships in.
  *
  * Usage: node scripts/resolveMigrationVersions.mjs <version>
  * Prints the paths it changed (one per line) so the caller can `git add` them.
