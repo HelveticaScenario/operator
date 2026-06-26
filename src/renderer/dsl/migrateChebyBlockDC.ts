@@ -8,9 +8,11 @@
  * high-pass would strip). This migration pins those call sites to the old
  * behavior by inserting `{ blockDC: false }`.
  *
- * Two call forms are rewritten:
- *   - Direct:       `$cheby(input, amount, config?)`        → config slot is arg 2
- *   - Dollar-chain: `<src>.$.cheby(amount, config?)`         → config slot is arg 1
+ * Three call forms are rewritten:
+ *   - Direct:       `$cheby(input, amount, config?)`         → config slot is arg 2
+ *   - Dollar-chain: `<src>.$.cheby(amount, config?)`          → config slot is arg 1
+ *   - Mix-chain:    `<src>.$m.cheby(mix, amount, config?)`    → config slot is arg 2
+ *     (`.$m` injects a leading `mix` crossfade signal, shifting the config)
  *
  * For each, the config (the trailing options object) gets `blockDC: false`:
  *   - no config object yet → append `{ blockDC: false }` as a new argument
@@ -39,6 +41,7 @@ import type {
 
 import type { Edit } from './migrationEdits';
 import { applyEdits } from './migrationEdits';
+import type { MigrationMeta } from './migrations/types';
 
 export interface ChebyBlockDcMigrationResult {
     migrated: string;
@@ -158,13 +161,15 @@ function classifyCheby(call: CallExpression): ChebyForm | null {
         return expr.getText() === '$cheby' ? { positional: 2 } : null;
     }
 
-    // Method form: `<recv>.$.cheby(...)` is the dollar-chain (input is the
-    // receiver, so only `amount` is positional). Any other `.cheby(...)` is
-    // ambiguous and handled by the caller's skip path.
+    // Method form: `<recv>.$.cheby(...)` / `<recv>.$m.cheby(...)` are the dollar
+    // chains (input is the receiver). `.$` leaves `amount` as the only
+    // positional; `.$m` injects a leading `mix` signal, so `amount` is preceded
+    // by it. Any other `.cheby(...)` is ambiguous and left to the skip path.
     if (Node.isPropertyAccessExpression(expr) && expr.getName() === 'cheby') {
         const obj = expr.getExpression();
-        if (Node.isPropertyAccessExpression(obj) && obj.getName() === '$') {
-            return { positional: 1 };
+        if (Node.isPropertyAccessExpression(obj)) {
+            if (obj.getName() === '$') return { positional: 1 };
+            if (obj.getName() === '$m') return { positional: 2 };
         }
     }
     return null;
@@ -234,3 +239,25 @@ function describeCall(call: CallExpression): string {
 function dedupe(items: string[]): string[] {
     return Array.from(new Set(items));
 }
+
+/** Registry entry: the DC-blocker default shipped in v0.0.102. */
+export const meta: MigrationMeta = {
+    id: 'cheby-block-dc',
+    sinceVersion: '0.0.102',
+    order: 3,
+    title: 'Migrate $cheby to preserve pre-DC-blocker output',
+    skippedLabel: 'Needs manual review:',
+    run(source) {
+        const result = migrateChebyBlockDC(source);
+        return {
+            migrated: result.migrated,
+            changed: result.migrated !== source,
+            summary: {
+                callsChanged: result.callsChanged,
+                commentsChanged: 0,
+                skippedVariables: result.skipped,
+                error: result.error,
+            },
+        };
+    },
+};

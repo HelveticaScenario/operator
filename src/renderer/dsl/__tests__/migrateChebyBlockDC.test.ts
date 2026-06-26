@@ -50,6 +50,26 @@ describe('migrateChebyBlockDC', () => {
         expect(result.callsChanged).toBe(1);
     });
 
+    // ─── Mix-chain form (.$m injects a leading mix arg) ───────────────────
+
+    test('appends config past the mix arg in a .$m.cheby(mix, amount) call', () => {
+        const result = migrateChebyBlockDC(`$sine('c4').$m.cheby(2.5, 3).out()`);
+        expect(result.migrated).toBe(
+            `$sine('c4').$m.cheby(2.5, 3, { blockDC: false }).out()`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
+    test('injects blockDC into a .$m.cheby config object', () => {
+        const result = migrateChebyBlockDC(
+            `$sine('c4').$m.cheby(2.5, 3, { freq: 'c4' })`,
+        );
+        expect(result.migrated).toBe(
+            `$sine('c4').$m.cheby(2.5, 3, { blockDC: false, freq: 'c4' })`,
+        );
+        expect(result.callsChanged).toBe(1);
+    });
+
     // ─── Idempotency ──────────────────────────────────────────────────────
 
     test('leaves a call that already sets blockDC untouched', () => {

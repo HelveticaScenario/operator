@@ -38,6 +38,7 @@ import { collectCommentEdits } from './migrateCycleCalls.comments';
 import type { Edit } from './migrateCycleCalls.shared';
 import { buildSpReplacement, wrapP } from './migrateCycleCalls.shared';
 import { applyEdits } from './migrationEdits';
+import type { MigrationMeta } from './migrations/types';
 
 export interface MigrationResult {
     migrated: string;
@@ -430,3 +431,25 @@ function push(
         map.set(name, [site]);
     }
 }
+
+/** Registry entry: shipped in v0.0.68. */
+export const meta: MigrationMeta = {
+    id: 'cycle-to-pattern',
+    sinceVersion: '0.0.68',
+    order: 1,
+    title: 'Migrate $cycle / $iCycle to $p / $p.s',
+    run(source) {
+        const result = migrateCycleCalls(source);
+        return {
+            migrated: result.migrated,
+            changed: result.migrated !== source,
+            summary: {
+                callsChanged: result.callsChanged,
+                assignmentsChanged: result.assignmentsChanged,
+                commentsChanged: result.commentsChanged,
+                skippedVariables: result.skippedVariables,
+                error: result.error,
+            },
+        };
+    },
+};

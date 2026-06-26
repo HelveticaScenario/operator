@@ -9,9 +9,8 @@ import { EngineHealth } from './components/EngineHealth';
 import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
 import type { MigrationModalSummary } from './components/MigrationDiffModal';
-import { migrateChebyBlockDC } from './dsl/migrateChebyBlockDC';
-import { migrateCycleCalls } from './dsl/migrateCycleCalls';
-import { migrateWavetableArgs } from './dsl/migrateWavetableArgs';
+import type { MigrationMeta } from './dsl/migrations/registry';
+import { migrationsNeededFor } from './dsl/migrations/registry';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
@@ -167,6 +166,9 @@ function App() {
     const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
     const [isPaletteOpen, setIsPaletteOpen] = useState(false);
     const [isModuleProfileOpen, setIsModuleProfileOpen] = useState(false);
+    // The migration step currently shown in the diff modal, or null when closed.
+    // A step with no automatic changes but constructs flagged for manual review
+    // still opens the modal, so the user can read them before the chain advances.
     const [migrationState, setMigrationState] = useState<{
         bufferId: string;
         original: string;
@@ -174,6 +176,17 @@ function App() {
         summary: MigrationModalSummary;
         title?: string;
         skippedLabel?: string;
+    } | null>(null);
+    // Chain context for "Migrate patch to latest": the migrations still to run,
+    // current step first. Held in a ref so the once-registered menu handler and
+    // the modal callbacks share one mutable cursor without re-subscribing.
+    const migrationRunRef = useRef<{
+        bufferId: string;
+        remaining: MigrationMeta[];
+        // Whether any step in this run has opened the modal. When the run drains
+        // without one, every pending migration was a no-op and the user gets the
+        // "nothing to do" modal instead of silence.
+        shownAny: boolean;
     } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
@@ -326,6 +339,7 @@ function App() {
                         await electronAPI.filesystem.writeFile(
                             buffer.filePath,
                             buffer.content,
+                            buffer.evaluatedVersion,
                         );
                     }
                 }
@@ -759,6 +773,26 @@ function App() {
                 setError(null);
                 setValidationErrors(null);
 
+                // The patch evaluated successfully: stamp the buffer with this
+                // app version so migrations that shipped after it are no longer
+                // offered. Only touch state (and mark dirty, so the new version
+                // reaches the autosave and file header) when it actually changes.
+                const evaluatedAt = appVersionRef.current;
+                if (evaluatedAt) {
+                    setBuffers((prev) =>
+                        prev.map((b) =>
+                            getBufferId(b) === activeBufferId &&
+                            b.evaluatedVersion !== evaluatedAt
+                                ? {
+                                      ...b,
+                                      dirty: true,
+                                      evaluatedVersion: evaluatedAt,
+                                  }
+                                : b,
+                        ),
+                    );
+                }
+
                 // Set interpolation resolutions in renderer for template literal highlighting
                 const interpolationMap = result.interpolationResolutions
                     ? new Map(Object.entries(result.interpolationResolutions))
@@ -871,7 +905,7 @@ function App() {
                 setValidationErrors(null);
             }
         };
-    }, [activeBufferId]);
+    }, [activeBufferId, setBuffers]);
 
     // Expose test API for E2E tests
     useEffect(() => {
@@ -937,6 +971,96 @@ function App() {
     useEffect(() => {
         activeBufferIdRef.current = activeBufferId;
     }, [activeBufferId]);
+
+    // Live view of buffers for the once-registered migrate handler.
+    const buffersRef = useRef(buffers);
+    useEffect(() => {
+        buffersRef.current = buffers;
+    }, [buffers]);
+
+    // This app's version, fetched once. Stamped onto a buffer each time it
+    // evaluates successfully so migrations can be gated on the last-evaluated
+    // version. Empty until the fetch resolves (well before any evaluation).
+    const appVersionRef = useRef('');
+    useEffect(() => {
+        electronAPI
+            .getAppVersion()
+            .then((version) => {
+                appVersionRef.current = version;
+            })
+            .catch((err) => {
+                console.error('[migrate] failed to read app version:', err);
+            });
+    }, []);
+
+    // Drive the migration chain from `source`: run each remaining migration in
+    // order and pause on the diff modal for any step that changes the source or
+    // raises an alert (manual-review items or a parse error). A step that would
+    // do neither is dropped from the group. If every step is dropped the patch
+    // already conforms, so a no-change modal reports there was nothing to do.
+    // The modal's callbacks resume the chain. Nothing is recorded here — a
+    // successful re-evaluation after migrating advances the buffer's
+    // evaluatedVersion.
+    const advanceMigrationRun = useCallback((source: string) => {
+        const run = migrationRunRef.current;
+        if (!run) return;
+        while (run.remaining.length > 0) {
+            const meta = run.remaining[0];
+            const result = meta.run(source);
+            const hasManual = result.summary.skippedVariables.length > 0;
+            const hasError = Boolean(result.summary.error);
+            if (result.changed || hasManual || hasError) {
+                run.shownAny = true;
+                setMigrationState({
+                    bufferId: run.bufferId,
+                    original: source,
+                    migrated: result.migrated,
+                    summary: result.summary,
+                    title: meta.title,
+                    skippedLabel: meta.skippedLabel,
+                });
+                return;
+            }
+            // Clean no-op: the patch already conforms, so drop it from the group.
+            run.remaining.shift();
+        }
+        migrationRunRef.current = null;
+        if (!run.shownAny) {
+            setMigrationState({
+                bufferId: run.bufferId,
+                original: '',
+                migrated: '',
+                summary: {
+                    callsChanged: 0,
+                    commentsChanged: 0,
+                    skippedVariables: [],
+                },
+                title: 'Migrate patch to latest version',
+            });
+        }
+    }, []);
+
+    // Entry point for the "Migrate patch to latest version" command: gather the
+    // migrations the active patch still needs (by its last-evaluated version)
+    // and run them in order, dropping any that turn out to be no-ops.
+    const startMigrateToLatest = useCallback(() => {
+        const ed = editorRef.current;
+        const activeId = activeBufferIdRef.current;
+        if (!ed || !activeId) return;
+        const buffer = buffersRef.current.find(
+            (b) => getBufferId(b) === activeId,
+        );
+        migrationRunRef.current = {
+            bufferId: activeId,
+            remaining: migrationsNeededFor(buffer?.evaluatedVersion),
+            shownAny: false,
+        };
+        advanceMigrationRun(ed.getValue());
+    }, [advanceMigrationRun]);
+    const startMigrateToLatestRef = useRef(startMigrateToLatest);
+    useEffect(() => {
+        startMigrateToLatestRef.current = startMigrateToLatest;
+    }, [startMigrateToLatest]);
 
     const handleCloseBufferRef = useRef(handleCloseBuffer);
     useEffect(() => {
@@ -1161,128 +1285,11 @@ function App() {
                 setIsModuleProfileOpen(true);
             },
         );
-        const cleanupMigrateBuffer = electronAPI.onMenuMigrateBuffer(() => {
-            const ed = editorRef.current;
-            // Read the live id from the ref: this listener is registered once
-            // (deps below), so closing over the `activeBufferId` state would
-            // migrate a stale buffer after the user switches buffers.
-            const activeId = activeBufferIdRef.current;
-            if (!ed || !activeId) {
-                console.warn('Migrate buffer: no editor available');
-                setMigrationState({
-                    bufferId: activeId ?? '',
-                    original: '',
-                    migrated: '',
-                    summary: {
-                        callsChanged: 0,
-                        assignmentsChanged: 0,
-                        commentsChanged: 0,
-                        skippedVariables: [],
-                        error: 'No editor available',
-                    },
-                });
-                return;
-            }
-            const original = ed.getValue();
-            const result = migrateCycleCalls(original);
-            setMigrationState({
-                bufferId: activeId,
-                original,
-                migrated: result.migrated,
-                summary: {
-                    callsChanged: result.callsChanged,
-                    assignmentsChanged: result.assignmentsChanged,
-                    commentsChanged: result.commentsChanged,
-                    skippedVariables: result.skippedVariables,
-                    error: result.error,
-                },
-            });
+        // Registered once (deps below), so it reads the live start function
+        // through a ref to avoid migrating a stale buffer after a switch.
+        const cleanupMigrateToLatest = electronAPI.onMenuMigrateToLatest(() => {
+            startMigrateToLatestRef.current();
         });
-
-        const cleanupMigrateWavetable = electronAPI.onMenuMigrateWavetable(
-            () => {
-                const ed = editorRef.current;
-                // Read the live id from the ref: this listener is registered
-                // once (deps below), so closing over the `activeBufferId` state
-                // would migrate a stale buffer after the user switches buffers.
-                const activeId = activeBufferIdRef.current;
-                const wavetableTitle =
-                    'Migrate $wavetable to pitch-first order';
-                if (!ed || !activeId) {
-                    console.warn('Migrate wavetable: no editor available');
-                    setMigrationState({
-                        bufferId: activeId ?? '',
-                        original: '',
-                        migrated: '',
-                        title: wavetableTitle,
-                        summary: {
-                            callsChanged: 0,
-                            commentsChanged: 0,
-                            skippedVariables: [],
-                            error: 'No editor available',
-                        },
-                    });
-                    return;
-                }
-                const original = ed.getValue();
-                const result = migrateWavetableArgs(original);
-                setMigrationState({
-                    bufferId: activeId,
-                    original,
-                    migrated: result.migrated,
-                    title: wavetableTitle,
-                    skippedLabel: 'Needs manual review:',
-                    summary: {
-                        callsChanged: result.callsChanged,
-                        commentsChanged: result.commentsChanged,
-                        skippedVariables: result.skipped,
-                        error: result.error,
-                    },
-                });
-            },
-        );
-
-        const cleanupMigrateChebyBlockDC =
-            electronAPI.onMenuMigrateChebyBlockDC(() => {
-                const ed = editorRef.current;
-                // Read the live id from the ref: this listener is registered
-                // once (deps below), so closing over the `activeBufferId` state
-                // would migrate a stale buffer after the user switches buffers.
-                const activeId = activeBufferIdRef.current;
-                const chebyTitle =
-                    'Migrate $cheby to preserve pre-DC-blocker output';
-                if (!ed || !activeId) {
-                    console.warn('Migrate $cheby: no editor available');
-                    setMigrationState({
-                        bufferId: activeId ?? '',
-                        original: '',
-                        migrated: '',
-                        title: chebyTitle,
-                        summary: {
-                            callsChanged: 0,
-                            commentsChanged: 0,
-                            skippedVariables: [],
-                            error: 'No editor available',
-                        },
-                    });
-                    return;
-                }
-                const original = ed.getValue();
-                const result = migrateChebyBlockDC(original);
-                setMigrationState({
-                    bufferId: activeId,
-                    original,
-                    migrated: result.migrated,
-                    title: chebyTitle,
-                    skippedLabel: 'Needs manual review:',
-                    summary: {
-                        callsChanged: result.callsChanged,
-                        commentsChanged: 0,
-                        skippedVariables: result.skipped,
-                        error: result.error,
-                    },
-                });
-            });
 
         return () => {
             cleanupNewFile();
@@ -1296,9 +1303,7 @@ function App() {
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
-            cleanupMigrateBuffer();
-            cleanupMigrateWavetable();
-            cleanupMigrateChebyBlockDC();
+            cleanupMigrateToLatest();
         };
     }, [isRecording]);
 
@@ -1430,32 +1435,47 @@ function App() {
                     summary={migrationState.summary}
                     title={migrationState.title}
                     skippedLabel={migrationState.skippedLabel}
-                    onCancel={() => setMigrationState(null)}
+                    onCancel={() => {
+                        // Cancelling ends the run; steps already applied stay in
+                        // the editor, and re-evaluating advances the version.
+                        setMigrationState(null);
+                        migrationRunRef.current = null;
+                    }}
                     onApply={() => {
                         const ed = editorRef.current;
                         const model = ed?.getModel();
-                        if (!ed || !model) {
-                            setMigrationState(null);
+                        const run = migrationRunRef.current;
+                        setMigrationState(null);
+                        if (!ed || !model || !run) {
+                            migrationRunRef.current = null;
                             return;
                         }
                         if (migrationState.bufferId !== activeBufferId) {
                             console.warn(
                                 'Migrate apply: active buffer changed since modal opened; aborting',
                             );
-                            setMigrationState(null);
+                            migrationRunRef.current = null;
                             return;
                         }
-                        model.pushEditOperations(
-                            [],
-                            [
-                                {
-                                    range: model.getFullModelRange(),
-                                    text: migrationState.migrated,
-                                },
-                            ],
-                            () => null,
-                        );
-                        setMigrationState(null);
+                        // A flagged-only step leaves the source unchanged; skip
+                        // the no-op write so it adds no undo stop.
+                        if (
+                            migrationState.migrated !== migrationState.original
+                        ) {
+                            model.pushEditOperations(
+                                [],
+                                [
+                                    {
+                                        range: model.getFullModelRange(),
+                                        text: migrationState.migrated,
+                                    },
+                                ],
+                                () => null,
+                            );
+                        }
+                        // Advance the chain on the migrated source.
+                        run.remaining.shift();
+                        advanceMigrationRun(migrationState.migrated);
                     }}
                 />
             )}
