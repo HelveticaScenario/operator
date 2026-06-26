@@ -1290,6 +1290,56 @@ mod tests {
     }
 
     #[test]
+    fn test_convert_stack_inside_slowcat_keeps_independent_periods() {
+        // `<a b, c d e>` is `stack(slowcat(a,b), slowcat(c,d,e))`: each comma
+        // voice is its own slowcat with its own period, then stacked — NOT a
+        // single slowcat holding one stacked element (which would replay both
+        // voices, spread across the cycle, every cycle). Matches strudel.
+        //
+        // Using `<0 ~ 2 ~ 4, 2 ~ 4>` (Option<f64> so `~` rests are allowed):
+        // voice A has period 5 (0 ~ 2 ~ 4), voice B period 3 (2 ~ 4).
+        let ast = parse("<0 ~ 2 ~ 4, 2 ~ 4>").unwrap();
+        let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
+
+        // Expected onset values per cycle (verified against strudel @strudel/mini).
+        let expected: [&[f64]; 8] = [
+            &[0.0, 2.0], // A=0, B=2
+            &[],         // A=~, B=~
+            &[2.0, 4.0], // A=2, B=4
+            &[2.0],      // A=~, B=2 (B wraps)
+            &[4.0],      // A=4, B=~
+            &[0.0, 4.0], // A=0 (A wraps), B=4
+            &[2.0],      // A=~, B=2
+            &[2.0],      // A=2, B=~
+        ];
+
+        for (cycle, want) in expected.iter().enumerate() {
+            let c = cycle as i64;
+            let haps = pat.query_arc(Fraction::from_integer(c), Fraction::from_integer(c + 1));
+            let mut got: Vec<(Fraction, f64)> = haps
+                .iter()
+                .filter(|h| h.has_onset())
+                .filter_map(|h| h.value.map(|v| (h.part.begin.clone(), v)))
+                .collect();
+            got.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+            let got_vals: Vec<f64> = got.iter().map(|(_, v)| *v).collect();
+            assert_eq!(
+                got_vals, *want,
+                "cycle {cycle}: expected {want:?}, got {got_vals:?}"
+            );
+            // Both voices fire at the cycle start (onset at the integer
+            // boundary), not spread across the cycle like a fastcat would.
+            for (begin, _) in &got {
+                assert_eq!(
+                    *begin,
+                    Fraction::from_integer(c),
+                    "cycle {cycle}: onset should be at cycle start, got {begin}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_convert_weighted() {
         let ast = parse("0@3 1").unwrap();
         let pat: Pattern<f64> = convert(&ast).unwrap();

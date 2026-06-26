@@ -303,10 +303,19 @@ impl<'a> Parser<'a> {
         if !self.consume(b'>') {
             return Err(ParseError("expected >".into()));
         }
+        // Each comma voice becomes its own slowcat (keeping its own period),
+        // then the voices are stacked: `<a b, c d e>` is
+        // `stack(slowcat(a,b), slowcat(c,d,e))` — matching strudel and the
+        // peggy grammar's SlowSub rule.
+        fn to_slowcat(v: MiniAST) -> MiniAST {
+            match v {
+                MiniAST::Sequence(items) => MiniAST::SlowCat(items),
+                other => MiniAST::SlowCat(vec![(other, None)]),
+            }
+        }
         Ok(match s {
-            MiniAST::Stack(_) => MiniAST::SlowCat(vec![(s, None)]),
-            MiniAST::Sequence(items) => MiniAST::SlowCat(items),
-            other => MiniAST::SlowCat(vec![(other, None)]),
+            MiniAST::Stack(voices) => MiniAST::Stack(voices.into_iter().map(to_slowcat).collect()),
+            other => to_slowcat(other),
         })
     }
 
@@ -502,10 +511,17 @@ impl<'a> Parser<'a> {
                 if !self.consume(b'>') {
                     return Err(ParseError("expected >".into()));
                 }
+                fn to_slowcat(v: MiniASTF64) -> MiniASTF64 {
+                    match v {
+                        MiniASTF64::Sequence(items) => MiniASTF64::SlowCat(items),
+                        other => MiniASTF64::SlowCat(vec![(other, None)]),
+                    }
+                }
                 Ok(match s {
-                    MiniASTF64::Stack(_) => MiniASTF64::SlowCat(vec![(s, None)]),
-                    MiniASTF64::Sequence(items) => MiniASTF64::SlowCat(items),
-                    other => MiniASTF64::SlowCat(vec![(other, None)]),
+                    MiniASTF64::Stack(voices) => {
+                        MiniASTF64::Stack(voices.into_iter().map(to_slowcat).collect())
+                    }
+                    other => to_slowcat(other),
                 })
             }
             _ => {
@@ -593,10 +609,17 @@ impl<'a> Parser<'a> {
                 if !self.consume(b'>') {
                     return Err(ParseError("expected >".into()));
                 }
+                fn to_slowcat(v: MiniASTU32) -> MiniASTU32 {
+                    match v {
+                        MiniASTU32::Sequence(items) => MiniASTU32::SlowCat(items),
+                        other => MiniASTU32::SlowCat(vec![(other, None)]),
+                    }
+                }
                 Ok(match s {
-                    MiniASTU32::Stack(_) => MiniASTU32::SlowCat(vec![(s, None)]),
-                    MiniASTU32::Sequence(items) => MiniASTU32::SlowCat(items),
-                    other => MiniASTU32::SlowCat(vec![(other, None)]),
+                    MiniASTU32::Stack(voices) => {
+                        MiniASTU32::Stack(voices.into_iter().map(to_slowcat).collect())
+                    }
+                    other => to_slowcat(other),
                 })
             }
             _ => {
@@ -680,10 +703,17 @@ impl<'a> Parser<'a> {
                 if !self.consume(b'>') {
                     return Err(ParseError("expected >".into()));
                 }
+                fn to_slowcat(v: MiniASTI32) -> MiniASTI32 {
+                    match v {
+                        MiniASTI32::Sequence(items) => MiniASTI32::SlowCat(items),
+                        other => MiniASTI32::SlowCat(vec![(other, None)]),
+                    }
+                }
                 Ok(match s {
-                    MiniASTI32::Stack(_) => MiniASTI32::SlowCat(vec![(s, None)]),
-                    MiniASTI32::Sequence(items) => MiniASTI32::SlowCat(items),
-                    other => MiniASTI32::SlowCat(vec![(other, None)]),
+                    MiniASTI32::Stack(voices) => {
+                        MiniASTI32::Stack(voices.into_iter().map(to_slowcat).collect())
+                    }
+                    other => to_slowcat(other),
                 })
             }
             _ => {

@@ -364,6 +364,92 @@
     }
   },
   {
+    "label": "stack inside slow subsequence <a b, c d e>",
+    "input": "<0 1, 2 3 4>",
+    "peggy_ast": {
+      "Stack": [
+        {
+          "SlowCat": [
+            [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 0
+                  },
+                  "span": {
+                    "start": 1,
+                    "end": 2
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 1
+                  },
+                  "span": {
+                    "start": 3,
+                    "end": 4
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        },
+        {
+          "SlowCat": [
+            [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 2
+                  },
+                  "span": {
+                    "start": 6,
+                    "end": 7
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 3
+                  },
+                  "span": {
+                    "start": 8,
+                    "end": 9
+                  }
+                }
+              },
+              null
+            ],
+            [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 4
+                  },
+                  "span": {
+                    "start": 10,
+                    "end": 11
+                  }
+                }
+              },
+              null
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  {
     "label": "stack via comma",
     "input": "0,1,2",
     "peggy_ast": {

@@ -331,14 +331,18 @@ function peg$parse(input, options) {
     return { FastCat: [[s, null]] };
   }
   function peg$f14(head, tail) {
-    const s = tail.length === 0 ? head : { Stack: [head, ...tail] };
-    if (s && s.Stack) {
-      return { SlowCat: [[s, null]] };
+    // Each comma voice becomes its own slowcat (one entry per cycle, each
+    // voice keeping its own period), then the voices are stacked:
+    // `<a b, c d e>` is `stack(slowcat(a,b), slowcat(c,d,e))` — matching
+    // strudel and the operand `<...>` subtrees below. A voice that is a
+    // Sequence contributes its entries as slowcat steps; any other voice
+    // (single atom, `[...]` group, …) is a one-step slowcat.
+    const toSlowCat = (v) =>
+      v && v.Sequence ? { SlowCat: v.Sequence } : { SlowCat: [[v, null]] };
+    if (tail.length === 0) {
+      return toSlowCat(head);
     }
-    if (s && s.Sequence) {
-      return { SlowCat: s.Sequence };
-    }
-    return { SlowCat: [[s, null]] };
+    return { Stack: [head, ...tail].map(toSlowCat) };
   }
   function peg$f15() {    return { Rest: spanOf(location()) };  }
   function peg$f16(n) {

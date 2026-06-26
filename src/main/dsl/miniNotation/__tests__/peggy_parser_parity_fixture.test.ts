@@ -65,6 +65,7 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     { label: 'sequence (null weights)', input: '0 1 2' },
     { label: 'fast subsequence []', input: '[0 1] 2' },
     { label: 'slow subsequence <>', input: '<0 1 2>' },
+    { label: 'stack inside slow subsequence <a b, c d e>', input: '<0 1, 2 3 4>' },
     { label: 'stack via comma', input: '0,1,2' },
     { label: 'nested stack inside []', input: '[0 1, 2 3]' },
     { label: 'fast modifier *n', input: '0*2' },
