@@ -191,14 +191,23 @@ pub fn interpolate_segment(x: f32, amount: f32) -> f32 {
     s1 + frac * (s2 - s1)
 }
 
+/// Upper edge (in normalized `amount`) of the low-amount crossfade band.
+/// Below this, the folded output is blended with the dry signal; at and above
+/// it the output is fully folded. See [`lookup_fold`].
+const FOLD_FADE_IN: f32 = 0.02;
+
 /// Lookup folded value from table.
 /// `x` is input signal in [-1, 1].
 /// `amount` scales the folding intensity [0, 1].
 #[inline]
 pub fn lookup_fold(x: f32, amount: f32) -> f32 {
-    if amount <= 0.005 {
+    // Exact-zero (or disconnected) amount is a clean passthrough — skip the
+    // table lookups. The crossfade below already returns `x` at amount 0, so
+    // this is purely a fast path, not a behavioural threshold (no discontinuity).
+    if amount <= 0.0 {
         return x;
     }
+
     // Reference: sample = x * s1_15(amount), phase = sample.to_unsigned_scale()
     // x ∈ [-1,1], amount ∈ [0,1] → sample ∈ [-1,1] → phase ∈ [0,1]
     let sample = x * amount;
@@ -208,7 +217,16 @@ pub fn lookup_fold(x: f32, amount: f32) -> f32 {
 
     // Multiply by normalization (reference: res *= fold_max.interpolate(amount))
     let norm = interpolate_table(&*FOLD_MAX_TABLE, amount);
-    folded * norm
+    let wet = folded * norm;
+
+    // The folded output does not converge to the dry signal as `amount` → 0
+    // (it tends toward a roughly constant value), so a hard switch to clean
+    // passthrough at a low-amount threshold would step discontinuously — an
+    // audible click as `amount` sweeps through it. Crossfade dry → wet over a
+    // short low-amount band with a smoothstep so the fold eases in continuously.
+    let t = (amount / FOLD_FADE_IN).clamp(0.0, 1.0);
+    let blend = t * t * (3.0 - 2.0 * t);
+    x + blend * (wet - x)
 }
 
 /// Per-effect anti-aliasing functions matching the 4ms Ensemble Oscillator.
@@ -354,5 +372,40 @@ mod tests {
             y_at_1,
             y_near_1
         );
+    }
+
+    #[test]
+    fn test_fold_passthrough_at_zero_amount() {
+        // amount = 0 must be exact dry passthrough.
+        for &x in &[-1.0f32, -0.5, 0.0, 0.5, 1.0] {
+            let y = lookup_fold(x, 0.0);
+            assert!(
+                (y - x).abs() < 1e-6,
+                "amount=0 should pass through: x={x}, y={y}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_fold_continuous_across_low_amounts() {
+        // Regression: the old hard passthrough threshold at amount=0.005 stepped
+        // discontinuously into the folded output (a ~0.55 jump → audible click).
+        // Sweep amount finely and assert no large single-step jump for any input.
+        let da = 0.0002_f32;
+        for i in 0..5 {
+            let x = -1.0 + i as f32 * 0.5; // -1, -0.5, 0, 0.5, 1
+            let mut prev = lookup_fold(x, 0.0);
+            let mut a = da;
+            while a <= 0.2 {
+                let cur = lookup_fold(x, a);
+                let step = (cur - prev).abs();
+                assert!(
+                    step < 0.02,
+                    "fold output jumps at x={x}, amount={a}: {prev} -> {cur} (step {step})"
+                );
+                prev = cur;
+                a += da;
+            }
+        }
     }
 }

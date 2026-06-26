@@ -9,6 +9,7 @@ import { EngineHealth } from './components/EngineHealth';
 import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
 import type { MigrationModalSummary } from './components/MigrationDiffModal';
+import { migrateChebyBlockDC } from './dsl/migrateChebyBlockDC';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
 import { migrateWavetableArgs } from './dsl/migrateWavetableArgs';
 import type { UpdateNotificationState } from './components/UpdateNotification';
@@ -1201,12 +1202,16 @@ function App() {
         const cleanupMigrateWavetable = electronAPI.onMenuMigrateWavetable(
             () => {
                 const ed = editorRef.current;
+                // Read the live id from the ref: this listener is registered
+                // once (deps below), so closing over the `activeBufferId` state
+                // would migrate a stale buffer after the user switches buffers.
+                const activeId = activeBufferIdRef.current;
                 const wavetableTitle =
                     'Migrate $wavetable to pitch-first order';
-                if (!ed || !activeBufferId) {
+                if (!ed || !activeId) {
                     console.warn('Migrate wavetable: no editor available');
                     setMigrationState({
-                        bufferId: activeBufferId ?? '',
+                        bufferId: activeId ?? '',
                         original: '',
                         migrated: '',
                         title: wavetableTitle,
@@ -1222,7 +1227,7 @@ function App() {
                 const original = ed.getValue();
                 const result = migrateWavetableArgs(original);
                 setMigrationState({
-                    bufferId: activeBufferId,
+                    bufferId: activeId,
                     original,
                     migrated: result.migrated,
                     title: wavetableTitle,
@@ -1236,6 +1241,48 @@ function App() {
                 });
             },
         );
+
+        const cleanupMigrateChebyBlockDC =
+            electronAPI.onMenuMigrateChebyBlockDC(() => {
+                const ed = editorRef.current;
+                // Read the live id from the ref: this listener is registered
+                // once (deps below), so closing over the `activeBufferId` state
+                // would migrate a stale buffer after the user switches buffers.
+                const activeId = activeBufferIdRef.current;
+                const chebyTitle =
+                    'Migrate $cheby to preserve pre-DC-blocker output';
+                if (!ed || !activeId) {
+                    console.warn('Migrate $cheby: no editor available');
+                    setMigrationState({
+                        bufferId: activeId ?? '',
+                        original: '',
+                        migrated: '',
+                        title: chebyTitle,
+                        summary: {
+                            callsChanged: 0,
+                            commentsChanged: 0,
+                            skippedVariables: [],
+                            error: 'No editor available',
+                        },
+                    });
+                    return;
+                }
+                const original = ed.getValue();
+                const result = migrateChebyBlockDC(original);
+                setMigrationState({
+                    bufferId: activeId,
+                    original,
+                    migrated: result.migrated,
+                    title: chebyTitle,
+                    skippedLabel: 'Needs manual review:',
+                    summary: {
+                        callsChanged: result.callsChanged,
+                        commentsChanged: 0,
+                        skippedVariables: result.skipped,
+                        error: result.error,
+                    },
+                });
+            });
 
         return () => {
             cleanupNewFile();
@@ -1251,6 +1298,7 @@ function App() {
             cleanupOpenModuleProfile();
             cleanupMigrateBuffer();
             cleanupMigrateWavetable();
+            cleanupMigrateChebyBlockDC();
         };
     }, [isRecording]);
 

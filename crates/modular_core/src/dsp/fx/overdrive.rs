@@ -9,6 +9,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 use std::f32::consts::PI;
 
+use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::halfband::{Halfband2xDown, Halfband2xUp};
 use crate::dsp::utils::one_pole::OnePole;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
@@ -63,9 +64,8 @@ struct ChannelState {
     down: Halfband2xDown,
     tilt_pre: OnePole,
     tilt_post: OnePole,
-    /// DC blocker (one-pole high-pass) — `y[n] = x[n] - x[n-1] + R · y[n-1]`.
-    dc_prev_in: f32,
-    dc_prev_out: f32,
+    /// DC blocker (one-pole high-pass) on the input before upsampling.
+    dc_blocker: DcBlocker,
 }
 
 #[derive(Default)]
@@ -76,9 +76,6 @@ struct OverdriveState {
 
 /// Tilt-EQ pivot frequency, in Hz.
 const TILT_PIVOT_HZ: f32 = 1500.0;
-
-/// DC-blocker corner frequency, in Hz.
-const DC_BLOCK_FC_HZ: f32 = 20.0;
 
 /// Maximum drive multiplier (gain at drive = 5).
 const MAX_DRIVE_GAIN: f32 = 32.0;
@@ -109,8 +106,7 @@ impl Overdrive {
         self.state.tilt_coeff = tilt.clamp(0.0, 1.0);
 
         // DC blocker runs at the base rate before the upsampler.
-        let base_rate = sample_rate.max(1.0);
-        self.state.dc_block_coeff = (1.0 - (2.0 * PI * DC_BLOCK_FC_HZ / base_rate)).clamp(0.0, 1.0);
+        self.state.dc_block_coeff = DcBlocker::coeff(DEFAULT_DC_BLOCK_FC_HZ, sample_rate);
 
         // Tilt-EQ coefficient is constant for the module's lifetime, so seed
         // every channel's filters once here instead of per sample. `init` runs
@@ -151,9 +147,7 @@ impl Overdrive {
 
             // DC-block the input at base rate before upsampling.
             let x_norm = input / 5.0;
-            let dc_out = x_norm - state.dc_prev_in + dc_coeff * state.dc_prev_out;
-            state.dc_prev_in = x_norm;
-            state.dc_prev_out = dc_out;
+            let dc_out = state.dc_blocker.process(x_norm, dc_coeff);
 
             let (e, o) = state.up.process(dc_out);
             let e_shaped = process_one(

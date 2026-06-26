@@ -13,6 +13,7 @@ pub mod enosc_tables;
 
 pub mod cheby;
 pub mod dattorro;
+pub mod filterdc;
 pub mod fold;
 pub mod overdrive;
 pub mod plate;
@@ -23,6 +24,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     cheby::Cheby::install_constructor(map);
     dattorro::Dattorro::install_constructor(map);
     overdrive::Overdrive::install_constructor(map);
+    filterdc::FilterDc::install_constructor(map);
     plate::Plate::install_constructor(map);
     segment::Segment::install_constructor(map);
 }
@@ -32,6 +34,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     cheby::Cheby::install_params_deserializer(map);
     dattorro::Dattorro::install_params_deserializer(map);
     overdrive::Overdrive::install_params_deserializer(map);
+    filterdc::FilterDc::install_params_deserializer(map);
     plate::Plate::install_params_deserializer(map);
     segment::Segment::install_params_deserializer(map);
 }
@@ -42,6 +45,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         cheby::Cheby::get_schema(),
         dattorro::Dattorro::get_schema(),
         overdrive::Overdrive::get_schema(),
+        filterdc::FilterDc::get_schema(),
         plate::Plate::get_schema(),
         segment::Segment::get_schema(),
     ]

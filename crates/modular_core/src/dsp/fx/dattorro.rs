@@ -6,6 +6,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use crate::dsp::utils::dc_blocker::DcBlocker;
 use crate::dsp::utils::delay_line::DelayLine;
 use crate::dsp::utils::map_range;
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
@@ -162,11 +163,8 @@ struct DattorroState {
 
     // DC blocking high-pass filters on the output (20 Hz cutoff).
     // Prevents DC offset accumulation in the feedback loop.
-    // Standard DC blocker: y[n] = x[n] - x[n-1] + coeff * y[n-1]
-    dc_prev_in_l: f32,
-    dc_prev_in_r: f32,
-    dc_prev_out_l: f32,
-    dc_prev_out_r: f32,
+    dc_blocker_l: DcBlocker,
+    dc_blocker_r: DcBlocker,
     dc_block_coeff: f32,
 
     // Per-volt modulation excursion in samples. Constant for the module's
@@ -418,12 +416,8 @@ impl Dattorro {
         // accumulation that the feedback loop can amplify.
         // y[n] = x[n] - x[n-1] + coeff * y[n-1]
         let c = self.state.dc_block_coeff;
-        let left_ac = left_out - self.state.dc_prev_in_l + c * self.state.dc_prev_out_l;
-        let right_ac = right_out - self.state.dc_prev_in_r + c * self.state.dc_prev_out_r;
-        self.state.dc_prev_in_l = left_out;
-        self.state.dc_prev_in_r = right_out;
-        self.state.dc_prev_out_l = left_ac;
-        self.state.dc_prev_out_r = right_ac;
+        let left_ac = self.state.dc_blocker_l.process(left_out, c);
+        let right_ac = self.state.dc_blocker_r.process(right_out, c);
 
         // Scale output (0.6 factor to prevent clipping with dense input)
         let output_gain = 0.6;

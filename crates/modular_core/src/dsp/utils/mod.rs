@@ -1,4 +1,6 @@
+pub mod dc_blocker;
 pub mod delay_line;
+pub mod fade;
 pub mod halfband;
 pub mod one_pole;
 

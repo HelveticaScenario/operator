@@ -8,6 +8,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use crate::dsp::utils::dc_blocker::DcBlocker;
 use crate::dsp::utils::delay_line::DelayLine;
 use crate::dsp::utils::map_range;
 use crate::dsp::utils::one_pole::OnePole;
@@ -185,10 +186,8 @@ struct PlateState {
     smoothed_decay: Clickless,
 
     // DC blocking HPF (20Hz)
-    dc_prev_in_l: f32,
-    dc_prev_in_r: f32,
-    dc_prev_out_l: f32,
-    dc_prev_out_r: f32,
+    dc_blocker_l: DcBlocker,
+    dc_blocker_r: DcBlocker,
     dc_block_coeff: f32,
 
     sample_rate: f32,
@@ -495,13 +494,8 @@ impl Plate {
 
         let coeff = self.state.dc_block_coeff;
 
-        let dc_out_l = left_out - self.state.dc_prev_in_l + coeff * self.state.dc_prev_out_l;
-        self.state.dc_prev_in_l = left_out;
-        self.state.dc_prev_out_l = dc_out_l;
-
-        let dc_out_r = right_out - self.state.dc_prev_in_r + coeff * self.state.dc_prev_out_r;
-        self.state.dc_prev_in_r = right_out;
-        self.state.dc_prev_out_r = dc_out_r;
+        let dc_out_l = self.state.dc_blocker_l.process(left_out, coeff);
+        let dc_out_r = self.state.dc_blocker_r.process(right_out, coeff);
 
         // ── Write outputs ────────────────────────────────────────────────
 

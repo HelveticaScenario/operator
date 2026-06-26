@@ -410,6 +410,7 @@ export const IPC_CHANNELS = {
 export const MENU_CHANNELS = {
     CLOSE_BUFFER: 'modular:menu:close-buffer',
     MIGRATE_BUFFER: 'modular:menu:migrate-buffer',
+    MIGRATE_CHEBY_BLOCK_DC: 'modular:menu:migrate-cheby-block-dc',
     MIGRATE_WAVETABLE: 'modular:menu:migrate-wavetable',
     NEW_FILE: 'modular:menu:new-file',
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',

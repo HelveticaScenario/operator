@@ -2312,6 +2312,18 @@ const createMenu = (): void => {
                     },
                     label: 'Migrate $wavetable to pitch-first order...',
                 },
+                {
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(
+                                MENU_CHANNELS.MIGRATE_CHEBY_BLOCK_DC,
+                            );
+                        }
+                    },
+                    label: 'Migrate $cheby to preserve pre-DC-blocker output...',
+                },
                 ...(!isMac
                     ? ([
                           { type: 'separator' },

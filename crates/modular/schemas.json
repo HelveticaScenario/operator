@@ -1415,6 +1415,11 @@
           "description": "harmonic richness (0–5). At 0 the signal is clean; at 5 the highest harmonic content dominates",
           "$ref": "#/$defs/PolySignal"
         },
+        "blockDC": {
+          "description": "when true (default), a one-pole high-pass (~20 Hz) on the output removes\nthe DC offset that the even-order harmonics introduce, keeping the\nsignal centred",
+          "type": "boolean",
+          "default": true
+        },
         "freq": {
           "description": "pitch of the source signal in V/Oct (optional, reduces aliasing at high frequencies)",
           "anyOf": [
@@ -1931,6 +1936,106 @@
       },
       {
         "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$filterDC",
+    "documentation": "One-pole high-pass that removes DC offset and sub-audio rumble from a\nsignal while passing audio-rate content. The cutoff sits at ~20 Hz.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "FilterDcParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "input signal to filter (any range)",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "DC-blocked output signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to filter (any range)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
       }
     ]
   },

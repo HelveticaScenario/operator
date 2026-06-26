@@ -997,6 +997,11 @@ describe('fx modules', () => {
         expect(findModules(patch, '$cheby').length).toBe(1);
     });
 
+    test('$filterDC', () => {
+        const patch = execPatch('$filterDC($sine("C4")).out()');
+        expect(findModules(patch, '$filterDC').length).toBe(1);
+    });
+
     test('$comp accepts ratio < 1 for expansion', () => {
         const source = `
             // ratio 0.5 = upward expansion above threshold (boost loud)
