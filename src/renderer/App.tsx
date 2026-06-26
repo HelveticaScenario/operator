@@ -183,6 +183,10 @@ function App() {
     const migrationRunRef = useRef<{
         bufferId: string;
         remaining: MigrationMeta[];
+        // Whether any step in this run has opened the modal. When the run drains
+        // without one, every pending migration was a no-op and the user gets the
+        // "nothing to do" modal instead of silence.
+        shownAny: boolean;
     } | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [validationErrors, setValidationErrors] = useState<
@@ -990,10 +994,13 @@ function App() {
     }, []);
 
     // Drive the migration chain from `source`: run each remaining migration in
-    // order, auto-clearing clean no-ops and pausing on the diff modal whenever a
-    // step changes the source or has something to flag. The modal's callbacks
-    // resume the chain. Nothing is recorded here — a successful re-evaluation
-    // after migrating advances the buffer's evaluatedVersion.
+    // order and pause on the diff modal for any step that changes the source or
+    // raises an alert (manual-review items or a parse error). A step that would
+    // do neither is dropped from the group. If every step is dropped the patch
+    // already conforms, so a no-change modal reports there was nothing to do.
+    // The modal's callbacks resume the chain. Nothing is recorded here — a
+    // successful re-evaluation after migrating advances the buffer's
+    // evaluatedVersion.
     const advanceMigrationRun = useCallback((source: string) => {
         const run = migrationRunRef.current;
         if (!run) return;
@@ -1003,6 +1010,7 @@ function App() {
             const hasManual = result.summary.skippedVariables.length > 0;
             const hasError = Boolean(result.summary.error);
             if (result.changed || hasManual || hasError) {
+                run.shownAny = true;
                 setMigrationState({
                     bufferId: run.bufferId,
                     original: source,
@@ -1013,27 +1021,13 @@ function App() {
                 });
                 return;
             }
-            // Clean no-op: the patch already conforms to this migration.
+            // Clean no-op: the patch already conforms, so drop it from the group.
             run.remaining.shift();
         }
         migrationRunRef.current = null;
-    }, []);
-
-    // Entry point for the "Migrate patch to latest version" command: gather the
-    // migrations the active patch still needs (by its last-evaluated version)
-    // and run them in order.
-    const startMigrateToLatest = useCallback(() => {
-        const ed = editorRef.current;
-        const activeId = activeBufferIdRef.current;
-        if (!ed || !activeId) return;
-        const buffer = buffersRef.current.find(
-            (b) => getBufferId(b) === activeId,
-        );
-        const pending = migrationsNeededFor(buffer?.evaluatedVersion);
-        if (pending.length === 0) {
-            // Nothing pending — show an informational, no-change modal.
+        if (!run.shownAny) {
             setMigrationState({
-                bufferId: activeId,
+                bufferId: run.bufferId,
                 original: '',
                 migrated: '',
                 summary: {
@@ -1043,11 +1037,23 @@ function App() {
                 },
                 title: 'Migrate patch to latest version',
             });
-            return;
         }
+    }, []);
+
+    // Entry point for the "Migrate patch to latest version" command: gather the
+    // migrations the active patch still needs (by its last-evaluated version)
+    // and run them in order, dropping any that turn out to be no-ops.
+    const startMigrateToLatest = useCallback(() => {
+        const ed = editorRef.current;
+        const activeId = activeBufferIdRef.current;
+        if (!ed || !activeId) return;
+        const buffer = buffersRef.current.find(
+            (b) => getBufferId(b) === activeId,
+        );
         migrationRunRef.current = {
             bufferId: activeId,
-            remaining: [...pending],
+            remaining: migrationsNeededFor(buffer?.evaluatedVersion),
+            shownAny: false,
         };
         advanceMigrationRun(ed.getValue());
     }, [advanceMigrationRun]);
