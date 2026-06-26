@@ -5805,7 +5805,7 @@
   },
   {
     "name": "$adsr",
-    "documentation": "An Attack-Decay-Sustain-Release envelope generator.\n\nGenerates a control voltage envelope driven by a **gate** input.\nWhen the gate goes high (>1V) the envelope enters the attack phase;\nwhen the gate goes low it enters release.\n\n- **attack** / **decay** / **release** — time in seconds\n- **sustain** — level in volts (0–5V). Defaults to 5V, but if **decay** is set\n  without **sustain**, sustain defaults to 0V for a plucky attack-decay shape.\n- **curve** — ramp shape from -5 to 5. 0 is linear; +5 gives a logarithmic\n  attack and exponential decay/release; -5 is the inverse.\n- **retrigger** — a rising edge restarts the attack from the current level\n  (no jump). Defaults to the gate input. Set **resetOnRetrig** to true to\n  instead snap back to the start of the attack on every retrigger.\n\nOutput range is **0–5V**.\n\n## Example\n\n```js\nconst env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.2, sustain: 3, release: 0.5 })\n$sine('c4').amplitude(env).out()\n```",
+    "documentation": "An Attack-Decay-Sustain-Release envelope generator.\n\nGenerates a control voltage envelope driven by a **gate** input.\nWhen the gate goes high (>1V) the envelope enters the attack phase;\nwhen the gate goes low it enters release.\n\n- **attack** / **decay** / **release** — time in seconds\n- **sustain** — level in volts (0–5V). Defaults to 5V, but if **decay** is set\n  without **sustain**, sustain defaults to 0V for a plucky attack-decay shape.\n- **curve** — ramp shape from -5 to 5. 0 is linear; +5 gives a logarithmic\n  attack and exponential decay/release; -5 is the inverse.\n  Defaults to 5.\n- **retrigger** — a rising edge restarts the attack from the current level\n  (no jump). Defaults to the gate input. Set **resetOnRetrig** to true to\n  instead snap back to the start of the attack on every retrigger.\n\nOutput range is **0–5V**.\n\n## Example\n\n```js\nconst env = $adsr($pPulse($clock[0]), { attack: 0.01, decay: 0.2, sustain: 3, release: 0.5 })\n$sine('c4').amplitude(env).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "AdsrParams",
@@ -5823,7 +5823,7 @@
           ]
         },
         "curve": {
-          "description": "shape of the attack, decay, and release ramps. 0 is linear; +5 is\nlogarithmic attack with exponential decay/release; -5 is exponential\nattack with logarithmic decay/release.\ndefaults to 5.",
+          "description": "shape of the attack, decay, and release ramps. 0 is linear; +5 is\nlogarithmic attack with exponential decay/release; -5 is exponential\nattack with logarithmic decay/release.\nDefaults to 5.",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -6003,7 +6003,7 @@
       },
       {
         "name": "curve",
-        "description": "shape of the attack, decay, and release ramps. 0 is linear; +5 is\nlogarithmic attack with exponential decay/release; -5 is exponential\nattack with logarithmic decay/release.\ndefaults to 5.",
+        "description": "shape of the attack, decay, and release ramps. 0 is linear; +5 is\nlogarithmic attack with exponential decay/release; -5 is exponential\nattack with logarithmic decay/release.\nDefaults to 5.",
         "signalType": "control",
         "defaultValue": 5.0,
         "minValue": -5.0,

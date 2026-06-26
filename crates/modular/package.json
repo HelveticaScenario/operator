@@ -44,6 +44,7 @@
         "bench": "node --import @oxc-node/core/register benchmark/bench.ts",
         "build": "napi build --platform --release --esm && node ../../scripts/copy-debuginfo.mjs && cargo run -p modular_core --bin generate-schemas --release -- schemas.json",
         "build:debug": "napi build --platform --esm && cargo run -p modular_core --bin generate-schemas -- schemas.json",
+        "build:alloc": "napi build --platform --release --esm --features=alloc-detector && node ../../scripts/copy-debuginfo.mjs && cargo run -p modular_core --bin generate-schemas --release -- schemas.json",
         "format": "run-p format:rs format:toml",
         "format:toml": "taplo format",
         "format:rs": "cargo fmt",

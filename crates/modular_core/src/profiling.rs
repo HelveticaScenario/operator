@@ -136,6 +136,18 @@ pub fn set_sample_rate(rate: u32) {
     SAMPLE_RATE.store(rate.max(1), Ordering::Relaxed);
 }
 
+/// Independent always-on profiling switch for the dev-only allocation detector.
+/// ORed into the enable decision in `refresh_enabled` so the detector's
+/// attribution survives the UI profiling enable refcount and the device-switch
+/// reset (both drive `ENABLED`). Set once by the detector's logger thread.
+#[cfg(feature = "alloc-detector")]
+static FORCE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(feature = "alloc-detector")]
+pub fn set_force_enabled(on: bool) {
+    FORCE_ENABLED.store(on, Ordering::Relaxed);
+}
+
 struct Frame {
     /// Pointer + len back into the wrapper's owned `id: String`.
     ///
@@ -188,10 +200,19 @@ thread_local! {
 }
 
 /// Refresh the thread-local enable mirror. Called once per audio callback
-/// at the top, before any module processing. Honours the sample-rate knob.
+/// at the top, before any module processing.
 pub fn refresh_enabled() {
     let global_on = ENABLED.load(Ordering::Relaxed);
-    let on = if global_on {
+    #[cfg(feature = "alloc-detector")]
+    let force_on = FORCE_ENABLED.load(Ordering::Relaxed);
+    #[cfg(not(feature = "alloc-detector"))]
+    let force_on = false;
+    let on = if force_on {
+        // alloc-detector: profile every callback regardless of the UI enable
+        // refcount and sample-rate, so audio-thread allocations can always be
+        // attributed to the running module.
+        true
+    } else if global_on {
         let rate = SAMPLE_RATE.load(Ordering::Relaxed).max(1);
         let count = CALLBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
         count.is_multiple_of(rate)
@@ -302,6 +323,38 @@ pub fn pop_frame(samples_processed: u32) {
             parent.last_resume = now;
         }
     });
+}
+
+/// Copy the id of the currently-executing module (the top profiler frame) into
+/// `buf`, returning the number of bytes written (0 if no frame is active). Used by
+/// the dev-only audio allocation detector to attribute an audio-thread allocation
+/// to the module whose `update()` is running. Alloc-free and lock-free; reads the
+/// same thread-local stack as `pop_frame` but never mutates `depth`. Only
+/// meaningful when called on the audio thread mid-process.
+#[cfg(feature = "alloc-detector")]
+#[inline]
+pub fn current_module_id_into(buf: &mut [u8; 64]) -> u8 {
+    PROFILER.with(|p| {
+        // `try_borrow`: if the stack is momentarily borrowed (e.g. an allocation
+        // fired from inside `push_frame`/`pop_frame`), skip attribution rather than
+        // panic on a double borrow.
+        let Ok(prof) = p.try_borrow() else {
+            return 0;
+        };
+        if prof.depth == 0 {
+            return 0;
+        }
+        // SAFETY: slot `depth - 1` is the live top frame; its `id_ptr`/`id_len`
+        // borrow the wrapper's write-once `id: String`, valid for the strict-LIFO
+        // span of the frame (the same contract `pop_frame` relies on). Read-only.
+        let frame = unsafe { prof.stack[prof.depth - 1].assume_init_ref() };
+        let n = frame.id_len.min(buf.len());
+        // SAFETY: as above — the id bytes are valid for `frame.id_len`; copy the
+        // first `n` (clamped to the buffer).
+        let id = unsafe { std::slice::from_raw_parts(frame.id_ptr, n) };
+        buf[..n].copy_from_slice(id);
+        n as u8
+    })
 }
 
 /// Drain the audio-thread-local records into the shared cross-thread

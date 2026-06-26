@@ -2379,6 +2379,13 @@ where
                     }
                     return;
                 }
+                // Dev-only: mark this thread as the audio thread so the global
+                // allocation detector records (and attributes) any alloc/dealloc
+                // made below. Placed after the panicked-flag early return and
+                // outside `catch_unwind`, so the guard's `Drop` runs even on a
+                // caught unwind. Compiles to nothing without `--features=alloc-detector`.
+                #[cfg(feature = "alloc-detector")]
+                let _alloc_scope = crate::alloc_detector::AudioThreadScope::enter();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID};
                     profiling::scope!("audio_callback");

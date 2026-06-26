@@ -10,6 +10,11 @@ const ROOT = join(__dirname, '..');
 const CRATES_DIR = join(ROOT, 'crates');
 const DEBOUNCE_MS = 500;
 
+// `yarn watch-native-alloc` passes --features=alloc-detector so rebuilds keep the
+// dev-only allocation detector compiled in; plain `watch-native` builds without it.
+const allocMode = process.argv.includes('--features=alloc-detector');
+const buildScript = allocMode ? 'build-native-alloc' : 'build-native';
+
 let buildProcess = null;
 let debounceTimer = null;
 
@@ -34,7 +39,7 @@ function startBuild() {
     }
     console.log('[watch] Rebuilding native module...');
 
-    const child = spawn('yarn', ['build-native'], {
+    const child = spawn('yarn', [buildScript], {
         stdio: 'inherit',
         detached: true,
         cwd: ROOT,
@@ -76,4 +81,6 @@ process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
 watch(CRATES_DIR, { recursive: true }, onChange);
-console.log('[watch] Watching crates/ for changes...');
+console.log(
+    `[watch] Watching crates/ for changes...${allocMode ? ' (alloc-detector enabled)' : ''}`,
+);

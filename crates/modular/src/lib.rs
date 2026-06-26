@@ -1,5 +1,8 @@
 #![deny(clippy::all)]
 
+#[cfg(feature = "alloc-detector")]
+mod alloc_detector;
+
 mod audio;
 mod commands;
 mod graph_analysis;
@@ -10,6 +13,14 @@ mod params_cache;
 mod validation;
 mod wav_bpm;
 mod wav_metadata;
+
+/// Dev-only: route every native-addon allocation through the audio-thread
+/// allocation detector (see [`alloc_detector`]). Compiled only with
+/// `--features=alloc-detector` (`yarn build-native-alloc` or `yarn start:alloc`); the default build installs no
+/// global allocator.
+#[cfg(feature = "alloc-detector")]
+#[global_allocator]
+static GLOBAL_ALLOC: alloc_detector::AudioAllocDetector = alloc_detector::AudioAllocDetector;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use napi::bindgen_prelude::Float32Array;

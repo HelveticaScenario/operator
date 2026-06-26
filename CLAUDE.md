@@ -102,6 +102,20 @@ init (construct, main thread) → transfer_state_from → connect → on_patch_u
 
 Examples: `supersaw` — `init` seeds phases + `inv_sample_rate` (sr-only); `on_patch_update` computes `voice_t`/`gain`/`voices` (param-derived). `sampler` — `rate_ratio` is in `on_patch_update` because `wav.sample_rate()` only resolves in `connect()`. Test harnesses that build a module directly must mirror this: call `init` then `on_patch_update` before driving `update`.
 
+### Detecting audio-thread allocations (dev-only)
+
+`yarn build-native-alloc` builds the rust code with a runtime allocation detector compiled in (`--features=alloc-detector` on `crates/modular`). It installs a `#[global_allocator]` that flags any heap allocation/deallocation made on the audio thread and writes a warning to **stderr** — the `rust`-labelled stream in the `concurrently` output — naming the offending module, e.g.:
+
+```
+[alloc-detector] AUDIO-THREAD ALLOC in module "osc_3" — 48 bytes (×127 since last report). Move allocation out of process()/update() into init()/on_patch_update() (see CLAUDE.md lifecycle rules).
+```
+
+Use it to verify the "no heap allocation on the audio thread" rule above. Notes:
+
+- **Opt-in only.** Plain `yarn build-native` never compiles the detector in (zero cost, byte-identical binary). The detector installs a process-wide global allocator — never enable the feature in a shipped build.
+- **Auto-attribution.** Module profiling is force-enabled so attribution works with the editor profiler closed. Allocations on the audio thread but outside any module/scope frame report as `"<unknown>"`.
+- **Detect-and-flag, never fail.** The real `System` allocation always runs first; the detector only records. All formatting/logging happens on a background thread, never the audio thread. Dropped/dealloc events and running totals are summarized periodically on the same `[alloc-detector]` stderr stream.
+
 ## Conventions
 
 ### Voltage Standards
