@@ -3,6 +3,7 @@ pub mod delay_line;
 pub mod fade;
 pub mod halfband;
 pub mod one_pole;
+pub mod rng;
 
 use crate::dsp::consts::{LUT_PITCH_RATIO_HIGH, LUT_PITCH_RATIO_LOW};
 

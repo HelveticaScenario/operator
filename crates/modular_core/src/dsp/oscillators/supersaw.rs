@@ -4,7 +4,10 @@ use schemars::JsonSchema;
 use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::SchmittTrigger,
+        utils::{
+            SchmittTrigger,
+            rng::{LcgRng, seed_base},
+        },
     },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
 };
@@ -113,7 +116,7 @@ struct VoiceState {
 
 /// Module-level state for the Supersaw module.
 struct SupersawState {
-    rng_state: u32,
+    rng: LcgRng,
     /// Voice count clamped to [1, PORT_MAX_CHANNELS]. Derived from params.
     voices: usize,
     /// Channel count of the freq input. Derived from params.
@@ -136,7 +139,7 @@ struct SupersawState {
 impl Default for SupersawState {
     fn default() -> Self {
         Self {
-            rng_state: 0,
+            rng: LcgRng::default(),
             voices: 1,
             input_channels: 1,
             inv_sample_rate: 0.0,
@@ -164,24 +167,6 @@ fn poly_blep_saw(phase: f32, dt: f32) -> f32 {
     0.0
 }
 
-/// Simple xorshift32 PRNG.
-#[inline(always)]
-fn xorshift32(state: &mut u32) -> u32 {
-    let mut x = *state;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    *state = x;
-    x
-}
-
-/// Generate a random phase in [0, 1) from the PRNG state.
-#[inline(always)]
-fn rand_phase(state: &mut u32) -> f32 {
-    let x = xorshift32(state);
-    (x as f32) / (u32::MAX as f32)
-}
-
 impl Supersaw {
     fn init(&mut self, sample_rate: f32) {
         // Sample-rate-derived: safe in init because the rate never changes across
@@ -191,7 +176,8 @@ impl Supersaw {
         // Seed per-oscillator phases once. This runtime state is preserved across
         // patch updates by transfer_state_from, so it must not be re-seeded in
         // configure().
-        self.state.rng_state = self as *const Self as usize as u32;
+        let base = seed_base(self);
+        self.state.rng.seed(base, 0);
         // `voices` rows of state per input channel. Input channels are bounded
         // by PORT_MAX_CHANNELS, so allocating that many rows keeps the matrix
         // valid for any input width while shrinking the voice dimension.
@@ -205,7 +191,7 @@ impl Supersaw {
         // `transfer_state_from`, keeping an already-sounding voice un-muted.
         let gate_open = !self.params.wait_for_zero_cross;
         for cell in self.channel_state.iter_mut() {
-            cell.phase = rand_phase(&mut self.state.rng_state);
+            cell.phase = self.state.rng.next_unit();
             cell.gate_open = gate_open;
             cell.prev_out = 2.0 * cell.phase - 1.0;
         }

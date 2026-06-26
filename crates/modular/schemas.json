@@ -2230,6 +2230,160 @@
     "channels": 2
   },
   {
+    "name": "$quantNoise",
+    "documentation": "Adds bright, granular quantization noise to a signal.\n\nThe signal is snapped to a coarse voltage grid (`step`), dithered so the\nresult is broadband noise instead of a tonal buzz, then the quantized value\nis differentiated and scaled by `amount` and summed back onto the dry signal.\nBecause the grit is the signal's own (dithered) quantization residual, it\ntracks the signal's level and motion — feed it a slow LFO for a fizz that\nswells with the modulator, or audio for a crunchy digital edge.\n\n## Example\n\n```js\n$quantNoise($sine('c'), 2).out() // grainy, fizzy sine\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "QuantNoiseParams",
+      "type": "object",
+      "properties": {
+        "amount": {
+          "description": "grit amount — gain on the differentiated quantization residual that is\nadded to the signal (0 = clean, higher = more fizz)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "dither": {
+          "description": "dither depth (0–1). At 0 the grit is a tonal staircase buzz that tracks\nthe signal; at 1 the quantization is fully dithered into broadband noise.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to grit up (bipolar, typically -5 to 5)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "step": {
+          "description": "quantization step in volts: the grid the signal is snapped to. Coarser\n(larger) steps give bigger, grainier grit.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "amount"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "input with quantization-noise grit added",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to grit up (bipolar, typically -5 to 5)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "grit amount — gain on the differentiated quantization residual that is\nadded to the signal (0 = clean, higher = more fizz)",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "step",
+        "description": "quantization step in volts: the grid the signal is snapped to. Coarser\n(larger) steps give bigger, grainier grit.",
+        "signalType": "control",
+        "defaultValue": 0.25,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "dither",
+        "description": "dither depth (0–1). At 0 the grit is a tonal staircase buzz that tracks\nthe signal; at 1 the quantization is fully dithered into broadband noise.",
+        "signalType": "control",
+        "defaultValue": 1.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "amount"
+      }
+    ]
+  },
+  {
     "name": "$segment",
     "documentation": "Waveshaper that morphs through 8 distinct tonal shapes as you sweep the\namount control. Low settings pass the signal cleanly; mid settings compress\nand square it off; high settings introduce stepped, ripple-like overtone\npatterns. Works best on simple waveforms like sines or triangles.",
     "paramsSchema": {

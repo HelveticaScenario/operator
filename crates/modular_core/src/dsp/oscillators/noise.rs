@@ -1,6 +1,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::poly::PolyOutput;
 
 fn default_channels() -> usize {
@@ -64,20 +65,6 @@ impl PinkFilter {
 
     fn reset(&mut self) {
         *self = Self::default();
-    }
-}
-
-#[derive(Default)]
-struct LcgRng {
-    state: u64,
-}
-
-impl LcgRng {
-    fn next(&mut self) -> f32 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        let bits = (self.state >> 32) as u32;
-        let value = bits as f32 / u32::MAX as f32;
-        value * 2.0 - 1.0
     }
 }
 
@@ -158,9 +145,9 @@ impl Noise {
     /// the previous patch on every edit. Seeding once keeps each node's stream
     /// continuous across patch updates.
     fn seed(&mut self) {
-        let base = self as *const Self as usize as u64;
+        let base = seed_base(self);
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
-            state.generator.state = base ^ (ch as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            state.generator.seed(base, ch);
         }
         self.state.seeded = true;
     }
@@ -181,7 +168,7 @@ impl Noise {
 
         for ch in 0..channels {
             let state = &mut self.channel_state[ch];
-            let white = state.generator.next();
+            let white = state.generator.next_bipolar();
             let colored = match color {
                 NoiseKind::White => white,
                 NoiseKind::Pink => state.pink.process(white),

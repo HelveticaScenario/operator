@@ -5,7 +5,11 @@ use schemars::JsonSchema;
 
 use crate::{
     Wav,
-    dsp::utils::{SchmittTrigger, sanitize},
+    dsp::utils::{
+        SchmittTrigger,
+        rng::{LcgRng, seed_base},
+        sanitize,
+    },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
 };
 
@@ -64,22 +68,6 @@ struct Grain {
 }
 
 // ── Per-channel state ──────────────────────────────────────────────────────────
-
-#[derive(Default)]
-struct LcgRng {
-    state: u64,
-}
-
-impl LcgRng {
-    /// Returns a pseudo-random value in [0, 1).
-    #[inline]
-    fn next_f32(&mut self) -> f32 {
-        self.state = self.state.wrapping_mul(6364136223846793005).wrapping_add(1);
-        // Top 31 bits → non-negative u32; divide to [0, 1).
-        let bits = (self.state >> 33) as u32;
-        bits as f32 / (u32::MAX >> 1) as f32
-    }
-}
 
 struct GrainChannel {
     grains: [Grain; GRAINS_PER_CHANNEL],
@@ -401,7 +389,7 @@ impl Grains {
                     while cs.spawn_phase >= 1.0 {
                         cs.spawn_phase -= 1.0;
 
-                        let reverse = cs.rng.next_f32() < reverse_prob;
+                        let reverse = cs.rng.next_unit() < reverse_prob;
 
                         // Reverse grains play the same slice backward: start
                         // at the far end and step back toward start_frame.
@@ -530,9 +518,9 @@ impl Grains {
     /// updates don't clobber running grain sequences — identical to the
     /// pattern used in `noise.rs`.
     fn seed(&mut self) {
-        let base = self as *const Self as usize as u64;
+        let base = seed_base(self);
         for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-            cs.rng.state = base ^ (ch as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            cs.rng.seed(base, ch);
         }
         self.state.seeded = true;
     }
