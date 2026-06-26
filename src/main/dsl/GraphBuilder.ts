@@ -884,15 +884,18 @@ export class GraphBuilder {
      * Collections, arrays) are spread, and bare Signal literals — numbers and
      * note/Hz strings — are lifted into `$signal` modules, so `$c(440, 'c4',
      * osc)` works alongside `$c(osc1, osc2)`. Lifting nests, so scalars inside
-     * an array argument are handled too. Needs the `$signal` factory, hence a
-     * builder method.
+     * an array argument are handled too. Lifting a scalar needs the `$signal`
+     * factory, hence a builder method.
      */
     $c(...args: (Signal | Iterable<Signal>)[]): Collection {
-        const signal = this.getFactory('$signal');
+        // Resolved on the first scalar: a Collection of only ModuleOutputs
+        // needs no factory.
+        let signal: FactoryFunction | undefined;
         const lift = (value: unknown): ModuleOutput[] => {
             // Scalar literal checked before the iterable branch so a string is
             // one signal rather than spread into characters.
             if (typeof value === 'number' || typeof value === 'string') {
+                signal ??= this.getFactory('$signal');
                 return [...(signal(value) as Collection)];
             }
             if (value instanceof ModuleOutput) {
