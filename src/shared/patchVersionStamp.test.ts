@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
     isStampablePath,
+    parsePatchVersionStamp,
     stampPatchVersionSource,
     stripPatchVersionStamp,
 } from './patchVersionStamp';
@@ -54,6 +55,33 @@ describe('stampPatchVersionSource', () => {
         const stamped = stampPatchVersionSource('', '0.0.1');
         expect(stamped).toBe(`/**\n * @operator\n * @version 0.0.1\n */\n`);
         expect(stripPatchVersionStamp(stamped)).toBe('');
+    });
+});
+
+describe('parsePatchVersionStamp', () => {
+    it('reads the last-evaluated version back out of a stamp', () => {
+        const stamped = stampPatchVersionSource(PATCH, '0.0.101');
+        expect(parsePatchVersionStamp(stamped)).toEqual({
+            evaluatedVersion: '0.0.101',
+        });
+    });
+
+    it('round-trips through a re-stamp at a newer version', () => {
+        const once = stampPatchVersionSource(PATCH, '0.0.101');
+        const twice = stampPatchVersionSource(once, '0.0.102');
+        expect(twice.match(/@version/g)).toHaveLength(1);
+        expect(parsePatchVersionStamp(twice)).toEqual({
+            evaluatedVersion: '0.0.102',
+        });
+    });
+
+    it('reports no version for an unstamped patch', () => {
+        expect(parsePatchVersionStamp(PATCH)).toEqual({});
+    });
+
+    it("ignores a user's own leading JSDoc", () => {
+        const withDoc = `/**\n * @version 9.9.9\n */\n\n${PATCH}`;
+        expect(parsePatchVersionStamp(withDoc)).toEqual({});
     });
 });
 

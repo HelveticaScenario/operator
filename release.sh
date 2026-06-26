@@ -28,8 +28,12 @@ yarn version patch
 # Get the new version
 VERSION=$(node -p "require('./package.json').version")
 
+# Resolve any unreleased migration markers (`sinceVersion: 'next'`) to this
+# version, so each migration records the release it actually ships in.
+RESOLVED=$(node scripts/resolveMigrationVersions.mjs "$VERSION")
+
 # Commit changes
-git add package.json
+git add package.json $RESOLVED
 git commit -m "Release v$VERSION"
 
 # Create tag

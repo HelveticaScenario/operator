@@ -48,17 +48,24 @@ export function MigrationDiffModal({
         (summary.assignmentsChanged ?? 0) +
         summary.commentsChanged;
     const noChanges = totalChanges === 0;
-    const canApply = !noChanges && !summary.error;
+    const hasFlags =
+        summary.skippedVariables.length > 0 || Boolean(summary.error);
+    // The primary button moves the migration forward: it applies the diff when
+    // there is one, or steps past a flagged/errored migration so the rest of the
+    // chain still runs. It is disabled only when there is nothing to apply and
+    // nothing flagged. The label reflects which of the two it does.
+    const canProceed = !noChanges || hasFlags;
+    const applyLabel = canProceed && noChanges ? 'Continue' : 'Apply';
 
     const handleKey = useCallback(
         (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
                 onCancel();
-            } else if (e.key === 'Enter' && canApply) {
+            } else if (e.key === 'Enter' && canProceed) {
                 onApply();
             }
         },
-        [canApply, onApply, onCancel],
+        [canProceed, onApply, onCancel],
     );
 
     useEffect(() => {
@@ -92,8 +99,10 @@ export function MigrationDiffModal({
                         {summary.assignmentsChanged !== undefined && (
                             <>
                                 {summary.assignmentsChanged} assignment
-                                {summary.assignmentsChanged === 1 ? '' : 's'} ·
-                                {' '}
+                                {summary.assignmentsChanged === 1
+                                    ? ''
+                                    : 's'}{' '}
+                                ·{' '}
                             </>
                         )}
                         {summary.commentsChanged} comment
@@ -114,9 +123,11 @@ export function MigrationDiffModal({
                 <div className="migration-body">
                     {noChanges ? (
                         <div className="migration-empty">
-                            {summary.skippedVariables.length > 0
-                                ? 'No automatic changes to apply — see the flagged items above.'
-                                : 'Buffer already migrated — no changes to apply.'}
+                            {summary.error
+                                ? 'Could not migrate this step — see the error above.'
+                                : summary.skippedVariables.length > 0
+                                  ? 'No automatic changes to apply — see the flagged items above.'
+                                  : 'Buffer already migrated — no changes to apply.'}
                         </div>
                     ) : (
                         <DiffEditor
@@ -152,9 +163,9 @@ export function MigrationDiffModal({
                     <button
                         className="btn btn-primary"
                         onClick={onApply}
-                        disabled={!canApply}
+                        disabled={!canProceed}
                     >
-                        Apply
+                        {applyLabel}
                     </button>
                 </div>
             </div>

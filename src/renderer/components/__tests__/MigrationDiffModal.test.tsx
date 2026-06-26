@@ -196,17 +196,20 @@ describe('MigrationDiffModal', () => {
         expect((apply.props as { disabled?: boolean }).disabled).toBe(true);
     });
 
-    test('Apply button is disabled when error is set', () => {
+    test('an errored step shows an enabled Continue button and the error text', () => {
+        // A migration that fails to parse leaves the source unchanged and
+        // reports an error; the primary button steps past it so the rest of the
+        // chain still runs.
         const tree = renderModal({
             summary: {
-                callsChanged: 3,
-                assignmentsChanged: 1,
+                callsChanged: 0,
+                assignmentsChanged: 0,
                 commentsChanged: 0,
                 error: 'parse failure',
             },
         });
-        const apply = findButtonByText(tree!, 'Apply');
-        expect((apply.props as { disabled?: boolean }).disabled).toBe(true);
+        const proceed = findButtonByText(tree!, 'Continue');
+        expect((proceed.props as { disabled?: boolean }).disabled).toBe(false);
 
         // The error message should also render in the summary block.
         const texts: string[] = [];
@@ -218,6 +221,21 @@ describe('MigrationDiffModal', () => {
             if (typeof flat === 'string') texts.push(flat);
         }
         expect(texts.some((t) => t.includes('parse failure'))).toBe(true);
+    });
+
+    test('a flagged-only step shows an enabled Continue button', () => {
+        // No automatic changes, but items flagged for manual review: the
+        // primary button stays enabled so the chain can advance past it.
+        const tree = renderModal({
+            summary: {
+                callsChanged: 0,
+                assignmentsChanged: 0,
+                commentsChanged: 0,
+                skippedVariables: ['line 3: $wavetable(getWav(), 0)'],
+            },
+        });
+        const proceed = findButtonByText(tree!, 'Continue');
+        expect((proceed.props as { disabled?: boolean }).disabled).toBe(false);
     });
 
     test('Apply button is enabled when totalChanges > 0 and no error', () => {
