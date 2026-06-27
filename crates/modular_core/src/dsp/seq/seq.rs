@@ -839,35 +839,84 @@ fn resolve_hap_index(storage: &SeqCycleStorage, cached: &CachedHap) -> Option<us
 }
 
 impl crate::types::StatefulModule for Seq {
-    /// Write the currently-highlighted step spans into `out` on the audio thread,
-    /// without allocating. The parts that don't change while playing (`source`,
-    /// `all_spans`, `argument_spans`) live on the main thread and are merged with
-    /// this snapshot on poll (see [`crate::dsp::seq::highlight`]).
-    ///
-    /// Spans are stored by source index; the main thread maps index `i` to the
-    /// editor key `"pattern"` or `"pattern.{i}"` from the same params.
-    fn write_highlight_state(&self, out: &mut crate::dsp::seq::SeqHighlightState) {
-        out.reset();
+    fn get_state(&self) -> Option<serde_json::Value> {
         let num_channels = self.channel_count().clamp(1, PORT_MAX_CHANNELS);
-        let num_sources = self.params.pattern.per_source().len().max(1);
+        let per_source = self.params.pattern.per_source();
+        let num_sources = per_source.len().max(1);
+
+        // Per-pattern active spans from all active voices.
+        let mut per_pattern_spans: Vec<Vec<(usize, usize)>> = vec![Vec::new(); num_sources];
+        let mut any_non_rest = false;
 
         for channel in self.channel_state.iter().take(num_channels) {
             let voice = &channel.voice;
             if let Some(cached) = voice.cached_hap
                 && !cached.is_rest()
-                && let Some(storage) = self.get_cycle_storage(cached.cached_cycle)
-                && let Some(hap_index) = resolve_hap_index(storage, &cached)
-                && let Some(hap) = storage.haps.get(hap_index)
             {
-                let start = hap.span_offset as usize;
-                let end = start + hap.span_len as usize;
-                for span in &storage.span_arena[start..end] {
-                    let idx = span.pattern_idx as usize;
-                    if idx < num_sources {
-                        out.push_span(idx, span.start as u32, span.end as u32);
+                any_non_rest = true;
+                if let Some(storage) = self.get_cycle_storage(cached.cached_cycle)
+                    && let Some(hap_index) = resolve_hap_index(storage, &cached)
+                    && let Some(hap) = storage.haps.get(hap_index)
+                {
+                    let start = hap.span_offset as usize;
+                    let end = start + hap.span_len as usize;
+                    for span in &storage.span_arena[start..end] {
+                        let idx = span.pattern_idx as usize;
+                        if idx < num_sources {
+                            per_pattern_spans[idx].push((span.start as usize, span.end as usize));
+                        }
                     }
                 }
             }
+        }
+
+        if !any_non_rest && per_pattern_spans.iter().all(|s| s.is_empty()) {
+            None
+        } else {
+            for spans in &mut per_pattern_spans {
+                spans.sort();
+                spans.dedup();
+            }
+
+            // Build param_spans keyed by "pattern" for single-source legacy
+            // payloads and "pattern.0", "pattern.1", ... for chained `$p.s`
+            // payloads. The argument-span analyzer registers chain RHS
+            // literals under the chain call site, so the renderer maps
+            // pattern_idx > 0 to those.
+            let is_multi = self.params.pattern.is_multi_source();
+            let mut param_spans = serde_json::Map::new();
+            if !is_multi
+                && num_sources == 1
+                && let Some(meta) = per_source.first()
+            {
+                param_spans.insert(
+                    "pattern".to_string(),
+                    serde_json::json!({
+                        "spans": &per_pattern_spans[0],
+                        "source": meta.source,
+                        "all_spans": meta.all_spans,
+                    }),
+                );
+            } else {
+                for (i, meta) in per_source.iter().enumerate() {
+                    param_spans.insert(
+                        format!("pattern.{i}"),
+                        serde_json::json!({
+                            "spans": per_pattern_spans
+                                .get(i)
+                                .cloned()
+                                .unwrap_or_default(),
+                            "source": meta.source,
+                            "all_spans": meta.all_spans,
+                        }),
+                    );
+                }
+            }
+
+            Some(serde_json::json!({
+                "param_spans": param_spans,
+                "num_channels": num_channels,
+            }))
         }
     }
 }

@@ -40,32 +40,9 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use modular_core::dsp::seq::{SeqHighlightMeta, SeqHighlightState};
 use modular_core::patch::Patch;
 use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges};
 use std::time::Instant;
-
-/// Shared map of `$cycle` live step-highlight state, keyed by module id. The audio
-/// thread writes values (without allocating); the main thread reads them on poll
-/// and is the only side that adds or removes keys (in `apply_patch`).
-type ModuleStateMap = HashMap<String, SeqHighlightState>;
-
-/// Main-thread-only cache of `$cycle` highlight metadata that doesn't change
-/// while playing. Held behind a single lock (see [`AudioState::seq_meta`]) only
-/// because `AudioState` is shared by `Arc` and so must be `Sync`; the audio
-/// thread never touches it.
-#[derive(Default)]
-struct SeqMetaCache {
-    /// Metadata for the patch currently playing on the audio thread, keyed by
-    /// module id. Paired with the live spans in `get_module_states`.
-    live: HashMap<String, SeqHighlightMeta>,
-    /// Metadata for a queued patch update that has not yet swapped in, tagged
-    /// with its `update_id`. Promoted into `live` once the audio thread reports
-    /// the swap applied (`applied_update_id >= id`), so a poll during the queue
-    /// window never pairs the new patch's metadata with the old patch's still-
-    /// live spans.
-    pending: Option<(u64, HashMap<String, SeqHighlightMeta>)>,
-}
 
 use crate::commands::{
     AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
@@ -1024,14 +1001,8 @@ pub struct AudioState {
     channels: u16,
     /// Audio budget meter - written by audio thread, read by main thread
     audio_budget_meter: Arc<AudioBudgetMeter>,
-    /// `$cycle` live step-highlight spans, written by the audio thread and read by
-    /// the main thread. The audio thread only writes into existing slots; the
-    /// main thread owns adding and removing keys.
-    module_states: Arc<Mutex<ModuleStateMap>>,
-    /// Main-thread cache of `$cycle` highlight metadata (live + pending), used to
-    /// build the editor JSON in `get_module_states`. Single lock for `&self`
-    /// mutation; the audio thread never touches it. See [`SeqMetaCache`].
-    seq_meta: Mutex<SeqMetaCache>,
+    /// Module states (e.g., seq current step) - written by audio thread, read by main thread
+    module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     /// MIDI input manager - shared with audio thread for polling
     midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1092,7 +1063,6 @@ impl AudioState {
             channels,
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
-            seq_meta: Mutex::new(SeqMetaCache::default()),
             midi_manager,
             transport_meter: Arc::new(TransportMeter::default()),
             audio_thread_panicked: Arc::new(AtomicBool::new(false)),
@@ -1317,32 +1287,11 @@ impl AudioState {
     }
 
     pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
-        // Snapshot the live spans under a brief lock, then build the editor JSON
-        // outside it. The audio thread only wrote the spans; pairing them with the
-        // cached metadata happens here so the audio thread stays allocation-free.
-        // Releasing the lock before the build keeps the audio thread's `try_lock`
-        // from failing across the whole JSON construction.
-        let states = match self.module_states.try_lock() {
+        // Read module states from shared buffer (written by audio thread)
+        match self.module_states.try_lock() {
             Some(states) => states.clone(),
-            None => return HashMap::new(), // audio thread is writing; skip this poll
-        };
-        let mut meta = self.seq_meta.lock();
-        // Promote queued metadata only once the audio thread reports its swap
-        // applied, so the new patch's metadata is never paired with the old
-        // patch's still-live spans.
-        if let Some((id, _)) = meta.pending.as_ref()
-            && self.transport_meter.read_applied_update_id() >= *id
-            && let Some((_, metas)) = meta.pending.take()
-        {
-            meta.live = metas;
+            None => HashMap::new(), // Skip if locked by audio thread
         }
-        let mut out = HashMap::with_capacity(states.len());
-        for (id, pod) in states.iter() {
-            if let Some(m) = meta.live.get(id) {
-                out.insert(id.clone(), modular_core::dsp::seq::build_state_json(m, pod));
-            }
-        }
-        out
     }
 
     /// Build a PatchUpdate from desired graph and send to audio thread.
@@ -1458,17 +1407,7 @@ impl AudioState {
             modular_core::params::DeserializedParams,
         )> = Vec::with_capacity(desired_modules.len());
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-        // Collect each `$cycle`'s highlight metadata from the raw params now, before
-        // the deserialize step below consumes them. Used to build the editor JSON
-        // on poll.
-        let mut seq_metas: HashMap<String, SeqHighlightMeta> = HashMap::new();
         for (id, module_state) in desired_modules {
-            if let Some(meta) = modular_core::dsp::seq::highlight_meta(
-                &module_state.module_type,
-                &module_state.params,
-            ) {
-                seq_metas.insert(id.clone(), meta);
-            }
             let deserialized =
                 crate::deserialize_params(&module_state.module_type, module_state.params, true)
                     .map_err(|e| {
@@ -1577,22 +1516,6 @@ impl AudioState {
         // Restart the transport when applying this update (set on a buffer switch)
         update.reset_clock = reset_clock;
 
-        // Reconcile the shared highlight slots to the new module set on the main
-        // thread: add a slot for every new `$cycle` and drop slots for ones that
-        // left. Doing the key changes here means the audio thread only ever writes
-        // into slots that already exist, so its writes never allocate. The new
-        // metadata is held as pending (not published yet); `get_module_states`
-        // promotes it once the audio thread reports this update applied, so a poll
-        // during the queue window never pairs new metadata with old live spans.
-        {
-            let mut states = self.module_states.lock();
-            states.retain(|id, _| seq_metas.contains_key(id));
-            for id in seq_metas.keys() {
-                states.entry(id.clone()).or_default();
-            }
-        }
-        self.seq_meta.lock().pending = Some((update_id, seq_metas));
-
         // Send the update to audio thread
         self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
     }
@@ -1658,8 +1581,8 @@ pub struct AudioSharedState {
     pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
     pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
     pub audio_budget_meter: Arc<AudioBudgetMeter>,
-    /// `$cycle` live step-highlight spans - written by audio thread, read by main thread
-    pub module_states: Arc<Mutex<ModuleStateMap>>,
+    /// Module states (e.g., seq current step) - written by audio thread, read by main thread
+    pub module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     /// MIDI input manager for polling MIDI messages
     pub midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1738,9 +1661,8 @@ struct AudioProcessor {
     /// volt→clip mapping swaps atomically with the buffers; read by the main
     /// thread for the renderer.
     scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    /// Shared `$cycle` live step-highlight spans. Written into existing slots each
-    /// callback; never adds or removes keys (the main thread owns those).
-    module_states: Arc<Mutex<ModuleStateMap>>,
+    /// Shared module states (e.g., seq current step)
+    module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
     /// MIDI input manager for polling
     midi_manager: Arc<MidiInputManager>,
     /// Queued patch update waiting for its trigger condition
@@ -2375,18 +2297,19 @@ impl AudioProcessor {
     /// Uses try_lock to avoid blocking the audio thread if the main thread is reading.
     /// Reuses HashMap entries to avoid repeated String allocation on the audio thread.
     fn collect_module_states(&self) {
-        // try_lock so the audio thread never blocks on the main thread's poll.
-        //
-        // No allocation here: the main thread owns the keys, so this only writes
-        // into slots that already exist — no insert, no clone, no drop. A slot
-        // whose module isn't present yet (briefly, after a queued update changes
-        // the keys but before its swap goes live) is reset so an old highlight
-        // doesn't linger.
+        // Use try_lock to avoid blocking audio if main thread is reading
         if let Some(mut states) = self.module_states.try_lock() {
-            for (id, slot) in states.iter_mut() {
-                match self.patch.sampleables.get(id) {
-                    Some(module) => module.write_highlight_state(slot),
-                    None => slot.reset(),
+            // Remove entries for modules that no longer exist
+            states.retain(|id, _| self.patch.sampleables.contains_key(id));
+
+            // Update existing entries and add new ones
+            for (id, module) in &self.patch.sampleables {
+                if let Some(state) = module.get_state() {
+                    if let Some(existing) = states.get_mut(id.as_str()) {
+                        *existing = state;
+                    } else {
+                        states.insert(id.clone(), state);
+                    }
                 }
             }
         }
