@@ -291,6 +291,12 @@ pub trait Sampleable: MessageHandler + Send {
 }
 
 pub trait Module {
+    /// The module's type name, exactly as registered in the constructor/schema
+    /// maps (the `name` in the `#[module(...)]` attribute). Code that matches on
+    /// a module type should anchor to this const rather than copy the literal, so
+    /// a rename of the attribute can't silently drift out of sync.
+    const MODULE_TYPE: &'static str;
+
     fn install_constructor(map: &mut HashMap<String, SampleableConstructor>);
     fn get_schema() -> ModuleSchema;
 

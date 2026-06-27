@@ -106,13 +106,11 @@ pub struct SeqSourceHighlight {
     pub all_spans: Value,
 }
 
-/// The `$cycle` module's type name. Matches the `name` in the
-/// `#[module(...)]` attribute on `Seq`.
-pub const SEQ_MODULE_TYPE: &str = "$cycle";
-
-/// Whether a module of `module_type` publishes step-highlight state.
+/// Whether a module of `module_type` publishes step-highlight state. Anchored to
+/// [`Seq::MODULE_TYPE`](super::seq::Seq) so the match can't drift from the name
+/// the `#[module(...)]` macro actually registers.
 pub fn is_seq_module(module_type: &str) -> bool {
-    module_type == SEQ_MODULE_TYPE
+    module_type == <super::seq::Seq as crate::types::Module>::MODULE_TYPE
 }
 
 /// Build a `$cycle`'s highlight metadata from its patch params, on the main

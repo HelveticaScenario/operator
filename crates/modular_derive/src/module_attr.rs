@@ -836,7 +836,7 @@ fn impl_module_macro_attr(
             }
 
             fn get_module_type(&self) -> &str {
-                #module_name
+                <#name as crate::types::Module>::MODULE_TYPE
             }
 
             fn get_id(&self) -> &str {
@@ -946,8 +946,10 @@ fn impl_module_macro_attr(
         }
 
         impl #impl_generics crate::types::Module for #name #ty_generics #where_clause {
+            const MODULE_TYPE: &'static str = #module_name;
+
             fn install_constructor(map: &mut std::collections::HashMap<String, crate::types::SampleableConstructor>) {
-                map.insert(#module_name.into(), Box::new(#constructor_name));
+                map.insert(Self::MODULE_TYPE.into(), Box::new(#constructor_name));
             }
 
             fn install_params_deserializer(map: &mut std::collections::HashMap<String, crate::params::ParamsDeserializer>) {
@@ -959,7 +961,7 @@ fn impl_module_macro_attr(
                         channel_count,
                     })
                 }
-                map.insert(#module_name.into(), deserializer as crate::params::ParamsDeserializer);
+                map.insert(Self::MODULE_TYPE.into(), deserializer as crate::params::ParamsDeserializer);
             }
 
             fn get_schema() -> crate::types::ModuleSchema {
@@ -967,7 +969,7 @@ fn impl_module_macro_attr(
                 let outputs = <#outputs_ty as crate::types::OutputStruct>::schemas();
 
                 crate::types::ModuleSchema {
-                    name: #module_name.to_string(),
+                    name: Self::MODULE_TYPE.to_string(),
                     documentation: #module_documentation_token,
                     params_schema: crate::types::SchemaContainer {
                         schema: params_schema,
