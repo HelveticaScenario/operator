@@ -69,6 +69,21 @@ struct ModuleStateMetaCache {
     pending: Option<(u64, HashMap<String, Box<dyn ModuleStateMeta>>)>,
 }
 
+impl ModuleStateMetaCache {
+    /// Promote pending metadata and prune dropped modules' slots once the swap
+    /// applied. Called from the poll path and `apply_patch` so orphan slots can't
+    /// accumulate while the editor isn't polling.
+    fn promote_if_applied(&mut self, states: &mut ModuleStateMap, applied_update_id: u64) {
+        if let Some((id, _)) = self.pending.as_ref()
+            && applied_update_id >= *id
+            && let Some((_, metas)) = self.pending.take()
+        {
+            states.retain(|id, _| metas.contains_key(id));
+            self.live = metas;
+        }
+    }
+}
+
 use crate::commands::{
     AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
     GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
@@ -1319,30 +1334,24 @@ impl AudioState {
     }
 
     pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
-        // Snapshot the live slots under a brief lock, then build the editor JSON
-        // outside it. The audio thread only wrote the live state; pairing it with
-        // the cached metadata happens here so the audio thread stays
-        // allocation-free. Snapshotting (via `clone_box`) and releasing the lock
-        // before the build keeps the audio thread's `try_lock` from failing across
-        // the whole JSON construction.
-        let states: HashMap<String, Box<dyn ModuleLiveState>> = match self.module_states.try_lock()
-        {
-            Some(states) => states
-                .iter()
-                .map(|(id, s)| (id.clone(), s.clone_box()))
-                .collect(),
+        // Snapshot under the lock, then build JSON after releasing it, so the audio
+        // thread's `try_lock` never fails across JSON construction.
+        let mut states_guard = match self.module_states.try_lock() {
+            Some(guard) => guard,
             None => return HashMap::new(), // audio thread is writing; skip this poll
         };
         let mut meta = self.module_state_meta.lock();
-        // Promote queued metadata only once the audio thread reports its swap
-        // applied, so the new patch's metadata is never paired with the old
-        // patch's still-live state.
-        if let Some((id, _)) = meta.pending.as_ref()
-            && self.transport_meter.read_applied_update_id() >= *id
-            && let Some((_, metas)) = meta.pending.take()
-        {
-            meta.live = metas;
-        }
+        // Prune on apply, not submit, so a removed module highlights until its swap
+        // lands. The applied-id gate keeps new metadata from pairing with old state.
+        meta.promote_if_applied(
+            &mut states_guard,
+            self.transport_meter.read_applied_update_id(),
+        );
+        let states: Vec<(String, Box<dyn ModuleLiveState>)> = states_guard
+            .iter()
+            .map(|(id, s)| (id.clone(), s.clone_box()))
+            .collect();
+        drop(states_guard);
         let mut out = HashMap::with_capacity(states.len());
         for (id, live) in states.iter() {
             if let Some(m) = meta.live.get(id) {
@@ -1350,6 +1359,30 @@ impl AudioState {
             }
         }
         out
+    }
+
+    /// `set_module_param` swaps a module bypassing `apply_patch`'s promote path,
+    /// so refresh its editor state here. `None` drops any existing state for `id`.
+    pub(crate) fn refresh_single_module_state(
+        &self,
+        id: String,
+        refreshed: Option<(Box<dyn ModuleLiveState>, Box<dyn ModuleStateMeta>)>,
+    ) {
+        // Lock order: module_states before module_state_meta, as everywhere.
+        let mut states = self.module_states.lock();
+        let mut meta = self.module_state_meta.lock();
+        match refreshed {
+            Some((live, m)) => {
+                // Fresh slot, not or_insert: new params may change geometry, so a
+                // blank frame beats pairing stale spans with the new metadata.
+                states.insert(id.clone(), live);
+                meta.live.insert(id, m);
+            }
+            None => {
+                states.remove(&id);
+                meta.live.remove(&id);
+            }
+        }
     }
 
     /// Build a PatchUpdate from desired graph and send to audio thread.
@@ -1588,22 +1621,18 @@ impl AudioState {
         // Restart the transport when applying this update (set on a buffer switch)
         update.reset_clock = reset_clock;
 
-        // Reconcile the shared live-state slots to the new module set on the main
-        // thread: add a slot for every new stateful module and drop slots for ones
-        // that left, keeping a persisting module's existing slot. Doing the key
-        // changes here means the audio thread only ever writes into slots that
-        // already exist, so its writes never allocate. The new metadata is held as
-        // pending (not published yet); `get_module_states` promotes it once the
-        // audio thread reports this update applied, so a poll during the queue
-        // window never pairs new metadata with old live state.
+        // Add-only: the audio thread must write only into pre-existing slots, so a
+        // dropped module's removal is deferred until its swap lands. Promote any
+        // prior applied update first (bounds slots if the editor isn't polling).
         {
             let mut states = self.module_states.lock();
-            states.retain(|id, _| state_metas.contains_key(id));
+            let mut meta = self.module_state_meta.lock();
+            meta.promote_if_applied(&mut states, self.transport_meter.read_applied_update_id());
             for (id, live) in state_live {
                 states.entry(id).or_insert(live);
             }
+            meta.pending = Some((update_id, state_metas));
         }
-        self.module_state_meta.lock().pending = Some((update_id, state_metas));
 
         // Send the update to audio thread
         self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })

@@ -37,7 +37,7 @@ pub use poly::{
 
 pub use params::{
     ARGUMENT_SPANS_KEY, ArgumentSpan, CachedParams, CloneableParams, DeserializedParams,
-    ParamsDeserializer, extract_argument_spans,
+    ParamsDeserializer, strip_argument_spans,
 };
 
 pub use types::{

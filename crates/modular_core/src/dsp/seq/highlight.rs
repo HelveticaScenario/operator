@@ -76,19 +76,6 @@ impl SeqHighlightState {
         let count = (self.span_counts[source_idx] as usize).min(MAX_SEQ_HIGHLIGHT_SPANS);
         &self.spans[source_idx][..count]
     }
-
-    /// Total active spans across every source — used by tests.
-    pub fn total_spans(&self) -> usize {
-        self.span_counts
-            .iter()
-            .map(|&c| (c as usize).min(MAX_SEQ_HIGHLIGHT_SPANS))
-            .sum()
-    }
-
-    /// Number of sources carrying at least one active span — used by tests.
-    pub fn active_source_count(&self) -> usize {
-        self.span_counts.iter().filter(|&&c| c > 0).count()
-    }
 }
 
 impl ModuleLiveState for SeqHighlightState {

@@ -713,7 +713,6 @@ fn impl_module_macro_attr(
             id: String,
             module: std::cell::UnsafeCell<#name #static_ty_generics>,
             sample_rate: f32,
-            argument_spans: std::cell::UnsafeCell<std::collections::HashMap<String, crate::params::ArgumentSpan>>,
             /// Per-block sample-index cursor. `start_block()` resets it to 0
             /// at the top of each internal `block_size` block; `ensure_processed_to`
             /// advances it as samples get written. Embedded `Signal::Cable`s
@@ -932,7 +931,6 @@ fn impl_module_macro_attr(
                 id: id.clone(),
                 sample_rate,
                 module: std::cell::UnsafeCell::new(inner),
-                argument_spans: std::cell::UnsafeCell::new(deserialized.argument_spans),
                 index: std::cell::Cell::new(0),
                 block_outputs: std::cell::UnsafeCell::new(<#block_outputs_ty>::new(_block_size, deserialized.channel_count)),
                 block_size: _block_size,

@@ -12,7 +12,7 @@ use lru::LruCache;
 use parking_lot::Mutex;
 
 use modular_core::params::{
-    CachedParams, DeserializedParams, ParamsDeserializer, extract_argument_spans,
+    CachedParams, DeserializedParams, ParamsDeserializer, strip_argument_spans,
 };
 
 // ---------------------------------------------------------------------------
@@ -39,8 +39,7 @@ fn get_params_cache() -> &'static Mutex<LruCache<(String, serde_json::Value), Ca
 /// Deserialize params with optional LRU cache (for apply_patch / derive_channel_count).
 ///
 /// Strips argument spans before cache lookup so identical param values at
-/// different source positions share the same cache entry. Spans are extracted
-/// fresh and attached to the returned `DeserializedParams`.
+/// different source positions share the same cache entry.
 ///
 /// If `with_cache` is false, skips the cache and always deserializes fresh for set_module_param / slider path.
 /// Slider interactions produce many intermediate values that would pollute
@@ -50,7 +49,7 @@ pub fn deserialize_params(
     params: serde_json::Value,
     with_cache: bool,
 ) -> Result<DeserializedParams, modular_core::param_errors::ModuleParamErrors> {
-    let (stripped, argument_spans) = extract_argument_spans(params);
+    let stripped = strip_argument_spans(params);
     let key = (module_type.to_string(), stripped.clone());
 
     // Check cache
@@ -59,7 +58,6 @@ pub fn deserialize_params(
         if let Some(cached) = cache.get(&key) {
             return Ok(DeserializedParams {
                 params: cached.params.clone(),
-                argument_spans,
                 channel_count: cached.channel_count,
             });
         }
@@ -84,7 +82,6 @@ pub fn deserialize_params(
 
     Ok(DeserializedParams {
         params: cached.params,
-        argument_spans,
         channel_count: cached.channel_count,
     })
 }

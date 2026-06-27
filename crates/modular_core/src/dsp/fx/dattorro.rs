@@ -449,7 +449,6 @@ mod tests {
         let cached = deserializer(params).unwrap();
         let deserialized = DeserializedParams {
             params: cached.params,
-            argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
         constructors.get("$dattorro").unwrap()(

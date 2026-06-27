@@ -47,7 +47,6 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
         .unwrap_or_else(|e| panic!("params deserialization for '{module_type}' failed: {e}"));
     let deserialized = DeserializedParams {
         params: cached.params,
-        argument_spans: Default::default(),
         channel_count: cached.channel_count,
     };
     constructors
@@ -376,7 +375,6 @@ fn all_constructors_produce_valid_modules() {
             .unwrap_or_else(|e| panic!("params deserialization for '{name}' failed: {e}"));
         let deserialized = DeserializedParams {
             params: cached.params,
-            argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
         let module = constructor(
@@ -409,7 +407,6 @@ fn all_constructors_can_tick() {
             .unwrap_or_else(|e| panic!("params deserialization for '{name}' failed: {e}"));
         let deserialized = DeserializedParams {
             params: cached.params,
-            argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
         let module = constructor(
@@ -1236,12 +1233,26 @@ fn sp_payload(sources: &[&str], scale: &str, ops: Vec<(&str, &str)>) -> Value {
     })
 }
 
+/// Total active highlight spans across every pattern source in a snapshot.
+fn pod_total_spans(pod: &modular_core::dsp::seq::SeqHighlightState) -> usize {
+    (0..modular_core::dsp::seq::highlight::MAX_SEQ_SOURCES)
+        .map(|i| pod.spans_for(i).len())
+        .sum()
+}
+
+/// Number of pattern sources carrying at least one active span in a snapshot.
+fn pod_active_sources(pod: &modular_core::dsp::seq::SeqHighlightState) -> usize {
+    (0..modular_core::dsp::seq::highlight::MAX_SEQ_SOURCES)
+        .filter(|&i| !pod.spans_for(i).is_empty())
+        .count()
+}
+
 /// Snapshot a module's live step-highlight spans and return the total active
 /// span count across all pattern sources.
 fn total_highlight_spans(module: &dyn modular_core::types::Sampleable) -> usize {
     let mut pod = modular_core::dsp::seq::SeqHighlightState::default();
     module.write_module_state(&mut pod);
-    pod.total_spans()
+    pod_total_spans(&pod)
 }
 
 #[test]
@@ -1354,9 +1365,9 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     let seq_b = new_patch.sampleables.get("seq").unwrap();
     let mut healed_pod = modular_core::dsp::seq::SeqHighlightState::default();
     seq_b.write_module_state(&mut healed_pod);
-    let healed_spans = healed_pod.total_spans();
+    let healed_spans = pod_total_spans(&healed_pod);
 
-    let healed_active_sources = healed_pod.active_source_count();
+    let healed_active_sources = pod_active_sources(&healed_pod);
     eprintln!("--- seq highlight transfer (self-heal) ---");
     eprintln!("old (single-source) total spans = {old_spans}");
     eprintln!("after transfer, active sources   = {healed_active_sources}");
