@@ -50,6 +50,23 @@ use std::time::Instant;
 /// and is the only side that adds or removes keys (in `apply_patch`).
 type ModuleStateMap = HashMap<String, SeqHighlightState>;
 
+/// Main-thread-only cache of `$cycle` highlight metadata that doesn't change
+/// while playing. Held behind a single lock (see [`AudioState::seq_meta`]) only
+/// because `AudioState` is shared by `Arc` and so must be `Sync`; the audio
+/// thread never touches it.
+#[derive(Default)]
+struct SeqMetaCache {
+    /// Metadata for the patch currently playing on the audio thread, keyed by
+    /// module id. Paired with the live spans in `get_module_states`.
+    live: HashMap<String, SeqHighlightMeta>,
+    /// Metadata for a queued patch update that has not yet swapped in, tagged
+    /// with its `update_id`. Promoted into `live` once the audio thread reports
+    /// the swap applied (`applied_update_id >= id`), so a poll during the queue
+    /// window never pairs the new patch's metadata with the old patch's still-
+    /// live spans.
+    pending: Option<(u64, HashMap<String, SeqHighlightMeta>)>,
+}
+
 use crate::commands::{
     AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
     GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
@@ -1011,17 +1028,10 @@ pub struct AudioState {
     /// the main thread. The audio thread only writes into existing slots; the
     /// main thread owns adding and removing keys.
     module_states: Arc<Mutex<ModuleStateMap>>,
-    /// Main-thread cache of the *currently playing* `$cycle` highlight metadata
-    /// that doesn't change while playing, keyed by module id. Combined with the
-    /// live spans in `get_module_states` to build the editor JSON. The `Mutex` is
-    /// only to allow `&self` mutation — the audio thread never touches it.
-    seq_meta: Mutex<HashMap<String, SeqHighlightMeta>>,
-    /// Highlight metadata for a queued patch update that has not yet swapped in
-    /// on the audio thread, tagged with its `update_id`. Promoted into `seq_meta`
-    /// once the audio thread reports the swap applied (`applied_update_id >= id`),
-    /// so a poll never pairs the new patch's metadata with the old patch's still-
-    /// live spans.
-    pending_seq_meta: Mutex<Option<(u64, HashMap<String, SeqHighlightMeta>)>>,
+    /// Main-thread cache of `$cycle` highlight metadata (live + pending), used to
+    /// build the editor JSON in `get_module_states`. Single lock for `&self`
+    /// mutation; the audio thread never touches it. See [`SeqMetaCache`].
+    seq_meta: Mutex<SeqMetaCache>,
     /// MIDI input manager - shared with audio thread for polling
     midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1082,8 +1092,7 @@ impl AudioState {
             channels,
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
-            seq_meta: Mutex::new(HashMap::new()),
-            pending_seq_meta: Mutex::new(None),
+            seq_meta: Mutex::new(SeqMetaCache::default()),
             midi_manager,
             transport_meter: Arc::new(TransportMeter::default()),
             audio_thread_panicked: Arc::new(AtomicBool::new(false)),
@@ -1317,32 +1326,23 @@ impl AudioState {
             Some(states) => states.clone(),
             None => return HashMap::new(), // audio thread is writing; skip this poll
         };
+        let mut meta = self.seq_meta.lock();
         // Promote queued metadata only once the audio thread reports its swap
         // applied, so the new patch's metadata is never paired with the old
         // patch's still-live spans.
-        self.promote_pending_seq_meta();
-        let meta = self.seq_meta.lock();
+        if let Some((id, _)) = meta.pending.as_ref()
+            && self.transport_meter.read_applied_update_id() >= *id
+            && let Some((_, metas)) = meta.pending.take()
+        {
+            meta.live = metas;
+        }
         let mut out = HashMap::with_capacity(states.len());
         for (id, pod) in states.iter() {
-            if let Some(m) = meta.get(id) {
+            if let Some(m) = meta.live.get(id) {
                 out.insert(id.clone(), modular_core::dsp::seq::build_state_json(m, pod));
             }
         }
         out
-    }
-
-    /// Move queued `$cycle` highlight metadata into the live cache once the audio
-    /// thread reports the matching patch update applied. Until then the live
-    /// cache keeps the playing patch's metadata, so spans and metadata always
-    /// describe the same generation.
-    fn promote_pending_seq_meta(&self) {
-        let mut pending = self.pending_seq_meta.lock();
-        if let Some((id, _)) = pending.as_ref()
-            && self.transport_meter.read_applied_update_id() >= *id
-            && let Some((_, metas)) = pending.take()
-        {
-            *self.seq_meta.lock() = metas;
-        }
     }
 
     /// Build a PatchUpdate from desired graph and send to audio thread.
@@ -1591,7 +1591,7 @@ impl AudioState {
                 states.entry(id.clone()).or_default();
             }
         }
-        *self.pending_seq_meta.lock() = Some((update_id, seq_metas));
+        self.seq_meta.lock().pending = Some((update_id, seq_metas));
 
         // Send the update to audio thread
         self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
