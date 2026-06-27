@@ -247,7 +247,7 @@ pub trait Sampleable: MessageHandler + Send {
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
     /// Write the module's live step-highlight spans into `out` for the editor
-    /// (only `$seq` produces any). Runs on the audio thread and **must not
+    /// (only `$cycle` produces any). Runs on the audio thread and **must not
     /// allocate**; `out` is reused, so the implementor resets it first. Default:
     /// no-op.
     fn write_highlight_state(&self, _out: &mut crate::dsp::seq::SeqHighlightState) {}

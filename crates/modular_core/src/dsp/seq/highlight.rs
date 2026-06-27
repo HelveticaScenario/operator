@@ -1,6 +1,6 @@
-//! `$seq` step-highlight state, split so the audio thread never allocates.
+//! `$cycle` step-highlight state, split so the audio thread never allocates.
 //!
-//! The editor highlights a `$seq`'s playing step(s) by polling per-module state.
+//! The editor highlights a `$cycle`'s playing step(s) by polling per-module state.
 //! The audio thread writes only the live part — the active span ranges per
 //! pattern source — into a pre-allocated [`SeqHighlightState`]. The main thread
 //! holds the parts that don't change while playing ([`SeqHighlightMeta`]:
@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-/// Max pattern sources a `$seq` highlight publishes. A plain pattern has one
+/// Max pattern sources a `$cycle` highlight publishes. A plain pattern has one
 /// source; a chained `$p.s(...).add(...)` has one per link. Extra sources are
 /// not highlighted.
 pub const MAX_SEQ_SOURCES: usize = 16;
@@ -18,7 +18,7 @@ pub const MAX_SEQ_SOURCES: usize = 16;
 /// small handful; extra spans are dropped from the highlight.
 pub const MAX_SEQ_HIGHLIGHT_SPANS: usize = 32;
 
-/// Snapshot of a `$seq`'s currently-highlighted step spans. `Copy` and
+/// Snapshot of a `$cycle`'s currently-highlighted step spans. `Copy` and
 /// allocation-free, so the audio thread can write it into a pre-allocated slot.
 #[derive(Clone, Copy)]
 pub struct SeqHighlightState {
@@ -85,7 +85,7 @@ impl SeqHighlightState {
     }
 }
 
-/// The parts of a `$seq`'s highlight output that don't change while playing,
+/// The parts of a `$cycle`'s highlight output that don't change while playing,
 /// held on the main thread. Built from the patch params (see [`highlight_meta`])
 /// and paired with the live [`SeqHighlightState`] on poll.
 pub struct SeqHighlightMeta {
@@ -106,7 +106,7 @@ pub struct SeqSourceHighlight {
     pub all_spans: Value,
 }
 
-/// `$seq`'s module type name (the DSL `$cycle`). Matches the `name` in the
+/// The `$cycle` module's type name. Matches the `name` in the
 /// `#[module(...)]` attribute on `Seq`.
 pub const SEQ_MODULE_TYPE: &str = "$cycle";
 
@@ -115,7 +115,7 @@ pub fn is_seq_module(module_type: &str) -> bool {
     module_type == SEQ_MODULE_TYPE
 }
 
-/// Build a `$seq`'s highlight metadata from its patch params, on the main
+/// Build a `$cycle`'s highlight metadata from its patch params, on the main
 /// thread. Returns `None` for non-sequencer modules or if the pattern won't
 /// parse.
 ///

@@ -472,7 +472,7 @@ fn impl_module_macro_attr(
 
     let is_stateful = attr_args.stateful;
 
-    // Step-highlight publishing. Only stateful modules ($seq) produce any; they
+    // Step-highlight publishing. Only stateful modules ($cycle) produce any; they
     // write live spans into a pre-allocated struct on the audio thread without
     // allocating. The parts that don't change while playing (argument_spans,
     // source, all_spans) are built and merged on the main thread (see

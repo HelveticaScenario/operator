@@ -45,7 +45,7 @@ use modular_core::patch::Patch;
 use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges};
 use std::time::Instant;
 
-/// Shared map of `$seq` live step-highlight state, keyed by module id. The audio
+/// Shared map of `$cycle` live step-highlight state, keyed by module id. The audio
 /// thread writes values (without allocating); the main thread reads them on poll
 /// and is the only side that adds or removes keys (in `apply_patch`).
 type ModuleStateMap = HashMap<String, SeqHighlightState>;
@@ -1007,11 +1007,11 @@ pub struct AudioState {
     channels: u16,
     /// Audio budget meter - written by audio thread, read by main thread
     audio_budget_meter: Arc<AudioBudgetMeter>,
-    /// `$seq` live step-highlight spans, written by the audio thread and read by
+    /// `$cycle` live step-highlight spans, written by the audio thread and read by
     /// the main thread. The audio thread only writes into existing slots; the
     /// main thread owns adding and removing keys.
     module_states: Arc<Mutex<ModuleStateMap>>,
-    /// Main-thread cache of the *currently playing* `$seq` highlight metadata
+    /// Main-thread cache of the *currently playing* `$cycle` highlight metadata
     /// that doesn't change while playing, keyed by module id. Combined with the
     /// live spans in `get_module_states` to build the editor JSON. The `Mutex` is
     /// only to allow `&self` mutation — the audio thread never touches it.
@@ -1331,7 +1331,7 @@ impl AudioState {
         out
     }
 
-    /// Move queued `$seq` highlight metadata into the live cache once the audio
+    /// Move queued `$cycle` highlight metadata into the live cache once the audio
     /// thread reports the matching patch update applied. Until then the live
     /// cache keeps the playing patch's metadata, so spans and metadata always
     /// describe the same generation.
@@ -1458,7 +1458,7 @@ impl AudioState {
             modular_core::params::DeserializedParams,
         )> = Vec::with_capacity(desired_modules.len());
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
-        // Collect each `$seq`'s highlight metadata from the raw params now, before
+        // Collect each `$cycle`'s highlight metadata from the raw params now, before
         // the deserialize step below consumes them. Used to build the editor JSON
         // on poll.
         let mut seq_metas: HashMap<String, SeqHighlightMeta> = HashMap::new();
@@ -1578,7 +1578,7 @@ impl AudioState {
         update.reset_clock = reset_clock;
 
         // Reconcile the shared highlight slots to the new module set on the main
-        // thread: add a slot for every new `$seq` and drop slots for ones that
+        // thread: add a slot for every new `$cycle` and drop slots for ones that
         // left. Doing the key changes here means the audio thread only ever writes
         // into slots that already exist, so its writes never allocate. The new
         // metadata is held as pending (not published yet); `get_module_states`
@@ -1658,7 +1658,7 @@ pub struct AudioSharedState {
     pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
     pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
     pub audio_budget_meter: Arc<AudioBudgetMeter>,
-    /// `$seq` live step-highlight spans - written by audio thread, read by main thread
+    /// `$cycle` live step-highlight spans - written by audio thread, read by main thread
     pub module_states: Arc<Mutex<ModuleStateMap>>,
     /// MIDI input manager for polling MIDI messages
     pub midi_manager: Arc<MidiInputManager>,
@@ -1738,7 +1738,7 @@ struct AudioProcessor {
     /// volt→clip mapping swaps atomically with the buffers; read by the main
     /// thread for the renderer.
     scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    /// Shared `$seq` live step-highlight spans. Written into existing slots each
+    /// Shared `$cycle` live step-highlight spans. Written into existing slots each
     /// callback; never adds or removes keys (the main thread owns those).
     module_states: Arc<Mutex<ModuleStateMap>>,
     /// MIDI input manager for polling
