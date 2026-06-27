@@ -869,8 +869,6 @@ impl crate::types::StatefulModule for Seq {
                 }
             }
         }
-
-        out.num_sources = num_sources.min(crate::dsp::seq::highlight::MAX_SEQ_SOURCES) as u32;
     }
 }
 

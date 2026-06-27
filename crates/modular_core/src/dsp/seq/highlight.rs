@@ -22,9 +22,8 @@ pub const MAX_SEQ_HIGHLIGHT_SPANS: usize = 32;
 /// allocation-free, so the audio thread can write it into a pre-allocated slot.
 #[derive(Clone, Copy)]
 pub struct SeqHighlightState {
-    /// Number of pattern sources carrying span data (`<= MAX_SEQ_SOURCES`).
-    pub num_sources: u32,
-    /// Active span count per source (`<= MAX_SEQ_HIGHLIGHT_SPANS`).
+    /// Active span count per source (`<= MAX_SEQ_HIGHLIGHT_SPANS`). A source with
+    /// no active spans this callback has count `0`.
     pub span_counts: [u32; MAX_SEQ_SOURCES],
     /// `[start, end)` document offsets of active spans, per source.
     pub spans: [[(u32, u32); MAX_SEQ_HIGHLIGHT_SPANS]; MAX_SEQ_SOURCES],
@@ -33,7 +32,6 @@ pub struct SeqHighlightState {
 impl Default for SeqHighlightState {
     fn default() -> Self {
         Self {
-            num_sources: 0,
             span_counts: [0; MAX_SEQ_SOURCES],
             spans: [[(0, 0); MAX_SEQ_HIGHLIGHT_SPANS]; MAX_SEQ_SOURCES],
         }
@@ -43,7 +41,6 @@ impl Default for SeqHighlightState {
 impl SeqHighlightState {
     /// Clear the active spans before writing the next snapshot.
     pub fn reset(&mut self) {
-        self.num_sources = 0;
         self.span_counts = [0; MAX_SEQ_SOURCES];
     }
 
@@ -63,7 +60,6 @@ impl SeqHighlightState {
         }
         self.spans[source_idx][count] = (start, end);
         self.span_counts[source_idx] = (count + 1) as u32;
-        self.num_sources = self.num_sources.max((source_idx + 1) as u32);
     }
 
     /// The recorded active spans for `source_idx`.
@@ -77,9 +73,15 @@ impl SeqHighlightState {
 
     /// Total active spans across every source — used by tests.
     pub fn total_spans(&self) -> usize {
-        (0..self.num_sources as usize)
-            .map(|i| self.spans_for(i).len())
+        self.span_counts
+            .iter()
+            .map(|&c| (c as usize).min(MAX_SEQ_HIGHLIGHT_SPANS))
             .sum()
+    }
+
+    /// Number of sources carrying at least one active span — used by tests.
+    pub fn active_source_count(&self) -> usize {
+        self.span_counts.iter().filter(|&&c| c > 0).count()
     }
 }
 
@@ -139,7 +141,8 @@ pub fn highlight_meta(module_type: &str, params: &Value) -> Option<SeqHighlightM
     let source_json = |meta: &super::seq_value::SeqSourceMeta| SeqSourceHighlight {
         key: String::new(),
         source: Value::String(meta.source.clone()),
-        all_spans: serde_json::to_value(&meta.all_spans).unwrap_or_else(|_| Value::Array(Vec::new())),
+        all_spans: serde_json::to_value(&meta.all_spans)
+            .unwrap_or_else(|_| Value::Array(Vec::new())),
     };
 
     let mut sources = Vec::with_capacity(num_sources);

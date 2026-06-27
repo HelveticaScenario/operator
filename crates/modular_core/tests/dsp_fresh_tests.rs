@@ -1356,9 +1356,10 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     seq_b.write_highlight_state(&mut healed_pod);
     let healed_spans = healed_pod.total_spans();
 
+    let healed_active_sources = healed_pod.active_source_count();
     eprintln!("--- seq highlight transfer (self-heal) ---");
     eprintln!("old (single-source) total spans = {old_spans}");
-    eprintln!("after transfer, num_sources      = {}", healed_pod.num_sources);
+    eprintln!("after transfer, active sources   = {healed_active_sources}");
     eprintln!("after transfer, total spans      = {healed_spans}");
 
     // The fix: immediately after transfer (no restart), with a voice still
@@ -1368,16 +1369,15 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
         healed_spans > 0,
         "after state transfer with a held voice, the highlight should self-heal \
          (re-resolve the stale hap_index by geometry) and be NON-EMPTY. \
-         Got total={healed_spans}, num_sources={}",
-        healed_pod.num_sources
+         Got total={healed_spans}, active sources={healed_active_sources}"
     );
 
     // Multi-source: both source 0 (`5`) and source 1 (`4`) — published under the
     // renderer keys `pattern.0`/`pattern.1` — contributed to the held step, so
     // both must carry spans.
     assert_eq!(
-        healed_pod.num_sources, 2,
-        "expected two pattern sources after the chained `$p.s` swap"
+        healed_active_sources, 2,
+        "expected two pattern sources to carry spans after the chained `$p.s` swap"
     );
     for source_idx in 0..2 {
         assert!(
