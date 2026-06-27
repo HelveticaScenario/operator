@@ -142,6 +142,23 @@ When adding methods to `ModuleOutput`, `ModuleOutputWithRange`, `BaseCollection`
 - Patch graphs are the contract — update Rust types in `modular_core::types`, not TypeScript.
 - Prefer Electron APIs over web/React APIs when either could solve a task.
 
+### Comments
+
+**The codebase is a present-tense artifact. It must read as though it was written this way from the start.** This is a hard invariant, the single most important rule here — never relaxed, no exceptions:
+
+- **No history, anywhere.** Never reference commits, PRs, tickets, or past states — no "used to", "now", "previously", "formerly", "renamed", "instead of", "we changed", "this was". History lives in git, and only in git.
+- **No roads not taken.** Never mention alternatives considered, decisions made, approaches rejected, or bugs once present. The current code is the only thing that exists; comments describe what must be true, never what once was. (A regression test states the invariant it guards, not the bug it fixed.)
+
+Within that invariant, comment well:
+
+- **Only the non-obvious.** Explain a constraint, invariant, unit, or consequence a reader needs to use the code correctly. If the code is clear, leave it uncommented.
+- **Short and complete.** One or two full sentences. Cut jargon and detail the reader doesn't need.
+- **No redundant restatement.** If a comment re-says the line below it, delete it.
+- **Don't over-comment.** Match the surrounding file's density. Spend comments on safety/thread-safety/real-time rules and boundary semantics (IPC, DSL, Electron quirks).
+- **Leave nothing dead.** No commented-out code; no unowned `TODO`/`FIXME`.
+
+Models to emulate: `crates/modular_core/src/types.rs` (safety invariants), `src/main/bufferSwitch.ts` (boundary semantics).
+
 ## Tooling
 
 - **Node 24.12.0 / Yarn 4.12.0** pinned via Volta.
