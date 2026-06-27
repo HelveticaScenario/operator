@@ -137,9 +137,12 @@ pub trait MessageHandler {
 }
 
 pub trait StatefulModule {
-    fn get_state(&self) -> Option<serde_json::Value> {
-        None
-    }
+    /// Write the module's live editor state into `out` (its own
+    /// [`ModuleLiveState`](crate::module_state::ModuleLiveState), recovered by
+    /// downcasting `out`). Runs on the audio thread and **must not allocate**;
+    /// `out` is reused across callbacks, so reset it before writing. Default
+    /// (stateless module): no-op.
+    fn write_module_state(&self, _out: &mut dyn crate::module_state::ModuleLiveState) {}
 }
 
 /// Trait for modules that need to perform work after the patch is updated.
@@ -245,9 +248,12 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
-    fn get_state(&self) -> Option<serde_json::Value> {
-        None
-    }
+    /// Write the module's live editor state into `out` (its type-erased
+    /// [`ModuleLiveState`](crate::module_state::ModuleLiveState); only modules
+    /// that publish state override this — today just `$cycle`). Runs on the audio
+    /// thread and **must not allocate**; `out` is reused, so the implementor
+    /// resets it first. Default: no-op.
+    fn write_module_state(&self, _out: &mut dyn crate::module_state::ModuleLiveState) {}
     /// Get a buffer output by port name. Only modules that own buffers (like `$buffer`)
     /// override this. Default: no buffer outputs.
     ///
@@ -288,6 +294,12 @@ pub trait Sampleable: MessageHandler + Send {
 }
 
 pub trait Module {
+    /// The module's type name, exactly as registered in the constructor/schema
+    /// maps (the `name` in the `#[module(...)]` attribute). Code that matches on
+    /// a module type should anchor to this const rather than copy the literal, so
+    /// a rename of the attribute can't silently drift out of sync.
+    const MODULE_TYPE: &'static str;
+
     fn install_constructor(map: &mut HashMap<String, SampleableConstructor>);
     fn get_schema() -> ModuleSchema;
 

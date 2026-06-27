@@ -7,10 +7,12 @@
 
 use std::collections::HashMap;
 
+use crate::module_state::ModuleStateBuilder;
 use crate::params::ParamsDeserializer;
 use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub(crate) mod cache;
+pub mod highlight;
 pub mod interval_value;
 pub mod scale;
 pub mod seq;
@@ -18,6 +20,7 @@ pub mod seq_value;
 pub mod step;
 pub mod track;
 
+pub use highlight::{SeqHighlightMeta, SeqHighlightState, seq_state_builder};
 pub use interval_value::IntervalValue;
 pub use scale::{FixedRoot, ScaleRoot, ScaleSnapper};
 pub use seq_value::{SeqPatternParam, SeqValue};
@@ -32,6 +35,16 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     seq::Seq::install_params_deserializer(map);
     track::Track::install_params_deserializer(map);
     step::Step::install_params_deserializer(map);
+}
+
+/// Register the per-module editor-state builders for this category. `$cycle`
+/// publishes step-highlight state via [`highlight::seq_state_builder`]; the other
+/// sequencer modules publish none.
+pub fn install_module_state_builders(map: &mut HashMap<String, ModuleStateBuilder>) {
+    map.insert(
+        <seq::Seq as Module>::MODULE_TYPE.to_string(),
+        highlight::seq_state_builder,
+    );
 }
 
 pub fn schemas() -> Vec<ModuleSchema> {

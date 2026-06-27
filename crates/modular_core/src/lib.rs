@@ -18,6 +18,7 @@ extern crate simple_easing;
 
 pub mod block_port;
 pub mod dsp;
+pub mod module_state;
 pub mod param_errors;
 pub mod params;
 pub mod patch;
