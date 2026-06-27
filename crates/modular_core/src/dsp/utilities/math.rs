@@ -5,7 +5,6 @@ use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, ValuePointerRef};
 use fasteval::{Compiler, Evaler, Instruction};
 use napi::Result;
 use schemars::JsonSchema;
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Compiled fasteval expression data. Wrapped in `Arc` so that
@@ -172,25 +171,21 @@ impl Math {
         let z = self.params.z.value_or(0.0) as f64;
         let t = self.state.phase as f64 + self.state.loop_index as f64;
 
-        let mut btree = BTreeMap::new();
-        btree.insert("x".to_string(), x);
-        btree.insert("y".to_string(), y);
-        btree.insert("z".to_string(), z);
-        btree.insert("t".to_string(), t);
-
-        let mut cb = move |name: &str, args: Vec<f64>| -> Option<f64> {
-            if let Some(val) = btree.get(name) {
-                return Some(*val);
-            }
+        // Resolve variables and custom functions by name with a match. The
+        // variable set is fixed, so no per-sample map or string keys are built;
+        // variable lookups allocate nothing.
+        let mut cb = |name: &str, args: Vec<f64>| -> Option<f64> {
             match name {
+                "x" => Some(x),
+                "y" => Some(y),
+                "z" => Some(z),
+                "t" => Some(t),
                 "vToHz" => args.first().map(|v| voct_to_hz_f64(*v)),
                 "hzToV" => args.first().map(|v| hz_to_voct_f64(*v)),
-
                 // A wildcard to handle all undefined names:
                 _ => None,
             }
         };
-        // let mut ns = fasteval::CachedCallbackNamespace::new(cb);
 
         Ok({
             let evaler = &self.params.expression.compiled.instruction;

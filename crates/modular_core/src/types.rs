@@ -137,9 +137,10 @@ pub trait MessageHandler {
 }
 
 pub trait StatefulModule {
-    fn get_state(&self) -> Option<serde_json::Value> {
-        None
-    }
+    /// Write the module's live step-highlight spans into `out` for the editor.
+    /// Runs on the audio thread and **must not allocate**. `out` is reused across
+    /// callbacks, so reset it before writing. Default (non-sequencer): no-op.
+    fn write_highlight_state(&self, _out: &mut crate::dsp::seq::SeqHighlightState) {}
 }
 
 /// Trait for modules that need to perform work after the patch is updated.
@@ -245,9 +246,11 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
-    fn get_state(&self) -> Option<serde_json::Value> {
-        None
-    }
+    /// Write the module's live step-highlight spans into `out` for the editor
+    /// (only `$seq` produces any). Runs on the audio thread and **must not
+    /// allocate**; `out` is reused, so the implementor resets it first. Default:
+    /// no-op.
+    fn write_highlight_state(&self, _out: &mut crate::dsp::seq::SeqHighlightState) {}
     /// Get a buffer output by port name. Only modules that own buffers (like `$buffer`)
     /// override this. Default: no buffer outputs.
     ///

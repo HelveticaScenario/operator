@@ -48,8 +48,6 @@ impl syn::parse::Parse for ArgAttr {
 pub struct ModuleAttrArgs {
     module: ModuleAttr,
     args: Vec<ArgAttr>,
-    /// Whether the `args(...)` keyword was present at all (even if empty).
-    has_args: bool,
     stateful: bool,
     patch_update: bool,
     has_init: bool,
@@ -65,7 +63,6 @@ impl syn::parse::Parse for ModuleAttrArgs {
         let mut channels_param_default: Option<u8> = None;
         let mut channels_derive: Option<syn::Path> = None;
         let mut args: Vec<ArgAttr> = Vec::new();
-        let mut has_args = false;
         let mut stateful = false;
         let mut patch_update = false;
         let mut has_init = false;
@@ -107,7 +104,6 @@ impl syn::parse::Parse for ModuleAttrArgs {
                     channels_derive = Some(input.parse()?);
                 }
                 "args" => {
-                    has_args = true;
                     let content;
                     syn::parenthesized!(content in input);
                     let parsed: Punctuated<ArgAttr, Token![,]> =
@@ -162,7 +158,6 @@ impl syn::parse::Parse for ModuleAttrArgs {
                 channels_derive,
             },
             args,
-            has_args,
             stateful,
             patch_update,
             has_init,
@@ -292,7 +287,6 @@ fn impl_module_macro_attr(
         None => quote! { None },
     };
 
-    let has_args = attr_args.has_args;
     let positional_args_exprs: Vec<TokenStream2> = attr_args
         .args
         .iter()
@@ -478,67 +472,23 @@ fn impl_module_macro_attr(
 
     let is_stateful = attr_args.stateful;
 
-    let get_state_impl = if is_stateful {
-        if has_args {
-            // Stateful module with positional args - merge argument_spans into state
-            quote! {
-                use crate::types::StatefulModule;
-                // SAFETY: Audio thread has exclusive access. See crate::types module documentation.
-                let module = unsafe { &*self.module.get() };
-                let argument_spans = unsafe { &*self.argument_spans.get() };
-
-                // Get base state from module's StatefulModule impl
-                let state = module.get_state();
-
-                // If we have argument spans, merge them into the state
-                if argument_spans.is_empty() {
-                    state
-                } else {
-                    match (state, serde_json::to_value(argument_spans).ok()) {
-                        (Some(serde_json::Value::Object(mut obj)), Some(spans)) => {
-                            obj.insert("argument_spans".to_string(), spans);
-                            Some(serde_json::Value::Object(obj))
-                        }
-                        (Some(state_val), Some(spans)) => {
-                            // State exists but isn't an object - wrap it
-                            Some(serde_json::json!({
-                                "_state": state_val,
-                                "argument_spans": spans
-                            }))
-                        }
-                        (None, Some(spans)) => {
-                            // No base state, create one with just argument_spans
-                            Some(serde_json::json!({
-                                "argument_spans": spans
-                            }))
-                        }
-                        (state, None) => state,
-                    }
-                }
-            }
-        } else {
-            // Stateful module without args - just return module state
-            quote! {
-                use crate::types::StatefulModule;
-                // SAFETY: Audio thread has exclusive access. See crate::types module documentation.
-                let module = unsafe { &*self.module.get() };
-                module.get_state()
-            }
-        }
-    } else if has_args {
-        // Non-stateful module with args - return argument_spans only if present
+    // Step-highlight publishing. Only stateful modules ($seq) produce any; they
+    // write live spans into a pre-allocated struct on the audio thread without
+    // allocating. The parts that don't change while playing (argument_spans,
+    // source, all_spans) are built and merged on the main thread (see
+    // crate::dsp::seq::highlight). Non-stateful modules produce nothing.
+    let write_highlight_state_impl = if is_stateful {
         quote! {
-            let argument_spans = unsafe { &*self.argument_spans.get() };
-            if !argument_spans.is_empty() {
-                serde_json::to_value(std::collections::HashMap::from([
-                    ("argument_spans".to_string(), argument_spans.clone())
-                ])).ok()
-            } else {
-                None
+            fn write_highlight_state(&self, out: &mut crate::dsp::seq::SeqHighlightState) {
+                use crate::types::StatefulModule;
+                // SAFETY: Audio thread has exclusive access. See crate::types module documentation.
+                let module = unsafe { &*self.module.get() };
+                module.write_highlight_state(out);
             }
         }
     } else {
-        quote! { None }
+        // Non-stateful modules use the Sampleable default (no-op).
+        quote! {}
     };
 
     // Check for has_init flag
@@ -909,9 +859,7 @@ fn impl_module_macro_attr(
 
             #clock_sync_impl
 
-            fn get_state(&self) -> Option<serde_json::Value> {
-                #get_state_impl
-            }
+            #write_highlight_state_impl
 
             fn as_any(&self) -> &dyn std::any::Any {
                 self
