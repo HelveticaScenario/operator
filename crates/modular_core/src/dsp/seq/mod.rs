@@ -37,9 +37,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     step::Step::install_params_deserializer(map);
 }
 
-/// Register the per-module editor-state builders for this category. `$cycle`
-/// publishes step-highlight state via [`highlight::seq_state_builder`]; the other
-/// sequencer modules publish none.
+/// Register the per-module editor-state builders for this category.
 pub fn install_module_state_builders(map: &mut HashMap<String, ModuleStateBuilder>) {
     map.insert(
         <seq::Seq as Module>::MODULE_TYPE.to_string(),
