@@ -2,7 +2,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    MonoSignal, Signal,
+    MonoSignal,
     dsp::utils::SchmittTrigger,
     param_errors::ModuleParamErrors,
     poly::{PolyOutput, PolySignal},
@@ -56,7 +56,6 @@ pub struct Step {
 }
 
 struct StepState {
-    current_step: PolySignal,
     current_step_idx: usize,
     next_schmitt: SchmittTrigger,
     reset_schmitt: SchmittTrigger,
@@ -66,7 +65,6 @@ struct StepState {
 impl Default for StepState {
     fn default() -> Self {
         Self {
-            current_step: PolySignal::mono(Signal::Volts(0.0)),
             current_step_idx: 0,
             next_schmitt: SchmittTrigger::default(),
             reset_schmitt: SchmittTrigger::default(),
@@ -87,8 +85,6 @@ impl Step {
                 self.state.reset_schmitt.process(reset.get_value());
             }
             self.state.first_update = false;
-
-            self.state.current_step = self.params.steps[0].clone();
         } else {
             if self
                 .state
@@ -99,21 +95,19 @@ impl Step {
                 if self.state.current_step_idx >= self.params.steps.len() {
                     self.state.current_step_idx = 0;
                 }
-
-                self.state.current_step = self.params.steps[self.state.current_step_idx].clone();
             }
 
-            if let Some(ref reset) = self.params.reset {
-                if self.state.reset_schmitt.process(reset.get_value()) {
-                    self.state.current_step_idx = 0;
-                    self.state.current_step =
-                        self.params.steps[self.state.current_step_idx].clone();
-                }
+            if let Some(ref reset) = self.params.reset
+                && self.state.reset_schmitt.process(reset.get_value())
+            {
+                self.state.current_step_idx = 0;
             }
         }
+
+        let idx = self.state.current_step_idx.min(self.params.steps.len() - 1);
+        let step = &self.params.steps[idx];
         for i in 0..channels as usize {
-            let val = self.state.current_step.get_value(i);
-            self.outputs.sample.set(i, val);
+            self.outputs.sample.set(i, step.get_value(i));
         }
     }
 }
