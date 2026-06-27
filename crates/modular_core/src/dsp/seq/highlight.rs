@@ -26,22 +26,15 @@ pub const MAX_SEQ_HIGHLIGHT_SPANS: usize = 32;
 
 /// Snapshot of a `$cycle`'s currently-highlighted step spans. `Copy` and
 /// allocation-free, so the audio thread can write it into a pre-allocated slot.
-#[derive(Clone, Copy)]
+/// The derived `Default` zero-fills both arrays; it relies on both `MAX_SEQ_*`
+/// caps staying `<= 32` (the largest array length std implements `Default` for).
+#[derive(Clone, Copy, Default)]
 pub struct SeqHighlightState {
     /// Active span count per source (`<= MAX_SEQ_HIGHLIGHT_SPANS`). A source with
     /// no active spans this callback has count `0`.
     pub span_counts: [u32; MAX_SEQ_SOURCES],
     /// `[start, end)` document offsets of active spans, per source.
     pub spans: [[(u32, u32); MAX_SEQ_HIGHLIGHT_SPANS]; MAX_SEQ_SOURCES],
-}
-
-impl Default for SeqHighlightState {
-    fn default() -> Self {
-        Self {
-            span_counts: [0; MAX_SEQ_SOURCES],
-            spans: [[(0, 0); MAX_SEQ_HIGHLIGHT_SPANS]; MAX_SEQ_SOURCES],
-        }
-    }
 }
 
 impl SeqHighlightState {
@@ -173,28 +166,25 @@ pub fn seq_state_builder(
     let per_source = pattern.per_source();
     let num_sources = per_source.len().max(1);
 
-    let source_json = |meta: &super::seq_value::SeqSourceMeta| SeqSourceHighlight {
-        key: String::new(),
+    let make_source = |key: String, meta: &super::seq_value::SeqSourceMeta| SeqSourceHighlight {
+        key,
         source: Value::String(meta.source.clone()),
         all_spans: serde_json::to_value(&meta.all_spans)
             .unwrap_or_else(|_| Value::Array(Vec::new())),
     };
 
+    // A single non-chained source is keyed `"pattern"`; chained `$p.s` sources are
+    // keyed `"pattern.{i}"` to match the argument-span analyzer's per-link keys.
+    // The single-source case has exactly one element in `per_source`.
+    let single = !pattern.is_multi_source() && num_sources == 1;
     let mut sources = Vec::with_capacity(num_sources);
-    if !pattern.is_multi_source() && num_sources == 1 {
-        if let Some(meta) = per_source.first() {
-            sources.push(SeqSourceHighlight {
-                key: "pattern".to_string(),
-                ..source_json(meta)
-            });
-        }
-    } else {
-        for (i, meta) in per_source.iter().enumerate() {
-            sources.push(SeqSourceHighlight {
-                key: format!("pattern.{i}"),
-                ..source_json(meta)
-            });
-        }
+    for (i, meta) in per_source.iter().enumerate() {
+        let key = if single {
+            "pattern".to_string()
+        } else {
+            format!("pattern.{i}")
+        };
+        sources.push(make_source(key, meta));
     }
     let meta = SeqHighlightMeta {
         argument_spans,

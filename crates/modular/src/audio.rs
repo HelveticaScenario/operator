@@ -1341,21 +1341,26 @@ impl AudioState {
             None => return HashMap::new(), // audio thread is writing; skip this poll
         };
         let mut meta = self.module_state_meta.lock();
-        // Prune on apply, not submit, so a removed module highlights until its swap
-        // lands. The applied-id gate keeps new metadata from pairing with old state.
+        // Promotion (and the slot prune it drives) happens once the swap applies, so
+        // a removed module keeps highlighting until its swap lands. The applied-id
+        // gate keeps new metadata from pairing with old state.
         meta.promote_if_applied(
             &mut states_guard,
             self.transport_meter.read_applied_update_id(),
         );
+        // Clone only the slots that have paired metadata; an unpaired slot (a freshly
+        // added module whose metadata is still pending) would be discarded below, so
+        // skip its `clone_box` entirely.
         let states: Vec<(String, Box<dyn ModuleLiveState>)> = states_guard
             .iter()
+            .filter(|(id, _)| meta.live.contains_key(*id))
             .map(|(id, s)| (id.clone(), s.clone_box()))
             .collect();
         drop(states_guard);
         let mut out = HashMap::with_capacity(states.len());
-        for (id, live) in states.iter() {
-            if let Some(m) = meta.live.get(id) {
-                out.insert(id.clone(), m.build_json(live.as_ref()));
+        for (id, live) in states {
+            if let Some(m) = meta.live.get(&id) {
+                out.insert(id, m.build_json(live.as_ref()));
             }
         }
         out
@@ -1371,10 +1376,14 @@ impl AudioState {
         // Lock order: module_states before module_state_meta, as everywhere.
         let mut states = self.module_states.lock();
         let mut meta = self.module_state_meta.lock();
+        // Promote any already-applied pending first: a swap that landed since the last
+        // poll must clear `pending` before this insert, otherwise the next promotion
+        // would overwrite the entry written here with the patch's apply-time metadata.
+        meta.promote_if_applied(&mut states, self.transport_meter.read_applied_update_id());
         match refreshed {
             Some((live, m)) => {
-                // Fresh slot, not or_insert: new params may change geometry, so a
-                // blank frame beats pairing stale spans with the new metadata.
+                // Insert a fresh slot: new params may change geometry, so a blank frame
+                // beats pairing stale spans with the new metadata.
                 states.insert(id.clone(), live);
                 meta.live.insert(id, m);
             }
