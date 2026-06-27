@@ -171,8 +171,6 @@ impl Math {
         let z = self.params.z.value_or(0.0) as f64;
         let t = self.state.phase as f64 + self.state.loop_index as f64;
 
-        // The variable set is fixed, so resolving by name needs no per-sample map
-        // or string keys — variable lookups allocate nothing.
         let mut cb = |name: &str, args: Vec<f64>| -> Option<f64> {
             match name {
                 "x" => Some(x),
