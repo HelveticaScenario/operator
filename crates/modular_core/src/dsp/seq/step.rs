@@ -104,10 +104,6 @@ impl Step {
             }
         }
 
-        // Read the active step straight from the params (which never change after
-        // the module is built), so no per-step allocation is needed. The index is
-        // clamped because it carries over across patch updates and a new patch may
-        // have fewer steps.
         let idx = self.state.current_step_idx.min(self.params.steps.len() - 1);
         let step = &self.params.steps[idx];
         for i in 0..channels as usize {
