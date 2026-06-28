@@ -1373,7 +1373,6 @@ impl AudioState {
         id: String,
         refreshed: Option<(Box<dyn ModuleLiveState>, Box<dyn ModuleStateMeta>)>,
     ) {
-        // Lock order: module_states before module_state_meta, as everywhere.
         let mut states = self.module_states.lock();
         let mut meta = self.module_state_meta.lock();
         // Promote any already-applied pending first: a swap that landed since the last
