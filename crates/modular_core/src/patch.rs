@@ -98,82 +98,44 @@ impl Patch {
             .unwrap_or_default()
     }
 
-    /// Build a Patch from a [`PatchGraph`] for testing.
-    ///
-    /// Replicates the logic of `AudioState::apply_patch()` without the command
-    /// queue or audio-thread indirection: instantiate modules, deserialize params
-    /// on the calling thread, apply them, connect cables, and fire `on_patch_update`.
-    ///
-    /// `block_size` and `mode_map` flow through to each module's constructor.
-    /// Modules absent from `mode_map` default to [`ProcessingMode::Block`]. The
-    /// cycle classification itself lives in the `modular` crate (`graph_analysis`);
-    /// callers that want cycle-aware modes should run that first and pass the
-    /// resulting map in here. Tests that don't care typically pass `block_size=1`
-    /// and an empty map.
-    pub fn from_graph(
-        graph: &crate::types::PatchGraph,
+    /// Construct each module from already-deserialized params at its resolved
+    /// processing mode and insert it unconnected. Main thread only.
+    pub fn insert_modules(
+        &mut self,
+        modules: impl IntoIterator<
+            Item = (
+                String,
+                String,
+                crate::params::DeserializedParams,
+                crate::types::ProcessingMode,
+            ),
+        >,
         sample_rate: f32,
         block_size: usize,
-        mode_map: &HashMap<String, crate::types::ProcessingMode>,
-    ) -> Result<Self, String> {
-        use crate::dsp::{get_constructors, get_params_deserializers};
-        use crate::params::{DeserializedParams, strip_argument_spans};
-
-        let constructors = get_constructors();
-        let params_deserializers = get_params_deserializers();
-        let mut patch = Patch::new();
-
-        // 1. Instantiate all modules with their deserialized params
-        for module_state in &graph.modules {
+    ) -> Result<(), String> {
+        let constructors = crate::dsp::get_constructors();
+        for (id, module_type, params, mode) in modules {
             let constructor = constructors
-                .get(&module_state.module_type)
-                .ok_or_else(|| format!("Unknown module type: {}", module_state.module_type))?;
-            let deserializer = params_deserializers
-                .get(&module_state.module_type)
-                .ok_or_else(|| {
-                    format!(
-                        "No params deserializer for module type: {}",
-                        module_state.module_type
-                    )
-                })?;
-            let stripped = strip_argument_spans(module_state.params.clone());
-            let cached = deserializer(stripped).map_err(|e| {
-                format!(
-                    "Failed to deserialize params for {}: {}",
-                    module_state.id, e
-                )
-            })?;
-            let deserialized = DeserializedParams {
-                params: cached.params,
-                channel_count: cached.channel_count,
-            };
-            let mode = mode_map
-                .get(&module_state.id)
-                .copied()
-                .unwrap_or(crate::types::ProcessingMode::Block);
-            let module = constructor(
-                &module_state.id,
-                sample_rate,
-                deserialized,
-                block_size,
-                mode,
-            )
-            .map_err(|e| format!("Failed to create {}: {}", module_state.id, e))?;
-            patch.sampleables.insert(module_state.id.clone(), module);
+                .get(&module_type)
+                .ok_or_else(|| format!("Unknown module type: {}", module_type))?;
+            let module = constructor(&id, sample_rate, params, block_size, mode)
+                .map_err(|e| format!("Failed to create module {}: {}", id, e))?;
+            self.sampleables.insert(id, module);
         }
+        Ok(())
+    }
 
-        // 3. Connect all modules (resolves Cable weak pointers)
-        for module in patch.sampleables.values() {
-            module.connect(&patch);
+    /// Resolve every module's cable pointers, then notify each that the patch is
+    /// ready. `connect` reads raw pointers into upstream modules' output buffers,
+    /// so on a hot-swap this MUST run only after `transfer_state_from` has
+    /// swapped those buffers in. Allocation-free and safe on the audio thread.
+    pub fn connect_all(&self) {
+        for module in self.sampleables.values() {
+            module.connect(self);
         }
-
-        // 4. Notify modules that patch is ready
-        for module in patch.sampleables.values() {
+        for module in self.sampleables.values() {
             module.on_patch_update();
         }
-
-        patch.rebuild_message_listeners();
-        Ok(patch)
     }
 }
 

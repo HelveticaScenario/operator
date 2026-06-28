@@ -283,13 +283,16 @@ pub trait Sampleable: MessageHandler + Send {
     /// Transfer runtime state from an old module to this newly-constructed module.
     ///
     /// Called on the audio thread during the command-processing phase (between
-    /// `tick()` cycles), before any `update()` calls. The implementation uses
+    /// processing cycles), before any `update()` calls. The implementation uses
     /// `UnsafeCell` to mutate through `&self` — this is safe because:
     ///
     /// 1. It runs only from the command-queue consumer, never during `process()`.
-    /// 2. The proc macro guards against self-aliasing (`ptr::eq` check).
-    /// 3. `old` is removed from `patch.sampleables` before this call, so no
-    ///    concurrent `update()` can be in flight on it.
+    /// 2. Implementations guard against self-aliasing with a `ptr::eq` check.
+    /// 3. `self` and `old` are always distinct instances: a whole-patch swap
+    ///    transfers between the new and the live `Patch` maps, and a single-module
+    ///    replace removes `old` from the map before the call. The command-
+    ///    processing phase is synchronous on the audio thread, so no `update()`
+    ///    races the transfer on either module.
     fn transfer_state_from(&self, _old: &dyn Sampleable) {}
 }
 

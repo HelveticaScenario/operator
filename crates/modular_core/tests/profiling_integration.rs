@@ -14,6 +14,9 @@ use modular_core::profiling::{
 use modular_core::types::{ModuleSpec, PatchGraph};
 use serde_json::json;
 
+mod common;
+use common::from_graph;
+
 const SAMPLE_RATE: f32 = 48000.0;
 const BLOCK_SIZE: usize = 1;
 
@@ -64,11 +67,10 @@ fn profiler_attributes_work_to_both_modules() {
             }),
         ),
     ]);
-    let patch =
-        Patch::from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new()).expect("from_graph");
+    let patch = from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new()).expect("from_graph");
 
     let collection = new_collection();
-    // Patch::from_graph bypasses the audio-thread patch-swap path, so seed
+    // The from_graph helper bypasses the audio-thread patch-swap path, so seed
     // the profiler maps directly. Equivalent to what apply_patch_update
     // does via `swap_records` / `try_swap_shared` in production.
     let ids = ["osc".to_string(), "sig".to_string()];
@@ -130,8 +132,7 @@ fn profiler_attributes_work_to_both_modules() {
 #[test]
 fn profiler_disabled_produces_no_records() {
     let graph = make_graph(vec![("osc", "$sine", json!({ "freq": 0.0 }))]);
-    let patch =
-        Patch::from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new()).expect("from_graph");
+    let patch = from_graph(&graph, SAMPLE_RATE, BLOCK_SIZE, &HashMap::new()).expect("from_graph");
 
     profiling::set_enabled(false);
     profiling::refresh_enabled();

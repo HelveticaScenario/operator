@@ -8,7 +8,6 @@ use cpal::traits::{DeviceTrait, HostTrait};
 use hound::{WavSpec, WavWriter};
 use modular_core::PORT_MAX_CHANNELS;
 use modular_core::PatchGraph;
-use modular_core::dsp::get_constructors;
 use modular_core::dsp::schema;
 use modular_core::dsp::utils::SchmittTrigger;
 use modular_core::profiling::{ModuleProfileAccum, ModuleProfileCollection};
@@ -1417,8 +1416,9 @@ impl AudioState {
         let mut update = PatchUpdate::new(sample_rate);
         update.update_id = update_id;
 
-        // Add remaps
-        update.remaps = module_id_remaps.unwrap_or_default();
+        // Resolve id renames into the per-module transfer-source map the audio
+        // thread reads during the swap.
+        update.set_remaps(&module_id_remaps.unwrap_or_default());
 
         // Build maps for efficient lookup
         let desired_modules: HashMap<String, _> =
@@ -1544,53 +1544,44 @@ impl AudioState {
         let mode_map = analysis.modes;
         update.process_order_ids = analysis.order;
 
-        // Pass 2 — construct modules on the main thread with the resolved mode.
-        // The audio thread will always replace existing modules and transfer state.
-        let constructors = get_constructors();
+        // Pass 2 — resolve each module's processing mode, then construct on the
+        // main thread into the unconnected `new_patch`. The audio thread copies
+        // runtime state from the live patch into these modules, connects, then
+        // swaps the whole patch in. `block_ids`/`sample_ids` partition the
+        // constructed set by mode to seed the profiler maps below.
+        let mut to_construct: Vec<(
+            String,
+            String,
+            modular_core::params::DeserializedParams,
+            modular_core::types::ProcessingMode,
+        )> = Vec::with_capacity(deserialized_modules.len());
         let mut block_ids: Vec<String> = Vec::new();
         let mut sample_ids: Vec<String> = Vec::new();
         for (id, module_type, deserialized) in deserialized_modules {
-            if let Some(constructor) = constructors.get(&module_type) {
-                // ROOT_CLOCK is always Sample mode: the block-aware audio callback
-                // (when it lands) needs to eager-fill its trigger outputs one
-                // sample at a time so the queued-update trigger check can fire on
-                // an exact sample boundary, not a block boundary. At today's
-                // effective `block_size=1` the choice is moot, but baking the
-                // override in here keeps it correct once the audio loop flips.
-                let mode = if id == *modular_core::types::ROOT_CLOCK_ID {
-                    modular_core::types::ProcessingMode::Sample
-                } else {
-                    mode_map
-                        .get(&id)
-                        .copied()
-                        .unwrap_or(modular_core::types::ProcessingMode::Block)
-                };
-                match constructor(&id, sample_rate, deserialized, self.block_size, mode) {
-                    Ok(module) => {
-                        match mode {
-                            modular_core::types::ProcessingMode::Block => {
-                                block_ids.push(id.clone())
-                            }
-                            modular_core::types::ProcessingMode::Sample => {
-                                sample_ids.push(id.clone())
-                            }
-                        }
-                        update.inserts.push((id.clone(), module));
-                    }
-                    Err(err) => {
-                        return Err(napi::Error::from_reason(format!(
-                            "Failed to create module {}: {}",
-                            id, err
-                        )));
-                    }
-                }
+            // ROOT_CLOCK is always Sample mode: the block-aware audio callback
+            // (when it lands) needs to eager-fill its trigger outputs one sample
+            // at a time so the queued-update trigger check can fire on an exact
+            // sample boundary, not a block boundary. At today's effective
+            // `block_size=1` the choice is moot, but baking the override in here
+            // keeps it correct once the audio loop flips.
+            let mode = if id == *modular_core::types::ROOT_CLOCK_ID {
+                modular_core::types::ProcessingMode::Sample
             } else {
-                return Err(napi::Error::from_reason(format!(
-                    "{} is not a valid module type",
-                    module_type
-                )));
+                mode_map
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(modular_core::types::ProcessingMode::Block)
+            };
+            match mode {
+                modular_core::types::ProcessingMode::Block => block_ids.push(id.clone()),
+                modular_core::types::ProcessingMode::Sample => sample_ids.push(id.clone()),
             }
+            to_construct.push((id, module_type, deserialized, mode));
         }
+        update
+            .new_patch
+            .insert_modules(to_construct, sample_rate, self.block_size)
+            .map_err(napi::Error::from_reason)?;
         block_ids.sort();
         sample_ids.sort();
         println!(
@@ -1600,26 +1591,26 @@ impl AudioState {
             sample_ids.join(",\n    ")
         );
 
-        // Pre-compute desired IDs on main thread to avoid HashSet allocation on audio thread
-        update.desired_ids = update.inserts.iter().map(|(id, _)| id.clone()).collect();
+        update.new_patch.rebuild_message_listeners();
 
-        // Profiler seed maps for the audio thread's TLS records and shared
-        // map. One entry per inserted id, two maps because each `swap_*`
-        // consumes its operand.
+        // Profiler seed maps for the audio thread's TLS records and shared map.
+        // One entry per constructed id (HIDDEN_AUDIO_IN carries no record), two
+        // maps because each `swap_*` consumes its operand. `block_ids` and
+        // `sample_ids` together are exactly the constructed set.
         update.profile_records_seed =
-            modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+            modular_core::profiling::build_seed(block_ids.iter().chain(&sample_ids).cloned());
         update.profile_shared_seed =
-            modular_core::profiling::build_seed(update.inserts.iter().map(|(id, _)| id.clone()));
+            modular_core::profiling::build_seed(block_ids.iter().chain(&sample_ids).cloned());
 
         // Run main-thread resource preparation (e.g. FFT-based mipmap generation for
         // wavetable oscillators). Called here because allocation and file-backed
         // data access must not happen on the audio thread.
-        for (_id, module) in update.inserts.iter() {
+        for module in update.new_patch.sampleables.values() {
             module.prepare_resources(&wav_data);
         }
 
         // Populate wav_data from the cache snapshot
-        update.wav_data = wav_data;
+        update.new_patch.wav_data = wav_data;
 
         // Carry tempo/time-sig to apply time: the meter write and (when $setTempo
         // was called) the Link tempo push happen in apply_patch_update, atomically
@@ -1950,14 +1941,10 @@ impl AudioProcessor {
                     self.patch.sampleables.insert(module_id.clone(), new_module);
                     // Re-register message listeners for the replaced module
                     self.patch.add_message_listeners_for_module(&module_id);
-                    // Reconnect all modules so the new module picks up its connections
-                    for module in self.patch.sampleables.values() {
-                        module.connect(&self.patch);
-                    }
-                    // Refresh any module-local caches rebuilt from params after reconnect.
-                    for module in self.patch.sampleables.values() {
-                        module.on_patch_update();
-                    }
+                    // Reconnect all modules so the new module picks up its
+                    // connections, then refresh module-local caches rebuilt from
+                    // params.
+                    self.patch.connect_all();
                     // The old box was dropped and a fresh one inserted at this id, so its
                     // cached pointer now dangles. The graph shape is unchanged (same
                     // modules and cables — only this module's params differ), so reuse
@@ -2073,15 +2060,13 @@ impl AudioProcessor {
     /// Slots `[0, swap_pos)` were already emitted by the pre-swap modules.
     fn apply_patch_update(&mut self, update: PatchUpdate, swap_pos: usize) {
         let PatchUpdate {
-            remaps,
-            inserts,
-            desired_ids,
+            transfer_sources,
+            new_patch,
             process_order_ids,
             scope_adds,
             scope_removes,
             scope_xy_adds,
             scope_xy_removes,
-            wav_data,
             profile_records_seed,
             profile_shared_seed,
             reset_clock,
@@ -2090,102 +2075,45 @@ impl AudioProcessor {
             ..
         } = update;
 
-        // Apply remaps in two phases to avoid chain/swap collisions.
-        // Phase 1: Extract all remap sources into a temporary map.
-        // Phase 2: Insert them at their new IDs.
-        // This prevents chains (A→B, B→C) from overwriting modules that are
-        // themselves being remapped, and also handles swaps (A→B, B→A).
-        let mut remapped_ids: Vec<String> = Vec::new();
-        let mut remap_staging = Vec::new();
-        let filtered_remaps: Vec<_> = remaps
-            .into_iter()
-            .filter(|r| {
-                !is_reserved_module_id(&r.from) && !is_reserved_module_id(&r.to) && r.from != r.to
-            })
-            .collect();
+        // The new patch arrives fully constructed but unconnected. Bring it to liveness
+        // without ever touching the live patch's map, then swap.
 
-        // Phase 1: Remove all sources
-        for remap in &filtered_remaps {
-            if let Some(module) = self.patch.sampleables.remove(&remap.from) {
-                self.patch.remove_message_listeners_for_module(&remap.from);
-                remap_staging.push((remap.to.clone(), module));
+        // Copy runtime state from the live (old) patch into each new module.
+        for (id, module) in new_patch.sampleables.iter() {
+            let source_id = match transfer_sources.get(id) {
+                Some(Some(old_id)) => Some(old_id.as_str()),
+                Some(None) => None,
+                None => Some(id.as_str()),
+            };
+            if let Some(old_id) = source_id
+                && let Some(old) = self.patch.sampleables.get(old_id)
+            {
+                module.transfer_state_from(old.as_ref());
             }
         }
 
-        // Phase 2: Insert at destinations
-        for (to_id, module) in remap_staging {
-            self.patch.sampleables.insert(to_id.clone(), module);
-            remapped_ids.push(to_id);
-        }
+        // `connect` resolves raw pointers into upstream modules' just-transferred
+        // output buffers, so it MUST run after the state copy above.
+        new_patch.connect_all();
 
-        // Always-replace: insert new modules, transferring state from old ones.
-        // Every module is reconstructed on the main thread with fresh params.
-        // State continuity is preserved by transfer_state_from(). After
-        // transfer, force the per-block cursor to `swap_pos` so subsequent
-        // `ensure_processed_to(i)` fills only `[swap_pos, block_size)` on
-        // this block.
-        let mut newly_inserted_ids: Vec<String> = Vec::new();
-        for (id, new_module) in inserts {
-            if let Some(old_module) = self.patch.sampleables.remove(&id) {
-                new_module.transfer_state_from(old_module.as_ref());
-                self.patch.remove_message_listeners_for_module(&id);
-                if self
-                    .garbage_tx
-                    .push(GarbageItem::Module(old_module))
-                    .is_err()
-                {}
-            }
-            if swap_pos > 0 {
-                new_module.set_initial_index(swap_pos);
-            }
-            newly_inserted_ids.push(id.clone());
-            self.patch.sampleables.insert(id, new_module);
-        }
-
-        // Remove modules that are no longer in the desired graph.
-        // Stale modules are sent to the garbage queue for deallocation on the main thread,
-        // avoiding Drop running in the audio callback.
-        let stale_ids: Vec<String> = self
-            .patch
-            .sampleables
-            .keys()
-            .filter(|id| !is_reserved_module_id(id) && !desired_ids.contains(*id))
-            .cloned()
-            .collect();
-        for id in stale_ids {
-            if let Some(module) = self.patch.sampleables.remove(&id) {
-                self.patch.remove_message_listeners_for_module(&id);
-                if self.garbage_tx.push(GarbageItem::Module(module)).is_err() {}
+        if swap_pos > 0 {
+            for module in new_patch.sampleables.values() {
+                module.set_initial_index(swap_pos);
             }
         }
 
-        // Incrementally update message listeners for changed modules only.
-        // Stale entries were already removed above; now add entries for new and remapped modules.
-        for id in newly_inserted_ids.iter().chain(remapped_ids.iter()) {
-            self.patch.add_message_listeners_for_module(id);
+        let old_patch = std::mem::replace(&mut self.patch, new_patch);
+        if self.garbage_tx.push(GarbageItem::Patch(old_patch)).is_err() {
+            // Queue full (GARBAGE_QUEUE_CAPACITY is generous): the old patch drops
+            // here as a fallback rather than blocking the audio thread.
         }
 
-        // Swap wav_data into the patch (cheap — just moving Arc clones).
-        // Old Arc<WavData> refs just decrement refcount — no audio data freed
-        // because the main-thread WavCache still holds references.
-        if !wav_data.is_empty() || !self.patch.wav_data.is_empty() {
-            let old_wav_data = std::mem::replace(&mut self.patch.wav_data, wav_data);
-            drop(old_wav_data);
+        let old_order_ids = std::mem::replace(&mut self.process_order_ids, process_order_ids);
+        if self.garbage_tx.push(GarbageItem::OrderIds(old_order_ids)).is_err() {
+            // Queue full (GARBAGE_QUEUE_CAPACITY is generous): the old order ids drop
+            // here as a fallback rather than blocking the audio thread.
         }
-
-        // Connect all modules
-        for module in self.patch.sampleables.values() {
-            module.connect(&self.patch);
-        }
-
-        // Call on_patch_update for all modules
-        for module in self.patch.sampleables.values() {
-            module.on_patch_update();
-        }
-
-        // Adopt the new processing order and resolve it to live box pointers. Must
-        // come after every structural mutation above so no pointer dangles.
-        self.process_order_ids = process_order_ids;
+        // run after every structural change above so no pointer dangles
         self.rebuild_process_order_ptrs();
 
         // Update scopes
@@ -2434,14 +2362,6 @@ impl AudioProcessor {
     fn is_stopped(&self) -> bool {
         self.stopped.load(Ordering::SeqCst)
     }
-}
-
-/// Check if a module ID is reserved (well-known system module)
-fn is_reserved_module_id(id: &str) -> bool {
-    id == WellKnownModule::RootOutput.id()
-        || id == WellKnownModule::RootClock.id()
-        || id == WellKnownModule::RootInput.id()
-        || id == WellKnownModule::HiddenAudioIn.id()
 }
 
 pub fn make_stream<T>(
@@ -2770,10 +2690,11 @@ where
                                 audio_processor
                                     .transport_meter
                                     .write_applied_update_id(applied_id);
-                                // ROOT_CLOCK survives the swap structurally. Its cache for
-                                // `[swap_pos, block_size)` was filled under the OLD params;
-                                // refill the remainder of this callback's range from
-                                // `swap_pos` forward under the NEW patch.
+                                // ROOT_CLOCK's transport state carries across the swap via
+                                // `transfer_state_from`. Its cache
+                                // for `[swap_pos, block_size)` was filled under the OLD params;
+                                // refill the remainder of this callback's range from `swap_pos`
+                                // forward under the NEW patch.
                                 if let Some(root_clock) =
                                     audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
                                 {
@@ -3357,21 +3278,26 @@ mod tests {
         assert!(processor.patch.sampleables.is_empty() || processor.patch.sampleables.len() == 1);
     }
 
-    // A minimal mock Sampleable for testing remaps. Each instance encodes
-    // its identity in `get_module_type()` so we can verify which concrete
-    // module ends up at which map slot after remapping.
+    /// Test double for the whole-patch swap.
     struct MockModule {
-        /// Identity label returned by `get_module_type()` for assertions.
         label: String,
-        /// The "current" ID used by the Sampleable interface.
         current_id: String,
+        state: std::cell::Cell<f32>,
+        /// The last `swap_pos` passed to `set_initial_index`, so tests can assert
+        /// a mid-block swap moves every module's per-block cursor.
+        last_initial_index: std::cell::Cell<Option<usize>>,
     }
 
     impl MockModule {
         fn new(label: &str) -> Box<dyn modular_core::types::Sampleable> {
+            Self::tagged(label, 0.0)
+        }
+        fn tagged(label: &str, state: f32) -> Box<dyn modular_core::types::Sampleable> {
             Box::new(Self {
                 label: label.to_string(),
                 current_id: label.to_string(),
+                state: std::cell::Cell::new(state),
+                last_initial_index: std::cell::Cell::new(None),
             })
         }
     }
@@ -3386,11 +3312,19 @@ mod tests {
             &self.label
         }
         fn connect(&self, _patch: &modular_core::patch::Patch) {}
+        fn transfer_state_from(&self, old: &dyn modular_core::types::Sampleable) {
+            if let Some(old) = old.as_any().downcast_ref::<MockModule>() {
+                self.state.set(old.state.get());
+            }
+        }
+        fn set_initial_index(&self, slot: usize) {
+            self.last_initial_index.set(Some(slot));
+        }
         fn start_block(&self) {}
         fn ensure_processed_to(&self, _target: usize) {}
         fn ensure_processed(&self) {}
         fn get_value_at(&self, _port: &str, _ch: usize, _index: usize) -> f32 {
-            0.0
+            self.state.get()
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -3598,26 +3532,49 @@ mod tests {
         (cmd_producer, processor)
     }
 
+    /// Build a `PatchUpdate` whose `new_patch` holds the given `(id, module)`
+    /// pairs (plus the implicit HIDDEN_AUDIO_IN), message listeners registered —
+    /// mirroring the fully-built, unconnected patch the main thread hands the
+    /// audio thread.
+    fn update_with(
+        sample_rate: f32,
+        modules: Vec<(&str, Box<dyn modular_core::types::Sampleable>)>,
+    ) -> PatchUpdate {
+        let mut update = PatchUpdate::new(sample_rate);
+        for (id, module) in modules {
+            update.new_patch.sampleables.insert(id.to_string(), module);
+        }
+        update.new_patch.rebuild_message_listeners();
+        update
+    }
+
     #[test]
-    fn test_remap_chain_preserves_modules() {
-        // Regression test: when remaps form a chain (A→B, B→C), all modules
-        // must survive. Before the fix, applying A→B first would overwrite B
-        // (destroying it) before B→C could move it to C.
+    fn remap_chain_transfers_state_to_renamed_ids() {
+        // A whole-patch swap with a remap chain (cycle-2→cycle-3, cycle-3→cycle-4)
+        // transfers each outgoing module's runtime state to the module at its
+        // renamed id. The reverse lookup reads the old patch and never mutates it,
+        // so chained renames resolve correctly regardless of iteration order.
         let (_cmd_producer, mut processor) = create_test_processor();
 
-        // Set up initial state: cycle-2 (shift), cycle-3 (thirds)
+        // Old patch: tagged modules at the source ids.
         processor
             .patch
             .sampleables
-            .insert("cycle-2".into(), MockModule::new("shift"));
+            .insert("cycle-2".into(), MockModule::tagged("shift", 22.0));
         processor
             .patch
             .sampleables
-            .insert("cycle-3".into(), MockModule::new("thirds"));
+            .insert("cycle-3".into(), MockModule::tagged("thirds", 33.0));
 
-        // Remap chain: cycle-2→cycle-3, cycle-3→cycle-4
-        let mut update = PatchUpdate::new(48000.0);
-        update.remaps = vec![
+        // New patch: freshly-built modules at the destination ids (state 0).
+        let mut update = update_with(
+            48000.0,
+            vec![
+                ("cycle-3", MockModule::tagged("new-cycle-3", 0.0)),
+                ("cycle-4", MockModule::tagged("new-cycle-4", 0.0)),
+            ],
+        );
+        update.set_remaps(&[
             ModuleIdRemap {
                 from: "cycle-2".into(),
                 to: "cycle-3".into(),
@@ -3626,65 +3583,52 @@ mod tests {
                 from: "cycle-3".into(),
                 to: "cycle-4".into(),
             },
-        ];
-        // Both new IDs are desired (won't be garbage-collected)
-        update.desired_ids.insert("cycle-3".into());
-        update.desired_ids.insert("cycle-4".into());
+        ]);
 
         processor.apply_patch_update(update, 0);
 
-        // Verify: "shift" module should now be at cycle-3, "thirds" at cycle-4
-        assert!(
-            processor.patch.sampleables.contains_key("cycle-3"),
-            "cycle-3 should exist after remap"
-        );
-        assert!(
-            processor.patch.sampleables.contains_key("cycle-4"),
-            "cycle-4 should exist after remap"
-        );
+        // Identity comes from the new patch; only state followed the rename.
+        let c3 = processor.patch.sampleables.get("cycle-3").unwrap();
+        assert_eq!(c3.get_module_type(), "new-cycle-3");
         assert_eq!(
-            processor
-                .patch
-                .sampleables
-                .get("cycle-3")
-                .unwrap()
-                .get_module_type(),
-            "shift",
-            "cycle-3 should contain the shift module"
+            c3.get_value_at("", 0, 0),
+            22.0,
+            "cycle-3 inherits cycle-2's state"
         );
+        let c4 = processor.patch.sampleables.get("cycle-4").unwrap();
+        assert_eq!(c4.get_module_type(), "new-cycle-4");
         assert_eq!(
-            processor
-                .patch
-                .sampleables
-                .get("cycle-4")
-                .unwrap()
-                .get_module_type(),
-            "thirds",
-            "cycle-4 should contain the thirds module"
+            c4.get_value_at("", 0, 0),
+            33.0,
+            "cycle-4 inherits cycle-3's state"
         );
-        // cycle-2 should have been removed (not in desired_ids)
-        assert!(
-            !processor.patch.sampleables.contains_key("cycle-2"),
-            "cycle-2 should be removed (no longer desired)"
-        );
+        // The old source id is gone — the whole patch was replaced wholesale.
+        assert!(!processor.patch.sampleables.contains_key("cycle-2"));
     }
 
     #[test]
-    fn test_remap_swap_preserves_both_modules() {
-        // Test swap: A→B and B→A simultaneously
+    fn remap_swap_crosses_state_between_both_ids() {
+        // A simultaneous swap (osc-1→osc-2, osc-2→osc-1): each new module pulls
+        // state from the other id's outgoing module.
         let (_cmd_producer, mut processor) = create_test_processor();
 
         processor
             .patch
             .sampleables
-            .insert("osc-1".into(), MockModule::new("alpha"));
+            .insert("osc-1".into(), MockModule::tagged("alpha", 1.0));
         processor
             .patch
             .sampleables
-            .insert("osc-2".into(), MockModule::new("beta"));
+            .insert("osc-2".into(), MockModule::tagged("beta", 2.0));
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.remaps = vec![
+        let mut update = update_with(
+            48000.0,
+            vec![
+                ("osc-1", MockModule::tagged("new-osc-1", 0.0)),
+                ("osc-2", MockModule::tagged("new-osc-2", 0.0)),
+            ],
+        );
+        update.set_remaps(&[
             ModuleIdRemap {
                 from: "osc-1".into(),
                 to: "osc-2".into(),
@@ -3693,9 +3637,7 @@ mod tests {
                 from: "osc-2".into(),
                 to: "osc-1".into(),
             },
-        ];
-        update.desired_ids.insert("osc-1".into());
-        update.desired_ids.insert("osc-2".into());
+        ]);
 
         processor.apply_patch_update(update, 0);
 
@@ -3705,9 +3647,9 @@ mod tests {
                 .sampleables
                 .get("osc-1")
                 .unwrap()
-                .get_module_type(),
-            "beta",
-            "osc-1 should now contain beta (swapped)"
+                .get_value_at("", 0, 0),
+            2.0,
+            "osc-1 inherits the old osc-2's state"
         );
         assert_eq!(
             processor
@@ -3715,28 +3657,31 @@ mod tests {
                 .sampleables
                 .get("osc-2")
                 .unwrap()
-                .get_module_type(),
-            "alpha",
-            "osc-2 should now contain alpha (swapped)"
+                .get_value_at("", 0, 0),
+            1.0,
+            "osc-2 inherits the old osc-1's state"
         );
     }
 
     #[test]
-    fn test_remap_simple_rename() {
-        // Simple case: single remap, no chain
+    fn remap_simple_rename_carries_state() {
+        // Single rename vca-1→vca-2: the new module at vca-2 inherits vca-1's
+        // runtime state, and the old id disappears.
         let (_cmd_producer, mut processor) = create_test_processor();
 
         processor
             .patch
             .sampleables
-            .insert("vca-1".into(), MockModule::new("my-vca"));
+            .insert("vca-1".into(), MockModule::tagged("my-vca", 7.0));
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.remaps = vec![ModuleIdRemap {
+        let mut update = update_with(
+            48000.0,
+            vec![("vca-2", MockModule::tagged("renamed-vca", 0.0))],
+        );
+        update.set_remaps(&[ModuleIdRemap {
             from: "vca-1".into(),
             to: "vca-2".into(),
-        }];
-        update.desired_ids.insert("vca-2".into());
+        }]);
 
         processor.apply_patch_update(update, 0);
 
@@ -3750,18 +3695,162 @@ mod tests {
                 .sampleables
                 .get("vca-2")
                 .unwrap()
-                .get_module_type(),
-            "my-vca",
-            "module should be at new ID"
+                .get_value_at("", 0, 0),
+            7.0,
+            "vca-2 inherits vca-1's state across the rename"
         );
     }
 
-    /// Build a real running ROOT_CLOCK at 120 BPM 4/4, register it as a message
-    /// listener (as `apply_patch_update` does for inserted modules), and start it
-    /// from phase 0. Returns its module id.
-    fn insert_running_root_clock(processor: &mut AudioProcessor) -> String {
+    #[test]
+    fn remap_shift_chain_does_not_double_read_a_reused_id() {
+        // Adding a same-type module ahead of existing ones recycles auto-generated
+        // ids: the similarity matcher emits a shift chain (a→b, b→c) while a fresh
+        // module lands on the vacated head id `a`. Each outgoing module's state
+        // must transfer to exactly one new module — the fresh `a` must NOT steal
+        // the state the rename moved to `b`.
+        let (_cmd_producer, mut processor) = create_test_processor();
+
+        processor
+            .patch
+            .sampleables
+            .insert("a".into(), MockModule::tagged("old-a", 1.0));
+        processor
+            .patch
+            .sampleables
+            .insert("b".into(), MockModule::tagged("old-b", 2.0));
+
+        let mut update = update_with(
+            48000.0,
+            vec![
+                ("a", MockModule::tagged("fresh-a", 0.0)),
+                ("b", MockModule::tagged("new-b", 0.0)),
+                ("c", MockModule::tagged("new-c", 0.0)),
+            ],
+        );
+        update.set_remaps(&[
+            ModuleIdRemap {
+                from: "a".into(),
+                to: "b".into(),
+            },
+            ModuleIdRemap {
+                from: "b".into(),
+                to: "c".into(),
+            },
+        ]);
+
+        processor.apply_patch_update(update, 0);
+
+        let value = |id: &str| {
+            processor
+                .patch
+                .sampleables
+                .get(id)
+                .unwrap()
+                .get_value_at("", 0, 0)
+        };
+        assert_eq!(value("b"), 1.0, "b inherits the renamed old-a's state");
+        assert_eq!(value("c"), 2.0, "c inherits the renamed old-b's state");
+        assert_eq!(
+            value("a"),
+            0.0,
+            "the fresh module reusing id `a` must NOT steal old-a's state"
+        );
+    }
+
+    #[test]
+    fn swap_keeps_hidden_audio_in_present() {
+        use modular_core::types::WellKnownModule;
+        let (_cmd_producer, mut processor) = create_test_processor();
+
+        // A whole-patch swap replaces the patch wholesale; the reserved
+        // HIDDEN_AUDIO_IN must still be present afterward (Patch::new injects it)
+        // so per-block input injection keeps targeting it by id.
+        let update = update_with(48000.0, vec![("osc", MockModule::tagged("osc", 0.0))]);
+        processor.apply_patch_update(update, 0);
+
+        assert!(
+            processor
+                .patch
+                .sampleables
+                .contains_key(WellKnownModule::HiddenAudioIn.id()),
+            "HIDDEN_AUDIO_IN must survive the swap"
+        );
+    }
+
+    #[test]
+    fn swap_preserves_injected_audio_input() {
+        use modular_core::types::WellKnownModule;
+        let (_cmd_producer, mut processor) = create_test_processor();
+
+        // Inject a host-input frame into the live HIDDEN_AUDIO_IN.
+        let mut block = [[0.0f32; PORT_MAX_CHANNELS]; 1];
+        block[0][0] = 0.42;
+        processor
+            .patch
+            .sampleables
+            .get(WellKnownModule::HiddenAudioIn.id())
+            .unwrap()
+            .inject_audio_in_block(&block);
+
+        // The swap installs a fresh HIDDEN_AUDIO_IN; `transfer_state_from` must
+        // carry the injected frame across so consumers don't read silence for
+        // the remainder of the block.
+        let update = update_with(48000.0, vec![("osc", MockModule::tagged("osc", 0.0))]);
+        processor.apply_patch_update(update, 0);
+
+        assert_eq!(
+            processor
+                .patch
+                .sampleables
+                .get(WellKnownModule::HiddenAudioIn.id())
+                .unwrap()
+                .get_value_at("", 0, 0),
+            0.42,
+            "injected host input survives the whole-patch swap"
+        );
+    }
+
+    #[test]
+    fn mid_block_swap_sets_every_module_cursor() {
+        let (_cmd_producer, mut processor) = create_test_processor();
+
+        // A swap at a non-zero in-block position moves every new module's
+        // per-block cursor to `swap_pos` so slots [0, swap_pos) — already emitted
+        // by the pre-swap patch — are not re-filled.
+        let update = update_with(
+            48000.0,
+            vec![
+                ("a", MockModule::tagged("a", 0.0)),
+                ("b", MockModule::tagged("b", 0.0)),
+            ],
+        );
+        processor.apply_patch_update(update, 3);
+
+        for id in ["a", "b"] {
+            let recorded = processor
+                .patch
+                .sampleables
+                .get(id)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<MockModule>()
+                .unwrap()
+                .last_initial_index
+                .get();
+            assert_eq!(
+                recorded,
+                Some(3),
+                "module {id} cursor should advance to swap_pos"
+            );
+        }
+    }
+
+    /// Construct a fresh, unstarted ROOT_CLOCK at 120 BPM 4/4 (phase 0). The
+    /// caller inserts it into a patch; a whole-patch swap then carries any
+    /// running clock's phase into it via `transfer_state_from`.
+    fn build_root_clock(block_size: usize) -> Box<dyn modular_core::types::Sampleable> {
         let id = modular_core::types::ROOT_CLOCK_ID.to_string();
-        let constructors = get_constructors();
+        let constructors = modular_core::dsp::get_constructors();
         let constructor = constructors.get("_clock").expect("_clock constructor");
         let params = crate::deserialize_params(
             "_clock",
@@ -3769,14 +3858,21 @@ mod tests {
             true,
         )
         .expect("deserialize clock params");
-        let clock = constructor(
+        constructor(
             &id,
             44_100.0,
             params,
-            processor.block_size,
+            block_size,
             modular_core::types::ProcessingMode::Sample,
         )
-        .expect("construct clock");
+        .expect("construct clock")
+    }
+
+    /// Build a real running ROOT_CLOCK, insert it into the live patch, register it
+    /// as a message listener, and start it from phase 0. Returns its module id.
+    fn insert_running_root_clock(processor: &mut AudioProcessor) -> String {
+        let id = modular_core::types::ROOT_CLOCK_ID.to_string();
+        let clock = build_root_clock(processor.block_size);
         processor.patch.sampleables.insert(id.clone(), clock);
         processor.patch.add_message_listeners_for_module(&id);
         processor
@@ -3810,9 +3906,13 @@ mod tests {
             "clock should have advanced before reset, got {phase_before}"
         );
 
-        let mut update = PatchUpdate::new(44_100.0);
+        // The new patch carries a fresh clock at the same id; the swap transfers
+        // the running phase into it, then reset_clock restarts the transport.
+        let mut update = update_with(
+            44_100.0,
+            vec![(id.as_str(), build_root_clock(processor.block_size))],
+        );
         update.reset_clock = true;
-        update.desired_ids.insert(id.clone());
         processor.apply_patch_update(update, 0);
 
         // Re-fill the block from the top (mirrors the swap-site eager-fill) and
@@ -3835,12 +3935,15 @@ mod tests {
             "clock should have advanced, got {phase_before}"
         );
 
-        let mut update = PatchUpdate::new(44_100.0);
-        update.reset_clock = false;
-        update.desired_ids.insert(id.clone());
+        // The new patch's fresh clock inherits the running phase via
+        // transfer_state_from (ROOT_CLOCK matched by its constant id); with no
+        // reset, the transport keeps advancing from where it was.
+        let update = update_with(
+            44_100.0,
+            vec![(id.as_str(), build_root_clock(processor.block_size))],
+        );
         processor.apply_patch_update(update, 0);
 
-        // Without a reset the clock keeps advancing from where it was.
         let phase_after = advance_clock(&processor, &id, 1);
         assert!(
             phase_after > phase_before,
@@ -4108,12 +4211,7 @@ mod tests {
             PatchUpdateSensitiveModule::new("dep", Signal::cable("src", "out", 0)),
         );
 
-        for module in processor.patch.sampleables.values() {
-            module.connect(&processor.patch);
-        }
-        for module in processor.patch.sampleables.values() {
-            module.on_patch_update();
-        }
+        processor.patch.connect_all();
 
         let initial = processor
             .patch
@@ -4148,12 +4246,13 @@ mod tests {
         let (_cmd_producer, mut processor) = create_test_processor();
         let processed = Arc::new(AtomicUsize::new(0));
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.inserts.push((
-            "iso".into(),
-            CountingProcessModule::new("iso", Arc::clone(&processed)),
-        ));
-        update.desired_ids.insert("iso".into());
+        let mut update = update_with(
+            48000.0,
+            vec![(
+                "iso",
+                CountingProcessModule::new("iso", Arc::clone(&processed)),
+            )],
+        );
         update.process_order_ids = vec!["iso".into()];
 
         processor.apply_patch_update(update, 0);
@@ -4172,12 +4271,13 @@ mod tests {
         let (_cmd_producer, mut processor) = create_test_processor();
         let processed = Arc::new(AtomicUsize::new(0));
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.inserts.push((
-            "real".into(),
-            CountingProcessModule::new("real", Arc::clone(&processed)),
-        ));
-        update.desired_ids.insert("real".into());
+        let mut update = update_with(
+            48000.0,
+            vec![(
+                "real",
+                CountingProcessModule::new("real", Arc::clone(&processed)),
+            )],
+        );
         update.process_order_ids = vec!["real".into(), "ghost".into()];
 
         processor.apply_patch_update(update, 0);
@@ -4196,12 +4296,13 @@ mod tests {
         let old_processed = Arc::new(AtomicUsize::new(0));
         let new_processed = Arc::new(AtomicUsize::new(0));
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.inserts.push((
-            "m".into(),
-            CountingProcessModule::new("m", Arc::clone(&old_processed)),
-        ));
-        update.desired_ids.insert("m".into());
+        let mut update = update_with(
+            48000.0,
+            vec![(
+                "m",
+                CountingProcessModule::new("m", Arc::clone(&old_processed)),
+            )],
+        );
         update.process_order_ids = vec!["m".into()];
         processor.apply_patch_update(update, 0);
 
@@ -4222,12 +4323,13 @@ mod tests {
     fn process_order_cleared_on_clear_patch() {
         let (mut cmd_producer, mut processor) = create_test_processor();
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.inserts.push((
-            "m".into(),
-            CountingProcessModule::new("m", Arc::new(AtomicUsize::new(0))),
-        ));
-        update.desired_ids.insert("m".into());
+        let mut update = update_with(
+            48000.0,
+            vec![(
+                "m",
+                CountingProcessModule::new("m", Arc::new(AtomicUsize::new(0))),
+            )],
+        );
         update.process_order_ids = vec!["m".into()];
         processor.apply_patch_update(update, 0);
         assert_eq!(processor.process_order.len(), 1);
@@ -4240,22 +4342,31 @@ mod tests {
     }
 
     #[test]
-    fn test_patch_update_remap_re_registers_message_listeners() {
+    fn remap_routes_messages_to_the_new_id() {
+        // After a whole-patch swap with a rename old-id→new-id, the module that
+        // now occupies new-id (built into the new patch with its listeners
+        // registered) receives dispatched messages; old-id is gone.
         let (_cmd_producer, mut processor) = create_test_processor();
 
-        let hits = Arc::new(AtomicUsize::new(0));
+        let old_hits = Arc::new(AtomicUsize::new(0));
         processor.patch.sampleables.insert(
             "old-id".into(),
-            CountingMessageModule::new("old-id", Arc::clone(&hits)),
+            CountingMessageModule::new("old-id", Arc::clone(&old_hits)),
         );
         processor.patch.rebuild_message_listeners();
 
-        let mut update = PatchUpdate::new(48000.0);
-        update.remaps = vec![ModuleIdRemap {
+        let new_hits = Arc::new(AtomicUsize::new(0));
+        let mut update = update_with(
+            48000.0,
+            vec![(
+                "new-id",
+                CountingMessageModule::new("new-id", Arc::clone(&new_hits)),
+            )],
+        );
+        update.set_remaps(&[ModuleIdRemap {
             from: "old-id".into(),
             to: "new-id".into(),
-        }];
-        update.desired_ids.insert("new-id".into());
+        }]);
 
         processor.apply_patch_update(update, 0);
 
@@ -4265,10 +4376,14 @@ mod tests {
             note: 60,
             velocity: 100,
         });
-
         processor.patch.dispatch_message(&message).unwrap();
 
-        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            new_hits.load(Ordering::SeqCst),
+            1,
+            "the module at the new id receives the message"
+        );
+        assert_eq!(old_hits.load(Ordering::SeqCst), 0, "old id is gone");
         assert!(!processor.patch.sampleables.contains_key("old-id"));
         assert!(processor.patch.sampleables.contains_key("new-id"));
     }

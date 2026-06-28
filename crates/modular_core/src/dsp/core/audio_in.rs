@@ -93,6 +93,22 @@ impl Sampleable for AudioIn {
         unsafe { (*self.block.get())[index][ch] }
     }
 
+    fn transfer_state_from(&self, old: &dyn Sampleable) {
+        let Some(old) = old.as_any().downcast_ref::<AudioIn>() else {
+            return;
+        };
+        if std::ptr::eq(self, old) {
+            return;
+        }
+        unsafe {
+            let len = *old.block_len.get();
+            let src = &*old.block.get();
+            let dst = &mut *self.block.get();
+            dst[..len].copy_from_slice(&src[..len]);
+            *self.block_len.get() = len;
+        }
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }

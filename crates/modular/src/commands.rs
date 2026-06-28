@@ -3,9 +3,10 @@
 //! This module defines the commands sent from the main thread to the audio thread,
 //! and the errors reported back from the audio thread.
 
+use modular_core::patch::Patch;
 use modular_core::profiling::ModuleProfileAccum;
 use modular_core::types::{
-    Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges, WavData,
+    Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges,
 };
 use napi_derive::napi;
 use std::collections::HashMap;
@@ -47,12 +48,9 @@ pub struct PatchUpdate {
     /// Unique ID for this update, used to track apply/discard on the audio thread.
     pub update_id: u64,
 
-    /// Modules to insert (pre-constructed on main thread).
-    pub inserts: Vec<(String, Box<dyn modular_core::types::Sampleable>)>,
-
-    /// Set of desired module IDs, pre-computed on the main thread.
-    /// Any existing module not in this set (and not reserved) is stale.
-    pub desired_ids: std::collections::HashSet<String>,
+    /// The complete new patch, fully constructed and with message listeners
+    /// registered on the main thread, but not yet connected.
+    pub new_patch: Patch,
 
     /// Module IDs in cache-efficient processing order (producers before the
     /// consumers that read them), computed on the main thread by
@@ -62,7 +60,7 @@ pub struct PatchUpdate {
     pub process_order_ids: Vec<String>,
 
     /// ID remappings (applied before inserts/deletes)
-    pub remaps: Vec<ModuleIdRemap>,
+    pub transfer_sources: HashMap<String, Option<String>>,
 
     /// Pre-built scope buffers to add (constructed on main thread)
     pub scope_adds: Vec<(ScopeBufferKey, ScopeBuffer)>,
@@ -75,10 +73,6 @@ pub struct PatchUpdate {
 
     /// XY scope buffers to remove
     pub scope_xy_removes: Vec<ScopeXyBufferKey>,
-
-    /// WAV data cache — cloned Arc<WavData> entries from the main-thread WavCache.
-    /// Swapped into the Patch on the audio thread so Wav params can resolve during connect().
-    pub wav_data: HashMap<String, Arc<WavData>>,
 
     /// Sample rate for new modules
     pub sample_rate: f32,
@@ -97,11 +91,11 @@ pub struct PatchUpdate {
     /// leaves it false so the clock keeps running uninterrupted.
     pub reset_clock: bool,
 
-    /// Pre-allocated TLS profiler records map, one entry per id in
-    /// `desired_ids`. Consumed by `profiling::swap_records` on the audio
-    /// thread; the evicted map flows back via the garbage queue. Always
-    /// populated, even when profiling is disabled — the swap maintains
-    /// the audio-thread allocation invariant for the next enable.
+    /// Pre-allocated TLS profiler records map, one entry per constructed module
+    /// id. Consumed by `profiling::swap_records` on the audio thread; the
+    /// evicted map flows back via the garbage queue. Always populated, even
+    /// when profiling is disabled — the swap maintains the audio-thread
+    /// allocation invariant for the next enable.
     pub profile_records_seed: HashMap<String, ModuleProfileAccum>,
 
     /// Pre-allocated map for the cross-thread `ModuleProfileCollection`,
@@ -116,15 +110,13 @@ impl PatchUpdate {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             update_id: 0,
-            inserts: Vec::new(),
-            desired_ids: std::collections::HashSet::new(),
+            new_patch: Patch::new(),
             process_order_ids: Vec::new(),
-            remaps: Vec::new(),
+            transfer_sources: HashMap::new(),
             scope_adds: Vec::new(),
             scope_removes: Vec::new(),
             scope_xy_adds: Vec::new(),
             scope_xy_removes: Vec::new(),
-            wav_data: HashMap::new(),
             sample_rate,
             transport_meta: None,
             scope_xy_ranges: None,
@@ -134,15 +126,17 @@ impl PatchUpdate {
         }
     }
 
-    /// Check if this update has any changes
-    pub fn is_empty(&self) -> bool {
-        self.inserts.is_empty()
-            && self.desired_ids.is_empty()
-            && self.remaps.is_empty()
-            && self.scope_adds.is_empty()
-            && self.scope_removes.is_empty()
-            && self.scope_xy_adds.is_empty()
-            && self.scope_xy_removes.is_empty()
+    pub fn set_remaps(&mut self, remaps: &[ModuleIdRemap]) {
+        self.transfer_sources.clear();
+        for remap in remaps {
+            self.transfer_sources
+                .insert(remap.to.clone(), Some(remap.from.clone()));
+        }
+        for remap in remaps {
+            self.transfer_sources
+                .entry(remap.from.clone())
+                .or_insert(None);
+        }
     }
 }
 
@@ -244,14 +238,15 @@ pub enum GarbageItem {
     Scope(ScopeBuffer),
     /// An XY scope buffer removed from the collection
     ScopeXy(Arc<ScopeXyBuffer>),
-    /// A queued patch update that was superseded by a newer update before it fired
+    /// A queued patch update that was superseded by a newer update before it was applied.
     PatchUpdate(PatchUpdate),
-    /// Live Link resources removed from the audio thread. Drop tears down
-    /// internal networking threads and sockets — must happen on the main thread.
+    /// The old patch after a full patch update is applied.
+    Patch(Patch),
+    /// The old processing-order id list replaced during a full patch update.
+    OrderIds(Vec<String>),
+    /// Live Link resources removed from the audio thread.
     Link(Box<LinkResources>),
     /// Profiler records map evicted by `swap_records` / `try_swap_shared`.
-    /// Drops on the main thread so the `HashMap`'s bucket deallocation
-    /// stays off the audio thread.
     ProfileMap(HashMap<String, ModuleProfileAccum>),
 }
 
