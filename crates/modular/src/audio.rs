@@ -2426,13 +2426,6 @@ impl AudioProcessor {
     /// thread if the main thread is reading. Writes into existing slots to avoid
     /// any allocation on the audio thread.
     fn collect_module_states(&self) {
-        // try_lock so the audio thread never blocks on the main thread's poll.
-        //
-        // No allocation here: the main thread owns the keys, so this only writes
-        // into slots that already exist — no insert, no clone, no drop. A slot
-        // whose module isn't present yet (briefly, after a queued update changes
-        // the keys but before its swap goes live) is reset so old state doesn't
-        // linger.
         if let Some(mut states) = self.module_states.try_lock() {
             for (id, slot) in states.iter_mut() {
                 match self.patch.sampleables.get(id) {
