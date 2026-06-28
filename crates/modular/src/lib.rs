@@ -1253,8 +1253,6 @@ impl Synthesizer {
         module_type: String,
         params: serde_json::Value,
     ) -> Result<()> {
-        // Built before `params` is consumed below. This path bypasses `apply_patch`,
-        // so a stateful module's editor metadata would otherwise go stale.
         let refreshed_state = modular_core::dsp::get_module_state_builders()
             .get(&module_type)
             .map(|builder| builder(&params));
