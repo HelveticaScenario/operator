@@ -1510,7 +1510,7 @@ impl AudioState {
         // before the deserialize step below consumes them: the immutable metadata
         // (cached to build the editor JSON on poll) and the pre-allocated live slot
         // the audio thread will fill. Only modules registered in
-        // `get_module_state_builders` (today just `$cycle`) produce any.
+        // `get_module_state_builders` produce any.
         let state_builders = modular_core::dsp::get_module_state_builders();
         let mut state_metas: HashMap<String, Box<dyn ModuleStateMeta>> = HashMap::new();
         let mut state_live: HashMap<String, Box<dyn ModuleLiveState>> = HashMap::new();
