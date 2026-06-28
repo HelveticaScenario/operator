@@ -2109,7 +2109,11 @@ impl AudioProcessor {
         }
 
         let old_order_ids = std::mem::replace(&mut self.process_order_ids, process_order_ids);
-        if self.garbage_tx.push(GarbageItem::OrderIds(old_order_ids)).is_err() {
+        if self
+            .garbage_tx
+            .push(GarbageItem::OrderIds(old_order_ids))
+            .is_err()
+        {
             // Queue full (GARBAGE_QUEUE_CAPACITY is generous): the old order ids drop
             // here as a fallback rather than blocking the audio thread.
         }
@@ -2415,342 +2419,353 @@ where
                     }
                     return;
                 }
-                // Dev-only: mark this thread as the audio thread so the global
-                // allocation detector records (and attributes) any alloc/dealloc
-                // made below. Placed after the panicked-flag early return and
-                // outside `catch_unwind`, so the guard's `Drop` runs even on a
-                // caught unwind. Compiles to nothing without `--features=alloc-detector`.
-                #[cfg(feature = "alloc-detector")]
-                let _alloc_scope = crate::alloc_detector::AudioThreadScope::enter();
+                // Dev-only: `panic_on_alloc` forbids heap (de)allocation in the DSP
+                // region below; a violation panics with a site backtrace, caught by
+                // this `catch_unwind` so the poisoned-thread path restarts the stream.
+                // Inlined to a direct call without `--features=alloc-detector`.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID};
-                    profiling::scope!("audio_callback");
+                    crate::alloc_detector::panic_on_alloc(|| {
+                        use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID};
+                        profiling::scope!("audio_callback");
 
-                    let callback_start = Instant::now();
+                        let callback_start = Instant::now();
 
-                    // Mirror the main-thread enable atomic into the audio thread's
-                    // profiler TLS. Cheap relaxed load once per callback.
-                    modular_core::profiling::refresh_enabled();
+                        // Mirror the main-thread enable atomic into the audio thread's
+                        // profiler TLS. Cheap relaxed load once per callback.
+                        modular_core::profiling::refresh_enabled();
 
-                    // Process any pending commands from the main thread
-                    {
-                        profiling::scope!("process_commands");
-                        audio_processor.process_commands();
-                    }
-
-                    // Capture Link session state once per buffer (before frame loop).
-                    audio_processor
-                        .link
-                        .capture_buffer_state(audio_processor.sample_rate);
-
-                    // Operator transport is decoupled from Link peer transport:
-                    // peers never start or stop Operator. The only Link-driven transport
-                    // action is releasing a locally-initiated quantized start when the
-                    // shared timeline reaches a bar boundary.
-                    if audio_processor.link.check_pending_start_release() {
-                        audio_processor
-                            .stopped
-                            .store(false, std::sync::atomic::Ordering::SeqCst);
-                        let msg = modular_core::types::Message::Clock(ClockMessages::Start);
-                        let _ = audio_processor.patch.dispatch_message(&msg);
-                    }
-
-                    // Write Link state to transport meter for UI visibility. Done
-                    // BEFORE the is_stopped() guard so the UI always shows the
-                    // free-running Link phase, even when Operator is stopped.
-                    audio_processor
-                        .link
-                        .write_meter(&audio_processor.transport_meter);
-
-                    let num_frames = output.len() / num_channels;
-                    let block_size = audio_processor.block_size;
-
-                    // Initial block-boundary entry: either fresh callback at a clean
-                    // boundary, or resuming mid-block from the previous callback.
-                    // Either way, eager-fill ROOT_CLOCK under THIS callback's
-                    // host-time anchor for the samples we will emit.
-                    if audio_processor.block_pos >= block_size {
-                        for module in audio_processor.patch.sampleables.values() {
-                            module.start_block();
+                        // Process any pending commands from the main thread
+                        {
+                            profiling::scope!("process_commands");
+                            audio_processor.process_commands();
                         }
-                        audio_processor.pull_input_block(&mut input_reader);
-                        audio_processor.block_pos = 0;
-                    }
 
-                    let mut written: usize = 0;
+                        // Capture Link session state once per buffer (before frame loop).
+                        audio_processor
+                            .link
+                            .capture_buffer_state(audio_processor.sample_rate);
 
-                    {
-                        let eager_end = block_size.min(audio_processor.block_pos + num_frames);
-                        audio_processor.eager_fill_clock(
-                            audio_processor.block_pos,
-                            eager_end,
-                            written,
-                        );
-                    }
+                        // Operator transport is decoupled from Link peer transport:
+                        // peers never start or stop Operator. The only Link-driven transport
+                        // action is releasing a locally-initiated quantized start when the
+                        // shared timeline reaches a bar boundary.
+                        if audio_processor.link.check_pending_start_release() {
+                            audio_processor
+                                .stopped
+                                .store(false, std::sync::atomic::Ordering::SeqCst);
+                            let msg = modular_core::types::Message::Clock(ClockMessages::Start);
+                            let _ = audio_processor.patch.dispatch_message(&msg);
+                        }
 
-                    {
-                        profiling::scope!("process_frames");
-                        while written < num_frames {
-                            // Cross internal block boundary mid-callback.
-                            if audio_processor.block_pos >= block_size {
-                                for module in audio_processor.patch.sampleables.values() {
-                                    module.start_block();
+                        // Write Link state to transport meter for UI visibility. Done
+                        // BEFORE the is_stopped() guard so the UI always shows the
+                        // free-running Link phase, even when Operator is stopped.
+                        audio_processor
+                            .link
+                            .write_meter(&audio_processor.transport_meter);
+
+                        let num_frames = output.len() / num_channels;
+                        let block_size = audio_processor.block_size;
+
+                        // Initial block-boundary entry: either fresh callback at a clean
+                        // boundary, or resuming mid-block from the previous callback.
+                        // Either way, eager-fill ROOT_CLOCK under THIS callback's
+                        // host-time anchor for the samples we will emit.
+                        if audio_processor.block_pos >= block_size {
+                            for module in audio_processor.patch.sampleables.values() {
+                                module.start_block();
+                            }
+                            audio_processor.pull_input_block(&mut input_reader);
+                            audio_processor.block_pos = 0;
+                        }
+
+                        let mut written: usize = 0;
+
+                        {
+                            let eager_end = block_size.min(audio_processor.block_pos + num_frames);
+                            audio_processor.eager_fill_clock(
+                                audio_processor.block_pos,
+                                eager_end,
+                                written,
+                            );
+                        }
+
+                        {
+                            profiling::scope!("process_frames");
+                            while written < num_frames {
+                                // Cross internal block boundary mid-callback.
+                                if audio_processor.block_pos >= block_size {
+                                    for module in audio_processor.patch.sampleables.values() {
+                                        module.start_block();
+                                    }
+                                    audio_processor.pull_input_block(&mut input_reader);
+                                    audio_processor.block_pos = 0;
+                                    let eager_end = block_size.min(num_frames - written);
+                                    audio_processor.eager_fill_clock(0, eager_end, written);
                                 }
-                                audio_processor.pull_input_block(&mut input_reader);
-                                audio_processor.block_pos = 0;
-                                let eager_end = block_size.min(num_frames - written);
-                                audio_processor.eager_fill_clock(0, eager_end, written);
-                            }
 
-                            let scan_end =
-                                block_size.min(audio_processor.block_pos + (num_frames - written));
+                                let scan_end = block_size
+                                    .min(audio_processor.block_pos + (num_frames - written));
 
-                            // Resolve trigger sample for queued patch swap.
-                            let trigger_sample: Option<usize> =
-                                match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
-                                    Some(QueuedTrigger::Immediate) => {
-                                        Some(audio_processor.block_pos)
-                                    }
-                                    Some(QueuedTrigger::NextBar) => audio_processor.scan_trigger(
-                                        "barTrigger",
-                                        audio_processor.block_pos,
-                                        scan_end,
-                                    ),
-                                    Some(QueuedTrigger::NextBeat) => audio_processor.scan_trigger(
-                                        "beatTrigger",
-                                        audio_processor.block_pos,
-                                        scan_end,
-                                    ),
-                                    None => None,
-                                };
-
-                            let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
-
-                            // Force every module to advance to `end`, in cache-efficient
-                            // producer-before-consumer order, so modules not reachable from
-                            // the output or any scope still process. The root/scope reads in
-                            // the drain below then become pure cache hits. Skipped while
-                            // stopped so the patch freezes on stop — the drain still ramps
-                            // connected modules out via the root pull during the fade.
-                            if end > audio_processor.block_pos && !audio_processor.is_stopped() {
-                                audio_processor.process_all_modules_to(end);
-                            }
-
-                            // Drain [block_pos, end) into cpal output, inlining the
-                            // volume-change state machine + soft clip that
-                            // `FinalStateProcessor` used to provide per-frame.
-                            if end > audio_processor.block_pos {
-                                let mut scope_guard = audio_processor.scope_collection.try_lock();
-                                let mut writer_guard = recording_writer.try_lock();
-                                for i in audio_processor.block_pos..end {
-                                    let is_stopped = audio_processor.is_stopped();
-                                    match (final_state_processor.prev_is_stopped, is_stopped) {
-                                        (true, false) => {
-                                            final_state_processor.volume_change =
-                                                VolumeChange::None;
-                                            final_state_processor.attenuation_factor = 1.0;
+                                // Resolve trigger sample for queued patch swap.
+                                let trigger_sample: Option<usize> =
+                                    match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
+                                        Some(QueuedTrigger::Immediate) => {
+                                            Some(audio_processor.block_pos)
                                         }
-                                        (false, true) => {
-                                            final_state_processor.volume_change =
-                                                VolumeChange::Decrease;
-                                        }
-                                        _ => {}
-                                    }
-                                    final_state_processor.prev_is_stopped = is_stopped;
-                                    if matches!(
-                                        final_state_processor.volume_change,
-                                        VolumeChange::Decrease
-                                    ) {
-                                        final_state_processor.attenuation_factor *= 0.999;
-                                        if final_state_processor.attenuation_factor < 0.0001 {
-                                            final_state_processor.attenuation_factor = 0.0;
-                                            final_state_processor.volume_change =
-                                                VolumeChange::None;
-                                        }
-                                    }
+                                        Some(QueuedTrigger::NextBar) => audio_processor
+                                            .scan_trigger(
+                                                "barTrigger",
+                                                audio_processor.block_pos,
+                                                scan_end,
+                                            ),
+                                        Some(QueuedTrigger::NextBeat) => audio_processor
+                                            .scan_trigger(
+                                                "beatTrigger",
+                                                audio_processor.block_pos,
+                                                scan_end,
+                                            ),
+                                        None => None,
+                                    };
 
-                                    let frame_start = written * num_channels;
+                                let end =
+                                    trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
 
-                                    if final_state_processor.attenuation_factor < f32::EPSILON {
-                                        for ch in 0..num_channels {
-                                            output[frame_start + ch] = T::from_sample(0.0f32);
+                                // Force every module to advance to `end`, in cache-efficient
+                                // producer-before-consumer order, so modules not reachable from
+                                // the output or any scope still process. The root/scope reads in
+                                // the drain below then become pure cache hits. Skipped while
+                                // stopped so the patch freezes on stop — the drain still ramps
+                                // connected modules out via the root pull during the fade.
+                                if end > audio_processor.block_pos && !audio_processor.is_stopped()
+                                {
+                                    audio_processor.process_all_modules_to(end);
+                                }
+
+                                // Drain [block_pos, end) into cpal output, inlining the
+                                // volume-change state machine + soft clip that
+                                // `FinalStateProcessor` used to provide per-frame.
+                                if end > audio_processor.block_pos {
+                                    let mut scope_guard =
+                                        audio_processor.scope_collection.try_lock();
+                                    let mut writer_guard = recording_writer.try_lock();
+                                    for i in audio_processor.block_pos..end {
+                                        let is_stopped = audio_processor.is_stopped();
+                                        match (final_state_processor.prev_is_stopped, is_stopped) {
+                                            (true, false) => {
+                                                final_state_processor.volume_change =
+                                                    VolumeChange::None;
+                                                final_state_processor.attenuation_factor = 1.0;
+                                            }
+                                            (false, true) => {
+                                                final_state_processor.volume_change =
+                                                    VolumeChange::Decrease;
+                                            }
+                                            _ => {}
                                         }
-                                        written += 1;
-                                        continue;
-                                    }
-
-                                    if let Some(root) =
-                                        audio_processor.patch.sampleables.get(&*ROOT_ID)
-                                    {
-                                        let mut any_audible = false;
-                                        let mut samples = [0.0f32; PORT_MAX_CHANNELS];
-                                        for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                                            let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i)
-                                                * AUDIO_OUTPUT_ATTENUATION;
-                                            let sample = safety_soft_clip(
-                                                raw * final_state_processor.attenuation_factor,
-                                            );
-                                            samples[ch] = sample;
-                                            if sample.abs() >= 0.0005 {
-                                                any_audible = true;
+                                        final_state_processor.prev_is_stopped = is_stopped;
+                                        if matches!(
+                                            final_state_processor.volume_change,
+                                            VolumeChange::Decrease
+                                        ) {
+                                            final_state_processor.attenuation_factor *= 0.999;
+                                            if final_state_processor.attenuation_factor < 0.0001 {
+                                                final_state_processor.attenuation_factor = 0.0;
+                                                final_state_processor.volume_change =
+                                                    VolumeChange::None;
                                             }
                                         }
-                                        if is_stopped && !any_audible {
-                                            final_state_processor.attenuation_factor = 0.0;
-                                            final_state_processor.volume_change =
-                                                VolumeChange::None;
+
+                                        let frame_start = written * num_channels;
+
+                                        if final_state_processor.attenuation_factor < f32::EPSILON {
                                             for ch in 0..num_channels {
                                                 output[frame_start + ch] = T::from_sample(0.0f32);
                                             }
-                                        } else {
-                                            for ch in 0..num_channels {
-                                                let v = if ch < PORT_MAX_CHANNELS {
-                                                    samples[ch]
-                                                } else {
-                                                    0.0
-                                                };
-                                                output[frame_start + ch] = T::from_sample(v);
-                                            }
+                                            written += 1;
+                                            continue;
                                         }
-                                        if let Some(writer_lock) = writer_guard.as_mut()
-                                            && let Some(writer) = writer_lock.as_mut()
+
+                                        if let Some(root) =
+                                            audio_processor.patch.sampleables.get(&*ROOT_ID)
                                         {
-                                            let v = root.get_value_at(&ROOT_OUTPUT_PORT, 0, i)
-                                                * AUDIO_OUTPUT_ATTENUATION
-                                                * final_state_processor.attenuation_factor;
-                                            let _ = writer
-                                                .write_sample(T::from_sample(safety_soft_clip(v)));
-                                        }
-                                        if let Some(scope_lock) = scope_guard.as_mut() {
-                                            for (key, scope_buffer) in scope_lock.iter_mut() {
-                                                if let Some(module) = audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&key.module_id)
-                                                {
-                                                    let s = module.get_value_at(
-                                                        &key.port_name,
-                                                        key.channel as usize,
-                                                        i,
-                                                    );
-                                                    scope_buffer.push(s);
+                                            let mut any_audible = false;
+                                            let mut samples = [0.0f32; PORT_MAX_CHANNELS];
+                                            for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
+                                                let raw =
+                                                    root.get_value_at(&ROOT_OUTPUT_PORT, ch, i)
+                                                        * AUDIO_OUTPUT_ATTENUATION;
+                                                let sample = safety_soft_clip(
+                                                    raw * final_state_processor.attenuation_factor,
+                                                );
+                                                samples[ch] = sample;
+                                                if sample.abs() >= 0.0005 {
+                                                    any_audible = true;
                                                 }
                                             }
+                                            if is_stopped && !any_audible {
+                                                final_state_processor.attenuation_factor = 0.0;
+                                                final_state_processor.volume_change =
+                                                    VolumeChange::None;
+                                                for ch in 0..num_channels {
+                                                    output[frame_start + ch] =
+                                                        T::from_sample(0.0f32);
+                                                }
+                                            } else {
+                                                for ch in 0..num_channels {
+                                                    let v = if ch < PORT_MAX_CHANNELS {
+                                                        samples[ch]
+                                                    } else {
+                                                        0.0
+                                                    };
+                                                    output[frame_start + ch] = T::from_sample(v);
+                                                }
+                                            }
+                                            if let Some(writer_lock) = writer_guard.as_mut()
+                                                && let Some(writer) = writer_lock.as_mut()
+                                            {
+                                                let v = root.get_value_at(&ROOT_OUTPUT_PORT, 0, i)
+                                                    * AUDIO_OUTPUT_ATTENUATION
+                                                    * final_state_processor.attenuation_factor;
+                                                let _ = writer.write_sample(T::from_sample(
+                                                    safety_soft_clip(v),
+                                                ));
+                                            }
+                                            if let Some(scope_lock) = scope_guard.as_mut() {
+                                                for (key, scope_buffer) in scope_lock.iter_mut() {
+                                                    if let Some(module) = audio_processor
+                                                        .patch
+                                                        .sampleables
+                                                        .get(&key.module_id)
+                                                    {
+                                                        let s = module.get_value_at(
+                                                            &key.port_name,
+                                                            key.channel as usize,
+                                                            i,
+                                                        );
+                                                        scope_buffer.push(s);
+                                                    }
+                                                }
+                                            }
+                                            for (key, xy_buffer) in &audio_processor.scope_xy_audio
+                                            {
+                                                let (Some(x_mod), Some(y_mod)) = (
+                                                    audio_processor
+                                                        .patch
+                                                        .sampleables
+                                                        .get(&key.pair.x.module_id),
+                                                    audio_processor
+                                                        .patch
+                                                        .sampleables
+                                                        .get(&key.pair.y.module_id),
+                                                ) else {
+                                                    continue;
+                                                };
+                                                let xv = x_mod.get_value_at(
+                                                    &key.pair.x.port_name,
+                                                    key.pair.x.channel as usize,
+                                                    i,
+                                                );
+                                                let yv = y_mod.get_value_at(
+                                                    &key.pair.y.port_name,
+                                                    key.pair.y.channel as usize,
+                                                    i,
+                                                );
+                                                xy_buffer.push(xv, yv);
+                                            }
+                                        } else {
+                                            for ch in 0..num_channels {
+                                                output[frame_start + ch] = T::from_sample(0.0f32);
+                                            }
                                         }
-                                        for (key, xy_buffer) in &audio_processor.scope_xy_audio {
-                                            let (Some(x_mod), Some(y_mod)) = (
-                                                audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&key.pair.x.module_id),
-                                                audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&key.pair.y.module_id),
-                                            ) else {
-                                                continue;
-                                            };
-                                            let xv = x_mod.get_value_at(
-                                                &key.pair.x.port_name,
-                                                key.pair.x.channel as usize,
-                                                i,
-                                            );
-                                            let yv = y_mod.get_value_at(
-                                                &key.pair.y.port_name,
-                                                key.pair.y.channel as usize,
-                                                i,
-                                            );
-                                            xy_buffer.push(xv, yv);
-                                        }
-                                    } else {
-                                        for ch in 0..num_channels {
-                                            output[frame_start + ch] = T::from_sample(0.0f32);
-                                        }
+
+                                        written += 1;
                                     }
+                                    // Publish each XY buffer's ring to its SeqLock region once per
+                                    // block so the main thread can read a coherent frame without a
+                                    // lock.
+                                    for (_key, xy_buffer) in &audio_processor.scope_xy_audio {
+                                        xy_buffer.publish();
+                                    }
+                                    audio_processor.block_pos = end;
+                                }
 
-                                    written += 1;
+                                // Apply queued swap if we stopped at the trigger sample.
+                                if trigger_sample == Some(audio_processor.block_pos)
+                                    && audio_processor.block_pos < block_size
+                                {
+                                    let (update, _) = audio_processor.queued_update.take().unwrap();
+                                    let applied_id = update.update_id;
+                                    let swap_pos = audio_processor.block_pos;
+                                    audio_processor.apply_patch_update(update, swap_pos);
+                                    audio_processor
+                                        .transport_meter
+                                        .write_applied_update_id(applied_id);
+                                    // ROOT_CLOCK's transport state carries across the swap via
+                                    // `transfer_state_from`. Its cache
+                                    // for `[swap_pos, block_size)` was filled under the OLD params;
+                                    // refill the remainder of this callback's range from `swap_pos`
+                                    // forward under the NEW patch.
+                                    if let Some(root_clock) =
+                                        audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
+                                    {
+                                        root_clock.set_initial_index(swap_pos);
+                                    }
+                                    let eager_end = block_size
+                                        .min(audio_processor.block_pos + (num_frames - written));
+                                    audio_processor.eager_fill_clock(swap_pos, eager_end, written);
                                 }
-                                // Publish each XY buffer's ring to its SeqLock region once per
-                                // block so the main thread can read a coherent frame without a
-                                // lock.
-                                for (_key, xy_buffer) in &audio_processor.scope_xy_audio {
-                                    xy_buffer.publish();
-                                }
-                                audio_processor.block_pos = end;
                             }
+                        }
 
-                            // Apply queued swap if we stopped at the trigger sample.
-                            if trigger_sample == Some(audio_processor.block_pos)
-                                && audio_processor.block_pos < block_size
+                        // Transport meter — read at the last sample we just consumed.
+                        {
+                            let last = audio_processor.block_pos.saturating_sub(1);
+                            let has_queued = audio_processor.queued_update.is_some();
+                            if let Some(clock) =
+                                audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
                             {
-                                let (update, _) = audio_processor.queued_update.take().unwrap();
-                                let applied_id = update.update_id;
-                                let swap_pos = audio_processor.block_pos;
-                                audio_processor.apply_patch_update(update, swap_pos);
+                                let bar_phase = clock.get_value_at("playhead", 0, last) as f64;
+                                let bar_count = clock.get_value_at("playhead", 1, last) as u64;
+                                let beat_in_bar = clock.get_value_at("beatInBar", 0, last) as u32;
+                                let is_playing = !audio_processor.is_stopped();
+                                audio_processor.transport_meter.write_from_audio(
+                                    bar_phase,
+                                    bar_count,
+                                    beat_in_bar,
+                                    is_playing,
+                                    has_queued,
+                                );
+                            } else {
                                 audio_processor
                                     .transport_meter
-                                    .write_applied_update_id(applied_id);
-                                // ROOT_CLOCK's transport state carries across the swap via
-                                // `transfer_state_from`. Its cache
-                                // for `[swap_pos, block_size)` was filled under the OLD params;
-                                // refill the remainder of this callback's range from `swap_pos`
-                                // forward under the NEW patch.
-                                if let Some(root_clock) =
-                                    audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
-                                {
-                                    root_clock.set_initial_index(swap_pos);
-                                }
-                                let eager_end = block_size
-                                    .min(audio_processor.block_pos + (num_frames - written));
-                                audio_processor.eager_fill_clock(swap_pos, eager_end, written);
+                                    .write_from_audio(0.0, 0, 0, false, has_queued);
                             }
                         }
-                    }
 
-                    // Transport meter — read at the last sample we just consumed.
-                    {
-                        let last = audio_processor.block_pos.saturating_sub(1);
-                        let has_queued = audio_processor.queued_update.is_some();
-                        if let Some(clock) = audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
+                        // Increment Link sample count for HostTimeFilter
+                        audio_processor.link.add_samples(num_frames as u64);
+
+                        // Collect module states for UI (e.g., seq step highlighting)
+                        // Done once per buffer, not per frame, to minimize overhead
                         {
-                            let bar_phase = clock.get_value_at("playhead", 0, last) as f64;
-                            let bar_count = clock.get_value_at("playhead", 1, last) as u64;
-                            let beat_in_bar = clock.get_value_at("beatInBar", 0, last) as u32;
-                            let is_playing = !audio_processor.is_stopped();
-                            audio_processor.transport_meter.write_from_audio(
-                                bar_phase,
-                                bar_count,
-                                beat_in_bar,
-                                is_playing,
-                                has_queued,
-                            );
-                        } else {
-                            audio_processor
-                                .transport_meter
-                                .write_from_audio(0.0, 0, 0, false, has_queued);
+                            profiling::scope!("collect_module_states");
+                            audio_processor.collect_module_states();
                         }
-                    }
 
-                    // Increment Link sample count for HostTimeFilter
-                    audio_processor.link.add_samples(num_frames as u64);
+                        // Retry any deferred profiler shared-map swap, then flush this
+                        // callback's per-module profile data into the cross-thread
+                        // snapshot. Both are no-ops when nothing is pending / profiling
+                        // is disabled (early-out inside the calls).
+                        audio_processor.retry_pending_profile_seed();
+                        modular_core::profiling::flush_into(
+                            &audio_processor.module_profile_collection,
+                        );
 
-                    // Collect module states for UI (e.g., seq step highlighting)
-                    // Done once per buffer, not per frame, to minimize overhead
-                    {
-                        profiling::scope!("collect_module_states");
-                        audio_processor.collect_module_states();
-                    }
+                        let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
 
-                    // Retry any deferred profiler shared-map swap, then flush this
-                    // callback's per-module profile data into the cross-thread
-                    // snapshot. Both are no-ops when nothing is pending / profiling
-                    // is disabled (early-out inside the calls).
-                    audio_processor.retry_pending_profile_seed();
-                    modular_core::profiling::flush_into(&audio_processor.module_profile_collection);
-
-                    let elapsed_ns = callback_start.elapsed().as_nanos() as u64;
-
-                    audio_budget_meter.record_chunk(output.len() as u64, elapsed_ns);
+                        audio_budget_meter.record_chunk(output.len() as u64, elapsed_ns);
+                    })
                 }));
                 if result.is_err() {
                     // Panic hook (panic_log::install_panic_hook) has already written

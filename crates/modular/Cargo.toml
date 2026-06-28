@@ -13,7 +13,7 @@ default = []
 tracy   = ["modular_core/tracy", "tracy-client", "profiling/profile-with-tracy"]
 # Dev-only audio-thread allocation detector (see src/alloc_detector.rs). Off by
 # default; enabled by `yarn start:alloc` or `build-native-alloc`. Installs a global allocator — never ship.
-alloc-detector = ["modular_core/alloc-detector"]
+alloc-detector = []
 
 [dependencies]
 aubio = { version = "0.2", features = ["builtin", "bindgen"] }
