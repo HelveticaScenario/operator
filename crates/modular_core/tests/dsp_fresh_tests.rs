@@ -47,7 +47,6 @@ fn make_module(module_type: &str, id: &str, params: serde_json::Value) -> Box<dy
         .unwrap_or_else(|e| panic!("params deserialization for '{module_type}' failed: {e}"));
     let deserialized = DeserializedParams {
         params: cached.params,
-        argument_spans: Default::default(),
         channel_count: cached.channel_count,
     };
     constructors
@@ -378,7 +377,6 @@ fn all_constructors_produce_valid_modules() {
             .unwrap_or_else(|e| panic!("params deserialization for '{name}' failed: {e}"));
         let deserialized = DeserializedParams {
             params: cached.params,
-            argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
         let module = constructor(
@@ -411,7 +409,6 @@ fn all_constructors_can_tick() {
             .unwrap_or_else(|e| panic!("params deserialization for '{name}' failed: {e}"));
         let deserialized = DeserializedParams {
             params: cached.params,
-            argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
         let module = constructor(
@@ -1238,19 +1235,26 @@ fn sp_payload(sources: &[&str], scale: &str, ops: Vec<(&str, &str)>) -> Value {
     })
 }
 
-/// Sum the number of highlight spans across every `pattern.*` (or `pattern`)
-/// key in a `get_state()` param_spans object. Returns `None` if the module
-/// produced no state at all.
-fn total_highlight_spans(state: &Option<Value>) -> Option<usize> {
-    let state = state.as_ref()?;
-    let param_spans = state.get("param_spans")?.as_object()?;
-    let mut total = 0;
-    for (_key, entry) in param_spans {
-        if let Some(spans) = entry.get("spans").and_then(|s| s.as_array()) {
-            total += spans.len();
-        }
-    }
-    Some(total)
+/// Total active highlight spans across every pattern source in a snapshot.
+fn pod_total_spans(pod: &modular_core::dsp::seq::SeqHighlightState) -> usize {
+    (0..modular_core::dsp::seq::highlight::MAX_SEQ_SOURCES)
+        .map(|i| pod.spans_for(i).len())
+        .sum()
+}
+
+/// Number of pattern sources carrying at least one active span in a snapshot.
+fn pod_active_sources(pod: &modular_core::dsp::seq::SeqHighlightState) -> usize {
+    (0..modular_core::dsp::seq::highlight::MAX_SEQ_SOURCES)
+        .filter(|&i| !pod.spans_for(i).is_empty())
+        .count()
+}
+
+/// Snapshot a module's live step-highlight spans and return the total active
+/// span count across all pattern sources.
+fn total_highlight_spans(module: &dyn modular_core::types::Sampleable) -> usize {
+    let mut pod = modular_core::dsp::seq::SeqHighlightState::default();
+    module.write_module_state(&mut pod);
+    pod_total_spans(&pod)
 }
 
 #[test]
@@ -1308,11 +1312,10 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     }
 
     // Sanity: the OLD single-source module reports a non-empty highlight.
-    let old_state = old_patch.sampleables.get("seq").unwrap().get_state();
-    let old_spans = total_highlight_spans(&old_state);
+    let old_spans = total_highlight_spans(old_patch.sampleables.get("seq").unwrap().as_ref());
     assert!(
-        matches!(old_spans, Some(n) if n > 0),
-        "old single-source module should highlight the held `5` step; got state={old_state:?}"
+        old_spans > 0,
+        "old single-source module should highlight the held `5` step; got {old_spans} spans"
     );
 
     // CV the held voice is producing. `5` is bare-number degree 5 → 5 V/oct.
@@ -1362,47 +1365,39 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
     process_frame(&new_patch);
 
     let seq_b = new_patch.sampleables.get("seq").unwrap();
-    let healed_state = seq_b.get_state();
-    let healed_spans = total_highlight_spans(&healed_state);
-    let healed_keys: Vec<String> = healed_state
-        .as_ref()
-        .and_then(|s| s.get("param_spans"))
-        .and_then(|p| p.as_object())
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
+    let mut healed_pod = modular_core::dsp::seq::SeqHighlightState::default();
+    seq_b.write_module_state(&mut healed_pod);
+    let healed_spans = pod_total_spans(&healed_pod);
 
+    let healed_active_sources = pod_active_sources(&healed_pod);
     eprintln!("--- seq highlight transfer (self-heal) ---");
-    eprintln!("old (single-source) total spans = {old_spans:?}");
-    eprintln!("after transfer, param_spans keys = {healed_keys:?}");
-    eprintln!("after transfer, total spans      = {healed_spans:?}");
-    eprintln!("healed state = {healed_state:?}");
+    eprintln!("old (single-source) total spans = {old_spans}");
+    eprintln!("after transfer, active sources   = {healed_active_sources}");
+    eprintln!("after transfer, total spans      = {healed_spans}");
 
     // The fix: immediately after transfer (no restart), with a voice still
     // held off a stale/out-of-range hap_index, the highlight read self-heals
     // by geometry and surfaces the spans for the step actually playing.
     assert!(
-        matches!(healed_spans, Some(n) if n > 0),
+        healed_spans > 0,
         "after state transfer with a held voice, the highlight should self-heal \
          (re-resolve the stale hap_index by geometry) and be NON-EMPTY. \
-         Got total={healed_spans:?}, keys={healed_keys:?}, state={healed_state:?}"
+         Got total={healed_spans}, active sources={healed_active_sources}"
     );
 
-    // Multi-source: both pattern.0 (`5`) and pattern.1 (`4`) contributed to the
-    // held step, so both keys must carry spans.
-    let param_spans = healed_state
-        .as_ref()
-        .and_then(|s| s.get("param_spans"))
-        .and_then(|p| p.as_object())
-        .expect("param_spans map present");
-    for key in ["pattern.0", "pattern.1"] {
-        let spans = param_spans
-            .get(key)
-            .and_then(|e| e.get("spans"))
-            .and_then(|v| v.as_array())
-            .unwrap_or_else(|| panic!("missing {key} spans: {param_spans:?}"));
+    // Multi-source: both source 0 (`5`) and source 1 (`4`) — published under the
+    // renderer keys `pattern.0`/`pattern.1` — contributed to the held step, so
+    // both must carry spans.
+    assert_eq!(
+        healed_active_sources, 2,
+        "expected two pattern sources to carry spans after the chained `$p.s` swap"
+    );
+    for source_idx in 0..2 {
         assert!(
-            !spans.is_empty(),
-            "{key} should carry spans for the held step after self-heal: {param_spans:?}"
+            !healed_pod.spans_for(source_idx).is_empty(),
+            "source {source_idx} (pattern.{source_idx}) should carry spans for the held step \
+             after self-heal: {:?}",
+            healed_pod.spans_for(source_idx)
         );
     }
 
@@ -1448,11 +1443,11 @@ fn seq_highlight_survives_state_transfer_from_single_to_multi_source() {
         module.on_patch_update();
     }
     process_frame(&ctrl_patch);
-    let ctrl_spans = total_highlight_spans(&ctrl_patch.sampleables.get("seq").unwrap().get_state());
+    let ctrl_spans = total_highlight_spans(ctrl_patch.sampleables.get("seq").unwrap().as_ref());
     assert!(
-        matches!(ctrl_spans, Some(n) if n > 0),
+        ctrl_spans > 0,
         "equal-geometry single-source re-run should keep highlight (index still \
-         valid, fast path); got {ctrl_spans:?}"
+         valid, fast path); got {ctrl_spans}"
     );
 }
 

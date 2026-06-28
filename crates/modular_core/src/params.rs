@@ -3,10 +3,6 @@
 //! Types and utilities for deserializing module params on the main thread
 //! and applying them cheaply on the audio thread.
 
-use napi_derive::napi;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
 // ---------------------------------------------------------------------------
 // Argument spans
 // ---------------------------------------------------------------------------
@@ -14,30 +10,6 @@ use std::collections::HashMap;
 /// Key used for internal metadata field storing argument source spans.
 /// This constant is shared across Rust validation, derive macros, and TypeScript.
 pub const ARGUMENT_SPANS_KEY: &str = "__argument_spans";
-
-/// Represents a character span in source code, used for argument highlighting.
-/// Start and end are absolute character offsets (0-based, end exclusive).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-#[napi(object)]
-pub struct ArgumentSpan {
-    /// Absolute start offset (0-based)
-    pub start: u32,
-    /// Absolute end offset (exclusive)
-    pub end: u32,
-}
-
-impl ArgumentSpan {
-    /// Create a new argument span
-    pub fn new(start: u32, end: u32) -> Self {
-        Self { start, end }
-    }
-
-    /// Check if this span is empty/unset
-    pub fn is_empty(&self) -> bool {
-        self.start == 0 && self.end == 0
-    }
-}
 
 // ---------------------------------------------------------------------------
 // CloneableParams trait
@@ -86,18 +58,12 @@ impl Clone for Box<dyn CloneableParams> {
 // Deserialized / cached params
 // ---------------------------------------------------------------------------
 
-/// Pre-deserialized module params ready to be applied on the audio thread.
-///
-/// Contains the typed params (type-erased), argument spans (extracted fresh,
-/// never cached), and the derived channel count. Sent through the ring buffer
-/// from the main thread to the audio thread.
+/// Pre-deserialized module params, sent through the ring buffer from the main
+/// thread to the audio thread.
 #[derive(Clone)]
 pub struct DeserializedParams {
     /// Type-erased concrete params (e.g. `Box<SineOscillatorParams>`).
     pub params: Box<dyn CloneableParams>,
-    /// Source-location spans for each argument, keyed by param field name.
-    /// Extracted fresh on every update (not cached).
-    pub argument_spans: HashMap<String, ArgumentSpan>,
     /// Derived output channel count for this module.
     pub channel_count: usize,
 }
@@ -125,33 +91,14 @@ pub type ParamsDeserializer =
 // Utilities
 // ---------------------------------------------------------------------------
 
-/// Strip `__argument_spans` from a JSON params object, returning the cleaned
-/// value and the extracted spans map.
-///
-/// If the input is not an object or has no `__argument_spans` key, the value
-/// is returned unchanged with an empty spans map.
-pub fn extract_argument_spans(
-    params: serde_json::Value,
-) -> (serde_json::Value, HashMap<String, ArgumentSpan>) {
+/// Remove `__argument_spans` (the deserializers reject it). The spans are read
+/// from the raw params elsewhere, so they aren't returned here.
+pub fn strip_argument_spans(params: serde_json::Value) -> serde_json::Value {
     match params {
         serde_json::Value::Object(mut obj) => {
-            let spans = obj
-                .remove(ARGUMENT_SPANS_KEY)
-                .and_then(|v| match v {
-                    serde_json::Value::Object(spans_obj) => {
-                        let mut map = HashMap::new();
-                        for (key, value) in spans_obj {
-                            if let Ok(span) = serde_json::from_value::<ArgumentSpan>(value) {
-                                map.insert(key, span);
-                            }
-                        }
-                        Some(map)
-                    }
-                    _ => None,
-                })
-                .unwrap_or_default();
-            (serde_json::Value::Object(obj), spans)
+            obj.remove(ARGUMENT_SPANS_KEY);
+            serde_json::Value::Object(obj)
         }
-        other => (other, HashMap::new()),
+        other => other,
     }
 }

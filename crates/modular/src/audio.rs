@@ -40,9 +40,49 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use modular_core::module_state::{ModuleLiveState, ModuleStateMeta};
 use modular_core::patch::Patch;
 use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges};
 use std::time::Instant;
+
+/// Shared map of live per-module editor state, keyed by module id. Each value is
+/// a module's pre-allocated, type-erased live slot (see
+/// [`modular_core::module_state`]). The audio thread writes into existing slots
+/// (without allocating); the main thread reads them on poll and is the only side
+/// that adds or removes keys (in `apply_patch`).
+type ModuleStateMap = HashMap<String, Box<dyn ModuleLiveState>>;
+
+/// Main-thread-only cache of immutable per-module state metadata that doesn't
+/// change while playing. Held behind a single lock (see
+/// [`AudioState::module_state_meta`]) only because `AudioState` is shared by
+/// `Arc` and so must be `Sync`; the audio thread never touches it.
+#[derive(Default)]
+struct ModuleStateMetaCache {
+    /// Metadata for the patch currently playing on the audio thread, keyed by
+    /// module id. Paired with the live slots in `get_module_states`.
+    live: HashMap<String, Box<dyn ModuleStateMeta>>,
+    /// Metadata for a queued patch update that has not yet swapped in, tagged
+    /// with its `update_id`. Promoted into `live` once the audio thread reports
+    /// the swap applied (`applied_update_id >= id`), so a poll during the queue
+    /// window never pairs the new patch's metadata with the old patch's still-
+    /// live state.
+    pending: Option<(u64, HashMap<String, Box<dyn ModuleStateMeta>>)>,
+}
+
+impl ModuleStateMetaCache {
+    /// Promote pending metadata and prune dropped modules' slots once the swap
+    /// applied. Called from the poll path and `apply_patch` so orphan slots can't
+    /// accumulate while the editor isn't polling.
+    fn promote_if_applied(&mut self, states: &mut ModuleStateMap, applied_update_id: u64) {
+        if let Some((id, _)) = self.pending.as_ref()
+            && applied_update_id >= *id
+            && let Some((_, metas)) = self.pending.take()
+        {
+            states.retain(|id, _| metas.contains_key(id));
+            self.live = metas;
+        }
+    }
+}
 
 use crate::commands::{
     AudioError, COMMAND_QUEUE_CAPACITY, ERROR_QUEUE_CAPACITY, GARBAGE_QUEUE_CAPACITY, GarbageItem,
@@ -1001,8 +1041,14 @@ pub struct AudioState {
     channels: u16,
     /// Audio budget meter - written by audio thread, read by main thread
     audio_budget_meter: Arc<AudioBudgetMeter>,
-    /// Module states (e.g., seq current step) - written by audio thread, read by main thread
-    module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    /// Live per-module editor state, written by the audio thread and read by the
+    /// main thread. The audio thread only writes into existing slots; the main
+    /// thread owns adding and removing keys.
+    module_states: Arc<Mutex<ModuleStateMap>>,
+    /// Main-thread cache of per-module state metadata (live + pending), used to
+    /// build the editor JSON in `get_module_states`. Single lock for `&self`
+    /// mutation; the audio thread never touches it. See [`ModuleStateMetaCache`].
+    module_state_meta: Mutex<ModuleStateMetaCache>,
     /// MIDI input manager - shared with audio thread for polling
     midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1063,6 +1109,7 @@ impl AudioState {
             channels,
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
+            module_state_meta: Mutex::new(ModuleStateMetaCache::default()),
             midi_manager,
             transport_meter: Arc::new(TransportMeter::default()),
             audio_thread_panicked: Arc::new(AtomicBool::new(false)),
@@ -1287,10 +1334,62 @@ impl AudioState {
     }
 
     pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
-        // Read module states from shared buffer (written by audio thread)
-        match self.module_states.try_lock() {
-            Some(states) => states.clone(),
-            None => HashMap::new(), // Skip if locked by audio thread
+        // Snapshot under the lock, then build JSON after releasing it, so the audio
+        // thread's `try_lock` never fails across JSON construction.
+        let mut states_guard = match self.module_states.try_lock() {
+            Some(guard) => guard,
+            None => return HashMap::new(), // audio thread is writing; skip this poll
+        };
+        let mut meta = self.module_state_meta.lock();
+        // Promotion (and the slot prune it drives) happens once the swap applies, so
+        // a removed module keeps highlighting until its swap lands. The applied-id
+        // gate keeps new metadata from pairing with old state.
+        meta.promote_if_applied(
+            &mut states_guard,
+            self.transport_meter.read_applied_update_id(),
+        );
+        // Clone only the slots that have paired metadata; an unpaired slot (a freshly
+        // added module whose metadata is still pending) would be discarded below, so
+        // skip its `clone_box` entirely.
+        let states: Vec<(String, Box<dyn ModuleLiveState>)> = states_guard
+            .iter()
+            .filter(|(id, _)| meta.live.contains_key(*id))
+            .map(|(id, s)| (id.clone(), s.clone_box()))
+            .collect();
+        drop(states_guard);
+        let mut out = HashMap::with_capacity(states.len());
+        for (id, live) in states {
+            if let Some(m) = meta.live.get(&id) {
+                out.insert(id, m.build_json(live.as_ref()));
+            }
+        }
+        out
+    }
+
+    /// `set_module_param` swaps a module bypassing `apply_patch`'s promote path,
+    /// so refresh its editor state here. `None` drops any existing state for `id`.
+    pub(crate) fn refresh_single_module_state(
+        &self,
+        id: String,
+        refreshed: Option<(Box<dyn ModuleLiveState>, Box<dyn ModuleStateMeta>)>,
+    ) {
+        let mut states = self.module_states.lock();
+        let mut meta = self.module_state_meta.lock();
+        // Promote any already-applied pending first: a swap that landed since the last
+        // poll must clear `pending` before this insert, otherwise the next promotion
+        // would overwrite the entry written here with the patch's apply-time metadata.
+        meta.promote_if_applied(&mut states, self.transport_meter.read_applied_update_id());
+        match refreshed {
+            Some((live, m)) => {
+                // Insert a fresh slot: new params may change geometry, so a blank frame
+                // beats pairing stale spans with the new metadata.
+                states.insert(id.clone(), live);
+                meta.live.insert(id, m);
+            }
+            None => {
+                states.remove(&id);
+                meta.live.remove(&id);
+            }
         }
     }
 
@@ -1407,7 +1506,21 @@ impl AudioState {
             modular_core::params::DeserializedParams,
         )> = Vec::with_capacity(desired_modules.len());
         let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+        // Build each stateful module's editor-state halves from the raw params now,
+        // before the deserialize step below consumes them: the immutable metadata
+        // (cached to build the editor JSON on poll) and the pre-allocated live slot
+        // the audio thread will fill. Only modules registered in
+        // `get_module_state_builders` produce any.
+        let state_builders = modular_core::dsp::get_module_state_builders();
+        let mut state_metas: HashMap<String, Box<dyn ModuleStateMeta>> = HashMap::new();
+        let mut state_live: HashMap<String, Box<dyn ModuleLiveState>> = HashMap::new();
         for (id, module_state) in desired_modules {
+            if let Some(builder) = state_builders.get(&module_state.module_type)
+                && let Some((live, meta)) = builder(&module_state.params)
+            {
+                state_metas.insert(id.clone(), meta);
+                state_live.insert(id.clone(), live);
+            }
             let deserialized =
                 crate::deserialize_params(&module_state.module_type, module_state.params, true)
                     .map_err(|e| {
@@ -1516,6 +1629,19 @@ impl AudioState {
         // Restart the transport when applying this update (set on a buffer switch)
         update.reset_clock = reset_clock;
 
+        // Add-only: the audio thread must write only into pre-existing slots, so a
+        // dropped module's removal is deferred until its swap lands. Promote any
+        // prior applied update first (bounds slots if the editor isn't polling).
+        {
+            let mut states = self.module_states.lock();
+            let mut meta = self.module_state_meta.lock();
+            meta.promote_if_applied(&mut states, self.transport_meter.read_applied_update_id());
+            for (id, live) in state_live {
+                states.entry(id).or_insert(live);
+            }
+            meta.pending = Some((update_id, state_metas));
+        }
+
         // Send the update to audio thread
         self.send_command(GraphCommand::QueuedPatchUpdate { update, trigger })
     }
@@ -1581,8 +1707,8 @@ pub struct AudioSharedState {
     pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
     pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
     pub audio_budget_meter: Arc<AudioBudgetMeter>,
-    /// Module states (e.g., seq current step) - written by audio thread, read by main thread
-    pub module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    /// Live per-module editor state - written by audio thread, read by main thread
+    pub module_states: Arc<Mutex<ModuleStateMap>>,
     /// MIDI input manager for polling MIDI messages
     pub midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1661,8 +1787,9 @@ struct AudioProcessor {
     /// volt→clip mapping swaps atomically with the buffers; read by the main
     /// thread for the renderer.
     scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    /// Shared module states (e.g., seq current step)
-    module_states: Arc<Mutex<HashMap<String, serde_json::Value>>>,
+    /// Shared live per-module editor state. Written into existing slots each
+    /// callback; never adds or removes keys (the main thread owns those).
+    module_states: Arc<Mutex<ModuleStateMap>>,
     /// MIDI input manager for polling
     midi_manager: Arc<MidiInputManager>,
     /// Queued patch update waiting for its trigger condition
@@ -2293,23 +2420,12 @@ impl AudioProcessor {
         None
     }
 
-    /// Collect states from modules that implement StatefulModule (e.g., Seq).
-    /// Uses try_lock to avoid blocking the audio thread if the main thread is reading.
-    /// Reuses HashMap entries to avoid repeated String allocation on the audio thread.
     fn collect_module_states(&self) {
-        // Use try_lock to avoid blocking audio if main thread is reading
         if let Some(mut states) = self.module_states.try_lock() {
-            // Remove entries for modules that no longer exist
-            states.retain(|id, _| self.patch.sampleables.contains_key(id));
-
-            // Update existing entries and add new ones
-            for (id, module) in &self.patch.sampleables {
-                if let Some(state) = module.get_state() {
-                    if let Some(existing) = states.get_mut(id.as_str()) {
-                        *existing = state;
-                    } else {
-                        states.insert(id.clone(), state);
-                    }
+            for (id, slot) in states.iter_mut() {
+                match self.patch.sampleables.get(id) {
+                    Some(module) => module.write_module_state(&mut **slot),
+                    None => slot.reset(),
                 }
             }
         }

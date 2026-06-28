@@ -117,7 +117,7 @@ impl Patch {
         mode_map: &HashMap<String, crate::types::ProcessingMode>,
     ) -> Result<Self, String> {
         use crate::dsp::{get_constructors, get_params_deserializers};
-        use crate::params::{DeserializedParams, extract_argument_spans};
+        use crate::params::{DeserializedParams, strip_argument_spans};
 
         let constructors = get_constructors();
         let params_deserializers = get_params_deserializers();
@@ -136,7 +136,7 @@ impl Patch {
                         module_state.module_type
                     )
                 })?;
-            let (stripped, argument_spans) = extract_argument_spans(module_state.params.clone());
+            let stripped = strip_argument_spans(module_state.params.clone());
             let cached = deserializer(stripped).map_err(|e| {
                 format!(
                     "Failed to deserialize params for {}: {}",
@@ -145,7 +145,6 @@ impl Patch {
             })?;
             let deserialized = DeserializedParams {
                 params: cached.params,
-                argument_spans,
                 channel_count: cached.channel_count,
             };
             let mode = mode_map

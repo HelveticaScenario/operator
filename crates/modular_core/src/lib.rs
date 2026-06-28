@@ -18,6 +18,7 @@ extern crate simple_easing;
 
 pub mod block_port;
 pub mod dsp;
+pub mod module_state;
 pub mod param_errors;
 pub mod params;
 pub mod patch;
@@ -35,8 +36,8 @@ pub use poly::{
 };
 
 pub use params::{
-    ARGUMENT_SPANS_KEY, ArgumentSpan, CachedParams, CloneableParams, DeserializedParams,
-    ParamsDeserializer, extract_argument_spans,
+    ARGUMENT_SPANS_KEY, CachedParams, CloneableParams, DeserializedParams, ParamsDeserializer,
+    strip_argument_spans,
 };
 
 pub use types::{

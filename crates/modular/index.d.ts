@@ -400,17 +400,6 @@ export interface WavTimeSignature {
   num: number
   den: number
 }
-/**
- * Represents a character span in source code, used for argument highlighting.
- * Start and end are absolute character offsets (0-based, end exclusive).
- */
-export interface ArgumentSpan {
-  /** Absolute start offset (0-based) */
-  start: number
-  /** Absolute end offset (exclusive) */
-  end: number
-}
-
 export interface ModuleIdRemap {
   from: string
   to: string

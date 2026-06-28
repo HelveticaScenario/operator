@@ -405,7 +405,6 @@ mod tests {
             .unwrap_or_else(|e| panic!("params deserialization for '{module_type}' failed: {e}"));
         let deserialized = DeserializedParams {
             params: cached.params,
-            argument_spans: Default::default(),
             channel_count: cached.channel_count,
         };
         constructors
