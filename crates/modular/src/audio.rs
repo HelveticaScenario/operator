@@ -2420,10 +2420,6 @@ impl AudioProcessor {
         None
     }
 
-    /// Collect live editor state from modules that publish it (those implementing
-    /// `StatefulModule`, e.g. `$cycle`). Uses try_lock to avoid blocking the audio
-    /// thread if the main thread is reading. Writes into existing slots to avoid
-    /// any allocation on the audio thread.
     fn collect_module_states(&self) {
         if let Some(mut states) = self.module_states.try_lock() {
             for (id, slot) in states.iter_mut() {
