@@ -114,8 +114,7 @@ mod imp {
             };
             panic!(
                 "audio-thread heap {kind} of {n} bytes inside the no-alloc region. \
-                 Move it out of process()/update() into init()/on_patch_update() \
-                 (see CLAUDE.md lifecycle rules). Allocation-site backtrace:\n{bt}",
+                Allocation-site backtrace:\n{bt}",
                 n = c.size,
                 bt = c.backtrace,
             );
