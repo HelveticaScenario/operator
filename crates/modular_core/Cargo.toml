@@ -9,9 +9,6 @@ edition = "2024"
 [features]
 default = []
 tracy = ["profiling/profile-with-tracy", "modular_derive/tracy"]
-# Dev-only: exposes `profiling::current_module_id_into` for the audio allocation
-# detector in the `modular` crate. Enabled via that crate's `alloc-detector` feature.
-alloc-detector = []
 
 [[bin]]
 name = "generate-schemas"

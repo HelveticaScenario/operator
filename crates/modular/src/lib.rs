@@ -1,6 +1,5 @@
 #![deny(clippy::all)]
 
-#[cfg(feature = "alloc-detector")]
 mod alloc_detector;
 
 mod audio;

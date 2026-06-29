@@ -104,17 +104,20 @@ Examples: `supersaw` — `init` seeds phases + `inv_sample_rate` (sr-only); `on_
 
 ### Detecting audio-thread allocations (dev-only)
 
-`yarn build-native-alloc` builds the rust code with a runtime allocation detector compiled in (`--features=alloc-detector` on `crates/modular`). It installs a `#[global_allocator]` that flags any heap allocation/deallocation made on the audio thread and writes a warning to **stderr** — the `rust`-labelled stream in the `concurrently` output — naming the offending module, e.g.:
+`yarn build-native-alloc` builds the rust code with a runtime allocation detector compiled in (`--features=alloc-detector` on `crates/modular`). It installs a `#[global_allocator]` that, on the **first** heap allocation/deallocation made in the audio DSP region, captures a backtrace at the allocation site and panics with it once the region exits. The audio callback's `catch_unwind` catches that panic, so the existing audio-thread-panic path emits silence and restarts the stream; the `panic_log` file and **stderr** carry the allocation-site backtrace pointing at the offending code, e.g.:
 
 ```
-[alloc-detector] AUDIO-THREAD ALLOC in module "osc_3" — 48 bytes (×127 since last report). Move allocation out of process()/update() into init()/on_patch_update() (see CLAUDE.md lifecycle rules).
+thread '<unnamed>' panicked: audio-thread heap allocation of 48 bytes inside the no-alloc region. Move it out of process()/update() into init()/on_patch_update() (see CLAUDE.md lifecycle rules). Allocation-site backtrace:
+   ...
+   <modular_core::dsp::oscillators::...>::update
+   ...
 ```
 
 Use it to verify the "no heap allocation on the audio thread" rule above. Notes:
 
-- **Opt-in only.** Plain `yarn build-native` never compiles the detector in (zero cost, byte-identical binary). The detector installs a process-wide global allocator — never enable the feature in a shipped build.
-- **Auto-attribution.** Module profiling is force-enabled so attribution works with the editor profiler closed. Allocations on the audio thread but outside any module/scope frame report as `"<unknown>"`.
-- **Detect-and-flag, never fail.** The real `System` allocation always runs first; the detector only records. All formatting/logging happens on a background thread, never the audio thread. Dropped/dealloc events and running totals are summarized periodically on the same `[alloc-detector]` stderr stream.
+- **Opt-in only.** Plain `yarn build-native` never compiles the detector in (zero cost, byte-identical binary): `panic_on_alloc` inlines to a direct call and no global allocator is installed. The detector installs a process-wide global allocator — never enable the feature in a shipped build.
+- **Stops at the first violation.** It panics and restarts on the first audio-thread (de)allocation rather than accumulating, so a single offending alloc or dealloc (including a patch-apply dealloc such as scope teardown) trips it.
+- **Site capture is safe; the panic is deferred.** The real `System` allocation always runs first; the backtrace is captured at the site (a re-entrancy guard keeps the capture's own allocations from recursing) but the panic fires only after the no-alloc region exits, where allocating and unwinding are safe.
 
 ## Conventions
 
