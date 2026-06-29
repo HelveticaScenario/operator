@@ -1087,7 +1087,7 @@ function App() {
         };
     }, []);
 
-    // Register the macOS-only "Publish Window to Syphon" command when supported,
+    // Register the macOS-only "Toggle Syphon Output" command when supported,
     // so it shows in the palette and is bindable. The action lives in the main
     // process (SyphonBridge), so the handler round-trips through IPC. Gating on
     // support keeps it out of the palette where the menu item is also hidden.
@@ -1100,7 +1100,7 @@ function App() {
                 () => {
                     void electronAPI.syphon.toggle();
                 },
-                { label: 'Publish Window to Syphon', category: 'View' },
+                { label: 'Toggle Syphon Output', category: 'View' },
             );
         });
         return () => {
