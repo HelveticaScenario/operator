@@ -136,7 +136,7 @@ function promptScreenRecordingPermission(): void {
             detail:
                 'To publish the Operator window to Syphon, allow Operator under ' +
                 'Privacy & Security → Screen & System Audio Recording, then enable ' +
-                '“Publish Window to Syphon” again.',
+                '“Toggle Syphon Output” again.',
             message: 'Screen Recording permission needed',
             type: 'info',
         })
@@ -2234,7 +2234,7 @@ const createMenu = (): void => {
                                   toggleSyphonPublish();
                               },
                               id: SYPHON_MENU_ITEM_ID,
-                              label: 'Publish Window to Syphon',
+                              label: 'Toggle Syphon Output',
                               type: 'checkbox',
                           },
                       ] as Electron.MenuItemConstructorOptions[])

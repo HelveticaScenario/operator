@@ -3,7 +3,7 @@
 A headless macOS companion that captures the Operator window with
 **ScreenCaptureKit** and republishes it as a **Syphon** source, so the live
 patch view can be pulled into Resolume, VDMX, MadMapper, TouchDesigner, Isadora,
-etc. Operator launches and stops it from the **View → Publish Window to Syphon**
+etc. Operator launches and stops it from the **View → Toggle Syphon Output**
 menu item.
 
 Requires **macOS 14+** (ScreenCaptureKit window capture + the helper's deployment
