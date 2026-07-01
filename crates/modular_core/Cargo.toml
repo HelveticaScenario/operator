@@ -50,6 +50,10 @@ harness = false
 name = "overdrive_bench"
 harness = false
 
+[[bench]]
+name = "shape_bench"
+harness = false
+
 [dependencies.napi]
 version = "3.7.1"
 features = ["serde", "serde-json"]

@@ -12,11 +12,7 @@ import schemas from '@modular/core/schemas.json';
 import { DSLContext } from '../factories';
 import { Collection, type GraphBuilder, ModuleOutput } from '../GraphBuilder';
 import { executePatchScript } from '../executor';
-import {
-    dollarMethodName,
-    processModuleSchema,
-    qualifiesForDollarChain,
-} from '../paramsSchema';
+import { processModuleSchema, qualifiesForDollarChain } from '../paramsSchema';
 
 const EXECUTION_OPTIONS = {
     sampleRate: 48_000,
@@ -163,6 +159,44 @@ describe('synthetic dollar methods ($delay)', () => {
     });
 });
 
+// ─── nested `.$.unstable.shape.*` chain ──────────────────────────────────────
+
+describe('namespaced dollar chain', () => {
+    test('.$.unstable.shape.<leaf> equals the bare $unstable.shape factory', () => {
+        const viaChain = execPatch(
+            "$sine(0).$.unstable.shape.fold('dual', 2).out()",
+        );
+        const viaFactory = execPatch(
+            "$unstable.shape.fold($sine(0), 'dual', 2).out()",
+        );
+        expect(normalize(viaChain)).toEqual(normalize(viaFactory));
+        expect(moduleTypes(viaChain)).toContain('$unstable.shape.fold');
+    });
+
+    test('leaf collisions are namespaced: $unstable.shape.fold coexists with $fold', () => {
+        // `.$.unstable.shape.fold` resolves to the waveshaper…
+        expect(
+            moduleTypes(
+                execPatch("$sine(0).$.unstable.shape.fold('dual', 2).out()"),
+            ),
+        ).toContain('$unstable.shape.fold');
+        // …while the flat `.$.fold` still resolves to the fx wavefolder.
+        expect(moduleTypes(execPatch('$sine(0).$.fold(2).out()'))).toContain(
+            '$fold',
+        );
+    });
+
+    test('.$m.unstable.shape.<leaf> crossfades dry against the shaped wet', () => {
+        const types = moduleTypes(
+            execPatch(
+                "$sine(0).$m.unstable.shape.saturate(2.5, 'hard', 3).out()",
+            ),
+        );
+        expect(types).toContain('$unstable.shape.saturate');
+        expect(types).toContain('$remap'); // crossfade dry leg
+    });
+});
+
 // ─── pipeMix regression: ModuleOutput.pipeMix now crossfades ─────────────────
 
 describe('ModuleOutput.pipeMix regression', () => {
@@ -181,14 +215,37 @@ describe('ModuleOutput.pipeMix regression', () => {
 // ─── drift guard: runtime set === type-gen set ───────────────────────────────
 
 describe('dollar-chain drift guard', () => {
-    test('runtime dollarLookup matches the type-generation qualifying set exactly', () => {
-        const dollarLookup = (
-            builder as unknown as { dollarLookup: Map<string, string> }
-        ).dollarLookup;
-        const runtimeNames = [...dollarLookup.keys()].sort();
+    test('runtime dollar chain matches the type-generation qualifying set exactly', () => {
+        interface Node {
+            leaves: Map<string, string>;
+            children: Map<string, Node>;
+        }
+        const b = builder as unknown as {
+            dollarLookup: Map<string, string>;
+            dollarNamespaceRoot: Node;
+        };
+        // Flat leaves plus full dotted `namespace…leaf` paths, walking the tree.
+        const collectPaths = (node: Node, prefix: string): string[] => {
+            const out: string[] = [];
+            for (const leaf of node.leaves.keys()) {
+                out.push(prefix ? `${prefix}.${leaf}` : leaf);
+            }
+            for (const [seg, child] of node.children) {
+                out.push(
+                    ...collectPaths(child, prefix ? `${prefix}.${seg}` : seg),
+                );
+            }
+            return out;
+        };
+        const runtimeNames = [
+            ...b.dollarLookup.keys(),
+            ...collectPaths(b.dollarNamespaceRoot, ''),
+        ].sort();
 
-        // Mirror generateDSL: userFacing schemas, the same predicate, the same
-        // name derivation (dollarMethodName).
+        // Mirror generateDSL: a module's `.$.` access path is its name minus the
+        // leading `$` (flat → the leaf; dotted → the full `namespace…leaf` path).
+        const dollarPath = (name: string): string =>
+            name.startsWith('$') ? name.slice(1) : name;
         const typeGenNames = schemas
             .filter((s) => s.name !== '_clock' && s.name !== '$buffer')
             .filter((s) =>
@@ -200,16 +257,18 @@ describe('dollar-chain drift guard', () => {
                     ),
                 ),
             )
-            .map((s) => dollarMethodName(s.name))
+            .map((s) => dollarPath(s.name))
             .sort();
 
         // Set-equality, not just counts: catches a name the runtime would
         // register but type generation would drop (or vice versa).
         expect(runtimeNames).toEqual(typeGenNames);
         expect(runtimeNames.length).toBeGreaterThan(0);
-        // Every emitted name must be a bare identifier — it is a TS interface member.
+        // Every path segment must be a bare identifier — it is a TS interface member.
         for (const name of runtimeNames) {
-            expect(name).toMatch(/^[$A-Za-z_][$A-Za-z0-9_]*$/);
+            for (const segment of name.split('.')) {
+                expect(segment).toMatch(/^[$A-Za-z_][$A-Za-z0-9_]*$/);
+            }
         }
     });
 });

@@ -2124,13 +2124,83 @@ export function generateDSL(schemas: Schemas): string {
         ),
     );
 
+    // Flat modules (`$lpf`) become direct members; dotted modules
+    // (`$unstable.shape.fold`) nest under a namespace tree of any depth
+    // (`.$.unstable.shape.fold`), mirroring the global namespace and keeping leaf
+    // names like `fold` from colliding with flat modules like `$fold`.
+    interface DollarTypeNode {
+        leaves: Schema[];
+        children: Map<string, DollarTypeNode>;
+    }
+    const dollarRoot: DollarTypeNode = { leaves: [], children: new Map() };
+    for (const s of dollarSchemas) {
+        const base = s.name.startsWith('$') ? s.name.slice(1) : s.name;
+        const segments = base.split('.');
+        let node = dollarRoot;
+        for (const seg of segments.slice(0, -1)) {
+            let child = node.children.get(seg);
+            if (child === undefined) {
+                child = { leaves: [], children: new Map() };
+                node.children.set(seg, child);
+            }
+            node = child;
+        }
+        node.leaves.push(s);
+    }
+    const pascal = (s: string): string =>
+        s
+            .split(/[^a-zA-Z0-9]/)
+            .filter(Boolean)
+            .map((w) => w[0].toUpperCase() + w.slice(1))
+            .join('');
+    const sortedChildren = (node: DollarTypeNode): string[] =>
+        [...node.children.keys()].sort();
+
+    // Emit a sub-interface (dry and mix) for every namespace node, so
+    // `.$.unstable.shape.fold` yields `DollarChainUnstable { shape:
+    // DollarChainUnstableShape }` and `DollarChainUnstableShape { fold(...) }`.
+    const emitNamespaceInterfaces = (
+        node: DollarTypeNode,
+        path: string[],
+    ): void => {
+        for (const seg of sortedChildren(node)) {
+            emitNamespaceInterfaces(node.children.get(seg)!, [...path, seg]);
+        }
+        const dotted = path.join('.');
+        for (const [prefix, iface, withMix] of [
+            ['.$', 'DollarChain', false],
+            ['.$m', 'DollarMixChain', true],
+        ] as const) {
+            lines.push('');
+            lines.push(
+                `/** Methods of the \`${prefix}.${dotted}\` chainable namespace. */`,
+            );
+            lines.push(`interface ${iface}${pascal(dotted)} {`);
+            for (const s of node.leaves) {
+                lines.push(...renderDollarMethod(s, withMix, '  '));
+            }
+            for (const seg of sortedChildren(node)) {
+                lines.push(
+                    `  ${seg}: ${iface}${pascal([...path, seg].join('.'))};`,
+                );
+            }
+            lines.push('}');
+        }
+    };
+    for (const seg of sortedChildren(dollarRoot)) {
+        emitNamespaceInterfaces(dollarRoot.children.get(seg)!, [seg]);
+    }
+
     lines.push('');
     lines.push(
         '/** Methods of the `.$` chainable module namespace (see {@link ModuleOutput.$}). */',
     );
     lines.push('interface DollarChain {');
-    for (const s of dollarSchemas) {
+    for (const s of dollarRoot.leaves) {
         lines.push(...renderDollarMethod(s, false, '  '));
+    }
+    for (const seg of sortedChildren(dollarRoot)) {
+        lines.push(`  ${seg}: DollarChain${pascal(seg)};`);
     }
     lines.push(
         ...renderDelayDoc('  ', dollarDelayHeader),
@@ -2143,8 +2213,11 @@ export function generateDSL(schemas: Schemas): string {
         '/** Methods of the `.$m` chainable module namespace (see {@link ModuleOutput.$m}). */',
     );
     lines.push('interface DollarMixChain {');
-    for (const s of dollarSchemas) {
+    for (const s of dollarRoot.leaves) {
         lines.push(...renderDollarMethod(s, true, '  '));
+    }
+    for (const seg of sortedChildren(dollarRoot)) {
+        lines.push(`  ${seg}: DollarMixChain${pascal(seg)};`);
     }
     lines.push(
         ...renderDelayDoc('  ', dollarMixDelayHeader),

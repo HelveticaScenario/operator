@@ -1,3 +1,4 @@
+pub mod adaa;
 pub mod dc_blocker;
 pub mod delay_line;
 pub mod fade;

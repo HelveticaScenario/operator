@@ -77,6 +77,16 @@ type Amplifiable = { amplitude(factor: PolySignal): Collection };
 type DollarChainProxy = Record<string, (...args: unknown[]) => unknown>;
 
 /**
+ * A node in the `.$.` namespace tree: leaf methods (`fold` → `$unstable.shape.fold`)
+ * plus child sub-namespaces (`shape` → node), so dotted module names of any depth
+ * (`$unstable.shape.fold` → `.$.unstable.shape.fold`) resolve by walking segments.
+ */
+interface DollarNamespaceNode {
+    leaves: Map<string, string>;
+    children: Map<string, DollarNamespaceNode>;
+}
+
+/**
  * A buffer output reference — returned by `$buffer()`, passed to readers
  * (like `$bufRead`, `$delayRead`) as their `buffer` param.
  */
@@ -628,8 +638,18 @@ export class GraphBuilder {
     private counters = new Map<string, number>();
     private schemas: ProcessedModuleSchema[] = [];
     private schemaByName = new Map<string, ProcessedModuleSchema>();
-    /** Maps a `.$.` method name (e.g. `lpf`) to its module name (e.g. `$lpf`). */
+    /** Maps a flat `.$.` method name (e.g. `lpf`) to its module name (e.g. `$lpf`). */
     private dollarLookup = new Map<string, string>();
+    /**
+     * Namespace tree for dotted modules' `.$.` methods: e.g. `$unstable.shape.fold`
+     * is reached as `sig.$.unstable.shape.fold(...)`, mirroring the global
+     * `$unstable.shape.fold(...)` namespace and avoiding leaf-name collisions with
+     * flat modules like `$fold`. Arbitrary nesting depth is supported.
+     */
+    private dollarNamespaceRoot: DollarNamespaceNode = {
+        leaves: new Map(),
+        children: new Map(),
+    };
     /**
      * `.$.` / `.$m.` methods backed by DSL sugar rather than a module schema
      * (e.g. `delay`). Each takes the chained signal as its first argument and
@@ -675,11 +695,29 @@ export class GraphBuilder {
         this.schemas = processSchemas(schemas);
         this.schemaByName = new Map(this.schemas.map((s) => [s.name, s]));
         for (const schema of this.schemas) {
-            if (qualifiesForDollarChain(schema)) {
-                this.dollarLookup.set(
-                    dollarMethodName(schema.name),
-                    schema.name,
-                );
+            if (!qualifiesForDollarChain(schema)) {
+                continue;
+            }
+            const leaf = dollarMethodName(schema.name);
+            const base = schema.name.startsWith('$')
+                ? schema.name.slice(1)
+                : schema.name;
+            const segments = base.split('.');
+            if (segments.length === 1) {
+                this.dollarLookup.set(leaf, schema.name);
+            } else {
+                // Walk (creating) the namespace path — every segment but the last
+                // — then register the leaf method at the terminal node.
+                let node = this.dollarNamespaceRoot;
+                for (const seg of segments.slice(0, -1)) {
+                    let child = node.children.get(seg);
+                    if (child === undefined) {
+                        child = { leaves: new Map(), children: new Map() };
+                        node.children.set(seg, child);
+                    }
+                    node = child;
+                }
+                node.leaves.set(leaf, schema.name);
             }
         }
     }
@@ -702,23 +740,67 @@ export class GraphBuilder {
                     return undefined;
                 }
                 const moduleName = this.dollarLookup.get(prop);
-                if (moduleName === undefined) {
-                    const synthetic = this.syntheticDollarMethods.get(prop);
-                    if (synthetic === undefined) {
-                        return undefined;
-                    }
+                if (moduleName !== undefined) {
+                    return this.dollarLeaf(self, withMix, moduleName);
+                }
+                const synthetic = this.syntheticDollarMethods.get(prop);
+                if (synthetic !== undefined) {
                     if (!withMix) {
                         return (...args: unknown[]) => synthetic(self, ...args);
                     }
                     return (mix: PolySignal, ...args: unknown[]) =>
                         crossfadeMix(this, self, synthetic(self, ...args), mix);
                 }
-                const factory = this.getFactory(moduleName);
-                if (!withMix) {
-                    return (...args: unknown[]) => factory(self, ...args);
+                const namespace = this.dollarNamespaceRoot.children.get(prop);
+                if (namespace !== undefined) {
+                    return this.makeDollarNamespace(self, withMix, namespace);
                 }
-                return (mix: PolySignal, ...args: unknown[]) =>
-                    crossfadeMix(this, self, factory(self, ...args), mix);
+                return undefined;
+            },
+        });
+    }
+
+    /**
+     * A single chainable leaf method: inject `self` as the module's first
+     * (signal) argument, or crossfade dry/wet when `withMix`.
+     */
+    private dollarLeaf(
+        self: ModuleOutput | BaseCollection<ModuleOutput>,
+        withMix: boolean,
+        moduleName: string,
+    ) {
+        const factory = this.getFactory(moduleName);
+        if (!withMix) {
+            return (...args: unknown[]) => factory(self, ...args);
+        }
+        return (mix: PolySignal, ...args: unknown[]) =>
+            crossfadeMix(this, self, factory(self, ...args), mix);
+    }
+
+    /**
+     * A nested proxy for a dotted namespace (e.g. `sig.$.unstable.shape`),
+     * resolving leaf methods against the node and recursing into child
+     * sub-namespaces so any nesting depth chains correctly.
+     */
+    private makeDollarNamespace(
+        self: ModuleOutput | BaseCollection<ModuleOutput>,
+        withMix: boolean,
+        node: DollarNamespaceNode,
+    ): DollarChainProxy {
+        return new Proxy({} as DollarChainProxy, {
+            get: (_target, prop) => {
+                if (typeof prop !== 'string') {
+                    return undefined;
+                }
+                const moduleName = node.leaves.get(prop);
+                if (moduleName !== undefined) {
+                    return this.dollarLeaf(self, withMix, moduleName);
+                }
+                const child = node.children.get(prop);
+                if (child !== undefined) {
+                    return this.makeDollarNamespace(self, withMix, child);
+                }
+                return undefined;
             },
         });
     }

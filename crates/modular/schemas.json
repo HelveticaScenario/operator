@@ -11665,5 +11665,1285 @@
         "name": "gate"
       }
     ]
+  },
+  {
+    "name": "$unstable.shape.saturate",
+    "documentation": "Saturation and clipping, from Surge XT's Saturator waveshapers. `mode`\nsets the character — soft, hard, asymmetric, medium, or ojd — and `drive`\nsets how hard the signal is pushed in (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.saturate($saw('c3'), 'hard', 3).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SaturateParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "shaper algorithm",
+          "$ref": "#/$defs/SaturateMode"
+        }
+      },
+      "required": [
+        "input",
+        "mode"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "SaturateMode": {
+          "description": "Saturation algorithm.",
+          "oneOf": [
+            {
+              "description": "Smooth, warm saturation.",
+              "type": "string",
+              "const": "soft"
+            },
+            {
+              "description": "Hard clipping — aggressive, squared-off edges.",
+              "type": "string",
+              "const": "hard"
+            },
+            {
+              "description": "Asymmetric saturation — adds even harmonics for a warmer colour.",
+              "type": "string",
+              "const": "asymmetric"
+            },
+            {
+              "description": "Medium saturation — sits between soft and hard.",
+              "type": "string",
+              "const": "medium"
+            },
+            {
+              "description": "Overdrive with a soft knee before it clips.",
+              "type": "string",
+              "const": "ojd"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "mode"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.harmonic",
+    "documentation": "Adds extra harmonics to brighten or thicken a tone, from Surge XT's\nHarmonic waveshapers. `mode` picks which harmonics (a single 2nd–5th, or\nan additive blend) and `drive` sets the intensity (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.harmonic($sine('c3'), 'cheby3', 2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "HarmonicParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "shaper algorithm",
+          "$ref": "#/$defs/HarmonicMode"
+        }
+      },
+      "required": [
+        "input",
+        "mode"
+      ],
+      "$defs": {
+        "HarmonicMode": {
+          "description": "Harmonic-generating algorithm.",
+          "oneOf": [
+            {
+              "description": "Adds a soft 2nd harmonic.",
+              "type": "string",
+              "const": "cheby2"
+            },
+            {
+              "description": "Adds a soft 3rd harmonic.",
+              "type": "string",
+              "const": "cheby3"
+            },
+            {
+              "description": "Adds a soft 4th harmonic.",
+              "type": "string",
+              "const": "cheby4"
+            },
+            {
+              "description": "Adds a soft 5th harmonic.",
+              "type": "string",
+              "const": "cheby5"
+            },
+            {
+              "description": "Blend of the 1st and 2nd harmonics.",
+              "type": "string",
+              "const": "add12"
+            },
+            {
+              "description": "Blend of the 1st and 3rd harmonics.",
+              "type": "string",
+              "const": "add13"
+            },
+            {
+              "description": "Blend of the 1st and 4th harmonics.",
+              "type": "string",
+              "const": "add14"
+            },
+            {
+              "description": "Blend of the 1st and 5th harmonics.",
+              "type": "string",
+              "const": "add15"
+            },
+            {
+              "description": "Blend of the 1st through 5th harmonics.",
+              "type": "string",
+              "const": "add12345"
+            },
+            {
+              "description": "Sawtooth-like blend of the first three harmonics.",
+              "type": "string",
+              "const": "addSaw3"
+            },
+            {
+              "description": "Square-like blend of odd harmonics.",
+              "type": "string",
+              "const": "addSqr3"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "mode"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.rectify",
+    "documentation": "Rectification, from Surge XT's Rectifier waveshapers — folds or gates the\nwaveform for a harder, buzzier tone. `mode` selects full-wave,\npositive/negative half-wave, or a softer rectifier; `drive` sets the level\ngoing in (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.rectify($sine('c3'), 'full', 1).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "RectifyParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "shaper algorithm",
+          "$ref": "#/$defs/RectifyMode"
+        }
+      },
+      "required": [
+        "input",
+        "mode"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "RectifyMode": {
+          "description": "Rectification algorithm.",
+          "oneOf": [
+            {
+              "description": "Full-wave — flips the negative half up (doubles the pitch).",
+              "type": "string",
+              "const": "full"
+            },
+            {
+              "description": "Positive half-wave — keeps only the upper half.",
+              "type": "string",
+              "const": "positive"
+            },
+            {
+              "description": "Negative half-wave — keeps only the lower half.",
+              "type": "string",
+              "const": "negative"
+            },
+            {
+              "description": "Softer rectification with rounded edges.",
+              "type": "string",
+              "const": "soft"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "mode"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.fold",
+    "documentation": "Wavefolding, from Surge XT's Wavefolder waveshapers — folds peaks back on\nthemselves to add rich harmonics that grow with level. `mode` selects the\nfold shape (soft, single, dual, westcoast, linear, sine); `drive` pushes\nharder into the folds as it rises (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.fold($sine('c3'), 'westcoast', 3).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "FoldParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "shaper algorithm",
+          "$ref": "#/$defs/FoldMode"
+        }
+      },
+      "required": [
+        "input",
+        "mode"
+      ],
+      "$defs": {
+        "FoldMode": {
+          "description": "Wavefolding algorithm.",
+          "oneOf": [
+            {
+              "description": "A single, smooth fold.",
+              "type": "string",
+              "const": "soft"
+            },
+            {
+              "description": "A single sharp fold.",
+              "type": "string",
+              "const": "single"
+            },
+            {
+              "description": "A double fold — more harmonics.",
+              "type": "string",
+              "const": "dual"
+            },
+            {
+              "description": "West-coast (Buchla-style) fold — complex, metallic harmonics.",
+              "type": "string",
+              "const": "westcoast"
+            },
+            {
+              "description": "Triangle fold — hard and buzzy.",
+              "type": "string",
+              "const": "linear"
+            },
+            {
+              "description": "Sine fold — wraps the signal smoothly through a sine.",
+              "type": "string",
+              "const": "sine"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "mode"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.fuzz",
+    "documentation": "Fuzz, from Surge XT's Fuzz waveshapers — a gritty, broken-up distortion.\n`mode` selects the flavour (fuzz, soft, heavy, center, softEdge); `drive`\nsets the level going in (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.fuzz($saw('c3'), 'heavy', 2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "FuzzParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "shaper algorithm",
+          "$ref": "#/$defs/FuzzMode"
+        }
+      },
+      "required": [
+        "input",
+        "mode"
+      ],
+      "$defs": {
+        "FuzzMode": {
+          "description": "Fuzz algorithm.",
+          "oneOf": [
+            {
+              "description": "Hard, gated fuzz.",
+              "type": "string",
+              "const": "fuzz"
+            },
+            {
+              "description": "Softer fuzz.",
+              "type": "string",
+              "const": "soft"
+            },
+            {
+              "description": "Heavier, noisier fuzz.",
+              "type": "string",
+              "const": "heavy"
+            },
+            {
+              "description": "Fuzz focused around the zero crossings.",
+              "type": "string",
+              "const": "center"
+            },
+            {
+              "description": "Fuzz focused on the loud peaks.",
+              "type": "string",
+              "const": "softEdge"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "mode"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.trigonometric",
+    "documentation": "Sine-based shaping, from Surge XT's Trigonometric waveshapers — reshapes\nthe signal through sine curves for dense, ringing harmonics. `mode`\nselects the pattern (sinPlusX, sin2x…sin10x, cyc2…cyc10, and edge-tapered\nvariants); `drive` sets the level going in (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.trigonometric($sine('c3'), 'cyc7', 2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "TrigonometricParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "shaper algorithm",
+          "$ref": "#/$defs/TrigonometricMode"
+        }
+      },
+      "required": [
+        "input",
+        "mode"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "TrigonometricMode": {
+          "description": "Trigonometric shaping algorithm.",
+          "oneOf": [
+            {
+              "description": "Adds a single sine ripple to the signal.",
+              "type": "string",
+              "const": "sinPlusX"
+            },
+            {
+              "description": "Adds 2 sine ripples riding on the signal.",
+              "type": "string",
+              "const": "sin2x"
+            },
+            {
+              "description": "Adds 3 sine ripples riding on the signal.",
+              "type": "string",
+              "const": "sin3x"
+            },
+            {
+              "description": "Adds 7 sine ripples riding on the signal.",
+              "type": "string",
+              "const": "sin7x"
+            },
+            {
+              "description": "Adds 10 sine ripples riding on the signal.",
+              "type": "string",
+              "const": "sin10x"
+            },
+            {
+              "description": "Maps the signal through 2 sine cycles — dense harmonics.",
+              "type": "string",
+              "const": "cyc2"
+            },
+            {
+              "description": "Maps the signal through 7 sine cycles — denser harmonics.",
+              "type": "string",
+              "const": "cyc7"
+            },
+            {
+              "description": "Maps the signal through 10 sine cycles — densest harmonics.",
+              "type": "string",
+              "const": "cyc10"
+            },
+            {
+              "description": "2 sine cycles, tapered toward the edges.",
+              "type": "string",
+              "const": "cyc2Bound"
+            },
+            {
+              "description": "7 sine cycles, tapered toward the edges.",
+              "type": "string",
+              "const": "cyc7Bound"
+            },
+            {
+              "description": "10 sine cycles, tapered toward the edges.",
+              "type": "string",
+              "const": "cyc10Bound"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "mode"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.digital",
+    "documentation": "Bit-crusher, from Surge XT's Effect waveshaper — steps the signal down to\ncoarse levels for a lo-fi, digital edge. `drive` sets how coarse the steps\nare: higher is crunchier (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.digital($saw('c3'), 2).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DigitalParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "drive"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.shape.sine",
+    "documentation": "Sine shaper, from Surge XT's Effect waveshaper — reshapes the signal\nthrough a sine curve for smooth added harmonics. Higher `drive` pushes\nfurther through the curve for more harmonics (−5..5, 0 = unity).\n\n## Example\n```js\n$unstable.shape.sine($sine('c3'), 3).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SineParams",
+      "type": "object",
+      "properties": {
+        "drive": {
+          "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "input signal to shape (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "shaped signal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "input signal to shape (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "drive amount (-5..5, 0 = unity); higher pushes harder into the shaper",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "drive"
+      }
+    ]
   }
 ]
