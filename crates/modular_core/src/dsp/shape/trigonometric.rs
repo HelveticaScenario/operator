@@ -1,6 +1,6 @@
 //! `$unstable.shape.trigonometric` — Surge XT's Trigonometric waveshaper group.
 //!
-//! Ported from sst-waveshapers (GPL-3.0).
+//! Ported from sst-waveshapers (GPL-3.0-or-later).
 
 use deserr::Deserr;
 use schemars::JsonSchema;

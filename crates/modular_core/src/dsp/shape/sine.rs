@@ -1,6 +1,6 @@
 //! `$unstable.shape.sine` — Surge XT's sine effect waveshaper (non-folding).
 //!
-//! Ported from sst-waveshapers (GPL-3.0).
+//! Ported from sst-waveshapers (GPL-3.0-or-later).
 
 use crate::dsp::shape::shape_core::Shaper;
 use crate::dsp::shape::shapers;

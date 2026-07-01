@@ -1,6 +1,6 @@
 //! `$unstable.shape.fold` — Surge XT's Wavefolder group.
 //!
-//! Ported from sst-waveshapers (GPL-3.0).
+//! Ported from sst-waveshapers (GPL-3.0-or-later).
 
 use deserr::Deserr;
 use schemars::JsonSchema;

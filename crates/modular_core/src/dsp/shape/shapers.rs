@@ -5,7 +5,7 @@
 //! harmonics/fuzz) expose their per-sample kernel math here and are wired to
 //! their state in the owning module.
 //!
-//! Ported from https://github.com/surge-synthesizer/sst-waveshapers (GPL-3.0).
+//! Ported from https://github.com/surge-synthesizer/sst-waveshapers (GPL-3.0-or-later).
 
 use std::f32::consts::PI;
 use std::sync::LazyLock;

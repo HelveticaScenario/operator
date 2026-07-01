@@ -2,7 +2,12 @@
 //!
 //! Each module wraps one of Surge XT's waveshaper groups (a `mode` enum selects
 //! the algorithm), except `digital` and `sine`, which are single-algorithm.
-//! Ported from https://github.com/surge-synthesizer/sst-waveshapers (GPL-3.0).
+//!
+//! The DSP kernels are ported from `sst-waveshapers` by the Surge Synth Team
+//! (Copyright 2018-2025, various authors), released under the GNU General Public
+//! License version 3 or later; source at
+//! <https://github.com/surge-synthesizer/sst-waveshapers>. This port is a
+//! derivative work under that license, compatible with Operator's AGPL-3.0.
 
 use std::collections::HashMap;
 

@@ -2,7 +2,7 @@
 //!
 //! The fuzz curves are frozen, seeded noise tables; `prime` builds them on the
 //! main thread so the fill never runs on the audio thread. Ported from
-//! sst-waveshapers (GPL-3.0).
+//! sst-waveshapers (GPL-3.0-or-later).
 
 use deserr::Deserr;
 use schemars::JsonSchema;

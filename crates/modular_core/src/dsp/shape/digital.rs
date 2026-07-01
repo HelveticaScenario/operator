@@ -1,6 +1,6 @@
 //! `$unstable.shape.digital` — Surge XT's digital (sample-quantizing) effect waveshaper.
 //!
-//! Ported from sst-waveshapers (GPL-3.0).
+//! Ported from sst-waveshapers (GPL-3.0-or-later).
 
 use crate::dsp::shape::shape_core::Shaper;
 use crate::dsp::shape::shapers;
