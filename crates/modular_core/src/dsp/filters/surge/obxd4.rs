@@ -8,7 +8,6 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::coeffs::note_to_hz;
 use super::filter_core::{Filter, N_COEFFS, N_REGISTERS};
 use super::obxd2::obxd_cutoff;
 
