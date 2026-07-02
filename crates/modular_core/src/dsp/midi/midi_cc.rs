@@ -7,7 +7,7 @@ use deserr::Deserr;
 use napi::Result;
 use schemars::JsonSchema;
 
-use crate::types::{MidiControlChange, MidiControlChange14Bit};
+use crate::types::{DeviceName, MidiControlChange, MidiControlChange14Bit};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -77,11 +77,11 @@ pub struct MidiCc {
 
 impl MidiCc {
     /// Check if we should process events from a MIDI device
-    fn should_process_device(&self, device: Option<&String>) -> bool {
+    fn should_process_device(&self, device: Option<&DeviceName>) -> bool {
         match (&self.params.device, device) {
-            (None, _) => true,                          // No filter = accept all devices
-            (Some(wanted), Some(got)) => wanted == got, // Exact match
-            (Some(_), None) => false,                   // Filter set but no device info
+            (None, _) => true, // No filter = accept all devices
+            (Some(wanted), Some(got)) => wanted == got.as_str(), // Exact match
+            (Some(_), None) => false, // Filter set but no device info
         }
     }
 

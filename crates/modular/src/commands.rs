@@ -8,7 +8,9 @@ use modular_core::profiling::ModuleProfileAccum;
 use modular_core::types::{
     Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges,
 };
+use napi::Error;
 use napi_derive::napi;
+use rtrb::PushError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -68,11 +70,22 @@ pub struct PatchUpdate {
     /// Scopes to remove
     pub scope_removes: Vec<ScopeBufferKey>,
 
-    /// Pre-built XY scope buffers to add (constructed on main thread)
-    pub scope_xy_adds: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
+    /// The complete next XY-scope membership, built on the main thread:
+    /// carried-over pairs keep their live buffer `Arc` (ring continuity), new
+    /// pairs get fresh buffers. The audio thread swaps this in wholesale — it
+    /// never inserts into or removes from the shared map — and the evicted map
+    /// rides this update back through the garbage queue.
+    pub scope_xy_next: HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>,
 
-    /// XY scope buffers to remove
-    pub scope_xy_removes: Vec<ScopeXyBufferKey>,
+    /// The same membership as `scope_xy_next`, as the flat list the audio
+    /// thread iterates per sample. Swapped wholesale for the same reason.
+    pub scope_xy_audio_next: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
+
+    /// Empty, main-thread-allocated storage for the audio thread's processing
+    /// order pointer list, with capacity for `process_order_ids.len()` entries
+    /// so resolving the pointers never grows a Vec on the audio thread. The
+    /// displaced list rides this update back through the garbage queue.
+    pub process_order_scratch: Vec<crate::audio::ProcessHandle>,
 
     /// Sample rate for new modules
     pub sample_rate: f32,
@@ -115,8 +128,9 @@ impl PatchUpdate {
             transfer_sources: HashMap::new(),
             scope_adds: Vec::new(),
             scope_removes: Vec::new(),
-            scope_xy_adds: Vec::new(),
-            scope_xy_removes: Vec::new(),
+            scope_xy_next: HashMap::new(),
+            scope_xy_audio_next: Vec::new(),
+            process_order_scratch: Vec::new(),
             sample_rate,
             transport_meta: None,
             scope_xy_ranges: None,
@@ -167,8 +181,11 @@ pub enum GraphCommand {
     /// Transport control: stop playback
     Stop,
 
-    /// Clear the entire patch (used when stopped to reset state)
-    ClearPatch,
+    /// Clear the entire patch (used when stopped to reset state). Carries a
+    /// fresh main-thread-built patch (hidden audio-in + listeners already
+    /// registered) so the audio thread only swaps and ships the old patch to
+    /// the garbage queue — it never constructs or deallocates anything.
+    ClearPatch { fresh_patch: Patch },
 
     /// Install or remove the live Ableton Link session.
     ///
@@ -185,35 +202,24 @@ pub enum GraphCommand {
 }
 
 /// Error types that can be reported from the audio thread back to the main thread.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum AudioError {
-    /// Failed to update module parameters
-    ParamUpdateFailed { module_id: String, message: String },
-
-    /// Failed to dispatch a message
-    MessageDispatchFailed { message: String },
-
-    /// Module not found when trying to perform an operation
-    ModuleNotFound { module_id: String },
-
-    /// Generic error during patch processing
-    PatchProcessingError { message: String },
+    GarbageQueueFull { message: PushError<GarbageItem> },
+    MessageDispatchFailed { message: Error },
 }
 
 impl std::fmt::Display for AudioError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AudioError::ParamUpdateFailed { module_id, message } => {
-                write!(f, "Failed to update params for {}: {}", module_id, message)
+            AudioError::GarbageQueueFull { message } => {
+                write!(
+                    f,
+                    "Failed to push a garbage item to the garbage channel: {}",
+                    message
+                )
             }
             AudioError::MessageDispatchFailed { message } => {
                 write!(f, "Failed to dispatch message: {}", message)
-            }
-            AudioError::ModuleNotFound { module_id } => {
-                write!(f, "Module not found: {}", module_id)
-            }
-            AudioError::PatchProcessingError { message } => {
-                write!(f, "Patch processing error: {}", message)
             }
         }
     }
@@ -232,17 +238,21 @@ pub const ERROR_QUEUE_CAPACITY: usize = 256;
 /// Fields are intentionally never read — the value of this type is in its `Drop`.
 #[allow(dead_code)]
 pub enum GarbageItem {
-    /// A module removed from the patch
-    Module(Box<dyn Sampleable>),
-    /// A scope buffer removed from the collection
-    Scope(ScopeBuffer),
-    /// An XY scope buffer removed from the collection
-    ScopeXy(Arc<ScopeXyBuffer>),
-    /// A queued patch update that was superseded by a newer update before it was applied.
+    /// A module replaced by `SingleModuleUpdate`, paired with the command's id
+    /// string so both heap owners drop together on the main thread.
+    Module((String, Box<dyn Sampleable>)),
+    /// A scope entry removed from the collection. Carries the map's owned key
+    /// so its strings drop on the main thread, not inside `remove_entry`.
+    Scope((ScopeBufferKey, ScopeBuffer)),
+    /// The audio thread's private XY-scope list, taken on `ClearPatch`.
+    ScopeXyAudio(Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>),
+    /// A patch update after it is applied (carrying everything it displaced:
+    /// old patch, order ids, XY scope map/list, evicted profiler maps) or one
+    /// superseded by a newer update before it was applied.
     PatchUpdate(PatchUpdate),
-    /// The old patch after a full patch update is applied.
+    /// The old patch swapped out by `ClearPatch`.
     Patch(Patch),
-    /// The old processing-order id list replaced during a full patch update.
+    /// The old processing-order id list taken by `ClearPatch`.
     OrderIds(Vec<String>),
     /// Live Link resources removed from the audio thread.
     Link(Box<LinkResources>),

@@ -23,9 +23,9 @@ pub struct AudioIn {
     /// channels. Layout mirrors `BlockPort`: `block[sample_index][channel_index]`.
     ///
     /// Heap-allocated (`Box<[_]>`) so that constructing `AudioIn` does not
-    /// push a 256 KB array through the stack. `Patch::insert_audio_in` runs
-    /// on the CoreAudio IO thread (stack ≈ 512 KB), and a stack-resident
-    /// `[[f32; 16]; 4096]` temp would overflow the guard page → SIGBUS.
+    /// push a 256 KB array through the stack: a stack-resident
+    /// `[[f32; 16]; 4096]` temp would overflow a small thread stack's guard
+    /// page → SIGBUS.
     ///
     /// # Safety
     ///

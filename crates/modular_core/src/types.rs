@@ -2754,12 +2754,75 @@ pub enum ClockMessages {
     Stop,
 }
 
+/// Interned MIDI device name carried inside [`Message`]s.
+///
+/// Messages are dispatched — and then dropped — on the audio thread, so the
+/// device field must never own its heap memory. Interning gives every distinct
+/// name one shared `Arc<str>` that a process-wide table keeps alive for the
+/// process lifetime: clones and drops of a `DeviceName` anywhere (including the
+/// audio thread) are pure refcount traffic, never a heap (de)allocation.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DeviceName(Arc<str>);
+
+impl DeviceName {
+    /// Intern `name`. Allocates and locks the intern table on first sight of a
+    /// name, so this must never run on the audio thread — device names are born
+    /// on the MIDI and main threads only.
+    pub fn intern(name: &str) -> Self {
+        use std::collections::HashSet;
+        use std::sync::{Mutex, OnceLock};
+        static TABLE: OnceLock<Mutex<HashSet<Arc<str>>>> = OnceLock::new();
+        let mut table = TABLE
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .unwrap();
+        match table.get(name) {
+            Some(interned) => Self(Arc::clone(interned)),
+            None => {
+                let interned: Arc<str> = Arc::from(name);
+                table.insert(Arc::clone(&interned));
+                Self(interned)
+            }
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DeviceName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
+    }
+}
+
+impl Serialize for DeviceName {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for DeviceName {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        // Runs on the main thread (messages cross serde boundaries only there),
+        // where interning is allowed to allocate.
+        let name: std::borrow::Cow<'de, str> = Deserialize::deserialize(deserializer)?;
+        Ok(Self::intern(&name))
+    }
+}
+
 /// MIDI note on message
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MidiNoteOn {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     pub note: u8,
     pub velocity: u8,
@@ -2770,7 +2833,7 @@ pub struct MidiNoteOn {
 pub struct MidiNoteOff {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     pub note: u8,
     pub velocity: u8,
@@ -2781,7 +2844,7 @@ pub struct MidiNoteOff {
 pub struct MidiControlChange {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     pub cc: u8,
     pub value: u8,
@@ -2793,7 +2856,7 @@ pub struct MidiControlChange {
 pub struct MidiControlChange14Bit {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     /// CC number (0-31, the MSB controller number)
     pub cc: u8,
@@ -2806,7 +2869,7 @@ pub struct MidiControlChange14Bit {
 pub struct MidiPitchBend {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     /// Pitch bend value: -8192 to 8191 (center = 0)
     pub value: i16,
@@ -2817,7 +2880,7 @@ pub struct MidiPitchBend {
 pub struct MidiChannelPressure {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     pub pressure: u8,
 }
@@ -2827,7 +2890,7 @@ pub struct MidiChannelPressure {
 pub struct MidiPolyPressure {
     /// Source MIDI device name (None for legacy messages)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device: Option<String>,
+    pub device: Option<DeviceName>,
     pub channel: u8,
     pub note: u8,
     pub pressure: u8,

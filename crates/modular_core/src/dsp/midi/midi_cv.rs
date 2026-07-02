@@ -13,7 +13,7 @@ use crate::dsp::utils::{
 };
 use crate::poly::{PORT_MAX_CHANNELS, PolyOutput};
 use crate::types::{
-    MidiChannelPressure, MidiControlChange, MidiNoteOff, MidiNoteOn, MidiPitchBend,
+    DeviceName, MidiChannelPressure, MidiControlChange, MidiNoteOff, MidiNoteOn, MidiPitchBend,
     MidiPolyPressure,
 };
 
@@ -217,10 +217,13 @@ impl Default for MidiCvState {
     fn default() -> Self {
         Self {
             sample_rate: 48000.0,
-            held_notes: Vec::with_capacity(128),
+            // Both note lists are deduped by note value on every push, so 256
+            // (the full u8 note domain) bounds their length — the audio-thread
+            // message handlers never grow them past this capacity.
+            held_notes: Vec::with_capacity(256),
             rotate_index: 0,
             sustain: [false; 16],
-            sustained_notes: Vec::with_capacity(128),
+            sustained_notes: Vec::with_capacity(256),
             global_pitch_wheel: 0,
             global_mod_wheel: 0,
             global_aftertouch: 0,
@@ -251,11 +254,11 @@ impl MidiCv {
     }
 
     /// Check if we should process events from a MIDI device
-    fn should_process_device(&self, device: Option<&String>) -> bool {
+    fn should_process_device(&self, device: Option<&DeviceName>) -> bool {
         match (&self.params.device, device) {
-            (None, _) => true,                          // No filter = accept all devices
-            (Some(wanted), Some(got)) => wanted == got, // Exact match
-            (Some(_), None) => false,                   // Filter set but no device info
+            (None, _) => true, // No filter = accept all devices
+            (Some(wanted), Some(got)) => wanted == got.as_str(), // Exact match
+            (Some(_), None) => false, // Filter set but no device info
         }
     }
 
@@ -429,6 +432,10 @@ impl MidiCv {
                 .position(|&(n, _, _)| n == note)
             {
                 let (n, v, c) = self.state.held_notes.remove(idx);
+                // A re-struck note may already be parked here; keeping one
+                // entry per note bounds the list to its pre-allocated
+                // capacity, so the push never grows it on the audio thread.
+                self.state.sustained_notes.retain(|&(sn, _, _)| sn != n);
                 self.state.sustained_notes.push((n, v, c));
             }
             return Ok(());
@@ -493,24 +500,21 @@ impl MidiCv {
                     let was_held = self.state.sustain[ch_idx];
                     self.state.sustain[ch_idx] = held;
 
-                    // When sustain is released, release all sustained notes for this channel
+                    // When sustain is released, release all sustained notes for
+                    // this channel — in place, so this message handler (which
+                    // runs on the audio thread) never builds an intermediate
+                    // list.
                     if was_held && !held {
-                        let notes_to_release: Vec<u8> = self
-                            .state
-                            .sustained_notes
-                            .iter()
-                            .filter(|&&(_, _, c)| c == msg.channel)
-                            .map(|&(n, _, _)| n)
-                            .collect();
-
-                        self.state
-                            .sustained_notes
-                            .retain(|&(_, _, c)| c != msg.channel);
-
-                        // Release voices for these notes
-                        for note in notes_to_release {
-                            if let Some(voice_idx) = self.find_voice_for_note(note) {
-                                self.channel_state[voice_idx].voice.gate = false;
+                        let mut i = 0;
+                        while i < self.state.sustained_notes.len() {
+                            let (n, _, c) = self.state.sustained_notes[i];
+                            if c == msg.channel {
+                                if let Some(voice_idx) = self.find_voice_for_note(n) {
+                                    self.channel_state[voice_idx].voice.gate = false;
+                                }
+                                self.state.sustained_notes.remove(i);
+                            } else {
+                                i += 1;
                             }
                         }
                     }

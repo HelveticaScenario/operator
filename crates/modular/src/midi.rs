@@ -8,23 +8,29 @@
 
 use midir::{MidiInput, MidiInputConnection};
 use modular_core::types::{
-    Message, MidiChannelPressure, MidiControlChange, MidiControlChange14Bit, MidiNoteOff,
-    MidiNoteOn, MidiPitchBend, MidiPolyPressure,
+    DeviceName, Message, MidiChannelPressure, MidiControlChange, MidiControlChange14Bit,
+    MidiNoteOff, MidiNoteOn, MidiPitchBend, MidiPolyPressure,
 };
 use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Maximum MIDI messages buffered
-const MIDI_BUFFER_SIZE: usize = 1024;
+/// Maximum MIDI messages buffered. Also the capacity of the audio thread's
+/// drain scratch — the two vectors swap wholesale, and neither side ever
+/// pushes past this bound, so neither ever grows.
+pub const MIDI_BUFFER_SIZE: usize = 1024;
 
 /// A MIDI message with its timestamp (microseconds from midir)
 #[derive(Debug, Clone)]
-struct TimestampedMessage {
+pub struct TimestampedMessage {
     /// Timestamp in microseconds (from midir callback)
-    timestamp_us: u64,
+    pub timestamp_us: u64,
+    /// Arrival order within this manager. Tie-breaks equal timestamps so the
+    /// audio thread's in-place unstable sort is still a total, deterministic
+    /// order (e.g. a note-off and note-on landing on the same microsecond).
+    pub seq: u64,
     /// The parsed MIDI message
-    message: Message,
+    pub message: Message,
 }
 
 /// State for tracking 14-bit CC MSB values per device
@@ -71,6 +77,8 @@ pub struct MidiPortInfo {
 struct MidiParseState {
     /// Pending messages with timestamps
     messages: Vec<TimestampedMessage>,
+    /// Next value for [`TimestampedMessage::seq`]
+    next_seq: u64,
     /// 14-bit CC state per device
     cc_state: HashMap<String, MidiCcState>,
 }
@@ -79,8 +87,22 @@ impl MidiParseState {
     fn new() -> Self {
         Self {
             messages: Vec::with_capacity(MIDI_BUFFER_SIZE),
+            next_seq: 0,
             cc_state: HashMap::new(),
         }
+    }
+
+    /// Queue a parsed message. MIDI-thread only; `messages` never exceeds
+    /// `MIDI_BUFFER_SIZE` (the connection callbacks stop parsing at the cap),
+    /// so this push never grows the buffer.
+    fn push(&mut self, timestamp_us: u64, message: Message) {
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        self.messages.push(TimestampedMessage {
+            timestamp_us,
+            seq,
+            message,
+        });
     }
 
     fn get_cc_state(&mut self, device: &str) -> &mut MidiCcState {
@@ -167,7 +189,9 @@ impl MidiInputManager {
             .ok_or_else(|| format!("MIDI port '{}' not found", port_name))?;
 
         let parse_state = self.parse_state.clone();
-        let device_name = port_name.to_string();
+        // Interned once per connection; per-message clones are refcount-only,
+        // so dropping dispatched messages on the audio thread never frees heap.
+        let device_name = DeviceName::intern(port_name);
 
         let connection = midi_in
             .connect(
@@ -293,18 +317,17 @@ impl MidiInputManager {
         }
     }
 
-    /// Take all pending messages, sorted by timestamp (clears the buffer).
-    /// Messages from multiple devices are interleaved in the correct temporal order.
-    pub fn take_messages(&self) -> Vec<Message> {
-        let mut state = self.parse_state.lock();
-        let mut timestamped = std::mem::take(&mut state.messages);
-
-        // Sort by timestamp to ensure messages are processed in the correct order
-        // even when coming from multiple MIDI devices
-        timestamped.sort_by_key(|m| m.timestamp_us);
-
-        // Extract just the messages, now in correct order
-        timestamped.into_iter().map(|tm| tm.message).collect()
+    /// Move all pending messages into `out` (which must be empty) by swapping
+    /// the two backing buffers, so the caller — the audio thread — never
+    /// allocates. Messages from multiple devices arrive interleaved; the caller
+    /// sorts by `(timestamp_us, seq)` for correct temporal order. Uses
+    /// `try_lock` so a MIDI-thread writer never blocks the audio thread; on
+    /// contention the messages simply wait for the next poll.
+    pub fn take_messages_into(&self, out: &mut Vec<TimestampedMessage>) {
+        debug_assert!(out.is_empty());
+        if let Some(mut state) = self.parse_state.try_lock() {
+            std::mem::swap(&mut state.messages, out);
+        }
     }
 }
 
@@ -316,7 +339,12 @@ impl Default for MidiInputManager {
 
 /// Parse raw MIDI bytes and add messages to state.
 /// Handles 14-bit CC by tracking MSB (CC 0-31) and combining with LSB (CC 32-63).
-fn parse_midi_message(data: &[u8], device: &str, timestamp_us: u64, state: &mut MidiParseState) {
+fn parse_midi_message(
+    data: &[u8],
+    device: &DeviceName,
+    timestamp_us: u64,
+    state: &mut MidiParseState,
+) {
     if data.is_empty() {
         return;
     }
@@ -332,7 +360,7 @@ fn parse_midi_message(data: &[u8], device: &str, timestamp_us: u64, state: &mut 
     let status = status_byte & 0xF0;
     let data1 = data.get(1).copied().unwrap_or(0);
     let data2 = data.get(2).copied().unwrap_or(0);
-    let device_opt = Some(device.to_string());
+    let device_opt = Some(device.clone());
 
     let message = match status {
         0x90 if data2 > 0 => {
@@ -357,7 +385,7 @@ fn parse_midi_message(data: &[u8], device: &str, timestamp_us: u64, state: &mut 
             // Control Change - handle 14-bit CC
             let cc = data1;
             let value = data2;
-            let cc_state = state.get_cc_state(device);
+            let cc_state = state.get_cc_state(device.as_str());
 
             if cc < 32 {
                 // MSB for 14-bit CC (CC 0-31)
@@ -378,15 +406,15 @@ fn parse_midi_message(data: &[u8], device: &str, timestamp_us: u64, state: &mut 
                     // Combine MSB and LSB into 14-bit value
                     let value_14bit = ((msb as u16) << 7) | (value as u16);
                     // Emit both the regular LSB CC message and the 14-bit message
-                    state.messages.push(TimestampedMessage {
+                    state.push(
                         timestamp_us,
-                        message: Message::MidiCC(MidiControlChange {
+                        Message::MidiCC(MidiControlChange {
                             device: device_opt.clone(),
                             channel,
                             cc,
                             value,
                         }),
-                    });
+                    );
                     Some(Message::MidiCC14Bit(MidiControlChange14Bit {
                         device: device_opt,
                         channel,
@@ -442,10 +470,7 @@ fn parse_midi_message(data: &[u8], device: &str, timestamp_us: u64, state: &mut 
     };
 
     if let Some(msg) = message {
-        state.messages.push(TimestampedMessage {
-            timestamp_us,
-            message: msg,
-        });
+        state.push(timestamp_us, msg);
     }
 }
 

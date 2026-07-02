@@ -7,7 +7,6 @@
 use crate::dsp::core::audio_in::AudioIn;
 use crate::types::{
     Message, MessageTag, ROOT_ID, ROOT_OUTPUT_PORT, Sampleable, SampleableMap, WavData,
-    WellKnownModule,
 };
 
 use std::collections::HashMap;
@@ -37,14 +36,6 @@ impl Patch {
         };
         patch.rebuild_message_listeners();
         patch
-    }
-
-    /// Re-insert the AudioIn module into sampleables.
-    /// Called after sampleables.clear() to restore the hidden audio input module.
-    pub fn insert_audio_in(&mut self) {
-        let audio_in_sampleable = AudioIn::default();
-        let id = WellKnownModule::HiddenAudioIn.id().to_string();
-        self.sampleables.insert(id, Box::new(audio_in_sampleable));
     }
 
     pub fn rebuild_message_listeners(&mut self) {
@@ -143,7 +134,7 @@ impl Patch {
 mod tests {
     use super::*;
 
-    use crate::types::MessageHandler;
+    use crate::types::{MessageHandler, WellKnownModule};
     use napi::Result;
     use std::alloc::{GlobalAlloc, Layout, System};
     use std::process::Command;

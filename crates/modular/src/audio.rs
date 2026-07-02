@@ -15,7 +15,6 @@ use modular_core::profiling::{ModuleProfileAccum, ModuleProfileCollection};
 use modular_core::types::ClockMessages;
 use modular_core::types::Message;
 use modular_core::types::ScopeMode;
-use modular_core::types::WellKnownModule;
 use napi::Result;
 use napi::bindgen_prelude::Float32Array;
 use napi_derive::napi;
@@ -1134,22 +1133,20 @@ impl AudioState {
         })
     }
 
-    /// Drain any errors accumulated on the audio thread
-    pub fn drain_errors(&self) -> Vec<AudioError> {
-        let mut rx = self.error_rx.lock();
-        let mut errors = Vec::new();
-        while let Ok(err) = rx.pop() {
-            errors.push(err);
-        }
-        errors
-    }
-
     /// Drain deferred deallocations from the audio thread.
     /// Items are simply dropped on the main thread where allocation/deallocation is safe.
+    /// Also drains the error queue: an error's payload can carry a garbage item
+    /// that overflowed the garbage queue, so dropping it here (with a log line)
+    /// is part of the same off-audio-thread deallocation contract.
     pub fn drain_garbage(&self) {
         let mut rx = self.garbage_rx.lock();
         while let Ok(_item) = rx.pop() {
             // Item is dropped here on the main thread - this is the whole point
+        }
+        drop(rx);
+        let mut errors = self.error_rx.lock();
+        while let Ok(err) = errors.pop() {
+            eprintln!("[audio] {}", err);
         }
     }
 
@@ -1426,7 +1423,7 @@ impl AudioState {
 
         // Compute scopes to add/remove (no updates — key includes config)
         {
-            let scope_collection = self.scope_collection.lock();
+            let mut scope_collection = self.scope_collection.lock();
             let current_keys: HashSet<ScopeBufferKey> = scope_collection.keys().cloned().collect();
 
             // Expand desired scopes into per-channel buffer keys
@@ -1455,18 +1452,24 @@ impl AudioState {
                     (key.clone(), buffer)
                 })
                 .collect();
+
+            // Grow the map here so the audio thread's inserts at apply time
+            // never rehash. The collection only shrinks between now and then
+            // (removals happen at apply; a superseding update re-reserves), so
+            // this bound holds.
+            scope_collection.reserve(update.scope_adds.len());
         }
 
-        // Compute XY scope diff against the audio-thread collection. Single
-        // global $scopeXY → one HashSet round-trip; keys are pair-indexed so
-        // re-ordering one pair forces a full rebuild (intentional — buffers
-        // are sample-rate ring buffers that would smear if reused).
+        // Build the complete next XY-scope membership. Single global $scopeXY;
+        // keys are pair-indexed so re-ordering one pair forces a full rebuild
+        // (intentional — buffers are sample-rate ring buffers that would smear
+        // if reused). Pairs already present keep their live buffer `Arc` (ring
+        // continuity); new pairs get fresh buffers. The audio thread swaps the
+        // map and list in wholesale at apply time, so both are allocated here.
         {
             let scope_xy_collection = self.scope_xy_collection.lock();
-            let current_keys: HashSet<ScopeXyBufferKey> =
-                scope_xy_collection.keys().cloned().collect();
 
-            let desired_keys: HashSet<ScopeXyBufferKey> = match scope_xy.as_ref() {
+            let desired_keys: Vec<ScopeXyBufferKey> = match scope_xy.as_ref() {
                 Some(sx) => sx
                     .pairs
                     .iter()
@@ -1476,13 +1479,23 @@ impl AudioState {
                         pair: p.clone(),
                     })
                     .collect(),
-                None => HashSet::new(),
+                None => Vec::new(),
             };
 
-            update.scope_xy_removes = current_keys.difference(&desired_keys).cloned().collect();
-            update.scope_xy_adds = desired_keys
-                .difference(&current_keys)
-                .map(|key| (key.clone(), Arc::new(ScopeXyBuffer::new())))
+            update.scope_xy_next = desired_keys
+                .into_iter()
+                .map(|key| {
+                    let buffer = scope_xy_collection
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or_else(|| Arc::new(ScopeXyBuffer::new()));
+                    (key, buffer)
+                })
+                .collect();
+            update.scope_xy_audio_next = update
+                .scope_xy_next
+                .iter()
+                .map(|(key, buffer)| (key.clone(), Arc::clone(buffer)))
                 .collect();
         }
 
@@ -1543,6 +1556,9 @@ impl AudioState {
         let analysis = crate::graph_analysis::analyze(&adjacency);
         let mode_map = analysis.modes;
         update.process_order_ids = analysis.order;
+        // Empty storage, allocated here, that the audio thread swaps in for its
+        // pointer list so resolving every order id never grows a Vec there.
+        update.process_order_scratch = Vec::with_capacity(update.process_order_ids.len());
 
         // Pass 2 — resolve each module's processing mode, then construct on the
         // main thread into the unconnected `new_patch`. The audio thread copies
@@ -1661,7 +1677,9 @@ impl AudioState {
         // at the next bar boundary when Link is enabled (the quantize also
         // surfaces in the UI via `link_pending_start`).
         if self.is_stopped() {
-            let _ = self.send_command(GraphCommand::ClearPatch);
+            let _ = self.send_command(GraphCommand::ClearPatch {
+                fresh_patch: Patch::new(),
+            });
             self.scope_collection.lock().clear();
             self.scope_xy_collection.lock().clear();
             self.request_start();
@@ -1737,12 +1755,29 @@ fn chrono_simple_timestamp() -> String {
 /// only on the audio thread, which has exclusive access to the patch.
 /// `ensure_processed_to` takes `&self` and mutates only through the module's
 /// `UnsafeCell`, so shared aliasing with the owning `Box` is sound.
-struct ProcessHandle(modular_core::types::SampleablePtr);
+pub(crate) struct ProcessHandle(modular_core::types::SampleablePtr);
 
 // SAFETY: the pointed-to module is `Send` (Sampleable: Send) and is only ever
 // dereferenced on the audio thread that owns the patch. This mirrors the
 // `unsafe impl Send` on `Signal`/`Buffer`, which cache the same pointer type.
 unsafe impl Send for ProcessHandle {}
+
+/// Ship `item` to the main thread for deallocation. On a full garbage queue the
+/// item reroutes through the error queue, which the main thread also drains and
+/// drops; only with both queues saturated does the drop land here (memory-safe
+/// but a violation of the no-audio-thread-dealloc invariant, so both capacities
+/// are sized to make that unreachable). A free function so call sites that hold
+/// a borrow of another `AudioProcessor` field (e.g. a scope-collection lock
+/// guard) can still push.
+fn try_push_garbage(
+    garbage_tx: &mut GarbageProducer,
+    error_tx: &mut ErrorProducer,
+    item: GarbageItem,
+) {
+    if let Err(err) = garbage_tx.push(item) {
+        let _ = error_tx.push(AudioError::GarbageQueueFull { message: err });
+    }
+}
 
 struct AudioProcessor {
     /// The DSP patch graph - owned directly, no mutex needed
@@ -1772,7 +1807,9 @@ struct AudioProcessor {
     scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
     /// Audio-thread-private view of the XY scope buffers. Iterated every frame
     /// to append samples, so the per-sample path never touches the collection
-    /// mutex. Reconciled against the collection on each patch update.
+    /// mutex. Each patch update swaps in a complete main-thread-built
+    /// replacement (`PatchUpdate::scope_xy_audio_next`); this thread never
+    /// pushes to or drops from it.
     scope_xy_audio: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
     /// Shared XY-scope display window. Written here in `apply_patch_update` so the
     /// volt→clip mapping swaps atomically with the buffers; read by the main
@@ -1812,6 +1849,11 @@ struct AudioProcessor {
     /// `retry_pending_profile_seed`) so the audio thread never blocks on the
     /// profiler mutex. Normally `None`.
     pending_profile_shared_seed: Option<HashMap<String, ModuleProfileAccum>>,
+    /// Pre-allocated buffer the pending MIDI queue is swapped into each
+    /// callback (see `MidiInputManager::take_messages_into`), sorted in place,
+    /// dispatched, and cleared. `Message` is drop-free (its device name is
+    /// interned), so the clear never deallocates here.
+    midi_scratch: Vec<crate::midi::TimestampedMessage>,
 }
 
 impl AudioProcessor {
@@ -1823,6 +1865,13 @@ impl AudioProcessor {
         sample_rate: f32,
         block_size: usize,
     ) -> Self {
+        // Force the lazy module-id statics while still on the main thread:
+        // their first deref allocates, and the audio callback derefs them
+        // every buffer.
+        {
+            use modular_core::types::{ROOT_CLOCK_ID, ROOT_ID, ROOT_OUTPUT_PORT};
+            let _ = (&*ROOT_ID, &*ROOT_CLOCK_ID, &*ROOT_OUTPUT_PORT);
+        }
         Self {
             patch: Patch::new(),
             process_order: Vec::new(),
@@ -1846,18 +1895,14 @@ impl AudioProcessor {
             link: crate::link::LinkState::new(),
             module_profile_collection: shared.module_profile_collection,
             pending_profile_shared_seed: None,
+            midi_scratch: Vec::with_capacity(crate::midi::MIDI_BUFFER_SIZE),
         }
     }
 
     /// Route an evicted profiler map to the garbage queue for drop on the
-    /// main thread. On a saturated queue the map drops here on the audio
-    /// thread instead (memory-safe but undesirable), so log its size to make
-    /// that diagnosable, mirroring the PatchUpdate eviction path.
+    /// main thread.
     fn drop_profile_map(&mut self, map: HashMap<String, ModuleProfileAccum>) {
-        let len = map.len();
-        if self.garbage_tx.push(GarbageItem::ProfileMap(map)).is_err() {
-            println!("Profiler map ({len} entries) dropped on audio thread: garbage queue full");
-        }
+        self.try_push_garbage_item(GarbageItem::ProfileMap(map));
     }
 
     /// Retry a deferred profiler shared-map swap. A swap is deferred when
@@ -1876,18 +1921,28 @@ impl AudioProcessor {
         }
     }
 
+    fn try_push_garbage_item(&mut self, item: GarbageItem) {
+        try_push_garbage(&mut self.garbage_tx, &mut self.error_tx, item);
+    }
+
     /// Process all pending commands from the main thread and poll MIDI.
     /// Called at the start of each audio callback before processing frames.
     fn process_commands(&mut self) {
-        // Poll MIDI messages and dispatch directly to the patch
-        // This happens in the audio thread for low-latency MIDI response
-        for msg in self.midi_manager.take_messages() {
-            if let Err(e) = self.patch.dispatch_message(&msg) {
-                let _ = self.error_tx.push(AudioError::MessageDispatchFailed {
-                    message: e.to_string(),
-                });
+        // Poll MIDI and dispatch directly to the patch — on the audio thread
+        // for low-latency response. The pending queue is swapped into the
+        // pre-allocated scratch and sorted in place; devices interleave, so
+        // temporal order is (timestamp, arrival seq).
+        self.midi_manager.take_messages_into(&mut self.midi_scratch);
+        self.midi_scratch
+            .sort_unstable_by_key(|tm| (tm.timestamp_us, tm.seq));
+        for tm in self.midi_scratch.iter() {
+            if let Err(e) = self.patch.dispatch_message(&tm.message) {
+                let _ = self
+                    .error_tx
+                    .push(AudioError::MessageDispatchFailed { message: e });
             }
         }
+        self.midi_scratch.clear();
 
         // Process commands from the main thread
         while let Ok(cmd) = self.command_rx.pop() {
@@ -1912,13 +1967,7 @@ impl AudioProcessor {
                         // lands on a different song than what's playing, so it must still
                         // restart the clock.
                         update.reset_clock |= old_update.reset_clock;
-                        if let Err(err) = self.garbage_tx.push(GarbageItem::PatchUpdate(old_update))
-                        {
-                            println!(
-                                "Failed to push old patch update to garbage queue: ${:?}",
-                                err
-                            );
-                        } // If queue is full, old update will be dropped here as fallback (not ideal but safe)
+                        self.try_push_garbage_item(GarbageItem::PatchUpdate(old_update));
                         self.queued_update = Some((update, QueuedTrigger::Immediate));
                     } else {
                         self.queued_update = Some((update, trigger));
@@ -1928,34 +1977,40 @@ impl AudioProcessor {
                     module_id,
                     module: new_module,
                 } => {
-                    // State transfer + replace, then reconnect
-                    if let Some(old_module) = self.patch.sampleables.remove(&module_id) {
+                    // State transfer + replace, then reconnect. `remove_entry`
+                    // keeps the map's owned key so the re-insert reuses it (no
+                    // clone, and no growth after a same-key remove); the key's
+                    // strings never drop here. Message listeners are untouched:
+                    // they are keyed by id, and the replacement has the same id
+                    // and type — hence the same static `handled_message_tags` —
+                    // so the existing entries already route to the new box.
+                    if let Some((key, old_module)) = self.patch.sampleables.remove_entry(&module_id)
+                    {
                         new_module.transfer_state_from(old_module.as_ref());
-                        self.patch.remove_message_listeners_for_module(&module_id);
-                        if self
-                            .garbage_tx
-                            .push(GarbageItem::Module(old_module))
-                            .is_err()
-                        {}
+                        self.patch.sampleables.insert(key, new_module);
+                        self.try_push_garbage_item(GarbageItem::Module((module_id, old_module)));
+                        // Reconnect all modules so the new module picks up its
+                        // connections, then refresh module-local caches rebuilt
+                        // from params.
+                        self.patch.connect_all();
+                        // The old box was dropped and a fresh one inserted at this id, so its
+                        // cached pointer now dangles. The graph shape is unchanged (same
+                        // modules and cables — only this module's params differ), so reuse
+                        // `process_order_ids` and just re-resolve the pointers.
+                        self.rebuild_process_order_ptrs();
+                    } else {
+                        // No module at this id (it raced a removal in a patch
+                        // swap). Inserting would grow the map and register a
+                        // module absent from the processing order, so ship the
+                        // unmatched replacement straight back for deallocation.
+                        self.try_push_garbage_item(GarbageItem::Module((module_id, new_module)));
                     }
-                    self.patch.sampleables.insert(module_id.clone(), new_module);
-                    // Re-register message listeners for the replaced module
-                    self.patch.add_message_listeners_for_module(&module_id);
-                    // Reconnect all modules so the new module picks up its
-                    // connections, then refresh module-local caches rebuilt from
-                    // params.
-                    self.patch.connect_all();
-                    // The old box was dropped and a fresh one inserted at this id, so its
-                    // cached pointer now dangles. The graph shape is unchanged (same
-                    // modules and cables — only this module's params differ), so reuse
-                    // `process_order_ids` and just re-resolve the pointers.
-                    self.rebuild_process_order_ptrs();
                 }
                 GraphCommand::DispatchMessage(msg) => {
                     if let Err(e) = self.patch.dispatch_message(&msg) {
-                        let _ = self.error_tx.push(AudioError::MessageDispatchFailed {
-                            message: e.to_string(),
-                        });
+                        let _ = self
+                            .error_tx
+                            .push(AudioError::MessageDispatchFailed { message: e });
                     }
                 }
                 GraphCommand::Start => {
@@ -1982,48 +2037,33 @@ impl AudioProcessor {
                     self.link.clear_pending_start();
                     self.link.signal_stop();
                 }
-                GraphCommand::ClearPatch => {
+                GraphCommand::ClearPatch { mut fresh_patch } => {
                     // Discard any pending queued update
                     if let Some((old_update, _)) = self.queued_update.take() {
-                        if let Err(err) = self.garbage_tx.push(GarbageItem::PatchUpdate(old_update))
-                        {
-                            println!(
-                                "Failed to push old patch update to garbage queue: ${:?}",
-                                err
-                            );
-                        } // If queue is full, old update will be dropped here as fallback (not ideal but safe)
+                        self.try_push_garbage_item(GarbageItem::PatchUpdate(old_update));
                     }
-                    // Defer deallocation of all non-reserved modules to main thread
-                    let ids_to_remove: Vec<String> =
-                        self.patch.sampleables.keys().cloned().collect();
-                    for id in ids_to_remove {
-                        if let Some(module) = self.patch.sampleables.remove(&id) {
-                            let _ = self.garbage_tx.push(GarbageItem::Module(module));
-                        }
-                    }
-                    // Drop the audio-private XY scope mirror to match the main thread's
-                    // `scope_xy_collection.clear()` on stop. Without this, a stopped
-                    // rerun re-adds each pair against the cleared collection while these
-                    // stale entries remain, duplicating the per-sample writes and pinning
-                    // the orphaned buffers. Ship them to the garbage queue so their final
-                    // drop lands on the main thread; on a full queue keep the buffer
-                    // (don't drop the last ref here) and let the next reconcile retry.
-                    {
-                        let garbage_tx = &mut self.garbage_tx;
-                        let scope_xy_audio = &mut self.scope_xy_audio;
-                        scope_xy_audio.retain(|(_k, buf)| {
-                            match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
-                                Ok(()) => false,
-                                Err(_) => true,
-                            }
-                        });
-                    }
-                    self.patch.insert_audio_in();
-                    self.patch.rebuild_message_listeners();
+                    // Swap in the main-thread-built empty patch (hidden audio-in
+                    // and message listeners already registered) and ship the
+                    // whole old patch off for main-thread deallocation.
+                    std::mem::swap(&mut self.patch, &mut fresh_patch);
+                    self.try_push_garbage_item(GarbageItem::Patch(fresh_patch));
+                    // Take the audio-private XY scope mirror to match the main
+                    // thread's `scope_xy_collection.clear()` on stop. Without
+                    // this, a stopped rerun swaps in the new membership while
+                    // these stale entries would already be gone from the
+                    // collection, pinning the orphaned buffers. `take` leaves an
+                    // unallocated Vec; the next patch update swaps in a fresh
+                    // main-thread-built list.
+                    let xy_audio = std::mem::take(&mut self.scope_xy_audio);
+                    self.try_push_garbage_item(GarbageItem::ScopeXyAudio(xy_audio));
                     // No user modules remain (only the hidden audio-in, which is driven
-                    // by injection), so there is nothing to force-process.
+                    // by injection), so there is nothing to force-process. The
+                    // pointer list has no heap contents (`ProcessHandle` is a raw
+                    // pointer), so clearing it deallocates nothing; the id list's
+                    // strings must drop on the main thread.
                     self.process_order.clear();
-                    self.process_order_ids.clear();
+                    let order_ids = std::mem::take(&mut self.process_order_ids);
+                    self.try_push_garbage_item(GarbageItem::OrderIds(order_ids));
                 }
                 GraphCommand::SetLink(new_resources) => {
                     // Construction/destruction of `AblLink` (and `enable()`) are
@@ -2033,10 +2073,7 @@ impl AudioProcessor {
                     // main-thread drop.
                     let was_active = self.link.is_active();
                     if let Some(old) = self.link.install(new_resources) {
-                        // If the queue is full, the Box drops here on the audio thread
-                        // as a fallback — not ideal RT-wise but bounded and strictly
-                        // better than leaking the live networking resources.
-                        let _ = self.garbage_tx.push(GarbageItem::Link(old));
+                        self.try_push_garbage_item(GarbageItem::Link(old));
                     }
 
                     // When the live instance changes, clear any external clock sync
@@ -2052,35 +2089,24 @@ impl AudioProcessor {
         }
     }
 
-    /// Apply a patch update command
     /// Apply a queued patch update. `swap_pos` is the per-block slot index at
     /// which the swap is happening; every newly-inserted module's per-block
     /// cursor is set to `swap_pos` so subsequent `ensure_processed_to(i)`
     /// calls within this block fill slots `[swap_pos, block_size)` only.
     /// Slots `[0, swap_pos)` were already emitted by the pre-swap modules.
-    fn apply_patch_update(&mut self, update: PatchUpdate, swap_pos: usize) {
-        let PatchUpdate {
-            transfer_sources,
-            new_patch,
-            process_order_ids,
-            scope_adds,
-            scope_removes,
-            scope_xy_adds,
-            scope_xy_removes,
-            profile_records_seed,
-            profile_shared_seed,
-            reset_clock,
-            transport_meta,
-            scope_xy_ranges,
-            ..
-        } = update;
-
+    ///
+    /// Everything the update displaces — the old patch, processing order and
+    /// pointer capacity, XY scope map and list, evicted profiler maps — is
+    /// stowed back into the consumed `update` (the "husk") and shipped to the
+    /// garbage queue in a single push at the end, so applying a patch neither
+    /// allocates nor deallocates on the audio thread.
+    fn apply_patch_update(&mut self, mut update: PatchUpdate, swap_pos: usize) {
         // The new patch arrives fully constructed but unconnected. Bring it to liveness
         // without ever touching the live patch's map, then swap.
 
         // Copy runtime state from the live (old) patch into each new module.
-        for (id, module) in new_patch.sampleables.iter() {
-            let source_id = match transfer_sources.get(id) {
+        for (id, module) in update.new_patch.sampleables.iter() {
+            let source_id = match update.transfer_sources.get(id) {
                 Some(Some(old_id)) => Some(old_id.as_str()),
                 Some(None) => None,
                 None => Some(id.as_str()),
@@ -2094,120 +2120,97 @@ impl AudioProcessor {
 
         // `connect` resolves raw pointers into upstream modules' just-transferred
         // output buffers, so it MUST run after the state copy above.
-        new_patch.connect_all();
+        update.new_patch.connect_all();
 
         if swap_pos > 0 {
-            for module in new_patch.sampleables.values() {
+            for module in update.new_patch.sampleables.values() {
                 module.set_initial_index(swap_pos);
             }
         }
 
-        let old_patch = std::mem::replace(&mut self.patch, new_patch);
-        if self.garbage_tx.push(GarbageItem::Patch(old_patch)).is_err() {
-            // Queue full (GARBAGE_QUEUE_CAPACITY is generous): the old patch drops
-            // here as a fallback rather than blocking the audio thread.
-        }
-
-        let old_order_ids = std::mem::replace(&mut self.process_order_ids, process_order_ids);
-        if self
-            .garbage_tx
-            .push(GarbageItem::OrderIds(old_order_ids))
-            .is_err()
-        {
-            // Queue full (GARBAGE_QUEUE_CAPACITY is generous): the old order ids drop
-            // here as a fallback rather than blocking the audio thread.
-        }
+        std::mem::swap(&mut self.patch, &mut update.new_patch);
+        std::mem::swap(&mut self.process_order_ids, &mut update.process_order_ids);
+        // The scratch arrives empty with capacity for every order id, so the
+        // rebuild below fills the pointer list without growing it.
+        std::mem::swap(&mut self.process_order, &mut update.process_order_scratch);
         // run after every structural change above so no pointer dangles
         self.rebuild_process_order_ptrs();
 
-        // Update scopes
+        // Update scopes. `remove_entry` hands back the map's owned key so its
+        // strings drop on the main thread; adds insert into capacity the main
+        // thread reserved when building this update, so no rehash happens
+        // here. Adds are diffed against the live collection so an add never
+        // collides with a resident key, but evicting first keeps even that
+        // case off this thread.
         {
-            let mut scope_collection = self.scope_collection.lock();
-
-            // Remove scopes
-            for key in &scope_removes {
-                if let Some(buffer) = scope_collection.remove(key) {
-                    let _ = self.garbage_tx.push(GarbageItem::Scope(buffer));
+            let AudioProcessor {
+                scope_collection,
+                garbage_tx,
+                error_tx,
+                ..
+            } = self;
+            let mut scope_collection = scope_collection.lock();
+            for key in update.scope_removes.iter() {
+                if let Some(entry) = scope_collection.remove_entry(key) {
+                    try_push_garbage(garbage_tx, error_tx, GarbageItem::Scope(entry));
                 }
             }
-
-            // Add new scopes
-            for (key, buffer) in scope_adds {
+            for (key, buffer) in update.scope_adds.drain(..) {
+                if let Some(entry) = scope_collection.remove_entry(&key) {
+                    try_push_garbage(garbage_tx, error_tx, GarbageItem::Scope(entry));
+                }
                 scope_collection.insert(key, buffer);
             }
         }
 
         // Profiler-map swap: `swap_records` updates the audio thread's TLS
         // records, `try_swap_shared` updates the cross-thread snapshot. Both
-        // operands were allocated on the main thread; the evicted maps drop
-        // on the main thread via `GarbageItem::ProfileMap`. Counters
-        // accumulated since the last UI drain do not survive the swap — a
-        // patch swap is a graph discontinuity, and pre-swap stats are not
-        // comparable to post-swap ones.
+        // operands were allocated on the main thread; the evicted maps ride
+        // the husk back for a main-thread drop. Counters accumulated since the
+        // last UI drain do not survive the swap — a patch swap is a graph
+        // discontinuity, and pre-swap stats are not comparable to post-swap
+        // ones.
         {
-            let old_records = modular_core::profiling::swap_records(profile_records_seed);
-            self.drop_profile_map(old_records);
+            let records_seed = std::mem::take(&mut update.profile_records_seed);
+            update.profile_records_seed = modular_core::profiling::swap_records(records_seed);
             // Non-blocking shared-map swap. On `try_lock` contention with the
             // main-thread drain, stash the seed and retry on a later callback
             // (see `retry_pending_profile_seed`) so the audio thread never blocks.
+            let shared_seed = std::mem::take(&mut update.profile_shared_seed);
             match modular_core::profiling::try_swap_shared(
                 &self.module_profile_collection,
-                profile_shared_seed,
+                shared_seed,
             ) {
-                Ok(old_shared) => self.drop_profile_map(old_shared),
+                Ok(old_shared) => update.profile_shared_seed = old_shared,
                 Err(seed) => {
                     if let Some(superseded) = self.pending_profile_shared_seed.replace(seed) {
-                        self.drop_profile_map(superseded);
+                        update.profile_shared_seed = superseded;
                     }
                 }
             }
         }
 
-        // Update XY scopes. The collection holds canonical membership; the
-        // audio-private `scope_xy_audio` co-owns each buffer so the per-sample
-        // path never touches this mutex.
+        // Swap in the complete new XY-scope membership built on the main
+        // thread: the shared map (canonical membership, read by the renderer)
+        // and the audio-private list the per-sample path iterates. Kept pairs
+        // carry the same buffer `Arc`s, so their rings stay continuous across
+        // the swap; the displaced map and list ride the husk.
         {
             let mut m = self.scope_xy_collection.lock();
-            let garbage_tx = &mut self.garbage_tx;
-            let scope_xy_audio = &mut self.scope_xy_audio;
-            for key in &scope_xy_removes {
-                // The map's Arc drops here; `scope_xy_audio` still co-owns the
-                // buffer, so this drop never frees on the audio thread.
-                m.remove(key);
-            }
-            for (key, buffer) in scope_xy_adds {
-                m.insert(key.clone(), buffer.clone());
-                scope_xy_audio.push((key, buffer));
-            }
-            // Reconcile the private list with the collection. Catches the removes
-            // above and any clear() done on the main thread; evicted buffers ship
-            // to the garbage queue so their final drop lands on the main thread.
-            scope_xy_audio.retain(|(k, buf)| {
-                if m.contains_key(k) {
-                    true
-                } else {
-                    // Evict — but only if the garbage queue accepts it. On a full queue
-                    // `push` hands the item back; dropping it here would free the
-                    // buffer's last strong ref on the audio thread. Keep it instead and
-                    // retry on the next reconcile so the final drop stays off this thread.
-                    match garbage_tx.push(GarbageItem::ScopeXy(buf.clone())) {
-                        Ok(()) => false,
-                        Err(_) => true,
-                    }
-                }
-            });
+            std::mem::swap(&mut *m, &mut update.scope_xy_next);
         }
+        std::mem::swap(&mut self.scope_xy_audio, &mut update.scope_xy_audio_next);
 
         // Publish the XY display window now, atomically with the buffer swap above,
         // so the renderer maps this patch's signal against this patch's volt→clip
         // window from the instant the patch applies. `None` clears it.
-        *self.scope_xy_ranges.lock() = scope_xy_ranges;
+        *self.scope_xy_ranges.lock() = update.scope_xy_ranges;
 
         // Restart the transport when this update switches playback to a different
         // buffer (song). Runs after the inserts/transfer/connect above so
         // ROOT_CLOCK's message listener is registered; the swap-site eager-fill
         // then refills the block.
-        if reset_clock {
+        if update.reset_clock {
             if self.link.is_active() {
                 // Under Ableton Link the shared session timeline owns the bar phase —
                 // a full Clock::Start would be re-overridden by the next synced sample
@@ -2232,13 +2235,18 @@ impl AudioProcessor {
         // always reflects the patch that just applied; the Link push only happens
         // when the DSL explicitly set the tempo, so a plain live-coding edit never
         // overrides a peer-driven Link tempo.
-        if let Some(t) = transport_meta {
+        if let Some(t) = &update.transport_meta {
             self.transport_meter
                 .write_tempo(t.tempo, t.numerator, t.denominator);
             if t.tempo_set {
                 self.link.set_tempo_now(t.tempo);
             }
         }
+
+        // Ship the husk — old patch, old order ids and pointer capacity, old
+        // XY map/list, evicted profiler maps, drained add/remove lists — in a
+        // single push for main-thread deallocation.
+        self.try_push_garbage_item(GarbageItem::PatchUpdate(update));
     }
 
     /// Pull one full block of host audio input from `input_reader` into
@@ -2272,8 +2280,11 @@ impl AudioProcessor {
     /// removes/replaces a module — the same discipline the cable
     /// `cached_source_ptr`s follow, which is why every such site also re-runs
     /// `connect()`. IDs absent from the patch (e.g. dangling cable targets) are
-    /// skipped. Allocates, so it only runs on the patch-swap path, never in the
-    /// per-sample loop.
+    /// skipped. Never grows the list on this thread: every patch update swaps
+    /// in main-thread-allocated storage with capacity for its full id set
+    /// (`PatchUpdate::process_order_scratch`), and the other caller
+    /// (`SingleModuleUpdate`) reuses the same ids, so the `reserve` is always
+    /// satisfied by existing capacity.
     fn rebuild_process_order_ptrs(&mut self) {
         let AudioProcessor {
             patch,
@@ -4338,7 +4349,11 @@ mod tests {
         processor.apply_patch_update(update, 0);
         assert_eq!(processor.process_order.len(), 1);
 
-        cmd_producer.push(GraphCommand::ClearPatch).unwrap();
+        cmd_producer
+            .push(GraphCommand::ClearPatch {
+                fresh_patch: Patch::new(),
+            })
+            .unwrap();
         processor.process_commands();
 
         assert!(processor.process_order.is_empty());
