@@ -2384,6 +2384,462 @@
     ]
   },
   {
+    "name": "$unstable.reverb",
+    "documentation": "Stereo Feedback Delay Network reverb.\n\nThe eight modulated delay lines are split into a left and a right\nsub-network. Even input channels feed the left half, odd channels the right,\nso the wet field tracks the dry stereo image; a `width` control sets how\nstrongly the two halves cross-couple, from held-apart to collapsed to mono.\nEach line has a decay gain tuned so the network reaches −60 dB at the\nrequested `decay`, plus a one-pole damping filter for a natural\nhigh-frequency rolloff. Per-channel predelay and diffusion sit ahead of the\nnetwork. Output is always 100% wet — use `.send()` or `$mix` for a dry/wet\nblend.\n\n```js\n$unstable.reverb($saw('c3')).out()\n$unstable.reverb($saw('c3'), { decay: 3, damping: 1.5, size: 2 }).out()\n$unstable.reverb($saw('c3'), { decay: 4, width: 4, modulation: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ReverbParams",
+      "type": "object",
+      "properties": {
+        "damping": {
+          "description": "high-frequency damping — higher values darken the tail by absorbing more\ntreble on each recirculation. default 0",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "reverb decay time, mapped logarithmically from ~0.15 s (-5) to ~18 s\n(+5). default 0 → ~1.6 s",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio input — even channels feed the left half of the reverb, odd\nchannels the right; an odd channel count feeds the last channel to both",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "modulation": {
+          "description": "internal chorusing depth — subtly detunes the delay lines to reduce\nmetallic ringing. -5 is off, +5 is deepest; default 0 → gentle",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "predelay": {
+          "description": "predelay before the network, in seconds (0 to 0.5). default 0",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "room size — scales every delay length from 0.5× (-5) to 2× (+5),\ntrading echo spacing and modal density. default 0 → 1.25×",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "stereo width — how strongly the left and right halves of the network\nstay separate. -5 is narrowest (a panned source pulls toward centre),\n+5 is widest; default 0 → natural",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo reverb output (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input — even channels feed the left half of the reverb, odd\nchannels the right; an odd channel count feeds the last channel to both",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "reverb decay time, mapped logarithmically from ~0.15 s (-5) to ~18 s\n(+5). default 0 → ~1.6 s",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "damping",
+        "description": "high-frequency damping — higher values darken the tail by absorbing more\ntreble on each recirculation. default 0",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "room size — scales every delay length from 0.5× (-5) to 2× (+5),\ntrading echo spacing and modal density. default 0 → 1.25×",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "stereo width — how strongly the left and right halves of the network\nstay separate. -5 is narrowest (a panned source pulls toward centre),\n+5 is widest; default 0 → natural",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "predelay",
+        "description": "predelay before the network, in seconds (0 to 0.5). default 0",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 0.5
+      },
+      {
+        "name": "modulation",
+        "description": "internal chorusing depth — subtly detunes the delay lines to reduce\nmetallic ringing. -5 is off, +5 is deepest; default 0 → gentle",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ],
+    "channels": 2
+  },
+  {
+    "name": "$unstable.reverb2",
+    "documentation": "Stereo Jot-style Feedback Delay Network reverb with a scattering matrix.\n\nThe eight modulated delay lines split into a left and a right sub-network,\neach recirculating through its own paraunitary scattering matrix — a\nHadamard mix, short per-line delays, then a Householder mix — so energy\ndiffuses densely without a fixed metallic structure. Even input channels\nfeed the left half, odd the right, so the wet field tracks the dry stereo\nimage; a `width` control sets how strongly the halves cross-couple. Each\nline's feedback runs through a first-order absorption filter that sets a\ntwo-band decay time (`decay` for the low band, `damping` for how much faster\nthe high band decays), and a matching tonal-correction shelf flattens the\noutput timbre. Per-channel predelay and diffusion sit ahead of the network.\nOutput is always 100% wet — use `.send()` or `$mix` for a dry/wet blend.\n\n```js\n$unstable.reverb2($saw('c3')).out()\n$unstable.reverb2($saw('c3'), { decay: 3, damping: 2, size: 2 }).out()\n$unstable.reverb2($saw('c3'), { decay: 4, width: 4, modulation: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Reverb2Params",
+      "type": "object",
+      "properties": {
+        "damping": {
+          "description": "high-frequency damping — sets how much faster the high band decays than\nthe low band, from equal (-5) to ten times faster (+5). default 0",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "low-frequency decay time, mapped logarithmically from ~0.15 s (-5) to\n~18 s (+5). default 0 → ~1.6 s",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "audio input — even channels feed the left half of the reverb, odd\nchannels the right; an odd channel count feeds the last channel to both",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "modulation": {
+          "description": "internal chorusing depth — subtly detunes the delay lines to reduce\nmetallic ringing. -5 is off, +5 is deepest; default 0 → gentle",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "predelay": {
+          "description": "predelay before the network, in seconds (0 to 0.5). default 0",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "size": {
+          "description": "room size — scales every delay length from 0.5× (-5) to 2× (+5). default\n0 → 1.25×",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "width": {
+          "description": "stereo width — how strongly the left and right halves of the network\nstay separate. -5 is narrowest (a panned source pulls toward centre),\n+5 is widest; default 0 → natural",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo reverb output (ch0=left, ch1=right)",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "audio input — even channels feed the left half of the reverb, odd\nchannels the right; an odd channel count feeds the last channel to both",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "low-frequency decay time, mapped logarithmically from ~0.15 s (-5) to\n~18 s (+5). default 0 → ~1.6 s",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "damping",
+        "description": "high-frequency damping — sets how much faster the high band decays than\nthe low band, from equal (-5) to ten times faster (+5). default 0",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "size",
+        "description": "room size — scales every delay length from 0.5× (-5) to 2× (+5). default\n0 → 1.25×",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "width",
+        "description": "stereo width — how strongly the left and right halves of the network\nstay separate. -5 is narrowest (a panned source pulls toward centre),\n+5 is widest; default 0 → natural",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "predelay",
+        "description": "predelay before the network, in seconds (0 to 0.5). default 0",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 0.5
+      },
+      {
+        "name": "modulation",
+        "description": "internal chorusing depth — subtly detunes the delay lines to reduce\nmetallic ringing. -5 is off, +5 is deepest; default 0 → gentle",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ],
+    "channels": 2
+  },
+  {
     "name": "$segment",
     "documentation": "Waveshaper that morphs through 8 distinct tonal shapes as you sweep the\namount control. Low settings pass the signal cleanly; mid settings compress\nand square it off; high settings introduce stepped, ripple-like overtone\npatterns. Works best on simple waveforms like sines or triangles.",
     "paramsSchema": {
