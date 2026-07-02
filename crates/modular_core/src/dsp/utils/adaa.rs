@@ -32,6 +32,15 @@ impl Default for Adaa {
 }
 
 impl Adaa {
+    /// Drop the one-sample memory; the next `process` re-seeds and returns `F(x)`
+    /// directly. Callers must do this when the nonlinearity itself changes:
+    /// differencing the new antiderivative against the old one's memory divides
+    /// their offset by a near-zero step, producing an unbounded spike.
+    #[inline]
+    pub fn reset(&mut self) {
+        self.init = true;
+    }
+
     /// Combine the precomputed `f = F(x)` and `ad = AD(x)` with the stored
     /// previous sample, advancing the memory.
     #[inline]

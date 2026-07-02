@@ -2109,7 +2109,11 @@ impl AudioProcessor {
         }
 
         let old_order_ids = std::mem::replace(&mut self.process_order_ids, process_order_ids);
-        if self.garbage_tx.push(GarbageItem::OrderIds(old_order_ids)).is_err() {
+        if self
+            .garbage_tx
+            .push(GarbageItem::OrderIds(old_order_ids))
+            .is_err()
+        {
             // Queue full (GARBAGE_QUEUE_CAPACITY is generous): the old order ids drop
             // here as a fallback rather than blocking the audio thread.
         }

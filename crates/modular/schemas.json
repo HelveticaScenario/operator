@@ -5632,6 +5632,5163 @@
     ]
   },
   {
+    "name": "$unstable.filter.lp",
+    "documentation": "Surge multimode lowpass (the \"12 dB\" / \"24 dB\" vember filter).\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; near the top the filter rings and self-oscillates.\n- **slope** — `'db12'` or `'db24'`.\n- **drive** — `'standard'`, `'driven'`, or `'clean'`.\n\n```js\n$unstable.filter.lp($saw('c2'), 'c4', 2, { slope: 'db24', drive: 'driven' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "LpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive character: standard, driven, or clean (default standard)",
+          "$ref": "#/$defs/BiquadDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: 12 or 24 dB/oct (default 24)",
+          "$ref": "#/$defs/FilterSlope"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "BiquadDrive": {
+          "description": "Drive character for the LP/HP biquads.",
+          "oneOf": [
+            {
+              "description": "State-variable form (cleanest, mildest resonance).",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Coupled state-space form with a heavier resonance/clip character.",
+              "type": "string",
+              "const": "driven"
+            },
+            {
+              "description": "Normalized-lattice form (high numerical precision).",
+              "type": "string",
+              "const": "clean"
+            }
+          ]
+        },
+        "FilterSlope": {
+          "description": "Filter slope (pole count). Rendered as `'db12'` / `'db24'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "12 dB/oct (2-pole).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "24 dB/oct (4-pole).",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.hp",
+    "documentation": "Surge multimode highpass (the \"12 dB\" / \"24 dB\" vember filter).\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; near the top the filter rings and self-oscillates.\n- **slope** — `'db12'` or `'db24'`.\n- **drive** — `'standard'`, `'driven'`, or `'clean'`.\n\n```js\n$unstable.filter.hp($saw('c2'), 'c4', 2, { slope: 'db12', drive: 'clean' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "HpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive character: standard, driven, or clean (default standard)",
+          "$ref": "#/$defs/BiquadDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: 12 or 24 dB/oct (default 24)",
+          "$ref": "#/$defs/FilterSlope"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "BiquadDrive": {
+          "description": "Drive character for the LP/HP biquads.",
+          "oneOf": [
+            {
+              "description": "State-variable form (cleanest, mildest resonance).",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Coupled state-space form with a heavier resonance/clip character.",
+              "type": "string",
+              "const": "driven"
+            },
+            {
+              "description": "Normalized-lattice form (high numerical precision).",
+              "type": "string",
+              "const": "clean"
+            }
+          ]
+        },
+        "FilterSlope": {
+          "description": "Filter slope (pole count). Rendered as `'db12'` / `'db24'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "12 dB/oct (2-pole).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "24 dB/oct (4-pole).",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "highpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.bp",
+    "documentation": "Surge multimode bandpass (the \"12 dB\" / \"24 dB\" vember filter).\n\n- **cutoff** — center frequency in V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; higher narrows the band and pushes toward ringing.\n- **slope** — `'db12'` or `'db24'`.\n- **drive** — `'standard'`, `'driven'`, `'clean'`, or the 12 dB-only\n  `'drivenLegacy'` / `'cleanLegacy'`.\n\n```js\n$unstable.filter.bp($saw('c2'), 'c4', 3, { slope: 'db12', drive: 'drivenLegacy' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "BpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive character (default standard); legacy variants apply at 12 dB only",
+          "$ref": "#/$defs/BpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: 12 or 24 dB/oct (default 24)",
+          "$ref": "#/$defs/FilterSlope"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "BpDrive": {
+          "description": "Drive character for the bandpass biquad. The legacy variants exist only at the\n12 dB slope (matching Surge XT's menu); at 24 dB they select their modern counterparts.",
+          "oneOf": [
+            {
+              "description": "State-variable form (cleanest, mildest resonance).",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Coupled state-space form with a heavier resonance/clip character.",
+              "type": "string",
+              "const": "driven"
+            },
+            {
+              "description": "Normalized-lattice form (high numerical precision).",
+              "type": "string",
+              "const": "clean"
+            },
+            {
+              "description": "Surge XT's \"Driven (Legacy)\" — the darker pre-fix driven bandpass.",
+              "type": "string",
+              "const": "drivenLegacy"
+            },
+            {
+              "description": "Surge XT's \"Clean (Legacy)\" — the darker pre-fix clean bandpass.",
+              "type": "string",
+              "const": "cleanLegacy"
+            }
+          ]
+        },
+        "FilterSlope": {
+          "description": "Filter slope (pole count). Rendered as `'db12'` / `'db24'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "12 dB/oct (2-pole).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "24 dB/oct (4-pole).",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "bandpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.notch",
+    "documentation": "Surge notch filter (the \"12 dB\" / \"24 dB\" vember notch).\n\n- **cutoff** — notch center in V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; shapes the notch width per `style`.\n- **slope** — `'db12'` or `'db24'`.\n- **style** — `'standard'` (wide) or `'mild'` (gentle).\n\n```js\n$unstable.filter.notch($saw('c2'), 'c4', 1, { slope: 'db12', style: 'mild' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "NotchFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: 12 or 24 dB/oct (default 24)",
+          "$ref": "#/$defs/FilterSlope"
+        },
+        "style": {
+          "description": "notch width: standard or mild (default standard)",
+          "$ref": "#/$defs/NotchStyle"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "FilterSlope": {
+          "description": "Filter slope (pole count). Rendered as `'db12'` / `'db24'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "12 dB/oct (2-pole).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "24 dB/oct (4-pole).",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "NotchStyle": {
+          "description": "Notch width character.",
+          "oneOf": [
+            {
+              "description": "Wide notch with a strong resonance response.",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Narrower, gentler notch.",
+              "type": "string",
+              "const": "mild"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "notch output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.ap",
+    "documentation": "Surge allpass filter — flat magnitude, frequency-dependent phase shift.\nUseful for phaser-style effects when mixed against the dry signal.\n\n- **cutoff** — phase-transition center in V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; sharpens the phase transition around the center.\n\n```js\n$unstable.filter.ap($saw('c2'), 'c4', 2)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ApFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "allpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.legacyLadder",
+    "documentation": "Surge XT's Legacy Ladder — the classic 4-pole transistor-ladder lowpass.\nSelf-oscillates at high resonance; runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; past ~4 the ladder rings and self-oscillates.\n- **slope** — output tap: `'db6'`, `'db12'`, `'db18'`, or `'db24'`.\n\n```js\n$unstable.filter.legacyLadder($saw('c2'), 'c4', 3, { slope: 'db24' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "LegacyLadderFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: output tap at 6, 12, 18, or 24 dB/oct (default 24)",
+          "$ref": "#/$defs/LadderSlope"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "LadderSlope": {
+          "description": "Ladder slope — which of the four cascaded pole outputs is tapped.",
+          "oneOf": [
+            {
+              "description": "6 dB/oct (1-pole tap).",
+              "type": "string",
+              "const": "db6"
+            },
+            {
+              "description": "12 dB/oct (2-pole tap).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "18 dB/oct (3-pole tap).",
+              "type": "string",
+              "const": "db18"
+            },
+            {
+              "description": "24 dB/oct (full 4-pole ladder).",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.diodeLadder",
+    "documentation": "Surge XT's Diode Ladder — an EMS-style diode-cascade lowpass (zero-delay\nfeedback, adapted from Odin 2). Screams at high resonance.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; high values self-oscillate.\n- **slope** — output tap: `'db6'`, `'db12'`, `'db18'`, or `'db24'`.\n\n```js\n$unstable.filter.diodeLadder($saw('c2'), 'c4', 3, { slope: 'db24' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DiodeLadderFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: output tap at 6, 12, 18, or 24 dB/oct (default 24)",
+          "$ref": "#/$defs/LadderSlope"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "LadderSlope": {
+          "description": "Ladder slope — which of the four cascaded pole outputs is tapped.",
+          "oneOf": [
+            {
+              "description": "6 dB/oct (1-pole tap).",
+              "type": "string",
+              "const": "db6"
+            },
+            {
+              "description": "12 dB/oct (2-pole tap).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "18 dB/oct (3-pole tap).",
+              "type": "string",
+              "const": "db18"
+            },
+            {
+              "description": "24 dB/oct (full 4-pole ladder).",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.vintageLadder",
+    "documentation": "Surge XT's Vintage Ladder — three Moog-ladder simulations. `type` picks the\nmodel: `'rk'` (Runge-Kutta circuit integration), `'huov'` (Huovilainen,\nper-stage saturation), or `'huov2010'` (Huovilainen's 2010 revision).\nRuns 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; the top of the range self-oscillates.\n- **compensated** — bass compensation: keeps low end at high resonance.\n\n```js\n$unstable.filter.vintageLadder($saw('c2'), 'c4', 2, { type: 'huov', compensated: true })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "VintageLadderFilterParams",
+      "type": "object",
+      "properties": {
+        "compensated": {
+          "description": "bass compensation (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "description": "ladder model: rk, huov, or huov2010 (default rk)",
+          "$ref": "#/$defs/VintageType"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "VintageType": {
+          "description": "Ladder simulation model.",
+          "oneOf": [
+            {
+              "description": "Runge-Kutta integration of the ladder circuit's differential equations.",
+              "type": "string",
+              "const": "rk"
+            },
+            {
+              "description": "Huovilainen model — a tanh saturator inside each of the four pole stages.",
+              "type": "string",
+              "const": "huov"
+            },
+            {
+              "description": "Huovilainen's 2010 revision — one input saturator driving four linear poles.",
+              "type": "string",
+              "const": "huov2010"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.k35Lp",
+    "documentation": "Surge XT's K35 lowpass — the Korg 35 sallen-key filter (from Odin 2), with a\nsaturator in the resonance feedback path. Oversampled 2× when saturating.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; screams near the top.\n- **saturation** — `'none'`, `'mild'`, `'moderate'`, `'heavy'`, `'extreme'`.\n\n```js\n$unstable.filter.k35Lp($saw('c2'), 'c4', 3, { saturation: 'moderate' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "K35LpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "saturation": {
+          "description": "feedback saturation: none, mild, moderate, heavy, extreme (default none)",
+          "$ref": "#/$defs/K35Saturation"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "K35Saturation": {
+          "description": "Saturation drive applied inside the feedback path. `none` bypasses the\nsaturator entirely (a fully linear filter).",
+          "oneOf": [
+            {
+              "description": "Linear — no saturation.",
+              "type": "string",
+              "const": "none"
+            },
+            {
+              "description": "×1 drive into the saturator.",
+              "type": "string",
+              "const": "mild"
+            },
+            {
+              "description": "×2 drive.",
+              "type": "string",
+              "const": "moderate"
+            },
+            {
+              "description": "×3 drive.",
+              "type": "string",
+              "const": "heavy"
+            },
+            {
+              "description": "×4 drive.",
+              "type": "string",
+              "const": "extreme"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.k35Hp",
+    "documentation": "Surge XT's K35 highpass — the Korg 35 sallen-key filter (from Odin 2), with a\nsaturator in the resonance feedback path. Oversampled 2× when saturating.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; screams near the top.\n- **saturation** — `'none'`, `'mild'`, `'moderate'`, `'heavy'`, `'extreme'`.\n\n```js\n$unstable.filter.k35Hp($saw('c2'), 'c4', 3, { saturation: 'mild' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "K35HpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "saturation": {
+          "description": "feedback saturation: none, mild, moderate, heavy, extreme (default none)",
+          "$ref": "#/$defs/K35Saturation"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "K35Saturation": {
+          "description": "Saturation drive applied inside the feedback path. `none` bypasses the\nsaturator entirely (a fully linear filter).",
+          "oneOf": [
+            {
+              "description": "Linear — no saturation.",
+              "type": "string",
+              "const": "none"
+            },
+            {
+              "description": "×1 drive into the saturator.",
+              "type": "string",
+              "const": "mild"
+            },
+            {
+              "description": "×2 drive.",
+              "type": "string",
+              "const": "moderate"
+            },
+            {
+              "description": "×3 drive.",
+              "type": "string",
+              "const": "heavy"
+            },
+            {
+              "description": "×4 drive.",
+              "type": "string",
+              "const": "extreme"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "highpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.obxd2Lp",
+    "documentation": "Surge XT's OB-Xd 2-pole filter — a zero-delay state-variable design with\na diode-pair feedback nonlinearity (from Filatov's OB-Xd, via Odin 2).\nRuns 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5.\n- **drive** — `'standard'`, or `'pushed'` for easy self-oscillation.\n\n```js\n$unstable.filter.obxd2Lp($saw('c2'), 'c4', 3, { drive: 'pushed' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Obxd2LpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive: standard or pushed (self-oscillation push; default standard)",
+          "$ref": "#/$defs/ObxdDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "ObxdDrive": {
+          "description": "Drive character: `pushed` boosts the feedback nonlinearity into easy\nself-oscillation (Surge XT's \"Pushed\" subtypes).",
+          "oneOf": [
+            {
+              "description": "Standard feedback bias.",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Self-oscillation push — hotter feedback bias.",
+              "type": "string",
+              "const": "pushed"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.obxd2Bp",
+    "documentation": "Surge XT's OB-Xd 2-pole filter — a zero-delay state-variable design with\na diode-pair feedback nonlinearity (from Filatov's OB-Xd, via Odin 2).\nRuns 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5.\n- **drive** — `'standard'`, or `'pushed'` for easy self-oscillation.\n\n```js\n$unstable.filter.obxd2Bp($saw('c2'), 'c4', 3)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Obxd2BpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive: standard or pushed (self-oscillation push; default standard)",
+          "$ref": "#/$defs/ObxdDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "ObxdDrive": {
+          "description": "Drive character: `pushed` boosts the feedback nonlinearity into easy\nself-oscillation (Surge XT's \"Pushed\" subtypes).",
+          "oneOf": [
+            {
+              "description": "Standard feedback bias.",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Self-oscillation push — hotter feedback bias.",
+              "type": "string",
+              "const": "pushed"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "bandpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.obxd2Hp",
+    "documentation": "Surge XT's OB-Xd 2-pole filter — a zero-delay state-variable design with\na diode-pair feedback nonlinearity (from Filatov's OB-Xd, via Odin 2).\nRuns 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5.\n- **drive** — `'standard'`, or `'pushed'` for easy self-oscillation.\n\n```js\n$unstable.filter.obxd2Hp($saw('c2'), 'c4', 3)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Obxd2HpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive: standard or pushed (self-oscillation push; default standard)",
+          "$ref": "#/$defs/ObxdDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "ObxdDrive": {
+          "description": "Drive character: `pushed` boosts the feedback nonlinearity into easy\nself-oscillation (Surge XT's \"Pushed\" subtypes).",
+          "oneOf": [
+            {
+              "description": "Standard feedback bias.",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Self-oscillation push — hotter feedback bias.",
+              "type": "string",
+              "const": "pushed"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "highpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.obxd2Notch",
+    "documentation": "Surge XT's OB-Xd 2-pole filter — a zero-delay state-variable design with\na diode-pair feedback nonlinearity (from Filatov's OB-Xd, via Odin 2).\nRuns 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5.\n- **drive** — `'standard'`, or `'pushed'` for easy self-oscillation.\n\n```js\n$unstable.filter.obxd2Notch($saw('c2'), 'c4', 3)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Obxd2NotchFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "drive: standard or pushed (self-oscillation push; default standard)",
+          "$ref": "#/$defs/ObxdDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "ObxdDrive": {
+          "description": "Drive character: `pushed` boosts the feedback nonlinearity into easy\nself-oscillation (Surge XT's \"Pushed\" subtypes).",
+          "oneOf": [
+            {
+              "description": "Standard feedback bias.",
+              "type": "string",
+              "const": "standard"
+            },
+            {
+              "description": "Self-oscillation push — hotter feedback bias.",
+              "type": "string",
+              "const": "pushed"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "notch output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.obxd4",
+    "documentation": "Surge XT's OB-Xd 4-pole lowpass — four cascaded zero-delay poles with an `atan`\ndamper (from Filatov's OB-Xd, via Odin 2). Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; self-oscillates near the top.\n- **slope** — `'db6'`, `'db12'`, `'db18'`, `'db24'`, or `'db24Legacy'`.\n\n```js\n$unstable.filter.obxd4($saw('c2'), 'c4', 3, { slope: 'db24Legacy' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Obxd4FilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "slope": {
+          "description": "slope: 6, 12, 18, 24 dB/oct, or the brighter 24 dB legacy mix (default 24)",
+          "$ref": "#/$defs/Obxd4Slope"
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "Obxd4Slope": {
+          "description": "4-pole lowpass slope (Surge `fut_obxd_4p_subtypes`, minus Morph).",
+          "oneOf": [
+            {
+              "description": "6 dB/oct (1-pole tap).",
+              "type": "string",
+              "const": "db6"
+            },
+            {
+              "description": "12 dB/oct (2-pole tap).",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "18 dB/oct (3-pole tap).",
+              "type": "string",
+              "const": "db18"
+            },
+            {
+              "description": "24 dB/oct (full cascade).",
+              "type": "string",
+              "const": "db24"
+            },
+            {
+              "description": "Surge XT's \"24 dB (Legacy)\" — the brighter `y3 + y4` mix.",
+              "type": "string",
+              "const": "db24Legacy"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.xpander",
+    "documentation": "The Oberheim Xpander pole-mixing filter (Surge XT's OB-Xd cascade with the\nXpander mode matrix): one 4-pole lowpass core re-mixed into lowpass,\nhighpass, bandpass, notch, and phaser responses. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5.\n- **mode** — `'lp1'`–`'lp4'`, `'hp1'`–`'hp3'`, `'bp2'`, `'bp4'`, `'n2'`,\n  `'ph3'`, `'hp2Lp1'`, `'hp3Lp1'`, `'n2Lp1'`, `'ph3Lp1'`.\n\n```js\n$unstable.filter.xpander($saw('c2'), 'c4', 3, { mode: 'bp4' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "XpanderFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "pole-mix mode (default lp4)",
+          "$ref": "#/$defs/XpanderMode"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "XpanderMode": {
+          "description": "Xpander pole-mix selection (Surge `fut_obxd_xpander_subtypes`).",
+          "oneOf": [
+            {
+              "description": "1-pole lowpass.",
+              "type": "string",
+              "const": "lp1"
+            },
+            {
+              "description": "2-pole lowpass.",
+              "type": "string",
+              "const": "lp2"
+            },
+            {
+              "description": "3-pole lowpass.",
+              "type": "string",
+              "const": "lp3"
+            },
+            {
+              "description": "4-pole lowpass.",
+              "type": "string",
+              "const": "lp4"
+            },
+            {
+              "description": "1-pole highpass.",
+              "type": "string",
+              "const": "hp1"
+            },
+            {
+              "description": "2-pole highpass.",
+              "type": "string",
+              "const": "hp2"
+            },
+            {
+              "description": "3-pole highpass.",
+              "type": "string",
+              "const": "hp3"
+            },
+            {
+              "description": "2-pole bandpass.",
+              "type": "string",
+              "const": "bp2"
+            },
+            {
+              "description": "4-pole bandpass.",
+              "type": "string",
+              "const": "bp4"
+            },
+            {
+              "description": "2-pole notch.",
+              "type": "string",
+              "const": "n2"
+            },
+            {
+              "description": "3-stage phaser.",
+              "type": "string",
+              "const": "ph3"
+            },
+            {
+              "description": "2-pole highpass + 1-pole lowpass.",
+              "type": "string",
+              "const": "hp2Lp1"
+            },
+            {
+              "description": "3-pole highpass + 1-pole lowpass.",
+              "type": "string",
+              "const": "hp3Lp1"
+            },
+            {
+              "description": "2-pole notch + 1-pole lowpass.",
+              "type": "string",
+              "const": "n2Lp1"
+            },
+            {
+              "description": "3-stage phaser + 1-pole lowpass.",
+              "type": "string",
+              "const": "ph3Lp1"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "filter output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.cutoffWarpLp",
+    "documentation": "Surge XT's Cutoff Warp filter — an RBJ biquad with a saturator in the\nfeedback path (a nonlinear-feedback design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'`, `'softClip'`, or `'ojd'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.cutoffWarpLp($saw('c2'), 'c4', 2, { drive: 'ojd', stages: 2 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CutoffWarpLpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "feedback saturator: tanh, softClip, or ojd (default tanh)",
+          "$ref": "#/$defs/WarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "WarpDrive": {
+          "description": "Feedback saturator. Rendered as `'tanh'` / `'softClip'` / `'ojd'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh feedback saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            },
+            {
+              "description": "OJD overdrive — asymmetric knee.",
+              "type": "string",
+              "const": "ojd"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.cutoffWarpHp",
+    "documentation": "Surge XT's Cutoff Warp filter — an RBJ biquad with a saturator in the\nfeedback path (a nonlinear-feedback design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'`, `'softClip'`, or `'ojd'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.cutoffWarpHp($saw('c2'), 'c4', 2, { stages: 2 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CutoffWarpHpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "feedback saturator: tanh, softClip, or ojd (default tanh)",
+          "$ref": "#/$defs/WarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "WarpDrive": {
+          "description": "Feedback saturator. Rendered as `'tanh'` / `'softClip'` / `'ojd'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh feedback saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            },
+            {
+              "description": "OJD overdrive — asymmetric knee.",
+              "type": "string",
+              "const": "ojd"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "highpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.cutoffWarpBp",
+    "documentation": "Surge XT's Cutoff Warp filter — an RBJ biquad with a saturator in the\nfeedback path (a nonlinear-feedback design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'`, `'softClip'`, or `'ojd'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.cutoffWarpBp($saw('c2'), 'c4', 2)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CutoffWarpBpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "feedback saturator: tanh, softClip, or ojd (default tanh)",
+          "$ref": "#/$defs/WarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "WarpDrive": {
+          "description": "Feedback saturator. Rendered as `'tanh'` / `'softClip'` / `'ojd'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh feedback saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            },
+            {
+              "description": "OJD overdrive — asymmetric knee.",
+              "type": "string",
+              "const": "ojd"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "bandpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.cutoffWarpNotch",
+    "documentation": "Surge XT's Cutoff Warp filter — an RBJ biquad with a saturator in the\nfeedback path (a nonlinear-feedback design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'`, `'softClip'`, or `'ojd'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.cutoffWarpNotch($saw('c2'), 'c4', 2)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CutoffWarpNotchFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "feedback saturator: tanh, softClip, or ojd (default tanh)",
+          "$ref": "#/$defs/WarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "WarpDrive": {
+          "description": "Feedback saturator. Rendered as `'tanh'` / `'softClip'` / `'ojd'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh feedback saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            },
+            {
+              "description": "OJD overdrive — asymmetric knee.",
+              "type": "string",
+              "const": "ojd"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "notch output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.cutoffWarpAp",
+    "documentation": "Surge XT's Cutoff Warp filter — an RBJ biquad with a saturator in the\nfeedback path (a nonlinear-feedback design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'`, `'softClip'`, or `'ojd'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.cutoffWarpAp($saw('c2'), 'c4', 2, { drive: 'softClip' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CutoffWarpApFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "feedback saturator: tanh, softClip, or ojd (default tanh)",
+          "$ref": "#/$defs/WarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "WarpDrive": {
+          "description": "Feedback saturator. Rendered as `'tanh'` / `'softClip'` / `'ojd'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh feedback saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            },
+            {
+              "description": "OJD overdrive — asymmetric knee.",
+              "type": "string",
+              "const": "ojd"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "allpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.resWarpLp",
+    "documentation": "Surge XT's Resonance Warp filter — an RBJ biquad with saturators on the\nstate variables (a nonlinear-biquad design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'` or `'softClip'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.resWarpLp($saw('c2'), 'c4', 2, { drive: 'softClip', stages: 2 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ResWarpLpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "state saturator: tanh or softClip (default tanh)",
+          "$ref": "#/$defs/ResWarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "ResWarpDrive": {
+          "description": "State saturator. Rendered as `'tanh'` / `'softClip'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh state saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "lowpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.resWarpHp",
+    "documentation": "Surge XT's Resonance Warp filter — an RBJ biquad with saturators on the\nstate variables (a nonlinear-biquad design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'` or `'softClip'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.resWarpHp($saw('c2'), 'c4', 2)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ResWarpHpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "state saturator: tanh or softClip (default tanh)",
+          "$ref": "#/$defs/ResWarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "ResWarpDrive": {
+          "description": "State saturator. Rendered as `'tanh'` / `'softClip'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh state saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "highpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.resWarpBp",
+    "documentation": "Surge XT's Resonance Warp filter — an RBJ biquad with saturators on the\nstate variables (a nonlinear-biquad design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'` or `'softClip'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.resWarpBp($saw('c2'), 'c4', 2)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ResWarpBpFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "state saturator: tanh or softClip (default tanh)",
+          "$ref": "#/$defs/ResWarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "ResWarpDrive": {
+          "description": "State saturator. Rendered as `'tanh'` / `'softClip'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh state saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "bandpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.resWarpNotch",
+    "documentation": "Surge XT's Resonance Warp filter — an RBJ biquad with saturators on the\nstate variables (a nonlinear-biquad design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'` or `'softClip'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.resWarpNotch($saw('c2'), 'c4', 2)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ResWarpNotchFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "state saturator: tanh or softClip (default tanh)",
+          "$ref": "#/$defs/ResWarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "ResWarpDrive": {
+          "description": "State saturator. Rendered as `'tanh'` / `'softClip'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh state saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "notch output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.resWarpAp",
+    "documentation": "Surge XT's Resonance Warp filter — an RBJ biquad with saturators on the\nstate variables (a nonlinear-biquad design by Jatin Chowdhury), up to\nfour cascaded stages. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 (biquad Q up to ~18).\n- **drive** — `'tanh'` or `'softClip'`.\n- **stages** — 1–4 cascaded sections.\n\n```js\n$unstable.filter.resWarpAp($saw('c2'), 'c4', 2, { stages: 3 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ResWarpApFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "state saturator: tanh or softClip (default tanh)",
+          "$ref": "#/$defs/ResWarpDrive"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stages": {
+          "description": "number of cascaded filter stages, 1–4 (default 1)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "ResWarpDrive": {
+          "description": "State saturator. Rendered as `'tanh'` / `'softClip'` in the DSL.",
+          "oneOf": [
+            {
+              "description": "Smooth tanh state saturation.",
+              "type": "string",
+              "const": "tanh"
+            },
+            {
+              "description": "Cubic soft clip.",
+              "type": "string",
+              "const": "softClip"
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "allpass output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.tripole",
+    "documentation": "Surge XT's Tri-pole — Ian Fritz's Threeler filter: three saturating one-pole\nstages, a resonance waveshaper, and global feedback. Wild and organic;\nself-oscillates readily. Runs 2× oversampled.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; the feedback coefficient grows exponentially.\n- **mode** — stage topology: `'lll'`, `'lhl'`, `'hlh'`, or `'hhh'`.\n- **outputStage** — 1, 2, or 3 (3 = the full feedback output).\n\n```js\n$unstable.filter.tripole($saw('c2'), 'c4', 2, { mode: 'lhl', outputStage: 3 })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "TriPoleFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "stage topology: lll, lhl, hlh, or hhh (default lll)",
+          "$ref": "#/$defs/TriPoleShape"
+        },
+        "outputStage": {
+          "description": "which stage to tap: 1, 2, or 3 (default 3, the full output)",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "TriPoleShape": {
+          "description": "Stage topology (which of the three one-poles are lowpass vs highpass).",
+          "oneOf": [
+            {
+              "description": "Lowpass → lowpass → lowpass.",
+              "type": "string",
+              "const": "lll"
+            },
+            {
+              "description": "Lowpass → highpass → lowpass.",
+              "type": "string",
+              "const": "lhl"
+            },
+            {
+              "description": "Highpass → lowpass → highpass.",
+              "type": "string",
+              "const": "hlh"
+            },
+            {
+              "description": "Highpass → highpass → highpass.",
+              "type": "string",
+              "const": "hhh"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "filter output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.fastSvf",
+    "documentation": "Surge XT's Fast SVF — Andy Simper's (Cytomic) trapezoidal state-variable filter.\nClean and linear, stable with cutoff modulation right up to Nyquist.\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5.\n- **mode** — `'lp'`, `'hp'`, `'bp'`, `'notch'`, `'peak'`, or `'allpass'`.\n\n```js\n$unstable.filter.fastSvf($saw('c2'), 'c4', 3, { mode: 'peak' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "FastSvfFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "output mix: lp, hp, bp, notch, peak, or allpass (default lp)",
+          "$ref": "#/$defs/FastSvfMode"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "FastSvfMode": {
+          "description": "Output mix (the six modes the product's subtype menu exposes).",
+          "oneOf": [
+            {
+              "description": "Lowpass.",
+              "type": "string",
+              "const": "lp"
+            },
+            {
+              "description": "Highpass.",
+              "type": "string",
+              "const": "hp"
+            },
+            {
+              "description": "Bandpass.",
+              "type": "string",
+              "const": "bp"
+            },
+            {
+              "description": "Notch.",
+              "type": "string",
+              "const": "notch"
+            },
+            {
+              "description": "Resonant peak.",
+              "type": "string",
+              "const": "peak"
+            },
+            {
+              "description": "Allpass.",
+              "type": "string",
+              "const": "allpass"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "filter output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.sah",
+    "documentation": "Surge XT's Sample & Hold — samples the input at the cutoff frequency, holding\neach value until the next tick (a pitched decimation/downsampling effect).\nResonance feeds the held value back through a soft clip.\n\n- **cutoff** — sample clock in V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; feedback into the sampler.\n\n```js\n$unstable.filter.sah($saw('c2'), 'c1', 0)\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SahFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "sampled output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
+    "name": "$unstable.filter.comb",
+    "documentation": "Surge XT's comb filter — a sinc-interpolated feedback delay line, one period of\nthe cutoff pitch long. Positive feedback resonates at the cutoff's harmonics;\nnegative at the half-shifted series. Runs 2× oversampled.\n\n- **cutoff** — comb pitch in V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5 feedback amount; high values ring strongly.\n- **polarity** — `'pos'` or `'neg'`.\n- **mix** — `'half'` (50% wet) or `'full'` (100% wet).\n\n```js\n$unstable.filter.comb($saw('c2'), 'c3', 4, { polarity: 'neg', mix: 'full' })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CombFilterParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "input": {
+          "description": "signal input (bipolar, ±5 V)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mix": {
+          "description": "wet mix: half (50%) or full (100%; default half)",
+          "$ref": "#/$defs/CombMix"
+        },
+        "polarity": {
+          "description": "feedback polarity: pos or neg (default pos)",
+          "$ref": "#/$defs/CombPolarity"
+        },
+        "resonance": {
+          "description": "filter resonance (0–5); high values approach self-oscillation",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "CombMix": {
+          "description": "Wet mix: Surge XT's \"50%\" / \"100%\" comb subtypes.",
+          "oneOf": [
+            {
+              "description": "50% wet / 50% dry — the feedforward comb response.",
+              "type": "string",
+              "const": "half"
+            },
+            {
+              "description": "100% wet — the delayed signal alone.",
+              "type": "string",
+              "const": "full"
+            }
+          ]
+        },
+        "CombPolarity": {
+          "description": "Feedback polarity: positive resonates at harmonics of the cutoff pitch,\nnegative at the half-shifted series.",
+          "oneOf": [
+            {
+              "description": "Positive feedback.",
+              "type": "string",
+              "const": "pos"
+            },
+            {
+              "description": "Negative feedback.",
+              "type": "string",
+              "const": "neg"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "comb output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (bipolar, ±5 V)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4)",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "filter resonance (0–5); high values approach self-oscillation",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      }
+    ]
+  },
+  {
     "name": "$crush",
     "documentation": "Phase effect: digital bit-crush distortion.\n\nTransforms a 0–1 phase signal by quantizing it into coarse steps,\ncreating glitchy, staircase-like phase patterns. Feed the output into\na phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear the result\nas gritty digital artifacts — fractured harmonics at low settings,\naggressive bit-reduction at high settings.\n\n# Example\n\n```js\n// Bit-crush a ramp phase and convert to audio with $pSine\n$pSine($crush($ramp('c3'), 2)).out()\n```",
     "paramsSchema": {
