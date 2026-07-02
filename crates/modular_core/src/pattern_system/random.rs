@@ -4,7 +4,9 @@
 //! based on time. The same query at the same time always returns the
 //! same value, enabling reproducible randomness in patterns.
 
-use super::{Fraction, Pattern, constructors::signal};
+use super::{ArenaHap, ArenaHapContext, Fraction, Pattern, State, constructors::signal};
+use bumpalo::Bump;
+use bumpalo::collections::Vec as BumpVec;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -35,8 +37,23 @@ pub fn rand_with_offset(seed: u64) -> Pattern<f64> {
 }
 
 /// Random signal that holds one value per cycle, keyed by `seed`.
+/// Queries split at cycle boundaries, so a query spanning several cycles
+/// yields one hap per cycle, each with an independent draw. This is what
+/// lets `[a|b]*16` make 16 independent choices per outer cycle: `fast`
+/// queries 16 inner cycles at once, and each must sample separately.
 pub fn rand_cycle_with_offset(seed: u64) -> Pattern<f64> {
-    signal(move |t| hash_to_float(cycle_hash(t, seed)))
+    Pattern::new_into(
+        move |state: &State, _bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, f64>>| {
+            state.span.for_each_cycle_span(|subspan| {
+                out.push(ArenaHap {
+                    whole: None,
+                    part: subspan.clone(),
+                    value: hash_to_float(cycle_hash(&subspan.begin, seed)),
+                    context: ArenaHapContext::empty_ref(),
+                });
+            });
+        },
+    )
 }
 
 /// Choose randomly from `values` per cycle, keyed by `seed`.
@@ -97,6 +114,43 @@ mod tests {
 
         assert!(haps[0].value >= 0.0);
         assert!(haps[0].value < 1.0);
+    }
+
+    #[test]
+    fn test_rand_cycle_splits_multi_cycle_queries() {
+        let pat = rand_cycle_with_offset(0);
+        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(16));
+
+        assert_eq!(haps.len(), 16, "expected one hap per cycle");
+        for (i, h) in haps.iter().enumerate() {
+            assert_eq!(h.part.begin, Fraction::from_integer(i as i64));
+            assert_eq!(h.part.end, Fraction::from_integer(i as i64 + 1));
+        }
+        let distinct: std::collections::HashSet<u64> =
+            haps.iter().map(|h| h.value.to_bits()).collect();
+        assert!(
+            distinct.len() > 1,
+            "each cycle should draw independently, got a single value across 16 cycles"
+        );
+    }
+
+    #[test]
+    fn test_choose_independent_per_slot_under_fast() {
+        // `[0|1]*16` compresses 16 choose cycles into one outer cycle, so
+        // the 16 slots must pick independently rather than sharing one draw.
+        use crate::pattern_system::mini::parse;
+
+        let pat = parse::<f64>("[0|1]*16").unwrap();
+        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+
+        assert_eq!(haps.len(), 16);
+        let distinct: std::collections::HashSet<u64> =
+            haps.iter().map(|h| h.value.to_bits()).collect();
+        assert_eq!(
+            distinct.len(),
+            2,
+            "expected both alternatives to appear across the 16 slots"
+        );
     }
 
     #[test]
