@@ -14325,7 +14325,7 @@
           ]
         },
         "AtomValue": {
-          "description": "Atomic value types produced by the `$p()` DSL parser.\n\nThe reduced set from strudel's krill grammar: `Number` covers bare\nnumeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), and\n`Note` covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`).\nEvery other atom form (`m60` midi shorthand, sample-name identifiers,\n`2v` voltage, module references, quoted strings) has been removed from\nthe grammar and is not representable here.",
+          "description": "Atomic value types produced by the `$p()` DSL parser.\n\nThe reduced set from strudel's krill grammar: `Number` covers bare\nnumeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), `Note`\ncovers pitched letter-octave atoms (`c4`, `d#3`, `eb5`), and `Truthy`\ncovers the `x` structure marker. Every other atom form (`m60` midi\nshorthand, sample-name identifiers, `2v` voltage, module references,\nquoted strings) has been removed from the grammar and is not\nrepresentable here.",
           "oneOf": [
             {
               "description": "Numeric value. Module-level semantics decide the interpretation:\n`$cycle($p(...))` maps a bare `Number` to volts (1V/oct); `$p.s(...)`\nmaps it to an integer scale degree.",
@@ -14393,7 +14393,44 @@
               "required": [
                 "Note"
               ]
+            },
+            {
+              "description": "Structure atom `x` — an onset marker with no pitch of its own, only\nmeaningful in boolean (`.struct(...)`) patterns.",
+              "type": "string",
+              "const": "Truthy"
             }
+          ]
+        },
+        "BeatKindTag": {
+          "description": "Phantom discriminator matching the literal `\"BeatPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "BeatPattern"
+          ]
+        },
+        "BeatPatternPayload": {
+          "description": "JSON payload for `$p(...).beat(t, div)`: place the sampled source value\nin the beat slot `[t/div, (t+1)/div)` of every cycle, silence elsewhere.\n`t` is typically a comma stack (`\"0,7,10\"` — one onset per index); both\n`t` and `div` follow [`FactorPayload`]'s const-vs-pattern duality.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.beat` sets this so the `SeqPatternSource`\nuntagged enum picks the `Beat` variant.",
+              "$ref": "#/$defs/BeatKindTag"
+            },
+            "div": {
+              "$ref": "#/$defs/FactorPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            },
+            "t": {
+              "$ref": "#/$defs/FactorPayload"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "t",
+            "div"
           ]
         },
         "FactorPayload": {
@@ -16071,13 +16108,19 @@
           ]
         },
         "SeqPatternSource": {
-          "description": "Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`\npayload, a chained `$p.s` payload with multi-source highlighting, or a\nsingle `ParsedPatternPayload` (the legacy single-source path used by\n`$cycle($p(...))`).\n\nThe `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before\nthe untagged `Single`; each carries a distinct required `__kind` literal, so\nthe untagged enum disambiguates them unambiguously before falling back to\n`Single`.",
+          "description": "Wire-level dispatch shape: a `.fast`/`.slow`/`.struct`/`.beat` wrapper, an\n`$p.arrange` payload, a chained `$p.s` payload with multi-source\nhighlighting, or a single `ParsedPatternPayload` (the legacy single-source\npath used by `$cycle($p(...))`).\n\nThe `__kind`-tagged variants are listed before the untagged `Single`; each\ncarries a distinct required `__kind` literal, so the untagged enum\ndisambiguates them unambiguously before falling back to `Single`.",
           "anyOf": [
             {
               "$ref": "#/$defs/FastPatternPayload"
             },
             {
               "$ref": "#/$defs/SlowPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/StructPatternPayload"
+            },
+            {
+              "$ref": "#/$defs/BeatPatternPayload"
             },
             {
               "$ref": "#/$defs/ArrangePatternPayload"
@@ -16265,6 +16308,35 @@
             "sources",
             "scale",
             "ops"
+          ]
+        },
+        "StructKindTag": {
+          "description": "Phantom discriminator matching the literal `\"StructPattern\"` string.",
+          "type": "string",
+          "enum": [
+            "StructPattern"
+          ]
+        },
+        "StructPatternPayload": {
+          "description": "JSON payload for `$p(...).struct(boolPattern)`: take event timing from a\nboolean mini-notation pattern (`\"x ~ x x\"`, `\"1 0 1\"`), sampling values\nfrom `pattern`. Falsy and rest slots become rests.",
+          "type": "object",
+          "properties": {
+            "__kind": {
+              "description": "Discriminator — TS-side `.struct` sets this so the `SeqPatternSource`\nuntagged enum picks the `Struct` variant.",
+              "$ref": "#/$defs/StructKindTag"
+            },
+            "bool_pattern": {
+              "description": "The boolean structure pattern — always a parsed mini-notation string,\nits own highlightable source.",
+              "$ref": "#/$defs/ParsedPatternPayload"
+            },
+            "pattern": {
+              "$ref": "#/$defs/SeqPatternSource"
+            }
+          },
+          "required": [
+            "__kind",
+            "pattern",
+            "bool_pattern"
           ]
         }
       }

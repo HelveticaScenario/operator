@@ -341,6 +341,25 @@ impl<'a> Parser<'a> {
             .ok_or_else(|| ParseError("unexpected end".into()))?;
         if c.is_ascii_alphabetic() {
             let letter = c.to_ascii_lowercase();
+            if letter == b'x' {
+                // Truthy structure marker. The ident-continuation guard
+                // mirrors the peggy TruthyValue rule's !IdentCont, so `x4`
+                // and `xx` are errors rather than atoms.
+                self.pos += 1;
+                if let Some(next) = self.peek() {
+                    if next.is_ascii_alphanumeric() || next == b'_' {
+                        return Err(ParseError(format!(
+                            "unexpected character after x at {}",
+                            self.pos
+                        )));
+                    }
+                }
+                return Ok(MiniAST::Pure(Located::new(
+                    AtomValue::Truthy,
+                    start,
+                    self.pos,
+                )));
+            }
             if (b'a'..=b'g').contains(&letter) {
                 self.pos += 1;
                 // Optional accidental: '#', 's' → sharp; 'b'/'f' only if followed by digit

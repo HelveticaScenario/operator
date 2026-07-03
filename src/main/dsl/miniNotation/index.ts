@@ -298,7 +298,9 @@ export type SectionPattern =
     | SpPattern
     | ArrangePattern
     | FastPattern
-    | SlowPattern;
+    | SlowPattern
+    | StructPattern
+    | BeatPattern;
 
 /** One `[cycles, pattern]` tuple accepted by `$p.arrange`. */
 export type ArrangeSectionArg = readonly [number, SectionPattern];
@@ -411,22 +413,39 @@ function $arrangeImpl(
     });
 }
 
-// ─── .fast / .slow (time modifiers on every pattern) ────────────────────
+// ─── .fast / .slow / .struct / .beat (modifiers on every pattern) ───────
 
 /** Discriminator strings the Rust `SeqPatternSource` untagged enum matches. */
 const FAST_KIND = 'FastPattern' as const;
 const SLOW_KIND = 'SlowPattern' as const;
+const STRUCT_KIND = 'StructPattern' as const;
+const BEAT_KIND = 'BeatPattern' as const;
 
 /**
- * The `.fast(...)` / `.slow(...)` methods attached (non-enumerably) to every
- * pattern object, mirroring Strudel's `fast`/`slow`. The factor is a constant
- * (`2`) or a mini-notation number pattern (`"2 4"` → ×2 then ×4 across the
- * cycle). A non-positive factor (`0` or negative) yields silence, matching the
- * in-string `*` / `/` operators.
+ * The `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)` methods
+ * attached (non-enumerably) to every pattern object, mirroring Strudel.
+ *
+ * `.fast`/`.slow`: the factor is a constant (`2`) or a mini-notation number
+ * pattern (`"2 4"` → ×2 then ×4 across the cycle). A non-positive factor
+ * (`0` or negative) yields silence, matching the in-string `*` / `/`
+ * operators.
+ *
+ * `.struct`: takes event timing from a boolean mini-notation pattern
+ * (`"x ~ x x"`, `"1 0 1"`), sampling values from the source pattern. Falsy
+ * (`0`) and rest (`~`) slots are silent.
+ *
+ * `.beat`: places the source value at beat `t` of a `div`-beat cycle,
+ * silence elsewhere. `t` is typically a comma stack (`"0,7,10"` — one onset
+ * per index) and wraps modulo `div`; a slot not fully inside the cycle
+ * (negative `t`, or fractional `t` within `1` of the cycle end) is silent,
+ * matching Strudel. Both arguments accept a constant number or a
+ * mini-notation number pattern.
  */
 export interface TimeModifiable {
     fast(factor: number | string): FastPattern & TimeModifiable;
     slow(factor: number | string): SlowPattern & TimeModifiable;
+    struct(boolPattern: string): StructPattern & TimeModifiable;
+    beat(t: number | string, div: number | string): BeatPattern & TimeModifiable;
 }
 
 /**
@@ -480,6 +499,54 @@ export function isSlowPattern(value: unknown): value is SlowPattern {
 }
 
 /**
+ * Wire shape for `pattern.struct(boolPattern)`. Recognised by the Rust
+ * `SeqPatternSource` untagged enum via `__kind === 'StructPattern'`.
+ * `bool_pattern` is always a parsed mini-notation string and always its own
+ * highlightable source (appended after the wrapped pattern's spans).
+ */
+export interface StructPattern {
+    __kind: typeof STRUCT_KIND;
+    pattern: SectionPattern;
+    bool_pattern: ParsedPatternPayload;
+    argument_spans: Array<SourceSpan>;
+}
+
+/**
+ * Wire shape for `pattern.beat(t, div)`. Recognised by the Rust
+ * `SeqPatternSource` untagged enum via `__kind === 'BeatPattern'`. `t` and
+ * `div` follow {@link FastPattern.factor}'s const-vs-pattern duality; string
+ * arguments append their spans after the wrapped pattern's (t first, then
+ * div — matching the Rust `per_source` order).
+ */
+export interface BeatPattern {
+    __kind: typeof BEAT_KIND;
+    pattern: SectionPattern;
+    t: number | ParsedPatternPayload;
+    div: number | ParsedPatternPayload;
+    argument_spans: Array<SourceSpan>;
+}
+
+/** Type guard for runtime `StructPattern` checks. */
+export function isStructPattern(value: unknown): value is StructPattern {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === STRUCT_KIND
+    );
+}
+
+/** Type guard for runtime `BeatPattern` checks. */
+export function isBeatPattern(value: unknown): value is BeatPattern {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        '__kind' in value &&
+        value.__kind === BEAT_KIND
+    );
+}
+
+/**
  * Collect a pattern's flat per-source argument spans in the same order the Rust
  * side flattens `per_source`. Shared by `$p.arrange` (per section) and the
  * `.fast`/`.slow` wrappers (the wrapped pattern). Throws on a non-pattern value.
@@ -495,27 +562,33 @@ function collectPatternSpans(
         isSpPattern(pattern) ||
         isArrangePattern(pattern) ||
         isFastPattern(pattern) ||
-        isSlowPattern(pattern)
+        isSlowPattern(pattern) ||
+        isStructPattern(pattern) ||
+        isBeatPattern(pattern)
     ) {
         return [...pattern.argument_spans];
     }
     throw new MiniParseError(
         `${context}: pattern must be a $p(...), $p.s(...), $p.arrange(...), ` +
-            `or .fast(...)/.slow(...) value`,
+            `or .fast(...)/.slow(...)/.struct(...)/.beat(...) value`,
     );
 }
 
 /**
- * Build the wire payload for a `.fast`/`.slow` factor. A number is carried as a
- * raw constant (not a highlightable source); a string is parsed as full
- * mini-notation (`"2 4"`, `"<1 2>"`, …) into a `ParsedPatternPayload` that the
- * Rust side lowers to a `Pattern<Fraction>` and highlights.
+ * Build the wire payload for a numeric pattern-method argument (`.fast`/
+ * `.slow` factor, `.beat` t/div). A number is carried as a raw constant (not
+ * a highlightable source); a string is parsed as full mini-notation (`"2 4"`,
+ * `"<1 2>"`, …) into a `ParsedPatternPayload` that the Rust side lowers to a
+ * `Pattern<Fraction>` and highlights.
  */
-function factorPayload(arg: number | string): number | ParsedPatternPayload {
+function factorPayload(
+    arg: number | string,
+    methodName: string,
+): number | ParsedPatternPayload {
     if (typeof arg === 'number') {
         if (!Number.isFinite(arg)) {
             throw new MiniParseError(
-                `fast()/slow() expects a finite number factor, got ${arg}`,
+                `${methodName}() expects a finite number, got ${arg}`,
             );
         }
         return arg;
@@ -531,7 +604,7 @@ function makeFast(
     return attachTimeModifiers({
         __kind: FAST_KIND,
         pattern: inner,
-        factor: factorPayload(factor),
+        factor: factorPayload(factor, 'fast'),
         argument_spans: factorArgumentSpans(inner, factor, 'fast'),
     });
 }
@@ -544,8 +617,62 @@ function makeSlow(
     return attachTimeModifiers({
         __kind: SLOW_KIND,
         pattern: inner,
-        factor: factorPayload(factor),
+        factor: factorPayload(factor, 'slow'),
         argument_spans: factorArgumentSpans(inner, factor, 'slow'),
+    });
+}
+
+/** Build a `StructPattern` wrapper around `inner`. */
+function makeStruct(
+    inner: SectionPattern,
+    boolPattern: string,
+): StructPattern & TimeModifiable {
+    if (typeof boolPattern !== 'string') {
+        throw new MiniParseError(
+            `struct() expects a mini-notation string, got ${typeof boolPattern}`,
+        );
+    }
+    const innerSpans = collectPatternSpans(inner, '$p(...).struct()');
+    // The bool pattern is always a string source, so unlike a numeric factor
+    // it always appends its own span.
+    const loc = captureSourceLocation();
+    const boolSpan = lookupArgumentSpan(loc, 'boolPattern') ?? {
+        start: 0,
+        end: 0,
+    };
+    return attachTimeModifiers({
+        __kind: STRUCT_KIND,
+        pattern: inner,
+        bool_pattern: parsePayload(boolPattern),
+        argument_spans: [...innerSpans, boolSpan],
+    });
+}
+
+/** Build a `BeatPattern` wrapper around `inner`. */
+function makeBeat(
+    inner: SectionPattern,
+    t: number | string,
+    div: number | string,
+): BeatPattern & TimeModifiable {
+    const innerSpans = collectPatternSpans(inner, '$p(...).beat()');
+    // Span order must match the Rust `per_source` push order: inner sources,
+    // then t (string only), then div (string only).
+    const loc = captureSourceLocation();
+    const argument_spans = [...innerSpans];
+    if (typeof t === 'string') {
+        argument_spans.push(lookupArgumentSpan(loc, 't') ?? { start: 0, end: 0 });
+    }
+    if (typeof div === 'string') {
+        argument_spans.push(
+            lookupArgumentSpan(loc, 'div') ?? { start: 0, end: 0 },
+        );
+    }
+    return attachTimeModifiers({
+        __kind: BEAT_KIND,
+        pattern: inner,
+        t: factorPayload(t, 'beat'),
+        div: factorPayload(div, 'beat'),
+        argument_spans,
     });
 }
 
@@ -572,11 +699,12 @@ function factorArgumentSpans(
 }
 
 /**
- * Attach `.fast(...)` / `.slow(...)` methods to a pattern object. `Object.assign`
- * types the result; the `defineProperty` calls then flip the two methods to
- * non-enumerable so `JSON.stringify` (the IPC clone) and `Object.keys`/`entries`
- * skip them and only the wire-shape fields cross the boundary — the same trick
- * `$p.s` uses for `.add`/`.sub`. The object identity is preserved.
+ * Attach the `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)`
+ * methods to a pattern object. `Object.assign` types the result; the
+ * `defineProperty` calls then flip the methods to non-enumerable so
+ * `JSON.stringify` (the IPC clone) and `Object.keys`/`entries` skip them and
+ * only the wire-shape fields cross the boundary — the same trick `$p.s` uses
+ * for `.add`/`.sub`. The object identity is preserved.
  */
 function attachTimeModifiers<T extends SectionPattern>(
     pattern: T,
@@ -584,9 +712,14 @@ function attachTimeModifiers<T extends SectionPattern>(
     const modifiable = Object.assign(pattern, {
         fast: (factor: number | string) => makeFast(pattern, factor),
         slow: (factor: number | string) => makeSlow(pattern, factor),
+        struct: (boolPattern: string) => makeStruct(pattern, boolPattern),
+        beat: (t: number | string, div: number | string) =>
+            makeBeat(pattern, t, div),
     });
     Object.defineProperty(modifiable, 'fast', { enumerable: false });
     Object.defineProperty(modifiable, 'slow', { enumerable: false });
+    Object.defineProperty(modifiable, 'struct', { enumerable: false });
+    Object.defineProperty(modifiable, 'beat', { enumerable: false });
     return modifiable;
 }
 

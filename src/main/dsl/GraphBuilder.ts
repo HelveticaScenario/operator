@@ -1942,8 +1942,8 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
         }
 
         // Opaque payloads (ParsedPattern from $p(), SpPattern from $p.s(),
-        // ArrangePattern from $p.arrange(), FastPattern/SlowPattern from
-        // .fast()/.slow()) must be preserved verbatim — walking them would
+        // ArrangePattern from $p.arrange(), and the .fast()/.slow()/.struct()/
+        // .beat() wrappers) must be preserved verbatim — walking them would
         // collapse the nulls in `accidental`/`octave`/weight slots to 0 via
         // valueToSignal, producing zero-duration haps and silence. Returning the
         // wrapper verbatim also preserves the nested pattern payloads it carries.
@@ -1954,7 +1954,9 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
                 kind === 'SpPattern' ||
                 kind === 'ArrangePattern' ||
                 kind === 'FastPattern' ||
-                kind === 'SlowPattern'
+                kind === 'SlowPattern' ||
+                kind === 'StructPattern' ||
+                kind === 'BeatPattern'
             ) {
                 return replaced;
             }
@@ -2025,17 +2027,19 @@ export function replaceDeferredStrings(
 
     if (typeof input === 'object' && input !== null) {
         // Opaque pattern payloads (ParsedPattern from $p(), SpPattern from
-        // $p.s(), ArrangePattern from $p.arrange(), FastPattern/SlowPattern from
-        // .fast()/.slow()) are JSON-only data with no deferred-output strings;
-        // mirror the replaceValues short-circuit and return them verbatim instead
-        // of deep-walking their mini-notation AST sub-tree.
+        // $p.s(), ArrangePattern from $p.arrange(), and the .fast()/.slow()/
+        // .struct()/.beat() wrappers) are JSON-only data with no deferred-output
+        // strings; mirror the replaceValues short-circuit and return them
+        // verbatim instead of deep-walking their mini-notation AST sub-tree.
         const kind = (input as { __kind?: unknown }).__kind;
         if (
             kind === 'ParsedPattern' ||
             kind === 'SpPattern' ||
             kind === 'ArrangePattern' ||
             kind === 'FastPattern' ||
-            kind === 'SlowPattern'
+            kind === 'SlowPattern' ||
+            kind === 'StructPattern' ||
+            kind === 'BeatPattern'
         ) {
             return input;
         }

@@ -202,23 +202,36 @@ function chainRootIsPs(
     }
 }
 
+/** Pattern methods whose argument spans the analyzer tracks. */
+type PatternMethodName = 'fast' | 'slow' | 'struct' | 'beat';
+
+/** Which argument names each pattern method registers, in positional order. */
+const PATTERN_METHOD_ARGS: Record<PatternMethodName, ReadonlyArray<string>> = {
+    fast: ['factor'],
+    slow: ['factor'],
+    struct: ['boolPattern'],
+    beat: ['t', 'div'],
+};
+
 /**
- * Identify `<pattern>.fast(factor)` / `<pattern>.slow(factor)` calls, where
- * `<pattern>` is any pattern-producing chain: `$p(...)`, `$p.s(...)`,
- * `$p.arrange(...)`, a nested `.fast`/`.slow`/`.add`/`.sub` link, or a
- * const-bound pattern. The factor literal is registered under `factor` so the
- * `.fast`/`.slow` method can capture it via
- * `captureSourceLocation()` + `lookupArgumentSpan(loc, 'factor')`.
+ * Identify `<pattern>.fast(factor)` / `.slow(factor)` / `.struct(boolPattern)`
+ * / `.beat(t, div)` calls, where `<pattern>` is any pattern-producing chain:
+ * `$p(...)`, `$p.s(...)`, `$p.arrange(...)`, a nested wrapper/`.add`/`.sub`
+ * link, or a const-bound pattern. Returns the method name so the caller can
+ * register each argument literal under the name the method looks up via
+ * `captureSourceLocation()` + `lookupArgumentSpan(loc, <argName>)`.
  */
-function isFastSlowCall(
+function patternMethodCallName(
     call: CallExpression,
     constInitMap: Map<string, Node>,
-): boolean {
+): PatternMethodName | null {
     const expr = call.getExpression();
-    if (!Node.isPropertyAccessExpression(expr)) return false;
+    if (!Node.isPropertyAccessExpression(expr)) return null;
     const methodName = expr.getName();
-    if (methodName !== 'fast' && methodName !== 'slow') return false;
-    return chainRootIsPattern(expr.getExpression(), constInitMap);
+    if (!(methodName in PATTERN_METHOD_ARGS)) return null;
+    return chainRootIsPattern(expr.getExpression(), constInitMap)
+        ? (methodName as PatternMethodName)
+        : null;
 }
 
 /**
@@ -774,15 +787,34 @@ export function analyzeArgumentSpans(
             return;
         }
 
-        // Track `<pattern>.fast(factor)` / `.slow(factor)`: register the factor
-        // literal span under `factor` so the `.fast`/`.slow` method captures it
-        // via captureSourceLocation()+lookupArgumentSpan(loc, 'factor'). Keyed at
-        // the method name's position, like the `$p.s` chain above.
-        if (isFastSlowCall(call, constInitMap)) {
+        // Track pattern-method calls (`.fast(factor)`, `.slow(factor)`,
+        // `.struct(boolPattern)`, `.beat(t, div)`): register each argument
+        // literal's span under its parameter name so the method captures it
+        // via captureSourceLocation()+lookupArgumentSpan(loc, <argName>).
+        // Keyed at the method name's position, like the `$p.s` chain above.
+        const patternMethod = patternMethodCallName(call, constInitMap);
+        if (patternMethod) {
             const pArgs = call.getArguments();
-            if (pArgs.length < 1) return;
-            const span = getTrackableSpan(pArgs[0], constMap);
-            if (!span) return;
+            const argNames = PATTERN_METHOD_ARGS[patternMethod];
+            const argsMap = new Map<string, SourceSpan>();
+            for (let i = 0; i < argNames.length && i < pArgs.length; i++) {
+                const span = getTrackableSpan(pArgs[i], constMap);
+                if (!span) continue;
+                argsMap.set(argNames[i], span);
+                const innerNode = getTrackableNode(pArgs[i], constNodeMap);
+                if (innerNode) {
+                    const resolutions = resolveInterpolations(
+                        innerNode,
+                        constNodeMap,
+                        constMap,
+                    );
+                    if (resolutions) {
+                        const spanKey = `${span.start}:${span.end}`;
+                        interpolationResolutions.set(spanKey, resolutions);
+                    }
+                }
+            }
+            if (argsMap.size === 0) return;
             const callExpr = call.getExpression();
             const callStartPos = Node.isPropertyAccessExpression(callExpr)
                 ? callExpr.getNameNode().getStart()
@@ -791,24 +823,10 @@ export function analyzeArgumentSpans(
                 sourceFile.getLineAndColumnAtPos(callStartPos);
             const columnOffset = line === 1 ? firstLineColumnOffset : 0;
             const callKey: CallSiteKey = `${line + lineOffset}:${column + columnOffset}`;
-            const argsMap = new Map<string, SourceSpan>();
-            argsMap.set('factor', span);
             registry.set(callKey, {
                 args: argsMap,
-                moduleType: '.fast/.slow',
+                moduleType: `.${patternMethod}`,
             });
-            const innerNode = getTrackableNode(pArgs[0], constNodeMap);
-            if (innerNode) {
-                const resolutions = resolveInterpolations(
-                    innerNode,
-                    constNodeMap,
-                    constMap,
-                );
-                if (resolutions) {
-                    const spanKey = `${span.start}:${span.end}`;
-                    interpolationResolutions.set(spanKey, resolutions);
-                }
-            }
             return;
         }
 

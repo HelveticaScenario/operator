@@ -88,18 +88,23 @@ function isArrangePatternLike(
 }
 
 /**
- * Structural check for a `.fast(...)` / `.slow(...)` wrapper. Like `SpPattern`
- * and `ArrangePattern`, it carries a flat `argument_spans[i]` list — the wrapped
- * pattern's per-source spans — used to map runtime per-source highlights back to
- * editor literals.
+ * Structural check for a `.fast(...)` / `.slow(...)` / `.struct(...)` /
+ * `.beat(...)` wrapper. Like `SpPattern` and `ArrangePattern`, it carries a
+ * flat `argument_spans[i]` list — the wrapped pattern's per-source spans —
+ * used to map runtime per-source highlights back to editor literals.
  */
-function isFastOrSlowPatternLike(
+function isPatternWrapperLike(
     value: unknown,
 ): value is { argument_spans?: ReadonlyArray<SourceSpan> } {
     if (typeof value !== 'object' || value === null || !('__kind' in value)) {
         return false;
     }
-    return value.__kind === 'FastPattern' || value.__kind === 'SlowPattern';
+    return (
+        value.__kind === 'FastPattern' ||
+        value.__kind === 'SlowPattern' ||
+        value.__kind === 'StructPattern' ||
+        value.__kind === 'BeatPattern'
+    );
 }
 
 /**
@@ -338,7 +343,7 @@ export class DSLContext {
                 if (
                     isSpPatternLike(value) ||
                     isArrangePatternLike(value) ||
-                    isFastOrSlowPatternLike(value)
+                    isPatternWrapperLike(value)
                 ) {
                     // Both carry a flat `argument_spans[i]` list lining up with
                     // the Rust per-source order; emit `<paramName>.<i>` keys.

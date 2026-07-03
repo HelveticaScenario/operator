@@ -168,19 +168,34 @@ impl FromMiniAtom for i32 {
 }
 
 impl FromMiniAtom for bool {
+    // Strudel truthiness: `0` is the only falsy atom; `x`, notes, and Hz
+    // values all count as onsets. Off slots come from `0`, `~`, and `-`.
     fn from_atom(atom: &AtomValue) -> Result<Self, ConvertError> {
         match atom {
             AtomValue::Number(n) => Ok(*n != 0.0),
-            _ => Err(ConvertError::InvalidAtom(
-                "Cannot convert to bool".to_string(),
-            )),
+            AtomValue::Truthy | AtomValue::Hz(_) | AtomValue::Note { .. } => Ok(true),
         }
     }
 
     fn combine_with_head(_head_atoms: &[AtomValue], _tail: &Self) -> Result<Self, ConvertError> {
         Err(ConvertError::ListNotSupported)
     }
-    // bool does not support rests - use default supports_rest() -> false
+
+    // Rest support lets boolean patterns use `~`, `?`, and in-string
+    // euclidean modifiers; a rest is simply "no onset".
+    fn rest_value() -> Option<Self> {
+        Some(false)
+    }
+
+    fn supports_rest() -> bool {
+        true
+    }
+}
+
+impl HasRest for bool {
+    fn rest_value() -> Self {
+        false
+    }
 }
 
 /// Convert an AST to a Pattern.
@@ -1039,6 +1054,46 @@ mod tests {
         let pat: Pattern<f64> = convert(&ast).unwrap();
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
         assert_eq!(haps.len(), 3);
+    }
+
+    fn bool_values(source: &str) -> Vec<bool> {
+        let ast = parse(source).unwrap();
+        let pat: Pattern<bool> = convert(&ast).unwrap();
+        pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1))
+            .into_iter()
+            .map(|h| h.value)
+            .collect()
+    }
+
+    #[test]
+    fn test_convert_bool_numbers() {
+        assert_eq!(bool_values("1 0 1"), vec![true, false, true]);
+    }
+
+    #[test]
+    fn test_convert_bool_truthy_and_rest() {
+        assert_eq!(bool_values("x ~ x"), vec![true, false, true]);
+    }
+
+    #[test]
+    fn test_convert_bool_notes_and_hz_are_truthy() {
+        assert_eq!(bool_values("c e"), vec![true, true]);
+        assert_eq!(bool_values("440hz"), vec![true]);
+    }
+
+    #[test]
+    fn test_convert_bool_euclidean() {
+        // x(3,8): Bjorklund 3-in-8 — onsets at slots 0, 3, 6.
+        let values = bool_values("x(3,8)");
+        assert_eq!(values.len(), 8);
+        assert_eq!(values.iter().filter(|v| **v).count(), 3);
+        assert!(values[0] && values[3] && values[6]);
+    }
+
+    #[test]
+    fn test_convert_bool_degrade_does_not_error() {
+        let ast = parse("x?").unwrap();
+        assert!(convert::<bool>(&ast).is_ok());
     }
 
     #[test]

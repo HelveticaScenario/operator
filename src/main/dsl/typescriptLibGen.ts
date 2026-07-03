@@ -349,7 +349,8 @@ type BufferOutputRef = {
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
  * \`$cycle\` as its pattern argument. Opaque to user code; construct with
- * \`$p(...)\` and chain \`.fast\`/\`.slow\`. Never build one by hand.
+ * \`$p(...)\` and chain \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\`. Never build one
+ * by hand.
  */
 type ParsedPattern = {
   /**
@@ -366,6 +367,41 @@ type ParsedPattern = {
    * mini-notation number pattern.
    */
   slow(factor: number | string): SlowPattern;
+  /**
+   * Impose a rhythmic structure on this pattern, mirroring Strudel's
+   * \`struct\`: event timing comes from the boolean pattern, and this
+   * pattern's value is sampled at each onset slot.
+   *
+   * | Token | Meaning |
+   * |-------|---------|
+   * | \`x\` (or any nonzero number) | Onset — sample this pattern here |
+   * | \`~\`, \`-\`, or \`0\` | Rest (silent slot) |
+   *
+   * The boolean pattern supports the full mini-notation grammar —
+   * \`"x ~ <x ~>"\` alternates its third slot per cycle, \`"x(3,8)"\` is a
+   * euclidean structure, and so on.
+   *
+   * \`\`\`js
+   * $cycle($p("c4 e4").struct("x ~ x x"))
+   * \`\`\`
+   */
+  struct(boolPattern: string): StructPattern;
+  /**
+   * Place this pattern's value at chosen beats of a divided cycle,
+   * mirroring Strudel's \`beat\`. \`t\` lists beat indices — a comma stack
+   * (\`"0,7,10"\`) plays one onset per index — and \`div\` is the number of
+   * beats per cycle. Each onset lasts \`1/div\` of a cycle; \`t\` wraps modulo
+   * \`div\` and may be fractional. A slot not fully inside the cycle is
+   * silent, as in Strudel: negative beats produce no onset, as does a
+   * fractional beat within \`1\` of the cycle end. Both arguments accept a
+   * constant number or a mini-notation number pattern (\`"<16 8>"\` changes
+   * the grid per cycle).
+   *
+   * \`\`\`js
+   * $cycle($p("c2").beat("0,7,10", 16))
+   * \`\`\`
+   */
+  beat(t: number | string, div: number | string): BeatPattern;
 };
 
 /**
@@ -553,7 +589,7 @@ function s(source: string, scale: string): SpPattern;
  * @param sections - \`[cycles, pattern]\` tuples, in play order
  */
 function arrange(
-  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern][]
+  ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern][]
 ): ArrangePattern;
 }
 
@@ -579,8 +615,9 @@ type SpCombineBuilder = ((rhs: string) => SpPattern) & {
 
 /**
  * Chainable scale-degree pattern returned by \`$p.s()\`. Pass directly to
- * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`.
- * Opaque to user code — chain methods return fresh patterns.
+ * \`$cycle\`'s \`pattern\` param, or chain \`.add\`/\`.sub\`/\`.fast\`/\`.slow\`/
+ * \`.struct\`/\`.beat\`. Opaque to user code — chain methods return fresh
+ * patterns.
  */
 type SpPattern = {
   add: SpCombineBuilder;
@@ -589,6 +626,10 @@ type SpPattern = {
   fast(factor: number | string): FastPattern;
   /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
   slow(factor: number | string): SlowPattern;
+  /** Impose a boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
 };
 
 /**
@@ -602,12 +643,16 @@ type ArrangePattern = {
   fast(factor: number | string): FastPattern;
   /** Slow this arrangement down by \`factor\`. See \`$p(...).slow\`. */
   slow(factor: number | string): SlowPattern;
+  /** Impose a boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this arrangement at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
 };
 
 /**
  * A sped-up pattern returned by \`pattern.fast(factor)\` (Strudel's \`fast\`).
  * Pass directly to \`$cycle\`'s \`pattern\` param, nest it as an \`$p.arrange(...)\`
- * section, or chain further \`.fast\`/\`.slow\`. Opaque to user code — construct
+ * section, or chain further pattern methods. Opaque to user code — construct
  * with \`.fast(...)\`; never build one by hand.
  */
 type FastPattern = {
@@ -615,6 +660,10 @@ type FastPattern = {
   fast(factor: number | string): FastPattern;
   /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
   slow(factor: number | string): SlowPattern;
+  /** Impose a boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
 };
 
 /**
@@ -626,6 +675,54 @@ type SlowPattern = {
   fast(factor: number | string): FastPattern;
   /** Slow this pattern down further by \`factor\`. See \`$p(...).slow\`. */
   slow(factor: number | string): SlowPattern;
+  /** Impose a boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
+};
+
+/**
+ * A structured pattern returned by \`pattern.struct(boolPattern)\` (Strudel's
+ * \`struct\`): timing from the boolean pattern, values sampled from the source.
+ * Pass directly to \`$cycle\`'s \`pattern\` param, nest it as an
+ * \`$p.arrange(...)\` section, or chain further pattern methods. Opaque to
+ * user code — construct with \`.struct(...)\`; never build one by hand.
+ *
+ * \`\`\`js
+ * $cycle($p("c4 e4").struct("x ~ <x ~>"))
+ * \`\`\`
+ */
+type StructPattern = {
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+  /** Impose another boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
+};
+
+/**
+ * A beat-grid pattern returned by \`pattern.beat(t, div)\` (Strudel's \`beat\`):
+ * the source value plays at beat \`t\` of a \`div\`-beat cycle, silence
+ * elsewhere. Pass directly to \`$cycle\`'s \`pattern\` param, nest it as an
+ * \`$p.arrange(...)\` section, or chain further pattern methods. Opaque to
+ * user code — construct with \`.beat(...)\`; never build one by hand.
+ *
+ * \`\`\`js
+ * $cycle($p("c2 g2").beat("0,7,10", 16))
+ * \`\`\`
+ */
+type BeatPattern = {
+  /** Speed this pattern up by \`factor\`. See \`$p(...).fast\`. */
+  fast(factor: number | string): FastPattern;
+  /** Slow this pattern down by \`factor\`. See \`$p(...).slow\`. */
+  slow(factor: number | string): SlowPattern;
+  /** Impose a boolean rhythmic structure. See \`$p(...).struct\`. */
+  struct(boolPattern: string): StructPattern;
+  /** Place this pattern at other beats. See \`$p(...).beat\`. */
+  beat(t: number | string, div: number | string): BeatPattern;
 };
 
 /**

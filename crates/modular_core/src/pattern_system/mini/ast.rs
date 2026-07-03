@@ -268,11 +268,12 @@ pub enum MiniAST {
 /// Atomic value types produced by the `$p()` DSL parser.
 ///
 /// The reduced set from strudel's krill grammar: `Number` covers bare
-/// numeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), and
-/// `Note` covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`).
-/// Every other atom form (`m60` midi shorthand, sample-name identifiers,
-/// `2v` voltage, module references, quoted strings) has been removed from
-/// the grammar and is not representable here.
+/// numeric atoms, `Hz` covers frequency-tagged numbers (`440hz`), `Note`
+/// covers pitched letter-octave atoms (`c4`, `d#3`, `eb5`), and `Truthy`
+/// covers the `x` structure marker. Every other atom form (`m60` midi
+/// shorthand, sample-name identifiers, `2v` voltage, module references,
+/// quoted strings) has been removed from the grammar and is not
+/// representable here.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum AtomValue {
     /// Numeric value. Module-level semantics decide the interpretation:
@@ -290,6 +291,10 @@ pub enum AtomValue {
         accidental: Option<char>,
         octave: Option<i32>,
     },
+
+    /// Structure atom `x` — an onset marker with no pitch of its own, only
+    /// meaningful in boolean (`.struct(...)`) patterns.
+    Truthy,
 }
 
 impl AtomValue {
@@ -328,6 +333,7 @@ impl AtomValue {
                 let oct = octave.unwrap_or(4);
                 Some(((oct + 1) * 12 + base + acc_offset) as f64)
             }
+            AtomValue::Truthy => None,
         }
     }
 }

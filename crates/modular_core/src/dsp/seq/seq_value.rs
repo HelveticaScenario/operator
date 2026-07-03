@@ -163,6 +163,11 @@ impl FromMiniAtom for SeqValue {
                     )))
                 }
             }
+            AtomValue::Truthy => Err(ConvertError::InvalidAtom(
+                "'x' is a structure marker with no pitch; it is only valid inside .struct() \
+                 boolean patterns"
+                    .to_string(),
+            )),
         }
     }
 
@@ -490,6 +495,20 @@ pub enum SlowKindTag {
     SlowPattern,
 }
 
+/// Phantom discriminator matching the literal `"StructPattern"` string.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum StructKindTag {
+    StructPattern,
+}
+
+/// Phantom discriminator matching the literal `"BeatPattern"` string.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "PascalCase")]
+pub enum BeatKindTag {
+    BeatPattern,
+}
+
 /// A `.fast`/`.slow` factor. A bare number (`.fast(2)`) is a constant speed —
 /// not a highlightable source. A parsed pattern (`.fast("2 4")`) becomes its own
 /// highlightable source, so its active value lights up in the editor as it
@@ -529,20 +548,51 @@ pub struct SlowPatternPayload {
     pub factor: FactorPayload,
 }
 
-/// Wire-level dispatch shape: a `.fast`/`.slow` wrapper, an `$p.arrange`
-/// payload, a chained `$p.s` payload with multi-source highlighting, or a
-/// single `ParsedPatternPayload` (the legacy single-source path used by
-/// `$cycle($p(...))`).
+/// JSON payload for `$p(...).struct(boolPattern)`: take event timing from a
+/// boolean mini-notation pattern (`"x ~ x x"`, `"1 0 1"`), sampling values
+/// from `pattern`. Falsy and rest slots become rests.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct StructPatternPayload {
+    /// Discriminator — TS-side `.struct` sets this so the `SeqPatternSource`
+    /// untagged enum picks the `Struct` variant.
+    #[serde(rename = "__kind")]
+    pub kind: StructKindTag,
+    pub pattern: Box<SeqPatternSource>,
+    /// The boolean structure pattern — always a parsed mini-notation string,
+    /// its own highlightable source.
+    pub bool_pattern: ParsedPatternPayload,
+}
+
+/// JSON payload for `$p(...).beat(t, div)`: place the sampled source value
+/// in the beat slot `[t/div, (t+1)/div)` of every cycle, silence elsewhere.
+/// `t` is typically a comma stack (`"0,7,10"` — one onset per index); both
+/// `t` and `div` follow [`FactorPayload`]'s const-vs-pattern duality.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct BeatPatternPayload {
+    /// Discriminator — TS-side `.beat` sets this so the `SeqPatternSource`
+    /// untagged enum picks the `Beat` variant.
+    #[serde(rename = "__kind")]
+    pub kind: BeatKindTag,
+    pub pattern: Box<SeqPatternSource>,
+    pub t: FactorPayload,
+    pub div: FactorPayload,
+}
+
+/// Wire-level dispatch shape: a `.fast`/`.slow`/`.struct`/`.beat` wrapper, an
+/// `$p.arrange` payload, a chained `$p.s` payload with multi-source
+/// highlighting, or a single `ParsedPatternPayload` (the legacy single-source
+/// path used by `$cycle($p(...))`).
 ///
-/// The `__kind`-tagged variants (`Fast`/`Slow`/`Arrange`/`Sp`) are listed before
-/// the untagged `Single`; each carries a distinct required `__kind` literal, so
-/// the untagged enum disambiguates them unambiguously before falling back to
-/// `Single`.
+/// The `__kind`-tagged variants are listed before the untagged `Single`; each
+/// carries a distinct required `__kind` literal, so the untagged enum
+/// disambiguates them unambiguously before falling back to `Single`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum SeqPatternSource {
     Fast(FastPatternPayload),
     Slow(SlowPatternPayload),
+    Struct(StructPatternPayload),
+    Beat(BeatPatternPayload),
     Arrange(ArrangePatternPayload),
     Sp(SpPatternPayload),
     Single(ParsedPatternPayload),
@@ -660,6 +710,8 @@ impl SeqPatternParam {
         match source {
             SeqPatternSource::Fast(p) => Self::lower_fast(p),
             SeqPatternSource::Slow(p) => Self::lower_slow(p),
+            SeqPatternSource::Struct(p) => Self::lower_struct(p),
+            SeqPatternSource::Beat(p) => Self::lower_beat(p),
             SeqPatternSource::Single(p) => Self::lower_single(p),
             SeqPatternSource::Sp(p) => Self::lower_sp(p),
             SeqPatternSource::Arrange(p) => Self::lower_arrange(p),
@@ -744,8 +796,57 @@ impl SeqPatternParam {
         Ok((inner.slow(factor), per_source))
     }
 
-    /// Lower a `.fast`/`.slow` factor into a `Pattern<Fraction>` plus an optional
-    /// source metadata entry.
+    /// Lower a `.struct(...)` wrapper: lower the inner pattern, build the
+    /// boolean structure pattern, and impose its timing on the inner values.
+    /// The bool pattern is always its own highlightable source (its slot is
+    /// `inner.per_source.len()`), so the active structure slot lights up as
+    /// it drives the rhythm.
+    fn lower_struct(
+        payload: StructPatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        let (inner, mut per_source) = Self::lower_source(*payload.pattern)?;
+        if payload.bool_pattern.source.trim().is_empty() {
+            return Err(crate::dsp::seq::interval_value::EMPTY_PATTERN_SOURCE_ERR.to_string());
+        }
+        let mut bool_pat = crate::pattern_system::mini::convert::<bool>(&payload.bool_pattern.ast)
+            .map_err(|e| e.to_string())?
+            .strip_modifier_spans();
+        let offset = per_source.len();
+        if offset > 0 {
+            bool_pat = bool_pat.offset_pattern_idx(offset as u32);
+        }
+        per_source.push(SeqSourceMeta {
+            source: payload.bool_pattern.source,
+            all_spans: payload.bool_pattern.all_spans,
+        });
+        Ok((
+            inner.struct_with_rest(&bool_pat, SeqValue::Rest),
+            per_source,
+        ))
+    }
+
+    /// Lower a `.beat(...)` wrapper: lower the inner pattern, build the beat
+    /// index and division patterns (each a [`FactorPayload`], so string args
+    /// become their own highlightable sources — t first, then div, matching
+    /// the TS span order), and place the inner values on the beat grid.
+    fn lower_beat(
+        payload: BeatPatternPayload,
+    ) -> Result<(Pattern<SeqValue>, Vec<SeqSourceMeta>), String> {
+        let (inner, mut per_source) = Self::lower_source(*payload.pattern)?;
+        let (t_pat, t_meta) = Self::lower_factor(payload.t, per_source.len())?;
+        if let Some(meta) = t_meta {
+            per_source.push(meta);
+        }
+        let (div_pat, div_meta) = Self::lower_factor(payload.div, per_source.len())?;
+        if let Some(meta) = div_meta {
+            per_source.push(meta);
+        }
+        Ok((inner.beat_with(t_pat, div_pat), per_source))
+    }
+
+    /// Lower a numeric pattern-method argument (`.fast`/`.slow` factor,
+    /// `.beat` t/div) into a `Pattern<Fraction>` plus an optional source
+    /// metadata entry.
     ///
     /// A [`FactorPayload::Const`] becomes a span-free `pure` constant — no
     /// highlightable source (`None`). A [`FactorPayload::Pattern`] is built with
@@ -766,7 +867,7 @@ impl SeqPatternParam {
         match factor {
             FactorPayload::Const(n) => {
                 if !n.is_finite() {
-                    return Err("fast/slow factor must be a finite number".to_string());
+                    return Err("pattern method argument must be a finite number".to_string());
                 }
                 Ok((
                     crate::pattern_system::pure(crate::pattern_system::Fraction::from(n)),
@@ -804,6 +905,30 @@ impl SeqPatternParam {
     /// pattern wouldn't highlight.
     pub fn from_fast_payload(payload: FastPatternPayload) -> Result<Self, String> {
         let (pattern, per_source) = Self::lower_fast(payload)?;
+        Ok(Self {
+            per_source,
+            is_multi_source: true,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
+
+    /// Build a `SeqPatternParam` from a `.struct(...)` payload. `is_multi_source`
+    /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
+    pub fn from_struct_payload(payload: StructPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_struct(payload)?;
+        Ok(Self {
+            per_source,
+            is_multi_source: true,
+            pattern: Some(pattern),
+            cached_haps: Vec::new(),
+        })
+    }
+
+    /// Build a `SeqPatternParam` from a `.beat(...)` payload. `is_multi_source`
+    /// is always `true` for the highlight-key reason in [`Self::from_fast_payload`].
+    pub fn from_beat_payload(payload: BeatPatternPayload) -> Result<Self, String> {
+        let (pattern, per_source) = Self::lower_beat(payload)?;
         Ok(Self {
             per_source,
             is_multi_source: true,
@@ -1015,6 +1140,20 @@ impl<E: DeserializeError> Deserr<E> for SeqPatternParam {
                 ))
             }),
             SeqPatternSource::Slow(p) => Self::from_slow_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+            SeqPatternSource::Struct(p) => Self::from_struct_payload(p).map_err(|e| {
+                deserr::take_cf_content(E::error::<V>(
+                    None,
+                    ErrorKind::Unexpected { msg: e },
+                    location,
+                ))
+            }),
+            SeqPatternSource::Beat(p) => Self::from_beat_payload(p).map_err(|e| {
                 deserr::take_cf_content(E::error::<V>(
                     None,
                     ErrorKind::Unexpected { msg: e },
@@ -1739,6 +1878,260 @@ mod tests {
         let inner = single_source("c4 e4");
         let fast = SeqPatternSource::Fast(fast_payload("3", inner));
         let param = SeqPatternParam::from_slow_payload(slow_payload("3", fast)).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 2);
+    }
+
+    // ===== .struct / .beat tests =====
+
+    fn struct_payload(bool_pattern: &str, pattern: SeqPatternSource) -> StructPatternPayload {
+        StructPatternPayload {
+            kind: StructKindTag::StructPattern,
+            pattern: Box::new(pattern),
+            bool_pattern: ParsedPatternPayload::parse_for_test(bool_pattern),
+        }
+    }
+
+    fn beat_payload(
+        t: FactorPayload,
+        div: FactorPayload,
+        pattern: SeqPatternSource,
+    ) -> BeatPatternPayload {
+        BeatPatternPayload {
+            kind: BeatKindTag::BeatPattern,
+            pattern: Box::new(pattern),
+            t,
+            div,
+        }
+    }
+
+    fn factor_str(source: &str) -> FactorPayload {
+        FactorPayload::Pattern(ParsedPatternPayload::parse_for_test(source))
+    }
+
+    #[test]
+    fn test_struct_takes_timing_from_bool_pattern() {
+        // "c4 e4" sampled through "x ~ x x": 4 slots, slot 1 a rest; slots 2
+        // and 3 both fall in e4's half of the source.
+        let param =
+            SeqPatternParam::from_struct_payload(struct_payload("x ~ x x", single_source("c4 e4")))
+                .unwrap();
+        let e4 = 4.0 / 12.0;
+        assert!(approx_eq(&cycle_voltages(&param, 0), &[0.0, e4, e4]));
+        let all_haps = param
+            .pattern()
+            .unwrap()
+            .query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(all_haps.len(), 4, "the falsy slot still emits a rest hap");
+        assert!(matches!(all_haps[1].value, SeqValue::Rest));
+    }
+
+    #[test]
+    fn test_struct_accepts_numeric_bool_atoms() {
+        // "1 0 1 1" is the numeric spelling of "x ~ x x" minus the rest/zero
+        // distinction: 0 is falsy, so both lower to the same onsets.
+        let param =
+            SeqPatternParam::from_struct_payload(struct_payload("1 0 1 1", single_source("c4 e4")))
+                .unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 3);
+    }
+
+    #[test]
+    fn test_struct_bool_pattern_alternates_per_cycle() {
+        // The <x ~> slot fires on even cycles only.
+        let param = SeqPatternParam::from_struct_payload(struct_payload(
+            "x ~ <x ~>",
+            single_source("c4 e4"),
+        ))
+        .unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 2);
+        assert_eq!(cycle_voltages(&param, 1).len(), 1);
+    }
+
+    #[test]
+    fn test_struct_bool_pattern_is_a_highlightable_source() {
+        // The bool pattern is appended after the wrapped pattern's sources and
+        // its active slot lights up at its flat slot (pattern_idx == 1).
+        let mut param =
+            SeqPatternParam::from_struct_payload(struct_payload("x ~ x x", single_source("c4 e4")))
+                .unwrap();
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["c4 e4", "x ~ x x"]);
+        assert!(param.is_multi_source());
+
+        param.bake(0.0, 1.0);
+        let pidxs: std::collections::BTreeSet<u32> = param.cached_haps()[0]
+            .span_arena
+            .iter()
+            .map(|s| s.pattern_idx)
+            .collect();
+        assert_eq!(
+            pidxs,
+            std::collections::BTreeSet::from([0, 1]),
+            "source highlights at idx 0, bool pattern at idx 1, got {pidxs:?}"
+        );
+    }
+
+    #[test]
+    fn test_struct_rejects_empty_bool_pattern() {
+        let payload = struct_payload("  ", single_source("c4"));
+        assert!(SeqPatternParam::from_struct_payload(payload).is_err());
+    }
+
+    #[test]
+    fn test_struct_wire_json_dispatches_to_struct_variant() {
+        let inner = serde_json::to_value(ParsedPatternPayload::parse_for_test("c4 e4")).unwrap();
+        let bools = serde_json::to_value(ParsedPatternPayload::parse_for_test("x ~ x x")).unwrap();
+        let json = serde_json::json!({
+            "__kind": "StructPattern",
+            "pattern": inner,
+            "bool_pattern": bools,
+        });
+        let parsed: SeqPatternSource =
+            serde_json::from_value(json).expect("struct wire json should parse");
+        let payload = match parsed {
+            SeqPatternSource::Struct(s) => s,
+            other => panic!("expected Struct variant, got {other:?}"),
+        };
+        let param = SeqPatternParam::from_struct_payload(payload).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 3);
+    }
+
+    #[test]
+    fn test_bare_x_atom_is_rejected_outside_struct() {
+        // `$cycle($p("x"))` — the structure marker has no pitch, so the
+        // single-source path must reject it with a pointer at .struct().
+        let err =
+            SeqPatternParam::from_payload(ParsedPatternPayload::parse_for_test("x")).unwrap_err();
+        assert!(
+            err.contains(".struct"),
+            "error should mention .struct: {err}"
+        );
+    }
+
+    #[test]
+    fn test_beat_places_onsets_at_listed_divisions() {
+        // `$p("c4").beat("0,7,10", 16)`: three 1/16-wide onsets per cycle.
+        let param = SeqPatternParam::from_beat_payload(beat_payload(
+            factor_str("0,7,10"),
+            FactorPayload::Const(16.0),
+            single_source("c4"),
+        ))
+        .unwrap();
+        let mut haps = param
+            .pattern()
+            .unwrap()
+            .query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        haps.sort_by(|a, b| a.part.begin.cmp(&b.part.begin));
+        assert_eq!(haps.len(), 3);
+        let expected = [(0i64, 1i64), (7, 8), (10, 11)];
+        for (hap, (begin, end)) in haps.iter().zip(expected) {
+            assert!(hap.has_onset());
+            let whole = hap.whole.as_ref().unwrap();
+            assert_eq!(whole.begin, Fraction::new(begin, 16));
+            assert_eq!(whole.end, Fraction::new(end, 16));
+            assert!(matches!(hap.value, SeqValue::Voltage(v) if v.abs() < 1e-9));
+        }
+    }
+
+    #[test]
+    fn test_beat_per_source_appends_string_args_in_t_div_order() {
+        // String t and div each become a highlightable source, t first —
+        // matching the TS factory's argument_spans order.
+        let param = SeqPatternParam::from_beat_payload(beat_payload(
+            factor_str("0,7"),
+            factor_str("<16 8>"),
+            single_source("c4"),
+        ))
+        .unwrap();
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["c4", "0,7", "<16 8>"]);
+        assert!(param.is_multi_source());
+    }
+
+    #[test]
+    fn test_beat_const_args_add_no_sources() {
+        let param = SeqPatternParam::from_beat_payload(beat_payload(
+            FactorPayload::Const(0.0),
+            FactorPayload::Const(4.0),
+            single_source("c4"),
+        ))
+        .unwrap();
+        assert_eq!(param.per_source().len(), 1);
+        assert!(param.is_multi_source(), "beat keys highlights by pattern.0");
+        assert_eq!(cycle_voltages(&param, 0).len(), 1);
+    }
+
+    #[test]
+    fn test_beat_zero_div_is_silence() {
+        let param = SeqPatternParam::from_beat_payload(beat_payload(
+            FactorPayload::Const(0.0),
+            FactorPayload::Const(0.0),
+            single_source("c4"),
+        ))
+        .unwrap();
+        assert!(cycle_voltages(&param, 0).is_empty());
+    }
+
+    #[test]
+    fn test_beat_negative_t_is_silence() {
+        // Strudel's _compress guard: a negative beat's slot lies before the
+        // cycle start and produces no onset.
+        let param = SeqPatternParam::from_beat_payload(beat_payload(
+            FactorPayload::Const(-1.0),
+            FactorPayload::Const(16.0),
+            single_source("c4"),
+        ))
+        .unwrap();
+        assert!(cycle_voltages(&param, 0).is_empty());
+    }
+
+    #[test]
+    fn test_beat_wire_json_dispatches_to_beat_variant() {
+        let inner = serde_json::to_value(ParsedPatternPayload::parse_for_test("c4")).unwrap();
+        let t = serde_json::to_value(ParsedPatternPayload::parse_for_test("0,7,10")).unwrap();
+        let json = serde_json::json!({
+            "__kind": "BeatPattern",
+            "pattern": inner,
+            "t": t,
+            "div": 16,
+        });
+        let parsed: SeqPatternSource =
+            serde_json::from_value(json).expect("beat wire json should parse");
+        let payload = match parsed {
+            SeqPatternSource::Beat(b) => b,
+            other => panic!("expected Beat variant, got {other:?}"),
+        };
+        assert!(matches!(payload.div, FactorPayload::Const(n) if (n - 16.0).abs() < 1e-9));
+        let param = SeqPatternParam::from_beat_payload(payload).unwrap();
+        assert_eq!(cycle_voltages(&param, 0).len(), 3);
+    }
+
+    #[test]
+    fn test_struct_beat_wrappers_chain() {
+        // `.fast(2).struct("x ~ x x").beat("0,2", 4)` — wrappers nest through
+        // lower_source, and per_source flattens in wrap order.
+        let fast = SeqPatternSource::Fast(fast_payload("2", single_source("c4 e4")));
+        let structured = SeqPatternSource::Struct(struct_payload("x ~ x x", fast));
+        let param = SeqPatternParam::from_beat_payload(beat_payload(
+            factor_str("0,2"),
+            FactorPayload::Const(4.0),
+            structured,
+        ))
+        .unwrap();
+        let sources: Vec<&str> = param
+            .per_source()
+            .iter()
+            .map(|m| m.source.as_str())
+            .collect();
+        assert_eq!(sources, vec!["c4 e4", "2", "x ~ x x", "0,2"]);
         assert_eq!(cycle_voltages(&param, 0).len(), 2);
     }
 

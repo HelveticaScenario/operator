@@ -42,7 +42,12 @@ export type AtomValue =
               /** Octave integer or null when not specified. */
               octave: number | null;
           };
-      };
+      }
+    /**
+     * The `x` structure marker (serde unit variant, so a bare string). Only
+     * meaningful in `.struct(...)` boolean patterns.
+     */
+    | 'Truthy';
 
 /** Top-level AST node. */
 export type MiniAST =

@@ -68,7 +68,9 @@ export function resolveRef(
     | 'SpPattern'
     | 'ArrangePattern'
     | 'FastPattern'
-    | 'SlowPattern' {
+    | 'SlowPattern'
+    | 'StructPattern'
+    | 'BeatPattern' {
     if (ref === 'Signal') {
         return 'Signal';
     }
@@ -92,6 +94,12 @@ export function resolveRef(
     }
     if (ref === 'SlowPatternPayload') {
         return 'SlowPattern';
+    }
+    if (ref === 'StructPatternPayload') {
+        return 'StructPattern';
+    }
+    if (ref === 'BeatPatternPayload') {
+        return 'BeatPattern';
     }
 
     const defsPrefix = '#/$defs/';
@@ -133,14 +141,20 @@ export function resolveRef(
     if (defName === 'ArrangePatternPayload') {
         return 'ArrangePattern';
     }
-    // FastPatternPayload / SlowPatternPayload are the `.fast(...)` / `.slow(...)`
-    // wrappers; they recurse (the wrapped `pattern` is a `SeqPatternSource`), so
-    // the DSL exposes them as named types like the others above.
+    // The `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)` wrapper
+    // payloads recurse (the wrapped `pattern` is a `SeqPatternSource`), so the
+    // DSL exposes them as named types like the others above.
     if (defName === 'FastPatternPayload') {
         return 'FastPattern';
     }
     if (defName === 'SlowPatternPayload') {
         return 'SlowPattern';
+    }
+    if (defName === 'StructPatternPayload') {
+        return 'StructPattern';
+    }
+    if (defName === 'BeatPatternPayload') {
+        return 'BeatPattern';
     }
 
     const defs = rootSchema?.$defs;
@@ -182,6 +196,12 @@ export function resolveRef(
     }
     if (resolved?.title === 'SlowPatternPayload') {
         return 'SlowPattern';
+    }
+    if (resolved?.title === 'StructPatternPayload') {
+        return 'StructPattern';
+    }
+    if (resolved?.title === 'BeatPatternPayload') {
+        return 'BeatPattern';
     }
     return resolved;
 }
@@ -373,6 +393,12 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'SlowPattern') {
             return 'SlowPattern';
+        }
+        if (resolved === 'StructPattern') {
+            return 'StructPattern';
+        }
+        if (resolved === 'BeatPattern') {
+            return 'BeatPattern';
         }
         return schemaToTypeExpr(resolved, rootSchema);
     }

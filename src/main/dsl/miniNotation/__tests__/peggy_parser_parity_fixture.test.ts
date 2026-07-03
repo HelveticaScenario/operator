@@ -91,6 +91,12 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     },
     { label: 'replicate !! accumulates to 3', input: '0!!' },
     { label: 'weight bare @ defaults to 2', input: '0@' },
+    { label: 'truthy atom x', input: 'x' },
+    { label: 'truthy atom uppercase X', input: 'X' },
+    { label: 'boolean structure sequence', input: 'x ~ x x' },
+    { label: 'truthy with euclidean', input: 'x(3,8)' },
+    { label: 'truthy in slow subsequence', input: '<x ~>' },
+    { label: 'truthy with fast modifier', input: 'x*2' },
 ];
 
 /**

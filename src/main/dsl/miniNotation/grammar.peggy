@@ -236,8 +236,17 @@ Rest
 
 Value
   = HzValue
+  / TruthyValue
   / NoteValue
   / NumberValue
+
+// `x` is the truthy structure marker used by `.struct(...)` boolean patterns
+// (an onset with no pitch of its own). The !IdentCont guard stops it from
+// matching the start of a longer alphanumeric run, so `x4` / `xx` are errors.
+TruthyValue
+  = [xX] !IdentCont {
+      return { Pure: located('Truthy', location()) };
+    }
 
 HzValue
   = n:Number "hz"i {

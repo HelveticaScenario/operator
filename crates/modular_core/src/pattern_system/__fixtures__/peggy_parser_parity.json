@@ -1392,5 +1392,175 @@
         ]
       ]
     }
+  },
+  {
+    "label": "truthy atom x",
+    "input": "x",
+    "peggy_ast": {
+      "Pure": {
+        "node": "Truthy",
+        "span": {
+          "start": 0,
+          "end": 1
+        }
+      }
+    }
+  },
+  {
+    "label": "truthy atom uppercase X",
+    "input": "X",
+    "peggy_ast": {
+      "Pure": {
+        "node": "Truthy",
+        "span": {
+          "start": 0,
+          "end": 1
+        }
+      }
+    }
+  },
+  {
+    "label": "boolean structure sequence",
+    "input": "x ~ x x",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": "Truthy",
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Rest": {
+              "start": 2,
+              "end": 3
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": "Truthy",
+              "span": {
+                "start": 4,
+                "end": 5
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": "Truthy",
+              "span": {
+                "start": 6,
+                "end": 7
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "truthy with euclidean",
+    "input": "x(3,8)",
+    "peggy_ast": {
+      "Euclidean": {
+        "pattern": {
+          "Pure": {
+            "node": "Truthy",
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        "pulses": {
+          "Pure": {
+            "node": 3,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        },
+        "steps": {
+          "Pure": {
+            "node": 8,
+            "span": {
+              "start": 4,
+              "end": 5
+            }
+          }
+        },
+        "rotation": null
+      }
+    }
+  },
+  {
+    "label": "truthy in slow subsequence",
+    "input": "<x ~>",
+    "peggy_ast": {
+      "SlowCat": [
+        [
+          {
+            "Pure": {
+              "node": "Truthy",
+              "span": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          },
+          null
+        ],
+        [
+          {
+            "Rest": {
+              "start": 3,
+              "end": 4
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "truthy with fast modifier",
+    "input": "x*2",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": "Truthy",
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Pure": {
+            "node": 2,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        }
+      ]
+    }
   }
 ]

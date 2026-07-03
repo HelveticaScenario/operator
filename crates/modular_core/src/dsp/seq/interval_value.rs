@@ -44,6 +44,9 @@ impl crate::pattern_system::mini::convert::FromMiniAtom for IntervalValue {
             AtomValue::Note { .. } => Err(ConvertError::InvalidAtom(
                 "IntervalValue does not accept note atoms; $p.s interprets atoms as scale-degree integers (use $p for unquantized pitch)".into(),
             )),
+            AtomValue::Truthy => Err(ConvertError::InvalidAtom(
+                "'x' is a structure marker with no pitch; it is only valid inside .struct() boolean patterns".into(),
+            )),
         }
     }
 

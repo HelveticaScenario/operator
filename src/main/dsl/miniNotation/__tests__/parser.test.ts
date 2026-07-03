@@ -156,6 +156,26 @@ describe('atom kinds', () => {
         const r = $p('~');
         expect(r.ast).toEqual({ Rest: { start: 0, end: 1 } });
     });
+
+    test('Truthy structure marker x', () => {
+        const r = $p('x');
+        expect(r.ast).toEqual({
+            Pure: { node: 'Truthy', span: { start: 0, end: 1 } },
+        });
+    });
+
+    test('Truthy accepts uppercase X', () => {
+        const r = $p('X');
+        expect(r.ast).toEqual({
+            Pure: { node: 'Truthy', span: { start: 0, end: 1 } },
+        });
+    });
+
+    test('x must stand alone (ident-continuation guard)', () => {
+        expect(() => $p('x4')).toThrow(MiniParseError);
+        expect(() => $p('xx')).toThrow(MiniParseError);
+        expect(() => $p('x_')).toThrow(MiniParseError);
+    });
 });
 
 describe('sequences and groupings', () => {

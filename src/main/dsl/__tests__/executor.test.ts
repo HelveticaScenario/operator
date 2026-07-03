@@ -11,7 +11,12 @@ import { describe, expect, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
-import { isFastPattern, isParsedPattern } from '../miniNotation/index';
+import {
+    isBeatPattern,
+    isFastPattern,
+    isParsedPattern,
+    isStructPattern,
+} from '../miniNotation/index';
 
 const DEFAULT_EXECUTION_OPTIONS = {
     sampleRate: 48_000,
@@ -590,6 +595,114 @@ describe('sequencing', () => {
                 '$cycle',
             ).length,
         ).toBe(1);
+    });
+
+    test('$cycle($p(...).struct(s)) builds end-to-end', () => {
+        // Round-trips the StructPattern wire payload through the native
+        // deserializer — a clean build proves Rust accepted it through
+        // from_struct_payload.
+        const patch = execPatch('$cycle($p("c4 e4").struct("x ~ x x")).out()');
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+        const pattern = cycles[0].params.pattern;
+        expect(isStructPattern(pattern)).toBe(true);
+        if (!isStructPattern(pattern)) return;
+        expect(isParsedPattern(pattern.pattern)).toBe(true);
+        expect(pattern.bool_pattern.source).toBe('x ~ x x');
+    });
+
+    test('.struct captures the bool pattern argument span for highlighting', () => {
+        // The bool pattern string is its own highlightable source: the
+        // analyzer registers it under `boolPattern`, and the runtime carries
+        // it as argument_spans[1] — parallel to the Rust per_source
+        // [inner, bool_pattern].
+        const source =
+            'const pat = $p("c4 e4").struct("x ~ x x")\n' +
+            'const seq = $cycle(pat)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const pattern = findModules(patch, '$cycle')[0].params.pattern;
+        expect(isStructPattern(pattern)).toBe(true);
+        if (!isStructPattern(pattern)) return;
+        expect(pattern.argument_spans.length).toBe(2);
+        const boolSpan = pattern.argument_spans[1];
+        expect(boolSpan).not.toEqual({ start: 0, end: 0 });
+        expect(
+            source.slice(boolSpan.start, boolSpan.end).includes('x ~ x x'),
+        ).toBe(true);
+        const innerSpan = pattern.argument_spans[0];
+        expect(
+            source.slice(innerSpan.start, innerSpan.end).includes('c4 e4'),
+        ).toBe(true);
+    });
+
+    test('$cycle($p(...).beat(t, div)) builds end-to-end', () => {
+        const patch = execPatch('$cycle($p("c2").beat("0,7,10", 16)).out()');
+        const cycles = findModules(patch, '$cycle');
+        expect(cycles.length).toBe(1);
+        const pattern = cycles[0].params.pattern;
+        expect(isBeatPattern(pattern)).toBe(true);
+        if (!isBeatPattern(pattern)) return;
+        expect(isParsedPattern(pattern.pattern)).toBe(true);
+        if (typeof pattern.t === 'number') {
+            throw new Error('expected a pattern t, got a number');
+        }
+        expect(pattern.t.source).toBe('0,7,10');
+        // A number div is a raw constant on the wire.
+        expect(pattern.div).toBe(16);
+    });
+
+    test('.beat captures string t and div argument spans for highlighting', () => {
+        const source =
+            'const pat = $p("c2").beat("0,7", "<16 8>")\n' +
+            'const seq = $cycle(pat)\n' +
+            'seq.out()';
+        const patch = execPatch(source);
+        const pattern = findModules(patch, '$cycle')[0].params.pattern;
+        expect(isBeatPattern(pattern)).toBe(true);
+        if (!isBeatPattern(pattern)) return;
+        // Spans flatten as [inner, t, div] — matching the Rust per_source order.
+        expect(pattern.argument_spans.length).toBe(3);
+        const tSpan = pattern.argument_spans[1];
+        expect(source.slice(tSpan.start, tSpan.end).includes('0,7')).toBe(true);
+        const divSpan = pattern.argument_spans[2];
+        expect(source.slice(divSpan.start, divSpan.end).includes('<16 8>')).toBe(
+            true,
+        );
+    });
+
+    test('.struct / .beat compose with the other pattern builders', () => {
+        // .struct on a scale-degree pattern.
+        expect(
+            findModules(
+                execPatch(
+                    '$cycle($p.s("0 2 4", "C(major)").struct("x ~ x")).out()',
+                ),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+        // .beat wrapping an arrangement.
+        expect(
+            findModules(
+                execPatch(
+                    '$cycle($p.arrange([2, $p("c4")], [2, $p("e4")]).beat(0, 4)).out()',
+                ),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+        // Chained wrappers in both orders.
+        expect(
+            findModules(
+                execPatch(
+                    '$cycle($p("c4 e4").fast(2).struct("x ~ x x").beat("0,2", 4)).out()',
+                ),
+                '$cycle',
+            ).length,
+        ).toBe(1);
+    });
+
+    test('$cycle($p("x")) is rejected — x is struct-only', () => {
+        expect(() => execPatch('$cycle($p("x")).out()')).toThrow(/struct/);
     });
 
     test('$p rejects dropped atom kinds', () => {
