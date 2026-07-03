@@ -17203,15 +17203,53 @@
   },
   {
     "name": "$sampler",
-    "documentation": "One-shot sample player. Plays a loaded WAV file from the beginning on each\ngate rising edge. Speed control allows pitch-shifting and reverse playback.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })\n```",
+    "documentation": "One-shot sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set: the slice signal is sampled at\nthe edge — integer part picks the slice point (wrapping), fraction offsets\nthe start into it. Speed control allows pitch-shifting and reverse\nplayback (a slice plays the same region backwards). A short `fade`\n(milliseconds) declicks onsets, slice ends, and retriggers.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SamplerParams",
       "type": "object",
       "properties": {
+        "fade": {
+          "description": "Declick fade in milliseconds: fade-in at onset, fade-out at the window\nexit edge, and retrigger crossfade. 0 disables.",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
         "gate": {
           "description": "Gate input — rising edge starts playback from the beginning.",
           "$ref": "#/$defs/MonoSignal"
+        },
+        "slice": {
+          "description": "Slice selector: a mono signal (whole file as one slice) or\n`[points, signal]` where points are fractions of the total length in\n[0, 1]. Sampled once per gate rising edge: the integer part picks the\nslice (wrapping), the fraction offsets the start into it.",
+          "anyOf": [
+            {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MonoSignal"
+                },
+                {
+                  "type": "array",
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "prefixItems": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "minItems": 1
+                    },
+                    {
+                      "$ref": "#/$defs/MonoSignal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "speed": {
           "description": "Playback speed. 1.0 = normal, 2.0 = double speed, negative = reverse.",

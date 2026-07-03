@@ -122,6 +122,16 @@ fn schema_refers_to_signal(schema_node: &Schema) -> bool {
             }
         }
 
+        // Tuple schemas carry per-position schemas in `prefixItems`.
+        if let Some(items) = obj.get("prefixItems").and_then(|v| v.as_array())
+            && items.iter().any(|item| {
+                let schema: Result<Schema, _> = item.clone().try_into();
+                schema.ok().is_some_and(|s| schema_refers_to_signal(&s))
+            })
+        {
+            return true;
+        }
+
         // Object schemas can nest Signal references inside `properties`.
         // This is common for complex params (struct-like objects).
         for key in ["properties", "additionalProperties"] {
@@ -674,6 +684,57 @@ mod tests {
         let errors = result.unwrap_err();
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("not found for cable source"));
+    }
+
+    #[test]
+    fn test_schema_refers_to_signal_descends_prefix_items() {
+        let schema: Schema = json!({
+            "type": "array",
+            "prefixItems": [
+                { "type": "array", "items": { "type": "number" } },
+                { "$ref": "#/$defs/MonoSignal" }
+            ]
+        })
+        .try_into()
+        .unwrap();
+        assert!(schema_refers_to_signal(&schema));
+    }
+
+    #[test]
+    fn test_cable_in_slice_tuple_to_nonexistent_module() {
+        // The sampler's slice param nests a signal inside a tuple
+        // (prefixItems) inside an anyOf — a dangling cable there must still be
+        // reference-checked.
+        let schemas = schemas();
+        let patch = PatchGraph {
+            modules: vec![ModuleSpec {
+                id: "s1".to_string(),
+                module_type: "$sampler".to_string(),
+                id_is_explicit: None,
+                params: json!({
+                    "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
+                    "gate": 0.0,
+                    "slice": [[0.0, 0.5], {"type": "cable", "module": "nonexistent", "port": "output"}]
+                }),
+            }],
+            module_id_remaps: None,
+
+            scopes: vec![],
+            scope_xy: None,
+        };
+
+        let result = validate_patch(&patch, &schemas);
+        assert!(
+            result.is_err(),
+            "dangling cable in slice tuple must be caught"
+        );
+        let errors = result.unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("not found for cable source")),
+            "expected a cable-source error, got {errors:?}"
+        );
     }
 
     #[test]

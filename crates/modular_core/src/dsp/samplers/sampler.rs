@@ -1,9 +1,11 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use super::slice::SliceParam;
 use crate::{
     Wav,
     dsp::utils::SchmittTrigger,
+    param_errors::ModuleParamErrors,
     poly::{MonoSignal, MonoSignalExt, PolyOutput},
 };
 
@@ -11,9 +13,16 @@ fn sampler_derive_channel_count(params: &SamplerParams) -> usize {
     params.wav.channel_count()
 }
 
+fn default_fade() -> f64 {
+    1.0
+}
+
+/// Upper bound on the declick fade time.
+const MAX_FADE_MS: f64 = 1000.0;
+
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
+#[deserr(rename_all = camelCase, deny_unknown_fields, validate = sampler_validate_params -> ModuleParamErrors)]
 struct SamplerParams {
     wav: Wav,
     /// Gate input — rising edge starts playback from the beginning.
@@ -23,6 +32,32 @@ struct SamplerParams {
     #[signal(default = 1.0, range = (-4.0, 4.0))]
     #[deserr(default)]
     speed: Option<MonoSignal>,
+    /// Slice selector: a mono signal (whole file as one slice) or
+    /// `[points, signal]` where points are fractions of the total length in
+    /// [0, 1]. Sampled once per gate rising edge: the integer part picks the
+    /// slice (wrapping), the fraction offsets the start into it.
+    #[deserr(default)]
+    slice: Option<SliceParam>,
+    /// Declick fade in milliseconds: fade-in at onset, fade-out at the window
+    /// exit edge, and retrigger crossfade. 0 disables.
+    #[serde(default = "default_fade")]
+    #[deserr(default = default_fade())]
+    fade: f64,
+}
+
+fn sampler_validate_params(
+    params: SamplerParams,
+    _location: deserr::ValuePointerRef,
+) -> Result<SamplerParams, ModuleParamErrors> {
+    if !params.fade.is_finite() || params.fade < 0.0 || params.fade > MAX_FADE_MS {
+        let mut err = ModuleParamErrors::default();
+        err.add(
+            "fade".to_string(),
+            format!("fade must be between 0 and {MAX_FADE_MS} milliseconds"),
+        );
+        return Err(err);
+    }
+    Ok(params)
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -43,14 +78,36 @@ struct SamplerState {
     /// connect(), so this is computed in on_patch_update, not init. Constant
     /// until the next patch update.
     rate_ratio: f64,
+    /// Playback window in WAV frames, sampled at the gate rising edge. A
+    /// playing voice keeps its trigger-time window across patch updates.
+    win_lo: f64,
+    win_hi: f64,
+    /// Declick ramp half-width in WAV frames (fade seconds × wav rate).
+    /// Param+wav-derived, so computed in on_patch_update; 0 disables fades.
+    fade_frames: f64,
+    /// Retrigger release-voice ramp length in output samples (fade seconds ×
+    /// engine rate). Param-derived, so computed in on_patch_update.
+    fade_out_samples: u32,
+    /// Release voice: on retrigger the previous playback keeps sounding at a
+    /// fading gain so the jump to the new onset doesn't click.
+    rel_active: bool,
+    rel_position: f64,
+    rel_win_lo: f64,
+    rel_win_hi: f64,
+    rel_countdown: u32,
 }
 
-/// One-shot sample player. Plays a loaded WAV file from the beginning on each
-/// gate rising edge. Speed control allows pitch-shifting and reverse playback.
+/// One-shot sample player. Each gate rising edge starts playback of the whole
+/// file, or of one slice when `slice` is set: the slice signal is sampled at
+/// the edge — integer part picks the slice point (wrapping), fraction offsets
+/// the start into it. Speed control allows pitch-shifting and reverse
+/// playback (a slice plays the same region backwards). A short `fade`
+/// (milliseconds) declicks onsets, slice ends, and retriggers.
 ///
 /// ```js
 /// $sampler($wavs().kick, $pulse('4hz'))
 /// $sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })
+/// $sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })
 /// ```
 #[module(name = "$sampler", channels_derive = sampler_derive_channel_count, args(wav, gate), has_init, patch_update)]
 pub struct Sampler {
@@ -67,36 +124,116 @@ impl Sampler {
         self.state.sample_rate = sample_rate;
     }
 
+    /// Distance-to-edge declick gain: ramps linearly from 0 at either window
+    /// edge to 1 a full ramp-width inside it. Position-based, so it is
+    /// stateless, symmetric under reverse, and robust to live speed changes
+    /// (fade time scales with |speed|). Windows shorter than two ramp widths
+    /// peak below unity. `w == 0` (fade disabled) is unity.
+    fn edge_gain(position: f64, lo: f64, hi: f64, w: f64) -> f32 {
+        if w > 0.0 {
+            let d = (position - lo).min(hi - position);
+            (d / w).clamp(0.0, 1.0) as f32
+        } else {
+            1.0
+        }
+    }
+
     fn update(&mut self, _sample_rate: f32) {
         let channels = self.channel_count();
         let frame_count = self.params.wav.frame_count();
 
-        // Detect gate rising edge
-        let gate_val = self.params.gate.get_value();
-        if self.state.gate_trigger.process(gate_val) {
-            let speed = self.params.speed.value_or(1.0) as f64;
-            // Start from the appropriate end based on playback direction
-            if speed < 0.0 && frame_count > 0 {
-                self.state.position = (frame_count - 1) as f64;
-            } else {
-                self.state.position = 0.0;
-            }
-            self.state.playing = true;
-        }
-
-        if !self.state.playing || !self.params.wav.is_loaded() || frame_count == 0 {
+        if !self.params.wav.is_loaded() || frame_count == 0 {
             for ch in 0..channels {
                 self.outputs.sample.set(ch, 0.0);
             }
             return;
         }
-
-        let speed = self.params.speed.value_or(1.0) as f64;
         let max_frame = (frame_count - 1) as f64;
 
-        // Check bounds
-        if self.state.position < 0.0 || self.state.position > max_frame {
-            self.state.playing = false;
+        // Detect gate rising edge
+        let gate_val = self.params.gate.get_value();
+        if self.state.gate_trigger.process(gate_val) {
+            let speed = self.params.speed.value_or(1.0) as f64;
+            // Demote the current voice to the release voice so the jump to
+            // the new onset crossfades instead of clicking. A retrigger
+            // during an active release simply steals the slot.
+            if self.state.playing && self.state.fade_out_samples > 0 {
+                self.state.rel_position = self.state.position;
+                self.state.rel_win_lo = self.state.win_lo;
+                self.state.rel_win_hi = self.state.win_hi;
+                self.state.rel_countdown = self.state.fade_out_samples;
+                self.state.rel_active = true;
+            }
+            let (lo, hi) = match &self.params.slice {
+                Some(slice) => {
+                    // Sample-and-hold the slice signal at the edge.
+                    let s = slice.signal.get_value_f64();
+                    let n = slice.points.len();
+                    let idx = (s.floor() as i64).rem_euclid(n as i64) as usize;
+                    let frac = s - s.floor();
+                    let start_p = slice.points[idx];
+                    // Slice ends at the next point, or the end of the file
+                    // for the last one; an unsorted successor clamps to a
+                    // zero-length slice.
+                    let end_p = if idx + 1 < n {
+                        slice.points[idx + 1]
+                    } else {
+                        1.0
+                    };
+                    let end_p = end_p.clamp(0.0, 1.0).max(start_p);
+                    let slice_lo = (start_p * frame_count as f64).min(max_frame);
+                    let slice_hi = (end_p * frame_count as f64).min(max_frame);
+                    (slice_lo + frac * (slice_hi - slice_lo), slice_hi)
+                }
+                None => (0.0, max_frame),
+            };
+            self.state.win_lo = lo;
+            self.state.win_hi = hi;
+            // Reverse playback enters through the window's far edge: the same
+            // audible region, played backwards.
+            self.state.position = if speed < 0.0 { hi } else { lo };
+            self.state.playing = true;
+        }
+
+        let speed = self.params.speed.value_or(1.0) as f64;
+        let advance = speed * self.state.rate_ratio;
+        let w = self.state.fade_frames;
+
+        let mut main_gain = 0.0;
+        if self.state.playing {
+            if self.state.position < self.state.win_lo || self.state.position > self.state.win_hi {
+                self.state.playing = false;
+            } else {
+                main_gain =
+                    Self::edge_gain(self.state.position, self.state.win_lo, self.state.win_hi, w);
+            }
+        }
+
+        let mut rel_gain = 0.0;
+        if self.state.rel_active {
+            if self.state.rel_countdown == 0
+                || self.state.rel_position < self.state.rel_win_lo
+                || self.state.rel_position > self.state.rel_win_hi
+            {
+                self.state.rel_active = false;
+            } else {
+                let pg = Self::edge_gain(
+                    self.state.rel_position,
+                    self.state.rel_win_lo,
+                    self.state.rel_win_hi,
+                    w,
+                );
+                // Time-based ramp-down bounds the ring-out to the fade time
+                // regardless of speed; clamped because a patch update can
+                // shrink fade_out_samples mid-release.
+                let t = (self.state.rel_countdown as f64
+                    / self.state.fade_out_samples.max(1) as f64)
+                    .min(1.0) as f32;
+                rel_gain = pg * t;
+            }
+        }
+
+        if !self.state.playing && !self.state.rel_active {
             for ch in 0..channels {
                 self.outputs.sample.set(ch, 0.0);
             }
@@ -105,15 +242,28 @@ impl Sampler {
 
         // Read with Hermite interpolation
         let pos = self.state.position as f32;
+        let rel_pos = self.state.rel_position as f32;
         for ch in 0..channels {
-            // Expected range of wav is -1.0 to 1.0, multiply by 5 to get to oscillator level
-            let value = self.params.wav.read_hermite_clamped(ch, pos) * 5.0;
+            let mut value = 0.0;
+            if self.state.playing {
+                // Expected range of wav is -1.0 to 1.0, multiply by 5 to get to oscillator level
+                value += self.params.wav.read_hermite_clamped(ch, pos) * 5.0 * main_gain;
+            }
+            if self.state.rel_active {
+                value += self.params.wav.read_hermite_clamped(ch, rel_pos) * 5.0 * rel_gain;
+            }
             self.outputs.sample.set(ch, value);
         }
 
-        // Advance position, compensating for sample rate difference (ratio
+        // Advance positions, compensating for sample rate difference (ratio
         // resolved in on_patch_update).
-        self.state.position += speed * self.state.rate_ratio;
+        if self.state.playing {
+            self.state.position += advance;
+        }
+        if self.state.rel_active {
+            self.state.rel_position += advance;
+            self.state.rel_countdown -= 1;
+        }
     }
 }
 
@@ -128,6 +278,9 @@ impl crate::types::PatchUpdateHandler for Sampler {
         } else {
             1.0
         };
+        let fade_secs = self.params.fade / 1000.0;
+        self.state.fade_frames = fade_secs * wav_rate;
+        self.state.fade_out_samples = (fade_secs * engine_rate).round() as u32;
     }
 }
 
@@ -137,10 +290,16 @@ message_handlers!(impl Sampler {});
 mod tests {
     use std::sync::Arc;
 
+    use serde_json::json;
+
+    use super::*;
     use crate::dsp::{get_constructors, get_params_deserializers};
     use crate::params::DeserializedParams;
     use crate::patch::Patch;
-    use crate::types::{SampleBuffer, Sampleable, WavData};
+    use crate::poly::PolySignal;
+    use crate::types::{
+        Connect, OutputStruct, PatchUpdateHandler, SampleBuffer, Sampleable, Signal, WavData,
+    };
 
     const SAMPLE_RATE: f32 = 48000.0;
 
@@ -220,6 +379,7 @@ mod tests {
                 "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
                 "gate": 0.0,
                 "speed": 1.0,
+                "fade": 0.0,
             }),
         );
 
@@ -249,6 +409,7 @@ mod tests {
                 "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
                 "gate": 5.0,
                 "speed": 1.0,
+                "fade": 0.0,
             }),
         );
 
@@ -275,6 +436,7 @@ mod tests {
                 "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
                 "gate": 5.0,
                 "speed": 1.0,
+                "fade": 0.0,
             }),
         );
 
@@ -306,6 +468,7 @@ mod tests {
                 "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
                 "gate": 5.0,
                 "speed": -1.0,
+                "fade": 0.0,
             }),
         );
 
@@ -347,6 +510,7 @@ mod tests {
                 "wav": { "type": "wav_ref", "path": "stereo", "channels": 2 },
                 "gate": 5.0,
                 "speed": 1.0,
+                "fade": 0.0,
             }),
         );
 
@@ -372,5 +536,285 @@ mod tests {
         let r = module.get_value_at("output", 1, slot);
         assert!((l - 2.0).abs() < 1e-6, "L ch should be 2.0, got {l}");
         assert!((r - 5.0).abs() < 1e-6, "R ch should be 5.0, got {r}");
+    }
+
+    // === slice/fade param deserialization ===
+
+    fn try_params(params: serde_json::Value) -> Result<(), String> {
+        let deserializers = get_params_deserializers();
+        let de = deserializers
+            .get("$sampler")
+            .expect("no params deserializer for $sampler");
+        de(params).map(|_| ()).map_err(|e| e.to_string())
+    }
+
+    fn params_with(extra: serde_json::Value) -> serde_json::Value {
+        let mut v = json!({
+            "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
+            "gate": 0.0,
+        });
+        v.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        v
+    }
+
+    #[test]
+    fn slice_param_accepts_bare_signal_and_tuple_forms() {
+        for good in [
+            json!(0.5),
+            json!([0.0, 1.0]), // poly-array shorthand, summed to mono
+            json!([[0.0, 0.5], 1.0]),
+            json!([[0.0, 0.25, 0.5, 0.75], { "type": "cable", "module": "m", "port": "p" }]),
+        ] {
+            let r = try_params(params_with(json!({ "slice": good.clone() })));
+            assert!(r.is_ok(), "expected acceptance for slice = {good}: {r:?}");
+        }
+    }
+
+    #[test]
+    fn slice_param_rejects_malformed_forms() {
+        for bad in [
+            json!([]),
+            json!([[], 0.0]),
+            json!([[0.0, 1.5], 0.0]),
+            json!([[-0.1], 0.0]),
+            json!([[0.0]]),
+            json!([[0.0], 0.0, 0.0]),
+        ] {
+            let r = try_params(params_with(json!({ "slice": bad.clone() })));
+            assert!(r.is_err(), "expected rejection for slice = {bad}");
+        }
+    }
+
+    #[test]
+    fn fade_param_bounds() {
+        assert!(try_params(params_with(json!({}))).is_ok()); // defaulted
+        assert!(try_params(params_with(json!({ "fade": 0.0 }))).is_ok());
+        assert!(try_params(params_with(json!({ "fade": 1000.0 }))).is_ok());
+        assert!(try_params(params_with(json!({ "fade": -1.0 }))).is_err());
+        assert!(try_params(params_with(json!({ "fade": 1000.5 }))).is_err());
+    }
+
+    // === slice playback ===
+
+    fn make_sliced(
+        id: &str,
+        wav_data: Arc<WavData>,
+        extra: serde_json::Value,
+    ) -> Box<dyn Sampleable> {
+        let module = make_module("$sampler", id, params_with(extra));
+        let mut patch = Patch::new();
+        patch.wav_data.insert("test".to_string(), wav_data);
+        module.connect(&patch);
+        module.on_patch_update();
+        module
+    }
+
+    fn expect_output(module: &dyn Sampleable, s: &mut Stepper, expected: &[f32]) {
+        for (i, &want) in expected.iter().enumerate() {
+            let slot = s.tick(module);
+            let v = module.get_value_at("output", 0, slot);
+            assert!(
+                (v - want).abs() < 1e-4,
+                "frame {i}: expected {want}, got {v}"
+            );
+        }
+    }
+
+    #[test]
+    fn slice_plays_selected_slice() {
+        // Slice 1 of [0, 0.5] covers the second half: frames 2, 3, then silence.
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        let module = make_sliced(
+            "sl1",
+            wav_data,
+            json!({ "gate": 5.0, "fade": 0.0, "slice": [[0.0, 0.5], 1.0] }),
+        );
+        expect_output(module.as_ref(), &mut Stepper::new(), &[3.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn slice_index_wraps_including_negatives() {
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        // 2 wraps to slice 0: frames 0..2 (window hi = 0.5 × 4 = frame 2).
+        let module = make_sliced(
+            "sl_wrap_pos",
+            wav_data.clone(),
+            json!({ "gate": 5.0, "fade": 0.0, "slice": [[0.0, 0.5], 2.0] }),
+        );
+        expect_output(module.as_ref(), &mut Stepper::new(), &[1.0, 2.0, 3.0, 0.0]);
+        // -1 wraps to slice 1: frames 2, 3.
+        let module = make_sliced(
+            "sl_wrap_neg",
+            wav_data,
+            json!({ "gate": 5.0, "fade": 0.0, "slice": [[0.0, 0.5], -1.0] }),
+        );
+        expect_output(module.as_ref(), &mut Stepper::new(), &[3.0, 4.0, 0.0]);
+    }
+
+    #[test]
+    fn slice_fraction_offsets_start_into_slice() {
+        // Signal 0.5 on a single whole-file slice: start halfway into the
+        // window [0, 4] → frame 2, play to the end.
+        let wav_data = make_test_wav(vec![vec![0.1, 0.2, 0.3, 0.4, 0.5]]);
+        let module = make_sliced(
+            "sl_frac",
+            wav_data,
+            json!({ "gate": 5.0, "fade": 0.0, "slice": [[0.0], 0.5] }),
+        );
+        expect_output(module.as_ref(), &mut Stepper::new(), &[1.5, 2.0, 2.5, 0.0]);
+    }
+
+    #[test]
+    fn slice_reverse_plays_same_window_backwards() {
+        // Same window as the fraction test, negative speed: enters at the far
+        // edge and exits at the fraction-offset start.
+        let wav_data = make_test_wav(vec![vec![0.1, 0.2, 0.3, 0.4, 0.5]]);
+        let module = make_sliced(
+            "sl_rev",
+            wav_data,
+            json!({ "gate": 5.0, "speed": -1.0, "fade": 0.0, "slice": [[0.0], 0.5] }),
+        );
+        expect_output(module.as_ref(), &mut Stepper::new(), &[2.5, 2.0, 1.5, 0.0]);
+    }
+
+    #[test]
+    fn zero_length_slice_is_silent_with_fade() {
+        let wav_data = make_test_wav(vec![vec![0.2; 4]]);
+        // Duplicate points and unsorted points both collapse to a zero-length
+        // window, which the declick gain keeps silent.
+        for (id, points) in [
+            ("sl_dup", json!([0.5, 0.5])),
+            ("sl_unsorted", json!([0.7, 0.2])),
+        ] {
+            let module = make_sliced(
+                id,
+                wav_data.clone(),
+                json!({ "gate": 5.0, "fade": 1.0, "slice": [points, 0.0] }),
+            );
+            expect_output(module.as_ref(), &mut Stepper::new(), &[0.0, 0.0, 0.0]);
+        }
+    }
+
+    // === declick fades ===
+
+    #[test]
+    fn fade_ramps_at_onset_and_window_edges() {
+        // 480-frame constant wav at 48kHz with a 1ms fade: the ramp width is
+        // 48 frames on each side of the window.
+        let wav_data = make_test_wav(vec![vec![0.2; 480]]);
+        let module = make_sliced("sl_fade", wav_data, json!({ "gate": 5.0, "fade": 1.0 }));
+        let mut s = Stepper::new();
+        let mut out = Vec::with_capacity(481);
+        for _ in 0..481 {
+            let slot = s.tick(module.as_ref());
+            out.push(module.get_value_at("output", 0, slot));
+        }
+        for (k, want) in [
+            (0, 0.0),   // onset
+            (24, 0.5),  // halfway up the ramp
+            (48, 1.0),  // ramp complete
+            (240, 1.0), // mid-file
+            (455, 0.5), // 24 frames from the window edge
+            (479, 0.0), // window edge
+            (480, 0.0), // past the end
+        ] {
+            let v = out[k];
+            assert!(
+                (v - want).abs() < 1e-3,
+                "sample {k}: expected {want}, got {v}"
+            );
+        }
+    }
+
+    // === retrigger crossfade (needs a mutable gate → direct construction) ===
+
+    fn make_direct(params_json: serde_json::Value, wav_data: Arc<WavData>) -> Sampler {
+        let mut params: SamplerParams = deserr::deserialize::<_, _, ModuleParamErrors>(params_json)
+            .unwrap_or_else(|e| panic!("params deserialization failed: {e}"));
+        let mut patch = Patch::new();
+        patch.wav_data.insert("test".to_string(), wav_data);
+        params.connect(&patch);
+        let mut outputs = SamplerOutputs::default();
+        outputs.set_all_channels(1);
+        let mut sampler = Sampler {
+            params,
+            outputs,
+            state: SamplerState::default(),
+            _channel_count: 1,
+            _block_index: Default::default(),
+        };
+        sampler.init(SAMPLE_RATE);
+        sampler.on_patch_update();
+        sampler
+    }
+
+    fn set_gate(sampler: &mut Sampler, volts: f32) {
+        sampler.params.gate = MonoSignal::from_poly(PolySignal::mono(Signal::Volts(volts)));
+    }
+
+    #[test]
+    fn retrigger_crossfades_without_discontinuity() {
+        let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+        let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+        // Run past the 48-sample fade-in; steady state is unity (0.2 × 5).
+        for _ in 0..100 {
+            sampler.update(SAMPLE_RATE);
+        }
+        assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
+
+        // Drop the gate below the Schmitt low threshold, then retrigger.
+        set_gate(&mut sampler, 0.0);
+        sampler.update(SAMPLE_RATE);
+        set_gate(&mut sampler, 5.0);
+
+        // On a constant-amplitude wav the old voice's ramp-down and the new
+        // voice's ramp-up sum to unity across the whole crossfade.
+        for i in 0..48 {
+            sampler.update(SAMPLE_RATE);
+            let v = sampler.outputs.sample.get(0);
+            assert!(
+                (v - 1.0).abs() < 1e-3,
+                "crossfade sample {i}: expected ~1.0, got {v}"
+            );
+        }
+        for _ in 0..10 {
+            sampler.update(SAMPLE_RATE);
+        }
+        assert!(!sampler.state.rel_active, "release voice should be spent");
+        assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn retrigger_during_release_steals_the_slot() {
+        let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+        let mut sampler = make_direct(params_with(json!({ "gate": 5.0, "fade": 1.0 })), wav_data);
+        for _ in 0..100 {
+            sampler.update(SAMPLE_RATE);
+        }
+        // First retrigger: the ~100-frame-old voice becomes the release voice.
+        set_gate(&mut sampler, 0.0);
+        sampler.update(SAMPLE_RATE);
+        set_gate(&mut sampler, 5.0);
+        for _ in 0..10 {
+            sampler.update(SAMPLE_RATE);
+        }
+        // Second retrigger mid-crossfade: the young main voice (position ~12)
+        // steals the release slot from the old voice (position ~112).
+        set_gate(&mut sampler, 0.0);
+        sampler.update(SAMPLE_RATE);
+        set_gate(&mut sampler, 5.0);
+        sampler.update(SAMPLE_RATE);
+        assert!(sampler.state.rel_active);
+        assert!(
+            sampler.state.rel_position < 20.0,
+            "release slot should hold the young voice, got position {}",
+            sampler.state.rel_position
+        );
+        assert_eq!(
+            sampler.state.rel_countdown,
+            sampler.state.fade_out_samples - 1
+        );
     }
 }

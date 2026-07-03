@@ -5,6 +5,7 @@ use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub mod grains;
 pub mod sampler;
+mod slice;
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     grains::Grains::install_constructor(map);

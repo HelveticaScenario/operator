@@ -194,4 +194,40 @@ describe('getEnumVariants', () => {
             'Table',
         );
     });
+
+    test('schemaToTypeExpr keeps a signal-or-tuple union (sampler slice shape)', () => {
+        const rootSchema = {
+            $defs: {
+                MonoSignal: { title: 'MonoSignal' },
+            },
+        };
+        const sliceSchema = {
+            anyOf: [
+                { $ref: '#/$defs/MonoSignal' },
+                {
+                    type: 'array',
+                    prefixItems: [
+                        {
+                            type: 'array',
+                            items: { type: 'number' },
+                            minItems: 1,
+                        },
+                        { $ref: '#/$defs/MonoSignal' },
+                    ],
+                    minItems: 2,
+                    maxItems: 2,
+                },
+            ],
+        };
+        expect(schemaToTypeExpr(sliceSchema, rootSchema)).toBe(
+            'Mono<Signal> | [number[], Mono<Signal>]',
+        );
+        // Option<...> wraps the union in another anyOf with a null arm.
+        expect(
+            schemaToTypeExpr(
+                { anyOf: [sliceSchema, { type: 'null' }] },
+                rootSchema,
+            ),
+        ).toBe('Mono<Signal> | [number[], Mono<Signal>]');
+    });
 });
