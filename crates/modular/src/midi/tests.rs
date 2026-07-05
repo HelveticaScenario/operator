@@ -9,7 +9,14 @@ fn set(items: &[&str]) -> HashSet<String> {
 fn defer_records_dropped_device() {
     let mut deferred = HashMap::new();
     let mut desired = HashSet::new();
-    let to_open = plan_deferrals(&set(&["X"]), &set(&[]), 2, &mut deferred, &mut desired);
+    let to_open = plan_deferrals(
+        &set(&["X"]),
+        &set(&[]),
+        false,
+        2,
+        &mut deferred,
+        &mut desired,
+    );
     assert_eq!(deferred.get("X"), Some(&2));
     assert!(desired.is_empty());
     assert!(to_open.is_empty());
@@ -19,7 +26,14 @@ fn defer_records_dropped_device() {
 fn defer_keeps_earliest_id() {
     let mut deferred = HashMap::from([("X".to_string(), 2u64)]);
     let mut desired = HashSet::new();
-    plan_deferrals(&set(&["X"]), &set(&[]), 3, &mut deferred, &mut desired);
+    plan_deferrals(
+        &set(&["X"]),
+        &set(&[]),
+        false,
+        3,
+        &mut deferred,
+        &mut desired,
+    );
     assert_eq!(deferred.get("X"), Some(&2));
 }
 
@@ -27,7 +41,14 @@ fn defer_keeps_earliest_id() {
 fn rereference_cancels_defer() {
     let mut deferred = HashMap::from([("X".to_string(), 2u64)]);
     let mut desired = HashSet::new();
-    let to_open = plan_deferrals(&set(&["X"]), &set(&["X"]), 3, &mut deferred, &mut desired);
+    let to_open = plan_deferrals(
+        &set(&["X"]),
+        &set(&["X"]),
+        false,
+        3,
+        &mut deferred,
+        &mut desired,
+    );
     assert!(deferred.is_empty());
     assert_eq!(desired, set(&["X"]));
     assert!(to_open.is_empty());
@@ -37,7 +58,14 @@ fn rereference_cancels_defer() {
 fn new_device_scheduled_for_open() {
     let mut deferred = HashMap::new();
     let mut desired = HashSet::new();
-    let to_open = plan_deferrals(&set(&[]), &set(&["Y"]), 3, &mut deferred, &mut desired);
+    let to_open = plan_deferrals(
+        &set(&[]),
+        &set(&["Y"]),
+        false,
+        3,
+        &mut deferred,
+        &mut desired,
+    );
     assert_eq!(to_open, vec!["Y".to_string()]);
     assert_eq!(desired, set(&["Y"]));
     assert!(deferred.is_empty());
@@ -49,7 +77,14 @@ fn multi_module_same_device_not_deferred() {
     // modules stays present when only one module is removed.
     let mut deferred = HashMap::new();
     let mut desired = HashSet::new();
-    plan_deferrals(&set(&["X"]), &set(&["X"]), 2, &mut deferred, &mut desired);
+    plan_deferrals(
+        &set(&["X"]),
+        &set(&["X"]),
+        false,
+        2,
+        &mut deferred,
+        &mut desired,
+    );
     assert!(deferred.is_empty());
 }
 
@@ -97,9 +132,63 @@ fn supersede_then_prune() {
     // B(id 2) and C(id 3) both drop X; or_insert keeps {X:2}. C applies → 3.
     let mut deferred = HashMap::new();
     let mut desired = HashSet::new();
-    plan_deferrals(&set(&["X"]), &set(&[]), 2, &mut deferred, &mut desired);
-    plan_deferrals(&set(&["X"]), &set(&[]), 3, &mut deferred, &mut desired);
+    plan_deferrals(
+        &set(&["X"]),
+        &set(&[]),
+        false,
+        2,
+        &mut deferred,
+        &mut desired,
+    );
+    plan_deferrals(
+        &set(&["X"]),
+        &set(&[]),
+        false,
+        3,
+        &mut deferred,
+        &mut desired,
+    );
     assert_eq!(deferred.get("X"), Some(&2));
     let to_close = plan_prunes(&mut deferred, &desired, 3);
     assert_eq!(to_close, vec!["X".to_string()]);
+}
+
+#[test]
+fn wants_all_keeps_connected_devices() {
+    // Explicit device → deviceless transition: a patch with a deviceless
+    // MIDI module wants every open device kept, so no close is scheduled
+    // and the device survives the subsequent prune.
+    let mut deferred = HashMap::new();
+    let mut desired = set(&["X"]);
+    let to_open = plan_deferrals(
+        &set(&["X"]),
+        &set(&[]),
+        true,
+        2,
+        &mut deferred,
+        &mut desired,
+    );
+    assert!(deferred.is_empty());
+    assert_eq!(desired, set(&["X"]));
+    assert!(to_open.is_empty());
+    let to_close = plan_prunes(&mut deferred, &desired, 9);
+    assert!(to_close.is_empty());
+}
+
+#[test]
+fn wants_all_cancels_pending_close_and_keeps_desired() {
+    let mut deferred = HashMap::from([("X".to_string(), 2u64)]);
+    let mut desired = set(&["Y"]);
+    let to_open = plan_deferrals(
+        &set(&["X"]),
+        &set(&["Z"]),
+        true,
+        3,
+        &mut deferred,
+        &mut desired,
+    );
+    assert!(deferred.is_empty());
+    // Explicitly connected devices are kept alongside the new ones.
+    assert_eq!(desired, set(&["X", "Y", "Z"]));
+    assert_eq!(to_open, vec!["Z".to_string()]);
 }
