@@ -358,6 +358,84 @@ fn test_multiple_unknown_params_via_deserr() {
 }
 
 #[test]
+fn test_duplicate_module_ids_rejected() {
+    let schemas = schemas();
+    let module = ModuleSpec {
+        id: "dup".to_string(),
+        module_type: "$sine".to_string(),
+        id_is_explicit: Some(true),
+        params: json!({ "freq": 4.0 }),
+    };
+    let patch = PatchGraph {
+        modules: vec![module.clone(), module],
+        module_id_remaps: None,
+
+        scopes: vec![],
+        scope_xy: None,
+    };
+
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "id" && e.message.contains("Duplicate module id 'dup'")),
+        "expected a duplicate-id error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_hidden_audio_in_id_rejected() {
+    let schemas = schemas();
+    let patch = PatchGraph {
+        modules: vec![ModuleSpec {
+            id: "HIDDEN_AUDIO_IN".to_string(),
+            module_type: "$sine".to_string(),
+            id_is_explicit: Some(true),
+            params: json!({ "freq": 4.0 }),
+        }],
+        module_id_remaps: None,
+
+        scopes: vec![],
+        scope_xy: None,
+    };
+
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "id" && e.message.contains("reserved for the engine")),
+        "expected a reserved-id error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_root_clock_id_requires_clock_type() {
+    let schemas = schemas();
+    let mk_patch = |module_type: &str| PatchGraph {
+        modules: vec![ModuleSpec {
+            id: "ROOT_CLOCK".to_string(),
+            module_type: module_type.to_string(),
+            id_is_explicit: Some(true),
+            params: json!({}),
+        }],
+        module_id_remaps: None,
+
+        scopes: vec![],
+        scope_xy: None,
+    };
+
+    let errors = validate_patch(&mk_patch("$noise"), &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "id" && e.message.contains("reserved for a _clock module")),
+        "expected a reserved-id error, got {errors:?}"
+    );
+
+    assert!(validate_patch(&mk_patch("_clock"), &schemas).is_ok());
+}
+
+#[test]
 fn test_empty_patch_is_valid() {
     let schemas = schemas();
     let patch = PatchGraph {

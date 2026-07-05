@@ -1,3 +1,4 @@
+mod module_ids;
 mod signal_refs;
 
 use modular_core::params::ARGUMENT_SPANS_KEY;
@@ -75,11 +76,12 @@ pub fn validate_patch(
     //
     // High-level flow:
     // 1) Build fast lookup tables (schemas by name, modules by id).
-    // 2) Validate each module:
+    // 2) Validate module ids (uniqueness, engine reservations).
+    // 3) Validate each module:
     //    - module type exists
     //    - for params whose schema indicates a `Signal`, validate any Cable references
     //    (param-level validation is now handled by deserr)
-    // 3) Validate scopes:
+    // 4) Validate scopes:
     //    - referenced module exists
     //    - referenced output port exists on the module type
     let mut errors = Vec::new();
@@ -92,6 +94,8 @@ pub fn validate_patch(
     // Build a map from module id -> module instance (state) from the patch.
     let module_by_id: HashMap<&str, &ModuleSpec> =
         patch.modules.iter().map(|m| (m.id.as_str(), m)).collect();
+
+    module_ids::validate_module_ids(patch, &mut errors);
 
     // === Module validation ===
     // Validate each module instance in the patch.
