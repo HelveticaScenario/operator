@@ -1,4 +1,7 @@
+use super::MIDI_BUFFER_SIZE;
 use super::devices::{plan_deferrals, plan_prunes};
+use super::parse::{MidiParseState, parse_midi_message};
+use modular_core::types::DeviceName;
 use std::collections::{HashMap, HashSet};
 
 fn set(items: &[&str]) -> HashSet<String> {
@@ -191,4 +194,23 @@ fn wants_all_cancels_pending_close_and_keeps_desired() {
     // Explicitly connected devices are kept alongside the new ones.
     assert_eq!(desired, set(&["X", "Y", "Z"]));
     assert_eq!(to_open, vec!["Z".to_string()]);
+}
+
+#[test]
+fn fourteen_bit_cc_never_grows_buffer() {
+    let mut state = MidiParseState::new();
+    let device = DeviceName::intern("test-device");
+
+    // Store an MSB for CC 0 so a later LSB emits two messages.
+    parse_midi_message(&[0xB0, 0x00, 0x40], &device, 0, &mut state);
+    // Fill to one below capacity, mirroring the connection callback's
+    // len-check admitting one more packet.
+    while state.messages.len() < MIDI_BUFFER_SIZE - 1 {
+        parse_midi_message(&[0xB0, 0x46, 0x01], &device, 0, &mut state);
+    }
+    // The LSB packet emits both the raw LSB CC and the combined 14-bit CC.
+    parse_midi_message(&[0xB0, 0x20, 0x01], &device, 0, &mut state);
+
+    assert_eq!(state.messages.len(), MIDI_BUFFER_SIZE);
+    assert_eq!(state.messages.capacity(), MIDI_BUFFER_SIZE);
 }
