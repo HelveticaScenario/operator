@@ -477,32 +477,31 @@ const configNeedsUpdate =
     actualConfig.audioConfig?.bufferSize !== actualAudioState.bufferSize;
 
 if (configNeedsUpdate) {
-    actualConfig.audioConfig = {
-        bufferSize: actualAudioState.bufferSize ?? undefined,
-        hostId: actualAudioState.hostId,
-        inputDeviceId: actualAudioState.inputDeviceId ?? null,
-        outputDeviceId: actualAudioState.outputDeviceId ?? undefined,
-        sampleRate: actualAudioState.sampleRate,
-    };
-    configStore.save(actualConfig);
+    configStore.update((config) => {
+        config.audioConfig = {
+            bufferSize: actualAudioState.bufferSize ?? undefined,
+            hostId: actualAudioState.hostId,
+            inputDeviceId: actualAudioState.inputDeviceId ?? null,
+            outputDeviceId: actualAudioState.outputDeviceId ?? undefined,
+            sampleRate: actualAudioState.sampleRate,
+        };
+    });
     console.log('Saved updated audio config after fallback');
 }
 
 // Save audio configuration to config file
 function saveAudioConfig() {
     try {
-        const config = configStore.load();
         const state = synth.getCurrentAudioState();
-
-        config.audioConfig = {
-            bufferSize: state.bufferSize ?? undefined,
-            hostId: state.hostId,
-            inputDeviceId: state.inputDeviceId ?? null,
-            outputDeviceId: state.outputDeviceId ?? undefined,
-            sampleRate: state.sampleRate,
-        };
-
-        configStore.save(config);
+        configStore.update((config) => {
+            config.audioConfig = {
+                bufferSize: state.bufferSize ?? undefined,
+                hostId: state.hostId,
+                inputDeviceId: state.inputDeviceId ?? null,
+                outputDeviceId: state.outputDeviceId ?? undefined,
+                sampleRate: state.sampleRate,
+            };
+        });
         console.log('Audio configuration saved');
     } catch (error) {
         console.error('Error saving audio config:', error);
@@ -1302,18 +1301,19 @@ registerIPCHandler('FS_SELECT_WORKSPACE', async () => {
         return null;
     }
 
-    currentWorkspaceRoot = result.filePaths[0];
-    console.log('Workspace selected:', currentWorkspaceRoot);
+    const workspaceRoot = result.filePaths[0];
+    currentWorkspaceRoot = workspaceRoot;
+    console.log('Workspace selected:', workspaceRoot);
 
     // Start watching wavs/ folder for the new workspace
-    startWavsWatcher(currentWorkspaceRoot);
+    startWavsWatcher(workspaceRoot);
 
     // Save to config (load-merge-save to preserve other settings)
-    const config = configStore.load();
-    config.lastOpenedFolder = currentWorkspaceRoot;
-    configStore.save(config);
+    configStore.update((config) => {
+        config.lastOpenedFolder = workspaceRoot;
+    });
 
-    return { path: currentWorkspaceRoot };
+    return { path: workspaceRoot };
 });
 
 registerIPCHandler('FS_GET_WORKSPACE', () =>
@@ -1624,9 +1624,9 @@ registerIPCHandler('CONFIG_READ', () => {
 
 registerIPCHandler('CONFIG_WRITE', (partial: Partial<AppConfig>) => {
     configStore.ensureExists();
-    const current = configStore.load();
-    const merged = { ...current, ...partial };
-    configStore.save(merged);
+    configStore.update((config) => {
+        Object.assign(config, partial);
+    });
 });
 
 // User keybinding overrides. The file is VS Code-style `keybindings.json`,
