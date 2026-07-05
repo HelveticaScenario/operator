@@ -1807,9 +1807,15 @@ export class DeferredModuleOutput extends ModuleOutput {
 
     /**
      * Set the actual signal this deferred output should resolve to.
+     * Bare Signal literals (numbers, note/Hz strings) are lifted into $signal
+     * modules, matching `$c`.
      * @param signal - The signal to resolve to (number, string, or ModuleOutput)
      */
-    set(signal: ModuleOutput): void {
+    set(signal: Signal): void {
+        if (typeof signal === 'number' || typeof signal === 'string') {
+            this.resolvedModuleOutput = this.builder.$c(signal)[0];
+            return;
+        }
         this.resolvedModuleOutput = signal;
     }
 
@@ -1846,19 +1852,26 @@ export class DeferredModuleOutput extends ModuleOutput {
 
 /**
  * DeferredCollection is a collection of DeferredModuleOutput instances.
- * Provides a .set() method to assign ModuleOutputs to all contained deferred outputs.
+ * Provides a .set() method to assign signals to all contained deferred outputs.
  */
 export class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
     /**
-     * Set the values for all deferred outputs in this collection.
-     * @param outputs - A ModuleOutput or iterable of ModuleOutputs to distribute across outputs
+     * Set the signals for all deferred outputs in this collection, cycling a
+     * narrower argument across the channels. Bare Signal literals (numbers,
+     * note/Hz strings) are lifted into $signal modules, matching `$c` — a
+     * string is one signal, not spread into characters.
+     * @param outputs - A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
      */
-    set(outputs: ModuleOutput | Iterable<ModuleOutput>): void {
-        if (outputs instanceof ModuleOutput) {
-            outputs = [outputs];
+    set(outputs: PolySignal): void {
+        if (this.items.length === 0) {
+            return;
         }
-
-        const outputsArr = Array.from(outputs);
+        const outputsArr = [...this.items[0].builder.$c(outputs)];
+        if (outputsArr.length === 0) {
+            throw new Error(
+                'DeferredCollection.set() requires at least one signal',
+            );
+        }
 
         // Distribute signals across deferred outputs
         for (let i = 0; i < this.items.length; i++) {

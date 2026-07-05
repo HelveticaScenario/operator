@@ -185,11 +185,17 @@ export function executePatchScript(
         config?: ScopeXYConfig,
     ): void => {
         const flatten = (v: unknown): ModuleOutput[] => {
+            // Bare Signal literals (numbers, note/Hz strings) are lifted into
+            // $signal modules, matching `$c`. A string is one signal, not
+            // spread into characters.
+            if (typeof v === 'number' || typeof v === 'string') {
+                return [...(signal(v) as Collection)];
+            }
             if (v instanceof ModuleOutput) return [v];
             if (v instanceof BaseCollection) return [...v];
             if (Array.isArray(v)) return v.flatMap((e: unknown) => flatten(e));
             throw new Error(
-                '$scopeXY: arguments must be a ModuleOutput, Collection, or array thereof',
+                '$scopeXY: arguments must be a number, note/Hz string, ModuleOutput, Collection, or array thereof',
             );
         };
         const xs = flatten(x);

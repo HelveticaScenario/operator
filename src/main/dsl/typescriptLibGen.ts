@@ -1003,6 +1003,8 @@ interface ModuleOutput {
 interface DeferredModuleOutput extends ModuleOutput {
   /**
    * Set the actual signal this deferred output should resolve to.
+   * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
+   * $signal modules, matching $c.
    * @param signal - The signal to resolve to (number, string, or ModuleOutput)
    */
   set(signal: Signal): void;
@@ -1285,7 +1287,10 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
   constructor(...outputs: DeferredModuleOutput[]);
 
   /**
-   * Set the signals for all deferred outputs in this collection.
+   * Set the signals for all deferred outputs in this collection, cycling a
+   * narrower argument across the channels. Bare {@link Signal} literals
+   * (numbers, note/Hz strings) are lifted into $signal modules, matching $c —
+   * a string is one signal, not spread into characters.
    * @param polySignal - A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
    */
   set(polySignal: Poly<Signal>): void;
@@ -1360,6 +1365,8 @@ function $setOutputGain(gain: Mono<Signal>): void;
 /**
  * Render a Lissajous-style XY oscilloscope as the editor background.
  * Each axis is cycled to the longer arity, producing one trace per pair.
+ * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
+ * $signal modules, matching $c.
  * Last call wins; only one global XY scope can be active at a time.
  * @param x - Horizontal channel(s)
  * @param y - Vertical channel(s)
