@@ -281,22 +281,29 @@ function stripQuotes(text: string): string {
  * interpolations, recurses into nested resolutions and re-maps positions in
  * the nested template's own literal text from evaluated to raw offsets.
  *
+ * Span ends are exclusive, so a position on the boundary of two adjacent
+ * interpolation results belongs to the earlier one when it is a span end and
+ * to the later one when it is a span start; `bias` selects the boundary side.
+ *
  * @param evalPos - Position in evaluated string that fell inside an interpolation
  * @param resolutions - Resolved interpolations for this argument span
  * @param getTextInSpan - Reads the document text covered by a span
+ * @param bias - Whether evalPos is a span start or a span end
  * @returns Document offset to highlight, or null if no resolution found
  */
 function resolveInterpolatedPosition(
     evalPos: number,
     resolutions: ResolvedInterpolation[],
     getTextInSpan: (span: SourceSpan) => string,
+    bias: 'start' | 'end',
 ): number | null {
     for (const r of resolutions) {
         const rEnd = r.evaluatedStart + r.evaluatedLength;
-        // Use <= for the end check because span ends are exclusive:
-        // A Rust span [0, 2] means characters 0-1, and position 2 is the
-        // Exclusive end that should map to the exclusive end of the const literal.
-        if (evalPos < r.evaluatedStart || evalPos > rEnd) {
+        const inRegion =
+            bias === 'start'
+                ? evalPos >= r.evaluatedStart && evalPos < rEnd
+                : evalPos > r.evaluatedStart && evalPos <= rEnd;
+        if (!inRegion) {
             continue;
         }
         const offsetInResult = evalPos - r.evaluatedStart;
@@ -308,6 +315,7 @@ function resolveInterpolatedPosition(
                 offsetInResult,
                 r.nestedResolutions,
                 getTextInSpan,
+                bias,
             );
             if (nestedResult !== null) {
                 return nestedResult;
@@ -678,12 +686,14 @@ export function startModuleStatePolling({
                                             evalStart,
                                             resolutions,
                                             getTextInSpan,
+                                            'start',
                                         );
                                     const resolvedEnd =
                                         resolveInterpolatedPosition(
                                             evalEnd,
                                             resolutions,
                                             getTextInSpan,
+                                            'end',
                                         );
                                     if (
                                         resolvedStart !== null &&
