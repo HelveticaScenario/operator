@@ -29,6 +29,7 @@ import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { EditorBuffer } from './types/editor';
 import { applySliderChange } from './app/sliderChange';
+import { resolveScopeCallRange } from './app/scopeCallRange';
 import { transformErrorsWithSourceLocations } from './app/validationErrorLocations';
 import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
@@ -750,27 +751,34 @@ function App() {
                         range: scope.range ?? [-5, 5],
                     });
 
-                    if (model && loc) {
-                        const spanKey = `${loc.line}:${loc.column}`;
-                        const callSpan = callSiteSpans?.[spanKey];
-                        const endLine = callSpan?.endLine ?? loc.line;
-
-                        const endLineContent =
-                            model.getLineContent(endLine) ?? '';
-                        decorationDescs.push({
-                            options: {
-                                stickiness:
-                                    editor.TrackedRangeStickiness
-                                        .NeverGrowsWhenTypingAtEdges,
-                            },
-                            range: {
-                                endColumn: endLineContent.length + 1,
-                                endLineNumber: endLine,
-                                startColumn: loc.column,
-                                startLineNumber: loc.line,
-                            },
-                        });
-                    }
+                    // scopeViewZones pairs views and decorations by index, so
+                    // every view must get a decoration. A scope whose call
+                    // site cannot be resolved (source edited during the async
+                    // round-trip) gets a collapsed range, which reads as "no
+                    // anchor": its zone is hidden instead of shifting every
+                    // later scope onto the wrong call.
+                    const spanKey = loc ? `${loc.line}:${loc.column}` : '';
+                    const range =
+                        model && loc
+                            ? resolveScopeCallRange(
+                                  model,
+                                  loc,
+                                  callSiteSpans?.[spanKey],
+                              )
+                            : null;
+                    decorationDescs.push({
+                        options: {
+                            stickiness:
+                                editor.TrackedRangeStickiness
+                                    .NeverGrowsWhenTypingAtEdges,
+                        },
+                        range: range ?? {
+                            endColumn: 1,
+                            endLineNumber: 1,
+                            startColumn: 1,
+                            startLineNumber: 1,
+                        },
+                    });
                 }
 
                 let newScopeDecorations: editor.IEditorDecorationsCollection | null =
