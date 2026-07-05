@@ -240,7 +240,9 @@ fn max_u32_leaf(ast: &MiniASTU32) -> u32 {
 
 /// Generates a limit validator for one of the four structurally identical
 /// AST enums. Each validator rejects operands that conversion cannot lower
-/// safely: `!n`/euclidean-step operands past `MAX_EXPANSION`.
+/// safely: `!n`/euclidean-step operands past `MAX_EXPANSION`, and polymeter
+/// `%` steps that are not a single number (`eval_f64` reads exactly one
+/// constant, so any other shape would be silently collapsed).
 macro_rules! define_validate_limits {
     ($name:ident, $ast:ident) => {
         fn $name(ast: &$ast) -> Result<(), ConvertError> {
@@ -285,7 +287,19 @@ macro_rules! define_validate_limits {
                     }
                     $name(pattern)
                 }
-                $ast::Polymeter { children, .. } => children.iter().try_for_each($name),
+                $ast::Polymeter {
+                    children,
+                    steps_per_cycle,
+                } => {
+                    if let Some(spc) = steps_per_cycle.as_deref() {
+                        if !matches!(spc, MiniASTF64::Pure(_)) {
+                            return Err(ConvertError::OperatorError(
+                                "polymeter steps must be a single number".to_string(),
+                            ));
+                        }
+                    }
+                    children.iter().try_for_each($name)
+                }
             }
         }
     };
@@ -299,9 +313,9 @@ define_validate_limits!(validate_limits_i32, MiniASTI32);
 /// Evaluate a MiniASTF64 to get a single f64 value.
 ///
 /// Used by the polymeter converter for `%n` step-count overrides and by
-/// step-count helpers as a scalar readout. For complex patterns it
-/// returns the first value found (matches strudel's approach of using
-/// `children[0]` for the stepsPerCycle fallback).
+/// step-count helpers as a scalar readout. The limit validators guarantee
+/// `%` operands are single `Pure` numbers before conversion runs; the
+/// remaining arms keep the function total by reading the first leaf.
 fn eval_f64(ast: &MiniASTF64) -> f64 {
     match ast {
         MiniASTF64::Pure(Located { node, .. }) => *node,
@@ -2469,6 +2483,20 @@ mod tests {
         ];
         assert_eq!(onsets(0), expected);
         assert_eq!(onsets(3000), expected);
+    }
+
+    #[test]
+    fn test_polymeter_pattern_steps_operand_errors() {
+        // A `%` steps operand carries exactly one constant; a pattern
+        // operand like `%<2 4>` is rejected with a clear error.
+        let spc = MiniASTF64::SlowCat(vec![(f64_pure(2.0), None), (f64_pure(4.0), None)]);
+        let ast = polymeter_012(Some(spc));
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("polymeter steps must be a single number"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
