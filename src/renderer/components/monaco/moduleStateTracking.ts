@@ -262,6 +262,13 @@ function buildPositionMapper(
     };
 }
 
+/** Strip a surrounding quote/backtick pair from a literal's source text. */
+function stripQuotes(text: string): string {
+    return text.startsWith('`') || text.startsWith('"') || text.startsWith("'")
+        ? text.slice(1, -1)
+        : text;
+}
+
 /**
  * Resolve an evaluated position that falls inside an interpolation result
  * to a document offset by looking up the interpolation resolution map.
@@ -271,40 +278,62 @@ function buildPositionMapper(
  * redirects the highlight to the original const literal's location in the document.
  *
  * Handles recursive resolution: if the const is itself a template with
- * interpolations, recurses into nested resolutions.
+ * interpolations, recurses into nested resolutions and re-maps positions in
+ * the nested template's own literal text from evaluated to raw offsets.
  *
  * @param evalPos - Position in evaluated string that fell inside an interpolation
  * @param resolutions - Resolved interpolations for this argument span
+ * @param getTextInSpan - Reads the document text covered by a span
  * @returns Document offset to highlight, or null if no resolution found
  */
 function resolveInterpolatedPosition(
     evalPos: number,
     resolutions: ResolvedInterpolation[],
+    getTextInSpan: (span: SourceSpan) => string,
 ): number | null {
     for (const r of resolutions) {
         const rEnd = r.evaluatedStart + r.evaluatedLength;
         // Use <= for the end check because span ends are exclusive:
         // A Rust span [0, 2] means characters 0-1, and position 2 is the
         // Exclusive end that should map to the exclusive end of the const literal.
-        if (evalPos >= r.evaluatedStart && evalPos <= rEnd) {
-            const offsetInResult = evalPos - r.evaluatedStart;
+        if (evalPos < r.evaluatedStart || evalPos > rEnd) {
+            continue;
+        }
+        const offsetInResult = evalPos - r.evaluatedStart;
 
-            // If the const has nested resolutions (it's a template with interpolations),
-            // Check if this offset falls inside one of the nested interpolations
-            if (r.nestedResolutions && r.nestedResolutions.length > 0) {
-                const nestedResult = resolveInterpolatedPosition(
-                    offsetInResult,
-                    r.nestedResolutions,
-                );
-                if (nestedResult !== null) {
-                    return nestedResult;
-                }
+        // If the const has nested resolutions (it's a template with interpolations),
+        // Check if this offset falls inside one of the nested interpolations
+        if (r.nestedResolutions && r.nestedResolutions.length > 0) {
+            const nestedResult = resolveInterpolatedPosition(
+                offsetInResult,
+                r.nestedResolutions,
+                getTextInSpan,
+            );
+            if (nestedResult !== null) {
+                return nestedResult;
             }
 
-            // Simple case or fallback: map directly into the const literal
-            // +1 to skip the opening quote character
-            return r.constLiteralSpan.start + 1 + offsetInResult;
+            // Position in the nested template's own literal text: each nested
+            // ${...} occupies a different width in the raw literal than in its
+            // evaluated result, so the evaluated offset must be re-mapped
+            // through the nested template's literal regions.
+            const rawContent = stripQuotes(getTextInSpan(r.constLiteralSpan));
+            const nestedRegions = buildInterpolationRegionsFromResolutions(
+                rawContent,
+                r.nestedResolutions,
+            );
+            if (nestedRegions) {
+                const rawOffset =
+                    buildPositionMapper(nestedRegions)(offsetInResult);
+                if (rawOffset !== null) {
+                    return r.constLiteralSpan.start + 1 + rawOffset;
+                }
+            }
         }
+
+        // Plain string const: evaluated offsets equal literal offsets
+        // +1 to skip the opening quote character
+        return r.constLiteralSpan.start + 1 + offsetInResult;
     }
     return null;
 }
@@ -453,6 +482,17 @@ export function startModuleStatePolling({
                 modelCaches.set(model, globalCache);
             }
 
+            const getTextInSpan = (span: SourceSpan): string => {
+                const startPos = model.getPositionAt(span.start);
+                const endPos = model.getPositionAt(span.end);
+                return model.getValueInRange({
+                    endColumn: endPos.column,
+                    endLineNumber: endPos.lineNumber,
+                    startColumn: startPos.column,
+                    startLineNumber: startPos.lineNumber,
+                });
+            };
+
             // Clean up cache entries for modules that no longer exist in the patch.
             // Without this, tracked decorations from removed modules would linger.
             for (const [cachedModuleId, moduleCache] of globalCache) {
@@ -562,18 +602,9 @@ export function startModuleStatePolling({
                             evaluatedSource
                         ) {
                             // Strip quotes from source content for mapping
-                            let sourceWithoutQuotes =
-                                paramCache.sourceContent || '';
-                            if (
-                                sourceWithoutQuotes.startsWith('`') ||
-                                sourceWithoutQuotes.startsWith('"') ||
-                                sourceWithoutQuotes.startsWith("'")
-                            ) {
-                                sourceWithoutQuotes = sourceWithoutQuotes.slice(
-                                    1,
-                                    -1,
-                                );
-                            }
+                            const sourceWithoutQuotes = stripQuotes(
+                                paramCache.sourceContent || '',
+                            );
 
                             // Prefer building regions from resolution data (accurate)
                             // Over indexOf-based text matching (can fail when
@@ -646,11 +677,13 @@ export function startModuleStatePolling({
                                         resolveInterpolatedPosition(
                                             evalStart,
                                             resolutions,
+                                            getTextInSpan,
                                         );
                                     const resolvedEnd =
                                         resolveInterpolatedPosition(
                                             evalEnd,
                                             resolutions,
+                                            getTextInSpan,
                                         );
                                     if (
                                         resolvedStart !== null &&
