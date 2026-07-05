@@ -8,6 +8,8 @@
 //!   y[n] = a·(x[n] − y[n−1]) + x[n−1]
 //! State per stage: previous input and previous output.
 
+use super::sanitize;
+
 /// Coefficients for the cascade in branch A. Cascaded as stage1 → stage2.
 const BRANCH_A: [f32; 2] = [0.07471, 0.42943];
 
@@ -30,10 +32,12 @@ impl Allpass1 {
         }
     }
 
+    /// The stored state is sanitized every sample so a non-finite input cannot
+    /// lodge in the recursion — the filter recovers as soon as the input does.
     #[inline]
     fn process(&mut self, x: f32) -> f32 {
-        let y = self.coeff * (x - self.y_prev) + self.x_prev;
-        self.x_prev = x;
+        let y = sanitize(self.coeff * (x - self.y_prev) + self.x_prev);
+        self.x_prev = sanitize(x);
         self.y_prev = y;
         y
     }
@@ -172,6 +176,28 @@ mod tests {
             (peak - 1.0).abs() < 0.05,
             "low-freq sine should pass with ~unit amplitude, got peak {}",
             peak
+        );
+    }
+
+    #[test]
+    fn recovers_after_non_finite_input() {
+        // A non-finite sample must not lodge in the allpass recursion: once the
+        // input is finite again, the cascade settles back to passing the signal.
+        let mut up = Halfband2xUp::default();
+        let mut down = Halfband2xDown::default();
+        for x in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let (e, o) = up.process(x);
+            down.process(e, o);
+        }
+        let mut last = 0.0;
+        for _ in 0..2000 {
+            let (e, o) = up.process(1.0);
+            last = down.process(e, o);
+            assert!(last.is_finite());
+        }
+        assert!(
+            (last - 1.0).abs() < 1e-3,
+            "DC should pass at unit gain after recovery, got {last}"
         );
     }
 
