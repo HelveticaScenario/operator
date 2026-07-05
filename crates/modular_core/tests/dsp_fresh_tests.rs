@@ -2024,6 +2024,47 @@ fn seq_ribbon_note_dividing_window_loops_seamlessly() {
     );
 }
 
+/// A note whose part covers the ENTIRE ribbon window re-articulates on every
+/// lap: crossing the seam is a fresh pass through the window, so the onset
+/// fires once per lap, not only on the first.
+#[test]
+fn seq_ribbon_whole_window_note_retriggers_every_lap() {
+    const SPC: usize = 240;
+    // `c4` fills the [0, 1] window exactly — the folded playhead never leaves
+    // the hap's part.
+    let gate = cycle_port_trace(
+        &make_cycle_patch(mini_payload("c4"), Some([0, 1])),
+        "gate",
+        4 * SPC,
+    );
+    for c in 0..4 {
+        assert!(
+            gate[c * SPC + SPC / 2] > 2.5,
+            "whole-window note sounds at every cycle midpoint, silent at cycle {c}"
+        );
+    }
+    // End the trig trace mid-lap so no seam onset straddles the boundary.
+    let trig = cycle_port_trace(
+        &make_cycle_patch(mini_payload("c4"), Some([0, 1])),
+        "trig",
+        3 * SPC + SPC / 2,
+    );
+    assert_eq!(rising_edges(&trig), 4, "one onset per lap over 4 laps");
+
+    // Same invariant with a fractional window: "c4 e4" folded into [0, 0.5]
+    // plays only c4, whose part fills the window — one onset per half-cycle lap.
+    let trig = cycle_port_trace(
+        &make_cycle_patch_frac(mini_payload("c4 e4"), [0.0, 0.5]),
+        "trig",
+        3 * SPC / 2 + SPC / 4,
+    );
+    assert_eq!(
+        rising_edges(&trig),
+        4,
+        "one onset per half-cycle lap over 4 laps"
+    );
+}
+
 /// True if any sample in `trace` is within `eps` of `target`.
 fn trace_contains(trace: &[f32], target: f32, eps: f32) -> bool {
     trace.iter().any(|&v| (v - target).abs() < eps)
