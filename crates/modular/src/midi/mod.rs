@@ -11,7 +11,7 @@ mod parse;
 
 use devices::{plan_deferrals, plan_prunes};
 use midir::{MidiInput, MidiInputConnection};
-use modular_core::types::{DeviceName, Message};
+use modular_core::types::{DeviceName, Message, MidiNoteOff};
 use parking_lot::Mutex;
 use parse::{MidiParseState, parse_midi_message};
 use std::collections::{HashMap, HashSet};
@@ -46,7 +46,7 @@ pub struct MidiPortInfo {
 pub struct MidiInputManager {
     /// Active connections keyed by device name
     connections: Mutex<HashMap<String, MidiInputConnection<()>>>,
-    /// Shared parse state (messages + 14-bit CC tracking)
+    /// Shared parse state (messages, 14-bit CC and held-note tracking)
     parse_state: Arc<Mutex<MidiParseState>>,
     /// Device names we want to be connected to (for reconnection)
     desired_devices: Mutex<HashSet<String>>,
@@ -150,8 +150,48 @@ impl MidiInputManager {
         self.desired_devices.lock().clear();
         self.deferred_disconnects.lock().clear();
         let connections = std::mem::take(&mut *self.connections.lock());
+        let mut closed: Vec<String> = Vec::new();
         for (name, _conn) in connections {
             println!("[MIDI] Disconnected from: {}", name);
+            closed.push(name);
+        }
+        // All connections are torn down, so no more messages can arrive from
+        // them and the synthesized offs are guaranteed to sort last.
+        for name in &closed {
+            self.push_note_offs_for_device(name);
+        }
+    }
+
+    /// Synthesize note-offs for every note held on `device`, delivered through
+    /// the pending-message queue — the same path real device messages take —
+    /// so a closed device cannot leave notes latched in modules. Timestamped
+    /// at the newest pending message so the offs sort after anything the
+    /// device already queued.
+    fn push_note_offs_for_device(&self, device: &str) {
+        let mut state = self.parse_state.lock();
+        let Some(held) = state.held_notes.remove(device) else {
+            return;
+        };
+        if held.is_empty() {
+            return;
+        }
+        let timestamp_us = state
+            .messages
+            .iter()
+            .map(|m| m.timestamp_us)
+            .max()
+            .unwrap_or(0);
+        let device_name = DeviceName::intern(device);
+        for (channel, note) in held {
+            state.push(
+                timestamp_us,
+                Message::MidiNoteOff(MidiNoteOff {
+                    device: Some(device_name.clone()),
+                    channel,
+                    note,
+                    velocity: 0,
+                }),
+            );
         }
     }
 
@@ -239,6 +279,11 @@ impl MidiInputManager {
                 "[MIDI] Disconnected from: {} (deferred close applied)",
                 name
             );
+        }
+        // Clear held notes for every pruned device, including ones whose
+        // connection had already vanished (e.g. unplugged before the prune).
+        for name in &to_close {
+            self.push_note_offs_for_device(name);
         }
     }
 

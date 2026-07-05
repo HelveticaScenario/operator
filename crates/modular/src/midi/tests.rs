@@ -1,7 +1,7 @@
-use super::MIDI_BUFFER_SIZE;
 use super::devices::{plan_deferrals, plan_prunes};
 use super::parse::{MidiParseState, parse_midi_message};
-use modular_core::types::DeviceName;
+use super::{MIDI_BUFFER_SIZE, MidiInputManager};
+use modular_core::types::{DeviceName, Message};
 use std::collections::{HashMap, HashSet};
 
 fn set(items: &[&str]) -> HashSet<String> {
@@ -213,4 +213,39 @@ fn fourteen_bit_cc_never_grows_buffer() {
 
     assert_eq!(state.messages.len(), MIDI_BUFFER_SIZE);
     assert_eq!(state.messages.capacity(), MIDI_BUFFER_SIZE);
+}
+
+#[test]
+fn prune_synthesizes_note_offs_for_held_notes() {
+    let manager = MidiInputManager::new();
+    let device = DeviceName::intern("Keystep");
+    {
+        let mut state = manager.parse_state.lock();
+        parse_midi_message(&[0x90, 60, 100], &device, 10, &mut state);
+        parse_midi_message(&[0x91, 64, 100], &device, 11, &mut state);
+        parse_midi_message(&[0x80, 60, 0], &device, 12, &mut state);
+    }
+    manager
+        .deferred_disconnects
+        .lock()
+        .insert("Keystep".to_string(), 2);
+
+    manager.prune_disconnects(2);
+
+    let state = manager.parse_state.lock();
+    let offs: Vec<_> = state
+        .messages
+        .iter()
+        .filter_map(|tm| match &tm.message {
+            Message::MidiNoteOff(off) => Some((tm.timestamp_us, off.channel, off.note)),
+            _ => None,
+        })
+        .collect();
+    // The real note-off for note 60 plus the synthesized one for the note
+    // still held (channel 1, note 64), timestamped no earlier than the
+    // newest queued message so it sorts after the device's own traffic.
+    assert_eq!(offs.len(), 2);
+    assert!(offs.contains(&(12, 0, 60)));
+    assert!(offs.contains(&(12, 1, 64)));
+    assert!(state.held_notes.get("Keystep").is_none());
 }
