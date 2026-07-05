@@ -345,7 +345,15 @@ impl Grains {
         for ch in 0..channels {
             // ── Read params for this channel ───────────────────────────────
             let gate_val = self.params.gate.get_value(ch);
-            let density = self.params.density.value_or(ch, 2.5).max(0.0001);
+            // A cable can carry any f32, so enforce the documented range
+            // here (non-finite falls back to the default): the spawn drain
+            // loop below only terminates for a finite, bounded rate.
+            let density = self.params.density.value_or(ch, 2.5);
+            let density = if density.is_finite() {
+                density.clamp(0.0001, 100.0)
+            } else {
+                2.5
+            };
             let loop_count = self.params.loop_count;
 
             // ── Gate / spawn control ───────────────────────────────────────
@@ -386,7 +394,17 @@ impl Grains {
                     let decay_coeff = (-6.9 / decay_samps).exp() as f32;
 
                     let cs = &mut self.channel_state[ch];
+                    // The pool holds GRAINS_PER_CHANNEL slots, so any spawn
+                    // beyond that within one sample only overwrites a grain
+                    // spawned this same sample; dropping the residual keeps
+                    // the drain loop bounded for any spawn_phase value.
+                    let mut spawn_budget = GRAINS_PER_CHANNEL;
                     while cs.spawn_phase >= 1.0 {
+                        if spawn_budget == 0 {
+                            cs.spawn_phase = 0.0;
+                            break;
+                        }
+                        spawn_budget -= 1;
                         cs.spawn_phase -= 1.0;
 
                         let reverse = cs.rng.next_unit() < reverse_prob;
@@ -563,10 +581,14 @@ message_handlers!(impl Grains {});
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
     use crate::dsp::{get_constructors, get_params_deserializers};
+    use crate::param_errors::ModuleParamErrors;
     use crate::params::DeserializedParams;
     use crate::patch::Patch;
-    use crate::types::{SampleBuffer, Sampleable, WavData};
+    use crate::types::{
+        Connect, OutputStruct, PatchUpdateHandler, SampleBuffer, Sampleable, Signal, WavData,
+    };
 
     const SAMPLE_RATE: f32 = 48000.0;
     const TEST_BLOCK_SIZE: usize = 1;
@@ -967,6 +989,60 @@ mod tests {
             peak <= 5.01,
             "single grain should not exceed ±5 V: peak was {peak}"
         );
+    }
+
+    // ── Direct construction (tests that mutate signals or grain state) ────────
+
+    fn make_direct(params_json: serde_json::Value, wav_data: Arc<WavData>) -> Grains {
+        let mut params: GrainsParams = deserr::deserialize::<_, _, ModuleParamErrors>(params_json)
+            .unwrap_or_else(|e| panic!("params deserialization failed: {e}"));
+        let mut patch = Patch::new();
+        patch.wav_data.insert("t".to_string(), wav_data);
+        params.connect(&patch);
+        let mut outputs = GrainsOutputs::default();
+        outputs.set_all_channels(1);
+        let mut grains = Grains {
+            params,
+            outputs,
+            state: GrainsState::default(),
+            channel_state: vec![GrainChannel::default()].into_boxed_slice(),
+            _channel_count: 1,
+            _block_index: Default::default(),
+        };
+        grains.init(SAMPLE_RATE);
+        grains.on_patch_update();
+        grains
+    }
+
+    // ── Density from a cable can be any f32; the spawn loop stays bounded ─────
+
+    #[test]
+    fn grains_extreme_density_does_not_stall_the_spawn_loop() {
+        let wav = make_test_wav(vec![vec![0.5; 2000]], SAMPLE_RATE);
+        let mut grains = make_direct(
+            serde_json::json!({
+                "pitch": 0.0,
+                "wav": { "type": "wav_ref", "path": "t", "channels": 1 },
+                "gate": 5.0,
+                "shape": "triangle",
+            }),
+            wav,
+        );
+        for density in [f32::INFINITY, 1e30, f32::NAN] {
+            grains.params.density = Some(PolySignal::mono(Signal::Volts(density)));
+            grains.update(SAMPLE_RATE);
+            assert!(
+                grains.channel_state[0].spawn_phase.is_finite(),
+                "spawn_phase must stay finite for density {density}"
+            );
+        }
+        // Recovery: a sane density keeps producing finite output.
+        grains.params.density = Some(PolySignal::mono(Signal::Volts(2.5)));
+        for _ in 0..100 {
+            grains.update(SAMPLE_RATE);
+            let v = grains.outputs.sample.get(0);
+            assert!(v.is_finite(), "output must stay finite, got {v}");
+        }
     }
 
     // ── All window shapes produce finite output ────────────────────────────────
