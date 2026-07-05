@@ -1,3 +1,4 @@
+import vm from 'node:vm';
 import type { ModuleSchema, PatchGraph } from '@modular/core';
 import { deriveChannelCount } from '@modular/core';
 import {
@@ -642,6 +643,16 @@ export function executePatchScript(
      * Returns a proxy tree matching the folder structure; leaf nodes trigger
      * loadWav() and return `{ type: 'wav_ref', path, channels }` objects.
      */
+    // Wall-clock time this run spends inside synchronous loadWav host calls.
+    // The vm timeout below measures total wall-clock time of the run, so this
+    // distinguishes a patch stuck in a loop from one legitimately spending
+    // its budget decoding samples from disk. `wavLoadStart` marks a load in
+    // flight: the timeout terminates all JS in the isolate, so the
+    // post-load accumulation may never run and the catch block below must
+    // count the interrupted load itself.
+    let wavLoadMs = 0;
+    let wavLoadStart: number | null = null;
+
     const $wavs = (): unknown => {
         const tree = options.wavsFolderTree;
         if (!tree) {
@@ -681,7 +692,10 @@ export function executePatchScript(
                 if (!options.loadWav) {
                     throw new Error('$wavs(): loadWav function not provided');
                 }
+                wavLoadStart = performance.now();
                 const info = options.loadWav(relPath);
+                wavLoadMs += performance.now() - wavLoadStart;
+                wavLoadStart = null;
                 return {
                     type: 'wav_ref' as const,
                     path: relPath,
@@ -906,11 +920,11 @@ export function executePatchScript(
 
     // Console.log(dslGlobals);
 
-    // Build the function body - count wrapper lines for source mapping
-    // When new Function() executes code, line numbers in stack traces are relative
-    // To the function body string. The template literal structure plus new Function's
-    // Own wrapper results in user code starting at line 5 in stack traces.
-    const wrapperLineCount = 4;
+    // Build the script body - count wrapper lines for source mapping.
+    // Stack-trace line numbers are relative to the compiled vm script: the
+    // template literal's leading newline, the 'use strict' line, and the
+    // IIFE opener put user code at line 4 in stack traces.
+    const wrapperLineCount = 3;
     setDSLWrapperLineOffset(wrapperLineCount);
 
     // The function body template indents the first line of source with 4 spaces
@@ -932,19 +946,41 @@ export function executePatchScript(
     setActiveSpanRegistry(spanRegistry);
     setActiveInterpolationResolutions(interpolationResolutions);
 
-    const functionBody = `
+    // The user source runs as a function body (an IIFE), not at the script's
+    // top level, so top-level `return` is legal in a patch script.
+    const scriptBody = `
     'use strict';
+    (function () {
     ${source}
+    })();
   `;
 
-    // Create parameter names and values
-    const paramNames = Object.keys(dslGlobals);
-    const paramValues = Object.values(dslGlobals);
+    // Cap on synchronous script execution. A non-terminating patch script
+    // (e.g. an accidental infinite loop) raises a catchable error instead of
+    // blocking the Electron main process forever.
+    const executionTimeoutMs = 5000;
 
     try {
-        // Execute the script
-        const fn = new Function(...paramNames, functionBody);
-        fn(...paramValues);
+        // Execute the script in a vm context so the timeout applies. The DSL
+        // globals are the sandbox's globals; they are host objects, so
+        // instanceof checks against host classes keep working. The default
+        // script filename contains `<anonymous>`, which captureSourceLocation
+        // relies on to find DSL stack frames.
+        const script = new vm.Script(scriptBody);
+        const sandbox = vm.createContext({ ...dslGlobals, console });
+        // The sandbox is its own realm: array literals in the patch script use
+        // the sandbox's Array.prototype, so pipe() must be installed there too
+        // (mirroring the host-side installation above).
+        vm.runInContext(
+            `Object.defineProperty(Array.prototype, 'pipe', {
+                configurable: true,
+                enumerable: false,
+                value: function pipe(pipelineFunc) { return pipelineFunc(this); },
+                writable: true,
+            });`,
+            sandbox,
+        );
+        script.runInContext(sandbox, { timeout: executionTimeoutMs });
 
         // Build and return the patch with source locations
         const resultBuilder = context.getBuilder();
@@ -959,8 +995,34 @@ export function executePatchScript(
             sourceLocationMap,
         };
     } catch (error) {
-        if (error instanceof Error) {
-            throw new Error(`DSL execution error: ${error.message}`, {
+        if (
+            (error as NodeJS.ErrnoException | null)?.code ===
+            'ERR_SCRIPT_EXECUTION_TIMEOUT'
+        ) {
+            // The timeout counts wall-clock time, including synchronous host
+            // call-outs. When most of the budget went to loading WAV files
+            // (slow/cold disk, big library), say so — the wav cache keeps
+            // everything already decoded, so a re-run makes progress.
+            const seconds = executionTimeoutMs / 1000;
+            const totalWavMs =
+                wavLoadMs +
+                (wavLoadStart !== null ? performance.now() - wavLoadStart : 0);
+            const message =
+                totalWavMs >= executionTimeoutMs / 2
+                    ? `DSL execution error: Patch script timed out after ${seconds}s, ${(totalWavMs / 1000).toFixed(1)}s of it loading WAV files — loaded files stay cached, so run again to continue`
+                    : `DSL execution error: Patch script timed out after ${seconds}s — check for infinite loops`;
+            throw new Error(message, { cause: error });
+        }
+        // Errors thrown by code inside the vm are sandbox-realm Error
+        // instances, so duck-type on `message` rather than instanceof.
+        const message =
+            typeof error === 'object' &&
+            error !== null &&
+            typeof (error as { message?: unknown }).message === 'string'
+                ? (error as { message: string }).message
+                : null;
+        if (message !== null) {
+            throw new Error(`DSL execution error: ${message}`, {
                 cause: error,
             });
         }
@@ -972,24 +1034,5 @@ export function executePatchScript(
         // NOTE: Do NOT clear interpolation resolutions here. They are read
         // Asynchronously by moduleStateTracking during decoration polling and
         // Must persist until the next execution replaces them.
-    }
-}
-
-/**
- * Validate DSL script syntax without executing
- */
-export function validateDSLSyntax(source: string): {
-    valid: boolean;
-    error?: string;
-} {
-    try {
-        // Create function only for syntax validation - not executed
-        const _fn = new Function(source);
-        return { valid: true };
-    } catch (error) {
-        if (error instanceof Error) {
-            return { error: error.message, valid: false };
-        }
-        return { error: 'Unknown syntax error', valid: false };
     }
 }

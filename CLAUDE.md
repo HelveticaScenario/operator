@@ -45,7 +45,7 @@ E2E tests require the webpack build to exist — run `yarn start` once first.
 
 ### Data Flow
 
-1. **DSL execution** — JavaScript code runs via `new Function(...)` in `src/main/dsl/executor.ts`, producing a `PatchGraph` JSON structure.
+1. **DSL execution** — JavaScript code runs in a `node:vm` context with an execution timeout in `src/main/dsl/executor.ts`, producing a `PatchGraph` JSON structure.
 2. **IPC transport** — PatchGraph sent from renderer to main process over Electron IPC (channels defined in `src/shared/ipcTypes.ts`), which calls `synthesizer.updatePatch(graph)`.
 3. **Validation** — Rust validates the graph on the main thread (`crates/modular/src/validation.rs`).
 4. **Audio thread** — Applied via lock-free command queue (rtrb SPSC) to the audio thread (`crates/modular/src/audio.rs`). Modules instantiated and processed here.

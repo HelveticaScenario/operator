@@ -1248,6 +1248,64 @@ describe('error handling', () => {
     });
 });
 
+// ─── Script execution environment ────────────────────────────────────────────
+
+describe('script execution environment', () => {
+    test('a non-terminating script raises a timeout error instead of hanging', () => {
+        expect(() => execPatch('while (true) {}')).toThrow(
+            /timed out after 5s — check for infinite loops/,
+        );
+    }, 15_000);
+
+    test('a timeout spent mostly loading wavs blames the disk, not a loop', () => {
+        const spinFor = (ms: number) => {
+            const end = performance.now() + ms;
+            while (performance.now() < end) {
+                // Burn wall-clock time synchronously, like a cold-disk decode.
+            }
+        };
+        expect(() =>
+            executePatchScript('$wavs().kick', schemas, {
+                ...DEFAULT_EXECUTION_OPTIONS,
+                loadWav: (path: string) => {
+                    spinFor(10_000);
+                    return {
+                        bitDepth: 16,
+                        channels: 1,
+                        cuePoints: [],
+                        duration: 1,
+                        frameCount: 48_000,
+                        loops: [],
+                        mtime: 0,
+                        path,
+                        sampleRate: 48_000,
+                    };
+                },
+                wavsFolderTree: { kick: 'file' },
+            }),
+        ).toThrow(/loading WAV files — loaded files stay cached/);
+    }, 15_000);
+
+    test('top-level return ends the patch script early', () => {
+        const patch = execPatch(
+            '$sine("c").out()\nreturn\n$saw("c").out()',
+        );
+        expect(findModules(patch, '$sine').length).toBe(1);
+        expect(findModules(patch, '$saw').length).toBe(0);
+    });
+
+    test('console is available inside patch scripts', () => {
+        expect(() => execPatch('console.log("patch")')).not.toThrow();
+    });
+
+    test('arrays created inside the script support pipe()', () => {
+        const patch = execPatch(
+            '[440, 880].pipe((a) => $mix(a.map((f) => $sine($hz(f))))).out()',
+        );
+        expect(findModules(patch, '$sine').length).toBe(2);
+    });
+});
+
 // ─── Pipe vs direct call comparison ──────────────────────────────────────────
 
 describe('pipe vs direct call', () => {
