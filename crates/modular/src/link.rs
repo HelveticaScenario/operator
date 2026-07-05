@@ -154,9 +154,10 @@ impl LinkState {
     }
 
     /// Check whether a pending quantized start should be released this buffer.
-    /// Returns `true` exactly once — when the Link bar phase has rolled past
-    /// the boundary — and clears the flag. The caller is responsible for
-    /// flipping the stopped atomic and dispatching `Clock::Start`.
+    /// Returns `true` exactly once — when the bar boundary the start was
+    /// quantized to has been reached — and clears the flag. The caller is
+    /// responsible for flipping the stopped atomic and dispatching
+    /// `Clock::Start`.
     pub fn check_pending_start_release(&mut self) -> bool {
         if !self.pending_start {
             return false;
@@ -169,8 +170,13 @@ impl LinkState {
             Some(s) => s,
             None => return false,
         };
-        let phase = ss.phase_at_time(buffer.host_time_micros, buffer.quantum);
-        if phase < 0.5 {
+        // `request_quantized_start` maps beat 0 to the boundary: with peers
+        // the session timeline is fixed and Link reports negative beats until
+        // the boundary arrives; solo, beat 0 maps to the request time itself.
+        // Either way the start releases exactly when the beat turns
+        // non-negative.
+        let beat = ss.beat_at_time(buffer.host_time_micros, buffer.quantum);
+        if beat >= 0.0 {
             self.pending_start = false;
             true
         } else {
@@ -252,5 +258,66 @@ impl LinkState {
         } else {
             meter.write_link_pending_start(false);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `LinkState` with a pending start, holding the given session snapshot
+    /// and a buffer captured at `host_time_micros`.
+    fn armed_state(link: AblLink, ss: SessionState, host_time_micros: i64) -> LinkState {
+        let mut state = LinkState::new();
+        state.link = Some(link);
+        state.session_state = Some(ss);
+        state.buffer = Some(LinkBufferState {
+            host_time_micros,
+            quantum: QUANTUM,
+            tempo: 120.0,
+            micros_per_sample: 1_000_000.0 / 48_000.0,
+        });
+        state.pending_start = true;
+        state
+    }
+
+    #[test]
+    fn pending_start_holds_until_bar_boundary() {
+        let link = AblLink::new(120.0);
+        let mut ss = SessionState::new();
+        link.capture_app_session_state(&mut ss);
+        let now = link.clock_micros();
+        // Pin beat 0 a bar ahead, as a peer-locked session does when a start
+        // is armed mid-bar (the shared timeline cannot be re-mapped).
+        let boundary = now + 2_000_000; // 4 beats at 120 BPM
+        ss.force_beat_at_time(0.0, boundary, QUANTUM);
+
+        // Armed at bar phase ~0.3 beats: must not release before the boundary.
+        let mut state = armed_state(link, ss, boundary - 1_850_000);
+        assert!(!state.check_pending_start_release());
+        assert!(state.pending_start);
+
+        state.buffer.as_mut().unwrap().host_time_micros = boundary - 10_000;
+        assert!(!state.check_pending_start_release());
+
+        // Boundary reached: releases exactly once.
+        state.buffer.as_mut().unwrap().host_time_micros = boundary + 1_000;
+        assert!(state.check_pending_start_release());
+        assert!(!state.check_pending_start_release());
+    }
+
+    #[test]
+    fn pending_start_releases_immediately_after_solo_remap() {
+        let link = AblLink::new(120.0);
+        let mut ss = SessionState::new();
+        link.capture_app_session_state(&mut ss);
+        let now = link.clock_micros();
+        // With no peers, the quantized-start request maps beat 0 to the
+        // request time itself, so the release fires on the next check.
+        ss.request_beat_at_time(0.0, now, QUANTUM);
+
+        let mut state = armed_state(link, ss, now);
+        assert!(state.check_pending_start_release());
+        assert!(!state.pending_start);
     }
 }
