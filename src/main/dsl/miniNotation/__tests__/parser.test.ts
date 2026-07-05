@@ -320,12 +320,13 @@ describe('modifiers', () => {
     });
 });
 
-// The Rust pest grammar's element/modifier rules are non-atomic, so pest
-// inserts implicit WHITESPACE between an element_base and its modifiers and
-// between a modifier sigil and its operand. The Peggy port must accept the
-// same whitespace or otherwise-valid patterns regress to syntax errors —
-// e.g. `<...> / 4`, which the Rust parser accepted as a Slow modifier.
-describe('whitespace around modifiers (Rust pest parity)', () => {
+// Whitespace is accepted between an element and its modifier sigils, and
+// between a mandatory-operand sigil (`*`, `/`, and `@`) and its operand —
+// e.g. `<...> / 4` is a Slow modifier. The optional-operand sigils `!` and
+// `?` bind their number only when adjacent (see the adjacency tests below),
+// so a whitespace-separated number stays a sequence event, matching
+// Tidal/krill and the Rust descent parser.
+describe('whitespace around modifiers', () => {
     test('space before and after the slow sigil attaches to preceding element', () => {
         for (const src of ['0/2', '0 /2', '0/ 2', '0 / 2']) {
             const r = $p(src);
@@ -359,10 +360,37 @@ describe('whitespace around modifiers (Rust pest parity)', () => {
         expect(r.ast.Sequence[1][1]).toBeNull();
     });
 
-    test('replicate / degrade / euclidean tolerate whitespace', () => {
-        expect('Replicate' in $p('0 ! 3').ast).toBe(true);
-        expect('Degrade' in $p('0 ? 0.3').ast).toBe(true);
+    test('replicate / degrade / euclidean tolerate whitespace before the sigil', () => {
+        expect('Replicate' in $p('0 !3').ast).toBe(true);
+        expect('Degrade' in $p('0 ?0.3').ast).toBe(true);
         expect('Euclidean' in $p('0 (3,8)').ast).toBe(true);
+    });
+
+    test('degrade binds its probability only when adjacent', () => {
+        // `1? 2`: the 2 is a sequence event, not the degrade probability —
+        // matching Tidal/krill and the Rust descent parser.
+        const r = $p('1? 2');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence).toHaveLength(2);
+        const [first, second] = r.ast.Sequence;
+        if (!('Degrade' in first[0])) return expect.fail('expected Degrade');
+        expect(first[0].Degrade[1]).toBeNull();
+        expect(firstPureAtom(second[0])).toEqual({
+            Pure: { node: { Number: 2 }, span: { start: 3, end: 4 } },
+        });
+    });
+
+    test('replicate binds its count only when adjacent', () => {
+        // `1! 2`: two copies of 1 followed by the event 2 ("1 1 2").
+        const r = $p('1! 2');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence).toHaveLength(2);
+        const [first, second] = r.ast.Sequence;
+        if (!('Replicate' in first[0])) return expect.fail('expected Replicate');
+        expect(first[0].Replicate[1]).toBe(2);
+        expect(firstPureAtom(second[0])).toEqual({
+            Pure: { node: { Number: 2 }, span: { start: 3, end: 4 } },
+        });
     });
 
     test('reported regression: slowcat group divided by 4', () => {
