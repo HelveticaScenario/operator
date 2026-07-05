@@ -1039,6 +1039,14 @@ describe('sliders', () => {
         ).toThrow('unique');
     });
 
+    test('$slider labels that sanitize to the same module id throw, naming both labels', () => {
+        expect(() =>
+            execPatch(
+                '$slider("cutoff a", 1, 0, 5)\n$slider("cutoff.a", 1, 0, 5)',
+            ),
+        ).toThrow(/"cutoff a" and "cutoff\.a"/);
+    });
+
     test('$slider result is re-rangeable via 2-arg .range()', () => {
         // $slider returns a CollectionWithRange carrying [min, max], so the
         // 2-arg .range() remaps from [100, 8000] into the new [0, 5] range.

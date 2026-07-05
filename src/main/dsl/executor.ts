@@ -639,6 +639,16 @@ export function executePatchScript(
 
         const moduleId = `__slider_${label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
 
+        // Sanitization collapses punctuation/whitespace to '_', so distinct
+        // labels can map to the same module id; catch that here with an error
+        // naming both labels.
+        const collision = sliders.find((s) => s.moduleId === moduleId);
+        if (collision) {
+            throw new Error(
+                `$slider() labels "${collision.label}" and "${label}" both map to module id "${moduleId}" — labels must differ in letters, digits, or underscores`,
+            );
+        }
+
         // Create backing signal module via the existing signal factory
         const result = signal(value, { id: moduleId });
 
