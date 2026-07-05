@@ -54,6 +54,24 @@ export function useEditorBuffers({
 
     const [renamingPath, setRenamingPath] = useState<string | null>(null);
 
+    // File buffers are identified by absolute path everywhere (getBufferId
+    // returns filePath). IPC surfaces that hand back workspace-relative paths
+    // (the save dialog, the file tree, context menus) must be resolved here
+    // before the path is stored or compared.
+    const resolveWorkspacePath = useCallback(
+        (path: string) => {
+            if (
+                workspaceRoot &&
+                !path.startsWith('/') &&
+                !path.match(/^[a-zA-Z]:/)
+            ) {
+                return `${workspaceRoot}/${path}`;
+            }
+            return path;
+        },
+        [workspaceRoot],
+    );
+
     const activeBuffer = buffers.find((b) => getBufferId(b) === activeBufferId);
     const patchCode = activeBuffer?.content ?? DEFAULT_PATCH;
 
@@ -218,8 +236,11 @@ export function useEditorBuffers({
                     return;
                 }
 
+                // The save dialog only ever returns workspace-relative paths.
+                const filePath = resolveWorkspacePath(normalized);
+
                 const result = await electronAPI.filesystem.writeFile(
-                    normalized,
+                    filePath,
                     buffer.content,
                 );
 
@@ -230,7 +251,7 @@ export function useEditorBuffers({
                                 ? {
                                       content: buffer.content,
                                       dirty: false,
-                                      filePath: normalized,
+                                      filePath,
                                       id: b.id,
                                       kind: 'file' as const,
                                   }
@@ -238,10 +259,10 @@ export function useEditorBuffers({
                         ),
                     );
                     if (idToSave === activeBufferId) {
-                        setActiveBufferId(normalized);
+                        setActiveBufferId(filePath);
                     }
                     await refreshFileTree();
-                    onFileSaved?.(normalized);
+                    onFileSaved?.(filePath);
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
@@ -265,22 +286,22 @@ export function useEditorBuffers({
                 }
             }
         },
-        [activeBufferId, buffers, refreshFileTree, onFileSaved],
+        [
+            activeBufferId,
+            buffers,
+            refreshFileTree,
+            onFileSaved,
+            resolveWorkspacePath,
+        ],
     );
 
     const renameFile = useCallback(
         async (targetIdOrPath?: string) => {
             let filePath: string | undefined;
 
-            let resolvedPath = targetIdOrPath;
-            if (
-                targetIdOrPath &&
-                workspaceRoot &&
-                !targetIdOrPath.startsWith('/') &&
-                !targetIdOrPath.match(/^[a-zA-Z]:/)
-            ) {
-                resolvedPath = `${workspaceRoot}/${targetIdOrPath}`;
-            }
+            const resolvedPath = targetIdOrPath
+                ? resolveWorkspacePath(targetIdOrPath)
+                : targetIdOrPath;
 
             const buffer =
                 buffers.find((b) => getBufferId(b) === targetIdOrPath) ||
@@ -306,7 +327,7 @@ export function useEditorBuffers({
             }
             setRenamingPath(filePath);
         },
-        [activeBufferId, buffers, workspaceRoot],
+        [activeBufferId, buffers, resolveWorkspacePath],
     );
 
     const handleRenameCommit = useCallback(
@@ -368,15 +389,9 @@ export function useEditorBuffers({
             let filePath: string | undefined;
             let bufferId: string | undefined;
 
-            let resolvedPath = targetIdOrPath;
-            if (
-                targetIdOrPath &&
-                workspaceRoot &&
-                !targetIdOrPath.startsWith('/') &&
-                !targetIdOrPath.match(/^[a-zA-Z]:/)
-            ) {
-                resolvedPath = `${workspaceRoot}/${targetIdOrPath}`;
-            }
+            const resolvedPath = targetIdOrPath
+                ? resolveWorkspacePath(targetIdOrPath)
+                : targetIdOrPath;
 
             const buffer =
                 buffers.find((b) => getBufferId(b) === targetIdOrPath) ||
@@ -444,7 +459,7 @@ export function useEditorBuffers({
                 throw new Error(result.error || 'Failed to delete file');
             }
         },
-        [activeBufferId, buffers, refreshFileTree, workspaceRoot],
+        [activeBufferId, buffers, refreshFileTree, resolveWorkspacePath],
     );
 
     const performCloseBuffer = useCallback(
