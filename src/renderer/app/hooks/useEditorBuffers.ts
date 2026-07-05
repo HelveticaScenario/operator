@@ -216,6 +216,11 @@ export function useEditorBuffers({
         });
     }, []);
 
+    /**
+     * Save a buffer to disk. Edits can land while the async write is in
+     * flight, so the dirty flag is only cleared on buffers whose content
+     * still equals the snapshot that reached disk.
+     */
     const saveFile = useCallback(
         async (targetId?: string) => {
             const idToSave = targetId || activeBufferId;
@@ -223,6 +228,7 @@ export function useEditorBuffers({
             if (!buffer) {
                 return;
             }
+            const savedContent = buffer.content;
 
             if (buffer.kind === 'untitled') {
                 const input =
@@ -241,7 +247,7 @@ export function useEditorBuffers({
 
                 const result = await electronAPI.filesystem.writeFile(
                     filePath,
-                    buffer.content,
+                    savedContent,
                 );
 
                 if (result.success) {
@@ -249,8 +255,8 @@ export function useEditorBuffers({
                         prev.map((b) =>
                             getBufferId(b) === idToSave
                                 ? {
-                                      content: buffer.content,
-                                      dirty: false,
+                                      content: b.content,
+                                      dirty: b.content !== savedContent,
                                       filePath,
                                       id: b.id,
                                       kind: 'file' as const,
@@ -269,13 +275,14 @@ export function useEditorBuffers({
             } else {
                 const result = await electronAPI.filesystem.writeFile(
                     buffer.filePath,
-                    buffer.content,
+                    savedContent,
                 );
 
                 if (result.success) {
                     setBuffers((prev) =>
                         prev.map((b) =>
-                            getBufferId(b) === idToSave
+                            getBufferId(b) === idToSave &&
+                            b.content === savedContent
                                 ? { ...b, dirty: false }
                                 : b,
                         ),
@@ -520,8 +527,9 @@ export function useEditorBuffers({
                         await saveFile(bufferId);
                         performCloseBuffer(bufferId);
                     } catch (error) {
+                        // A failed save aborts the close: the content never
+                        // reached disk, so the buffer must stay open.
                         console.error('Error saving file:', error);
-                        performCloseBuffer(bufferId);
                     }
                 } else {
                     performCloseBuffer(bufferId);
