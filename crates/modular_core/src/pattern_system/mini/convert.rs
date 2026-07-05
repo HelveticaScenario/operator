@@ -200,8 +200,68 @@ impl HasRest for bool {
 
 /// Convert an AST to a Pattern.
 pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertError> {
+    validate_limits_main(ast)?;
     convert_inner(ast)
 }
+
+/// Upper bound on `!n` replicate counts.
+///
+/// Replication multiplies the amount of structure that conversion (and the
+/// seq module's eager ribbon bake) materializes, so an oversized operand must
+/// fail conversion with a clear error rather than exhaust memory.
+const MAX_EXPANSION: u32 = 1024;
+
+/// Generates a limit validator for one of the four structurally identical
+/// AST enums. Each validator rejects operands that conversion cannot lower
+/// safely: `!n` operands past `MAX_EXPANSION`.
+macro_rules! define_validate_limits {
+    ($name:ident, $ast:ident) => {
+        fn $name(ast: &$ast) -> Result<(), ConvertError> {
+            match ast {
+                $ast::Pure(_) | $ast::Rest(_) => Ok(()),
+                $ast::List(Located { node, .. }) => node.iter().try_for_each($name),
+                $ast::Sequence(items) | $ast::FastCat(items) | $ast::SlowCat(items) => {
+                    items.iter().try_for_each(|(p, _)| $name(p))
+                }
+                $ast::Stack(items) | $ast::RandomChoice(items, _) => {
+                    items.iter().try_for_each($name)
+                }
+                $ast::Fast(pattern, factor) | $ast::Slow(pattern, factor) => {
+                    $name(pattern)?;
+                    validate_limits_f64(factor)
+                }
+                $ast::Replicate(pattern, count) => {
+                    if *count > MAX_EXPANSION {
+                        return Err(ConvertError::OperatorError(format!(
+                            "replicate count {count} exceeds the maximum of {MAX_EXPANSION}"
+                        )));
+                    }
+                    $name(pattern)
+                }
+                $ast::Degrade(pattern, _, _) => $name(pattern),
+                $ast::Euclidean {
+                    pattern,
+                    pulses,
+                    steps,
+                    rotation,
+                } => {
+                    validate_limits_u32(pulses)?;
+                    validate_limits_u32(steps)?;
+                    if let Some(r) = rotation {
+                        validate_limits_i32(r)?;
+                    }
+                    $name(pattern)
+                }
+                $ast::Polymeter { children, .. } => children.iter().try_for_each($name),
+            }
+        }
+    };
+}
+
+define_validate_limits!(validate_limits_main, MiniAST);
+define_validate_limits!(validate_limits_f64, MiniASTF64);
+define_validate_limits!(validate_limits_u32, MiniASTU32);
+define_validate_limits!(validate_limits_i32, MiniASTI32);
 
 /// Evaluate a MiniASTF64 to get a single f64 value.
 ///
@@ -2302,10 +2362,11 @@ mod tests {
         );
     }
 
-    // --- Polymeter Lowering Tests ---
+    // --- Polymeter Lowering / Operand Limit Tests ---
     //
-    // Polymeter `{...}` only reaches Rust as ASTs built by the TS peggy
-    // parser, so these tests construct the ASTs directly.
+    // Polymeter `{...}` and pattern-shaped operands only reach Rust as ASTs
+    // built by the TS peggy parser, so these tests construct the ASTs
+    // directly.
 
     fn num_atom(v: f64) -> MiniAST {
         MiniAST::Pure(Located {
@@ -2368,6 +2429,27 @@ mod tests {
         ];
         assert_eq!(onsets(0), expected);
         assert_eq!(onsets(3000), expected);
+    }
+
+    #[test]
+    fn test_replicate_count_limit() {
+        let ast = parse("0!1024").unwrap();
+        assert!(convert::<f64>(&ast).is_ok());
+
+        let ast = parse("0!2000").unwrap();
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("replicate count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_replicate_count_limit_in_operand_pattern() {
+        // Limits apply inside typed operand patterns (e.g. a `*` factor).
+        let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), 2000);
+        let ast = MiniAST::Fast(Box::new(num_atom(1.0)), Box::new(factor));
+        assert!(convert::<f64>(&ast).is_err());
     }
 
     // --- Rest Pattern Behavior Tests ---
