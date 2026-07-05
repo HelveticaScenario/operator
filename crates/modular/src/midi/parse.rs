@@ -60,10 +60,14 @@ impl MidiParseState {
         }
     }
 
-    /// Queue a parsed message. MIDI-thread only; `messages` never exceeds
-    /// `MIDI_BUFFER_SIZE` (the connection callbacks stop parsing at the cap),
-    /// so this push never grows the buffer.
+    /// Queue a parsed message, dropping it if the buffer is at capacity.
+    /// The cap is enforced here — not only per packet in the connection
+    /// callbacks — because one packet can produce two messages (the 14-bit CC
+    /// path), and the push must never grow the buffer past `MIDI_BUFFER_SIZE`.
     pub(super) fn push(&mut self, timestamp_us: u64, message: Message) {
+        if self.messages.len() >= MIDI_BUFFER_SIZE {
+            return;
+        }
         let seq = self.next_seq;
         self.next_seq += 1;
         self.messages.push(TimestampedMessage {
