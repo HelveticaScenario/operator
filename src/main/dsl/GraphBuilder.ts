@@ -1141,38 +1141,31 @@ export class GraphBuilder {
                     params: finalParams,
                 };
             }),
-            scopes: this.scopes
-                .map((scope) => {
-                    const resolvedChannels = scope.channels.map((ch) => {
-                        const deferredOutput = this.deferredOutputs.get(
-                            ch.moduleId,
-                        );
-                        if (deferredOutput) {
-                            const resolved = deferredOutput.resolve();
-                            if (resolved) {
-                                return {
-                                    channel: ch.channel,
-                                    moduleId: resolved.moduleId,
-                                    portName: resolved.portName,
-                                };
-                            }
-                            return null;
+            scopes: this.scopes.map((scope) => {
+                const resolvedChannels = scope.channels.map((ch) => {
+                    const deferredOutput = this.deferredOutputs.get(
+                        ch.moduleId,
+                    );
+                    if (deferredOutput) {
+                        const resolved = deferredOutput.resolve();
+                        if (resolved === null) {
+                            throw new Error(
+                                'Unset DeferredModuleOutput used in a scope — call .set(...) on the $deferred() before the end of the script',
+                            );
                         }
-                        return ch;
-                    });
-                    // If any channel couldn't be resolved, skip the scope
-                    if (resolvedChannels.some((ch) => ch === null)) {
-                        return null;
+                        return {
+                            channel: ch.channel,
+                            moduleId: resolved.moduleId,
+                            portName: resolved.portName,
+                        };
                     }
-                    return {
-                        ...scope,
-                        channels: resolvedChannels,
-                    } as ScopeWithLocation;
-                })
-                .filter(
-                    (s: ScopeWithLocation | null): s is ScopeWithLocation =>
-                        s !== null,
-                ),
+                    return ch;
+                });
+                return {
+                    ...scope,
+                    channels: resolvedChannels,
+                } as ScopeWithLocation;
+            }),
             scopeXy: this.resolveScopeXY(),
         };
 
@@ -2065,7 +2058,13 @@ function replaceDeferred(
                 maybeResolvedModuleOutput.data.module,
             );
             if (resolved) {
-                return valueToSignal(resolved.resolve());
+                const output = resolved.resolve();
+                if (output === null) {
+                    throw new Error(
+                        'Unset DeferredModuleOutput used as a module param — call .set(...) on the $deferred() before the end of the script',
+                    );
+                }
+                return valueToSignal(output);
             }
             return maybeResolvedModuleOutput.data;
         }

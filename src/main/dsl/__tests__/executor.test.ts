@@ -1014,6 +1014,18 @@ describe('deferred signals', () => {
         const patch = execPatch(source);
         expect(findModules(patch, '$sine').length).toBe(1);
     });
+
+    test('unset deferred used as a module param throws', () => {
+        expect(() =>
+            execPatch('const d = $deferred()\n$sine(d[0]).out()'),
+        ).toThrow(/Unset DeferredModuleOutput used as a module param/);
+    });
+
+    test('unset deferred used in a scope throws', () => {
+        expect(() =>
+            execPatch('const d = $deferred()\nd[0].scope()\n$sine(0).out()'),
+        ).toThrow(/Unset DeferredModuleOutput used in a scope/);
+    });
 });
 
 // ─── Slider ──────────────────────────────────────────────────────────────────
