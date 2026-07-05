@@ -150,6 +150,15 @@ export function executePatchScript(
     // Create functions to set global tempo and output gain
     const builder = context.getBuilder();
     const $setTempo = (tempo: number) => {
+        if (
+            typeof tempo !== 'number' ||
+            !Number.isFinite(tempo) ||
+            tempo <= 0
+        ) {
+            throw new Error(
+                `$setTempo: tempo must be a finite number greater than 0, got ${tempo}`,
+            );
+        }
         builder.setTempo(tempo);
     };
     const $setOutputGain = (gain: Signal) => {

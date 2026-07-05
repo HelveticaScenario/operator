@@ -1065,6 +1065,18 @@ describe('global settings', () => {
     test('$setOutputGain does not throw', () => {
         expect(() => execPatch('$setOutputGain(5.0)')).not.toThrow();
     });
+
+    test('$setTempo rejects a non-finite tempo with a pointer to $setTempo', () => {
+        expect(() => execPatch('$setTempo(NaN)')).toThrow(
+            /\$setTempo: tempo must be a finite number greater than 0/,
+        );
+        expect(() => execPatch('$setTempo(Infinity)')).toThrow(/\$setTempo/);
+    });
+
+    test('$setTempo rejects zero and negative tempos', () => {
+        expect(() => execPatch('$setTempo(0)')).toThrow(/\$setTempo/);
+        expect(() => execPatch('$setTempo(-120)')).toThrow(/\$setTempo/);
+    });
 });
 
 // ─── Built-in modules ────────────────────────────────────────────────────────
