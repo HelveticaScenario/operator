@@ -174,7 +174,16 @@ impl MidiInputManager {
     /// against `update_id` and only closed once that update is applied (see
     /// `prune_disconnects`), so the still-playing patch keeps its MIDI input until
     /// the queued swap actually lands.
-    pub fn sync_devices(&self, device_names: &HashSet<String>, update_id: u64) {
+    ///
+    /// `wants_all_devices` marks a patch containing a deviceless MIDI module
+    /// (which receives from every device): every open or previously desired
+    /// device stays wanted, and no closes are scheduled.
+    pub fn sync_devices(
+        &self,
+        device_names: &HashSet<String>,
+        wants_all_devices: bool,
+        update_id: u64,
+    ) {
         let to_open = {
             let connected: HashSet<String> = self.connections.lock().keys().cloned().collect();
             let mut deferred = self.deferred_disconnects.lock();
@@ -182,6 +191,7 @@ impl MidiInputManager {
             plan_deferrals(
                 &connected,
                 device_names,
+                wants_all_devices,
                 update_id,
                 &mut deferred,
                 &mut desired,

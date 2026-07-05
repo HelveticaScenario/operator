@@ -10,10 +10,21 @@ use std::collections::{HashMap, HashSet};
 pub(super) fn plan_deferrals(
     connected: &HashSet<String>,
     device_names: &HashSet<String>,
+    wants_all_devices: bool,
     update_id: u64,
     deferred: &mut HashMap<String, u64>,
     desired: &mut HashSet<String>,
 ) -> Vec<String> {
+    if wants_all_devices {
+        // A deviceless MIDI module receives from every open device, so every
+        // connected (and previously desired) device stays wanted: cancel all
+        // pending closes and keep `desired` a superset of what it was.
+        deferred.clear();
+        desired.extend(device_names.iter().cloned());
+        desired.extend(connected.iter().cloned());
+        return device_names.difference(connected).cloned().collect();
+    }
+
     // Open devices that are no longer wanted → schedule a deferred close, keeping
     // the earliest id (soonest provably-safe close; a still-pending entry implies
     // no re-reference has happened since, so every later update also drops it).

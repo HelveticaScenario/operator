@@ -1300,23 +1300,28 @@ impl Synthesizer {
         use std::collections::HashSet;
 
         let mut devices: HashSet<String> = HashSet::new();
+        // A MIDI module with no device param receives from all devices, so its
+        // presence means every currently open device must stay open.
+        let mut wants_all_devices = false;
 
         for module in &patch.modules {
             // Check if this is a MIDI module type
             match module.module_type.as_str() {
                 "$midiCV" | "$midiCC" => {
                     // Extract device param from params JSON
-                    if let Some(device) = module.params.get("device").and_then(|v| v.as_str()) {
-                        if !device.is_empty() {
+                    match module.params.get("device").and_then(|v| v.as_str()) {
+                        Some(device) if !device.is_empty() => {
                             devices.insert(device.to_string());
                         }
+                        _ => wants_all_devices = true,
                     }
                 }
                 _ => {}
             }
         }
 
-        self.midi_manager.sync_devices(&devices, update_id);
+        self.midi_manager
+            .sync_devices(&devices, wants_all_devices, update_id);
     }
 
     #[napi]
