@@ -10,8 +10,8 @@ use schemars::JsonSchema;
 
 use crate::dsp::utils::dc_blocker::DcBlocker;
 use crate::dsp::utils::delay_line::DelayLine;
-use crate::dsp::utils::map_range;
 use crate::dsp::utils::one_pole::OnePole;
+use crate::dsp::utils::{map_range, sanitize};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
 use crate::types::Clickless;
 
@@ -482,8 +482,9 @@ impl Plate {
         let tap_fa2 = self.state.line_f_delay[0].read(lens.line_f[0]);
         let tap_fb = self.state.line_f_delay[1].read(lens.line_f[1]);
 
-        // Feedback: end of Line F * decay → back to input
-        self.state.feedback = signal * decay;
+        // Feedback: end of Line F * decay → back to input. Sanitized so a
+        // non-finite sample cannot lodge in the tank recursion.
+        self.state.feedback = sanitize(signal * decay);
 
         // ── Output tap matrix (matches Glicol) ──────────────────────────
 
@@ -565,6 +566,45 @@ mod tests {
             }
         }
         base
+    }
+
+    #[test]
+    fn recovers_after_non_finite_input() {
+        // A non-finite input sample must not lodge in the tank's recursive
+        // state: once the input is finite again, the reverb builds a tail.
+        use crate::poly::PolySignal;
+        use crate::types::{OutputStruct, Signal};
+
+        let mut outputs = super::PlateOutputs::default();
+        outputs.set_all_channels(2);
+        let mut m = super::Plate {
+            outputs,
+            state: Default::default(),
+            params: super::PlateParams {
+                input: PolySignal::mono(Signal::Volts(f32::NAN)),
+                bandwidth: None,
+                damping: None,
+                decay: None,
+                modulation: None,
+            },
+            _channel_count: 2,
+            _block_index: Default::default(),
+        };
+        m.init(SAMPLE_RATE);
+        for _ in 0..64 {
+            m.update(SAMPLE_RATE);
+        }
+
+        m.params.input = PolySignal::mono(Signal::Volts(1.0));
+        let mut energy = 0.0f32;
+        for _ in 0..48000 {
+            m.update(SAMPLE_RATE);
+            let l = m.outputs.sample.get(0);
+            let r = m.outputs.sample.get(1);
+            assert!(l.is_finite() && r.is_finite());
+            energy += l * l + r * r;
+        }
+        assert!(energy > 0.0, "tail should recover after non-finite input");
     }
 
     #[test]
