@@ -100,6 +100,15 @@ export function createScopeViewZones({
     const scopeHeight = 80; // Increased height for legend and stats
 
     const zones = views.map((view, index) => {
+        // A view without a resolvable decoration range has no anchor line in
+        // the document, so it gets no zone and no canvas — mirroring the
+        // removal path in repositionZones. The null placeholders keep the
+        // per-index arrays aligned 1:1 with `views`.
+        const resolvedLine = resolveLineNumber(scopeDecorations, index);
+        if (resolvedLine === null) {
+            return { delegate: null, key: view.key };
+        }
+
         const container = document.createElement('div');
         container.className = 'scope-view-zone';
         container.style.height = `${scopeHeight}px`;
@@ -125,11 +134,8 @@ export function createScopeViewZones({
         scopeCanvasMap.set(view.key, canvas);
         onRegisterScopeCanvas?.(view.key, canvas);
 
-        const resolvedLine = resolveLineNumber(scopeDecorations, index);
-        const afterLineNumber = resolvedLine ?? 1;
-
         const delegate: editor.IViewZone = {
-            afterLineNumber,
+            afterLineNumber: resolvedLine,
             domNode: container,
             heightInPx: scopeHeight,
             marginDomNode: undefined,
@@ -141,7 +147,7 @@ export function createScopeViewZones({
     editor.changeViewZones((accessor) => {
         for (const { delegate, key } of zones) {
             viewZoneDelegates.push(delegate);
-            viewZoneIds.push(accessor.addZone(delegate));
+            viewZoneIds.push(delegate ? accessor.addZone(delegate) : null);
             viewKeys.push(key);
         }
     });
