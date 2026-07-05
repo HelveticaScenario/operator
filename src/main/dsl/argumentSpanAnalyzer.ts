@@ -638,7 +638,7 @@ function getTrackableNode(
  *
  * @param sourceFile - The ts-morph SourceFile to analyze
  * @param schemas - Module schemas to determine which calls to track
- * @param lineOffset - Line offset for wrapper code in new Function()
+ * @param lineOffset - Line offset for the executor's script wrapper lines
  * @param firstLineColumnOffset - Column offset for the first line
  * @returns Span registry and interpolation resolution map
  */
@@ -996,7 +996,7 @@ export function analyzeArgumentSpans(
         }
 
         // Both ts-morph and V8 stack traces use 1-based lines and columns.
-        // Add the lineOffset to account for wrapper code in new Function().
+        // Add the lineOffset to account for the executor's script wrapper lines.
         const { line, column } = sourceFile.getLineAndColumnAtPos(callStartPos);
         // For line 1 of source, add the firstLineColumnOffset because
         // The function body template indents the first line with spaces.
