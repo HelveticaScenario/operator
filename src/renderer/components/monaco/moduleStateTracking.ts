@@ -463,11 +463,16 @@ export function startModuleStatePolling({
     activeClassName = 'active-seq-step',
     pollInterval = 50,
 }: ModuleStatePollingParams): () => void {
+    // The active-highlight collection is bound to a single editor instance,
+    // and this session may target a recreated editor. Drop any collection
+    // from a previous session so the first poll creates one on this editor.
+    if (activeDecorationRef.current) {
+        activeDecorationRef.current.clear();
+        activeDecorationRef.current = null;
+    }
+
     // Only track if viewing the running buffer
     if (currentFile !== runningBufferId) {
-        if (activeDecorationRef.current) {
-            activeDecorationRef.current.clear();
-        }
         return () => {};
     }
 
