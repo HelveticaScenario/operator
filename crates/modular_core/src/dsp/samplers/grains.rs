@@ -55,8 +55,10 @@ struct Grain {
     read_pos: f64,
     /// Frames advanced per audio sample (positive = forward, negative = reverse).
     signed_rate: f64,
-    /// Samples elapsed since spawn; window phase t = age * inv_life.
-    age: f32,
+    /// Samples elapsed since spawn; window phase t = age × inv_life. An
+    /// integer counter always advances by exactly 1, so a grain reaches the
+    /// end of its life no matter how long that life is.
+    age: u64,
     /// Reciprocal of the grain length in samples.
     inv_life: f32,
     /// Fraction of normalised grain time equal to 1 ms (for ramp / square / decay).
@@ -300,11 +302,7 @@ fn alloc_grain(grains: &[Grain; GRAINS_PER_CHANNEL]) -> usize {
     grains
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            a.age
-                .partial_cmp(&b.age)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .max_by_key(|(_, g)| g.age)
         .map(|(i, _)| i)
         .unwrap_or(0)
 }
@@ -422,7 +420,7 @@ impl Grains {
                             active: true,
                             read_pos,
                             signed_rate,
-                            age: 0.0,
+                            age: 0,
                             inv_life,
                             d_ratio,
                             decay_level: 0.0,
@@ -448,7 +446,7 @@ impl Grains {
                 if !grain.active {
                     continue;
                 }
-                let t = grain.age * grain.inv_life;
+                let t = grain.age as f32 * grain.inv_life;
                 if t >= 1.0 {
                     grain.active = false;
                     continue;
@@ -509,7 +507,7 @@ impl Grains {
                 active_count += 1;
 
                 grain.read_pos += grain.signed_rate;
-                grain.age += 1.0;
+                grain.age += 1;
             }
 
             // ── Normalise (Clouds-style) ───────────────────────────────────
@@ -1043,6 +1041,41 @@ mod tests {
             let v = grains.outputs.sample.get(0);
             assert!(v.is_finite(), "output must stay finite, got {v}");
         }
+    }
+
+    // ── Grain age keeps advancing past f32's contiguous-integer range ─────────
+
+    #[test]
+    fn grains_long_grain_still_terminates() {
+        // Gate low: no spawns. Plant a grain whose remaining life crosses
+        // 2^24 samples, past the range where an f32 counter can advance by 1.
+        let wav = make_test_wav(vec![vec![0.5; 16]], SAMPLE_RATE);
+        let mut grains = make_direct(
+            serde_json::json!({
+                "pitch": 0.0,
+                "wav": { "type": "wav_ref", "path": "t", "channels": 1 },
+                "gate": 0.0,
+            }),
+            wav,
+        );
+        let life = (1u64 << 24) + 50;
+        grains.channel_state[0].grains[0] = Grain {
+            active: true,
+            read_pos: 0.0,
+            signed_rate: 0.0,
+            age: (1 << 24) - 10,
+            inv_life: 1.0 / life as f32,
+            d_ratio: 0.001,
+            decay_level: 0.0,
+            decay_coeff: 0.0,
+        };
+        for _ in 0..100 {
+            grains.update(SAMPLE_RATE);
+        }
+        assert!(
+            !grains.channel_state[0].grains[0].active,
+            "a grain must deactivate once its age reaches its life"
+        );
     }
 
     // ── All window shapes produce finite output ────────────────────────────────
