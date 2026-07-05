@@ -79,6 +79,11 @@ impl SineOscillator {
             state.phase += frequency;
             // Wrap phase to [0, 1) — supports negative increments (through-zero FM)
             state.phase = state.phase.rem_euclid(1.0);
+            // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which
+            // is absorbing; reset so the phase recovers once the input does.
+            if !state.phase.is_finite() {
+                state.phase = 0.0;
+            }
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.
@@ -113,3 +118,55 @@ impl SineOscillator {
 }
 
 message_handlers!(impl SineOscillator {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::poly::PolySignal;
+    use crate::types::{OutputStruct, Signal};
+
+    fn make_sine(fm_volts: f32, fm_mode: FmMode) -> SineOscillator {
+        let params = SineOscillatorParams {
+            freq: PolySignal::mono(Signal::Volts(0.0)), // C4 ≈ 261 Hz
+            fm: Some(PolySignal::mono(Signal::Volts(fm_volts))),
+            fm_mode,
+            sync: None,
+            phase_offset: None,
+        };
+        let channels = params.freq.channels().max(1);
+        let mut outputs = SineOscillatorOutputs::default();
+        outputs.set_all_channels(channels);
+        SineOscillator {
+            params,
+            outputs,
+            _channel_count: channels,
+            _block_index: Default::default(),
+            channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
+        }
+    }
+
+    #[test]
+    fn recovers_after_non_finite_frequency() {
+        // An exp-FM voltage large enough to overflow voct_to_hz to +inf must
+        // not stick in the phase accumulator: once the FM input returns to a
+        // normal level, the oscillator sounds again within one cycle.
+        let mut osc = make_sine(121.0, FmMode::Exp);
+        for _ in 0..8 {
+            osc.update(48_000.0);
+        }
+        assert!(
+            osc.channel_state[0].phase.is_finite(),
+            "phase {} must stay finite through a non-finite frequency",
+            osc.channel_state[0].phase
+        );
+
+        osc.params.fm = Some(PolySignal::mono(Signal::Volts(0.0)));
+        // C4 period ≈ 183.5 samples: a healthy oscillator reaches a
+        // substantial level well within one cycle.
+        let recovered = (0..184).any(|_| {
+            osc.update(48_000.0);
+            osc.outputs.sample.get(0).abs() > 1.0
+        });
+        assert!(recovered, "output must recover within a cycle");
+    }
+}
