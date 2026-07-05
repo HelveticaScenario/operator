@@ -1266,6 +1266,21 @@ describe('error handling', () => {
     test('providing required param does not throw', () => {
         expect(() => execPatch('$lpf($sine("C4"), "C4").out()')).not.toThrow();
     });
+
+    test('non-finite numeric param reports the module and line', () => {
+        expect(() => execPatch('$sine(0/0).out()')).toThrow(
+            '$sine at line 1: parameter `freq` must be a finite number',
+        );
+        expect(() => execPatch('\n$saw(Infinity).out()')).toThrow(
+            '$saw at line 2: parameter `freq` must be a finite number',
+        );
+    });
+
+    test('$buffer with a non-finite input param reports the module and line', () => {
+        expect(() => execPatch('$buffer(0/0, 1)')).toThrow(
+            '$buffer at line 1: parameter `input` must be a finite number',
+        );
+    });
 });
 
 // ─── Script execution environment ────────────────────────────────────────────

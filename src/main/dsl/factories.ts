@@ -154,6 +154,42 @@ export function lookupArgumentSpan(
     return spans ? spans[argName] : undefined;
 }
 
+/**
+ * Throw a module-and-line formatted error if any number nested anywhere in
+ * `params` is non-finite. The N-API boundary rejects NaN/Infinity with a
+ * context-free conversion error, so this must run before any native call
+ * (deriveChannelCount) that receives the params.
+ */
+export function assertFiniteNumericParams(
+    moduleName: string,
+    params: unknown,
+    sourceLocation: { line: number; column: number } | undefined,
+): void {
+    const walk = (value: unknown, path: string): void => {
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value)) {
+                const loc = sourceLocation
+                    ? ` at line ${sourceLocation.line}`
+                    : '';
+                throw new Error(
+                    `${moduleName}${loc}: parameter \`${path}\` must be a finite number, got ${value}`,
+                );
+            }
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((v, i) => walk(v, `${path}[${i}]`));
+            return;
+        }
+        if (typeof value === 'object' && value !== null) {
+            for (const [k, v] of Object.entries(value)) {
+                walk(v, path === '' ? k : `${path}.${k}`);
+            }
+        }
+    };
+    walk(params, '');
+}
+
 // Return type for module factories - varies by output configuration
 type SingleOutput = ModuleOutput;
 type PolyOutput = Collection | CollectionWithRange;
@@ -391,6 +427,11 @@ export class DSLContext {
             // Derive channel count from params using Rust-side derivation (backed by LRU cache)
             // This handles modules with custom derivation logic (like mix, seq)
             // As well as standard inference from PolySignal inputs
+            assertFiniteNumericParams(
+                schema.name,
+                node.getParamsSnapshot(),
+                sourceLocation,
+            );
             const deriveResult = deriveChannelCount(
                 schema.name,
                 node.getParamsSnapshot(),
