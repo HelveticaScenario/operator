@@ -55,19 +55,16 @@ pub fn bjorklund(pulses: i32, steps: u32) -> Vec<bool> {
 
 type BjorklundState = (Vec<Vec<bool>>, Vec<Vec<bool>>);
 
-fn bjorklund_inner(n: (u32, u32), x: BjorklundState) -> BjorklundState {
-    let (ons, offs) = n;
+// Iterative so stack usage stays constant regardless of step count.
+fn bjorklund_inner(mut n: (u32, u32), mut x: BjorklundState) -> BjorklundState {
+    loop {
+        let (ons, offs) = n;
 
-    if ons.min(offs) <= 1 {
-        return x;
-    }
+        if ons.min(offs) <= 1 {
+            return x;
+        }
 
-    if ons > offs {
-        let (new_n, new_x) = left(n, x);
-        bjorklund_inner(new_n, new_x)
-    } else {
-        let (new_n, new_x) = right(n, x);
-        bjorklund_inner(new_n, new_x)
+        (n, x) = if ons > offs { left(n, x) } else { right(n, x) };
     }
 }
 
@@ -321,6 +318,20 @@ mod tests {
         assert_eq!(rotate(&vec, 1), vec![2, 3, 4, 5, 1]);
         assert_eq!(rotate(&vec, -1), vec![5, 1, 2, 3, 4]);
         assert_eq!(rotate(&vec, 5), vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn test_bjorklund_constant_stack() {
+        // bjorklund's stack usage stays constant regardless of step count:
+        // a large step count must complete on a deliberately tiny stack.
+        let pattern = std::thread::Builder::new()
+            .stack_size(64 * 1024)
+            .spawn(|| bjorklund(3, 6000))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(pattern.len(), 6000);
+        assert_eq!(pattern.iter().filter(|&&x| x).count(), 3);
     }
 
     #[test]

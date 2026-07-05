@@ -204,16 +204,43 @@ pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertErro
     convert_inner(ast)
 }
 
-/// Upper bound on `!n` replicate counts.
+/// Upper bound on `!n` replicate counts and euclidean step counts.
 ///
-/// Replication multiplies the amount of structure that conversion (and the
-/// seq module's eager ribbon bake) materializes, so an oversized operand must
+/// Both multiply the amount of structure that conversion (and the seq
+/// module's eager ribbon bake) materializes, so an oversized operand must
 /// fail conversion with a clear error rather than exhaust memory.
 const MAX_EXPANSION: u32 = 1024;
 
+/// Largest `Pure` leaf in a u32 operand pattern (0 when there are none).
+fn max_u32_leaf(ast: &MiniASTU32) -> u32 {
+    match ast {
+        MiniASTU32::Pure(Located { node, .. }) => *node,
+        MiniASTU32::Rest(_) => 0,
+        MiniASTU32::List(Located { node, .. }) => node.iter().map(max_u32_leaf).max().unwrap_or(0),
+        MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
+            items
+                .iter()
+                .map(|(p, _)| max_u32_leaf(p))
+                .max()
+                .unwrap_or(0)
+        }
+        MiniASTU32::Stack(items) | MiniASTU32::RandomChoice(items, _) => {
+            items.iter().map(max_u32_leaf).max().unwrap_or(0)
+        }
+        MiniASTU32::Fast(pattern, _)
+        | MiniASTU32::Slow(pattern, _)
+        | MiniASTU32::Replicate(pattern, _)
+        | MiniASTU32::Degrade(pattern, _, _) => max_u32_leaf(pattern),
+        MiniASTU32::Euclidean { pattern, .. } => max_u32_leaf(pattern),
+        MiniASTU32::Polymeter { children, .. } => {
+            children.iter().map(max_u32_leaf).max().unwrap_or(0)
+        }
+    }
+}
+
 /// Generates a limit validator for one of the four structurally identical
 /// AST enums. Each validator rejects operands that conversion cannot lower
-/// safely: `!n` operands past `MAX_EXPANSION`.
+/// safely: `!n`/euclidean-step operands past `MAX_EXPANSION`.
 macro_rules! define_validate_limits {
     ($name:ident, $ast:ident) => {
         fn $name(ast: &$ast) -> Result<(), ConvertError> {
@@ -245,6 +272,12 @@ macro_rules! define_validate_limits {
                     steps,
                     rotation,
                 } => {
+                    let max_steps = max_u32_leaf(steps);
+                    if max_steps > MAX_EXPANSION {
+                        return Err(ConvertError::OperatorError(format!(
+                            "euclidean step count {max_steps} exceeds the maximum of {MAX_EXPANSION}"
+                        )));
+                    }
                     validate_limits_u32(pulses)?;
                     validate_limits_u32(steps)?;
                     if let Some(r) = rotation {
@@ -2382,6 +2415,13 @@ mod tests {
         })
     }
 
+    fn u32_pure(v: u32) -> MiniASTU32 {
+        MiniASTU32::Pure(Located {
+            node: v,
+            span: SourceSpan::new(0, 1),
+        })
+    }
+
     fn polymeter_012(steps_per_cycle: Option<MiniASTF64>) -> MiniAST {
         let child = MiniAST::Sequence(vec![
             (num_atom(0.0), None),
@@ -2450,6 +2490,34 @@ mod tests {
         let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), 2000);
         let ast = MiniAST::Fast(Box::new(num_atom(1.0)), Box::new(factor));
         assert!(convert::<f64>(&ast).is_err());
+    }
+
+    #[test]
+    fn test_euclid_steps_limit() {
+        let ast = parse("x(3,1024)").unwrap();
+        assert!(convert::<bool>(&ast).is_ok());
+
+        let ast = parse("x(3,100000)").unwrap();
+        let err = convert::<bool>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("euclidean step count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_euclid_steps_limit_covers_patterned_operands() {
+        // Every steps alternative is bounded, so `(3,<8 100000>)` is rejected.
+        let ast = MiniAST::Euclidean {
+            pattern: Box::new(num_atom(1.0)),
+            pulses: Box::new(u32_pure(3)),
+            steps: Box::new(MiniASTU32::SlowCat(vec![
+                (u32_pure(8), None),
+                (u32_pure(100000), None),
+            ])),
+            rotation: None,
+        };
+        assert!(convert::<Option<f64>>(&ast).is_err());
     }
 
     // --- Rest Pattern Behavior Tests ---
