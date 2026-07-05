@@ -6,11 +6,13 @@ use crate::{
     Wav,
     dsp::utils::SchmittTrigger,
     param_errors::ModuleParamErrors,
-    poly::{MonoSignal, MonoSignalExt, PolyOutput},
+    poly::{MonoSignal, MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
+/// Output width follows the WAV, capped at the port-wide channel limit — a
+/// WAV header can claim any u16 channel count.
 fn sampler_derive_channel_count(params: &SamplerParams) -> usize {
-    params.wav.channel_count()
+    params.wav.channel_count().clamp(1, PORT_MAX_CHANNELS)
 }
 
 fn default_fade() -> f64 {
@@ -784,6 +786,25 @@ mod tests {
         }
         assert!(!sampler.state.rel_active, "release voice should be spent");
         assert!((sampler.outputs.sample.get(0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn channel_count_clamps_to_port_max() {
+        let deserializers = get_params_deserializers();
+        let de = deserializers
+            .get("$sampler")
+            .expect("no params deserializer for $sampler");
+        for (channels, want) in [(65535, PORT_MAX_CHANNELS), (0, 1)] {
+            let cached = de(json!({
+                "wav": { "type": "wav_ref", "path": "test", "channels": channels },
+                "gate": 0.0,
+            }))
+            .expect("params should deserialize");
+            assert_eq!(
+                cached.channel_count, want,
+                "channel count for a {channels}-channel wav"
+            );
+        }
     }
 
     #[test]
