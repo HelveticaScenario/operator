@@ -30,7 +30,7 @@ fn cycle_hash(time: &Fraction, seed: u64) -> u64 {
     time_hash(&cycle, seed)
 }
 
-/// Continuous random signal in [0, 1) keyed by query time and `seed`.
+/// Continuous random signal in [0, 1) keyed by sample time and `seed`.
 /// Independent seeds produce independent streams.
 pub fn rand_with_offset(seed: u64) -> Pattern<f64> {
     signal(move |t| hash_to_float(time_hash(t, seed)))
@@ -200,6 +200,62 @@ mod tests {
             }
         }
         assert!(kept_count > 20 && kept_count < 80);
+    }
+
+    #[test]
+    fn test_degrade_group_events_decide_independently() {
+        // Simulates [1 2 3 4]? — ONE degrade applied over a fastcat. Every
+        // event must draw its own keep/drop from the shared random signal.
+        // With independent 50/50 draws, P(all four agree) = 1/8 per cycle
+        // (~50 of 400); events sharing a single draw per query would agree
+        // in all 400.
+        use crate::pattern_system::combinators::fastcat;
+
+        let elements: Vec<Pattern<i32>> = (1..=4).map(pure).collect();
+        let pat = fastcat(elements).degrade_by_with_rest_seeded(0.5, -1, 3);
+
+        let mut all_same_count = 0;
+        let num_cycles = 400;
+        for c in 0..num_cycles {
+            let haps = pat.query_arc(Fraction::from_integer(c), Fraction::from_integer(c + 1));
+            assert_eq!(haps.len(), 4, "fastcat of 4 should yield 4 haps");
+            let first_kept = haps[0].value != -1;
+            if haps.iter().all(|h| (h.value != -1) == first_kept) {
+                all_same_count += 1;
+            }
+        }
+        assert!(
+            all_same_count < 200,
+            "Events under one degrade appear to share a draw: {all_same_count}/400 cycles had all-same decisions"
+        );
+    }
+
+    #[test]
+    fn test_degrade_decision_agrees_across_query_shapes() {
+        // A degrade draw is a function of the event's own span, so querying a
+        // cycle whole versus as two half-cycle spans must agree on the
+        // event's keep/drop decision.
+        let pat = pure(1i32).degrade_by_with_rest_seeded(0.5, -1, 7);
+
+        for c in 0..100 {
+            let whole = pat.query_arc(Fraction::from_integer(c), Fraction::from_integer(c + 1));
+            assert_eq!(whole.len(), 1);
+
+            let mid = Fraction::from_integer(c) + Fraction::new(1, 2);
+            let first_half = pat.query_arc(Fraction::from_integer(c), mid.clone());
+            let second_half = pat.query_arc(mid, Fraction::from_integer(c + 1));
+            assert_eq!(first_half.len(), 1);
+            assert_eq!(second_half.len(), 1);
+
+            assert_eq!(
+                first_half[0].value, whole[0].value,
+                "cycle {c}: first-half fragment disagrees with whole-cycle query"
+            );
+            assert_eq!(
+                second_half[0].value, whole[0].value,
+                "cycle {c}: second-half fragment disagrees with whole-cycle query"
+            );
+        }
     }
 
     #[test]

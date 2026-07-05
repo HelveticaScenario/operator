@@ -30,35 +30,18 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                 let mut haps_fn: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
                 pat_fn.query_into(state, bump, &mut haps_fn);
 
-                // Query pat_val once at the full state span. Each left hap's
-                // `whole_or_part` lies within that span, so the intersect with
-                // each left hap recovers the per-sub-query result for any
-                // pattern whose hap layout is cycle-determined.
+                // Re-query pat_val per left hap over its `whole_or_part`, so a
+                // continuous value pattern samples once per event as a function
+                // of the event's own span — independent of the enclosing
+                // query's shape (strudel's appLeft).
                 let mut haps_val: BumpVec<'_, ArenaHap<'_, U>> = BumpVec::new_in(bump);
-                pat_val.query_into(state, bump, &mut haps_val);
-
                 for hap_fn in &haps_fn {
-                    // Iterate haps_val in source order so the output preserves
-                    // the (left, right) ordering that downstream consumers
-                    // expect.
-                    let lookup_span = hap_fn.whole_or_part();
-                    let fn_part = &hap_fn.part;
-                    let window_begin = if fn_part.begin > lookup_span.begin {
-                        &fn_part.begin
-                    } else {
-                        &lookup_span.begin
-                    };
-                    let window_end = if fn_part.end < lookup_span.end {
-                        &fn_part.end
-                    } else {
-                        &lookup_span.end
-                    };
+                    let val_state = State::new(hap_fn.whole_or_part().clone());
+                    haps_val.clear();
+                    pat_val.query_into(&val_state, bump, &mut haps_val);
 
                     for hap_val in haps_val.iter() {
-                        if &hap_val.part.begin >= window_end || hap_val.part.end <= *window_begin {
-                            continue;
-                        }
-                        if let Some(part) = fn_part.intersection(&hap_val.part) {
+                        if let Some(part) = hap_fn.part.intersection(&hap_val.part) {
                             let value = f(&hap_fn.value, &hap_val.value);
                             let context = ArenaHapContext::combine_in(
                                 &hap_fn.context,
@@ -97,29 +80,16 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
                 let mut haps_val: BumpVec<'_, ArenaHap<'_, U>> = BumpVec::new_in(bump);
                 pat_val.query_into(state, bump, &mut haps_val);
 
-                // Query pat_fn once at the full state span. For
-                // cycle-deterministic patterns (the mini-notation case) the
-                // result matches a per-right-hap re-query.
+                // Re-query pat_fn per right hap over its `whole_or_part` —
+                // the mirror of `app_left`, so continuous left patterns
+                // sample per event (strudel's appRight).
                 let mut haps_fn: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
-                pat_fn.query_into(state, bump, &mut haps_fn);
-
                 for hap_val in &haps_val {
-                    let lookup_span = hap_val.whole_or_part();
-                    let val_part = &hap_val.part;
-                    let window_begin = if val_part.begin > lookup_span.begin {
-                        &val_part.begin
-                    } else {
-                        &lookup_span.begin
-                    };
-                    let window_end = if val_part.end < lookup_span.end {
-                        &val_part.end
-                    } else {
-                        &lookup_span.end
-                    };
+                    let fn_state = State::new(hap_val.whole_or_part().clone());
+                    haps_fn.clear();
+                    pat_fn.query_into(&fn_state, bump, &mut haps_fn);
+
                     for hap_fn in haps_fn.iter() {
-                        if &hap_fn.part.begin >= window_end || hap_fn.part.end <= *window_begin {
-                            continue;
-                        }
                         if let Some(part) = hap_fn.part.intersection(&hap_val.part) {
                             let value = f(&hap_fn.value, &hap_val.value);
                             let context = ArenaHapContext::combine_in(
@@ -225,5 +195,37 @@ mod tests {
         assert_eq!(haps.len(), 2);
         assert_eq!(haps[0].value, 11);
         assert_eq!(haps[1].value, 12);
+    }
+
+    #[test]
+    fn test_app_left_samples_signal_per_event() {
+        use crate::pattern_system::constructors::signal;
+
+        // Each of the four events must draw its own signal sample at its
+        // own whole's midpoint, not share one sample per query.
+        let left: Pattern<i32> = fastcat(vec![pure(1), pure(2), pure(3), pure(4)]);
+        let sig = signal(|t: &Fraction| t.to_f64());
+        let combined = left.app_left(&sig, |_, s| *s);
+
+        let haps = combined.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(haps.len(), 4);
+        for (i, hap) in haps.iter().enumerate() {
+            assert_eq!(hap.value, (i as f64 + 0.5) / 4.0);
+        }
+    }
+
+    #[test]
+    fn test_app_right_samples_signal_per_event() {
+        use crate::pattern_system::constructors::signal;
+
+        let sig = signal(|t: &Fraction| t.to_f64());
+        let right: Pattern<i32> = fastcat(vec![pure(1), pure(2), pure(3), pure(4)]);
+        let combined = sig.app_right(&right, |s, _| *s);
+
+        let haps = combined.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(haps.len(), 4);
+        for (i, hap) in haps.iter().enumerate() {
+            assert_eq!(hap.value, (i as f64 + 0.5) / 4.0);
+        }
     }
 }
