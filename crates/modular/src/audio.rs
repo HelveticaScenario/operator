@@ -1047,6 +1047,10 @@ pub struct AudioState {
     /// build the editor JSON in `get_module_states`. Single lock for `&self`
     /// mutation; the audio thread never touches it. See [`ModuleStateMetaCache`].
     module_state_meta: Mutex<ModuleStateMetaCache>,
+    /// The last successfully built editor-state JSON, served when a poll loses
+    /// the `module_states` try_lock race with the audio thread — so contention
+    /// reads as an unchanged poll, never as "all modules removed".
+    module_states_snapshot: Mutex<HashMap<String, serde_json::Value>>,
     /// MIDI input manager - shared with audio thread for polling
     midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1108,6 +1112,7 @@ impl AudioState {
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             module_state_meta: Mutex::new(ModuleStateMetaCache::default()),
+            module_states_snapshot: Mutex::new(HashMap::new()),
             midi_manager,
             transport_meter: Arc::new(TransportMeter::default()),
             audio_thread_panicked: Arc::new(AtomicBool::new(false)),
@@ -1331,7 +1336,9 @@ impl AudioState {
         // thread's `try_lock` never fails across JSON construction.
         let mut states_guard = match self.module_states.try_lock() {
             Some(guard) => guard,
-            None => return HashMap::new(), // audio thread is writing; skip this poll
+            // The audio thread is writing; serve the previous snapshot so the
+            // renderer never mistakes contention for module removal.
+            None => return self.module_states_snapshot.lock().clone(),
         };
         let mut meta = self.module_state_meta.lock();
         // Promotion (and the slot prune it drives) happens once the swap applies, so
@@ -1356,6 +1363,7 @@ impl AudioState {
                 out.insert(id, m.build_json(live.as_ref()));
             }
         }
+        *self.module_states_snapshot.lock() = out.clone();
         out
     }
 
@@ -4451,6 +4459,82 @@ mod tests {
             "a kept scope's buffer state survives the swap"
         );
         assert!(collection.contains_key(&added));
+    }
+
+    // ============================================================================
+    // Module-state metadata cache tests
+    // ============================================================================
+
+    #[derive(Clone)]
+    struct TestLiveState;
+
+    impl ModuleLiveState for TestLiveState {
+        fn reset(&mut self) {}
+        fn clone_box(&self) -> Box<dyn ModuleLiveState> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    struct TestStateMeta(&'static str);
+
+    impl ModuleStateMeta for TestStateMeta {
+        fn build_json(&self, _live: &dyn ModuleLiveState) -> serde_json::Value {
+            serde_json::Value::String(self.0.into())
+        }
+    }
+
+    fn create_test_audio_state() -> AudioState {
+        let (
+            cmd_producer,
+            _cmd_consumer,
+            _err_producer,
+            err_consumer,
+            _garbage_producer,
+            garbage_consumer,
+        ) = create_audio_channels();
+        AudioState::new_with_channels(
+            cmd_producer,
+            err_consumer,
+            garbage_consumer,
+            44_100.0,
+            2,
+            Arc::new(MidiInputManager::new()),
+            1,
+        )
+    }
+
+    #[test]
+    fn module_states_poll_under_contention_serves_last_snapshot() {
+        let state = create_test_audio_state();
+        state
+            .module_states
+            .lock()
+            .insert("m1".into(), Box::new(TestLiveState));
+        state
+            .module_state_meta
+            .lock()
+            .live
+            .insert("m1".into(), Box::new(TestStateMeta("one")));
+
+        let first = state.get_module_states();
+        assert_eq!(
+            first.get("m1"),
+            Some(&serde_json::Value::String("one".into()))
+        );
+
+        // Hold the live-state lock as the audio thread does mid-callback: the
+        // poll must serve the previous snapshot, never an empty map the
+        // renderer would read as "all modules removed".
+        let states_arc = Arc::clone(&state.module_states);
+        let _audio_thread_guard = states_arc.lock();
+        let contended = state.get_module_states();
+        assert_eq!(contended, first);
     }
 
     // ============================================================================
