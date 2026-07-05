@@ -17,7 +17,9 @@
  *   (NeverGrowsWhenTypingAtEdges).
  * - Interpolated patterns redirect highlights into const literals: positions
  *   in a nested template const's literal text re-map from evaluated to raw
- *   offsets.
+ *   offsets, and boundary positions are biased so a span start resolves into
+ *   the region that begins there and a span end into the region that ends
+ *   there.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -602,6 +604,81 @@ describe('startModuleStatePolling interpolation resolution', () => {
         );
         expect(text).toBe('c4');
         expect(decos[0].range.startColumn - 1).toBe(rootStart + 1);
+
+        stop();
+    });
+
+    test('a span starting on the boundary of adjacent interpolations resolves into the const that begins there', async () => {
+        const DOC = "const a = 'c4 '; const b = 'e4'; $p(`${a}${b}`)";
+        const aStart = DOC.indexOf("'c4 '");
+        const bStart = DOC.indexOf("'e4'");
+        const argStart = DOC.indexOf('`${a}${b}`');
+        const argSpan = { start: argStart, end: argStart + 10 };
+
+        setActiveInterpolationResolutions(
+            new Map([
+                [
+                    `${argSpan.start}:${argSpan.end}`,
+                    [
+                        {
+                            evaluatedStart: 0,
+                            evaluatedLength: 3,
+                            constLiteralSpan: {
+                                start: aStart,
+                                end: aStart + 5,
+                            },
+                        },
+                        {
+                            evaluatedStart: 3,
+                            evaluatedLength: 2,
+                            constLiteralSpan: {
+                                start: bStart,
+                                end: bStart + 4,
+                            },
+                        },
+                    ],
+                ],
+            ]),
+        );
+
+        const { editor, monaco } = makeHarness(DOC);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const activeDecorationRef: any = { current: null };
+
+        // Evaluated pattern: 'c4 e4'. Leaf 'e4' = [3,5] starts exactly where
+        // a's result ends and b's result begins. Its highlight must cover
+        // only b's literal — never span from const a to const b.
+        const state = seqState(
+            'c4 e4',
+            [[3, 5]],
+            [
+                [0, 2],
+                [3, 5],
+            ],
+            argSpan,
+        );
+        const getModuleStates = vi.fn(async () => state);
+
+        const stop = startModuleStatePolling({
+            editor,
+            monaco,
+            currentFile: 'buf',
+            runningBufferId: 'buf',
+            activeDecorationRef,
+            getModuleStates,
+            pollInterval: 50,
+        });
+
+        await vi.advanceTimersByTimeAsync(50);
+        const decos = activeDecos(activeDecorationRef);
+        expect(decos).toHaveLength(1);
+        const text = DOC.slice(
+            decos[0].range.startColumn - 1,
+            decos[0].range.endColumn - 1,
+        );
+        expect(text).toBe('e4');
+        expect(decos[0].range.startColumn - 1).toBe(bStart + 1);
+        expect(decos[0].range.endColumn - 1).toBe(bStart + 3);
 
         stop();
     });
