@@ -1,12 +1,12 @@
 //! Raw MIDI byte parsing and the shared parse state it feeds: the pending
-//! message queue and 14-bit CC MSB tracking.
+//! message queue, 14-bit CC MSB tracking, and held-note bookkeeping.
 
 use super::{MIDI_BUFFER_SIZE, TimestampedMessage};
 use modular_core::types::{
     DeviceName, Message, MidiChannelPressure, MidiControlChange, MidiControlChange14Bit,
     MidiNoteOff, MidiNoteOn, MidiPitchBend, MidiPolyPressure,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// State for tracking 14-bit CC MSB values per device
 /// Key: (device_name, channel, cc_msb), Value: msb_value
@@ -49,6 +49,9 @@ pub(super) struct MidiParseState {
     next_seq: u64,
     /// 14-bit CC state per device
     cc_state: HashMap<String, MidiCcState>,
+    /// Notes currently held per device, as (channel, note). Consulted when a
+    /// device closes to synthesize the note-offs it can no longer send.
+    pub(super) held_notes: HashMap<String, HashSet<(u8, u8)>>,
 }
 
 impl MidiParseState {
@@ -57,6 +60,7 @@ impl MidiParseState {
             messages: Vec::with_capacity(MIDI_BUFFER_SIZE),
             next_seq: 0,
             cc_state: HashMap::new(),
+            held_notes: HashMap::new(),
         }
     }
 
@@ -81,6 +85,19 @@ impl MidiParseState {
         self.cc_state
             .entry(device.to_string())
             .or_insert_with(MidiCcState::new)
+    }
+
+    fn track_note_on(&mut self, device: &str, channel: u8, note: u8) {
+        self.held_notes
+            .entry(device.to_string())
+            .or_default()
+            .insert((channel, note));
+    }
+
+    fn track_note_off(&mut self, device: &str, channel: u8, note: u8) {
+        if let Some(held) = self.held_notes.get_mut(device) {
+            held.remove(&(channel, note));
+        }
     }
 }
 
@@ -112,6 +129,7 @@ pub(super) fn parse_midi_message(
     let message = match status {
         0x90 if data2 > 0 => {
             // Note On
+            state.track_note_on(device.as_str(), channel, data1);
             Some(Message::MidiNoteOn(MidiNoteOn {
                 device: device_opt,
                 channel,
@@ -121,6 +139,7 @@ pub(super) fn parse_midi_message(
         }
         0x80 | 0x90 => {
             // Note Off (or Note On with velocity 0)
+            state.track_note_off(device.as_str(), channel, data1);
             Some(Message::MidiNoteOff(MidiNoteOff {
                 device: device_opt,
                 channel,
