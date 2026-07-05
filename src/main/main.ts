@@ -659,10 +659,16 @@ const PATCH_REMAP_MARGIN = process.env.MODULAR_PATCH_REMAP_MARGIN
 console.log('Patch remap debug mode:', DEBUG_LOG);
 
 /**
- * Validate that a path is valid (absolute or relative to workspace)
+ * Resolve a renderer-supplied path to an absolute path the filesystem IPC
+ * handlers may touch: anything inside the current workspace, plus the
+ * app-managed files (config.json, keybindings.json) the editor opens
+ * directly. Returns null for everything else.
  */
 function validatePathInWorkspace(filePath: string): string | null {
-    return resolveWorkspacePath(currentWorkspaceRoot, filePath);
+    return resolveWorkspacePath(currentWorkspaceRoot, filePath, [
+        CONFIG_FILE,
+        KEYBINDINGS_FILE,
+    ]);
 }
 
 /**
@@ -1416,13 +1422,21 @@ registerIPCHandler('FS_RENAME_FILE', (oldPath, newPath) => {
     }
 });
 
-registerIPCHandler('FS_DELETE_FILE', async (absolutePath) => {
+registerIPCHandler('FS_DELETE_FILE', async (filePath) => {
+    const absolutePath = validatePathInWorkspace(filePath);
+    if (!absolutePath) {
+        return {
+            error: 'Invalid file path or no workspace selected',
+            success: false,
+        };
+    }
+
     try {
         await shell.trashItem(absolutePath);
         return { success: true };
     } catch (error) {
         console.error('Error deleting file:', error);
-        return { error: `Failed to delete: ${absolutePath}`, success: false };
+        return { error: `Failed to delete: ${filePath}`, success: false };
     }
 });
 
@@ -1475,28 +1489,46 @@ registerIPCHandler('FS_CREATE_FOLDER', (relativePath) => {
 
 // @ts-expect-error - async handler returns Promise
 registerIPCHandler('FS_SHOW_SAVE_DIALOG', async (defaultPath?: string) => {
-    console.log('defaultPath:', defaultPath);
-    const result = await dialog.showSaveDialog({
-        defaultPath: defaultPath || 'untitled.mjs',
-        filters: [
-            { extensions: ['js', 'mjs'], name: 'JavaScript Files' },
-            { extensions: ['*'], name: 'All Files' },
-        ],
-    });
-
-    if (result.canceled || !result.filePath) {
+    // FS_WRITE_FILE rejects paths outside the workspace, so this dialog must
+    // only ever hand back in-workspace locations: it opens anchored at the
+    // workspace root, and an out-of-workspace choice re-prompts rather than
+    // returning a path whose save is guaranteed to fail.
+    if (!currentWorkspaceRoot) {
+        await dialog.showMessageBox({
+            message: 'Open a workspace folder before saving files.',
+            type: 'warning',
+        });
         return null;
     }
 
-    // Return relative path if within workspace, otherwise absolute
-    if (
-        currentWorkspaceRoot &&
-        result.filePath.startsWith(currentWorkspaceRoot)
-    ) {
-        return path.relative(currentWorkspaceRoot, result.filePath);
-    }
+    const fileName = defaultPath || 'untitled.mjs';
+    for (;;) {
+        const result = await dialog.showSaveDialog({
+            defaultPath: path.join(currentWorkspaceRoot, fileName),
+            filters: [
+                { extensions: ['js', 'mjs'], name: 'JavaScript Files' },
+                { extensions: ['*'], name: 'All Files' },
+            ],
+        });
 
-    return result.filePath;
+        if (result.canceled || !result.filePath) {
+            return null;
+        }
+
+        const contained = resolveWorkspacePath(
+            currentWorkspaceRoot,
+            result.filePath,
+        );
+        if (contained) {
+            return path.relative(currentWorkspaceRoot, contained);
+        }
+
+        await dialog.showMessageBox({
+            detail: `Choose a location inside ${currentWorkspaceRoot}.`,
+            message: 'Files can only be saved inside the current workspace.',
+            type: 'warning',
+        });
+    }
 });
 
 registerIPCHandler(
