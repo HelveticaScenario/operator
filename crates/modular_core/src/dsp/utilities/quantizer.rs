@@ -297,7 +297,9 @@ pub struct Quantizer {
 
 impl Quantizer {
     pub fn update(&mut self, sample_rate: f32) {
-        let num_channels = self.params.input.channels();
+        // The module is as wide as its widest signal (input OR offset), so every
+        // declared channel must be written; narrower signals cycle.
+        let num_channels = self.channel_count();
         let hold = min_gate_samples(sample_rate);
 
         for ch in 0..num_channels {
@@ -523,6 +525,51 @@ mod tests {
             trigger.process(),
             GATE_LOW_VOLTAGE,
             "should be low after hold expires"
+        );
+    }
+
+    #[test]
+    fn offset_wider_than_input_drives_all_declared_channels() {
+        // The module's width is the max across input and offset; with a mono
+        // input and a 2-channel offset, both output channels must be written —
+        // channel 1 quantizes input (cycled) plus its own offset channel.
+        use crate::types::{OutputStruct, Signal};
+
+        let mut outputs = QuantizerOutputs::default();
+        outputs.set_all_channels(2);
+        let g4 = 7.0 / 12.0;
+        let mut q = Quantizer {
+            outputs,
+            params: QuantizerParams {
+                input: PolySignal::mono(Signal::Volts(0.0)),
+                offset: Some(PolySignal::poly(&[
+                    Signal::Volts(0.0),
+                    Signal::Volts(g4 as f32),
+                ])),
+                scale: ScaleParam::parse("C(major)").unwrap(),
+            },
+            channel_state: vec![ChannelState::default(); 2].into_boxed_slice(),
+            _channel_count: 2,
+            _block_index: Default::default(),
+        };
+
+        // The first sample counts as a note change on every channel, so trig
+        // fires on channel 1 too.
+        q.update(48000.0);
+        assert_eq!(q.outputs.trig.get(1), GATE_HIGH_VOLTAGE);
+
+        for _ in 0..32 {
+            q.update(48000.0);
+        }
+        let ch0 = q.outputs.output.get(0);
+        let ch1 = q.outputs.output.get(1);
+        assert!(
+            ch0.abs() < 1e-6,
+            "channel 0 should quantize to C4, got {ch0}"
+        );
+        assert!(
+            (ch1 as f64 - g4).abs() < 1e-4,
+            "channel 1 should quantize to G4 ({g4}), got {ch1}"
         );
     }
 
