@@ -1171,6 +1171,62 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 }
 
+/// A live time-signature edit reaches a running clock as a rebuild + state
+/// transfer: the bar phase carries over, and the beat grid re-anchors to it,
+/// so after a mid-bar 4/4 → 3/4 switch the beat triggers land at bar phases
+/// 0, 1/3, 2/3 — never at a constant offset inherited from the old meter.
+#[test]
+fn clock_meter_change_keeps_beat_triggers_on_bar_grid() {
+    let make = |numerator: u64| {
+        make_graph(vec![(
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": numerator, "denominator": 4 }),
+        )])
+    };
+    let old_patch =
+        from_graph(&make(4), SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("4/4 patch");
+    // 48000 BPM 4/4: one bar = 240 samples. Land mid-bar at phase 0.6.
+    for _ in 0..144 {
+        process_frame(&old_patch);
+    }
+
+    let new_patch =
+        from_graph(&make(3), SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("3/4 patch");
+    for (id, new_module) in &new_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    new_patch.connect_all();
+
+    // 3/4 at this tempo: one bar = 180 samples, one beat = 60. Collect the
+    // bar phase at every beat-trigger rising edge over the next two bars.
+    let clock = new_patch.sampleables.get("ROOT_CLOCK").unwrap();
+    let mut was_high = clock.get_value_at("beatTrigger", 0, 0) > 2.5;
+    let mut edge_phases: Vec<f32> = Vec::new();
+    for _ in 0..360 {
+        process_frame(&new_patch);
+        let is_high = clock.get_value_at("beatTrigger", 0, 0) > 2.5;
+        if is_high && !was_high {
+            edge_phases.push(clock.get_value_at("playhead", 0, 0));
+        }
+        was_high = is_high;
+    }
+    assert_eq!(
+        edge_phases.len(),
+        6,
+        "3 beats per 3/4 bar over 2 bars: {edge_phases:?}"
+    );
+    for p in edge_phases {
+        let beats = p as f64 * 3.0;
+        assert!(
+            (beats - beats.round()).abs() < 0.1,
+            "beat trigger off the 3/4 beat grid at bar phase {p}"
+        );
+    }
+}
+
 #[test]
 fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
     // Supersaw's channel_state is a [voice][input_ch] matrix with a fixed row
