@@ -1418,44 +1418,28 @@ impl AudioState {
         let desired_modules: HashMap<String, _> =
             modules.into_iter().map(|m| (m.id.clone(), m)).collect();
 
-        // Compute scopes to add/remove (no updates — key includes config)
-        {
-            let mut scope_collection = self.scope_collection.lock();
-            let current_keys: HashSet<ScopeBufferKey> = scope_collection.keys().cloned().collect();
-
-            // Expand desired scopes into per-channel buffer keys
-            let desired_keys: HashSet<ScopeBufferKey> = scopes
-                .iter()
-                .flat_map(|scope| {
-                    scope.channels.iter().map(move |ch| ScopeBufferKey {
-                        module_id: ch.module_id.clone(),
-                        port_name: ch.port_name.clone(),
-                        channel: ch.channel,
-                        ms_per_frame: scope.ms_per_frame,
-                        trigger_threshold: scope.trigger_threshold,
-                    })
+        // Build the complete next scope membership: one fresh buffer per
+        // desired per-channel key (a key includes the scope's config, so a
+        // config change is a new key). At apply time the audio thread moves
+        // each carried-over key's live buffer state into this map and swaps it
+        // in wholesale, so the resulting membership is exactly this update's
+        // desired set no matter which other updates apply in between.
+        update.scope_next = scopes
+            .iter()
+            .flat_map(|scope| {
+                scope.channels.iter().map(move |ch| ScopeBufferKey {
+                    module_id: ch.module_id.clone(),
+                    port_name: ch.port_name.clone(),
+                    channel: ch.channel,
+                    ms_per_frame: scope.ms_per_frame,
+                    trigger_threshold: scope.trigger_threshold,
                 })
-                .collect();
-
-            // Scopes to remove
-            update.scope_removes = current_keys.difference(&desired_keys).cloned().collect();
-
-            // Scopes to add (pre-build ScopeBuffers on main thread)
-            update.scope_adds = desired_keys
-                .difference(&current_keys)
-                .map(|key| {
-                    let buffer =
-                        ScopeBuffer::new(key.ms_per_frame, key.trigger_threshold, sample_rate);
-                    (key.clone(), buffer)
-                })
-                .collect();
-
-            // Grow the map here so the audio thread's inserts at apply time
-            // never rehash. The collection only shrinks between now and then
-            // (removals happen at apply; a superseding update re-reserves), so
-            // this bound holds.
-            scope_collection.reserve(update.scope_adds.len());
-        }
+            })
+            .map(|key| {
+                let buffer = ScopeBuffer::new(key.ms_per_frame, key.trigger_threshold, sample_rate);
+                (key, buffer)
+            })
+            .collect();
 
         // Build the complete next XY-scope membership. Single global $scopeXY;
         // keys are pair-indexed so re-ordering one pair forces a full rebuild
@@ -1762,23 +1746,6 @@ pub(crate) struct ProcessHandle(modular_core::types::SampleablePtr);
 // `unsafe impl Send` on `Signal`/`Buffer`, which cache the same pointer type.
 unsafe impl Send for ProcessHandle {}
 
-/// Ship `item` to the main thread for deallocation. On a full garbage queue the
-/// item reroutes through the error queue, which the main thread also drains and
-/// drops; only with both queues saturated does the drop land here (memory-safe
-/// but a violation of the no-audio-thread-dealloc invariant, so both capacities
-/// are sized to make that unreachable). A free function so call sites that hold
-/// a borrow of another `AudioProcessor` field (e.g. a scope-collection lock
-/// guard) can still push.
-fn try_push_garbage(
-    garbage_tx: &mut GarbageProducer,
-    error_tx: &mut ErrorProducer,
-    item: GarbageItem,
-) {
-    if let Err(err) = garbage_tx.push(item) {
-        let _ = error_tx.push(AudioError::GarbageQueueFull { message: err });
-    }
-}
-
 struct AudioProcessor {
     /// The DSP patch graph - owned directly, no mutex needed
     patch: Patch,
@@ -1921,8 +1888,17 @@ impl AudioProcessor {
         }
     }
 
+    /// Ship `item` to the main thread for deallocation. On a full garbage
+    /// queue the item reroutes through the error queue, which the main thread
+    /// also drains and drops; only with both queues saturated does the drop
+    /// land here (memory-safe but a violation of the no-audio-thread-dealloc
+    /// invariant, so both capacities are sized to make that unreachable).
     fn try_push_garbage_item(&mut self, item: GarbageItem) {
-        try_push_garbage(&mut self.garbage_tx, &mut self.error_tx, item);
+        if let Err(err) = self.garbage_tx.push(item) {
+            let _ = self
+                .error_tx
+                .push(AudioError::GarbageQueueFull { message: err });
+        }
     }
 
     /// Process all pending commands from the main thread and poll MIDI.
@@ -2096,10 +2072,10 @@ impl AudioProcessor {
     /// Slots `[0, swap_pos)` were already emitted by the pre-swap modules.
     ///
     /// Everything the update displaces — the old patch, processing order and
-    /// pointer capacity, XY scope map and list, evicted profiler maps — is
-    /// stowed back into the consumed `update` (the "husk") and shipped to the
-    /// garbage queue in a single push at the end, so applying a patch neither
-    /// allocates nor deallocates on the audio thread.
+    /// pointer capacity, scope map, XY scope map and list, evicted profiler
+    /// maps — is stowed back into the consumed `update` (the "husk") and
+    /// shipped to the garbage queue in a single push at the end, so applying a
+    /// patch neither allocates nor deallocates on the audio thread.
     fn apply_patch_update(&mut self, mut update: PatchUpdate, swap_pos: usize) {
         // The new patch arrives fully constructed but unconnected. Bring it to liveness
         // without ever touching the live patch's map, then swap.
@@ -2136,31 +2112,20 @@ impl AudioProcessor {
         // run after every structural change above so no pointer dangles
         self.rebuild_process_order_ptrs();
 
-        // Update scopes. `remove_entry` hands back the map's owned key so its
-        // strings drop on the main thread; adds insert into capacity the main
-        // thread reserved when building this update, so no rehash happens
-        // here. Adds are diffed against the live collection so an add never
-        // collides with a resident key, but evicting first keeps even that
-        // case off this thread.
+        // Swap in the complete new scope membership built on the main thread.
+        // A key also present in the live map first takes over that buffer's
+        // state (`mem::swap` in place — no allocation), so an unchanged
+        // scope's display stays continuous across the swap. The displaced map
+        // — removed keys' buffers plus the unused fresh ones — rides the husk
+        // back for main-thread drop.
         {
-            let AudioProcessor {
-                scope_collection,
-                garbage_tx,
-                error_tx,
-                ..
-            } = self;
-            let mut scope_collection = scope_collection.lock();
-            for key in update.scope_removes.iter() {
-                if let Some(entry) = scope_collection.remove_entry(key) {
-                    try_push_garbage(garbage_tx, error_tx, GarbageItem::Scope(entry));
+            let mut scope_collection = self.scope_collection.lock();
+            for (key, buffer) in update.scope_next.iter_mut() {
+                if let Some(live) = scope_collection.get_mut(key) {
+                    std::mem::swap(buffer, live);
                 }
             }
-            for (key, buffer) in update.scope_adds.drain(..) {
-                if let Some(entry) = scope_collection.remove_entry(&key) {
-                    try_push_garbage(garbage_tx, error_tx, GarbageItem::Scope(entry));
-                }
-                scope_collection.insert(key, buffer);
-            }
+            std::mem::swap(&mut *scope_collection, &mut update.scope_next);
         }
 
         // Profiler-map swap: `swap_records` updates the audio thread's TLS
@@ -2243,8 +2208,8 @@ impl AudioProcessor {
             }
         }
 
-        // Ship the husk — old patch, old order ids and pointer capacity, old
-        // XY map/list, evicted profiler maps, drained add/remove lists — in a
+        // Ship the husk — old patch, old order ids and pointer capacity, the
+        // displaced scope map, old XY map/list, evicted profiler maps — in a
         // single push for main-thread deallocation.
         self.try_push_garbage_item(GarbageItem::PatchUpdate(update));
     }
@@ -4407,6 +4372,85 @@ mod tests {
         assert_eq!(old_hits.load(Ordering::SeqCst), 0, "old id is gone");
         assert!(!processor.patch.sampleables.contains_key("old-id"));
         assert!(processor.patch.sampleables.contains_key("new-id"));
+    }
+
+    // ============================================================================
+    // Scope collection swap tests
+    // ============================================================================
+
+    fn scope_key(module_id: &str) -> ScopeBufferKey {
+        ScopeBufferKey {
+            module_id: module_id.into(),
+            port_name: "output".into(),
+            channel: 0,
+            ms_per_frame: 100,
+            trigger_threshold: None,
+        }
+    }
+
+    #[test]
+    fn scope_swap_membership_is_exactly_the_last_applied_updates_set() {
+        // Two updates built back-to-back before either applies: each carries
+        // its complete desired membership, so after both apply the collection
+        // holds exactly the later update's set — no orphan from the first, no
+        // dependence on the collection state at build time.
+        let (_cmd_producer, mut processor) = create_test_processor();
+        let key1 = scope_key("m1");
+        let key2 = scope_key("m2");
+
+        let mut u1 = PatchUpdate::new(44_100.0);
+        u1.scope_next
+            .insert(key1.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        let mut u2 = PatchUpdate::new(44_100.0);
+        u2.scope_next
+            .insert(key2.clone(), ScopeBuffer::new(100, None, 44_100.0));
+
+        processor.apply_patch_update(u1, 0);
+        processor.apply_patch_update(u2, 0);
+
+        let collection = processor.scope_collection.lock();
+        assert!(collection.contains_key(&key2));
+        assert!(
+            !collection.contains_key(&key1),
+            "a key absent from the applied update's membership must not linger"
+        );
+        assert_eq!(collection.len(), 1);
+    }
+
+    #[test]
+    fn scope_swap_carries_live_buffer_state_for_kept_keys() {
+        // A key present in both the live collection and the incoming
+        // membership keeps its buffer contents across the swap, so an
+        // unchanged scope's display never blanks on a patch edit.
+        let (_cmd_producer, mut processor) = create_test_processor();
+        let kept = scope_key("kept");
+        let added = scope_key("added");
+
+        let mut u1 = PatchUpdate::new(44_100.0);
+        u1.scope_next
+            .insert(kept.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        processor.apply_patch_update(u1, 0);
+        processor
+            .scope_collection
+            .lock()
+            .get_mut(&kept)
+            .unwrap()
+            .push(0.75);
+
+        let mut u2 = PatchUpdate::new(44_100.0);
+        u2.scope_next
+            .insert(kept.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        u2.scope_next
+            .insert(added.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        processor.apply_patch_update(u2, 0);
+
+        let collection = processor.scope_collection.lock();
+        assert_eq!(
+            collection.get(&kept).unwrap().get_buffer()[0],
+            0.75,
+            "a kept scope's buffer state survives the swap"
+        );
+        assert!(collection.contains_key(&added));
     }
 
     // ============================================================================
