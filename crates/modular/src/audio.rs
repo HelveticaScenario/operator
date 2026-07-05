@@ -56,12 +56,14 @@ struct ModuleStateMetaCache {
     /// Metadata for the patch currently playing on the audio thread, keyed by
     /// module id. Paired with the live slots in `get_module_states`.
     live: HashMap<String, Box<dyn ModuleStateMeta>>,
-    /// Metadata for a queued patch update that has not yet swapped in, tagged
-    /// with its `update_id`. Promoted into `live` once the audio thread reports
-    /// the swap applied (`applied_update_id >= id`), so a poll during the queue
-    /// window never pairs the new patch's metadata with the old patch's still-
-    /// live state.
-    pending: Option<(u64, HashMap<String, Box<dyn ModuleStateMeta>>)>,
+    /// Metadata for patch updates sent to the audio thread but not yet swapped
+    /// in, each tagged with its `update_id`, in submission (ascending-id)
+    /// order. Multiple entries coexist because a superseded update can still
+    /// swap in first — its quantized trigger may fire before the superseding
+    /// command is popped. Once the audio thread reports an applied id, the
+    /// newest entry at or below it promotes into `live`, so a poll never pairs
+    /// one patch's metadata with another patch's still-live state.
+    pending: Vec<(u64, HashMap<String, Box<dyn ModuleStateMeta>>)>,
 }
 
 impl ModuleStateMetaCache {
@@ -69,13 +71,23 @@ impl ModuleStateMetaCache {
     /// applied. Called from the poll path and `apply_patch` so orphan slots can't
     /// accumulate while the editor isn't polling.
     fn promote_if_applied(&mut self, states: &mut ModuleStateMap, applied_update_id: u64) {
-        if let Some((id, _)) = self.pending.as_ref()
-            && applied_update_id >= *id
-            && let Some((_, metas)) = self.pending.take()
-        {
-            states.retain(|id, _| metas.contains_key(id));
-            self.live = metas;
-        }
+        // Entries are id-ascending, so the applied ones are exactly a prefix.
+        // Only the newest applied entry promotes: an older one was superseded
+        // and its patch is no longer the one playing.
+        let applied = self
+            .pending
+            .iter()
+            .take_while(|(id, _)| *id <= applied_update_id)
+            .count();
+        let Some((_, metas)) = self.pending.drain(..applied).last() else {
+            return;
+        };
+        // Keep any slot a still-pending update pre-added — its patch may swap
+        // in next and the audio thread only ever writes into existing slots.
+        states.retain(|id, _| {
+            metas.contains_key(id) || self.pending.iter().any(|(_, m)| m.contains_key(id))
+        });
+        self.live = metas;
     }
 }
 
@@ -1635,7 +1647,7 @@ impl AudioState {
             for (id, live) in state_live {
                 states.entry(id).or_insert(live);
             }
-            meta.pending = Some((update_id, state_metas));
+            meta.pending.push((update_id, state_metas));
         }
 
         // Send the update to audio thread
@@ -4487,6 +4499,63 @@ mod tests {
         fn build_json(&self, _live: &dyn ModuleLiveState) -> serde_json::Value {
             serde_json::Value::String(self.0.into())
         }
+    }
+
+    fn pending_entry(
+        id: u64,
+        module: &str,
+        tag: &'static str,
+    ) -> (u64, HashMap<String, Box<dyn ModuleStateMeta>>) {
+        let mut metas: HashMap<String, Box<dyn ModuleStateMeta>> = HashMap::new();
+        metas.insert(module.into(), Box::new(TestStateMeta(tag)));
+        (id, metas)
+    }
+
+    #[test]
+    fn pending_meta_survives_supersession_until_its_update_applies() {
+        // Update 1 is registered, then update 2 before 1 applies. Update 1's
+        // quantized trigger can still fire before update 2's command is
+        // popped, so its metadata must promote at watermark 1 — with update
+        // 2's entry (and its pre-added slot) intact for the later swap.
+        let mut cache = ModuleStateMetaCache::default();
+        let mut states: ModuleStateMap = HashMap::new();
+        states.insert("a".into(), Box::new(TestLiveState));
+        cache.pending.push(pending_entry(1, "a", "one"));
+        states.insert("b".into(), Box::new(TestLiveState));
+        cache.pending.push(pending_entry(2, "b", "two"));
+
+        cache.promote_if_applied(&mut states, 1);
+        assert!(cache.live.contains_key("a"));
+        assert!(!cache.live.contains_key("b"));
+        assert_eq!(cache.pending.len(), 1);
+        assert!(
+            states.contains_key("b"),
+            "a still-pending update's pre-added slot survives the prune"
+        );
+
+        cache.promote_if_applied(&mut states, 2);
+        assert!(cache.live.contains_key("b"));
+        assert!(!cache.live.contains_key("a"));
+        assert!(!states.contains_key("a"));
+        assert!(cache.pending.is_empty());
+    }
+
+    #[test]
+    fn promotion_picks_newest_applied_pending_entry() {
+        // A watermark covering several pendings promotes only the newest one;
+        // the older entries were superseded before ever pairing with state.
+        let mut cache = ModuleStateMetaCache::default();
+        let mut states: ModuleStateMap = HashMap::new();
+        states.insert("a".into(), Box::new(TestLiveState));
+        states.insert("b".into(), Box::new(TestLiveState));
+        cache.pending.push(pending_entry(1, "a", "one"));
+        cache.pending.push(pending_entry(2, "b", "two"));
+
+        cache.promote_if_applied(&mut states, 2);
+        assert!(cache.live.contains_key("b"));
+        assert!(!cache.live.contains_key("a"));
+        assert!(!states.contains_key("a"));
+        assert!(cache.pending.is_empty());
     }
 
     fn create_test_audio_state() -> AudioState {
