@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 
 use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::delay_line::DelayLine;
-use crate::dsp::utils::map_range;
+use crate::dsp::utils::{map_range, sanitize};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
 use crate::types::Clickless;
 
@@ -402,8 +402,10 @@ impl Reverb {
                 right_out += delayed * TAP_SIGNS[i - HALF_LINES];
             }
 
-            // Damp, then attenuate by the nominal-length decay gain.
-            let damped = one_pole(self.state.damp_state[i], delayed, damp_coeff);
+            // Damp, then attenuate by the nominal-length decay gain. The state
+            // is sanitized every sample so a non-finite input cannot lodge in
+            // the loop recursion.
+            let damped = sanitize(one_pole(self.state.damp_state[i], delayed, damp_coeff));
             self.state.damp_state[i] = damped;
             let gain = (decay_k * length).exp().min(MAX_FEEDBACK);
             returns[i] = damped * gain;
@@ -507,6 +509,47 @@ mod tests {
             }
         }
         base
+    }
+
+    #[test]
+    fn recovers_after_non_finite_input() {
+        // A non-finite input sample must not lodge in the loop's recursive
+        // state: once the input is finite again, the reverb builds a tail.
+        use crate::poly::PolySignal;
+        use crate::types::{OutputStruct, Signal};
+
+        let mut outputs = super::ReverbOutputs::default();
+        outputs.set_all_channels(2);
+        let mut m = super::Reverb {
+            outputs,
+            state: Default::default(),
+            params: super::ReverbParams {
+                input: PolySignal::mono(Signal::Volts(f32::NAN)),
+                decay: None,
+                damping: None,
+                size: None,
+                width: None,
+                predelay: None,
+                modulation: None,
+            },
+            _channel_count: 2,
+            _block_index: Default::default(),
+        };
+        m.init(SAMPLE_RATE);
+        for _ in 0..64 {
+            m.update(SAMPLE_RATE);
+        }
+
+        m.params.input = PolySignal::mono(Signal::Volts(1.0));
+        let mut total = 0.0f32;
+        for _ in 0..48000 {
+            m.update(SAMPLE_RATE);
+            let l = m.outputs.sample.get(0);
+            let r = m.outputs.sample.get(1);
+            assert!(l.is_finite() && r.is_finite());
+            total += l * l + r * r;
+        }
+        assert!(total > 0.0, "tail should recover after non-finite input");
     }
 
     #[test]
