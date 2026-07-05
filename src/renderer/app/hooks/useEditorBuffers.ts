@@ -217,16 +217,20 @@ export function useEditorBuffers({
     }, []);
 
     /**
-     * Save a buffer to disk. Edits can land while the async write is in
-     * flight, so the dirty flag is only cleared on buffers whose content
-     * still equals the snapshot that reached disk.
+     * Save a buffer to disk. Returns the buffer's id after the save (the
+     * absolute file path — saving an untitled buffer changes its id), or
+     * undefined when nothing was saved (buffer missing, dialog cancelled).
+     *
+     * Edits can land while the async write is in flight, so the dirty flag is
+     * only cleared on buffers whose content still equals the snapshot that
+     * reached disk.
      */
     const saveFile = useCallback(
         async (targetId?: string) => {
             const idToSave = targetId || activeBufferId;
             const buffer = buffers.find((b) => getBufferId(b) === idToSave);
             if (!buffer) {
-                return;
+                return undefined;
             }
             const savedContent = buffer.content;
 
@@ -234,12 +238,12 @@ export function useEditorBuffers({
                 const input =
                     await electronAPI.filesystem.showSaveDialog('untitled.mjs');
                 if (!input) {
-                    return;
+                    return undefined;
                 }
 
                 const normalized = normalizeFileName(input);
                 if (!normalized) {
-                    return;
+                    return undefined;
                 }
 
                 // The save dialog only ever returns workspace-relative paths.
@@ -269,6 +273,7 @@ export function useEditorBuffers({
                     }
                     await refreshFileTree();
                     onFileSaved?.(filePath);
+                    return filePath;
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
@@ -288,6 +293,7 @@ export function useEditorBuffers({
                         ),
                     );
                     onFileSaved?.(buffer.filePath);
+                    return buffer.filePath;
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
@@ -469,44 +475,47 @@ export function useEditorBuffers({
         [activeBufferId, buffers, refreshFileTree, resolveWorkspacePath],
     );
 
-    const performCloseBuffer = useCallback(
-        (bufferId: string) => {
-            // Capture current activeBufferId to avoid stale closure
-            const currentActiveId = activeBufferId;
-            setTimeout(() => {
-                setBuffers((prev) => {
-                    const buffer = prev.find(
+    // Mirror of activeBufferId for deferred callbacks that run after state
+    // updates (e.g. a save that re-identified the buffer) have flushed.
+    const activeBufferIdRef = useRef(activeBufferId);
+    useEffect(() => {
+        activeBufferIdRef.current = activeBufferId;
+    });
+
+    const performCloseBuffer = useCallback((bufferId: string) => {
+        setTimeout(() => {
+            // Read the active id when the deferred update runs, so a
+            // just-completed save that changed either id is observed.
+            const currentActiveId = activeBufferIdRef.current;
+            setBuffers((prev) => {
+                const buffer = prev.find((b) => getBufferId(b) === bufferId);
+                if (!buffer) {
+                    return prev;
+                }
+
+                const remaining = prev.filter(
+                    (b) => getBufferId(b) !== bufferId,
+                );
+
+                // Update active buffer if we're closing the active one
+                if (currentActiveId === bufferId) {
+                    const idx = prev.findIndex(
                         (b) => getBufferId(b) === bufferId,
                     );
-                    if (!buffer) {
-                        return prev;
+                    if (remaining.length > 0) {
+                        // Select the buffer that was immediately after the closed one,
+                        // Or the last one if we closed the tail.
+                        const nextIdx = Math.min(idx, remaining.length - 1);
+                        setActiveBufferId(getBufferId(remaining[nextIdx]));
+                    } else {
+                        setActiveBufferId(undefined);
                     }
+                }
 
-                    const remaining = prev.filter(
-                        (b) => getBufferId(b) !== bufferId,
-                    );
-
-                    // Update active buffer if we're closing the active one
-                    if (currentActiveId === bufferId) {
-                        const idx = prev.findIndex(
-                            (b) => getBufferId(b) === bufferId,
-                        );
-                        if (remaining.length > 0) {
-                            // Select the buffer that was immediately after the closed one,
-                            // Or the last one if we closed the tail.
-                            const nextIdx = Math.min(idx, remaining.length - 1);
-                            setActiveBufferId(getBufferId(remaining[nextIdx]));
-                        } else {
-                            setActiveBufferId(undefined);
-                        }
-                    }
-
-                    return remaining;
-                });
-            }, 50);
-        },
-        [activeBufferId],
-    );
+                return remaining;
+            });
+        }, 50);
+    }, []);
 
     const closeBuffer = useCallback(
         async (bufferId: string) => {
@@ -524,8 +533,15 @@ export function useEditorBuffers({
                     return;
                 } else if (response === 0) {
                     try {
-                        await saveFile(bufferId);
-                        performCloseBuffer(bufferId);
+                        // Saving an untitled buffer changes its id to the
+                        // chosen file path; close under the post-save id. A
+                        // cancelled save dialog aborts the close so the
+                        // unsaved content is not discarded.
+                        const savedId = await saveFile(bufferId);
+                        if (savedId === undefined) {
+                            return;
+                        }
+                        performCloseBuffer(savedId);
                     } catch (error) {
                         // A failed save aborts the close: the content never
                         // reached disk, so the buffer must stay open.

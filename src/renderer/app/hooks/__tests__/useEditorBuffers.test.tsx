@@ -10,6 +10,8 @@
  * - Saving only marks a buffer clean if its content still equals the snapshot
  *   that reached disk; keystrokes landing during the async write stay dirty
  *   and are never reverted.
+ * - Closing a dirty untitled buffer via the Save choice closes the tab under
+ *   the buffer's post-save id; cancelling the save dialog keeps the tab open.
  */
 
 import { act, createElement, useEffect } from 'react';
@@ -145,7 +147,7 @@ describe('dirty tracking across an in-flight save', () => {
                 }),
         );
 
-        let savePromise: Promise<void> | undefined;
+        let savePromise: Promise<string | undefined> | undefined;
         act(() => {
             savePromise = hookRef.current.saveFile();
         });
@@ -196,7 +198,7 @@ describe('dirty tracking across an in-flight save', () => {
                 }),
         );
 
-        let savePromise: Promise<void> | undefined;
+        let savePromise: Promise<string | undefined> | undefined;
         act(() => {
             savePromise = hookRef.current.saveFile();
         });
@@ -215,5 +217,47 @@ describe('dirty tracking across an in-flight save', () => {
         expect(buffer.kind).toBe('file');
         expect(buffer.content).toBe('newer keystrokes');
         expect(buffer.dirty).toBe(true);
+    });
+});
+
+describe('closing a dirty untitled buffer with Save', () => {
+    test('closes the tab under the buffer id assigned by the save', async () => {
+        api.showUnsavedChangesDialog.mockResolvedValue(0);
+        api.filesystem.showSaveDialog.mockResolvedValue('kept.mjs');
+        api.filesystem.writeFile.mockResolvedValue({ success: true });
+
+        const hookRef = renderBuffersHook();
+        act(() => hookRef.current.createUntitledFile());
+        act(() => hookRef.current.handlePatchChange('some content'));
+
+        await act(async () => {
+            await hookRef.current.closeBuffer('untitled-1');
+        });
+        await flush();
+
+        expect(api.filesystem.writeFile).toHaveBeenCalledWith(
+            `${WORKSPACE}/kept.mjs`,
+            'some content',
+        );
+        expect(hookRef.current.buffers).toHaveLength(0);
+        expect(hookRef.current.activeBufferId).toBeUndefined();
+    });
+
+    test('keeps the tab open when the save dialog is cancelled', async () => {
+        api.showUnsavedChangesDialog.mockResolvedValue(0);
+        api.filesystem.showSaveDialog.mockResolvedValue(null);
+
+        const hookRef = renderBuffersHook();
+        act(() => hookRef.current.createUntitledFile());
+        act(() => hookRef.current.handlePatchChange('some content'));
+
+        await act(async () => {
+            await hookRef.current.closeBuffer('untitled-1');
+        });
+        await flush();
+
+        expect(hookRef.current.buffers).toHaveLength(1);
+        expect(hookRef.current.buffers[0].content).toBe('some content');
+        expect(api.filesystem.writeFile).not.toHaveBeenCalled();
     });
 });
