@@ -98,14 +98,24 @@ export function registerMidiCompletionProvider(
                 endColumn: wordAtPosition?.endColumn ?? position.column,
             };
 
+            // Monaco's auto-closing pairs insert the closing quote as soon as
+            // the opening one is typed, and completion insertion does not
+            // overtype it — so when a closing quote already follows the
+            // replaced range, the insert text must not add another.
+            const hasClosingQuote =
+                lineContent.charAt(range.endColumn - 1) === quoteChar;
+
             // Build suggestions
             const suggestions: languages.CompletionItem[] = midiInputs.map(
                 (device, index) => {
                     // Determine what to insert
                     let insertText: string;
                     if (endsWithQuote) {
-                        // Already typed opening quote, just insert name and closing quote
-                        insertText = device.name + quoteChar;
+                        // Already typed opening quote; close it only when the
+                        // buffer has not already
+                        insertText = hasClosingQuote
+                            ? device.name
+                            : device.name + quoteChar;
                     } else {
                         // Need to add quotes around the name
                         insertText = `"${device.name}"`;
