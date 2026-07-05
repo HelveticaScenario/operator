@@ -2590,6 +2590,15 @@ pub trait OutputStruct: Default + Send + 'static {
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
+    /// Names of the ports `get_buffer_output` resolves, surfaced through the
+    /// module schema so patch validation can reject `buffer_ref`s to non-buffer
+    /// ports. Default: none.
+    fn buffer_port_names() -> Vec<String>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
     /// Advance any owned circular buffers by `block_size` once per internal
     /// block. Called from the wrapper's `start_block()` before any per-sample
     /// `update()` runs. Default: no-op. `BufferWrite` overrides this to bump
@@ -2654,6 +2663,12 @@ pub struct ModuleSchema {
     #[napi(ts_type = "Record<string, unknown>")]
     pub params_schema: SchemaContainer,
     pub outputs: Vec<OutputSchema>,
+    /// Ports that expose a circular buffer (targets for `buffer_ref` params)
+    /// rather than a sample output. Disjoint from `outputs`. Always
+    /// serialized (even when empty) because the generated TS `ModuleSchema`
+    /// declares the field as required.
+    #[serde(default)]
+    pub buffer_outputs: Vec<String>,
     pub signal_params: Vec<SignalParamSchema>,
     pub positional_args: Vec<PositionalArg>,
     /// If set, this module always produces exactly this many channels (no inference needed)

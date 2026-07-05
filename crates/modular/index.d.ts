@@ -411,6 +411,13 @@ export interface ModuleSchema {
   documentation: string
   paramsSchema: Record<string, unknown>
   outputs: Array<OutputSchema>
+  /**
+   * Ports that expose a circular buffer (targets for `buffer_ref` params)
+   * rather than a sample output. Disjoint from `outputs`. Always
+   * serialized (even when empty) because the generated TS `ModuleSchema`
+   * declares the field as required.
+   */
+  bufferOutputs: Array<string>
   signalParams: Array<SignalParamSchema>
   positionalArgs: Array<PositionalArg>
   /** If set, this module always produces exactly this many channels (no inference needed) */

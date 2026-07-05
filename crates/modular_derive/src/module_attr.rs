@@ -976,6 +976,7 @@ fn impl_module_macro_attr(
                         schema: params_schema,
                     },
                     outputs,
+                    buffer_outputs: <#outputs_ty as crate::types::OutputStruct>::buffer_port_names(),
                     signal_params: <#params_struct_name as crate::types::SignalParamMeta>::signal_param_schemas(),
                     positional_args: vec![
                         #(#positional_args_exprs),*

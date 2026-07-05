@@ -138,6 +138,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "sigma",
@@ -258,6 +259,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "source",
@@ -401,6 +403,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "gain",
@@ -537,6 +540,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -676,6 +680,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -793,6 +798,7 @@
         "default": false
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [
       {
@@ -1012,6 +1018,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1240,6 +1247,7 @@
         "default": false
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1374,6 +1382,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1516,6 +1525,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1714,6 +1724,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1910,6 +1921,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2029,6 +2041,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2186,6 +2199,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2346,6 +2360,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2552,6 +2567,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2780,6 +2796,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2947,6 +2964,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -3126,6 +3144,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -3326,6 +3345,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -3540,6 +3560,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -3682,6 +3703,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "phase",
@@ -3795,6 +3817,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "phase",
@@ -3927,6 +3950,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "phase",
@@ -4011,6 +4035,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [
       {
@@ -4383,6 +4408,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -4654,6 +4680,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -5005,6 +5032,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "pitch",
@@ -5159,6 +5187,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5297,6 +5326,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5435,6 +5465,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5599,6 +5630,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5782,6 +5814,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5965,6 +5998,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6158,6 +6192,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6336,6 +6371,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6476,6 +6512,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6645,6 +6682,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6814,6 +6852,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6983,6 +7022,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7157,6 +7197,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7331,6 +7372,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7490,6 +7532,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7649,6 +7692,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7808,6 +7852,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7967,6 +8012,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8141,6 +8187,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8365,6 +8412,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8539,6 +8587,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8713,6 +8762,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8887,6 +8937,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9061,6 +9112,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9235,6 +9287,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9404,6 +9457,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9573,6 +9627,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9742,6 +9797,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9911,6 +9967,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10080,6 +10137,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10259,6 +10317,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10438,6 +10497,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10578,6 +10638,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10756,6 +10817,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10891,6 +10953,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11026,6 +11089,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11169,6 +11233,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11290,6 +11355,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -11395,6 +11461,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11579,6 +11646,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "gate",
@@ -11757,6 +11825,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "frame",
@@ -11858,6 +11927,9 @@
         "polyphonic": true,
         "default": true
       }
+    ],
+    "bufferOutputs": [
+      "buffer"
     ],
     "signalParams": [
       {
@@ -11984,6 +12056,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12118,6 +12191,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12234,6 +12308,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12375,6 +12450,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "time",
@@ -12500,6 +12576,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12616,6 +12693,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12716,6 +12794,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12734,7 +12813,7 @@
   },
   {
     "name": "$math",
-    "documentation": "Evaluates a math expression every sample, giving you arbitrary control\nvoltage transformations.\n\nWrite an expression string using `x`, `y`, `z` as input variables.\nThe built-in variable `t` (time in seconds) is also available.\n\n**Functions:** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,\n`sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,\n`log(base?, val)`, `abs`, `sign`, `int`, `ceil`, `floor`,\n`round(modulus?, val)`, `min(val, ...)`, `max(val, ...)`,\n`e()`, `pi()`, `vToHz(volts)`, `hzToV(hz)`\n\n**Operators** (highest to lowest precedence):\n`^`, `%`, `/`, `*`, `-`, `+`,\n`== != < <= >= >`,\n`&& and`, `|| or`\n\n```js\n// crossfade between two oscillators\n$math(\"x * sin(t) + y * cos(t)\", { x: $saw('c3'), y: $pulse('c3') })\n```",
+    "documentation": "Evaluates a math expression every sample, giving you arbitrary control\nvoltage transformations.\n\nWrite an expression string using `x`, `y`, `z` as input variables.\nThe built-in variable `t` (time in seconds) is also available.\n\nThe inputs are polyphonic: the module is as wide as its widest input, the\nexpression is evaluated once per channel, and narrower inputs cycle. A\nnon-finite result (e.g. `0/0`) is emitted as 0.\n\n**Functions:** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,\n`sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,\n`log(base?, val)`, `abs`, `sign`, `int`, `ceil`, `floor`,\n`round(modulus?, val)`, `min(val, ...)`, `max(val, ...)`,\n`e()`, `pi()`, `vToHz(volts)`, `hzToV(hz)`\n\n**Operators** (highest to lowest precedence):\n`^`, `%`, `/`, `*`, `-`, `+`,\n`== != < <= >= >`,\n`&& and`, `|| or`\n\n```js\n// crossfade between two oscillators\n$math(\"x * sin(t) + y * cos(t)\", { x: $saw('c3'), y: $pulse('c3') })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "MathParams",
@@ -12748,7 +12827,7 @@
           "description": "first input variable, referenced as `x` in the expression",
           "anyOf": [
             {
-              "$ref": "#/$defs/MonoSignal"
+              "$ref": "#/$defs/PolySignal"
             },
             {
               "type": "null"
@@ -12759,7 +12838,7 @@
           "description": "second input variable, referenced as `y` in the expression",
           "anyOf": [
             {
-              "$ref": "#/$defs/MonoSignal"
+              "$ref": "#/$defs/PolySignal"
             },
             {
               "type": "null"
@@ -12770,7 +12849,7 @@
           "description": "third input variable, referenced as `z` in the expression",
           "anyOf": [
             {
-              "$ref": "#/$defs/MonoSignal"
+              "$ref": "#/$defs/PolySignal"
             },
             {
               "type": "null"
@@ -12782,7 +12861,7 @@
         "expression"
       ],
       "$defs": {
-        "MonoSignal": {
+        "PolySignal": {
           "anyOf": [
             {
               "$ref": "#/$defs/Signal"
@@ -12845,10 +12924,11 @@
       {
         "name": "output",
         "description": "result of the expression",
-        "polyphonic": false,
+        "polyphonic": true,
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "x",
@@ -12970,6 +13050,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13101,6 +13182,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13250,6 +13332,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13366,6 +13449,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13490,6 +13574,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "trigger",
@@ -13624,6 +13709,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13757,6 +13843,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13902,6 +13989,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "min",
@@ -14043,6 +14131,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -14172,6 +14261,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -16371,6 +16461,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "playhead",
@@ -16545,6 +16636,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "playhead",
@@ -16677,6 +16769,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "next",
@@ -16864,6 +16957,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [],
     "channelsParam": "channels"
@@ -16926,6 +17020,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": []
   },
@@ -17145,6 +17240,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "pitch",
@@ -17368,6 +17464,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "gate",
@@ -17527,6 +17624,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -17719,6 +17817,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -17876,6 +17975,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18043,6 +18143,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18205,6 +18306,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18397,6 +18499,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18524,6 +18627,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18648,6 +18752,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
