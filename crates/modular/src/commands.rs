@@ -64,11 +64,14 @@ pub struct PatchUpdate {
     /// ID remappings (applied before inserts/deletes)
     pub transfer_sources: HashMap<String, Option<String>>,
 
-    /// Pre-built scope buffers to add (constructed on main thread)
-    pub scope_adds: Vec<(ScopeBufferKey, ScopeBuffer)>,
-
-    /// Scopes to remove
-    pub scope_removes: Vec<ScopeBufferKey>,
+    /// The complete next scope membership, built on the main thread with a
+    /// fresh buffer per key. At apply time the audio thread moves each
+    /// carried-over key's live buffer into this map in place (no allocation)
+    /// and swaps the whole map in — it never inserts into or removes from the
+    /// shared collection, and membership never depends on a snapshot taken
+    /// before other updates applied. The displaced map rides this update back
+    /// through the garbage queue.
+    pub scope_next: HashMap<ScopeBufferKey, ScopeBuffer>,
 
     /// The complete next XY-scope membership, built on the main thread:
     /// carried-over pairs keep their live buffer `Arc` (ring continuity), new
@@ -126,8 +129,7 @@ impl PatchUpdate {
             new_patch: Patch::new(),
             process_order_ids: Vec::new(),
             transfer_sources: HashMap::new(),
-            scope_adds: Vec::new(),
-            scope_removes: Vec::new(),
+            scope_next: HashMap::new(),
             scope_xy_next: HashMap::new(),
             scope_xy_audio_next: Vec::new(),
             process_order_scratch: Vec::new(),
@@ -241,14 +243,11 @@ pub enum GarbageItem {
     /// A module replaced by `SingleModuleUpdate`, paired with the command's id
     /// string so both heap owners drop together on the main thread.
     Module((String, Box<dyn Sampleable>)),
-    /// A scope entry removed from the collection. Carries the map's owned key
-    /// so its strings drop on the main thread, not inside `remove_entry`.
-    Scope((ScopeBufferKey, ScopeBuffer)),
     /// The audio thread's private XY-scope list, taken on `ClearPatch`.
     ScopeXyAudio(Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>),
     /// A patch update after it is applied (carrying everything it displaced:
-    /// old patch, order ids, XY scope map/list, evicted profiler maps) or one
-    /// superseded by a newer update before it was applied.
+    /// old patch, order ids, scope map, XY scope map/list, evicted profiler
+    /// maps) or one superseded by a newer update before it was applied.
     PatchUpdate(PatchUpdate),
     /// The old patch swapped out by `ClearPatch`.
     Patch(Patch),
