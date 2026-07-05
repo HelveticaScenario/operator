@@ -168,8 +168,11 @@ impl Sampler {
             }
             let (lo, hi) = match &self.params.slice {
                 Some(slice) => {
-                    // Sample-and-hold the slice signal at the edge.
+                    // Sample-and-hold the slice signal at the edge. A cable
+                    // can carry non-finite values; fall back to the first
+                    // slice so the window and position stay finite.
                     let s = slice.signal.get_value_f64();
+                    let s = if s.is_finite() { s } else { 0.0 };
                     let n = slice.points.len();
                     let idx = (s.floor() as i64).rem_euclid(n as i64) as usize;
                     let frac = s - s.floor();
@@ -805,6 +808,35 @@ mod tests {
                 "channel count for a {channels}-channel wav"
             );
         }
+    }
+
+    fn set_slice_signal(sampler: &mut Sampler, volts: f32) {
+        sampler.params.slice.as_mut().unwrap().signal =
+            MonoSignal::from_poly(PolySignal::mono(Signal::Volts(volts)));
+    }
+
+    #[test]
+    fn non_finite_slice_signal_plays_first_slice_and_window_still_ends() {
+        let wav_data = make_test_wav(vec![vec![0.2, 0.4, 0.6, 0.8]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 0.0, "slice": [[0.0, 0.5], 0.0] })),
+            wav_data,
+        );
+        set_slice_signal(&mut sampler, f32::NAN);
+        // The rising edge samples NaN; slice 0 (frames 0..2) plays.
+        sampler.update(SAMPLE_RATE);
+        let v = sampler.outputs.sample.get(0);
+        assert!((v - 1.0).abs() < 1e-6, "expected slice 0 onset, got {v}");
+        // Frames 1 and 2, then the position exits the window and the voice
+        // clears rather than latching.
+        for _ in 0..3 {
+            sampler.update(SAMPLE_RATE);
+        }
+        assert!(
+            !sampler.state.playing,
+            "voice must clear at the window exit"
+        );
+        assert_eq!(sampler.outputs.sample.get(0), 0.0);
     }
 
     #[test]
