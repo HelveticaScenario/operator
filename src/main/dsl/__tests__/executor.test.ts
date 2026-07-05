@@ -1385,6 +1385,21 @@ describe('script execution environment', () => {
     });
 });
 
+// ─── $cross ──────────────────────────────────────────────────────────────────
+
+describe('$cross', () => {
+    test('default weight range is [0, 5] (5 = unity), as the generated docs state', () => {
+        const patch = execPatch(
+            "$sine(['c', 'e']).amp($cross(2, $sine('0.25hz').range(0, 1))).out()",
+        );
+        const track = findModules(patch, '$track')[0];
+        expect(track.params.keyframes).toEqual([
+            [[5, 0], 0],
+            [[0, 5], 1],
+        ]);
+    });
+});
+
 // ─── Pipe vs direct call comparison ──────────────────────────────────────────
 
 describe('pipe vs direct call', () => {

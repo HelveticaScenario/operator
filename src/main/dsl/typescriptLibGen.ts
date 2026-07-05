@@ -1545,7 +1545,7 @@ function $ott(input: Collection | ModuleOutput, config?: {
 /**
  * @param count - Size of the output
  * @param playhead - 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
- * @param range - \`[off, on]\` weight pair (default \`[0, 1]\`)
+ * @param range - \`[off, on]\` weight pair (default \`[0, 5]\`, 5 = unity)
  * @param interpolationType - Easing between keyframes (default linear)
  *
  * @example
