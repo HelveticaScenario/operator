@@ -854,6 +854,34 @@ mod tests {
     }
 
     #[test]
+    fn whitespace_separated_number_after_optional_operand_sigil_is_an_event() {
+        // `?` and `!` bind their operand only when it is adjacent; a
+        // whitespace-separated number stays its own sequence element.
+        match parse("1? 2").unwrap() {
+            MiniAST::Sequence(items) => {
+                assert_eq!(items.len(), 2);
+                match &items[0].0 {
+                    MiniAST::Degrade(_, prob, _) => assert_eq!(*prob, None),
+                    other => panic!("expected Degrade, got {:?}", other),
+                }
+                assert_eq!(num(&items[1].0), 2.0);
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+        match parse("1! 2").unwrap() {
+            MiniAST::Sequence(items) => {
+                assert_eq!(items.len(), 2);
+                match &items[0].0 {
+                    MiniAST::Replicate(_, count) => assert_eq!(*count, 2),
+                    other => panic!("expected Replicate, got {:?}", other),
+                }
+                assert_eq!(num(&items[1].0), 2.0);
+            }
+            other => panic!("expected Sequence, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn parses_rest() {
         let ast = parse("~").unwrap();
         match &ast {

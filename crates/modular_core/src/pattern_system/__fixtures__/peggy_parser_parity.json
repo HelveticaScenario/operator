@@ -666,6 +666,47 @@
     }
   },
   {
+    "label": "replicate ! then whitespace-separated event",
+    "input": "1! 2",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Replicate": [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 1
+                  },
+                  "span": {
+                    "start": 0,
+                    "end": 1
+                  }
+                }
+              },
+              2
+            ]
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 3,
+                "end": 4
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
     "label": "degrade ? with prob",
     "input": "0?0.5",
     "peggy_ast": {
@@ -682,6 +723,27 @@
           }
         },
         0.5,
+        0
+      ]
+    }
+  },
+  {
+    "label": "degrade ? adjacent integer prob",
+    "input": "1?2",
+    "peggy_ast": {
+      "Degrade": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 1
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        2,
         0
       ]
     }
@@ -704,6 +766,48 @@
         },
         null,
         0
+      ]
+    }
+  },
+  {
+    "label": "degrade ? then whitespace-separated event",
+    "input": "1? 2",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Degrade": [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 1
+                  },
+                  "span": {
+                    "start": 0,
+                    "end": 1
+                  }
+                }
+              },
+              null,
+              0
+            ]
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 2
+              },
+              "span": {
+                "start": 3,
+                "end": 4
+              }
+            }
+          },
+          null
+        ]
       ]
     }
   },
