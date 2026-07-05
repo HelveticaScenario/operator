@@ -32,7 +32,7 @@ import type {
 } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { EditorBuffer } from './types/editor';
-import { findSliderValueSpan } from './dsl/sliderSourceEdit';
+import { applySliderChange } from './app/sliderChange';
 import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
 import {
@@ -181,7 +181,13 @@ function App() {
     >(null);
 
     const [scopeViews, setScopeViews] = useState<ScopeView[]>([]);
+    // Path-identity (getBufferId) of the buffer the running patch came from,
+    // compared against activeBufferId by every consumer. Path identities
+    // mutate on save/rename, so the stable EditorBuffer.id of the running
+    // buffer is tracked alongside and the effect below re-derives this value
+    // whenever the buffer's path identity changes.
     const [runningBufferId, setRunningBufferId] = useState<string | null>(null);
+    const runningSourceIdRef = useRef<string | null>(null);
     const [sliderDefs, setSliderDefs] = useState<SliderDefinition[]>([]);
     // Per-frame transport lives in an external store (see transportStore) so
     // updating it ~60×/s does not re-render the whole App tree — only the
@@ -224,49 +230,27 @@ function App() {
 
     const handleSliderChange = useCallback(
         (label: string, newValue: number) => {
-            // Find the slider definition
             const slider = sliderDefs.find((s) => s.label === label);
             if (!slider) {
                 return;
             }
 
-            // Update audio engine via lightweight param update
-            void electronAPI.synthesizer.setModuleParam(
-                slider.moduleId,
-                '$signal',
-                {
-                    source: newValue,
+            // The editor shows the active buffer, which is not necessarily
+            // the buffer the running patch (and its sliders) came from.
+            applySliderChange(
+                slider,
+                newValue,
+                editorRef.current?.getModel() ?? null,
+                activeBufferId !== undefined &&
+                    activeBufferId === runningBufferId,
+                (moduleId, moduleType, params) => {
+                    void electronAPI.synthesizer.setModuleParam(
+                        moduleId,
+                        moduleType,
+                        params,
+                    );
                 },
             );
-
-            // Update the source code in the editor
-            const editorInstance = editorRef.current;
-            if (editorInstance) {
-                const model = editorInstance.getModel();
-                if (model) {
-                    const source = model.getValue();
-                    const span = findSliderValueSpan(source, label);
-                    if (span) {
-                        const startPos = model.getPositionAt(span.start);
-                        const endPos = model.getPositionAt(span.end);
-                        const range = new (window as any).monaco.Range(
-                            startPos.lineNumber,
-                            startPos.column,
-                            endPos.lineNumber,
-                            endPos.column,
-                        );
-                        const formattedValue = Number(
-                            newValue.toPrecision(6),
-                        ).toString();
-                        // Use pushEditOperations for proper undo stack integration
-                        model.pushEditOperations(
-                            [],
-                            [{ range, text: formattedValue }],
-                            () => null,
-                        );
-                    }
-                }
-            }
 
             // Update slider state
             setSliderDefs((prev) =>
@@ -275,7 +259,7 @@ function App() {
                 ),
             );
         },
-        [sliderDefs],
+        [sliderDefs, activeBufferId, runningBufferId],
     );
 
     // Load workspace and file tree on mount
@@ -527,6 +511,21 @@ function App() {
         activeSourceIdRef.current = activeSourceId;
     }, [activeSourceId]);
 
+    // Keep runningBufferId pointing at the running buffer's current path
+    // identity: saving an untitled buffer or renaming a file changes
+    // getBufferId, and comparisons against activeBufferId (slider source
+    // rewriting, running indicators) must keep matching afterwards.
+    useEffect(() => {
+        const sourceId = runningSourceIdRef.current;
+        if (sourceId === null) {
+            return;
+        }
+        const running = buffers.find((b) => b.id === sourceId);
+        if (running) {
+            setRunningBufferId(getBufferId(running));
+        }
+    }, [buffers]);
+
     const isClockRunningRef = useRef(isClockRunning);
     useEffect(() => {
         isClockRunningRef.current = isClockRunning;
@@ -756,6 +755,7 @@ function App() {
 
                 setIsClockRunning(true);
                 setRunningBufferId(activeBufferId);
+                runningSourceIdRef.current = activeSourceIdRef.current ?? null;
                 setError(null);
                 setValidationErrors(null);
 
@@ -899,6 +899,7 @@ function App() {
             await electronAPI.synthesizer.stop();
             setIsClockRunning(false);
             setRunningBufferId(null);
+            runningSourceIdRef.current = null;
         };
     }, []);
     const handleStop = useCallback(() => handleStopRef.current(), []);
