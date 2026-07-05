@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { z } from 'zod';
 
 const AppConfigSchema = z.object({
@@ -144,6 +145,11 @@ export interface ConfigStore {
     update(mutate: (config: AppConfig) => void): void;
     /** Write the default config if the file does not exist yet. */
     ensureExists(): void;
+    /**
+     * Notify on every change to the config file, including atomic saves
+     * (write-temp-then-rename) from external editors.
+     */
+    watch(onChange: (config: AppConfig) => void): fs.FSWatcher;
 }
 
 export function createConfigStore(configFile: string): ConfigStore {
@@ -196,5 +202,25 @@ export function createConfigStore(configFile: string): ConfigStore {
         }
     }
 
-    return { ensureExists, load, save, update };
+    // Watch the containing directory rather than the file itself: an atomic
+    // save (write-temp-then-rename) replaces the file's inode, which detaches
+    // a per-file watcher permanently.
+    function watch(onChange: (config: AppConfig) => void): fs.FSWatcher {
+        const dir = path.dirname(configFile);
+        const base = path.basename(configFile);
+        return fs.watch(dir, (_eventType, filename) => {
+            // Some platforms omit the filename; treat that as a possible hit.
+            if (filename && filename !== base) {
+                return;
+            }
+            const config = read();
+            // A mid-write read can fail to parse; skip it rather than pushing
+            // an empty config to subscribers.
+            if (config !== null) {
+                onChange(config);
+            }
+        });
+    }
+
+    return { ensureExists, load, save, update, watch };
 }

@@ -118,4 +118,53 @@ describe('createConfigStore', () => {
             theme: 'modular-dark',
         });
     });
+
+    test('watcher keeps reporting changes across atomic saves', async () => {
+        const store = createConfigStore(configFile);
+        store.save({ fontSize: 12 });
+
+        const seen: unknown[] = [];
+        const watcher = store.watch((config) => {
+            seen.push(config);
+        });
+        try {
+            const atomicSave = (contents: string) => {
+                const tmp = path.join(dir, 'config.json.tmp');
+                fs.writeFileSync(tmp, contents);
+                fs.renameSync(tmp, configFile);
+            };
+            const waitFor = async (predicate: () => boolean) => {
+                const deadline = Date.now() + 5000;
+                while (!predicate() && Date.now() < deadline) {
+                    await new Promise((resolve) => setTimeout(resolve, 25));
+                }
+                expect(predicate()).toBe(true);
+            };
+
+            // fs.watch's underlying OS stream starts asynchronously, so a
+            // change landing before it is live is never reported. Prime the
+            // watcher by rewriting until an event arrives, then assert on
+            // the saves that matter.
+            const primeDeadline = Date.now() + 5000;
+            while (seen.length === 0 && Date.now() < primeDeadline) {
+                fs.writeFileSync(configFile, JSON.stringify({ fontSize: 12 }));
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
+            expect(seen.length).toBeGreaterThan(0);
+
+            atomicSave(JSON.stringify({ fontSize: 14 }));
+            await waitFor(() =>
+                seen.some((c) => (c as { fontSize?: number }).fontSize === 14),
+            );
+
+            // A second atomic save must still be observed: the rename swapped
+            // the file's inode, which detaches an inode-based watcher.
+            atomicSave(JSON.stringify({ fontSize: 16 }));
+            await waitFor(() =>
+                seen.some((c) => (c as { fontSize?: number }).fontSize === 16),
+            );
+        } finally {
+            watcher.close();
+        }
+    });
 });

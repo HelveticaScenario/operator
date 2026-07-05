@@ -533,16 +533,10 @@ function startConfigWatcher() {
     configStore.ensureExists();
 
     // Watch for config file changes
-    configWatcher = fs.watch(CONFIG_FILE, (eventType) => {
-        if (eventType === 'change') {
-            const config = configStore.load();
-            // Send updated config to renderer
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send(
-                    IPC_CHANNELS.CONFIG_ON_CHANGE,
-                    config,
-                );
-            }
+    configWatcher = configStore.watch((config) => {
+        // Send updated config to renderer
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(IPC_CHANNELS.CONFIG_ON_CHANGE, config);
         }
     });
 }
