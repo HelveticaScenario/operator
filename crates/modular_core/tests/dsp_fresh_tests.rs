@@ -1171,6 +1171,78 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 }
 
+#[test]
+fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
+    // Supersaw's channel_state is a [voice][input_ch] matrix with a fixed row
+    // stride, so the element-wise state transfer must keep every surviving
+    // voice's per-channel runtime state at its own coordinates when the
+    // `voices` param changes: carried voices stay phase-continuous on the
+    // transfer frame, and freshly added voices arrive with their zero-cross
+    // mute armed (silent) instead of inheriting another voice's mid-cycle,
+    // already-unmuted state.
+    let supersaw_params = |voices: u32| {
+        json!({
+            // Two-channel poly pitch (~C2): the matrix has more than one live
+            // column, so a stride mismatch would land channel >= 1 cells on
+            // the wrong (voice, channel) coordinates.
+            "freq": [-2.0, -1.9],
+            "voices": voices
+        })
+    };
+
+    let old_graph = make_graph(vec![("ss", "$supersaw", supersaw_params(5))]);
+    let old_patch = from_graph(&old_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    // Run past several C2 periods (~734 samples each) so every voice's
+    // zero-cross mute has released and phases sit at arbitrary points.
+    for _ in 0..4000 {
+        process_frame(&old_patch);
+    }
+    let old_ss = old_patch.sampleables.get("ss").unwrap();
+    let old_out: Vec<f32> = (0..5)
+        .map(|v| old_ss.get_value_at(DEFAULT_PORT, v, 0))
+        .collect();
+
+    let new_graph = make_graph(vec![("ss", "$supersaw", supersaw_params(7))]);
+    let new_patch = from_graph(&new_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    // Mirror apply_patch_update: transfer state, then connect (which also
+    // re-runs on_patch_update so param-derived caches reflect the new params).
+    for (id, new_module) in &new_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    new_patch.connect_all();
+
+    process_frame(&new_patch);
+    let new_ss = new_patch.sampleables.get("ss").unwrap();
+
+    // The added voices must be silent on the transfer frame: their mute is
+    // armed and releases only at their own first zero crossing.
+    for voice in 5..7 {
+        let v = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
+        assert_eq!(
+            v, 0.0,
+            "fresh voice {voice} must start muted on the transfer frame, got {v}"
+        );
+    }
+
+    // Carried voices continue from their transferred phases: one frame of
+    // evolution, not a jump to another voice's state.
+    for (voice, &before) in old_out.iter().enumerate() {
+        let after = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
+        let delta = (after - before).abs();
+        assert!(
+            delta < 0.5,
+            "voice {voice} must be continuous across the transfer.\n\
+             Before: {before}, after: {after}, delta: {delta}"
+        );
+    }
+}
+
 // ─── $cycle($p.s) CV hold during rest after state transfer ───────────────────
 
 #[test]
