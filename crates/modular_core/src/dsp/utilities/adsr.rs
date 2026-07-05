@@ -3,7 +3,8 @@ use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-/// Times below this (in seconds) are treated as instantaneous.
+/// Times below this (in seconds) saturate a ramp's time phase in one sample;
+/// the level itself still slews at [`MAX_LEVEL_STEP`] per sample.
 const TIME_EPSILON: f32 = 0.0001;
 
 /// Duration of the fast fade-to-zero a `resetOnRetrig` retrigger runs before
@@ -317,31 +318,30 @@ impl Adsr {
                     }
                 }
                 EnvelopeStage::Attack => {
-                    if attack < TIME_EPSILON {
-                        state.current_level = 1.0;
+                    // A sub-epsilon attack saturates the time ramp in one sample;
+                    // advance_ramp's step cap then slews the level to the top so
+                    // even a zero attack cannot click.
+                    let start = state.stage_start_level;
+                    let dphase = if attack < TIME_EPSILON {
+                        1.0
+                    } else {
+                        1.0 / (attack * sample_rate)
+                    };
+                    if advance_ramp(state, start, 1.0, c_attack, dphase) {
                         state.stage = EnvelopeStage::Decay;
                         state.phase = 0.0;
                         state.stage_start_level = 1.0;
-                    } else {
-                        let start = state.stage_start_level;
-                        let dphase = 1.0 / (attack * sample_rate);
-                        if advance_ramp(state, start, 1.0, c_attack, dphase) {
-                            state.stage = EnvelopeStage::Decay;
-                            state.phase = 0.0;
-                            state.stage_start_level = 1.0;
-                        }
                     }
                 }
                 EnvelopeStage::Decay => {
-                    if decay < TIME_EPSILON {
-                        state.current_level = sustain_level;
-                        state.stage = EnvelopeStage::Sustain;
+                    let start = state.stage_start_level;
+                    let dphase = if decay < TIME_EPSILON {
+                        1.0
                     } else {
-                        let start = state.stage_start_level;
-                        let dphase = 1.0 / (decay * sample_rate);
-                        if advance_ramp(state, start, sustain_level, c, dphase) {
-                            state.stage = EnvelopeStage::Sustain;
-                        }
+                        1.0 / (decay * sample_rate)
+                    };
+                    if advance_ramp(state, start, sustain_level, c, dphase) {
+                        state.stage = EnvelopeStage::Sustain;
                     }
                 }
                 EnvelopeStage::Sustain => {
@@ -353,8 +353,13 @@ impl Adsr {
                     }
                 }
                 EnvelopeStage::Release => {
-                    if release < TIME_EPSILON {
-                        state.current_level = 0.0;
+                    let start = state.stage_start_level;
+                    let dphase = if release < TIME_EPSILON {
+                        1.0
+                    } else {
+                        1.0 / (release * sample_rate)
+                    };
+                    if advance_ramp(state, start, 0.0, c, dphase) {
                         state.phase = 0.0;
                         state.stage_start_level = 0.0;
                         state.stage = if gate_on {
@@ -362,18 +367,6 @@ impl Adsr {
                         } else {
                             EnvelopeStage::Idle
                         };
-                    } else {
-                        let start = state.stage_start_level;
-                        let dphase = 1.0 / (release * sample_rate);
-                        if advance_ramp(state, start, 0.0, c, dphase) {
-                            state.phase = 0.0;
-                            state.stage_start_level = 0.0;
-                            state.stage = if gate_on {
-                                EnvelopeStage::Attack
-                            } else {
-                                EnvelopeStage::Idle
-                            };
-                        }
                     }
                 }
             }
@@ -658,6 +651,68 @@ mod tests {
             first <= MAX_LEVEL_STEP * 5.0 + 1e-4,
             "curved attack onset should be capped at ~0.1V, got {first}V"
         );
+    }
+
+    #[test]
+    fn zero_attack_slews_to_full_level() {
+        // A zero attack must still honor the MAX_LEVEL_STEP slew: the envelope
+        // reaches 5V over ~1/MAX_LEVEL_STEP samples, never jumping in one.
+        let mut adsr = make(AdsrParams {
+            attack: time(0.0),
+            ..base_params()
+        });
+        let mut prev = 0.0f32;
+        let mut max_step = 0.0f32;
+        let mut reached_top_at = None;
+        for n in 0..200 {
+            adsr.update(SR);
+            let v = adsr.outputs.sample.get(0);
+            max_step = max_step.max((v - prev).abs());
+            prev = v;
+            if reached_top_at.is_none() && v > 4.99 {
+                reached_top_at = Some(n);
+            }
+        }
+        assert!(
+            max_step <= MAX_LEVEL_STEP * 5.0 + 1e-4,
+            "zero attack must slew, largest single-sample step was {max_step}V"
+        );
+        let reached = reached_top_at.expect("envelope should reach 5V");
+        assert!(
+            reached > 10,
+            "the top should arrive over the slew, not in one sample (got sample {reached})"
+        );
+    }
+
+    #[test]
+    fn zero_release_slews_to_zero() {
+        // A zero release must ramp a sustained envelope down through the slew
+        // instead of snapping 5V→0V in one sample.
+        let mut adsr = make(AdsrParams {
+            release: time(0.0),
+            ..base_params()
+        });
+        let sustained = run(&mut adsr, (SR * 0.2) as usize);
+        assert!(sustained > 4.99, "should sustain near 5V, got {sustained}");
+
+        adsr.params.gate = gate(0.0);
+        let mut prev = sustained;
+        let mut max_step = 0.0f32;
+        let mut reached_zero = false;
+        for _ in 0..200 {
+            adsr.update(SR);
+            let v = adsr.outputs.sample.get(0);
+            max_step = max_step.max((v - prev).abs());
+            prev = v;
+            if v < 0.01 {
+                reached_zero = true;
+            }
+        }
+        assert!(
+            max_step <= MAX_LEVEL_STEP * 5.0 + 1e-4,
+            "zero release must slew, largest single-sample step was {max_step}V"
+        );
+        assert!(reached_zero, "envelope should reach 0V, ended at {prev}");
     }
 
     #[test]
