@@ -35,6 +35,7 @@ import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { serializeForIPC } from './serializeForIPC';
+import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
@@ -661,15 +662,7 @@ console.log('Patch remap debug mode:', DEBUG_LOG);
  * Validate that a path is valid (absolute or relative to workspace)
  */
 function validatePathInWorkspace(filePath: string): string | null {
-    if (path.isAbsolute(filePath)) {
-        return filePath;
-    }
-
-    if (!currentWorkspaceRoot) {
-        return null;
-    }
-
-    return path.resolve(currentWorkspaceRoot, filePath);
+    return resolveWorkspacePath(currentWorkspaceRoot, filePath);
 }
 
 /**
