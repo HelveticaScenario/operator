@@ -35,6 +35,7 @@ import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
+import { sendNavigateToSymbol } from './helpNavigation';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
@@ -1619,21 +1620,12 @@ registerIPCHandler(
     'OPEN_HELP_FOR_SYMBOL',
     async (symbolType: 'type' | 'module' | 'namespace', symbolName: string) => {
         createHelpWindow();
-        // Send navigation message to help window after it loads
         if (helpWindow) {
-            helpWindow.webContents.once('did-finish-load', () => {
-                helpWindow?.webContents.send('navigate-to-symbol', {
-                    symbolName,
-                    symbolType,
-                });
-            });
-            // If already loaded, send immediately
-            if (!helpWindow.webContents.isLoading()) {
-                helpWindow.webContents.send('navigate-to-symbol', {
-                    symbolName,
-                    symbolType,
-                });
-            }
+            sendNavigateToSymbol(
+                helpWindow.webContents,
+                symbolType,
+                symbolName,
+            );
         }
     },
 );
