@@ -20,6 +20,8 @@
  *   offsets, and boundary positions are biased so a span start resolves into
  *   the region that begins there and a span end into the region that ends
  *   there.
+ * - The active-highlight collection is created on the current session's
+ *   editor, never reused from a previous (possibly disposed) editor.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
@@ -507,6 +509,40 @@ describe('startModuleStatePolling anchor lifetime', () => {
 
         stop2();
     });
+
+    test('a collection left by a previous session is replaced with one on the live editor', async () => {
+        // A collection bound to a disposed editor swallows set() calls
+        // silently; a new session must not keep routing highlights to it.
+        const { editor, monaco } = makeHarness(DOC);
+        const dead = {
+            decos: [] as unknown[],
+            set: vi.fn(() => []),
+            clear: vi.fn(),
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const activeDecorationRef: any = { current: dead };
+
+        const state = arrangeState([[0, 1]], []);
+        const getModuleStates = vi.fn(async () => state);
+
+        const stop = startModuleStatePolling({
+            editor,
+            monaco,
+            currentFile: 'buf',
+            runningBufferId: 'buf',
+            activeDecorationRef,
+            getModuleStates,
+            pollInterval: 50,
+        });
+
+        await vi.advanceTimersByTimeAsync(50);
+
+        expect(activeDecorationRef.current).not.toBe(dead);
+        expect(dead.set).not.toHaveBeenCalled();
+        expect(activeCount(activeDecorationRef)).toBe(1);
+
+        stop();
+    });
 });
 
 describe('startModuleStatePolling interpolation resolution', () => {
@@ -623,18 +659,12 @@ describe('startModuleStatePolling interpolation resolution', () => {
                         {
                             evaluatedStart: 0,
                             evaluatedLength: 3,
-                            constLiteralSpan: {
-                                start: aStart,
-                                end: aStart + 5,
-                            },
+                            constLiteralSpan: { start: aStart, end: aStart + 5 },
                         },
                         {
                             evaluatedStart: 3,
                             evaluatedLength: 2,
-                            constLiteralSpan: {
-                                start: bStart,
-                                end: bStart + 4,
-                            },
+                            constLiteralSpan: { start: bStart, end: bStart + 4 },
                         },
                     ],
                 ],
