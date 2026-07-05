@@ -14,9 +14,13 @@
  * back to source positions so highlighting works correctly.
  *
  * IMPORTANT: This system uses Monaco's tracked decorations with stickiness so that
- * decorations automatically move when the user types. We create tracked decorations
- * for each span when we first see a module's argument_spans, then during polling
- * we use model.getDecorationRange() to get the current (tracked) positions.
+ * decorations automatically move when the user types. Tracked decorations are
+ * created for every span on the first poll after a patch evaluates — while
+ * `argument_spans` (evaluation-time document offsets) still match the document,
+ * before any edit can shift it. The decorations are owned by the model (not an
+ * editor) and the cache is keyed by model, so anchors survive polling restarts,
+ * tab switches, and editor recreation. During polling,
+ * model.getDecorationRange() supplies the current (tracked) positions.
  * This applies to both interpolated and non-interpolated spans.
  */
 
@@ -323,14 +327,11 @@ interface ParamCache {
     /**
      * Map of span ID (e.g., "0:5") to Monaco decoration ID.
      * These decorations are tracked and automatically move with text edits.
+     * They are owned by the model (not an editor) so they survive editor
+     * disposal and model detach/re-attach across tab switches.
      * Used for both interpolated and non-interpolated spans.
      */
     trackedDecorationIds?: Map<string, string>;
-    /**
-     * The decoration collection that holds all tracked decorations for this param.
-     * Used for both interpolated and non-interpolated spans.
-     */
-    decorationCollection?: editor.IEditorDecorationsCollection;
     /**
      * Whether we've already created tracked decorations for all_spans.
      * This prevents re-creating them on every poll.
@@ -360,6 +361,29 @@ type ModuleCache = Map<string, ParamCache>;
  * Cache for all modules
  */
 type GlobalCache = Map<string, ModuleCache>;
+
+/**
+ * Per-model caches. Keyed by model so tracked anchor state survives polling
+ * restarts and editor recreation; anchoring only happens while the cached
+ * span data still matches the document, never re-derived from stale
+ * evaluation-time offsets after edits.
+ */
+const modelCaches = new WeakMap<editor.ITextModel, GlobalCache>();
+
+/** Remove a param's tracked anchor decorations from the model. */
+function clearTrackedDecorations(
+    model: editor.ITextModel,
+    paramCache: ParamCache,
+): void {
+    if (paramCache.trackedDecorationIds) {
+        model.deltaDecorations(
+            [...paramCache.trackedDecorationIds.values()],
+            [],
+        );
+    }
+    paramCache.trackedDecorationIds = undefined;
+    paramCache.trackedDecorationsCreated = false;
+}
 
 /**
  * Parameters for starting module state polling
@@ -410,9 +434,6 @@ export function startModuleStatePolling({
         return () => {};
     }
 
-    // Global cache for all modules and their params
-    const globalCache: GlobalCache = new Map();
-
     const interval = setInterval(async () => {
         try {
             const states = await getModuleStates();
@@ -422,14 +443,22 @@ export function startModuleStatePolling({
                 return;
             }
 
+            // Reuse the model's cache: its tracked decorations are live in
+            // the model and already follow edits, whereas rebuilding from
+            // argument_spans would resolve evaluation-time offsets against a
+            // possibly-edited document.
+            let globalCache = modelCaches.get(model);
+            if (!globalCache) {
+                globalCache = new Map();
+                modelCaches.set(model, globalCache);
+            }
+
             // Clean up cache entries for modules that no longer exist in the patch.
             // Without this, tracked decorations from removed modules would linger.
             for (const [cachedModuleId, moduleCache] of globalCache) {
                 if (!(cachedModuleId in states)) {
                     for (const paramCache of moduleCache.values()) {
-                        if (paramCache.decorationCollection) {
-                            paramCache.decorationCollection.clear();
-                        }
+                        clearTrackedDecorations(model, paramCache);
                     }
                     globalCache.delete(cachedModuleId);
                 }
@@ -459,10 +488,12 @@ export function startModuleStatePolling({
                 )) {
                     const { spans, source: evaluatedSource } = paramInfo;
 
-                    // Skip if no spans to highlight
-                    if (!spans || spans.length === 0) {
-                        continue;
-                    }
+                    // A param with no currently active spans (e.g. an arrange
+                    // section that has not started playing) still gets its
+                    // tracked decorations created below: anchoring must
+                    // happen on the first poll after evaluate, while the
+                    // offsets still match the document.
+                    const activeSpans = spans ?? [];
 
                     // Get the document position for this argument
                     const argSpan = argumentSpans[paramName];
@@ -493,12 +524,7 @@ export function startModuleStatePolling({
 
                     if (argSpanChanged || sourceChanged) {
                         // Clear old tracked decorations if any
-                        if (paramCache.decorationCollection) {
-                            paramCache.decorationCollection.clear();
-                        }
-                        paramCache.trackedDecorationIds = undefined;
-                        paramCache.decorationCollection = undefined;
-                        paramCache.trackedDecorationsCreated = false;
+                        clearTrackedDecorations(model, paramCache);
                         paramCache.lastSource = evaluatedSource;
 
                         paramCache.argumentSpan = argSpan;
@@ -576,11 +602,7 @@ export function startModuleStatePolling({
                                 evaluatedSource;
 
                             // Mapper changed — tracked decorations need recreating
-                            paramCache.trackedDecorationsCreated = false;
-                            if (paramCache.decorationCollection) {
-                                paramCache.decorationCollection.clear();
-                            }
-                            paramCache.trackedDecorationIds = undefined;
+                            clearTrackedDecorations(model, paramCache);
                         }
 
                         if (!paramCache.positionMapper) {
@@ -669,12 +691,10 @@ export function startModuleStatePolling({
                             }
 
                             if (decorationsToCreate.length > 0) {
-                                paramCache.decorationCollection =
-                                    editor.createDecorationsCollection();
-                                const ids =
-                                    paramCache.decorationCollection.set(
-                                        decorationsToCreate,
-                                    );
+                                const ids = model.deltaDecorations(
+                                    [],
+                                    decorationsToCreate,
+                                );
                                 paramCache.trackedDecorationIds = new Map();
                                 for (let i = 0; i < spanIds.length; i++) {
                                     paramCache.trackedDecorationIds.set(
@@ -689,7 +709,7 @@ export function startModuleStatePolling({
 
                         // Use tracked decorations for active spans
                         if (paramCache.trackedDecorationIds) {
-                            for (const [spanStart, spanEnd] of spans) {
+                            for (const [spanStart, spanEnd] of activeSpans) {
                                 const spanId = `${spanStart}:${spanEnd}`;
                                 const decoId =
                                     paramCache.trackedDecorationIds.get(spanId);
@@ -758,13 +778,10 @@ export function startModuleStatePolling({
                                 });
                             }
 
-                            // Create the decoration collection and get IDs
-                            paramCache.decorationCollection =
-                                editor.createDecorationsCollection();
-                            const ids =
-                                paramCache.decorationCollection.set(
-                                    decorationsToCreate,
-                                );
+                            const ids = model.deltaDecorations(
+                                [],
+                                decorationsToCreate,
+                            );
 
                             // Build span ID -> decoration ID map
                             paramCache.trackedDecorationIds = new Map();
@@ -780,7 +797,7 @@ export function startModuleStatePolling({
 
                         // If we have tracked decorations, use them to get current positions for active spans
                         if (paramCache.trackedDecorationIds) {
-                            for (const [spanStart, spanEnd] of spans) {
+                            for (const [spanStart, spanEnd] of activeSpans) {
                                 const spanId = `${spanStart}:${spanEnd}`;
                                 const decoId =
                                     paramCache.trackedDecorationIds.get(spanId);
@@ -821,15 +838,10 @@ export function startModuleStatePolling({
         }
     }, pollInterval);
 
-    // Cleanup: clear all tracked decoration collections
+    // Tracked anchor decorations are owned by the model and cached per model,
+    // so a later session reuses their live (edit-tracked) ranges;
+    // evaluation-time offsets are stale after any edit.
     return () => {
         clearInterval(interval);
-        for (const moduleCache of globalCache.values()) {
-            for (const paramCache of moduleCache.values()) {
-                if (paramCache.decorationCollection) {
-                    paramCache.decorationCollection.clear();
-                }
-            }
-        }
     };
 }
