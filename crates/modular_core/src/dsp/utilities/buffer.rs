@@ -74,6 +74,10 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
         }
     }
 
+    fn buffer_port_names() -> Vec<String> {
+        vec!["buffer".to_string()]
+    }
+
     /// Advance the circular buffer write position by `block_size` once per
     /// internal block. Called from the wrapper's `start_block()` before
     /// any per-sample `update()` runs, so `read_write_index()` becomes the
