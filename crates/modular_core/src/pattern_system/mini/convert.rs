@@ -441,7 +441,10 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
                 .iter()
                 .map(|c| {
                     let w = step_count_f64(c).max(1.0);
-                    convert_f64_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                    // Divide as Fractions: quantizing the f64 quotient would
+                    // corrupt exact ratios like 4/3 and the pattern's period.
+                    convert_f64_pattern(c)
+                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
                 })
                 .collect();
             stack(scaled)
@@ -580,7 +583,9 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
                 .iter()
                 .map(|c| {
                     let w = step_count_u32(c).max(1.0);
-                    convert_u32_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                    convert_u32_pattern(c)
+                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
                 })
                 .collect();
             stack(scaled)
@@ -716,7 +721,9 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
                 .iter()
                 .map(|c| {
                     let w = step_count_i32(c).max(1.0);
-                    convert_i32_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                    convert_i32_pattern(c)
+                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
                 })
                 .collect();
             stack(scaled)
@@ -1025,7 +1032,8 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 .map(|c| {
                     let w = step_count_main(c).max(1.0);
                     let pat = convert_inner(c)?;
-                    Ok(pat.fast(constructors::pure(Fraction::from(spc / w))))
+                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                    Ok(pat.fast(constructors::pure(Fraction::from(spc) / Fraction::from(w))))
                 })
                 .collect::<Result<_, ConvertError>>()?;
             Ok(stack(scaled))
@@ -2272,6 +2280,74 @@ mod tests {
             haps[0].value.is_some(),
             "With 99% keep probability, value should typically be kept"
         );
+    }
+
+    // --- Polymeter Lowering Tests ---
+    //
+    // Polymeter `{...}` only reaches Rust as ASTs built by the TS peggy
+    // parser, so these tests construct the ASTs directly.
+
+    fn num_atom(v: f64) -> MiniAST {
+        MiniAST::Pure(Located {
+            node: AtomValue::Number(v),
+            span: SourceSpan::new(0, 1),
+        })
+    }
+
+    fn f64_pure(v: f64) -> MiniASTF64 {
+        MiniASTF64::Pure(Located {
+            node: v,
+            span: SourceSpan::new(0, 1),
+        })
+    }
+
+    fn polymeter_012(steps_per_cycle: Option<MiniASTF64>) -> MiniAST {
+        let child = MiniAST::Sequence(vec![
+            (num_atom(0.0), None),
+            (num_atom(1.0), None),
+            (num_atom(2.0), None),
+        ]);
+        MiniAST::Polymeter {
+            children: vec![child],
+            steps_per_cycle: steps_per_cycle.map(Box::new),
+        }
+    }
+
+    #[test]
+    fn test_polymeter_steps_ratio_is_exact() {
+        // {0 1 2}%4 runs the 3-step child at exactly 4/3 speed: onsets land
+        // exactly on the 1/4 grid, and the pattern's period is exactly 3
+        // cycles, so cycle 3000 is identical to cycle 0.
+        let ast = polymeter_012(Some(f64_pure(4.0)));
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+
+        let onsets = |cycle: i64| -> Vec<(Fraction, f64)> {
+            let mut v: Vec<(Fraction, f64)> = pat
+                .query_arc(
+                    Fraction::from_integer(cycle),
+                    Fraction::from_integer(cycle + 1),
+                )
+                .into_iter()
+                .filter(|h| h.has_onset())
+                .map(|h| {
+                    (
+                        h.whole.as_ref().unwrap().begin.clone() - Fraction::from_integer(cycle),
+                        h.value,
+                    )
+                })
+                .collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+
+        let expected = vec![
+            (Fraction::new(0, 1), 0.0),
+            (Fraction::new(1, 4), 1.0),
+            (Fraction::new(1, 2), 2.0),
+            (Fraction::new(3, 4), 0.0),
+        ];
+        assert_eq!(onsets(0), expected);
+        assert_eq!(onsets(3000), expected);
     }
 
     // --- Rest Pattern Behavior Tests ---
