@@ -34,6 +34,7 @@ import {
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
+import { createFallbackWarningChannel } from './fallbackWarning';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
@@ -458,12 +459,18 @@ const synth = new Synthesizer(audioConfigOptions);
 const actualAudioState = synth.getCurrentAudioState();
 console.log('Actual audio state after construction:', actualAudioState);
 
+// Forwards device-fallback warnings to the renderer's AUDIO_FALLBACK_WARNING
+// channel; a warning raised here at startup is held until the main window
+// loads.
+const fallbackWarnings = createFallbackWarningChannel();
+
 // Check for fallback warning and update saved config if devices changed
 if (actualAudioState.fallbackWarning) {
     console.warn(
         'Audio device fallback occurred:',
         actualAudioState.fallbackWarning,
     );
+    fallbackWarnings.report(actualAudioState.fallbackWarning);
 }
 
 // Update saved config with actual devices used (in case of fallback)
@@ -1097,6 +1104,7 @@ registerIPCHandler(
             bufferSize ?? undefined,
             inputDeviceId ?? undefined,
         );
+        fallbackWarnings.report(synth.getCurrentAudioState().fallbackWarning);
         saveAudioConfig();
     },
 );
@@ -1821,9 +1829,18 @@ const createWindow = (): void => {
         setTimeout(loadRenderer, 500);
     });
 
-    // Flush pending logs when the renderer is ready
+    // Flush pending logs and held fallback warnings when the renderer is
+    // ready — anything sent earlier would be dropped by the loading page.
     mainWindow.webContents.on('did-finish-load', () => {
         flushPendingLogs();
+        fallbackWarnings.attach((warning) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                    IPC_CHANNELS.AUDIO_FALLBACK_WARNING,
+                    warning,
+                );
+            }
+        });
     });
 
     loadRenderer();
