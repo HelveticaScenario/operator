@@ -25,14 +25,11 @@ import { ControlPanel } from './components/ControlPanel';
 import electronAPI from './electronAPI';
 import type { ValidationError } from '@modular/core';
 import type { QueuedTrigger } from '@modular/core';
-import type {
-    FileTreeEntry,
-    SourceLocationInfo,
-    UpdateAvailableInfo,
-} from '../shared/ipcTypes';
+import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { EditorBuffer } from './types/editor';
 import { applySliderChange } from './app/sliderChange';
+import { transformErrorsWithSourceLocations } from './app/validationErrorLocations';
 import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
 import {
@@ -56,54 +53,6 @@ import {
     useTransportLinkEnabled,
 } from './app/transportStore';
 import { useTheme } from './themes/ThemeContext';
-
-/**
- * Transform validation errors to use source line numbers instead of module IDs
- * for auto-generated modules (where the ID is meaningless to the user).
- */
-function transformErrorsWithSourceLocations(
-    errors: ValidationError[],
-    sourceLocationMap?: Record<string, SourceLocationInfo>,
-): ValidationError[] {
-    if (!sourceLocationMap) {
-        return errors;
-    }
-
-    return errors.map((err) => {
-        // The location field contains module ID like "sine-1" or user's explicit ID
-        if (!err.location) {
-            return err;
-        }
-
-        // Parse the location - it's either:
-        // - "'myModule'" for explicit IDs (from format_module_location in Rust)
-        // - "moduleName(...)" for auto-generated IDs
-        const explicitIdMatch = err.location.match(/^'([^']+)'$/);
-        if (explicitIdMatch) {
-            // User explicitly named this module - keep showing the ID
-            return err;
-        }
-
-        // For auto-generated module locations like "sine(...)",
-        // Try to find source line from the map
-        // The moduleType(...) format is produced by Rust, but we need the actual moduleId
-        // To look up in the map. Let's check all entries in the map.
-        for (const [moduleId, loc] of Object.entries(sourceLocationMap)) {
-            if (
-                !loc.idIsExplicit &&
-                err.location.includes(moduleId.split('-')[0])
-            ) {
-                // Found a match - replace location with line number
-                return {
-                    ...err,
-                    location: `line ${loc.line}`,
-                };
-            }
-        }
-
-        return err;
-    });
-}
 
 function App() {
     const {
