@@ -981,11 +981,13 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 return Err(ConvertError::RestNotSupported("? (degrade)".to_string()));
             }
             let pat = convert_inner(pattern)?;
-            let probability = prob.unwrap_or(0.5);
+            // `?p` drops with probability p (Tidal/strudel semantics); the
+            // combinator takes a keep probability, so pass the complement.
+            let drop_probability = prob.unwrap_or(0.5);
             // Safe to unwrap because supports_rest() returned true
             let rest =
                 T::rest_value().expect("supports_rest() returned true but rest_value() is None");
-            Ok(pat.degrade_by_with_rest_seeded(probability, rest, *seed))
+            Ok(pat.degrade_by_with_rest_seeded(1.0 - drop_probability, rest, *seed))
         }
 
         MiniAST::Euclidean {
@@ -2266,19 +2268,37 @@ mod tests {
 
     #[test]
     fn test_degrade_with_probability() {
-        // Degrade with 0% probability should keep all values (probability is "keep" probability)
-        // Actually, prob=0.5 means keep if random < 0.5
-        // So 1?0.9 means keep if random < 0.9 (keep 90% of the time)
-        let ast = parse("1?0.99").unwrap();
-        let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
+        // `?p` drops with probability p (Tidal/strudel semantics), so
+        // "1?0.9" sounds on only ~10% of cycles.
+        let kept_fraction = |source: &str| -> f64 {
+            let ast = parse(source).unwrap();
+            let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
+            let mut kept = 0;
+            for cycle in 0..1000 {
+                let haps = pat.query_arc(
+                    Fraction::from_integer(cycle),
+                    Fraction::from_integer(cycle + 1),
+                );
+                assert_eq!(haps.len(), 1, "degrade preserves the time slot");
+                if haps[0].value.is_some() {
+                    kept += 1;
+                }
+            }
+            kept as f64 / 1000.0
+        };
 
-        // With 99% keep probability, most queries should return the value
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-        assert_eq!(haps.len(), 1);
-        // High probability of being kept
+        let sparse = kept_fraction("1?0.9");
         assert!(
-            haps[0].value.is_some(),
-            "With 99% keep probability, value should typically be kept"
+            sparse > 0.04 && sparse < 0.2,
+            "'1?0.9' should keep ~10% of cycles, kept {:.0}%",
+            sparse * 100.0
+        );
+
+        let dense = kept_fraction("1?0.1");
+        assert!(
+            dense > 0.8 && dense < 0.96,
+            "'1?0.1' should keep ~90% of cycles, kept {:.0}%",
+            dense * 100.0
         );
     }
 
