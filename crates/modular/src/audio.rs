@@ -5,7 +5,6 @@ use cpal::Sample;
 use cpal::SizedSample;
 use cpal::traits::{DeviceTrait, HostTrait};
 
-use hound::{WavSpec, WavWriter};
 use modular_core::PORT_MAX_CHANNELS;
 use modular_core::PatchGraph;
 use modular_core::dsp::schema;
@@ -28,8 +27,6 @@ use rtrb::{Consumer as RtrbConsumer, Producer as RtrbProducer, RingBuffer};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -87,6 +84,7 @@ use crate::commands::{
     GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
 };
 use crate::midi::MidiInputManager;
+use crate::recording::{RecordingFeed, RecordingSession};
 
 // ============================================================================
 // Audio Host Information
@@ -1029,10 +1027,12 @@ pub struct AudioState {
     /// read on the main thread by `get_scope_xy_buffers` to ship the
     /// volt→clip window. Shared with the audio thread via `AudioSharedState`.
     scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    /// Recording writer - shared with audio thread
-    recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
-    /// Recording path
-    recording_path: Arc<Mutex<Option<PathBuf>>>,
+    /// Audio-thread half of the active recording session, shared with the
+    /// callback: a lock-free ring the callback pushes f32 samples into. All
+    /// disk I/O happens on the session's writer thread.
+    recording_feed: Arc<Mutex<Option<RecordingFeed>>>,
+    /// Main-thread handle to the active recording session's writer thread.
+    recording_session: Mutex<Option<RecordingSession>>,
     /// Sample rate
     sample_rate: f32,
     /// Output channels
@@ -1101,8 +1101,8 @@ impl AudioState {
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
-            recording_writer: Arc::new(Mutex::new(None)),
-            recording_path: Arc::new(Mutex::new(None)),
+            recording_feed: Arc::new(Mutex::new(None)),
+            recording_session: Mutex::new(None),
             sample_rate,
             channels,
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
@@ -1188,7 +1188,7 @@ impl AudioState {
             scope_collection: self.scope_collection.clone(),
             scope_xy_collection: self.scope_xy_collection.clone(),
             scope_xy_ranges: self.scope_xy_ranges.clone(),
-            recording_writer: self.recording_writer.clone(),
+            recording_feed: self.recording_feed.clone(),
             audio_budget_meter: self.audio_budget_meter.clone(),
             module_states: self.module_states.clone(),
             midi_manager: self.midi_manager.clone(),
@@ -1241,32 +1241,29 @@ impl AudioState {
             filename.unwrap_or_else(|| format!("recording_{}.wav", chrono_simple_timestamp()));
         let path = PathBuf::from(&filename);
 
-        let spec = WavSpec {
-            channels: 1,
-            sample_rate: self.sample_rate as u32,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-
-        let writer = WavWriter::create(&path, spec)
+        let (feed, session) = crate::recording::start(path, self.sample_rate as u32)
             .map_err(|e| napi::Error::from_reason(format!("Failed to start file write: {}", e)))?;
-        *self.recording_writer.lock() = Some(writer);
-        *self.recording_path.lock() = Some(path);
+        *self.recording_feed.lock() = Some(feed);
+        *self.recording_session.lock() = Some(session);
 
         Ok(filename)
     }
 
     pub fn stop_recording(&self) -> Result<Option<String>> {
-        let writer = self.recording_writer.lock().take();
-        let path = self.recording_path.lock().take();
+        // Remove the callback's feed first: dropping it closes the ring's write
+        // side, so the writer thread's final drain sees every pushed sample.
+        drop(self.recording_feed.lock().take());
+        let session = self.recording_session.lock().take();
 
-        if let Some(w) = writer {
-            w.finalize().map_err(|e| {
-                napi::Error::from_reason(format!("Failed to finalize file writer: {}", e))
-            })?;
+        match session {
+            Some(session) => {
+                let path = session.finish().map_err(|e| {
+                    napi::Error::from_reason(format!("Failed to finalize file writer: {}", e))
+                })?;
+                Ok(Some(path.to_string_lossy().to_string()))
+            }
+            None => Ok(None),
         }
-
-        Ok(path.map(|p| p.to_string_lossy().to_string()))
     }
 
     pub fn get_audio_buffers(&self) -> Vec<(ScopeBufferKey, Float32Array, ScopeStats)> {
@@ -1714,7 +1711,10 @@ pub struct AudioSharedState {
     /// Display ranges for the active $scopeXY — written by the audio thread on
     /// apply, read by the main thread for the renderer.
     pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
+    /// Audio-thread half of the active recording session: a lock-free ring the
+    /// callback pushes f32 samples into. Disk I/O stays on the session's
+    /// writer thread.
+    pub recording_feed: Arc<Mutex<Option<RecordingFeed>>>,
     pub audio_budget_meter: Arc<AudioBudgetMeter>,
     /// Live per-module editor state - written by audio thread, read by main thread
     pub module_states: Arc<Mutex<ModuleStateMap>>,
@@ -2390,7 +2390,7 @@ pub fn make_stream<T>(
     block_size: usize,
 ) -> Result<cpal::Stream>
 where
-    T: SizedSample + FromSample<f32> + hound::Sample,
+    T: SizedSample + FromSample<f32>,
 {
     let num_channels = config.channels as usize;
 
@@ -2400,7 +2400,7 @@ where
     println!("Time at start: {time_at_start:?}");
 
     // Clone shared state for the closure
-    let recording_writer = shared.recording_writer.clone();
+    let recording_feed = shared.recording_feed.clone();
     let audio_budget_meter = shared.audio_budget_meter.clone();
     let panicked_flag = shared.audio_thread_panicked.clone();
 
@@ -2556,7 +2556,7 @@ where
                             // `FinalStateProcessor` used to provide per-frame.
                             if end > audio_processor.block_pos {
                                 let mut scope_guard = audio_processor.scope_collection.try_lock();
-                                let mut writer_guard = recording_writer.try_lock();
+                                let mut recording_guard = recording_feed.try_lock();
                                 for i in audio_processor.block_pos..end {
                                     let is_stopped = audio_processor.is_stopped();
                                     match (final_state_processor.prev_is_stopped, is_stopped) {
@@ -2627,14 +2627,16 @@ where
                                                 output[frame_start + ch] = T::from_sample(v);
                                             }
                                         }
-                                        if let Some(writer_lock) = writer_guard.as_mut()
-                                            && let Some(writer) = writer_lock.as_mut()
+                                        // Recorded samples stay f32 — the WAV
+                                        // header declares Float32 regardless of
+                                        // the stream's sample type `T`.
+                                        if let Some(feed_lock) = recording_guard.as_mut()
+                                            && let Some(feed) = feed_lock.as_mut()
                                         {
                                             let v = root.get_value_at(&ROOT_OUTPUT_PORT, 0, i)
                                                 * AUDIO_OUTPUT_ATTENUATION
                                                 * final_state_processor.attenuation_factor;
-                                            let _ = writer
-                                                .write_sample(T::from_sample(safety_soft_clip(v)));
+                                            feed.push(safety_soft_clip(v));
                                         }
                                         if let Some(scope_lock) = scope_guard.as_mut() {
                                             for (key, scope_buffer) in scope_lock.iter_mut() {
@@ -3271,7 +3273,7 @@ mod tests {
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
-            recording_writer: Arc::new(Mutex::new(None)),
+            recording_feed: Arc::new(Mutex::new(None)),
             audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             midi_manager: Arc::new(MidiInputManager::new()),
@@ -3526,7 +3528,7 @@ mod tests {
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
-            recording_writer: Arc::new(Mutex::new(None)),
+            recording_feed: Arc::new(Mutex::new(None)),
             audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             midi_manager: Arc::new(MidiInputManager::new()),

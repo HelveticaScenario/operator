@@ -10,6 +10,7 @@ mod link;
 mod midi;
 mod panic_log;
 mod params_cache;
+mod recording;
 mod validation;
 mod wav_bpm;
 mod wav_metadata;
