@@ -8,6 +8,7 @@ import {
     setActiveSpanRegistry,
     setDSLWrapperLineOffset,
     captureSourceLocation,
+    assertFiniteNumericParams,
 } from './factories';
 import type {
     BufferOutputRef,
@@ -306,6 +307,11 @@ export function executePatchScript(
         node._setParam('length', lengthSeconds);
 
         // Derive channel count from the input signal
+        assertFiniteNumericParams(
+            '$buffer',
+            node.getParamsSnapshot(),
+            sourceLocation,
+        );
         const deriveResult = deriveChannelCount(
             '$buffer',
             node.getParamsSnapshot(),
