@@ -227,8 +227,9 @@ Atom
   = Rest
   / Value
 
+// A bare `-` is a rest only when it does not begin a number (`-5`, `-.5`).
 Rest
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
+  = ("~" / "-" !("."? [0-9])) { return { Rest: spanOf(location()) }; }
 
 // ---------------------------------------------------------------------------
 // Values
@@ -432,11 +433,11 @@ OperandRandomChoiceF64
     }
 
 OperandChoiceF64
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
+  = ("~" / "-" !("."? [0-9])) { return { Rest: spanOf(location()) }; }
   / n:Number { return { Pure: located(n, location()) }; }
 
 OperandBaseF64
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
+  = ("~" / "-" !("."? [0-9])) { return { Rest: spanOf(location()) }; }
   / n:Number { return { Pure: located(n, location()) }; }
   / "[" _ s:OperandStackExprF64 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprF64 _ ">" { return s.slow; }
@@ -553,8 +554,10 @@ OperandBaseI32
 // Numbers & whitespace
 // ---------------------------------------------------------------------------
 
+// The integer part may be empty (`.5`, `-.5`); the fractional part needs at
+// least one digit after the dot so a trailing `.` stays a feet separator.
 Number "number"
-  = s:$("-"? [0-9]+ ("." [0-9]+)?) { return parseFloat(s); }
+  = s:$("-"? ([0-9]+ ("." [0-9]+)? / "." [0-9]+)) { return parseFloat(s); }
 
 Integer "integer"
   = s:$("-"? [0-9]+) { return parseInt(s, 10); }

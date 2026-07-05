@@ -49,6 +49,20 @@ describe('atom kinds', () => {
         });
     });
 
+    test('leading-dot Number', () => {
+        const r = $p('.5');
+        expect(r.ast).toEqual({
+            Pure: { node: { Number: 0.5 }, span: { start: 0, end: 2 } },
+        });
+    });
+
+    test('negative leading-dot Number', () => {
+        const r = $p('-.5');
+        expect(r.ast).toEqual({
+            Pure: { node: { Number: -0.5 }, span: { start: 0, end: 3 } },
+        });
+    });
+
     test('Hz', () => {
         const r = $p('440hz');
         expect(r.ast).toEqual({

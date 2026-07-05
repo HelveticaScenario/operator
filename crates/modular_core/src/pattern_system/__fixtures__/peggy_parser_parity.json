@@ -812,6 +812,36 @@
     }
   },
   {
+    "label": "leading-dot decimal",
+    "input": ".5",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Number": 0.5
+        },
+        "span": {
+          "start": 0,
+          "end": 2
+        }
+      }
+    }
+  },
+  {
+    "label": "negative leading-dot decimal",
+    "input": "-.5",
+    "peggy_ast": {
+      "Pure": {
+        "node": {
+          "Number": -0.5
+        },
+        "span": {
+          "start": 0,
+          "end": 3
+        }
+      }
+    }
+  },
+  {
     "label": "euclidean (k,n) no rotation",
     "input": "0(3,8)",
     "peggy_ast": {
