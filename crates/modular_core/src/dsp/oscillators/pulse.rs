@@ -104,6 +104,11 @@ impl PulseOscillator {
 
             // Wrap phase (rem_euclid supports negative increments from through-zero FM)
             state.phase = state.phase.rem_euclid(1.0);
+            // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which
+            // is absorbing; reset so the phase recovers once the input does.
+            if !state.phase.is_finite() {
+                state.phase = 0.0;
+            }
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.

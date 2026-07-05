@@ -63,6 +63,12 @@ impl Ramp {
             if state.phase < 0.0 {
                 state.phase += 1.0;
             }
+            // A non-finite frequency (e.g. voct_to_hz overflow) wraps to NaN,
+            // which is absorbing; reset so the phase recovers once the input
+            // does.
+            if !state.phase.is_finite() {
+                state.phase = 0.0;
+            }
 
             self.outputs.sample.set(ch, state.phase);
         }
@@ -70,3 +76,53 @@ impl Ramp {
 }
 
 message_handlers!(impl Ramp {});
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{OutputStruct, Signal};
+
+    fn make_ramp(freq_volts: f32) -> Ramp {
+        let params = RampParams {
+            freq: PolySignal::mono(Signal::Volts(freq_volts)),
+        };
+        let channels = params.freq.channels().max(1);
+        let mut outputs = RampOutputs::default();
+        outputs.set_all_channels(channels);
+        Ramp {
+            params,
+            outputs,
+            _channel_count: channels,
+            _block_index: Default::default(),
+            channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
+        }
+    }
+
+    #[test]
+    fn recovers_after_non_finite_frequency() {
+        // 200 V overflows voct_to_hz to +inf; that must not stick in the
+        // phase accumulator — once the pitch returns to a normal level the
+        // ramp must rise again.
+        let mut ramp = make_ramp(200.0);
+        for _ in 0..8 {
+            ramp.update(48_000.0);
+        }
+        assert!(
+            ramp.channel_state[0].phase.is_finite(),
+            "phase {} must stay finite through a non-finite frequency",
+            ramp.channel_state[0].phase
+        );
+
+        ramp.params.freq = PolySignal::mono(Signal::Volts(0.0)); // C4
+        let out: Vec<f32> = (0..100)
+            .map(|_| {
+                ramp.update(48_000.0);
+                ramp.outputs.sample.get(0)
+            })
+            .collect();
+        assert!(
+            out.windows(2).all(|w| w[1] > w[0]),
+            "ramp must rise monotonically at C4 once the input is normal"
+        );
+    }
+}

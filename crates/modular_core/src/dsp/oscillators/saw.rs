@@ -169,6 +169,11 @@ impl SawOscillator {
             // Advance phase (rem_euclid supports negative increments from through-zero FM)
             state.phase += phase_increment;
             state.phase = state.phase.rem_euclid(1.0);
+            // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which
+            // is absorbing; reset so the phase recovers once the input does.
+            if !state.phase.is_finite() {
+                state.phase = 0.0;
+            }
             let read_phase = (state.phase + read_offset).rem_euclid(1.0);
 
             // DPW body for this sample. The sync reset (below) lands in the
