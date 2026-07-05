@@ -77,6 +77,8 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     { label: 'degrade ? adjacent integer prob', input: '1?2' },
     { label: 'degrade ? default prob (null)', input: '0?' },
     { label: 'degrade ? then whitespace-separated event', input: '1? 2' },
+    { label: 'leading-dot decimal', input: '.5' },
+    { label: 'negative leading-dot decimal', input: '-.5' },
     { label: 'euclidean (k,n) no rotation', input: '0(3,8)' },
     { label: 'euclidean with rotation', input: '0(3,8,1)' },
     { label: 'fast factor as subsequence', input: 'c*[1 2]' },

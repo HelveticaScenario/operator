@@ -438,7 +438,8 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         }
         if self.peek() == Some(b'.') {
-            // Optional fractional part (must have digits after .)
+            // Optional fractional part (must have digits after `.`). The
+            // integer part may be empty, so `.5` / `-.5` are numbers.
             let after_dot = self.pos + 1;
             if self
                 .input
@@ -463,7 +464,13 @@ impl<'a> Parser<'a> {
     }
 
     fn maybe_number(&mut self) -> ParseResult<Option<f64>> {
-        if matches!(self.peek(), Some(b'-') | Some(b'0'..=b'9')) {
+        // A number also starts with `.` when a digit follows (`.5`).
+        let starts_number = match (self.peek(), self.peek_at(1)) {
+            (Some(b'-') | Some(b'0'..=b'9'), _) => true,
+            (Some(b'.'), Some(d)) => d.is_ascii_digit(),
+            _ => false,
+        };
+        if starts_number {
             Ok(Some(self.number()?))
         } else {
             Ok(None)
@@ -851,6 +858,17 @@ mod tests {
             onsets("0/[2 2]") < onsets("0"),
             "patterned slow factor must actually slow the pattern",
         );
+    }
+
+    #[test]
+    fn parses_leading_dot_decimals() {
+        assert_eq!(num(&parse(".5").unwrap()), 0.5);
+        assert_eq!(num(&parse("-.5").unwrap()), -0.5);
+        // Leading-dot numbers are also valid as optional modifier operands.
+        match parse("1?.5").unwrap() {
+            MiniAST::Degrade(_, prob, _) => assert_eq!(prob, Some(0.5)),
+            other => panic!("expected Degrade, got {:?}", other),
+        }
     }
 
     #[test]
