@@ -39,7 +39,13 @@ fn format_module_location(module: &ModuleSpec) -> String {
 fn truncate_json(value: &serde_json::Value) -> String {
     let s = value.to_string();
     if s.len() > 100 {
-        format!("{}...", &s[..97])
+        // Back off to a char boundary — a fixed byte offset can land inside a
+        // multibyte codepoint, and slicing there panics.
+        let mut end = 97;
+        while !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     } else {
         s
     }

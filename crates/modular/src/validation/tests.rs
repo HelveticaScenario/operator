@@ -358,6 +358,41 @@ fn test_multiple_unknown_params_via_deserr() {
 }
 
 #[test]
+fn test_truncate_json_multibyte_content() {
+    // Byte 97 of the serialized value falls inside a multibyte codepoint;
+    // truncation must land on a char boundary.
+    let value = json!(format!("a{}", "あ".repeat(40)));
+    let truncated = truncate_json(&value);
+    assert!(truncated.ends_with("..."));
+    assert!(truncated.len() <= 100);
+}
+
+#[test]
+fn test_non_object_multibyte_params_reported_not_panicking() {
+    let schemas = schemas();
+    let patch = PatchGraph {
+        modules: vec![ModuleSpec {
+            id: "sine-1".to_string(),
+            module_type: "$sine".to_string(),
+            id_is_explicit: None,
+            params: json!(format!("a{}", "あ".repeat(40))),
+        }],
+        module_id_remaps: None,
+
+        scopes: vec![],
+        scope_xy: None,
+    };
+
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(errors.iter().any(|e| {
+        e.message.contains("must be a JSON object")
+            && e.actual_value
+                .as_deref()
+                .is_some_and(|v| v.ends_with("..."))
+    }));
+}
+
+#[test]
 fn test_duplicate_module_ids_rejected() {
     let schemas = schemas();
     let module = ModuleSpec {
