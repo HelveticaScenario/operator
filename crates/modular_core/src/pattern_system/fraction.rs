@@ -23,6 +23,19 @@ fn gcd(a: i64, b: i64) -> i64 {
     a
 }
 
+/// GCD via Euclidean algorithm on the widened intermediates used when i64
+/// arithmetic overflows (always returns non-negative).
+fn gcd_i128(a: i128, b: i128) -> i128 {
+    let mut a = a.abs();
+    let mut b = b.abs();
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    a
+}
+
 /// Exact rational number for precise time representation.
 ///
 /// Invariants maintained after every operation:
@@ -231,47 +244,112 @@ impl Ord for Fraction {
 // ===== Arithmetic Operations =====
 // Operations normalize via Fraction::new. Matched-denominator and
 // integer-denominator branches construct results directly without a GCD pass,
-// since those inputs are already in lowest terms.
+// since those inputs are already in lowest terms. Every branch uses checked
+// i64 arithmetic; on overflow it falls back to `reduce_wide`, which recomputes
+// the general cross-multiplied form in i128 (two i64 products plus their sum
+// always fit) and reduces before narrowing back to i64.
 
-#[inline]
-fn frac_add(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
-    if a_den == 1 && b_den == 1 {
+/// Reduce an i128 rational and narrow it to a `Fraction`. When the reduced
+/// terms still exceed i64 range, the value is approximated on a power-of-two
+/// grid sized so both terms fit (magnitudes beyond i64 saturate) rather than
+/// panicking.
+#[cold]
+fn reduce_wide(mut num: i128, mut den: i128) -> Fraction {
+    debug_assert!(den != 0, "Fraction denominator cannot be zero");
+    if den < 0 {
+        num = -num;
+        den = -den;
+    }
+    let g = gcd_i128(num, den);
+    if g > 1 {
+        num /= g;
+        den /= g;
+    }
+    if let (Ok(n), Ok(d)) = (i64::try_from(num), i64::try_from(den)) {
+        // Already reduced with a positive denominator, so the invariants hold.
+        return Fraction { num: n, den: d };
+    }
+    let value = num as f64 / den as f64;
+    if value >= i64::MAX as f64 {
         return Fraction {
-            num: a_num + b_num,
+            num: i64::MAX,
             den: 1,
         };
     }
+    if value <= i64::MIN as f64 {
+        return Fraction {
+            num: i64::MIN,
+            den: 1,
+        };
+    }
+    // Largest power-of-two denominator that keeps the numerator in range;
+    // the `as i64` cast saturates if rounding lands exactly on the boundary.
+    let headroom = (i64::MAX as f64 / value.abs().max(1.0)).log2().floor();
+    let q = 1i64 << headroom.clamp(0.0, 62.0) as u32;
+    Fraction::new((value * q as f64).round() as i64, q)
+}
+
+#[inline]
+fn frac_add(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
     if a_den == b_den {
-        return Fraction::new(a_num + b_num, a_den);
+        if let Some(num) = a_num.checked_add(b_num) {
+            if a_den == 1 {
+                return Fraction { num, den: 1 };
+            }
+            return Fraction::new(num, a_den);
+        }
+    } else if a_den == 1 {
+        // One-integer denominator: only one cross-multiplication needed.
+        if let Some(num) = a_num.checked_mul(b_den).and_then(|n| n.checked_add(b_num)) {
+            return Fraction::new(num, b_den);
+        }
+    } else if b_den == 1 {
+        if let Some(num) = b_num.checked_mul(a_den).and_then(|n| n.checked_add(a_num)) {
+            return Fraction::new(num, a_den);
+        }
+    } else if let (Some(l), Some(r), Some(den)) = (
+        a_num.checked_mul(b_den),
+        b_num.checked_mul(a_den),
+        a_den.checked_mul(b_den),
+    ) && let Some(num) = l.checked_add(r)
+    {
+        return Fraction::new(num, den);
     }
-    // One-integer denominator: only one cross-multiplication needed.
-    if a_den == 1 {
-        return Fraction::new(a_num * b_den + b_num, b_den);
-    }
-    if b_den == 1 {
-        return Fraction::new(a_num + b_num * a_den, a_den);
-    }
-    Fraction::new(a_num * b_den + b_num * a_den, a_den * b_den)
+    reduce_wide(
+        a_num as i128 * b_den as i128 + b_num as i128 * a_den as i128,
+        a_den as i128 * b_den as i128,
+    )
 }
 
 #[inline]
 fn frac_sub(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
-    if a_den == 1 && b_den == 1 {
-        return Fraction {
-            num: a_num - b_num,
-            den: 1,
-        };
-    }
     if a_den == b_den {
-        return Fraction::new(a_num - b_num, a_den);
+        if let Some(num) = a_num.checked_sub(b_num) {
+            if a_den == 1 {
+                return Fraction { num, den: 1 };
+            }
+            return Fraction::new(num, a_den);
+        }
+    } else if a_den == 1 {
+        if let Some(num) = a_num.checked_mul(b_den).and_then(|n| n.checked_sub(b_num)) {
+            return Fraction::new(num, b_den);
+        }
+    } else if b_den == 1 {
+        if let Some(num) = b_num.checked_mul(a_den).and_then(|n| a_num.checked_sub(n)) {
+            return Fraction::new(num, a_den);
+        }
+    } else if let (Some(l), Some(r), Some(den)) = (
+        a_num.checked_mul(b_den),
+        b_num.checked_mul(a_den),
+        a_den.checked_mul(b_den),
+    ) && let Some(num) = l.checked_sub(r)
+    {
+        return Fraction::new(num, den);
     }
-    if a_den == 1 {
-        return Fraction::new(a_num * b_den - b_num, b_den);
-    }
-    if b_den == 1 {
-        return Fraction::new(a_num - b_num * a_den, a_den);
-    }
-    Fraction::new(a_num * b_den - b_num * a_den, a_den * b_den)
+    reduce_wide(
+        a_num as i128 * b_den as i128 - b_num as i128 * a_den as i128,
+        a_den as i128 * b_den as i128,
+    )
 }
 
 impl Add for Fraction {
@@ -340,20 +418,22 @@ impl Sub<&Fraction> for &Fraction {
 
 #[inline]
 fn frac_mul(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
-    if a_den == 1 && b_den == 1 {
-        return Fraction {
-            num: a_num * b_num,
-            den: 1,
-        };
+    if let Some(num) = a_num.checked_mul(b_num) {
+        if a_den == 1 && b_den == 1 {
+            return Fraction { num, den: 1 };
+        }
+        // One denominator is 1: result denominator equals the other.
+        if a_den == 1 {
+            return Fraction::new(num, b_den);
+        }
+        if b_den == 1 {
+            return Fraction::new(num, a_den);
+        }
+        if let Some(den) = a_den.checked_mul(b_den) {
+            return Fraction::new(num, den);
+        }
     }
-    // One denominator is 1: result denominator equals the other.
-    if a_den == 1 {
-        return Fraction::new(a_num * b_num, b_den);
-    }
-    if b_den == 1 {
-        return Fraction::new(a_num * b_num, a_den);
-    }
-    Fraction::new(a_num * b_num, a_den * b_den)
+    reduce_wide(a_num as i128 * b_num as i128, a_den as i128 * b_den as i128)
 }
 
 #[inline]
@@ -364,16 +444,20 @@ fn frac_div(a_num: i64, a_den: i64, b_num: i64, b_den: i64) -> Fraction {
     if a_den == 1 && b_den == 1 {
         return Fraction::new(a_num, b_num);
     }
-    // One denominator is 1.
     if b_den == 1 {
         // (a/d) / b = a / (d*b)
-        return Fraction::new(a_num, a_den * b_num);
-    }
-    if a_den == 1 {
+        if let Some(den) = a_den.checked_mul(b_num) {
+            return Fraction::new(a_num, den);
+        }
+    } else if a_den == 1 {
         // a / (b/d) = a*d / b
-        return Fraction::new(a_num * b_den, b_num);
+        if let Some(num) = a_num.checked_mul(b_den) {
+            return Fraction::new(num, b_num);
+        }
+    } else if let (Some(num), Some(den)) = (a_num.checked_mul(b_den), a_den.checked_mul(b_num)) {
+        return Fraction::new(num, den);
     }
-    Fraction::new(a_num * b_den, a_den * b_num)
+    reduce_wide(a_num as i128 * b_den as i128, a_den as i128 * b_num as i128)
 }
 
 impl Mul for Fraction {
@@ -477,6 +561,57 @@ mod tests {
         assert_eq!(&a - &b, Fraction::new(1, 6));
         assert_eq!(&a * &b, Fraction::new(1, 6));
         assert_eq!(&a / &b, Fraction::new(3, 2));
+    }
+
+    #[test]
+    fn test_arithmetic_exact_past_i64_intermediates() {
+        // Cross-multiplied intermediates exceed i64, but the reduced results
+        // fit and must come back exact.
+        let d1 = 3 * (1i64 << 33);
+        let d2 = 5 * (1i64 << 33);
+        assert_eq!(
+            Fraction::new(1, d1) + Fraction::new(1, d2),
+            Fraction::new(1, 15 * (1i64 << 30))
+        );
+        assert_eq!(
+            Fraction::new(1, d1) - Fraction::new(1, d2),
+            Fraction::new(1, 15 * (1i64 << 32))
+        );
+
+        let a = Fraction::new(1i64 << 62, 3);
+        assert_eq!(
+            &a * &Fraction::new(3, 1i64 << 61),
+            Fraction::from_integer(2)
+        );
+        assert_eq!(
+            &a / &Fraction::new(1i64 << 61, 3),
+            Fraction::from_integer(2)
+        );
+    }
+
+    #[test]
+    fn test_reduced_result_beyond_i64_approximates() {
+        // 5·(2^63−1)/6 is irreducible with an out-of-range numerator; the
+        // result must land within f64 precision of the true value.
+        let sum = Fraction::new(i64::MAX, 2) + Fraction::new(i64::MAX, 3);
+        let expected = 5.0 * (i64::MAX as f64) / 6.0;
+        assert!(((sum.to_f64() - expected) / expected).abs() < 1e-9);
+
+        // Magnitudes beyond i64 saturate instead of panicking.
+        assert_eq!(
+            Fraction::from_integer(i64::MAX) * Fraction::from_integer(4),
+            Fraction::from_integer(i64::MAX)
+        );
+        assert_eq!(
+            Fraction::from_integer(i64::MIN) * Fraction::from_integer(2),
+            Fraction::from_integer(i64::MIN)
+        );
+
+        // 1/(2^63−1)² is closer to zero than to any representable fraction.
+        assert_eq!(
+            Fraction::new(1, i64::MAX) * Fraction::new(1, i64::MAX),
+            Fraction::from_integer(0)
+        );
     }
 
     #[test]
