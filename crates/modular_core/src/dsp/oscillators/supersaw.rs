@@ -89,9 +89,12 @@ pub struct Supersaw {
     outputs: SupersawOutputs,
     params: SupersawParams,
     state: SupersawState,
-    /// Per-voice state for matrix mixing: a `PORT_MAX_CHANNELS * voices` matrix
-    /// indexed as `[input_ch * voices + voice]` (row stride = voice count).
-    /// Allocated in `init` to the active voice count rather than the fixed max.
+    /// Per-voice state for matrix mixing: a `voices * PORT_MAX_CHANNELS` matrix
+    /// indexed as `[voice * PORT_MAX_CHANNELS + input_ch]`. The row stride is
+    /// the fixed `PORT_MAX_CHANNELS`, never the voice count, so the
+    /// element-wise state transfer keeps every surviving voice's cells at the
+    /// same coordinates when the `voices` param changes; only the voice
+    /// dimension grows or shrinks.
     channel_state: Box<[VoiceState]>,
 }
 
@@ -178,12 +181,15 @@ impl Supersaw {
         // configure().
         let base = seed_base(self);
         self.state.rng.seed(base, 0);
-        // `voices` rows of state per input channel. Input channels are bounded
-        // by PORT_MAX_CHANNELS, so allocating that many rows keeps the matrix
-        // valid for any input width while shrinking the voice dimension.
+        // One `PORT_MAX_CHANNELS`-wide row per voice. Input channels are
+        // bounded by PORT_MAX_CHANNELS, so a full-width row covers any input
+        // width, and the fixed stride keeps each voice's cells at stable flat
+        // indices across a voice-count change — the element-wise transfer then
+        // carries surviving voices intact while added voices keep the fresh
+        // seeding below.
         let voices = self.channel_count().max(1);
         self.channel_state =
-            vec![VoiceState::default(); PORT_MAX_CHANNELS * voices].into_boxed_slice();
+            vec![VoiceState::default(); voices * PORT_MAX_CHANNELS].into_boxed_slice();
         // Seed each fresh voice and arm its zero-cross mute. prev_out is the
         // naive saw at the seeded phase so the mute holds until the output
         // genuinely crosses zero (it would release immediately if left at 0).
@@ -268,7 +274,7 @@ impl Supersaw {
                 let freq = base_freq * (2.0f32).powf(offset_semitones / 12.0);
                 let dt = freq * inv_sample_rate;
 
-                let state_idx = input_ch * voices + voice;
+                let state_idx = voice * PORT_MAX_CHANNELS + input_ch;
 
                 // Advance phase (rem_euclid supports negative increments from through-zero FM)
                 let mut phase = (self.channel_state[state_idx].phase + dt).rem_euclid(1.0);
@@ -514,7 +520,9 @@ mod tests {
 
         // Check that at least some initial phases differ
         // (statistically extremely unlikely all 4 are identical)
-        let phases: Vec<f32> = (0..4).map(|v| s.channel_state[v].phase).collect();
+        let phases: Vec<f32> = (0..4)
+            .map(|v| s.channel_state[v * PORT_MAX_CHANNELS].phase)
+            .collect();
         let all_same = phases.windows(2).all(|w| (w[0] - w[1]).abs() < 1e-10);
         assert!(!all_same, "Random phases should not all be identical");
     }
@@ -569,7 +577,7 @@ mod tests {
             s.update(48000.0);
         }
         let advanced = (0..3)
-            .map(|v| s.channel_state[v].phase)
+            .map(|v| s.channel_state[v * PORT_MAX_CHANNELS].phase)
             .any(|p| p.abs() > 1e-3);
         assert!(advanced, "voice phases should have advanced before sync");
 
@@ -578,7 +586,7 @@ mod tests {
         s.update(48000.0);
 
         for voice in 0..3 {
-            let p = s.channel_state[voice].phase;
+            let p = s.channel_state[voice * PORT_MAX_CHANNELS].phase;
             assert!(
                 p.abs() < 1e-6,
                 "voice {voice} phase {p} should reset to 0 on hard sync"
@@ -689,8 +697,8 @@ mod tests {
             sync: None,
             wait_for_zero_cross: false,
         });
-        // Set all 4 input channel phases identically. Row stride is the voice
-        // count (1 here), so channel `input_ch`'s single voice is at `input_ch`.
+        // Set all 4 input channel phases identically. Voice 0's row starts at
+        // flat index 0, so channel `input_ch` sits at `input_ch`.
         for input_ch in 0..4 {
             s4.channel_state[input_ch].phase = 0.75;
         }
