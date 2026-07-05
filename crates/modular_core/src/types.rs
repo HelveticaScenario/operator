@@ -1739,27 +1739,18 @@ impl JsonSchema for Buffer {
 impl Connect for Buffer {
     fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
-        // Resolve source module and get its buffer output
+        // Resolve source module and get its buffer output. Runs on the audio
+        // thread, so an unresolvable reference is cached as None without any
+        // I/O — patch validation rejects such references before they get here.
         if let Some(module) = patch.sampleables.get(&self.source_module) {
-            self.cached_source_ptr = Some(NonNull::from(module.as_ref()));
             if let Some(buffer_data) = module.get_buffer_output(&self.source_port) {
+                self.cached_source_ptr = Some(NonNull::from(module.as_ref()));
                 self.cached_buffer = Some(NonNull::from(buffer_data));
-            } else {
-                eprintln!(
-                    "[Buffer] module '{}' has no buffer output on port '{}'",
-                    self.source_module, self.source_port
-                );
-                self.cached_source_ptr = None;
-                self.cached_buffer = None;
+                return;
             }
-        } else {
-            eprintln!(
-                "[Buffer] source module '{}' not found in patch",
-                self.source_module
-            );
-            self.cached_source_ptr = None;
-            self.cached_buffer = None;
         }
+        self.cached_source_ptr = None;
+        self.cached_buffer = None;
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {
         // `source_module` is a producer dependency, equivalent to a cable.

@@ -38,29 +38,30 @@ pub(super) fn schema_properties(schema: &Schema) -> HashMap<String, Schema> {
         .unwrap_or_default()
 }
 
-/// Returns true if `schema_node` describes (or contains) a `Signal`.
+/// Returns true if `schema_node` describes (or contains) a `Signal` or `Buffer`.
 ///
 /// Why we need this:
 /// - Most params are plain numbers/structs and don't reference other patch entities.
-/// - Params typed as `Signal` can contain `Cable { module, port }`.
+/// - Params typed as `Signal` can contain `Cable { module, port }`, and params
+///   typed as `Buffer` contain `{ module, port }` buffer references.
 ///   Those require existence checks against `patch.modules`.
 ///
 /// Implementation strategy:
-/// - Look for `$ref` containing "Signal".
+/// - Look for `$ref` containing "Signal" or "Buffer".
 /// - Recurse through combinators (`anyOf/oneOf/allOf`) and `items` for arrays.
-pub(super) fn schema_refers_to_signal(schema_node: &Schema) -> bool {
+pub(super) fn schema_refers_to_module_reference(schema_node: &Schema) -> bool {
     if let Some(obj) = schema_node.as_object() {
         if let Some(r) = obj.get("$ref").and_then(|v| v.as_str()) {
-            return r.ends_with("/Signal")
-                || r.ends_with("definitions/Signal")
-                || r.contains("Signal");
+            return r.contains("Signal") || r.contains("Buffer");
         }
 
         for key in ["anyOf", "oneOf", "allOf"] {
             if let Some(items) = obj.get(key).and_then(|v| v.as_array())
                 && items.iter().any(|item| {
                     let schema: Result<Schema, _> = item.clone().try_into();
-                    schema.ok().is_some_and(|s| schema_refers_to_signal(&s))
+                    schema
+                        .ok()
+                        .is_some_and(|s| schema_refers_to_module_reference(&s))
                 })
             {
                 return true;
@@ -70,7 +71,7 @@ pub(super) fn schema_refers_to_signal(schema_node: &Schema) -> bool {
         if let Some(items) = obj.get("items") {
             let schema: Result<Schema, _> = items.clone().try_into();
             if let Ok(schema) = schema
-                && schema_refers_to_signal(&schema)
+                && schema_refers_to_module_reference(&schema)
             {
                 return true;
             }
@@ -80,7 +81,9 @@ pub(super) fn schema_refers_to_signal(schema_node: &Schema) -> bool {
         if let Some(items) = obj.get("prefixItems").and_then(|v| v.as_array())
             && items.iter().any(|item| {
                 let schema: Result<Schema, _> = item.clone().try_into();
-                schema.ok().is_some_and(|s| schema_refers_to_signal(&s))
+                schema
+                    .ok()
+                    .is_some_and(|s| schema_refers_to_module_reference(&s))
             })
         {
             return true;
@@ -94,13 +97,18 @@ pub(super) fn schema_refers_to_signal(schema_node: &Schema) -> bool {
                 if let Some(map) = props.as_object() {
                     if map.iter().any(|(_, v)| {
                         let schema: Result<Schema, _> = v.clone().try_into();
-                        schema.ok().is_some_and(|s| schema_refers_to_signal(&s))
+                        schema
+                            .ok()
+                            .is_some_and(|s| schema_refers_to_module_reference(&s))
                     }) {
                         return true;
                     }
                 } else {
                     let schema: Result<Schema, _> = props.clone().try_into();
-                    if schema.ok().is_some_and(|s| schema_refers_to_signal(&s)) {
+                    if schema
+                        .ok()
+                        .is_some_and(|s| schema_refers_to_module_reference(&s))
+                    {
                         return true;
                     }
                 }
@@ -112,7 +120,9 @@ pub(super) fn schema_refers_to_signal(schema_node: &Schema) -> bool {
             && let Some(props) = schema_obj.get("properties").and_then(|v| v.as_object())
             && props.iter().any(|(_, v)| {
                 let schema: Result<Schema, _> = v.clone().try_into();
-                schema.ok().is_some_and(|s| schema_refers_to_signal(&s))
+                schema
+                    .ok()
+                    .is_some_and(|s| schema_refers_to_module_reference(&s))
             })
         {
             return true;
@@ -203,13 +213,16 @@ pub(super) fn validate_signals_in_json_value(
         return;
     }
 
-    // Validate buffer_ref targets: the referenced module must exist in the patch.
+    // Validate buffer_ref targets: the referenced module must exist in the
+    // patch and the referenced port must be one of its buffer outputs.
+    // `Buffer::connect` on the audio thread silently caches nothing for an
+    // unresolvable reference, so this is the only place the user gets an error.
     if let Some(obj) = value.as_object()
         && let Some(tag) = obj.get("type").and_then(|v| v.as_str())
         && tag == "buffer_ref"
     {
         if let Some(module_id) = obj.get("module").and_then(|v| v.as_str()) {
-            if !module_by_id.contains_key(module_id) {
+            let Some(src_module) = module_by_id.get(module_id).copied() else {
                 errors.push(ValidationError {
                     field: field.to_string(),
                     message: format!(
@@ -218,6 +231,24 @@ pub(super) fn validate_signals_in_json_value(
                     ),
                     location: Some(location.to_string()),
                     expected_type: None,
+                    actual_value: None,
+                });
+                return;
+            };
+
+            let port = obj.get("port").and_then(|v| v.as_str()).unwrap_or("");
+            let is_buffer_port = schema_map
+                .get(src_module.module_type.as_str())
+                .is_some_and(|s| s.buffer_outputs.iter().any(|p| p == port));
+            if !is_buffer_port {
+                errors.push(ValidationError {
+                    field: field.to_string(),
+                    message: format!(
+                        "buffer_ref references port '{}' on module '{}', which is not a buffer output",
+                        port, module_id
+                    ),
+                    location: Some(location.to_string()),
+                    expected_type: Some("a buffer output port (e.g. $buffer's 'buffer')".to_string()),
                     actual_value: None,
                 });
             }
