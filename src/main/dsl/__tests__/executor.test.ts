@@ -1026,6 +1026,38 @@ describe('deferred signals', () => {
             execPatch('const d = $deferred()\nd[0].scope()\n$sine(0).out()'),
         ).toThrow(/Unset DeferredModuleOutput used in a scope/);
     });
+
+    test('DeferredCollection.set lifts a bare number into one $signal shared by all channels', () => {
+        const patch = execPatch(
+            'const fb = $deferred(2)\n$sine(fb).out()\nfb.set(2.5)',
+        );
+        expect(liftedSignals(patch).length).toBe(1);
+        const sine = findModules(patch, '$sine')[0];
+        const freq = sine.params.freq as Array<{
+            type: string;
+            module: string;
+        }>;
+        expect(freq).toHaveLength(2);
+        for (const cable of freq) {
+            expect(cable.type).toBe('cable');
+            expect(
+                patch.modules.find((m) => m.id === cable.module)?.moduleType,
+            ).toBe('$signal');
+        }
+    });
+
+    test('DeferredCollection.set treats a note string as one signal, not spread chars', () => {
+        const patch = execPatch(
+            "const fb = $deferred(2)\n$sine(fb).out()\nfb.set('c4')",
+        );
+        expect(liftedSignals(patch).length).toBe(1);
+    });
+
+    test('DeferredCollection.set with an empty iterable throws', () => {
+        expect(() =>
+            execPatch('const fb = $deferred()\n$sine(fb[0]).out()\nfb.set([])'),
+        ).toThrow(/requires at least one signal/);
+    });
 });
 
 // ─── Slider ──────────────────────────────────────────────────────────────────
@@ -2204,6 +2236,27 @@ describe('$scopeXY', () => {
                 a.out()
             `),
         ).toThrow(/yRange/);
+    });
+
+    test('lifts bare signal literals into $signal modules', () => {
+        const patch = execPatch(`
+            const a = $sine('c4')
+            $scopeXY(a, 2.5)
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(1);
+        const y = patch.scopeXy!.pairs[0].y;
+        expect(patch.modules.find((m) => m.id === y.moduleId)?.moduleType).toBe(
+            '$signal',
+        );
+    });
+
+    test('lifts literals nested in arrays, cycling to the longer axis', () => {
+        const patch = execPatch(`
+            $scopeXY([$sine(0), 0], $saw('c3'))
+            $sine(0).out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(2);
     });
 });
 
