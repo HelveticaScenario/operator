@@ -195,7 +195,9 @@ pub fn extract<T: Read + Seek>(
                     }
                 }
             }
-            // Sony Acid chunk format: flags(4) root_note(2) padding(2) padding(4) beats(4) ts_num(2) ts_den(2) tempo(4)
+            // Sony Acid chunk format: flags(4) root_note(2) padding(2) padding(4)
+            // beats(4) ts_den(2) ts_num(2) tempo(4). The meter denominator
+            // precedes the numerator, per the de-facto layout libsndfile uses.
             b"acid" => {
                 let data = child
                     .read_contents(stream)
@@ -204,8 +206,8 @@ pub fn extract<T: Read + Seek>(
                     let flags = read_u32_le(&data, 0);
                     let root_note = read_u16_le(&data, 4);
                     let beats = read_u32_le(&data, 12);
-                    let ts_num = read_u16_le(&data, 16);
-                    let ts_den = read_u16_le(&data, 18);
+                    let ts_den = read_u16_le(&data, 16);
+                    let ts_num = read_u16_le(&data, 18);
                     let tempo = read_f32_le(&data, 20);
 
                     if flags & 1 != 0 {
@@ -444,8 +446,8 @@ mod tests {
         write_u16_le(wav, 0); // padding
         write_u32_le(wav, 0); // padding
         write_u32_le(wav, beats);
+        write_u16_le(wav, ts_den); // meter denominator precedes numerator
         write_u16_le(wav, ts_num);
-        write_u16_le(wav, ts_den);
         write_f32_le(wav, tempo);
 
         let riff_size = (wav.len() - 8) as u32;
@@ -601,6 +603,18 @@ mod tests {
         assert_eq!(meta.sample_rate, 44100);
         assert_eq!(meta.cue_points.len(), 1);
         assert_eq!(meta.cue_points[0].label, "hi");
+    }
+
+    #[test]
+    fn test_acid_three_four_time_signature() {
+        // 1s of audio at 90 BPM in 3/4: bar = 3 * (60/90) * (4/4) = 2s.
+        let mut wav = minimal_wav(44100, 1, 16, 44100);
+        append_acid_chunk(&mut wav, 0, 0, 3, 3, 4, 90.0);
+        let mut cursor = Cursor::new(wav);
+        let meta = extract(&mut cursor, 44100, None, None).unwrap();
+
+        assert_eq!(meta.time_signature.unwrap(), (3, 4));
+        assert!((meta.bar_count.unwrap() - 0.5).abs() < 1e-9);
     }
 
     #[test]
