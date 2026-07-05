@@ -337,6 +337,13 @@ impl WavCache {
         let file_sample_rate = spec.sample_rate as f32;
         let num_channels = spec.channels as usize;
 
+        // The data-chunk length in the header is untrusted: a corrupt or
+        // truncated file can claim billions of samples the file doesn't hold,
+        // and the sample iterator yields an Err (masked to silence) for each
+        // of them. Cap the decode at what the file's byte size can contain.
+        let bytes_per_sample = u64::from(spec.bits_per_sample).div_ceil(8).max(1);
+        let sample_cap = u64::from(reader.len()).min(metadata.len() / bytes_per_sample) as usize;
+
         // Decode all samples into interleaved f32
         let raw_samples: Vec<f32> = match spec.sample_format {
             hound::SampleFormat::Int => {
@@ -344,11 +351,13 @@ impl WavCache {
                 let max_val = (1u32 << (bits - 1)) as f32;
                 reader
                     .into_samples::<i32>()
+                    .take(sample_cap)
                     .map(|s| s.unwrap_or(0) as f32 / max_val)
                     .collect()
             }
             hound::SampleFormat::Float => reader
                 .into_samples::<f32>()
+                .take(sample_cap)
                 .map(|s| s.unwrap_or(0.0))
                 .collect(),
         };
@@ -2145,5 +2154,79 @@ mod detect_wavetable_tests {
         let result = detect_wavetable_frame_size(&path);
         let _ = std::fs::remove_file(&path);
         assert_eq!(result, Some(512));
+    }
+}
+
+#[cfg(test)]
+mod wav_cache_tests {
+    use super::WavCache;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    /// Build a 16-bit mono PCM wav whose data chunk claims
+    /// `claimed_data_bytes` but actually holds only `real_samples`.
+    fn wav_with_claimed_data_len(claimed_data_bytes: u32, real_samples: &[i16]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + claimed_data_bytes).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+        buf.extend_from_slice(&44100u32.to_le_bytes());
+        buf.extend_from_slice(&(44100u32 * 2).to_le_bytes()); // byte rate
+        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&claimed_data_bytes.to_le_bytes());
+        for s in real_samples {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Unique temp workspace with a `wavs/` directory (test helper).
+    fn temp_workspace(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        path.push(format!(
+            "modular_wav_cache_{}_{}_{}",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(path.join("wavs")).expect("create workspace");
+        path
+    }
+
+    #[test]
+    fn decode_is_bounded_by_actual_file_size() {
+        // The data chunk claims ~80 MB (40M samples) but the file holds two
+        // samples; the decode must be bounded by the file's byte size, not the
+        // claimed chunk length.
+        let workspace = temp_workspace("hostile_len");
+        let bytes = wav_with_claimed_data_len(80_000_000, &[i16::MAX, i16::MIN]);
+        let wav_path = workspace.join("wavs").join("hostile.wav");
+        std::fs::File::create(&wav_path)
+            .and_then(|mut f| f.write_all(&bytes))
+            .expect("write wav");
+        let file_len = std::fs::metadata(&wav_path).expect("stat wav").len();
+
+        let mut cache = WavCache::new(workspace.clone());
+        let result = cache.load("hostile", 48000.0);
+        if let Ok(_info) = result {
+            let frames = cache.entries["hostile"].data.frame_count() as u64;
+            assert!(
+                frames <= file_len / 2,
+                "decoded {} frames from a {}-byte file",
+                frames,
+                file_len
+            );
+        }
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 }
