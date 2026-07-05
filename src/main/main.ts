@@ -33,6 +33,7 @@ import {
 } from '../shared/patchVersionStamp';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
 import { isBufferSwitch } from './bufferSwitch';
+import { createConfigStore, type AppConfig } from './appConfig';
 import { serializeForIPC } from './serializeForIPC';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { executePatchScript } from './dsl/executor';
@@ -299,7 +300,7 @@ async function checkForUpdateAvailability(): Promise<void> {
         }
 
         // Check if this version was skipped
-        const config = loadConfig();
+        const config = configStore.load();
         if (config.skippedUpdateVersion === latestVersion) {
             return;
         }
@@ -432,100 +433,10 @@ try {
     KEYBINDINGS_FILE = 'keybindings.json';
 }
 
-const AppConfigSchema = z.object({
-    audioConfig: z
-        .object({
-            hostId: z.string().optional(),
-            inputDeviceId: z.string().nullable().optional(),
-            outputDeviceId: z.string().optional(),
-            sampleRate: z.number().optional(),
-            bufferSize: z.number().optional(),
-        })
-        .optional(),
-    cursorStyle: z
-        .enum([
-            'line',
-            'block',
-            'underline',
-            'line-thin',
-            'block-outline',
-            'underline-thin',
-        ])
-        .optional(),
-    font: z
-        .enum([
-            // Bundled fonts
-            'Fira Code',
-            'JetBrains Mono',
-            'Cascadia Code',
-            'Source Code Pro',
-            'IBM Plex Mono',
-            'Hack',
-            'Inconsolata',
-            'Monaspace Neon',
-            'Monaspace Argon',
-            'Monaspace Xenon',
-            'Monaspace Krypton',
-            'Monaspace Radon',
-            'Geist Mono',
-            'Iosevka',
-            'Victor Mono',
-            'Roboto Mono',
-            'Maple Mono',
-            'Commit Mono',
-            '0xProto',
-            'Intel One Mono',
-            'Mononoki',
-            'Anonymous Pro',
-            'Recursive',
-            // System fonts (available only if installed)
-            'SF Mono',
-            'Monaco',
-            'Menlo',
-            'Consolas',
-        ])
-        .optional(),
-    fontLigatures: z.boolean().optional(),
-    fontSize: z.number().min(8).max(72).optional(),
-    lastOpenedFolder: z.string().optional(),
-    prettier: z.record(z.string(), z.unknown()).optional(),
-    skippedUpdateVersion: z.string().optional(),
-    theme: z.string().optional(),
-    xyScopeIntensity: z.number().min(0).max(1).optional(),
-    xyScopePersistence: z.number().min(0).max(1).optional(),
-    xyScopeUpsample: z.boolean().optional(),
-    xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
-});
-
-type AppConfig = z.infer<typeof AppConfigSchema>;
-
-function loadConfig(): AppConfig {
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-            const json = JSON.parse(data);
-            const result = AppConfigSchema.safeParse(json);
-            if (result.success) {
-                return result.data;
-            }
-            console.error('Config validation failed:', result.error);
-        }
-    } catch (error) {
-        console.error('Error loading config:', error);
-    }
-    return {};
-}
-
-function saveConfig(config: AppConfig) {
-    try {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
-    } catch (error) {
-        console.error('Error saving config:', error);
-    }
-}
+const configStore = createConfigStore(CONFIG_FILE);
 
 // Load saved config to pass to synthesizer
-const savedConfig = loadConfig();
+const savedConfig = configStore.load();
 const audioConfigOptions: AudioConfigOptions | undefined =
     savedConfig.audioConfig
         ? {
@@ -555,7 +466,7 @@ if (actualAudioState.fallbackWarning) {
 }
 
 // Update saved config with actual devices used (in case of fallback)
-const actualConfig = loadConfig();
+const actualConfig = configStore.load();
 const configNeedsUpdate =
     actualConfig.audioConfig?.hostId !== actualAudioState.hostId ||
     actualConfig.audioConfig?.outputDeviceId !==
@@ -573,14 +484,14 @@ if (configNeedsUpdate) {
         outputDeviceId: actualAudioState.outputDeviceId ?? undefined,
         sampleRate: actualAudioState.sampleRate,
     };
-    saveConfig(actualConfig);
+    configStore.save(actualConfig);
     console.log('Saved updated audio config after fallback');
 }
 
 // Save audio configuration to config file
 function saveAudioConfig() {
     try {
-        const config = loadConfig();
+        const config = configStore.load();
         const state = synth.getCurrentAudioState();
 
         config.audioConfig = {
@@ -591,7 +502,7 @@ function saveAudioConfig() {
             sampleRate: state.sampleRate,
         };
 
-        saveConfig(config);
+        configStore.save(config);
         console.log('Audio configuration saved');
     } catch (error) {
         console.error('Error saving audio config:', error);
@@ -615,29 +526,17 @@ let currentWorkspaceRoot: string | null = null;
 // File watcher for config changes
 let configWatcher: fs.FSWatcher | null = null;
 
-function ensureConfigExists() {
-    if (!fs.existsSync(CONFIG_FILE)) {
-        const defaultConfig: AppConfig = {
-            cursorStyle: 'block',
-            font: 'Fira Code',
-            fontSize: 17,
-            theme: 'modular-dark',
-        };
-        saveConfig(defaultConfig);
-    }
-}
-
 function startConfigWatcher() {
     if (configWatcher) {
         configWatcher.close();
     }
 
-    ensureConfigExists();
+    configStore.ensureExists();
 
     // Watch for config file changes
     configWatcher = fs.watch(CONFIG_FILE, (eventType) => {
         if (eventType === 'change') {
-            const config = loadConfig();
+            const config = configStore.load();
             // Send updated config to renderer
             if (mainWindow && !mainWindow.isDestroyed()) {
                 mainWindow.webContents.send(
@@ -1410,9 +1309,9 @@ registerIPCHandler('FS_SELECT_WORKSPACE', async () => {
     startWavsWatcher(currentWorkspaceRoot);
 
     // Save to config (load-merge-save to preserve other settings)
-    const config = loadConfig();
+    const config = configStore.load();
     config.lastOpenedFolder = currentWorkspaceRoot;
-    saveConfig(config);
+    configStore.save(config);
 
     return { path: currentWorkspaceRoot };
 });
@@ -1714,20 +1613,20 @@ registerIPCHandler(
 
 // Config IPC handlers
 registerIPCHandler('CONFIG_GET_PATH', () => {
-    ensureConfigExists();
+    configStore.ensureExists();
     return CONFIG_FILE;
 });
 
 registerIPCHandler('CONFIG_READ', () => {
-    ensureConfigExists();
-    return loadConfig();
+    configStore.ensureExists();
+    return configStore.load();
 });
 
 registerIPCHandler('CONFIG_WRITE', (partial: Partial<AppConfig>) => {
-    ensureConfigExists();
-    const current = loadConfig();
+    configStore.ensureExists();
+    const current = configStore.load();
     const merged = { ...current, ...partial };
-    saveConfig(merged);
+    configStore.save(merged);
 });
 
 // User keybinding overrides. The file is VS Code-style `keybindings.json`,
@@ -2284,7 +2183,7 @@ app.on('ready', () => {
         console.log('E2E workspace:', currentWorkspaceRoot);
     } else {
         // Load last opened folder
-        const config = loadConfig();
+        const config = configStore.load();
         if (config.lastOpenedFolder && fs.existsSync(config.lastOpenedFolder)) {
             currentWorkspaceRoot = config.lastOpenedFolder;
             console.log('Restored last opened folder:', currentWorkspaceRoot);
