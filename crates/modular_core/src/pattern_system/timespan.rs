@@ -23,6 +23,11 @@ impl TimeSpan {
         &self.end - &self.begin
     }
 
+    /// Point midway between begin and end.
+    pub fn midpoint(&self) -> Fraction {
+        (&self.begin + &self.end) / Fraction::from_integer(2)
+    }
+
     /// Split a span at cycle boundaries, calling `f` once per sub-span.
     /// Each emitted span lies within a single cycle. For [0.5, 2.3) the
     /// callback receives [0.5, 1), [1, 2), [2, 2.3).
@@ -210,5 +215,11 @@ mod tests {
     fn test_duration() {
         let span = TimeSpan::new(Fraction::new(1, 4), Fraction::new(3, 4));
         assert_eq!(span.duration(), Fraction::new(1, 2));
+    }
+
+    #[test]
+    fn test_midpoint() {
+        let span = TimeSpan::new(Fraction::new(1, 4), Fraction::new(3, 4));
+        assert_eq!(span.midpoint(), Fraction::new(1, 2));
     }
 }
