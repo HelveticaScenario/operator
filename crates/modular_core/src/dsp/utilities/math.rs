@@ -37,6 +37,7 @@ struct MathExpressionParam {
 }
 
 impl Connect for Arc<MathCompiled> {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, _patch: &crate::Patch) {}
     fn collect_cables(&self, _sink: &mut Vec<String>) {}
     fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}

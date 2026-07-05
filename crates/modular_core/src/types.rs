@@ -438,7 +438,15 @@ impl Div for Clickless {
 }
 
 pub trait Connect {
-    /// Resolve cable references to live module pointers.
+    /// Fill each disconnected `#[default_connection]` input with its default
+    /// cable. Runs once at module construction on the main thread and may
+    /// allocate; `connect` (audio thread) then only resolves connections that
+    /// are already present. Containers forward; leaf types are no-op — same
+    /// contract as `collect_cables`.
+    fn apply_default_connections(&mut self);
+
+    /// Resolve cable references to live module pointers. Runs on the audio
+    /// thread during patch apply, so it must not allocate.
     fn connect(&mut self, patch: &Patch);
 
     /// Walk this value and push every producer module ID it references
@@ -466,6 +474,7 @@ pub trait Connect {
 macro_rules! impl_connect_noop {
     ($($t:ty),*) => {
         $(impl Connect for $t {
+            fn apply_default_connections(&mut self) {}
             fn connect(&mut self, _patch: &Patch) {}
             fn collect_cables(&self, _sink: &mut Vec<String>) {}
             fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
@@ -482,6 +491,11 @@ impl_connect_noop!(
 // ============================================================================
 
 impl<T: Connect> Connect for Vec<T> {
+    fn apply_default_connections(&mut self) {
+        for item in self {
+            item.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for item in self {
             item.connect(patch);
@@ -500,6 +514,11 @@ impl<T: Connect> Connect for Vec<T> {
 }
 
 impl<T: Connect> Connect for Option<T> {
+    fn apply_default_connections(&mut self) {
+        if let Some(inner) = self {
+            inner.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         if let Some(inner) = self {
             inner.connect(patch);
@@ -518,6 +537,9 @@ impl<T: Connect> Connect for Option<T> {
 }
 
 impl<T: Connect> Connect for Box<T> {
+    fn apply_default_connections(&mut self) {
+        (**self).apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         (**self).connect(patch);
     }
@@ -530,6 +552,11 @@ impl<T: Connect> Connect for Box<T> {
 }
 
 impl<T: Connect, const N: usize> Connect for [T; N] {
+    fn apply_default_connections(&mut self) {
+        for item in self {
+            item.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for item in self {
             item.connect(patch);
@@ -548,6 +575,11 @@ impl<T: Connect, const N: usize> Connect for [T; N] {
 }
 
 impl<V: Connect> Connect for std::collections::HashMap<String, V> {
+    fn apply_default_connections(&mut self) {
+        for v in self.values_mut() {
+            v.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for v in self.values_mut() {
             v.connect(patch);
@@ -566,6 +598,11 @@ impl<V: Connect> Connect for std::collections::HashMap<String, V> {
 }
 
 impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
+    fn apply_default_connections(&mut self) {
+        for v in self.values_mut() {
+            v.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for v in self.values_mut() {
             v.connect(patch);
@@ -585,6 +622,9 @@ impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
 
 // Tuples (arity 1-5)
 impl<T1: Connect> Connect for (T1,) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
     }
@@ -597,6 +637,10 @@ impl<T1: Connect> Connect for (T1,) {
 }
 
 impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -612,6 +656,11 @@ impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
 }
 
 impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+        self.2.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -630,6 +679,12 @@ impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
 }
 
 impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3, T4) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+        self.2.apply_default_connections();
+        self.3.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -653,6 +708,13 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3
 impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect, T5: Connect> Connect
     for (T1, T2, T3, T4, T5)
 {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+        self.2.apply_default_connections();
+        self.3.apply_default_connections();
+        self.4.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -1097,6 +1159,7 @@ impl Wav {
 }
 
 impl Connect for Wav {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
         if let Some(data) = patch.wav_data.get(&self.path) {
             self.cached_data = Some(Arc::clone(data));
@@ -1674,6 +1737,7 @@ impl JsonSchema for Buffer {
 }
 
 impl Connect for Buffer {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
         // Resolve source module and get its buffer output
         if let Some(module) = patch.sampleables.get(&self.source_module) {
@@ -2382,6 +2446,7 @@ impl SignalExt for Option<Signal> {
 }
 
 impl Connect for Signal {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
         if let Signal::Cable {
             module, resolved, ..

@@ -168,6 +168,9 @@ pub struct PolySignal {
 // `Connect for Box<[Signal]>` impl, which overlaps the blanket `Connect for
 // Box<T>` under coherence. Forwarding over the slice directly sidesteps that.
 impl crate::types::Connect for PolySignal {
+    fn apply_default_connections(&mut self) {
+        // Signals carry no `#[default_connection]` fields — nothing to fill.
+    }
     fn connect(&mut self, patch: &crate::Patch) {
         for signal in self.channels.iter_mut() {
             signal.connect(patch);
