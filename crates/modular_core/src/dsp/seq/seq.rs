@@ -373,6 +373,11 @@ struct SeqState {
     /// detection: a hap fires only when the playhead *enters* its window (an
     /// outside→inside transition), never because it is merely inside it.
     prev_logical: f64,
+    /// Previous frame's clamped raw playhead, for lap detection: when the raw
+    /// playhead crosses a ribbon seam, the window replays from the top, so the
+    /// edge check must fire even a hap whose part contained `prev_logical`
+    /// (e.g. one covering the entire window).
+    prev_raw: f64,
     /// False until the first `update`. On the first frame there is no previous
     /// position, so every in-window onset fires (a fresh `$cycle` starts playing
     /// from the current position).
@@ -390,6 +395,7 @@ impl Default for SeqState {
     fn default() -> Self {
         Self {
             prev_logical: 0.0,
+            prev_raw: 0.0,
             started: false,
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
@@ -473,6 +479,14 @@ impl Seq {
         self.state.prev_logical = logical;
         self.state.started = true;
 
+        // Forward seam crossing: the raw playhead moved onto a new lap of the
+        // window, so the whole window replays and in-window onsets fire again.
+        // Both lap indices use the current `length`, so a ribbon edit cannot
+        // fabricate a crossing on its own.
+        let prev_raw = self.state.prev_raw;
+        self.state.prev_raw = raw_clamped;
+        let lap_wrapped = (raw_clamped / length).floor() > (prev_raw / length).floor();
+
         // Release voices whose notes have ended. A note's life is tracked in
         // the monotonic `raw` frame (two-sided, so a backward scrub also
         // frees), because `logical` wraps at the ribbon seam.
@@ -524,8 +538,15 @@ impl Seq {
                 // if the playhead was already inside it last frame — a mid-window
                 // pattern swap, a scrub that lands inside, or a paused playhead is
                 // not an onset. (`started` is false on the very first frame, so a
-                // fresh module fires its in-window notes.)
-                if started && prev_logical >= hap.part_begin && prev_logical < hap.part_end {
+                // fresh module fires its in-window notes.) A seam crossing resets
+                // the edge: a hap whose part spans the entire window re-fires once
+                // per lap; a note still sounding across the seam stays suppressed
+                // by the `already_assigned` dedup below.
+                if started
+                    && !lap_wrapped
+                    && prev_logical >= hap.part_begin
+                    && prev_logical < hap.part_end
+                {
                     continue;
                 }
                 let hap_index = hap_index as u32;
