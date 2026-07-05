@@ -423,6 +423,34 @@ mod tests {
     }
 
     #[test]
+    fn test_fast_nested_f64_factors_deep_cycles() {
+        // f64-derived factors carry denominator 10^4 and nesting compounds
+        // them, so query times deep into the timeline need intermediates far
+        // wider than i64. Queries must still return in-cycle haps whose
+        // times round-trip to finite f64s.
+        let factor = Fraction::from(4.0 / 3.0);
+        let pat = pure(1.0)
+            .fast(pure(factor.clone()))
+            .fast(pure(factor.clone()))
+            .fast(pure(factor));
+        for cycle in [1000i64, 100_000] {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            assert!(!haps.is_empty());
+            for hap in &haps {
+                let begin = hap.part.begin.to_f64();
+                let end = hap.part.end.to_f64();
+                assert!(begin.is_finite() && end.is_finite());
+                assert!(begin >= cycle as f64 - 1e-6);
+                assert!(end <= (cycle + 1) as f64 + 1e-6);
+                assert!(end >= begin);
+            }
+        }
+    }
+
+    #[test]
     fn test_slow() {
         let pat = pure(42).slow(pure(Fraction::from_integer(2)));
         let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
