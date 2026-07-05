@@ -56,13 +56,9 @@ impl Ramp {
 
             state.phase += phase_increment;
 
-            // Wrap phase to [0, 1)
-            if state.phase >= 1.0 {
-                state.phase -= 1.0;
-            }
-            if state.phase < 0.0 {
-                state.phase += 1.0;
-            }
+            // Wrap phase to [0, 1) — rem_euclid keeps it in range for any
+            // increment, including magnitudes of 1 or more.
+            state.phase = state.phase.rem_euclid(1.0);
             // A non-finite frequency (e.g. voct_to_hz overflow) wraps to NaN,
             // which is absorbing; reset so the phase recovers once the input
             // does.
@@ -95,6 +91,18 @@ mod tests {
             _channel_count: channels,
             _block_index: Default::default(),
             channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
+        }
+    }
+
+    #[test]
+    fn output_stays_in_range_above_twice_the_sample_rate() {
+        // ~8.55 V is ≈ 96 kHz at C4 tuning, a phase increment of ~2 per
+        // sample: the wrap must keep the output in [0, 1) for any increment.
+        let mut ramp = make_ramp(8.55);
+        for _ in 0..1000 {
+            ramp.update(48_000.0);
+            let v = ramp.outputs.sample.get(0);
+            assert!((0.0..1.0).contains(&v), "output {v} must stay in [0, 1)");
         }
     }
 
