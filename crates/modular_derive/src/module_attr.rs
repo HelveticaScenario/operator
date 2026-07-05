@@ -926,6 +926,10 @@ fn impl_module_macro_attr(
                 #(#module_field_inits),*
             };
             crate::types::OutputStruct::set_all_channels(&mut inner.outputs, deserialized.channel_count);
+            // Fill `#[default_connection]` inputs here, on the main thread:
+            // the audio-thread `connect` must stay allocation-free, so it only
+            // resolves connections that are already present.
+            crate::types::Connect::apply_default_connections(&mut inner.params);
 
             let sampleable = #struct_name {
                 id: id.clone(),

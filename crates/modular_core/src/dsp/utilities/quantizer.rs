@@ -44,6 +44,7 @@ pub struct ScaleParam {
 }
 
 impl Connect for ScaleParam {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, _patch: &Patch) {
         // ScaleParam has no signals to connect
     }
