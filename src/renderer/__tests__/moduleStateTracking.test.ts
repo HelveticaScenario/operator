@@ -15,11 +15,15 @@
  *   both `argument_spans` and `all_spans` identical — only `source` changes —
  *   while the retype collapses the step's tracked decoration
  *   (NeverGrowsWhenTypingAtEdges).
+ * - Interpolated patterns redirect highlights into const literals: positions
+ *   in a nested template const's literal text re-map from evaluated to raw
+ *   offsets.
  */
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import { startModuleStatePolling } from '../components/monaco/moduleStateTracking';
+import { setActiveInterpolationResolutions } from '../../shared/dsl/spanTypes';
 
 const ACTIVE = 'active-seq-step';
 
@@ -208,7 +212,10 @@ const ALL = [
 
 describe('startModuleStatePolling step highlighting', () => {
     beforeEach(() => vi.useFakeTimers());
-    afterEach(() => vi.useRealTimers());
+    afterEach(() => {
+        vi.useRealTimers();
+        setActiveInterpolationResolutions(null);
+    });
 
     test('same-width edit re-highlights the edited step after its decoration collapses', async () => {
         // `0 1 4` -> `0 7 4`: argument_spans and all_spans are unchanged;
@@ -374,7 +381,10 @@ describe('startModuleStatePolling step highlighting', () => {
 
 describe('startModuleStatePolling anchor lifetime', () => {
     beforeEach(() => vi.useFakeTimers());
-    afterEach(() => vi.useRealTimers());
+    afterEach(() => {
+        vi.useRealTimers();
+        setActiveInterpolationResolutions(null);
+    });
 
     const DOC = "$p.arrange([8, 'a b'], [8, 'c d'])";
     const P0 = DOC.indexOf("'a b'");
@@ -494,5 +504,105 @@ describe('startModuleStatePolling anchor lifetime', () => {
         expect(trackedDecorationWrites()).toBe(writesAfterFirstSession);
 
         stop2();
+    });
+});
+
+describe('startModuleStatePolling interpolation resolution', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => {
+        vi.useRealTimers();
+        setActiveInterpolationResolutions(null);
+    });
+
+    test('positions in a nested template const literal re-map through its interpolation regions', async () => {
+        // chord is itself a template: its raw `${root}` (7 chars) evaluates
+        // to 'c4' (2 chars), so positions in chord's literal tail sit 5 chars
+        // later in the raw source than in the evaluated result.
+        const DOC =
+            "const root = 'c4'; const chord = `${root} e4 g4`; $p(`${chord} b4`)";
+        const rootStart = DOC.indexOf("'c4'");
+        const chordStart = DOC.indexOf('`${root} e4 g4`');
+        const argStart = DOC.indexOf('`${chord} b4`');
+        const argSpan = { start: argStart, end: argStart + 13 };
+
+        setActiveInterpolationResolutions(
+            new Map([
+                [
+                    `${argSpan.start}:${argSpan.end}`,
+                    [
+                        {
+                            evaluatedStart: 0,
+                            evaluatedLength: 8,
+                            constLiteralSpan: {
+                                start: chordStart,
+                                end: chordStart + 15,
+                            },
+                            nestedResolutions: [
+                                {
+                                    evaluatedStart: 0,
+                                    evaluatedLength: 2,
+                                    constLiteralSpan: {
+                                        start: rootStart,
+                                        end: rootStart + 4,
+                                    },
+                                },
+                            ],
+                        },
+                    ],
+                ],
+            ]),
+        );
+
+        const { editor, monaco } = makeHarness(DOC);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const activeDecorationRef: any = { current: null };
+
+        // Evaluated pattern: 'c4 e4 g4 b4'. Leaf 'e4' = [3,5] lives in
+        // chord's literal tail; leaf 'c4' = [0,2] lives in root's result.
+        const allSpans: [number, number][] = [
+            [0, 2],
+            [3, 5],
+            [6, 8],
+            [9, 11],
+        ];
+        let state = seqState('c4 e4 g4 b4', [[3, 5]], allSpans, argSpan);
+        const getModuleStates = vi.fn(async () => state);
+
+        const stop = startModuleStatePolling({
+            editor,
+            monaco,
+            currentFile: 'buf',
+            runningBufferId: 'buf',
+            activeDecorationRef,
+            getModuleStates,
+            pollInterval: 50,
+        });
+
+        await vi.advanceTimersByTimeAsync(50);
+        let decos = activeDecos(activeDecorationRef);
+        expect(decos).toHaveLength(1);
+        let text = DOC.slice(
+            decos[0].range.startColumn - 1,
+            decos[0].range.endColumn - 1,
+        );
+        expect(text).toBe('e4');
+        // 'e4' sits at chord content offset 8 in the raw literal, not at its
+        // evaluated offset 3.
+        expect(decos[0].range.startColumn - 1).toBe(chordStart + 1 + 8);
+
+        // A position inside the nested interpolation's result redirects all
+        // the way to the root const literal.
+        state = seqState('c4 e4 g4 b4', [[0, 2]], allSpans, argSpan);
+        await vi.advanceTimersByTimeAsync(50);
+        decos = activeDecos(activeDecorationRef);
+        expect(decos).toHaveLength(1);
+        text = DOC.slice(
+            decos[0].range.startColumn - 1,
+            decos[0].range.endColumn - 1,
+        );
+        expect(text).toBe('c4');
+        expect(decos[0].range.startColumn - 1).toBe(rootStart + 1);
+
+        stop();
     });
 });
