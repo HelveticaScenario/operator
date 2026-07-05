@@ -140,6 +140,13 @@ impl Sampler {
         }
     }
 
+    /// Whether a voice's position is inside its playback window. NaN
+    /// comparisons are false, so a non-finite position counts as outside —
+    /// a voice can always leave the playing state.
+    fn in_window(position: f64, lo: f64, hi: f64) -> bool {
+        position >= lo && position <= hi
+    }
+
     fn update(&mut self, _sample_rate: f32) {
         let channels = self.channel_count();
         let frame_count = self.params.wav.frame_count();
@@ -158,8 +165,15 @@ impl Sampler {
             let speed = self.params.speed.value_or(1.0) as f64;
             // Demote the current voice to the release voice so the jump to
             // the new onset crossfades instead of clicking. A retrigger
-            // during an active release simply steals the slot.
-            if self.state.playing && self.state.fade_out_samples > 0 {
+            // during an active release simply steals the slot. `playing`
+            // lags the position by one sample (the window-exit check runs
+            // after edge detection), so also require the position to still
+            // be in the window: an exited voice is silent and must not
+            // displace a live release.
+            if self.state.playing
+                && Self::in_window(self.state.position, self.state.win_lo, self.state.win_hi)
+                && self.state.fade_out_samples > 0
+            {
                 self.state.rel_position = self.state.position;
                 self.state.rel_win_lo = self.state.win_lo;
                 self.state.rel_win_hi = self.state.win_hi;
@@ -206,7 +220,7 @@ impl Sampler {
 
         let mut main_gain = 0.0;
         if self.state.playing {
-            if self.state.position < self.state.win_lo || self.state.position > self.state.win_hi {
+            if !Self::in_window(self.state.position, self.state.win_lo, self.state.win_hi) {
                 self.state.playing = false;
             } else {
                 main_gain =
@@ -217,8 +231,11 @@ impl Sampler {
         let mut rel_gain = 0.0;
         if self.state.rel_active {
             if self.state.rel_countdown == 0
-                || self.state.rel_position < self.state.rel_win_lo
-                || self.state.rel_position > self.state.rel_win_hi
+                || !Self::in_window(
+                    self.state.rel_position,
+                    self.state.rel_win_lo,
+                    self.state.rel_win_hi,
+                )
             {
                 self.state.rel_active = false;
             } else {
@@ -837,6 +854,53 @@ mod tests {
             "voice must clear at the window exit"
         );
         assert_eq!(sampler.outputs.sample.get(0), 0.0);
+    }
+
+    #[test]
+    fn retrigger_never_demotes_an_exited_voice_over_a_live_release() {
+        // Slice 0 spans frames 0..48; slice 1 spans frames 48..4799.
+        let wav_data = make_test_wav(vec![vec![0.2; 4800]]);
+        let mut sampler = make_direct(
+            params_with(json!({ "gate": 5.0, "fade": 2.0, "slice": [[0.0, 0.01], 1.0] })),
+            wav_data,
+        );
+        // Voice A: long slice 1, run well into its window.
+        for _ in 0..200 {
+            sampler.update(SAMPLE_RATE);
+        }
+        // Retrigger onto short slice 0: A becomes the release voice, B starts.
+        set_gate(&mut sampler, 0.0);
+        sampler.update(SAMPLE_RATE);
+        set_slice_signal(&mut sampler, 0.0);
+        set_gate(&mut sampler, 5.0);
+        sampler.update(SAMPLE_RATE);
+        assert!(sampler.state.rel_active);
+        // Run B to the last sample where its position has exited the window
+        // but `playing` has not yet been cleared, and land a gate rising
+        // edge exactly there.
+        for _ in 0..47 {
+            sampler.update(SAMPLE_RATE);
+        }
+        set_gate(&mut sampler, 0.0);
+        sampler.update(SAMPLE_RATE);
+        assert!(
+            sampler.state.playing && sampler.state.position > sampler.state.win_hi,
+            "setup must reach the stale-playing sample"
+        );
+        set_gate(&mut sampler, 5.0);
+        sampler.update(SAMPLE_RATE);
+        // A's release keeps fading; the dead voice B never takes the slot.
+        assert!(sampler.state.rel_active, "release voice must keep fading");
+        assert!(
+            sampler.state.rel_position > 100.0,
+            "release slot must still hold the long voice, got position {}",
+            sampler.state.rel_position
+        );
+        let v = sampler.outputs.sample.get(0);
+        assert!(
+            v > 0.3,
+            "release must stay audible across the edge, got {v}"
+        );
     }
 
     #[test]
