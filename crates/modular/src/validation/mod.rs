@@ -159,8 +159,9 @@ pub fn validate_patch(
                 continue;
             };
 
-            // 4b) Only params whose schema indicates they *contain* Signals can reference entities.
-            if !signal_refs::schema_refers_to_signal(param_schema_node) {
+            // 4b) Only params whose schema indicates they *contain* Signals or
+            //     Buffers can reference entities.
+            if !signal_refs::schema_refers_to_module_reference(param_schema_node) {
                 continue;
             }
             signal_refs::validate_signals_in_json_value(

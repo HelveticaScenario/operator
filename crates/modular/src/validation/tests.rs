@@ -1,4 +1,4 @@
-use super::signal_refs::schema_refers_to_signal;
+use super::signal_refs::schema_refers_to_module_reference;
 use super::*;
 use modular_core::types::ModuleSpec;
 use schemars::Schema;
@@ -157,7 +157,7 @@ fn test_cable_to_nonexistent_module() {
 }
 
 #[test]
-fn test_schema_refers_to_signal_descends_prefix_items() {
+fn test_schema_refers_to_module_reference_descends_prefix_items() {
     let schema: Schema = json!({
         "type": "array",
         "prefixItems": [
@@ -167,7 +167,7 @@ fn test_schema_refers_to_signal_descends_prefix_items() {
     })
     .try_into()
     .unwrap();
-    assert!(schema_refers_to_signal(&schema));
+    assert!(schema_refers_to_module_reference(&schema));
 }
 
 #[test]
@@ -468,6 +468,76 @@ fn test_root_clock_id_requires_clock_type() {
     );
 
     assert!(validate_patch(&mk_patch("_clock"), &schemas).is_ok());
+}
+
+fn patch_with_buffer_ref(target_module: &str, port: &str) -> PatchGraph {
+    PatchGraph {
+        modules: vec![
+            ModuleSpec {
+                id: "osc1".to_string(),
+                module_type: "$sine".to_string(),
+                id_is_explicit: None,
+                params: json!({ "freq": 4.0 }),
+            },
+            ModuleSpec {
+                id: "buf1".to_string(),
+                module_type: "$buffer".to_string(),
+                id_is_explicit: None,
+                params: json!({ "input": 0.0 }),
+            },
+            ModuleSpec {
+                id: "read1".to_string(),
+                module_type: "$delayRead".to_string(),
+                id_is_explicit: None,
+                params: json!({
+                    "buffer": {
+                        "type": "buffer_ref",
+                        "module": target_module,
+                        "port": port,
+                        "channels": 1
+                    },
+                    "time": 0.1
+                }),
+            },
+        ],
+        module_id_remaps: None,
+
+        scopes: vec![],
+        scope_xy: None,
+    }
+}
+
+#[test]
+fn test_buffer_ref_to_buffer_port_is_valid() {
+    let schemas = schemas();
+    let patch = patch_with_buffer_ref("buf1", "buffer");
+    assert!(validate_patch(&patch, &schemas).is_ok());
+}
+
+#[test]
+fn test_buffer_ref_to_non_buffer_port_rejected() {
+    let schemas = schemas();
+    let patch = patch_with_buffer_ref("osc1", "output");
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "params.buffer" && e.message.contains("not a buffer output")),
+        "expected a non-buffer-output error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_buffer_ref_to_missing_module_rejected() {
+    let schemas = schemas();
+    let patch = patch_with_buffer_ref("ghost", "buffer");
+    let errors = validate_patch(&patch, &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("does not exist in the patch")),
+        "expected a missing-module error, got {errors:?}"
+    );
 }
 
 #[test]
