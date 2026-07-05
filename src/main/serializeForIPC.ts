@@ -1,11 +1,27 @@
 /**
- * Serialize a value for IPC transfer, handling non-transferable types
+ * Serialize a value for IPC transfer, handling non-transferable types.
+ *
+ * `seen` holds the current recursion path, not every visited object: each
+ * entry is removed once its subtree is serialized, so a value referenced by
+ * two siblings (a DAG) serializes fully both times and only a true cycle is
+ * reported as '[Circular]'. Re-expanding shared subtrees is exponential in
+ * the worst case, and this runs synchronously on the main process for every
+ * intercepted console call, so a node budget bounds the total work — values
+ * past it serialize as '[Truncated]'.
  */
-export function serializeForIPC(
+const MAX_SERIALIZED_NODES = 10_000;
+
+export function serializeForIPC(value: unknown): unknown {
+    return serialize(value, new WeakSet(), {
+        remaining: MAX_SERIALIZED_NODES,
+    });
+}
+
+function serialize(
     value: unknown,
-    seen = new WeakSet<object>(),
+    seen: WeakSet<object>,
+    budget: { remaining: number },
 ): unknown {
-    // Handle primitives
     if (value === null || value === undefined) {
         return value;
     }
@@ -18,22 +34,19 @@ export function serializeForIPC(
         return value;
     }
 
-    // Handle BigInt by converting to string with 'n' suffix for clarity
+    // The 'n' suffix distinguishes a BigInt from a plain numeric string.
     if (typeof value === 'bigint') {
         return `${value}n`;
     }
 
-    // Handle symbols
     if (typeof value === 'symbol') {
         return value.toString();
     }
 
-    // Handle functions
     if (typeof value === 'function') {
         return `[Function: ${value.name || 'anonymous'}]`;
     }
 
-    // Handle Error objects specially
     if (value instanceof Error) {
         return {
             __error: true,
@@ -43,50 +56,56 @@ export function serializeForIPC(
         };
     }
 
-    // Handle objects and arrays
     if (typeof value === 'object') {
-        // Detect circular references
         if (seen.has(value)) {
             return '[Circular]';
         }
-        seen.add(value);
 
-        // Handle arrays
-        if (Array.isArray(value)) {
-            return value.map((item) => serializeForIPC(item, seen));
+        if (budget.remaining <= 0) {
+            return '[Truncated]';
         }
+        budget.remaining--;
 
-        // Handle Date
+        // Date is a leaf value, no recursion to track.
         if (value instanceof Date) {
             return value.toISOString();
         }
 
-        // Handle Map
-        if (value instanceof Map) {
-            const obj: Record<string, unknown> = { __type: 'Map' };
-            for (const [k, v] of value) {
-                obj[String(k)] = serializeForIPC(v, seen);
+        seen.add(value);
+        try {
+            if (Array.isArray(value)) {
+                return value.map((item) => serialize(item, seen, budget));
             }
-            return obj;
-        }
 
-        // Handle Set
-        if (value instanceof Set) {
-            return {
-                __type: 'Set',
-                values: Array.from(value).map((v) => serializeForIPC(v, seen)),
-            };
-        }
+            if (value instanceof Map) {
+                const obj: Record<string, unknown> = { __type: 'Map' };
+                for (const [k, v] of value) {
+                    obj[String(k)] = serialize(v, seen, budget);
+                }
+                return obj;
+            }
 
-        // Handle plain objects
-        const result: Record<string, unknown> = {};
-        for (const key of Object.keys(value)) {
-            result[key] = serializeForIPC(
-                (value as Record<string, unknown>)[key],
-                seen,
-            );
+            if (value instanceof Set) {
+                return {
+                    __type: 'Set',
+                    values: Array.from(value).map((v) =>
+                        serialize(v, seen, budget),
+                    ),
+                };
+            }
+
+            const result: Record<string, unknown> = {};
+            for (const key of Object.keys(value)) {
+                result[key] = serialize(
+                    (value as Record<string, unknown>)[key],
+                    seen,
+                    budget,
+                );
+            }
+            return result;
+        } finally {
+            seen.delete(value);
         }
-        return result;
     }
 
     // Fallback (should be unreachable; all types handled above)
