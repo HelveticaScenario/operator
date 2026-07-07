@@ -26,6 +26,7 @@ export const readUnsavedBuffers = (): EditorBuffer[] => {
                     filePath: snapshot.filePath,
                     id: snapshot.id,
                     kind: 'file',
+                    evaluatedVersion: snapshot.evaluatedVersion,
                 };
             }
             return {
@@ -33,6 +34,7 @@ export const readUnsavedBuffers = (): EditorBuffer[] => {
                 dirty: true,
                 id: snapshot.id,
                 kind: 'untitled',
+                evaluatedVersion: snapshot.evaluatedVersion,
             };
         });
     } catch (error) {
@@ -56,12 +58,14 @@ export const saveUnsavedBuffers = (buffers: EditorBuffer[]) => {
                         filePath: buffer.filePath,
                         id: buffer.filePath,
                         kind: 'file',
+                        evaluatedVersion: buffer.evaluatedVersion,
                     };
                 }
                 return {
                     content: buffer.content,
                     id: buffer.id,
                     kind: 'untitled',
+                    evaluatedVersion: buffer.evaluatedVersion,
                 };
             },
         );

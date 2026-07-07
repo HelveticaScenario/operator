@@ -22,6 +22,7 @@ import type {
 } from '@modular/core';
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
+import type { PatchVersionStamp } from './patchVersionStamp';
 
 export type {
     PatchGraph,
@@ -231,6 +232,13 @@ export interface FSOperationResult {
     error?: string;
 }
 
+/** Result of reading a file: the editor-facing content (version stamp already
+ *  stripped) plus the version the patch last evaluated under, so the renderer
+ *  can decide which migrations the patch still needs. */
+export interface FSReadFileResult extends PatchVersionStamp {
+    content: string;
+}
+
 export interface WorkspaceFolder {
     path: string;
 }
@@ -297,6 +305,7 @@ export interface ContextMenuAction {
 export const IPC_CHANNELS = {
     // Schema operations
     GET_SCHEMAS: 'modular:get-schemas',
+    GET_APP_VERSION: 'modular:get-app-version',
 
     // DSL operations
     DSL_EXECUTE: 'modular:dsl:execute',
@@ -409,9 +418,7 @@ export const IPC_CHANNELS = {
 
 export const MENU_CHANNELS = {
     CLOSE_BUFFER: 'modular:menu:close-buffer',
-    MIGRATE_BUFFER: 'modular:menu:migrate-buffer',
-    MIGRATE_CHEBY_BLOCK_DC: 'modular:menu:migrate-cheby-block-dc',
-    MIGRATE_WAVETABLE: 'modular:menu:migrate-wavetable',
+    MIGRATE_TO_LATEST: 'modular:menu:migrate-to-latest',
     NEW_FILE: 'modular:menu:new-file',
     OPEN_ENGINE_HEALTH: 'modular:menu:open-engine-health',
     OPEN_MODULE_PROFILE: 'modular:menu:open-module-profile',
@@ -430,6 +437,7 @@ export const MENU_CHANNELS = {
 export interface IPCHandlers {
     // Schema operations
     [IPC_CHANNELS.GET_SCHEMAS]: () => typeof schemas;
+    [IPC_CHANNELS.GET_APP_VERSION]: () => string;
 
     // DSL operations
     [IPC_CHANNELS.DSL_EXECUTE]: (
@@ -519,10 +527,11 @@ export interface IPCHandlers {
     [IPC_CHANNELS.FS_SELECT_WORKSPACE]: () => WorkspaceFolder | null;
     [IPC_CHANNELS.FS_GET_WORKSPACE]: () => WorkspaceFolder | null;
     [IPC_CHANNELS.FS_LIST_FILES]: () => FileTreeEntry[];
-    [IPC_CHANNELS.FS_READ_FILE]: (filePath: string) => string;
+    [IPC_CHANNELS.FS_READ_FILE]: (filePath: string) => FSReadFileResult;
     [IPC_CHANNELS.FS_WRITE_FILE]: (
         filePath: string,
         content: string,
+        evaluatedVersion?: string,
     ) => FSOperationResult;
     [IPC_CHANNELS.FS_RENAME_FILE]: (
         oldPath: string,

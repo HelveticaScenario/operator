@@ -41,6 +41,7 @@ export interface ElectronAPI {
 
     // Schema operations
     getSchemas: Promisify<IPCHandlers[typeof IPC_CHANNELS.GET_SCHEMAS]>;
+    getAppVersion: Promisify<IPCHandlers[typeof IPC_CHANNELS.GET_APP_VERSION]>;
 
     // DSL operations
     executeDSL: (
@@ -200,9 +201,7 @@ export interface ElectronAPI {
     onMenuOpenSettings: (callback: () => void) => () => void;
     onMenuOpenEngineHealth: (callback: () => void) => () => void;
     onMenuOpenModuleProfile: (callback: () => void) => () => void;
-    onMenuMigrateBuffer: (callback: () => void) => () => void;
-    onMenuMigrateWavetable: (callback: () => void) => () => void;
-    onMenuMigrateChebyBlockDC: (callback: () => void) => () => void;
+    onMenuMigrateToLatest: (callback: () => void) => () => void;
     // UI operations
     showContextMenu: (options: ContextMenuOptions) => Promise<void>;
     onContextMenuCommand: (
@@ -285,6 +284,7 @@ const electronAPI: ElectronAPI = {
 
     // Schema operations
     getSchemas: (...args) => invokeIPC('GET_SCHEMAS', ...args),
+    getAppVersion: (...args) => invokeIPC('GET_APP_VERSION', ...args),
 
     // DSL operations
     executeDSL: (source, sourceId, trigger) =>
@@ -467,11 +467,7 @@ const electronAPI: ElectronAPI = {
     onMenuOpenModuleProfile: menuEventHandler(
         MENU_CHANNELS.OPEN_MODULE_PROFILE,
     ),
-    onMenuMigrateBuffer: menuEventHandler(MENU_CHANNELS.MIGRATE_BUFFER),
-    onMenuMigrateWavetable: menuEventHandler(MENU_CHANNELS.MIGRATE_WAVETABLE),
-    onMenuMigrateChebyBlockDC: menuEventHandler(
-        MENU_CHANNELS.MIGRATE_CHEBY_BLOCK_DC,
-    ),
+    onMenuMigrateToLatest: menuEventHandler(MENU_CHANNELS.MIGRATE_TO_LATEST),
 
     // UI operations
     showContextMenu: (options) => invokeIPC('SHOW_CONTEXT_MENU', options),

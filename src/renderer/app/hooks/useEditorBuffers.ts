@@ -105,7 +105,8 @@ export function useEditorBuffers({
                 return;
             }
 
-            const content = await electronAPI.filesystem.readFile(absPath);
+            const { content, evaluatedVersion } =
+                await electronAPI.filesystem.readFile(absPath);
 
             setBuffers((prev) => {
                 const nextBuffers = [...prev];
@@ -127,6 +128,7 @@ export function useEditorBuffers({
                     id: v4(),
                     isPreview: options?.preview ?? false,
                     kind: 'file',
+                    evaluatedVersion,
                 };
                 return [...nextBuffers, newBuffer];
             });
@@ -147,7 +149,8 @@ export function useEditorBuffers({
                 setActiveBufferId(getBufferId(existing));
                 return;
             }
-            const content = await electronAPI.filesystem.readFile(absPath);
+            const { content, evaluatedVersion } =
+                await electronAPI.filesystem.readFile(absPath);
             const newBuffer: EditorBuffer = {
                 content,
                 dirty: false,
@@ -155,6 +158,7 @@ export function useEditorBuffers({
                 id: v4(),
                 isPreview: false,
                 kind: 'file',
+                evaluatedVersion,
             };
             setBuffers((prev) => [...prev, newBuffer]);
             setActiveBufferId(absPath);
@@ -221,6 +225,7 @@ export function useEditorBuffers({
                 const result = await electronAPI.filesystem.writeFile(
                     normalized,
                     buffer.content,
+                    buffer.evaluatedVersion,
                 );
 
                 if (result.success) {
@@ -233,6 +238,7 @@ export function useEditorBuffers({
                                       filePath: normalized,
                                       id: b.id,
                                       kind: 'file' as const,
+                                      evaluatedVersion: buffer.evaluatedVersion,
                                   }
                                 : b,
                         ),
@@ -249,6 +255,7 @@ export function useEditorBuffers({
                 const result = await electronAPI.filesystem.writeFile(
                     buffer.filePath,
                     buffer.content,
+                    buffer.evaluatedVersion,
                 );
 
                 if (result.success) {

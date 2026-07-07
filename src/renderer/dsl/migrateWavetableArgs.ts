@@ -36,6 +36,7 @@ import type { CallExpression, Expression, SourceFile } from 'ts-morph';
 
 import type { Edit } from './migrationEdits';
 import { applyEdits } from './migrationEdits';
+import type { MigrationMeta } from './migrations/types';
 
 export interface WavetableMigrationResult {
     migrated: string;
@@ -470,3 +471,25 @@ function trimSpan(
 function escapeRegExp(s: string): string {
     return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+
+/** Registry entry: shipped in v0.0.97. */
+export const meta: MigrationMeta = {
+    id: 'wavetable-pitch-first',
+    sinceVersion: '0.0.97',
+    order: 2,
+    title: 'Migrate $wavetable to pitch-first order',
+    skippedLabel: 'Needs manual review:',
+    run(source) {
+        const result = migrateWavetableArgs(source);
+        return {
+            migrated: result.migrated,
+            changed: result.migrated !== source,
+            summary: {
+                callsChanged: result.callsChanged,
+                commentsChanged: result.commentsChanged,
+                skippedVariables: result.skipped,
+                error: result.error,
+            },
+        };
+    },
+};

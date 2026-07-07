@@ -26,8 +26,10 @@ import type {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import { IPC_CHANNELS, MENU_CHANNELS } from '../shared/ipcTypes';
+import { compareVersion } from '../shared/compareVersion';
 import {
     isStampablePath,
+    parsePatchVersionStamp,
     stampPatchVersionSource,
     stripPatchVersionStamp,
 } from '../shared/patchVersionStamp';
@@ -378,17 +380,8 @@ async function checkForUpdateAvailability(): Promise<void> {
             return;
         }
 
-        // Compare semver — only notify if latest is strictly newer
-        const [lMaj, lMin, lPat] = latestVersion.split('.').map(Number);
-        const [cMaj, cMin, cPat] = currentVersion.split('.').map(Number);
-        // NaN from non-numeric components (e.g. pre-release tags like "1.0.0-beta.1")
-        // Causes all comparisons to be false — pre-releases are silently ignored.
-        const isNewer =
-            lMaj > cMaj ||
-            (lMaj === cMaj && lMin > cMin) ||
-            (lMaj === cMaj && lMin === cMin && lPat > cPat);
-
-        if (!isNewer) {
+        // Only notify if the latest release is strictly newer.
+        if (compareVersion(latestVersion, currentVersion) <= 0) {
             return;
         }
 
@@ -974,6 +967,8 @@ function registerIPCHandler<T extends keyof typeof IPC_CHANNELS>(
 // Main process has restarted with the updated native module.
 registerIPCHandler('GET_SCHEMAS', () => schemas);
 
+registerIPCHandler('GET_APP_VERSION', () => app.getVersion());
+
 // Syphon window output (macOS): the action lives here, so the renderer's
 // operator.toggleSyphon command (palette/keymap) round-trips through IPC.
 registerIPCHandler('SYPHON_TOGGLE', () => toggleSyphonPublish());
@@ -1529,12 +1524,17 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 
     try {
-        const content = fs.readFileSync(absolutePath, 'utf-8');
+        const raw = fs.readFileSync(absolutePath, 'utf-8');
         // Patch files carry an invisible version-stamp block at the top; strip
-        // it so the editor only ever sees the user's own source.
-        return isStampablePath(absolutePath)
-            ? stripPatchVersionStamp(content)
-            : content;
+        // it so the editor only ever sees the user's own source, but return the
+        // last-evaluated version alongside so the renderer can gate migrations.
+        if (!isStampablePath(absolutePath)) {
+            return { content: raw };
+        }
+        return {
+            content: stripPatchVersionStamp(raw),
+            ...parsePatchVersionStamp(raw),
+        };
     } catch (error) {
         console.error('Error reading file:', error);
         throw new Error(`Failed to read file: ${relativePath}`, {
@@ -1543,38 +1543,43 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 });
 
-registerIPCHandler('FS_WRITE_FILE', (relativePath, content) => {
-    const absolutePath = validatePathInWorkspace(relativePath);
-    if (!absolutePath) {
-        return {
-            error: 'Invalid file path or no workspace selected',
-            success: false,
-        };
-    }
-
-    try {
-        // Ensure directory exists
-        const dir = path.dirname(absolutePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+registerIPCHandler(
+    'FS_WRITE_FILE',
+    (relativePath, content, evaluatedVersion) => {
+        const absolutePath = validatePathInWorkspace(relativePath);
+        if (!absolutePath) {
+            return {
+                error: 'Invalid file path or no workspace selected',
+                success: false,
+            };
         }
 
-        // Record the app version that last wrote this patch as an invisible
-        // block at the top of the file (stripped again on read).
-        const toWrite = isStampablePath(absolutePath)
-            ? stampPatchVersionSource(content, app.getVersion())
-            : content;
+        try {
+            // Ensure directory exists
+            const dir = path.dirname(absolutePath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
 
-        fs.writeFileSync(absolutePath, toWrite, 'utf-8');
-        return { success: true };
-    } catch (error) {
-        console.error('Error writing file:', error);
-        return {
-            error: `Failed to write file: ${relativePath}`,
-            success: false,
-        };
-    }
-});
+            // Record the version the patch last evaluated under as an invisible
+            // block at the top of the file (stripped again on read). A patch
+            // never evaluated yet carries no version, so it is written bare.
+            const toWrite =
+                isStampablePath(absolutePath) && evaluatedVersion
+                    ? stampPatchVersionSource(content, evaluatedVersion)
+                    : content;
+
+            fs.writeFileSync(absolutePath, toWrite, 'utf-8');
+            return { success: true };
+        } catch (error) {
+            console.error('Error writing file:', error);
+            return {
+                error: `Failed to write file: ${relativePath}`,
+                success: false,
+            };
+        }
+    },
+);
 
 registerIPCHandler('FS_RENAME_FILE', (oldPath, newPath) => {
     const oldAbsolutePath = validatePathInWorkspace(oldPath);
@@ -2311,34 +2316,10 @@ const createMenu = (): void => {
                         if (focusedWindow) {
                             BrowserWindow.fromId(
                                 focusedWindow.id,
-                            )?.webContents.send(MENU_CHANNELS.MIGRATE_BUFFER);
+                            )?.webContents.send(MENU_CHANNELS.MIGRATE_TO_LATEST);
                         }
                     },
-                    label: 'Migrate $cycle / $iCycle to $p / $p.s...',
-                },
-                {
-                    click: (_item, focusedWindow) => {
-                        if (focusedWindow) {
-                            BrowserWindow.fromId(
-                                focusedWindow.id,
-                            )?.webContents.send(
-                                MENU_CHANNELS.MIGRATE_WAVETABLE,
-                            );
-                        }
-                    },
-                    label: 'Migrate $wavetable to pitch-first order...',
-                },
-                {
-                    click: (_item, focusedWindow) => {
-                        if (focusedWindow) {
-                            BrowserWindow.fromId(
-                                focusedWindow.id,
-                            )?.webContents.send(
-                                MENU_CHANNELS.MIGRATE_CHEBY_BLOCK_DC,
-                            );
-                        }
-                    },
-                    label: 'Migrate $cheby to preserve pre-DC-blocker output...',
+                    label: 'Migrate patch to latest version...',
                 },
                 ...(!isMac
                     ? ([
