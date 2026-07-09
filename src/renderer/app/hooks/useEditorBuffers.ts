@@ -182,14 +182,16 @@ export function useEditorBuffers({
 
     const createUntitledFile = useCallback(() => {
         setBuffers((prev) => {
-            // Derive next ID from current state to avoid race conditions
+            // Reserve every in-use untitled number from current state (avoiding
+            // races). Files saved from an untitled buffer keep their
+            // `untitled-N` id, so scan by id across all kinds — otherwise a new
+            // untitled could re-mint a number a saved file still holds, giving
+            // two buffers the same id.
             const currentUsed = new Set<number>();
             prev.forEach((b) => {
-                if (b.kind === 'untitled') {
-                    const match = b.id.match(/^untitled-(\d+)$/);
-                    if (match) {
-                        currentUsed.add(parseInt(match[1], 10));
-                    }
+                const match = b.id.match(/^untitled-(\d+)$/);
+                if (match) {
+                    currentUsed.add(parseInt(match[1], 10));
                 }
             });
 
