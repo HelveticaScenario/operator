@@ -1,5 +1,11 @@
+import { types } from 'node:util';
+
 /**
  * Serialize a value for IPC transfer, handling non-transferable types.
+ *
+ * Built-in detection uses `util.types` brand checks rather than `instanceof`:
+ * patch scripts run in a vm sandbox realm, so their Error/Date/Map/Set
+ * instances never satisfy `instanceof` against the host-realm constructors.
  *
  * `seen` holds the current recursion path, not every visited object: each
  * entry is removed once its subtree is serialized, so a value referenced by
@@ -47,7 +53,7 @@ function serialize(
         return `[Function: ${value.name || 'anonymous'}]`;
     }
 
-    if (value instanceof Error) {
+    if (types.isNativeError(value)) {
         return {
             __error: true,
             message: value.message,
@@ -67,7 +73,7 @@ function serialize(
         budget.remaining--;
 
         // Date is a leaf value, no recursion to track.
-        if (value instanceof Date) {
+        if (types.isDate(value)) {
             return value.toISOString();
         }
 
@@ -77,15 +83,20 @@ function serialize(
                 return value.map((item) => serialize(item, seen, budget));
             }
 
-            if (value instanceof Map) {
-                const obj: Record<string, unknown> = { __type: 'Map' };
-                for (const [k, v] of value) {
-                    obj[String(k)] = serialize(v, seen, budget);
-                }
-                return obj;
+            // Entries are kept as serialized [key, value] pairs: keying an
+            // object by String(k) would collide distinct keys (1 vs '1')
+            // and lose a '__proto__' key to the prototype setter.
+            if (types.isMap(value)) {
+                return {
+                    __type: 'Map',
+                    entries: Array.from(value, ([k, v]) => [
+                        serialize(k, seen, budget),
+                        serialize(v, seen, budget),
+                    ]),
+                };
             }
 
-            if (value instanceof Set) {
+            if (types.isSet(value)) {
                 return {
                     __type: 'Set',
                     values: Array.from(value).map((v) =>
@@ -94,7 +105,10 @@ function serialize(
                 };
             }
 
-            const result: Record<string, unknown> = {};
+            // Null prototype so an own '__proto__' key (e.g. from
+            // JSON.parse) lands as a plain property instead of invoking the
+            // Object.prototype setter and vanishing.
+            const result: Record<string, unknown> = Object.create(null);
             for (const key of Object.keys(value)) {
                 result[key] = serialize(
                     (value as Record<string, unknown>)[key],
