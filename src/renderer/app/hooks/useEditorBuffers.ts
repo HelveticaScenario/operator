@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { v4 } from 'uuid';
 import electronAPI from '../../electronAPI';
 import type { EditorBuffer } from '../../types/editor';
@@ -9,6 +9,7 @@ import {
     normalizeFileName,
     readUnsavedBuffers,
     saveUnsavedBuffers,
+    toAbsoluteWorkspacePath,
 } from '../buffers';
 
 interface UseEditorBuffersParams {
@@ -35,40 +36,10 @@ export function useEditorBuffers({
         },
     );
 
-    const usedUntitledNumbers = useMemo(() => {
-        const used = new Set<number>();
-        buffers.forEach((b) => {
-            if (b.kind === 'untitled') {
-                const match = b.id.match(/^untitled-(\d+)$/);
-                if (match) {
-                    used.add(parseInt(match[1], 10));
-                }
-            }
-        });
-        return used;
-    }, [buffers]);
-    const usedUntitledNumbersRef = useRef(usedUntitledNumbers);
-    useEffect(() => {
-        usedUntitledNumbersRef.current = usedUntitledNumbers;
-    });
-
     const [renamingPath, setRenamingPath] = useState<string | null>(null);
 
-    // File buffers are identified by absolute path everywhere (getBufferId
-    // returns filePath). IPC surfaces that hand back workspace-relative paths
-    // (the save dialog, the file tree, context menus) must be resolved here
-    // before the path is stored or compared.
-    const resolveWorkspacePath = useCallback(
-        (path: string) => {
-            if (
-                workspaceRoot &&
-                !path.startsWith('/') &&
-                !path.match(/^[a-zA-Z]:/)
-            ) {
-                return `${workspaceRoot}/${path}`;
-            }
-            return path;
-        },
+    const resolvePath = useCallback(
+        (path: string) => toAbsoluteWorkspacePath(workspaceRoot, path),
         [workspaceRoot],
     );
 
@@ -103,7 +74,7 @@ export function useEditorBuffers({
                 throw new Error('No workspace open');
             }
 
-            const absPath = `${workspaceRoot}/${relPath}`;
+            const absPath = toAbsoluteWorkspacePath(workspaceRoot, relPath);
 
             const existing = buffers.find(
                 (b) => b.kind === 'file' && b.filePath === absPath,
@@ -208,11 +179,6 @@ export function useEditorBuffers({
                 kind: 'untitled',
             };
 
-            // Update ref for useMemo dependency
-            const next = new Set(currentUsed);
-            next.add(nextIdNum);
-            usedUntitledNumbersRef.current = next;
-
             setActiveBufferId(nextId);
             return [...prev, newBuffer];
         });
@@ -249,7 +215,7 @@ export function useEditorBuffers({
                 }
 
                 // The save dialog only ever returns workspace-relative paths.
-                const filePath = resolveWorkspacePath(normalized);
+                const filePath = resolvePath(normalized);
 
                 const result = await electronAPI.filesystem.writeFile(
                     filePath,
@@ -257,8 +223,39 @@ export function useEditorBuffers({
                 );
 
                 if (result.success) {
-                    setBuffers((prev) =>
-                        prev.map((b) =>
+                    setBuffers((prev) => {
+                        const source = prev.find(
+                            (b) => getBufferId(b) === idToSave,
+                        );
+                        const existing = prev.find(
+                            (b) =>
+                                b.kind === 'file' &&
+                                b.filePath === filePath &&
+                                getBufferId(b) !== idToSave,
+                        );
+                        if (source && existing) {
+                            // The chosen path is already open: fold the
+                            // untitled buffer into the existing one so the
+                            // path keeps a single buffer identity — two
+                            // buffers sharing an id would make every id
+                            // lookup act on whichever comes first.
+                            return prev
+                                .filter((b) => getBufferId(b) !== idToSave)
+                                .map((b) =>
+                                    b.kind === 'file' &&
+                                    b.filePath === filePath
+                                        ? {
+                                              ...b,
+                                              content: source.content,
+                                              dirty:
+                                                  source.content !==
+                                                  savedContent,
+                                              isPreview: false,
+                                          }
+                                        : b,
+                                );
+                        }
+                        return prev.map((b) =>
                             getBufferId(b) === idToSave
                                 ? {
                                       content: b.content,
@@ -268,8 +265,8 @@ export function useEditorBuffers({
                                       kind: 'file' as const,
                                   }
                                 : b,
-                        ),
-                    );
+                        );
+                    });
                     if (idToSave === activeBufferId) {
                         setActiveBufferId(filePath);
                     }
@@ -306,7 +303,7 @@ export function useEditorBuffers({
             buffers,
             refreshFileTree,
             onFileSaved,
-            resolveWorkspacePath,
+            resolvePath,
         ],
     );
 
@@ -315,7 +312,7 @@ export function useEditorBuffers({
             let filePath: string | undefined;
 
             const resolvedPath = targetIdOrPath
-                ? resolveWorkspacePath(targetIdOrPath)
+                ? resolvePath(targetIdOrPath)
                 : targetIdOrPath;
 
             const buffer =
@@ -342,7 +339,7 @@ export function useEditorBuffers({
             }
             setRenamingPath(filePath);
         },
-        [activeBufferId, buffers, resolveWorkspacePath],
+        [activeBufferId, buffers, resolvePath],
     );
 
     const handleRenameCommit = useCallback(
@@ -405,7 +402,7 @@ export function useEditorBuffers({
             let bufferId: string | undefined;
 
             const resolvedPath = targetIdOrPath
-                ? resolveWorkspacePath(targetIdOrPath)
+                ? resolvePath(targetIdOrPath)
                 : targetIdOrPath;
 
             const buffer =
@@ -474,7 +471,7 @@ export function useEditorBuffers({
                 throw new Error(result.error || 'Failed to delete file');
             }
         },
-        [activeBufferId, buffers, refreshFileTree, resolveWorkspacePath],
+        [activeBufferId, buffers, refreshFileTree, resolvePath],
     );
 
     // Mirror of activeBufferId for deferred callbacks that run after state
