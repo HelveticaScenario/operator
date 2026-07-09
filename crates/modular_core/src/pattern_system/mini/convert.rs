@@ -200,15 +200,19 @@ impl HasRest for bool {
 
 /// Convert an AST to a Pattern.
 pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertError> {
-    validate_limits_main(ast)?;
+    validate_limits_main(ast, 1)?;
     convert_inner(ast)
 }
 
-/// Upper bound on `!n` replicate counts and euclidean step counts.
+/// Upper bound on how far `!n` replicate and euclidean-step expansion may
+/// multiply a pattern.
 ///
 /// Both multiply the amount of structure that conversion (and the seq
-/// module's eager ribbon bake) materializes, so an oversized operand must
-/// fail conversion with a clear error rather than exhaust memory.
+/// module's eager ribbon bake) materializes, and they compound when nested:
+/// `[0!1024]!1024` is a million steps from two in-range counts. The validator
+/// tracks the running product down each path, so a compound expansion past
+/// this bound fails conversion with a clear error rather than exhausting
+/// memory.
 const MAX_EXPANSION: u32 = 1024;
 
 /// Largest `Pure` leaf in a u32 operand pattern (0 when there are none).
@@ -239,35 +243,41 @@ fn max_u32_leaf(ast: &MiniASTU32) -> u32 {
 }
 
 /// Generates a limit validator for one of the four structurally identical
-/// AST enums. Each validator rejects operands that conversion cannot lower
-/// safely: `!n`/euclidean-step operands past `MAX_EXPANSION`, and polymeter
-/// `%` steps that are not a single number (`eval_f64` reads exactly one
-/// constant, so any other shape would be silently collapsed).
+/// AST enums. `budget` carries the product of the enclosing `!n`/euclidean-step
+/// expansions down each path; a node whose expansion pushes that running
+/// product past `MAX_EXPANSION` is rejected, as are polymeter `%` steps that
+/// are not a single number (`eval_f64` reads exactly one constant, so any
+/// other shape would be silently collapsed).
 macro_rules! define_validate_limits {
     ($name:ident, $ast:ident) => {
-        fn $name(ast: &$ast) -> Result<(), ConvertError> {
+        fn $name(ast: &$ast, budget: u32) -> Result<(), ConvertError> {
             match ast {
                 $ast::Pure(_) | $ast::Rest(_) => Ok(()),
-                $ast::List(Located { node, .. }) => node.iter().try_for_each($name),
+                $ast::List(Located { node, .. }) => {
+                    node.iter().try_for_each(|a| $name(a, budget))
+                }
                 $ast::Sequence(items) | $ast::FastCat(items) | $ast::SlowCat(items) => {
-                    items.iter().try_for_each(|(p, _)| $name(p))
+                    items.iter().try_for_each(|(p, _)| $name(p, budget))
                 }
                 $ast::Stack(items) | $ast::RandomChoice(items, _) => {
-                    items.iter().try_for_each($name)
+                    items.iter().try_for_each(|a| $name(a, budget))
                 }
                 $ast::Fast(pattern, factor) | $ast::Slow(pattern, factor) => {
-                    $name(pattern)?;
-                    validate_limits_f64(factor)
+                    $name(pattern, budget)?;
+                    // The factor is a separate operand pattern, materialized on
+                    // its own, so it starts from a fresh budget.
+                    validate_limits_f64(factor, 1)
                 }
                 $ast::Replicate(pattern, count) => {
-                    if *count > MAX_EXPANSION {
+                    let expansion = budget.saturating_mul(*count);
+                    if expansion > MAX_EXPANSION {
                         return Err(ConvertError::OperatorError(format!(
-                            "replicate count {count} exceeds the maximum of {MAX_EXPANSION}"
+                            "replicate count {count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
                         )));
                     }
-                    $name(pattern)
+                    $name(pattern, expansion)
                 }
-                $ast::Degrade(pattern, _, _) => $name(pattern),
+                $ast::Degrade(pattern, _, _) => $name(pattern, budget),
                 $ast::Euclidean {
                     pattern,
                     pulses,
@@ -275,17 +285,19 @@ macro_rules! define_validate_limits {
                     rotation,
                 } => {
                     let max_steps = max_u32_leaf(steps);
-                    if max_steps > MAX_EXPANSION {
+                    let expansion = budget.saturating_mul(max_steps);
+                    if expansion > MAX_EXPANSION {
                         return Err(ConvertError::OperatorError(format!(
-                            "euclidean step count {max_steps} exceeds the maximum of {MAX_EXPANSION}"
+                            "euclidean step count {max_steps} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
                         )));
                     }
-                    validate_limits_u32(pulses)?;
-                    validate_limits_u32(steps)?;
+                    // Operands are separate patterns with their own budgets.
+                    validate_limits_u32(pulses, 1)?;
+                    validate_limits_u32(steps, 1)?;
                     if let Some(r) = rotation {
-                        validate_limits_i32(r)?;
+                        validate_limits_i32(r, 1)?;
                     }
-                    $name(pattern)
+                    $name(pattern, expansion)
                 }
                 $ast::Polymeter {
                     children,
@@ -298,7 +310,7 @@ macro_rules! define_validate_limits {
                             ));
                         }
                     }
-                    children.iter().try_for_each($name)
+                    children.iter().try_for_each(|a| $name(a, budget))
                 }
             }
         }
@@ -2546,6 +2558,35 @@ mod tests {
             rotation: None,
         };
         assert!(convert::<Option<f64>>(&ast).is_err());
+    }
+
+    #[test]
+    fn test_replicate_expansion_compounds_when_nested() {
+        // The bound is on the product of nested `!n` counts, not each count
+        // alone: `[0!1024]!1024` is a million steps and is rejected even though
+        // both counts are within MAX_EXPANSION.
+        let ast = parse("[0!1024]!1024").unwrap();
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("replicate count"),
+            "unexpected error: {err}"
+        );
+
+        // A single `!1024` (product == MAX_EXPANSION) still converts.
+        let ast = parse("0!1024").unwrap();
+        assert!(convert::<f64>(&ast).is_ok());
+    }
+
+    #[test]
+    fn test_euclid_expansion_compounds_under_replicate() {
+        // A 1024-step euclid replicated 1024 times is 1024 * 1024 steps, so the
+        // compound expansion is rejected though each operand is within bounds.
+        let ast = parse("x(1,1024)!1024").unwrap();
+        assert!(convert::<bool>(&ast).is_err());
+
+        // The 1024-step euclid alone still converts.
+        let ast = parse("x(1,1024)").unwrap();
+        assert!(convert::<bool>(&ast).is_ok());
     }
 
     // --- Rest Pattern Behavior Tests ---
