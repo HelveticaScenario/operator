@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './FileExplorer.css';
 import type { FileTreeEntry } from '../../shared/ipcTypes';
 import type { EditorBuffer } from '../types/editor';
-import { getBufferId } from '../app/buffers';
+import { getBufferId, toAbsoluteWorkspacePath } from '../app/buffers';
 import electronAPI from '../electronAPI';
 import { bindFileExplorerFocus } from '../keybindings/contextKeyBootstrap';
 
@@ -54,7 +54,7 @@ function TreeNode({
 
     // FileTreeEntry paths are workspace-relative; renamingPath (like buffer
     // identity) is an absolute path, so resolve before comparing.
-    const absolutePath = `${workspaceRoot}/${entry.path}`;
+    const absolutePath = toAbsoluteWorkspacePath(workspaceRoot, entry.path);
     const isRenaming = renamingPath === absolutePath;
 
     useEffect(() => {
@@ -372,9 +372,7 @@ export function FileExplorer({
 
         // Check if it's open. Buffer filePaths are absolute while tree entry
         // paths are workspace-relative.
-        const absolutePath = workspaceRoot
-            ? `${workspaceRoot}/${entry.path}`
-            : entry.path;
+        const absolutePath = toAbsoluteWorkspacePath(workspaceRoot, entry.path);
         const buffer = buffers.find(
             (b) => b.kind === 'file' && b.filePath === absolutePath,
         );
