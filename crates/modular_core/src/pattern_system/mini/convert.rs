@@ -269,7 +269,9 @@ macro_rules! define_validate_limits {
                     validate_limits_f64(factor, 1)
                 }
                 $ast::Replicate(pattern, count) => {
-                    let expansion = budget.saturating_mul(*count);
+                    // A zero count must not zero the running budget: every
+                    // nested product would stay 0 and slip under the cap.
+                    let expansion = budget.saturating_mul((*count).max(1));
                     if expansion > MAX_EXPANSION {
                         return Err(ConvertError::OperatorError(format!(
                             "replicate count {count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
@@ -284,7 +286,11 @@ macro_rules! define_validate_limits {
                     steps,
                     rotation,
                 } => {
-                    let max_steps = max_u32_leaf(steps);
+                    // Clamped to 1 for the same reason as the replicate arm: a
+                    // steps operand whose leaves are all 0 (or all rests) must
+                    // not zero the budget and bypass the cap for everything
+                    // nested inside the pattern.
+                    let max_steps = max_u32_leaf(steps).max(1);
                     let expansion = budget.saturating_mul(max_steps);
                     if expansion > MAX_EXPANSION {
                         return Err(ConvertError::OperatorError(format!(
@@ -2575,6 +2581,29 @@ mod tests {
         // A single `!1024` (product == MAX_EXPANSION) still converts.
         let ast = parse("0!1024").unwrap();
         assert!(convert::<f64>(&ast).is_ok());
+    }
+
+    #[test]
+    fn test_zero_step_euclid_does_not_zero_the_expansion_budget() {
+        // A euclid whose steps operand is 0 contributes a factor of at least 1
+        // to the running budget — otherwise every product nested inside it
+        // would be 0 and the cap would never trigger.
+        let ast = parse("[[[0!1024]!1024]!1024](3,0)").unwrap();
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("replicate count"),
+            "unexpected error: {err}"
+        );
+
+        // Same for an all-rest steps operand (max leaf 0), which only the AST
+        // can express — the grammar requires an integer there.
+        let ast = MiniAST::Euclidean {
+            pattern: Box::new(parse("[[0!1024]!1024]!1024").unwrap()),
+            pulses: Box::new(u32_pure(3)),
+            steps: Box::new(MiniASTU32::Rest(SourceSpan::new(0, 1))),
+            rotation: None,
+        };
+        assert!(convert::<f64>(&ast).is_err());
     }
 
     #[test]
