@@ -2,7 +2,7 @@ use crate::{
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::{SchmittTrigger, interpolate},
+        utils::{SchmittTrigger, interpolate, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
@@ -76,14 +76,7 @@ impl SineOscillator {
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
             let frequency = apply_fm(pitch, fm, self.params.fm_mode) / sample_rate;
-            state.phase += frequency;
-            // Wrap phase to [0, 1) — supports negative increments (through-zero FM)
-            state.phase = state.phase.rem_euclid(1.0);
-            // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which
-            // is absorbing; reset so the phase recovers once the input does.
-            if !state.phase.is_finite() {
-                state.phase = 0.0;
-            }
+            state.phase = wrap_phase(state.phase + frequency);
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.

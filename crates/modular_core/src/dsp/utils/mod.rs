@@ -42,6 +42,23 @@ pub fn sanitize(x: f32) -> f32 {
     if x.is_finite() { x } else { 0.0 }
 }
 
+/// Wrap an accumulated oscillator phase to [0, 1). `rem_euclid` keeps any
+/// increment in range, including negative ones from through-zero FM. A
+/// non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which is
+/// absorbing, so a non-finite phase resets to 0.0 and recovers once the
+/// input does.
+#[inline]
+pub fn wrap_phase(phase: f32) -> f32 {
+    sanitize(phase.rem_euclid(1.0))
+}
+
+/// [`wrap_phase`] for the f64 accumulators used by DPW-based oscillators.
+#[inline]
+pub fn wrap_phase_f64(phase: f64) -> f64 {
+    let wrapped = phase.rem_euclid(1.0);
+    if wrapped.is_finite() { wrapped } else { 0.0 }
+}
+
 /// Map a value from one range to another. If the input range is degenerate, returns `y0`.
 pub fn map_range(x: f32, x0: f32, x1: f32, y0: f32, y1: f32) -> f32 {
     let denom = x1 - x0;
