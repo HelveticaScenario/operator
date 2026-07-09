@@ -785,6 +785,12 @@
         "description": "Current beat within the bar (0-indexed)",
         "polyphonic": false,
         "default": false
+      },
+      {
+        "name": "bpm",
+        "description": "Current tempo in beats per minute; tracks the session tempo while Ableton Link is enabled",
+        "polyphonic": false,
+        "default": false
       }
     ],
     "signalParams": [],
