@@ -668,15 +668,17 @@ console.log('Patch remap debug mode:', DEBUG_LOG);
 
 /**
  * Resolve a renderer-supplied path to an absolute path the filesystem IPC
- * handlers may touch: anything inside the current workspace, plus the
- * app-managed files (config.json, keybindings.json) the editor opens
- * directly. Returns null for everything else.
+ * handlers may touch. Absolute paths pass through (normalized): buffer
+ * identity is the absolute path, and buffers that outlive a workspace switch
+ * — or app-managed files like keybindings.json — must stay saveable.
+ * Relative paths resolve against the current workspace and must not escape
+ * it. Returns null for everything else.
  */
 function validatePathInWorkspace(filePath: string): string | null {
-    return resolveWorkspacePath(currentWorkspaceRoot, filePath, [
-        CONFIG_FILE,
-        KEYBINDINGS_FILE,
-    ]);
+    if (path.isAbsolute(filePath)) {
+        return path.resolve(filePath);
+    }
+    return resolveWorkspacePath(currentWorkspaceRoot, filePath);
 }
 
 /**
@@ -1498,10 +1500,11 @@ registerIPCHandler('FS_CREATE_FOLDER', (relativePath) => {
 
 // @ts-expect-error - async handler returns Promise
 registerIPCHandler('FS_SHOW_SAVE_DIALOG', async (defaultPath?: string) => {
-    // FS_WRITE_FILE rejects paths outside the workspace, so this dialog must
-    // only ever hand back in-workspace locations: it opens anchored at the
-    // workspace root, and an out-of-workspace choice re-prompts rather than
-    // returning a path whose save is guaranteed to fail.
+    // The dialog hands back workspace-relative paths, which the renderer
+    // resolves against the workspace root — so only in-workspace locations
+    // round-trip. It opens anchored at the workspace root, and an
+    // out-of-workspace choice re-prompts instead of returning a path that
+    // would be mis-resolved.
     if (!currentWorkspaceRoot) {
         await dialog.showMessageBox({
             message: 'Open a workspace folder before saving files.',
