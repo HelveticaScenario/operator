@@ -130,6 +130,33 @@ describe('buffer identity is the absolute file path', () => {
     });
 });
 
+describe('untitled ids stay unique after a save', () => {
+    test('a new untitled does not reuse the id of a file saved from an untitled buffer', async () => {
+        api.filesystem.showSaveDialog.mockResolvedValue('kept.mjs');
+        api.filesystem.writeFile.mockResolvedValue({ success: true });
+
+        const hookRef = renderBuffersHook();
+        act(() => hookRef.current.createUntitledFile());
+        await act(async () => {
+            await hookRef.current.saveFile();
+        });
+
+        // The saved buffer keeps its `untitled-1` id (so its source id stays
+        // stable across the save) while its path becomes the buffer key.
+        const saved = hookRef.current.buffers[0];
+        expect(saved.id).toBe('untitled-1');
+        expect(saved.kind).toBe('file');
+
+        act(() => hookRef.current.createUntitledFile());
+
+        expect(hookRef.current.buffers).toHaveLength(2);
+        const ids = hookRef.current.buffers.map((b) => b.id);
+        expect(new Set(ids).size).toBe(2);
+        // The new untitled skips the number the saved file still holds.
+        expect(ids).toContain('untitled-2');
+    });
+});
+
 describe('dirty tracking across an in-flight save', () => {
     test('keystrokes typed during the write stay dirty and keep their content', async () => {
         const hookRef = renderBuffersHook();
