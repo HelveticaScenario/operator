@@ -983,24 +983,6 @@ export function executePatchScript(
     // blocking the Electron main process forever.
     const executionTimeoutMs = 5000;
 
-    // Standard, synchronous JavaScript/Web APIs a patch script may use on top
-    // of the ECMAScript intrinsics the vm realm already has. Scheduling APIs
-    // (timers, queueMicrotask, performance, AbortSignal.timeout) stay out — a
-    // patch script runs synchronously under a timeout, so a scheduled callback
-    // could never fire. Node-only and DOM globals stay out too.
-    const sandboxHostGlobals = {
-        atob,
-        btoa,
-        crypto,
-        DOMException,
-        structuredClone,
-        TextDecoder,
-        TextEncoder,
-        URL,
-        URLPattern,
-        URLSearchParams,
-    };
-
     try {
         // Execute the script in a vm context so the timeout applies. The DSL
         // globals are the sandbox's globals; they are host objects, so
@@ -1011,7 +993,7 @@ export function executePatchScript(
         const sandbox = vm.createContext({
             ...dslGlobals,
             console,
-            ...sandboxHostGlobals,
+            structuredClone,
         });
         // The sandbox is its own realm: array literals in the patch script use
         // the sandbox's Array.prototype, so pipe() must be installed there too
