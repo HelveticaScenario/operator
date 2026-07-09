@@ -1061,8 +1061,10 @@ pub struct AudioState {
     module_state_meta: Mutex<ModuleStateMetaCache>,
     /// The last successfully built editor-state JSON, served when a poll loses
     /// the `module_states` try_lock race with the audio thread — so contention
-    /// reads as an unchanged poll, never as "all modules removed".
-    module_states_snapshot: Mutex<HashMap<String, serde_json::Value>>,
+    /// reads as an unchanged poll, never as "all modules removed". Shared via
+    /// `Arc` so both retaining and serving it are pointer swaps, never deep
+    /// clones of the map.
+    module_states_snapshot: Mutex<Arc<HashMap<String, serde_json::Value>>>,
     /// MIDI input manager - shared with audio thread for polling
     midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1124,7 +1126,7 @@ impl AudioState {
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             module_state_meta: Mutex::new(ModuleStateMetaCache::default()),
-            module_states_snapshot: Mutex::new(HashMap::new()),
+            module_states_snapshot: Mutex::new(Arc::new(HashMap::new())),
             midi_manager,
             transport_meter: Arc::new(TransportMeter::default()),
             audio_thread_panicked: Arc::new(AtomicBool::new(false)),
@@ -1266,7 +1268,7 @@ impl AudioState {
         Ok(filename)
     }
 
-    pub fn stop_recording(&self) -> Result<Option<String>> {
+    pub fn stop_recording(&self) -> Result<Option<crate::recording::FinishedRecording>> {
         // Remove the callback's feed first: dropping it closes the ring's write
         // side, so the writer thread's final drain sees every pushed sample.
         drop(self.recording_feed.lock().take());
@@ -1274,10 +1276,10 @@ impl AudioState {
 
         match session {
             Some(session) => {
-                let path = session.finish().map_err(|e| {
+                let finished = session.finish().map_err(|e| {
                     napi::Error::from_reason(format!("Failed to finalize file writer: {}", e))
                 })?;
-                Ok(Some(path.to_string_lossy().to_string()))
+                Ok(Some(finished))
             }
             None => Ok(None),
         }
@@ -1343,14 +1345,14 @@ impl AudioState {
         out
     }
 
-    pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
+    pub fn get_module_states(&self) -> Arc<HashMap<String, serde_json::Value>> {
         // Snapshot under the lock, then build JSON after releasing it, so the audio
         // thread's `try_lock` never fails across JSON construction.
         let mut states_guard = match self.module_states.try_lock() {
             Some(guard) => guard,
             // The audio thread is writing; serve the previous snapshot so the
             // renderer never mistakes contention for module removal.
-            None => return self.module_states_snapshot.lock().clone(),
+            None => return Arc::clone(&self.module_states_snapshot.lock()),
         };
         let mut meta = self.module_state_meta.lock();
         // Promotion (and the slot prune it drives) happens once the swap applies, so
@@ -1375,7 +1377,8 @@ impl AudioState {
                 out.insert(id, m.build_json(live.as_ref()));
             }
         }
-        *self.module_states_snapshot.lock() = out.clone();
+        let out = Arc::new(out);
+        *self.module_states_snapshot.lock() = Arc::clone(&out);
         out
     }
 

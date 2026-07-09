@@ -18,10 +18,11 @@ use std::time::Duration;
 use hound::{WavSpec, WavWriter};
 use rtrb::{Consumer, Producer, RingBuffer};
 
-/// One second of mono samples at the stream rate (rounded up to a power of
-/// two), so a disk stall must exceed a full second before samples drop.
+/// Four seconds of mono samples at the stream rate (rounded up to a power of
+/// two) — a couple of megabytes buys enough headroom that only a sustained
+/// disk stall (slow network volume, system-wide I/O pressure) drops samples.
 fn ring_capacity(sample_rate: u32) -> usize {
-    (sample_rate as usize).next_power_of_two()
+    (sample_rate as usize * 4).next_power_of_two()
 }
 
 /// How long the writer thread sleeps when the ring is empty.
@@ -46,10 +47,20 @@ impl RecordingFeed {
     }
 }
 
+/// A finished recording: where it landed, and how many samples never made it.
+/// `dropped_samples > 0` means the writer could not keep up with the stream
+/// and the file is shorter than the live take — callers must surface that to
+/// the user rather than reporting an unqualified success.
+pub struct FinishedRecording {
+    pub path: PathBuf,
+    pub dropped_samples: u64,
+}
+
 /// Main-thread handle to a recording session's writer thread.
 pub struct RecordingSession {
     path: PathBuf,
     stop: Arc<AtomicBool>,
+    dropped: Arc<AtomicU64>,
     handle: JoinHandle<Result<(), hound::Error>>,
 }
 
@@ -57,10 +68,13 @@ impl RecordingSession {
     /// Stop the writer thread, draining every sample still in the ring to disk
     /// and finalizing the WAV header. The caller must drop the session's
     /// [`RecordingFeed`] first so the final drain observes every pushed sample.
-    pub fn finish(self) -> Result<PathBuf, hound::Error> {
+    pub fn finish(self) -> Result<FinishedRecording, hound::Error> {
         self.stop.store(true, Ordering::Release);
         match self.handle.join() {
-            Ok(Ok(())) => Ok(self.path),
+            Ok(Ok(())) => Ok(FinishedRecording {
+                path: self.path,
+                dropped_samples: self.dropped.load(Ordering::Relaxed),
+            }),
             Ok(Err(e)) => Err(e),
             Err(_) => Err(hound::Error::IoError(std::io::Error::other(
                 "recording writer thread panicked",
@@ -94,8 +108,16 @@ pub fn start(
         })
         .map_err(hound::Error::IoError)?;
     Ok((
-        RecordingFeed { producer, dropped },
-        RecordingSession { path, stop, handle },
+        RecordingFeed {
+            producer,
+            dropped: Arc::clone(&dropped),
+        },
+        RecordingSession {
+            path,
+            stop,
+            dropped,
+            handle,
+        },
     ))
 }
 
@@ -157,7 +179,8 @@ mod tests {
         }
         drop(feed);
         let finished = session.finish().expect("finalize recording");
-        assert_eq!(finished, path);
+        assert_eq!(finished.path, path);
+        assert_eq!(finished.dropped_samples, 0);
 
         let mut reader = hound::WavReader::open(&path).expect("open recording");
         let spec = reader.spec();
