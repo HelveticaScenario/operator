@@ -29,8 +29,8 @@ fn format_module_location(module: &ModuleSpec) -> String {
         // User explicitly set this ID, show it
         format!("'{}'", module.id)
     } else {
-        // Auto-generated ID - this will be replaced by source line in TypeScript
-        // For now, show module type as a hint
+        // Auto-generated ID: show the module type as a hint. The TypeScript
+        // layer replaces this with the module's source line.
         format!("{}(...)", module.module_type)
     }
 }
@@ -86,7 +86,7 @@ pub fn validate_patch(
     // 3) Validate each module:
     //    - module type exists
     //    - for params whose schema indicates a `Signal`, validate any Cable references
-    //    (param-level validation is now handled by deserr)
+    //    (param-level validation is deserr's job)
     // 4) Validate scopes:
     //    - referenced module exists
     //    - referenced output port exists on the module type
@@ -154,7 +154,7 @@ pub fn validate_patch(
 
             let field = format!("params.{}", param_name);
 
-            // Skip unknown param names — deserr now handles this via deny_unknown_fields.
+            // Skip unknown param names — deserr rejects those via deny_unknown_fields.
             let Some(param_schema_node) = param_schemas.get(param_name) else {
                 continue;
             };
