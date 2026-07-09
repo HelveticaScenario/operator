@@ -183,7 +183,10 @@ impl MidiInputManager {
             .unwrap_or(0);
         let device_name = DeviceName::intern(device);
         for (channel, note) in held {
-            state.push(
+            // The held-notes entry is already consumed, so these offs get no
+            // retry: deliver past the capacity cap rather than dropping them
+            // when a stalled consumer has the buffer full.
+            state.push_unchecked(
                 timestamp_us,
                 Message::MidiNoteOff(MidiNoteOff {
                     device: Some(device_name.clone()),
