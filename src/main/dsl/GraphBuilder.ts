@@ -1141,31 +1141,15 @@ export class GraphBuilder {
                     params: finalParams,
                 };
             }),
-            scopes: this.scopes.map((scope) => {
-                const resolvedChannels = scope.channels.map((ch) => {
-                    const deferredOutput = this.deferredOutputs.get(
-                        ch.moduleId,
-                    );
-                    if (deferredOutput) {
-                        const resolved = deferredOutput.resolve();
-                        if (resolved === null) {
-                            throw new Error(
-                                'Unset DeferredModuleOutput used in a scope — call .set(...) on the $deferred() before the end of the script',
-                            );
-                        }
-                        return {
-                            channel: ch.channel,
-                            moduleId: resolved.moduleId,
-                            portName: resolved.portName,
-                        };
-                    }
-                    return ch;
-                });
-                return {
-                    ...scope,
-                    channels: resolvedChannels,
-                } as ScopeWithLocation;
-            }),
+            scopes: this.scopes.map(
+                (scope) =>
+                    ({
+                        ...scope,
+                        channels: scope.channels.map((ch) =>
+                            this.resolveScopeChannel(ch),
+                        ),
+                    }) as ScopeWithLocation,
+            ),
             scopeXy: this.resolveScopeXY(),
         };
 
@@ -1325,32 +1309,39 @@ export class GraphBuilder {
     }
 
     /**
+     * Resolve a scope channel ref against the $deferred outputs: a channel
+     * naming a deferred module is replaced by the module it was set to.
+     * Throws if the $deferred was never set. Shared by the per-scope and
+     * $scopeXY resolution in `toPatch`.
+     */
+    private resolveScopeChannel(ch: ScopeChannel): ScopeChannel {
+        const deferred = this.deferredOutputs.get(ch.moduleId);
+        if (!deferred) return ch;
+        const resolved = deferred.resolve();
+        if (resolved === null) {
+            throw new Error(
+                'Unset DeferredModuleOutput used in a scope — call .set(...) on the $deferred() before the end of the script',
+            );
+        }
+        return {
+            channel: ch.channel,
+            moduleId: resolved.moduleId,
+            portName: resolved.portName,
+        };
+    }
+
+    /**
      * Resolve the current $scopeXY's channel refs against deferred outputs.
      * Returns undefined when no scope is registered; throws if a referenced
      * $deferred was never set, mirroring the per-scope resolution path.
      */
     private resolveScopeXY(): ScopeXy | undefined {
         if (this.scopeXY === null) return undefined;
-        const resolveChannel = (ch: ScopeChannel): ScopeChannel => {
-            const deferred = this.deferredOutputs.get(ch.moduleId);
-            if (!deferred) return ch;
-            const resolved = deferred.resolve();
-            if (resolved === null) {
-                throw new Error(
-                    'Unset DeferredModuleOutput used in a scope — call .set(...) on the $deferred() before the end of the script',
-                );
-            }
-            return {
-                channel: ch.channel,
-                moduleId: resolved.moduleId,
-                portName: resolved.portName,
-            };
-        };
         const resolvedPairs: ScopeXyPair[] = [];
         for (const pair of this.scopeXY.pairs) {
             resolvedPairs.push({
-                x: resolveChannel(pair.x),
-                y: resolveChannel(pair.y),
+                x: this.resolveScopeChannel(pair.x),
+                y: this.resolveScopeChannel(pair.y),
             });
         }
         return {
