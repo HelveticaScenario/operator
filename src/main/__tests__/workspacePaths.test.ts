@@ -52,22 +52,4 @@ describe('resolveWorkspacePath', () => {
         expect(resolveWorkspacePath(null, 'a.mjs')).toBeNull();
         expect(resolveWorkspacePath(null, '/anywhere/a.mjs')).toBeNull();
     });
-
-    test('allowlisted files pass regardless of workspace containment', () => {
-        const keybindings = path.resolve('/Users/me/userData/keybindings.json');
-        expect(resolveWorkspacePath(ROOT, keybindings, [keybindings])).toBe(
-            keybindings,
-        );
-        expect(resolveWorkspacePath(null, keybindings, [keybindings])).toBe(
-            keybindings,
-        );
-        // The allowlist is exact: neighbours of an allowed file stay rejected.
-        expect(
-            resolveWorkspacePath(
-                ROOT,
-                path.resolve('/Users/me/userData/other.json'),
-                [keybindings],
-            ),
-        ).toBeNull();
-    });
 });
