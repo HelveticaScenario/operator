@@ -117,8 +117,7 @@ fn test_unknown_module_type() {
 
 #[test]
 fn test_unknown_param_via_deserr() {
-    // Unknown params are now rejected by deserr (deny_unknown_fields) rather
-    // than by validate_patch. Verify that deserr catches them.
+    // deserr rejects unknown params via deny_unknown_fields.
     // Use $noise because all its params are optional — we only want
     // the "unknown parameter" error, not an extra "missing required param" error.
     let params = json!({
@@ -270,7 +269,7 @@ fn test_nested_signal_cable_to_nonexistent_module() {
     assert!(result.is_err());
     let errors = result.unwrap_err();
     assert!(errors.iter().any(|e| {
-        // Location is now formatted as "moduleName(...)" for auto-generated IDs
+        // Auto-generated IDs format the location as "moduleName(...)"
         e.location.as_deref() == Some("$mix(...)")
             && e.field == "params.inputs"
             && e.message.contains("not found for cable source")
@@ -343,8 +342,8 @@ fn test_valid_cable_connection() {
 
 #[test]
 fn test_multiple_unknown_params_via_deserr() {
-    // Multiple unknown params are now caught by deserr (deny_unknown_fields).
-    // deserr accumulates all errors via ControlFlow::Continue.
+    // deserr accumulates every unknown-param error via ControlFlow::Continue,
+    // so all of them are reported in one pass.
     // Use $noise because all its params are optional — we only want
     // "unknown parameter" errors, not extra "missing required param" errors.
     let params = json!({
