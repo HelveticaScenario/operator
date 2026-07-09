@@ -65,7 +65,7 @@ export declare class Synthesizer {
    */
   setModuleParam(moduleId: string, moduleType: string, params: any): void
   startRecording(path?: string | undefined | null): string
-  stopRecording(): string | null
+  stopRecording(): RecordingResult | null
   isRecording(): boolean
   getHealth(): AudioBudgetSnapshot
   /**
@@ -74,6 +74,10 @@ export declare class Synthesizer {
    * garbage queue. Call this periodically from the main thread to drop them.
    */
   drainGarbage(): void
+  /**
+   * Serialized straight from the shared snapshot `Arc`, so the poll never
+   * deep-clones the per-module JSON map on the Rust side.
+   */
   getModuleStates(): Record<string, any>
   getTransportState(): TransportSnapshot
   enableLink(enabled: boolean): void
@@ -304,6 +308,16 @@ export type QueuedTrigger = /** Apply immediately (no waiting). */
 'NextBar'|
 /** Apply at the next beat (ROOT_CLOCK beat_trigger). */
 'NextBeat';
+
+/**
+ * A finished recording. `dropped_samples > 0` means the disk writer could
+ * not keep up with the stream and the file is shorter than the live take.
+ */
+export interface RecordingResult {
+  path: string
+  /** Samples lost to a full ring buffer (as f64: exact up to 2^53). */
+  droppedSamples: number
+}
 
 export interface TransportSnapshot {
   /** Current bar phase (0..1 over one bar) */

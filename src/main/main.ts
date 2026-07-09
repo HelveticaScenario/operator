@@ -1026,7 +1026,22 @@ registerIPCHandler('SYNTH_START_RECORDING', (filePath) =>
     synth.startRecording(filePath),
 );
 
-registerIPCHandler('SYNTH_STOP_RECORDING', () => synth.stopRecording());
+registerIPCHandler('SYNTH_STOP_RECORDING', () => {
+    const result = synth.stopRecording();
+    // A nonzero drop count means the disk writer fell behind and the file is
+    // shorter than the live take — warn rather than let the recording read
+    // as an unqualified success.
+    if (result && result.droppedSamples > 0) {
+        void dialog.showMessageBox({
+            detail:
+                `${result.droppedSamples} samples were lost because the disk ` +
+                `could not keep up. The file at ${result.path} has gaps.`,
+            message: 'Recording dropped samples',
+            type: 'warning',
+        });
+    }
+    return result;
+});
 
 registerIPCHandler('SYNTH_IS_RECORDING', () => synth.isRecording());
 

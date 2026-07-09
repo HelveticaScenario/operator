@@ -490,6 +490,15 @@ pub struct MidiInputInfo {
     pub index: u32,
 }
 
+/// A finished recording. `dropped_samples > 0` means the disk writer could
+/// not keep up with the stream and the file is shorter than the live take.
+#[napi(object)]
+pub struct RecordingResult {
+    pub path: String,
+    /// Samples lost to a full ring buffer (as f64: exact up to 2^53).
+    pub dropped_samples: f64,
+}
+
 /// Result of a patch update, including any validation errors and the assigned update ID.
 #[napi(object)]
 pub struct PatchUpdateResult {
@@ -1356,16 +1365,21 @@ impl Synthesizer {
     }
 
     #[napi]
-    pub fn stop_recording(&mut self) -> Result<Option<String>> {
+    pub fn stop_recording(&mut self) -> Result<Option<RecordingResult>> {
         if !self.is_recording {
             return Err(napi::Error::from_reason(
                 "No recording is in progress".to_string(),
             ));
         }
         match self.state.stop_recording() {
-            Ok(p) => {
+            Ok(finished) => {
                 self.is_recording = false;
-                Ok(p)
+                Ok(finished.map(|f| RecordingResult {
+                    path: f.path.to_string_lossy().to_string(),
+                    // f64 carries counts exactly up to 2^53 — far past any
+                    // real recording length — and maps to a plain JS number.
+                    dropped_samples: f.dropped_samples as f64,
+                }))
             }
             Err(e) => Err(e),
         }
@@ -1389,9 +1403,14 @@ impl Synthesizer {
         self.state.drain_garbage();
     }
 
-    #[napi]
-    pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
-        self.state.get_module_states()
+    /// Serialized straight from the shared snapshot `Arc`, so the poll never
+    /// deep-clones the per-module JSON map on the Rust side.
+    #[napi(ts_return_type = "Record<string, any>")]
+    pub fn get_module_states<'env>(
+        &self,
+        env: &'env napi::Env,
+    ) -> Result<napi::bindgen_prelude::Unknown<'env>> {
+        env.to_js_value(&*self.state.get_module_states())
     }
 
     #[napi]
