@@ -363,12 +363,17 @@ impl WavCache {
                 .collect(),
         };
 
-        // Deinterleave into per-channel vectors
-        let total_frames = raw_samples.len() / num_channels.max(1);
+        // Deinterleave into per-channel vectors, keeping only whole frames. A
+        // truncated file caps the decode mid-frame; dropping the ragged tail
+        // keeps every channel the same length, so the mono mixdown below can
+        // never index past a shorter channel.
+        let nch = num_channels.max(1);
+        let total_frames = raw_samples.len() / nch;
         let mut channels: Vec<Vec<f32>> = vec![Vec::with_capacity(total_frames); num_channels];
-        for (i, sample) in raw_samples.iter().enumerate() {
-            let ch = i % num_channels;
-            channels[ch].push(*sample);
+        for frame in 0..total_frames {
+            for ch in 0..num_channels {
+                channels[ch].push(raw_samples[frame * nch + ch]);
+            }
         }
 
         let frame_count = channels.first().map_or(0, Vec::len);
@@ -2229,5 +2234,53 @@ mod wav_cache_tests {
             );
         }
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// Build a 16-bit stereo PCM wav whose data chunk claims
+    /// `claimed_data_bytes` (a multiple of the 4-byte frame so hound accepts
+    /// the header) but actually holds only `real_samples` interleaved samples.
+    fn stereo_wav_with_claimed_data_len(claimed_data_bytes: u32, real_samples: &[i16]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + claimed_data_bytes).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        buf.extend_from_slice(&44100u32.to_le_bytes());
+        buf.extend_from_slice(&(44100u32 * 4).to_le_bytes()); // byte rate
+        buf.extend_from_slice(&4u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&claimed_data_bytes.to_le_bytes());
+        for s in real_samples {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn truncated_stereo_decodes_without_panicking() {
+        // A truncated stereo file caps the decode on an odd interleaved-sample
+        // count; deinterleaving must drop the ragged final frame so the two
+        // channels stay equal length and the mono mixdown stays in bounds.
+        let workspace = temp_workspace("truncated_stereo");
+        // Claim ~80 MB of stereo data but write a single real sample: the file
+        // is 46 bytes, so the byte-size cap lands on 23 samples (odd).
+        let bytes = stereo_wav_with_claimed_data_len(80_000_000, &[i16::MAX]);
+        std::fs::File::create(workspace.join("wavs").join("trunc.wav"))
+            .and_then(|mut f| f.write_all(&bytes))
+            .expect("write wav");
+
+        let mut cache = WavCache::new(workspace.clone());
+        let result = cache.load("trunc", 48000.0);
+        let _ = std::fs::remove_dir_all(&workspace);
+
+        result.expect("truncated stereo wav must decode without error");
+        let data = &cache.entries["trunc"].data;
+        assert_eq!(data.channel_count(), 2);
+        // 23 interleaved samples over 2 channels → 11 whole frames.
+        assert_eq!(data.frame_count(), 11);
     }
 }
