@@ -1381,6 +1381,44 @@ describe('script execution environment', () => {
         );
         expect(findModules(patch, '$sine').length).toBe(2);
     });
+
+    test('a factory passed directly to array pipe() is located at the pipe call site', () => {
+        // The sandbox pipe installer's own `pipe` frame must never win the
+        // stack scan — the module belongs to the user's `.pipe($mix)` line.
+        const result = exec(
+            'const xs = [440, 880].map((f) => $sine($hz(f)));\nxs.pipe($mix).out();',
+        );
+        const mix = findModules(result.patch, '$mix')[0];
+        expect(result.sourceLocationMap.get(mix.id)?.line).toBe(2);
+    });
+
+    test('standard synchronous web APIs are available inside patch scripts', () => {
+        const patch = execPatch(
+            [
+                "const note = new TextDecoder().decode(new TextEncoder().encode('c4'));",
+                "const url = new URL('operator://patch?note=a4');",
+                "const fromQuery = new URLSearchParams(url.search).get('note');",
+                "const roundTripped = atob(btoa(fromQuery));",
+                'const cloned = structuredClone({ note });',
+                'const seed = crypto.getRandomValues(new Uint32Array(1))[0];',
+                "$sine(seed >= 0 && roundTripped === 'a4' ? cloned.note : 'e2').out();",
+            ].join('\n'),
+        );
+        const sine = findModules(patch, '$sine')[0];
+        expect(sine.params.freq).toBe('c4');
+    });
+
+    test('scheduling APIs are not exposed to patch scripts', () => {
+        for (const call of [
+            'setTimeout(() => {}, 0)',
+            'setInterval(() => {}, 0)',
+            'queueMicrotask(() => {})',
+            'performance.now()',
+            'process.exit(0)',
+        ]) {
+            expect(() => execPatch(call)).toThrow(/is not defined/);
+        }
+    });
 });
 
 // ─── $cross ──────────────────────────────────────────────────────────────────
