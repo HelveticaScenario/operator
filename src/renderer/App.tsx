@@ -744,19 +744,9 @@ function App() {
                         | { line: number; column: number }
                         | undefined;
 
-                    views.push({
-                        channelKeys,
-                        file: activeBufferId,
-                        key: scopeKey,
-                        range: scope.range ?? [-5, 5],
-                    });
-
-                    // scopeViewZones pairs views and decorations by index, so
-                    // every view must get a decoration. A scope whose call
-                    // site cannot be resolved (source edited during the async
-                    // round-trip) gets a collapsed range, which reads as "no
-                    // anchor": its zone is hidden instead of shifting every
-                    // later scope onto the wrong call.
+                    // A scope whose call site cannot be resolved (source
+                    // edited during the async round-trip) gets no decoration
+                    // and a null decorationIndex: its zone is hidden.
                     const spanKey = loc ? `${loc.line}:${loc.column}` : '';
                     const range =
                         model && loc
@@ -766,19 +756,25 @@ function App() {
                                   callSiteSpans?.[spanKey],
                               )
                             : null;
-                    decorationDescs.push({
-                        options: {
-                            stickiness:
-                                editor.TrackedRangeStickiness
-                                    .NeverGrowsWhenTypingAtEdges,
-                        },
-                        range: range ?? {
-                            endColumn: 1,
-                            endLineNumber: 1,
-                            startColumn: 1,
-                            startLineNumber: 1,
-                        },
+
+                    views.push({
+                        channelKeys,
+                        decorationIndex: range ? decorationDescs.length : null,
+                        file: activeBufferId,
+                        key: scopeKey,
+                        range: scope.range ?? [-5, 5],
                     });
+
+                    if (range) {
+                        decorationDescs.push({
+                            options: {
+                                stickiness:
+                                    editor.TrackedRangeStickiness
+                                        .NeverGrowsWhenTypingAtEdges,
+                            },
+                            range,
+                        });
+                    }
                 }
 
                 let newScopeDecorations: editor.IEditorDecorationsCollection | null =

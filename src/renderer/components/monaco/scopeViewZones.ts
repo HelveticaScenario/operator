@@ -6,7 +6,7 @@ interface ScopeViewZoneParams {
     editor: editor.IStandaloneCodeEditor;
     monaco: Monaco;
     views: ScopeView[];
-    /** Tracked decoration collection whose ranges correspond 1:1 with `views`. */
+    /** Tracked decoration collection addressed by each view's `decorationIndex`. */
     scopeDecorations: editor.IEditorDecorationsCollection | null;
     onRegisterScopeCanvas?: (key: string, canvas: HTMLCanvasElement) => void;
     onUnregisterScopeCanvas?: (key: string) => void;
@@ -21,17 +21,17 @@ export interface ScopeViewZoneHandle {
 }
 
 /**
- * Resolve the afterLineNumber for a scope view zone.
- * Reads from the tracked decoration collection when available.
- * Returns `null` if the decoration range has been deleted (empty/missing),
- * signalling that the view zone should be hidden.
+ * Resolve the afterLineNumber for a scope view zone from its view's
+ * decoration index. Returns `null` for anchorless views (null index) and
+ * when the decoration range has been deleted (empty/missing), signalling
+ * that the view zone should be hidden.
  */
 function resolveLineNumber(
     scopeDecorations: editor.IEditorDecorationsCollection | null,
-    index: number,
+    decorationIndex: number | null,
 ): number | null {
-    if (scopeDecorations) {
-        const range = scopeDecorations.getRange(index);
+    if (scopeDecorations && decorationIndex !== null) {
+        const range = scopeDecorations.getRange(decorationIndex);
         if (range && !range.isEmpty()) {
             return range.endLineNumber;
         }
@@ -52,6 +52,8 @@ export function createScopeViewZones({
     const viewZoneDelegates: (editor.IViewZone | null)[] = [];
     /** Scope keys corresponding 1:1 with viewZoneIds, for canvas unregistration */
     const viewKeys: string[] = [];
+    /** Each zone's decoration index, for re-resolving positions on reposition */
+    const viewDecorationIndexes: (number | null)[] = [];
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
     let layoutListener: ReturnType<
         editor.IStandaloneCodeEditor['onDidLayoutChange']
@@ -71,6 +73,7 @@ export function createScopeViewZones({
         viewZoneIds.length = 0;
         viewZoneDelegates.length = 0;
         viewKeys.length = 0;
+        viewDecorationIndexes.length = 0;
 
         scopeCanvasMap.forEach((_canvas, key) => {
             onUnregisterScopeCanvas?.(key);
@@ -99,14 +102,21 @@ export function createScopeViewZones({
     const layoutInfo = editor.getLayoutInfo();
     const scopeHeight = 80; // Increased height for legend and stats
 
-    const zones = views.map((view, index) => {
-        // A view without a resolvable decoration range has no anchor line in
-        // the document, so it gets no zone and no canvas — mirroring the
-        // removal path in repositionZones. The null placeholders keep the
-        // per-index arrays aligned 1:1 with `views`.
-        const resolvedLine = resolveLineNumber(scopeDecorations, index);
+    const zones = views.map((view) => {
+        // A view without a resolvable anchor (null decorationIndex, or a
+        // decoration range that has collapsed) has no anchor line in the
+        // document, so it gets no zone and no canvas — mirroring the removal
+        // path in repositionZones.
+        const resolvedLine = resolveLineNumber(
+            scopeDecorations,
+            view.decorationIndex,
+        );
         if (resolvedLine === null) {
-            return { delegate: null, key: view.key };
+            return {
+                decorationIndex: view.decorationIndex,
+                delegate: null,
+                key: view.key,
+            };
         }
 
         const container = document.createElement('div');
@@ -141,14 +151,15 @@ export function createScopeViewZones({
             marginDomNode: undefined,
         };
 
-        return { delegate, key: view.key };
+        return { decorationIndex: view.decorationIndex, delegate, key: view.key };
     });
 
     editor.changeViewZones((accessor) => {
-        for (const { delegate, key } of zones) {
+        for (const { decorationIndex, delegate, key } of zones) {
             viewZoneDelegates.push(delegate);
             viewZoneIds.push(delegate ? accessor.addZone(delegate) : null);
             viewKeys.push(key);
+            viewDecorationIndexes.push(decorationIndex);
         }
     });
 
@@ -165,7 +176,10 @@ export function createScopeViewZones({
                 continue;
             } // Already removed
 
-            const resolvedLine = resolveLineNumber(scopeDecorations, i);
+            const resolvedLine = resolveLineNumber(
+                scopeDecorations,
+                viewDecorationIndexes[i],
+            );
 
             if (resolvedLine === null) {
                 // Decoration was deleted — remove the view zone entirely and
