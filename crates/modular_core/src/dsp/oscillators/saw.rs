@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::SchmittTrigger,
+        utils::{SchmittTrigger, wrap_phase_f64},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -166,14 +166,7 @@ impl SawOscillator {
             let read_old = (state.phase + read_offset).rem_euclid(1.0);
             let integral_old = triangle_integral(read_old, s);
 
-            // Advance phase (rem_euclid supports negative increments from through-zero FM)
-            state.phase += phase_increment;
-            state.phase = state.phase.rem_euclid(1.0);
-            // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which
-            // is absorbing; reset so the phase recovers once the input does.
-            if !state.phase.is_finite() {
-                state.phase = 0.0;
-            }
+            state.phase = wrap_phase_f64(state.phase + phase_increment);
             let read_phase = (state.phase + read_offset).rem_euclid(1.0);
 
             // DPW body for this sample. The sync reset (below) lands in the

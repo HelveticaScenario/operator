@@ -7,6 +7,7 @@ use crate::{
         utils::{
             SchmittTrigger,
             rng::{LcgRng, seed_base},
+            wrap_phase,
         },
     },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
@@ -276,14 +277,7 @@ impl Supersaw {
 
                 let state_idx = voice * PORT_MAX_CHANNELS + input_ch;
 
-                // Advance phase (rem_euclid supports negative increments from through-zero FM)
-                let mut phase = (self.channel_state[state_idx].phase + dt).rem_euclid(1.0);
-                // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN,
-                // which is absorbing; reset so the phase recovers once the
-                // input does.
-                if !phase.is_finite() {
-                    phase = 0.0;
-                }
+                let mut phase = wrap_phase(self.channel_state[state_idx].phase + dt);
 
                 // Naive saw + its own PolyBLEP wrap correction, then any residual
                 // carried from a sync reset on the previous sample. The reset

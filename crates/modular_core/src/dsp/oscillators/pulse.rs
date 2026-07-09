@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::SchmittTrigger,
+        utils::{SchmittTrigger, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -100,15 +100,7 @@ impl PulseOscillator {
             // Pulse width (0.0 to 1.0, 0.5 is square wave)
             let pulse_width = (*state.width / 5.0).clamp(0.01, 0.99);
 
-            state.phase += phase_increment;
-
-            // Wrap phase (rem_euclid supports negative increments from through-zero FM)
-            state.phase = state.phase.rem_euclid(1.0);
-            // A non-finite frequency (e.g. exp-FM overflow) wraps to NaN, which
-            // is absorbing; reset so the phase recovers once the input does.
-            if !state.phase.is_finite() {
-                state.phase = 0.0;
-            }
+            state.phase = wrap_phase(state.phase + phase_increment);
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.

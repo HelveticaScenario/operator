@@ -5,7 +5,7 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::voct_to_hz;
+use crate::dsp::utils::{voct_to_hz, wrap_phase};
 use crate::poly::{PolyOutput, PolySignal};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -54,17 +54,7 @@ impl Ramp {
             let frequency = voct_to_hz(self.params.freq.get_value(ch));
             let phase_increment = frequency * inv_sample_rate;
 
-            state.phase += phase_increment;
-
-            // Wrap phase to [0, 1) — rem_euclid keeps it in range for any
-            // increment, including magnitudes of 1 or more.
-            state.phase = state.phase.rem_euclid(1.0);
-            // A non-finite frequency (e.g. voct_to_hz overflow) wraps to NaN,
-            // which is absorbing; reset so the phase recovers once the input
-            // does.
-            if !state.phase.is_finite() {
-                state.phase = 0.0;
-            }
+            state.phase = wrap_phase(state.phase + phase_increment);
 
             self.outputs.sample.set(ch, state.phase);
         }
