@@ -666,9 +666,9 @@ describe('sequencing', () => {
         const tSpan = pattern.argument_spans[1];
         expect(source.slice(tSpan.start, tSpan.end).includes('0,7')).toBe(true);
         const divSpan = pattern.argument_spans[2];
-        expect(source.slice(divSpan.start, divSpan.end).includes('<16 8>')).toBe(
-            true,
-        );
+        expect(
+            source.slice(divSpan.start, divSpan.end).includes('<16 8>'),
+        ).toBe(true);
     });
 
     test('.struct / .beat compose with the other pattern builders', () => {
@@ -1366,9 +1366,7 @@ describe('script execution environment', () => {
     }, 15_000);
 
     test('top-level return ends the patch script early', () => {
-        const patch = execPatch(
-            '$sine("c").out()\nreturn\n$saw("c").out()',
-        );
+        const patch = execPatch('$sine("c").out()\nreturn\n$saw("c").out()');
         expect(findModules(patch, '$sine').length).toBe(1);
         expect(findModules(patch, '$saw').length).toBe(0);
     });
@@ -2272,6 +2270,17 @@ describe('$scopeXY', () => {
             $sine(0).out()
         `);
         expect(patch.scopeXy!.pairs).toHaveLength(2);
+    });
+
+    test('unset deferred used in $scopeXY throws', () => {
+        expect(() =>
+            execPatch(`
+                const d = $deferred()
+                const a = $sine($hz(440))
+                $scopeXY(d[0], a)
+                a.out()
+            `),
+        ).toThrow(/Unset DeferredModuleOutput used in a scope/);
     });
 });
 
