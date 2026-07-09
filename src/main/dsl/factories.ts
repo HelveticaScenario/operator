@@ -160,7 +160,7 @@ export function lookupArgumentSpan(
  * context-free conversion error, so this must run before any native call
  * (deriveChannelCount) that receives the params.
  */
-export function assertFiniteNumericParams(
+function assertFiniteNumericParams(
     moduleName: string,
     params: unknown,
     sourceLocation: { line: number; column: number } | undefined,
@@ -188,6 +188,31 @@ export function assertFiniteNumericParams(
         }
     };
     walk(params, '');
+}
+
+/**
+ * Derive a module's channel count with the guards every caller needs:
+ * `assertFiniteNumericParams` first (the N-API boundary rejects NaN/Infinity
+ * with a context-free conversion error, so the finite check must precede the
+ * native call), then module-and-line formatting for any deserialization
+ * errors. Returns the derived channel count, or undefined when the module
+ * has no derivation.
+ */
+export function deriveChannelCountChecked(
+    moduleName: string,
+    params: unknown,
+    sourceLocation: { line: number; column: number } | undefined,
+): number | undefined {
+    assertFiniteNumericParams(moduleName, params, sourceLocation);
+    const deriveResult = deriveChannelCount(moduleName, params);
+    if (deriveResult.errors && deriveResult.errors.length > 0) {
+        const messages = deriveResult.errors
+            .map((e: { message: string }) => e.message)
+            .join('; ');
+        const loc = sourceLocation ? ` at line ${sourceLocation.line}` : '';
+        throw new Error(`${moduleName}${loc}: ${messages}`);
+    }
+    return deriveResult.channelCount;
 }
 
 // Return type for module factories - varies by output configuration
@@ -427,32 +452,13 @@ export class DSLContext {
             // Derive channel count from params using Rust-side derivation (backed by LRU cache)
             // This handles modules with custom derivation logic (like mix, seq)
             // As well as standard inference from PolySignal inputs
-            assertFiniteNumericParams(
+            const channelCount = deriveChannelCountChecked(
                 schema.name,
                 node.getParamsSnapshot(),
                 sourceLocation,
             );
-            const deriveResult = deriveChannelCount(
-                schema.name,
-                node.getParamsSnapshot(),
-            );
-
-            // Check for errors from param deserialization
-            if (deriveResult.errors && deriveResult.errors.length > 0) {
-                const messages = deriveResult.errors
-                    .map((e) => e.message)
-                    .join('; ');
-                const loc = sourceLocation
-                    ? ` at line ${sourceLocation.line}`
-                    : '';
-                throw new Error(`${schema.name}${loc}: ${messages}`);
-            }
-
-            if (
-                deriveResult.channelCount !== null &&
-                deriveResult.channelCount !== undefined
-            ) {
-                node._setDerivedChannelCount(deriveResult.channelCount);
+            if (channelCount !== undefined) {
+                node._setDerivedChannelCount(channelCount);
             }
 
             // Return based on output configuration

@@ -1,6 +1,5 @@
 import vm from 'node:vm';
 import type { ModuleSchema, PatchGraph } from '@modular/core';
-import { deriveChannelCount } from '@modular/core';
 import {
     DSLContext,
     hz,
@@ -8,7 +7,7 @@ import {
     setActiveSpanRegistry,
     setDSLWrapperLineOffset,
     captureSourceLocation,
-    assertFiniteNumericParams,
+    deriveChannelCountChecked,
 } from './factories';
 import type {
     BufferOutputRef,
@@ -313,30 +312,15 @@ export function executePatchScript(
         node._setParam('length', lengthSeconds);
 
         // Derive channel count from the input signal
-        assertFiniteNumericParams(
+        const derivedChannels = deriveChannelCountChecked(
             '$buffer',
             node.getParamsSnapshot(),
             sourceLocation,
         );
-        const deriveResult = deriveChannelCount(
-            '$buffer',
-            node.getParamsSnapshot(),
-        );
-
-        if (deriveResult.errors && deriveResult.errors.length > 0) {
-            const messages = deriveResult.errors
-                .map((e: { message: string }) => e.message)
-                .join('; ');
-            const loc = sourceLocation ? ` at line ${sourceLocation.line}` : '';
-            throw new Error(`$buffer${loc}: ${messages}`);
+        if (derivedChannels !== undefined) {
+            node._setDerivedChannelCount(derivedChannels);
         }
-
-        const channels =
-            deriveResult.channelCount != null ? deriveResult.channelCount : 1;
-
-        if (deriveResult.channelCount != null) {
-            node._setDerivedChannelCount(deriveResult.channelCount);
-        }
+        const channels = derivedChannels ?? 1;
 
         const frameCount = Math.max(1, Math.ceil(lengthSeconds * sampleRate));
 
@@ -723,10 +707,18 @@ export function executePatchScript(
                 if (!options.loadWav) {
                     throw new Error('$wavs(): loadWav function not provided');
                 }
-                wavLoadStart = performance.now();
-                const info = options.loadWav(relPath);
-                wavLoadMs += performance.now() - wavLoadStart;
-                wavLoadStart = null;
+                const loadStart = performance.now();
+                wavLoadStart = loadStart;
+                let info;
+                try {
+                    info = options.loadWav(relPath);
+                } finally {
+                    // Also on throw: the time was still spent loading, and a
+                    // stale wavLoadStart would bill everything after a caught
+                    // load failure — even an infinite loop — to WAV loading.
+                    wavLoadMs += performance.now() - loadStart;
+                    wavLoadStart = null;
+                }
                 return {
                     type: 'wav_ref' as const,
                     path: relPath,
@@ -991,6 +983,24 @@ export function executePatchScript(
     // blocking the Electron main process forever.
     const executionTimeoutMs = 5000;
 
+    // Standard, synchronous JavaScript/Web APIs a patch script may use on top
+    // of the ECMAScript intrinsics the vm realm already has. Scheduling APIs
+    // (timers, queueMicrotask, performance, AbortSignal.timeout) stay out — a
+    // patch script runs synchronously under a timeout, so a scheduled callback
+    // could never fire. Node-only and DOM globals stay out too.
+    const sandboxHostGlobals = {
+        atob,
+        btoa,
+        crypto,
+        DOMException,
+        structuredClone,
+        TextDecoder,
+        TextEncoder,
+        URL,
+        URLPattern,
+        URLSearchParams,
+    };
+
     try {
         // Execute the script in a vm context so the timeout applies. The DSL
         // globals are the sandbox's globals; they are host objects, so
@@ -998,10 +1008,17 @@ export function executePatchScript(
         // script filename contains `<anonymous>`, which captureSourceLocation
         // relies on to find DSL stack frames.
         const script = new vm.Script(scriptBody);
-        const sandbox = vm.createContext({ ...dslGlobals, console });
+        const sandbox = vm.createContext({
+            ...dslGlobals,
+            console,
+            ...sandboxHostGlobals,
+        });
         // The sandbox is its own realm: array literals in the patch script use
         // the sandbox's Array.prototype, so pipe() must be installed there too
-        // (mirroring the host-side installation above).
+        // (mirroring the host-side installation above). The explicit filename
+        // keeps `<anonymous>` out of the installer's stack frames, so
+        // captureSourceLocation never mistakes the installer's `pipe` frame
+        // for the user's call site.
         vm.runInContext(
             `Object.defineProperty(Array.prototype, 'pipe', {
                 configurable: true,
@@ -1010,6 +1027,7 @@ export function executePatchScript(
                 writable: true,
             });`,
             sandbox,
+            { filename: 'dsl-pipe-installer.js' },
         );
         script.runInContext(sandbox, { timeout: executionTimeoutMs });
 
