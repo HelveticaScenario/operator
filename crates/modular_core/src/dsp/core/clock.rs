@@ -96,8 +96,8 @@ struct ClockOutputs {
     ppq_trigger: f32,
     #[output("beatInBar", "Current beat within the bar (0-indexed)")]
     beat_in_bar: f32,
-    #[output("bpm", "Current tempo in beats per minute")]
-    bpm: f32,
+    #[output("tempo", "Current tempo in beats per minute")]
+    tempo: f32,
 }
 
 message_handlers!(impl Clock {
@@ -136,7 +136,7 @@ impl Clock {
         if let Some(sync) = self.state.external_sync.take() {
             self.state.running = true;
             self.params.tempo = sync.bpm;
-            self.outputs.bpm = sync.bpm as f32;
+            self.outputs.tempo = sync.bpm as f32;
 
             let numerator = self.params.numerator.max(1) as f64;
             let denominator = self.params.denominator.max(1) as f64;
@@ -209,14 +209,14 @@ impl Clock {
 
         // Tempo is a plain BPM value. It describes the transport's configuration
         // rather than its motion, so it is published even while stopped.
-        let bpm = self.params.tempo.max(1.0);
-        self.outputs.bpm = bpm as f32;
+        let tempo = self.params.tempo.max(1.0);
+        self.outputs.tempo = tempo as f32;
 
         if !self.state.running {
             return; // If not running, skip the rest of the update to keep outputs where they are until clock starts
         }
 
-        let frequency_hz = bpm / 60.0;
+        let frequency_hz = tempo / 60.0;
 
         // Time signature: numerator = beats per bar, denominator = beat value
         // Clamp to valid values (minimum 1) to avoid division by zero
@@ -913,36 +913,36 @@ mod tests {
     }
 
     #[test]
-    fn clock_bpm_output_reports_free_running_tempo() {
+    fn clock_tempo_output_reports_free_running_tempo() {
         let mut c = Clock::default();
         c.params.tempo = 137.5;
         c.update(48_000.0);
-        assert_eq!(c.outputs.bpm, 137.5);
+        assert_eq!(c.outputs.tempo, 137.5);
     }
 
     #[test]
-    fn clock_bpm_output_is_published_while_stopped() {
+    fn clock_tempo_output_is_published_while_stopped() {
         // Tempo describes the transport's configuration, not its motion, so a
         // stopped clock still reports the tempo it would run at.
         let mut c = Clock::default();
         c.params.tempo = 90.0;
         let _ = c.on_clock_message(&ClockMessages::Stop);
         c.update(48_000.0);
-        assert_eq!(c.outputs.bpm, 90.0);
+        assert_eq!(c.outputs.tempo, 90.0);
     }
 
     #[test]
-    fn clock_bpm_output_clamps_to_the_tempo_the_clock_runs_at() {
+    fn clock_tempo_output_clamps_to_the_tempo_the_clock_runs_at() {
         // Phase math floors the tempo at 1 BPM; the output must not claim a rate
         // the clock is not actually advancing at.
         let mut c = Clock::default();
         c.params.tempo = 0.0;
         c.update(48_000.0);
-        assert_eq!(c.outputs.bpm, 1.0);
+        assert_eq!(c.outputs.tempo, 1.0);
     }
 
     #[test]
-    fn clock_bpm_output_follows_external_sync() {
+    fn clock_tempo_output_follows_external_sync() {
         let mut c = Clock::default();
         let sr = 48_000.0;
 
@@ -951,7 +951,7 @@ mod tests {
             bpm: 128.0,
         });
         c.update(sr);
-        assert_eq!(c.outputs.bpm, 128.0);
+        assert_eq!(c.outputs.tempo, 128.0);
 
         // A peer tempo change is reflected on the very next synced sample.
         c.sync_external_clock_impl(ExternalClockState {
@@ -959,11 +959,11 @@ mod tests {
             bpm: 174.0,
         });
         c.update(sr);
-        assert_eq!(c.outputs.bpm, 174.0);
+        assert_eq!(c.outputs.tempo, 174.0);
     }
 
     #[test]
-    fn clock_bpm_output_holds_link_tempo_after_sync_clears() {
+    fn clock_tempo_output_holds_link_tempo_after_sync_clears() {
         // Disabling Link hands the transport back to the free-running path at the
         // tempo the session left it on, and the output tracks that handoff.
         let mut c = Clock::default();
@@ -977,6 +977,6 @@ mod tests {
 
         c.clear_external_sync();
         c.update(sr);
-        assert_eq!(c.outputs.bpm, 100.0);
+        assert_eq!(c.outputs.tempo, 100.0);
     }
 }

@@ -787,8 +787,8 @@
         "default": false
       },
       {
-        "name": "bpm",
-        "description": "Current tempo in beats per minute; tracks the session tempo while Ableton Link is enabled",
+        "name": "tempo",
+        "description": "Current tempo in beats per minute",
         "polyphonic": false,
         "default": false
       }
