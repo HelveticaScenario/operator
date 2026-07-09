@@ -67,11 +67,22 @@ impl MidiParseState {
     /// Queue a parsed message, dropping it if the buffer is at capacity.
     /// The cap is enforced here — not only per packet in the connection
     /// callbacks — because one packet can produce two messages (the 14-bit CC
-    /// path), and the push must never grow the buffer past `MIDI_BUFFER_SIZE`.
+    /// path), and device input must never grow the buffer past
+    /// `MIDI_BUFFER_SIZE`.
     pub(super) fn push(&mut self, timestamp_us: u64, message: Message) {
         if self.messages.len() >= MIDI_BUFFER_SIZE {
             return;
         }
+        self.push_unchecked(timestamp_us, message);
+    }
+
+    /// Queue a message bypassing the capacity cap. Reserved for the note-offs
+    /// synthesized when a device closes: dropping one would leave a note
+    /// latched forever with no device left to release it. The overage is
+    /// bounded by the device's held-note set, and any growth allocates on the
+    /// thread doing the close — the audio thread only ever swaps the buffer
+    /// out, so it never reallocates or frees it.
+    pub(super) fn push_unchecked(&mut self, timestamp_us: u64, message: Message) {
         let seq = self.next_seq;
         self.next_seq += 1;
         self.messages.push(TimestampedMessage {

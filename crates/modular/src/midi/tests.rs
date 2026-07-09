@@ -216,6 +216,37 @@ fn fourteen_bit_cc_never_grows_buffer() {
 }
 
 #[test]
+fn synthesized_note_offs_survive_a_full_buffer() {
+    // A stalled consumer can leave the pending buffer at capacity when a
+    // device closes. The synthesized offs have no retry (the held-notes entry
+    // is consumed), so they must be delivered past the cap, not dropped.
+    let manager = MidiInputManager::new();
+    let device = DeviceName::intern("Keystep");
+    {
+        let mut state = manager.parse_state.lock();
+        parse_midi_message(&[0x90, 60, 100], &device, 10, &mut state);
+        while state.messages.len() < MIDI_BUFFER_SIZE {
+            parse_midi_message(&[0xB0, 0x46, 0x01], &device, 11, &mut state);
+        }
+    }
+    manager
+        .deferred_disconnects
+        .lock()
+        .insert("Keystep".to_string(), 2);
+
+    manager.prune_disconnects(2);
+
+    let state = manager.parse_state.lock();
+    assert_eq!(state.messages.len(), MIDI_BUFFER_SIZE + 1);
+    let last = &state.messages[state.messages.len() - 1];
+    assert!(matches!(
+        &last.message,
+        Message::MidiNoteOff(off) if off.channel == 0 && off.note == 60
+    ));
+    assert!(state.held_notes.get("Keystep").is_none());
+}
+
+#[test]
 fn prune_synthesizes_note_offs_for_held_notes() {
     let manager = MidiInputManager::new();
     let device = DeviceName::intern("Keystep");
