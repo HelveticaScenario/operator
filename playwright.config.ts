@@ -6,9 +6,10 @@
  *   yarn test:e2e:update    — run with snapshot update
  *
  * Prerequisites:
- *   The webpack build must exist in .webpack/ (run `yarn start` once to create it).
- *   The webServer config below will automatically serve the renderer files on
- *   port 3000 (or reuse your existing `yarn start` dev server if it's already running).
+ *   The Vite main/preload bundles must exist in .vite/build/ (run `yarn start`
+ *   once to create them). The webServer config below serves the renderer on
+ *   port 5173 (or reuses your existing `yarn start` dev server if it's
+ *   already running).
  */
 
 import { defineConfig } from '@playwright/test';
@@ -25,20 +26,18 @@ export default defineConfig({
     },
 
     /**
-     * Serve the webpack renderer output on port 3000.
+     * Serve the renderer with a Vite dev server on port 5173.
      *
-     * The compiled main process loads the renderer from
-     * http://localhost:3000/main_window/index.html (baked in by electron-forge's
-     * WebpackPlugin). In dev mode (`yarn start`), this is handled by webpack-dev-server.
-     * For E2E tests we serve the static build with `serve`.
-     *
-     * If `yarn start` is already running, `reuseExistingServer: true` skips this.
+     * The dev-built main process loads the renderer from
+     * MAIN_WINDOW_VITE_DEV_SERVER_URL (http://localhost:5173, baked in by
+     * electron-forge's VitePlugin). In dev mode (`yarn start`) forge runs this
+     * server itself; `reuseExistingServer: true` picks it up when present.
      */
     webServer: {
         command:
-            'python3 -m http.server 3000 --directory .webpack/renderer --bind 127.0.0.1',
-        port: 3000,
+            'yarn vite --config vite.renderer.config.ts --port 5173 --strictPort',
+        port: 5173,
         reuseExistingServer: true,
-        timeout: 15_000,
+        timeout: 30_000,
     },
 });

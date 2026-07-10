@@ -23,6 +23,7 @@ fn test_valid_patch() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -40,6 +41,7 @@ fn patch_with_scope_xy(x_port: &str, x_module: &str) -> PatchGraph {
         }],
         module_id_remaps: None,
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: Some(ScopeXy {
             pairs: vec![ScopeXyPair {
                 x: ScopeChannel {
@@ -92,6 +94,132 @@ fn test_scope_xy_missing_port() {
     );
 }
 
+fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
+    PatchGraph {
+        modules: vec![
+            ModuleSpec {
+                id: "tap-1".to_string(),
+                module_type: "$sine".to_string(),
+                id_is_explicit: Some(true),
+                params: json!({ "freq": 4.0 }),
+            },
+            ModuleSpec {
+                id: "mute-1".to_string(),
+                module_type: "$signal".to_string(),
+                id_is_explicit: Some(true),
+                params: json!({ "source": 5.0 }),
+            },
+            ModuleSpec {
+                id: "not-signal".to_string(),
+                module_type: "$sine".to_string(),
+                id_is_explicit: Some(true),
+                params: json!({ "freq": 4.0 }),
+            },
+        ],
+        module_id_remaps: None,
+        scopes: vec![],
+        vu_meters: vec![spec],
+        scope_xy: None,
+    }
+}
+
+fn vu_spec() -> modular_core::types::VuMeterSpec {
+    modular_core::types::VuMeterSpec {
+        key: "lead".to_string(),
+        module_id: "tap-1".to_string(),
+        port_name: "output".to_string(),
+        channels: 2,
+        mute_module_id: Some("mute-1".to_string()),
+        pan_source: None,
+        gain_source: None,
+    }
+}
+
+#[test]
+fn test_vu_meter_without_mute_gate_is_valid() {
+    let schemas = schemas();
+    let mut spec = vu_spec();
+    spec.mute_module_id = None;
+    assert!(validate_patch(&patch_with_vu_meter(spec), &schemas).is_ok());
+}
+
+#[test]
+fn test_vu_meter_valid() {
+    let schemas = schemas();
+    let patch = patch_with_vu_meter(vu_spec());
+    assert!(validate_patch(&patch, &schemas).is_ok());
+}
+
+#[test]
+fn test_vu_meter_missing_tap_module() {
+    let schemas = schemas();
+    let mut spec = vu_spec();
+    spec.module_id = "ghost".to_string();
+    let errors = validate_patch(&patch_with_vu_meter(spec), &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "vuMeters" && e.message.contains("missing module")),
+        "expected a missing-module vuMeters error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_vu_meter_missing_port() {
+    let schemas = schemas();
+    let mut spec = vu_spec();
+    spec.port_name = "nope".to_string();
+    let errors = validate_patch(&patch_with_vu_meter(spec), &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "vuMeters" && e.message.contains("missing output port")),
+        "expected a missing-output-port vuMeters error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_vu_meter_missing_mute_module() {
+    let schemas = schemas();
+    let mut spec = vu_spec();
+    spec.mute_module_id = Some("ghost".to_string());
+    let errors = validate_patch(&patch_with_vu_meter(spec), &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "vuMeters" && e.message.contains("missing mute module")),
+        "expected a missing-mute-module vuMeters error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_vu_meter_mute_module_not_signal() {
+    let schemas = schemas();
+    let mut spec = vu_spec();
+    spec.mute_module_id = Some("not-signal".to_string());
+    let errors = validate_patch(&patch_with_vu_meter(spec), &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "vuMeters" && e.message.contains("must be a $signal")),
+        "expected a mute-module-type vuMeters error, got {errors:?}"
+    );
+}
+
+#[test]
+fn test_vu_meter_bad_channel_count() {
+    let schemas = schemas();
+    let mut spec = vu_spec();
+    spec.channels = 3;
+    let errors = validate_patch(&patch_with_vu_meter(spec), &schemas).unwrap_err();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.field == "vuMeters" && e.message.contains("channels must be 1 or 2")),
+        "expected a channel-count vuMeters error, got {errors:?}"
+    );
+}
+
 #[test]
 fn test_unknown_module_type() {
     let schemas = schemas();
@@ -105,6 +233,7 @@ fn test_unknown_module_type() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -145,6 +274,7 @@ fn test_cable_to_nonexistent_module() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -189,6 +319,7 @@ fn test_cable_in_slice_tuple_to_nonexistent_module() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -231,6 +362,7 @@ fn test_cable_to_invalid_port() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -262,6 +394,7 @@ fn test_nested_signal_cable_to_nonexistent_module() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -303,6 +436,7 @@ fn test_nested_signal_valid_cable_connection() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -334,6 +468,7 @@ fn test_valid_cable_connection() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -379,6 +514,7 @@ fn test_non_object_multibyte_params_reported_not_panicking() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -405,6 +541,7 @@ fn test_duplicate_module_ids_rejected() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -430,6 +567,7 @@ fn test_hidden_audio_in_id_rejected() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -455,6 +593,7 @@ fn test_root_clock_id_requires_clock_type() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -502,6 +641,7 @@ fn patch_with_buffer_ref(target_module: &str, port: &str) -> PatchGraph {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     }
 }
@@ -547,6 +687,7 @@ fn test_empty_patch_is_valid() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 
@@ -569,6 +710,7 @@ fn test_null_params_is_tolerated() {
         module_id_remaps: None,
 
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     };
 

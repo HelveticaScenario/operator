@@ -29,6 +29,12 @@ export declare class Synthesizer {
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
   /**
+   * Snapshot every VU meter's current levels (per-channel RMS + windowed
+   * peak, in volts). Each read resets the peak windows. Returns empty
+   * while stopped.
+   */
+  getVuMeters(): Array<VuMeterFrame>
+  /**
    * Drain the per-module profiler snapshot accumulated since the last
    * call. Returns one entry per module instance that did work in that
    * window. No-op (returns empty) when profiling is disabled.
@@ -467,6 +473,7 @@ export interface PatchGraph {
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
   scopeXy?: ScopeXy
+  vuMeters: Array<VuMeterSpec>
 }
 
 export interface PositionalArg {
@@ -547,4 +554,46 @@ export interface SignalParamSchema {
   defaultValue: number
   minValue: number
   maxValue: number
+}
+
+/** One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`. */
+export interface VuMeterFrame {
+  moduleId: string
+  /** Per-channel RMS in volts (0 dB reference = 5 V). */
+  rms: Array<number>
+  /** Per-channel max |sample| since the previous poll, in volts. */
+  peak: Array<number>
+  /** Live value of the signal-driven pan, when `pan_source` is set. */
+  pan?: number
+  /** Live value of the signal-driven gain, when `gain_source` is set. */
+  gain?: number
+}
+
+/**
+ * One out-group VU meter tap. The DSL attaches extra renderer-only metadata
+ * to these entries; napi conversion reads only the fields declared here.
+ */
+export interface VuMeterSpec {
+  /** Stable identity used by the renderer to join meter frames to meters. */
+  key: string
+  /** Module whose output port is metered (the pre-mute tap). */
+  moduleId: string
+  portName: string
+  /** 1 (mono) or 2 (stereo). */
+  channels: number
+  /**
+   * `$signal` module driving the mute gate (source 5 = audible, 0 =
+   * silenced). None for the end-of-chain master meter, which has no gate.
+   */
+  muteModuleId?: string
+  /**
+   * When the out's pan is signal-driven, the output to sample so the
+   * panel's locked knob can track it live.
+   */
+  panSource?: ScopeChannel
+  /**
+   * When the out's gain is signal-driven, the output to sample (in DSL
+   * gain units, pre-curve) so the panel's locked fader can track it live.
+   */
+  gainSource?: ScopeChannel
 }

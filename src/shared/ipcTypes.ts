@@ -125,6 +125,10 @@ export interface AppConfig {
     xyScopeUpsample?: boolean;
     /** XY scope beam half-width in clip-space units. Default 0.012. */
     xyScopeLineWidth?: number;
+    /** VU meter panel visibility. Default false. */
+    vuPanelVisible?: boolean;
+    /** VU meter panel height in px (84–480). Default 150. */
+    vuPanelHeight?: number;
 }
 
 /** Result of toggling the macOS Syphon window-output helper. */
@@ -307,6 +311,7 @@ export const IPC_CHANNELS = {
     SYNTH_GET_CHANNELS: 'modular:synth:get-channels',
     SYNTH_GET_SCOPES: 'modular:synth:get-scopes',
     SYNTH_GET_SCOPE_XY: 'modular:synth:get-scope-xy',
+    SYNTH_GET_VU_METERS: 'modular:synth:get-vu-meters',
     SYNTH_UPDATE_PATCH: 'modular:synth:update-patch',
     SYNTH_START_RECORDING: 'modular:synth:start-recording',
     SYNTH_STOP_RECORDING: 'modular:synth:stop-recording',
@@ -420,6 +425,7 @@ export const MENU_CHANNELS = {
     SAVE: 'modular:menu:save',
     STOP: 'modular:menu:stop',
     TOGGLE_RECORDING: 'modular:menu:toggle-recording',
+    TOGGLE_VU_METERS: 'modular:menu:toggle-vu-meters',
     UPDATE_PATCH: 'modular:menu:update-patch',
     UPDATE_PATCH_NEXT_BEAT: 'modular:menu:update-patch-next-beat',
 } as const;
@@ -447,6 +453,8 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_GET_SCOPES]: typeof Synthesizer.prototype.getScopes;
 
     [IPC_CHANNELS.SYNTH_GET_SCOPE_XY]: typeof Synthesizer.prototype.getScopeXy;
+
+    [IPC_CHANNELS.SYNTH_GET_VU_METERS]: typeof Synthesizer.prototype.getVuMeters;
 
     [IPC_CHANNELS.SYNTH_UPDATE_PATCH]: (
         patch: PatchGraph,

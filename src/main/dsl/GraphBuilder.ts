@@ -8,6 +8,12 @@ import type {
     ScopeXy,
     ScopeXyPair,
 } from '@modular/core';
+import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
+import {
+    DEFAULT_OUTPUT_GAIN,
+    GAIN_CURVE_EXP,
+    UNITY_OUT_GAIN,
+} from '../../shared/dsl/vuMeterTypes';
 import type { ProcessedModuleSchema } from './paramsSchema';
 import {
     dollarMethodName,
@@ -20,8 +26,6 @@ import z from 'zod';
 
 export const PORT_MAX_CHANNELS = 64;
 
-/** Exponent used by .gain() for perceptual amplitude curve */
-const GAIN_CURVE_EXP = 3;
 
 /**
  * Scope with an optional source location captured at call time.
@@ -136,6 +140,12 @@ export interface StereoOutOptions {
     pan?: PolySignal;
     /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
     width?: Signal;
+    /** Label shown on this output's VU meter. Must be unique across outs */
+    label?: string;
+    /** Silence this output. It is still metered; its VU meter greys out */
+    mute?: boolean;
+    /** When any output is soloed, only soloed outputs are audible */
+    solo?: boolean;
 }
 
 /** Options for mono output routing */
@@ -144,10 +154,27 @@ export interface MonoOutOptions {
     channel?: number;
     /** Output gain. If set, a scaleAndShift module is added after the mix */
     gain?: PolySignal;
+    /** Label shown on this output's VU meter. Must be unique across outs */
+    label?: string;
+    /** Silence this output. It is still metered; its VU meter greys out */
+    mute?: boolean;
+    /** When any output is soloed, only soloed outputs are audible */
+    solo?: boolean;
+}
+
+/** VU meter / mute / solo state shared by both out group kinds */
+interface OutGroupVuState {
+    label?: string;
+    mute?: boolean;
+    solo?: boolean;
+    /** Source-order position across all out groups; assigned by addOut/addOutMono */
+    ordinal: number;
+    /** Location of the `.out(...)`/`.outMono(...)` call in the DSL source */
+    sourceLocation?: { line: number; column: number };
 }
 
 /** Internal storage for a stereo output group */
-export interface StereoOutGroup {
+export interface StereoOutGroup extends OutGroupVuState {
     type: 'stereo';
     outputs: ModuleOutput[];
     gain?: PolySignal;
@@ -156,10 +183,81 @@ export interface StereoOutGroup {
 }
 
 /** Internal storage for a mono output group */
-export interface MonoOutGroup {
+export interface MonoOutGroup extends OutGroupVuState {
     type: 'mono';
     outputs: ModuleOutput[];
     gain?: PolySignal;
+}
+
+/**
+ * True for a plain `{ ... }` literal — distinguishes MonoOutOptions from a
+ * gain PolySignal (number | string | array | ModuleOutput | iterable).
+ * Patch scripts evaluate in a vm realm whose `Object.prototype` is a
+ * different object from the host's, so plainness is judged by chain depth
+ * (a prototype that is itself the chain root) rather than identity.
+ */
+function isMonoOutOptions(v: unknown): v is MonoOutOptions {
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+        return false;
+    }
+    const proto = Object.getPrototypeOf(v);
+    return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+/**
+ * Resolve the `.outMono(...)` overloads — `(channel?, gain?)`,
+ * `(channel, options)`, or `(options)` — into one options object. An
+ * explicit `channel` inside the options wins over the positional argument.
+ */
+function resolveMonoOutArgs(
+    channelOrOptions: number | MonoOutOptions,
+    gainOrOptions?: PolySignal | MonoOutOptions,
+): MonoOutOptions {
+    if (isMonoOutOptions(channelOrOptions)) {
+        return channelOrOptions;
+    }
+    if (isMonoOutOptions(gainOrOptions)) {
+        return { channel: channelOrOptions, ...gainOrOptions };
+    }
+    return { channel: channelOrOptions, gain: gainOrOptions };
+}
+
+/**
+ * Live-display tap for a locked VU control: the (module, port, channel)
+ * address the engine samples so the panel can track the signal. Collections
+ * and arrays tap their first channel; deferred outputs still hold
+ * placeholder ids here, so they get no tap.
+ */
+function controlSourceTap(
+    value: PolySignal | undefined,
+): { moduleId: string; portName: string; channel: number } | undefined {
+    if (
+        value == null ||
+        typeof value === 'number' ||
+        typeof value === 'string'
+    ) {
+        return undefined;
+    }
+    let single: unknown = value;
+    if (
+        !(value instanceof ModuleOutput) &&
+        typeof (value as unknown as Record<symbol, unknown>)[
+            Symbol.iterator
+        ] === 'function'
+    ) {
+        single = [...(value as Iterable<unknown>)][0];
+    }
+    if (
+        single instanceof ModuleOutput &&
+        !(single instanceof DeferredModuleOutput)
+    ) {
+        return {
+            channel: single.channel ?? 0,
+            moduleId: single.moduleId,
+            portName: single.portName,
+        };
+    }
+    return undefined;
 }
 
 export type OutGroup = StereoOutGroup | MonoOutGroup;
@@ -375,28 +473,41 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
      * @param options.gain - Output gain
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
      * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
+     * @param options.label - Label shown on this output's VU meter
+     * @param options.mute - Silence this output (still metered)
+     * @param options.solo - When any output is soloed, only soloed outputs are audible
      */
     out(options: StereoOutOptions = {}): this {
         if (this.items.length > 0) {
-            this.items[0].builder.addOut([...this.items], {
-                baseChannel: 0,
-                ...options,
-            });
+            const loc = captureSourceLocation();
+            this.items[0].builder.addOut(
+                [...this.items],
+                {
+                    baseChannel: 0,
+                    ...options,
+                },
+                loc,
+            );
         }
         return this;
     }
 
     /**
      * Send all outputs to speakers as mono
-     * @param channel - Output channel (0-15, default 0)
-     * @param gain - Output gain
+     * @param channelOrOptions - Output channel (0-15, default 0), or `{ channel, gain, label, mute, solo }` options
+     * @param gainOrOptions - Output gain, or the same options (an explicit `channel` there wins)
      */
-    outMono(channel: number = 0, gain?: PolySignal): this {
+    outMono(
+        channelOrOptions: number | MonoOutOptions = 0,
+        gainOrOptions?: PolySignal | MonoOutOptions,
+    ): this {
         if (this.items.length > 0) {
-            this.items[0].builder.addOutMono([...this.items], {
-                channel,
-                gain,
-            });
+            const loc = captureSourceLocation();
+            this.items[0].builder.addOutMono(
+                [...this.items],
+                resolveMonoOutArgs(channelOrOptions, gainOrOptions),
+                loc,
+            );
         }
         return this;
     }
@@ -670,6 +781,10 @@ export class GraphBuilder {
     private scopeXY: ScopeXYWithLocation | null = null;
     /** Output groups keyed by baseChannel */
     private outGroups = new Map<number, OutGroup[]>();
+    /** Monotonic source-order counter for out groups */
+    private outGroupOrdinal = 0;
+    /** Out labels seen so far, for duplicate detection */
+    private outLabels = new Set<string>();
     private factoryRegistry = new Map<string, FactoryFunction>();
     private sourceLocationMap = new Map<string, SourceLocation>();
     /** Track all deferred outputs for string replacement during toPatch */
@@ -678,8 +793,8 @@ export class GraphBuilder {
     private tempo: number = 120;
     /** Whether $setTempo was explicitly called in the DSL */
     private tempoExplicitlySet: boolean = false;
-    /** Global output gain signal (default: 2.5) */
-    private outputGain: Signal = 2.5;
+    /** Global output gain signal. */
+    private outputGain: Signal = DEFAULT_OUTPUT_GAIN;
     /** Time signature numerator (beats per bar) for ROOT_CLOCK */
     private timeSignatureNumerator: number = 4;
     /** Time signature denominator (beat value) for ROOT_CLOCK */
@@ -1010,6 +1125,11 @@ export class GraphBuilder {
         const stereoMixerFactory = this.getFactory('$stereoMix');
         const scaleAndShiftFactory = this.getFactory('$scaleAndShift');
         const curveFactory = this.getFactory('$curve');
+        const slewFactory = this.getFactory('$slew');
+
+        // VU meter entries, one per out group, collected in compile order and
+        // sorted into source order before emission.
+        const vuMeters: (VuMeterDef & { ordinal: number })[] = [];
 
         // Process output groups and build channel collections
         if (this.outGroups.size > 0) {
@@ -1021,57 +1141,214 @@ export class GraphBuilder {
                 (a, b) => a - b,
             );
 
+            const allGroups = [...this.outGroups.values()]
+                .flat()
+                .sort((a, b) => a.ordinal - b.ordinal);
+
+            // Solo state is global: any solo silences every non-soloed group.
+            const anySolo = allGroups.some((g) => g.solo);
+
+            // Display key and sanitized module-id suffix per group, assigned
+            // in source order. Keys join renderer state to meters, so they
+            // are unique across every meter: labels are unique and never
+            // '__main__' (both enforced at addOut time), and unlabeled outs
+            // take the next `out N` name not claimed by a label. Suffixes
+            // seed the hidden __vu* module ids, so they are unique too —
+            // 'main' is reserved for the master gain stage, and distinct
+            // labels that sanitize alike get a numeric disambiguator.
+            const keyByOrdinal = new Map<number, string>();
+            const skByOrdinal = new Map<number, string>();
+            const usedSk = new Set<string>(['main']);
+            let autoKeyNumber = 1;
+            for (const group of allGroups) {
+                let key: string;
+                if (group.label === undefined) {
+                    while (this.outLabels.has(`out ${autoKeyNumber}`)) {
+                        autoKeyNumber++;
+                    }
+                    key = `out ${autoKeyNumber}`;
+                    autoKeyNumber++;
+                } else {
+                    key = group.label;
+                }
+                keyByOrdinal.set(group.ordinal, key);
+                const skBase = key.replace(/[^a-zA-Z0-9_]/g, '_');
+                let sk = skBase;
+                for (let n = 2; usedSk.has(sk); n++) {
+                    sk = `${skBase}_${n}`;
+                }
+                usedSk.add(sk);
+                skByOrdinal.set(group.ordinal, sk);
+            }
+
+            // Out groups created by the same `.out()` call (a call site
+            // inside a loop or helper) share one source span, so a per-meter
+            // option edit there would rewrite every instance. Meters at a
+            // shared call site carry no sourceLocation; their panel controls
+            // stay live-only and the source reasserts on the next eval.
+            const groupsPerCallSite = new Map<string, number>();
+            for (const group of allGroups) {
+                if (group.sourceLocation) {
+                    const siteKey = `${group.sourceLocation.line}:${group.sourceLocation.column}`;
+                    groupsPerCallSite.set(
+                        siteKey,
+                        (groupsPerCallSite.get(siteKey) ?? 0) + 1,
+                    );
+                }
+            }
+
             for (const baseChannel of sortedChannels) {
                 const groups = this.outGroups.get(baseChannel)!;
 
                 for (const group of groups) {
-                    let outputSignals: ModuleOutput[];
+                    const key = keyByOrdinal.get(group.ordinal)!;
+                    // Sanitized id suffix for the group's deterministic
+                    // __vuTap_/__vuMute_ module ids.
+                    const sk = skByOrdinal.get(group.ordinal)!;
+                    const tapId = `__vuTap_${sk}`;
 
-                    if (group.type === 'stereo') {
-                        // Create stereoMixer with the outputs
-                        const stereoOut = stereoMixerFactory(group.outputs, {
-                            pan: group.pan ?? 0,
-                            width: group.width ?? 0,
-                        }) as Collection;
+                    // A numeric (or absent) stereo pan is lifted into a
+                    // $signal so the VU panel's knob can drive it live via
+                    // the single-module update path; a signal-valued pan
+                    // stays wired as given and renders as a locked knob that
+                    // tracks the signal.
+                    const panControllable =
+                        group.type === 'stereo' &&
+                        (group.pan === undefined ||
+                            typeof group.pan === 'number');
+                    const panValue = panControllable
+                        ? ((group.pan as number | undefined) ?? 0)
+                        : null;
+                    const panLocked =
+                        group.type === 'stereo' && !panControllable;
 
-                        // Apply gain if specified
-                        if (group.gain !== undefined) {
-                            const curvedAmp = curveFactory(
-                                group.gain,
-                                GAIN_CURVE_EXP,
-                            );
-                            const gained = scaleAndShiftFactory(
-                                [...stereoOut],
-                                curvedAmp,
-                            ) as Collection;
-                            outputSignals = [...gained];
-                        } else {
-                            outputSignals = [...stereoOut];
-                        }
-                    } else {
-                        // Mono: use mix module
-                        const mixOut = (
-                            stereoMixerFactory(group.outputs, {
-                                pan: -5,
-                                width: 0,
-                            }) as Collection
-                        )[0];
+                    // Likewise a numeric (or absent) gain is lifted into a
+                    // $signal so the VU panel's fader triangle can drive it;
+                    // the gain stage always compiles so the fader has a
+                    // target (absent gain seeds unity).
+                    const gainControllable =
+                        group.gain === undefined ||
+                        typeof group.gain === 'number';
+                    const gainValue = gainControllable
+                        ? ((group.gain as number | undefined) ??
+                          UNITY_OUT_GAIN)
+                        : null;
+                    const gainSource = gainControllable
+                        ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
+                        : group.gain!;
 
-                        // Apply gain if specified
-                        if (group.gain !== undefined) {
-                            const curvedAmp = curveFactory(
-                                group.gain,
-                                GAIN_CURVE_EXP,
-                            );
-                            const gained = scaleAndShiftFactory(
-                                [mixOut],
-                                curvedAmp,
-                            ) as Collection;
-                            outputSignals = [...gained];
-                        } else {
-                            outputSignals = [mixOut];
+                    // Group mix, then the gain stage — the tap: the meter
+                    // reads post-gain, pre-mute like a post-fader DAW meter.
+                    const mixSignals: ModuleOutput[] =
+                        group.type === 'stereo'
+                            ? [
+                                  ...(stereoMixerFactory(group.outputs, {
+                                      pan: panControllable
+                                          ? signalFactory(panValue, {
+                                                id: `__vuPan_${sk}`,
+                                            })
+                                          : group.pan,
+                                      width: group.width ?? 0,
+                                  }) as Collection),
+                              ]
+                            : [
+                                  (
+                                      stereoMixerFactory(group.outputs, {
+                                          pan: -5,
+                                          width: 0,
+                                      }) as Collection
+                                  )[0],
+                              ];
+
+                    const curvedAmp = curveFactory(
+                        gainSource,
+                        GAIN_CURVE_EXP,
+                    );
+                    let outputSignals: ModuleOutput[] = [
+                        ...(scaleAndShiftFactory(
+                            mixSignals,
+                            curvedAmp,
+                            undefined,
+                            { id: tapId },
+                        ) as Collection),
+                    ];
+
+                    // Mute/solo gate stage. The gate $signal holds 5 (unity in
+                    // $scaleAndShift scale terms) or 0 (silence); the VU panel
+                    // flips it live via the single-module update path, and the
+                    // $slew declicks the 5 V swing over ~10 ms.
+                    const gate = (anySolo ? group.solo : !group.mute) ? 5 : 0;
+                    const muteSig = signalFactory(gate, {
+                        id: `__vuMute_${sk}`,
+                    });
+                    const smoothed = slewFactory(muteSig, {
+                        fall: 0.002,
+                        id: `__vuSlew_${sk}`,
+                        rise: 0.002,
+                    });
+                    const gated = scaleAndShiftFactory(
+                        outputSignals,
+                        smoothed,
+                    ) as Collection;
+                    outputSignals = [...gated];
+
+                    // Unlabeled outs' id suffix comes from a positional
+                    // counter that shifts when outs elsewhere are added or
+                    // removed, so these ids carry no identity across edits.
+                    // Flag them implicit so the similarity reconciler matches
+                    // the instances structurally, as it does for every other
+                    // anonymous module. Label-derived ids stay explicit —
+                    // the label is stable identity.
+                    if (group.label === undefined) {
+                        for (const hiddenId of [
+                            tapId,
+                            `__vuMute_${sk}`,
+                            `__vuSlew_${sk}`,
+                            `__vuGain_${sk}`,
+                            `__vuPan_${sk}`,
+                        ]) {
+                            const spec = this.modules.get(hiddenId);
+                            if (spec) {
+                                spec.idIsExplicit = false;
+                            }
                         }
                     }
+
+                    const editableLocation =
+                        group.sourceLocation &&
+                        groupsPerCallSite.get(
+                            `${group.sourceLocation.line}:${group.sourceLocation.column}`,
+                        ) === 1
+                            ? group.sourceLocation
+                            : undefined;
+
+                    vuMeters.push({
+                        baseChannel,
+                        channels: group.type === 'stereo' ? 2 : 1,
+                        gain: gainValue,
+                        gainLocked: !gainControllable,
+                        gainModuleId: gainControllable
+                            ? `__vuGain_${sk}`
+                            : null,
+                        gainSource: gainControllable
+                            ? undefined
+                            : controlSourceTap(group.gain),
+                        key,
+                        label: group.label ?? null,
+                        moduleId: tapId,
+                        mute: group.mute === true,
+                        muteModuleId: `__vuMute_${sk}`,
+                        ordinal: group.ordinal,
+                        pan: panValue,
+                        panLocked,
+                        panModuleId: panControllable ? `__vuPan_${sk}` : null,
+                        panSource: panLocked
+                            ? controlSourceTap(group.pan)
+                            : undefined,
+                        portName: 'output',
+                        solo: group.solo === true,
+                        sourceLocation: editableLocation,
+                    });
 
                     // Build channel collection with baseChannel silent channels prepended
                     const channelCollection: (ModuleOutput | number)[] = [];
@@ -1092,16 +1369,62 @@ export class GraphBuilder {
             // Each collection contributes to corresponding output channels
             const finalMix = mixFactory(allChannelCollections) as Collection;
 
-            // Apply end of chain processing and global output gain
+            // Apply end of chain processing and global output gain. A
+            // numeric output gain is lifted into a $signal so the master
+            // fader can drive it live; the fader's source edits go through
+            // $setOutputGain. A signal-valued output gain renders as a
+            // locked, live-tracking fader.
             this.processingEndOfChain = true;
-            const gainedMix = this.endOfChainCb(finalMix).gain(this.outputGain);
+            const masterGainControllable =
+                typeof this.outputGain === 'number';
+            const masterGainValue = masterGainControllable
+                ? (this.outputGain as number)
+                : null;
+            const masterGainSignal = masterGainControllable
+                ? (signalFactory(this.outputGain, {
+                      id: '__vuGain_main',
+                  }) as ModuleOutput)
+                : this.outputGain;
+            const gainedMix = this.endOfChainCb(finalMix).gain(
+                masterGainSignal,
+            );
 
             // Create root signal module with the final mix
             signalFactory(gainedMix, { id: 'ROOT_OUTPUT' });
+
+            // End-of-chain master meter, pinned to the panel's right side.
+            // Taps ROOT_OUTPUT itself (post end-of-chain + global gain), so
+            // it reads exactly what leaves the patch.
+            vuMeters.push({
+                baseChannel: 0,
+                channels: 2,
+                gain: masterGainValue,
+                gainLocked: !masterGainControllable,
+                gainModuleId: masterGainControllable ? '__vuGain_main' : null,
+                gainSource: masterGainControllable
+                    ? undefined
+                    : controlSourceTap(this.outputGain),
+                key: '__main__',
+                label: 'Main',
+                main: true,
+                moduleId: 'ROOT_OUTPUT',
+                mute: false,
+                muteModuleId: undefined,
+                ordinal: Number.MAX_SAFE_INTEGER,
+                pan: null,
+                panLocked: false,
+                panModuleId: null,
+                portName: 'output',
+                solo: false,
+                sourceLocation: undefined,
+            });
         } else {
             // No outputs registered - create silent root signal (0V)
             signalFactory(0, { id: 'ROOT_OUTPUT' });
         }
+
+        // The VU panel lists meters in source order, not channel order.
+        vuMeters.sort((a, b) => a.ordinal - b.ordinal);
 
         // Update ROOT_CLOCK tempo with the current tempo setting
         const rootClock = this.modules.get('ROOT_CLOCK');
@@ -1151,6 +1474,9 @@ export class GraphBuilder {
                     }) as ScopeWithLocation,
             ),
             scopeXy: this.resolveScopeXY(),
+            // Napi maps both null and undefined to None, so the renderer's
+            // null-based VuMeterDef satisfies VuMeterSpec's optional fields.
+            vuMeters: vuMeters as unknown as PatchGraph['vuMeters'],
         };
 
         if (
@@ -1171,10 +1497,12 @@ export class GraphBuilder {
         this.scopeXY = null;
         this.counters.clear();
         this.outGroups.clear();
+        this.outGroupOrdinal = 0;
+        this.outLabels.clear();
         this.sourceLocationMap.clear();
         this.deferredOutputs.clear();
         this.tempo = 120;
-        this.outputGain = 2.5;
+        this.outputGain = DEFAULT_OUTPUT_GAIN;
         this.timeSignatureNumerator = 4;
         this.timeSignatureDenominator = 4;
     }
@@ -1193,6 +1521,7 @@ export class GraphBuilder {
     addOut(
         value: ModuleOutput | ModuleOutput[],
         options: StereoOutOptions = {},
+        sourceLocation?: { line: number; column: number },
     ): void {
         if (this.processingEndOfChain) {
             throw new Error(
@@ -1205,11 +1534,18 @@ export class GraphBuilder {
             throw new Error(`baseChannel must be 0-14, got ${baseChannel}`);
         }
 
+        this.registerOutLabel(options.label);
+
         const outputs = Array.isArray(value) ? [...value] : [value];
         const group: StereoOutGroup = {
             gain: options.gain,
+            label: options.label,
+            mute: options.mute === true,
+            ordinal: this.outGroupOrdinal++,
             outputs,
             pan: options.pan,
+            solo: options.solo === true,
+            sourceLocation,
             type: 'stereo',
             width: options.width,
         };
@@ -1225,6 +1561,7 @@ export class GraphBuilder {
     addOutMono(
         value: ModuleOutput | ModuleOutput[],
         options: MonoOutOptions = {},
+        sourceLocation?: { line: number; column: number },
     ): void {
         if (this.processingEndOfChain) {
             throw new Error(
@@ -1237,16 +1574,42 @@ export class GraphBuilder {
             throw new Error(`channel must be 0-15, got ${channel}`);
         }
 
+        this.registerOutLabel(options.label);
+
         const outputs = Array.isArray(value) ? [...value] : [value];
         const group: MonoOutGroup = {
             gain: options.gain,
+            label: options.label,
+            mute: options.mute === true,
+            ordinal: this.outGroupOrdinal++,
             outputs,
+            solo: options.solo === true,
+            sourceLocation,
             type: 'mono',
         };
 
         const existing = this.outGroups.get(channel) ?? [];
         existing.push(group);
         this.outGroups.set(channel, existing);
+    }
+
+    /** Validate an out label and record it for duplicate detection. */
+    private registerOutLabel(label: string | undefined): void {
+        if (label === undefined) {
+            return;
+        }
+        if (typeof label !== 'string' || label.length === 0) {
+            throw new Error('.out label must be a non-empty string');
+        }
+        if (label === '__main__') {
+            throw new Error(
+                '.out label "__main__" is reserved for the master meter',
+            );
+        }
+        if (this.outLabels.has(label)) {
+            throw new Error(`.out label "${label}" must be unique`);
+        }
+        this.outLabels.add(label);
     }
 
     addBus(bus: Bus) {
@@ -1600,19 +1963,31 @@ export class ModuleOutput {
      * @param options.gain - Output gain (adds util.scaleAndShift after stereo mix)
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
      * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
+     * @param options.label - Label shown on this output's VU meter
+     * @param options.mute - Silence this output (still metered)
+     * @param options.solo - When any output is soloed, only soloed outputs are audible
      */
     out(options: StereoOutOptions = {}): this {
-        this.builder.addOut(this, { baseChannel: 0, ...options });
+        const loc = captureSourceLocation();
+        this.builder.addOut(this, { baseChannel: 0, ...options }, loc);
         return this;
     }
 
     /**
      * Send this output to speakers as mono
-     * @param channel - Output channel (0-15, default 0)
-     * @param gain - Output gain
+     * @param channelOrOptions - Output channel (0-15, default 0), or `{ channel, gain, label, mute, solo }` options
+     * @param gainOrOptions - Output gain, or the same options (an explicit `channel` there wins)
      */
-    outMono(channel: number = 0, gain?: PolySignal): this {
-        this.builder.addOutMono(this, { channel, gain });
+    outMono(
+        channelOrOptions: number | MonoOutOptions = 0,
+        gainOrOptions?: PolySignal | MonoOutOptions,
+    ): this {
+        const loc = captureSourceLocation();
+        this.builder.addOutMono(
+            this,
+            resolveMonoOutArgs(channelOrOptions, gainOrOptions),
+            loc,
+        );
         return this;
     }
 

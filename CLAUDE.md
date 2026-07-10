@@ -39,7 +39,7 @@ yarn lint:fix              # oxlint --fix
 | Visual snapshots       | `yarn test:e2e:update`                           |
 | Everything             | `yarn test:all`                                  |
 
-E2E tests require the webpack build to exist — run `yarn start` once first.
+E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run `yarn start` once first.
 
 ## Architecture
 

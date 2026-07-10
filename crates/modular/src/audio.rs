@@ -822,6 +822,133 @@ impl ScopeBuffer {
     }
 }
 
+/// Per-out-group loudness accumulator. Constructed on the main thread (the
+/// strings allocate there); `accumulate` runs on the audio thread and must
+/// not allocate.
+pub struct VuMeterState {
+    pub module_id: String,
+    pub port_name: String,
+    /// 1 (mono) or 2 (stereo).
+    pub channels: usize,
+    /// Signal-driven pan/gain control taps, sampled so the panel's locked
+    /// controls can track them live.
+    pub pan_source: Option<modular_core::types::ScopeChannel>,
+    pub gain_source: Option<modular_core::types::ScopeChannel>,
+    /// One-pole EMA of x² per channel (300 ms time constant), in volts².
+    rms_sq: [f32; 2],
+    /// Max |x| per channel since the last `get_vu_meter_frames` read.
+    window_peak: [f32; 2],
+    /// Most recent samples of the control taps.
+    pan_value: f32,
+    gain_value: f32,
+    rms_coeff: f32,
+}
+
+impl VuMeterState {
+    pub fn new(spec: &modular_core::types::VuMeterSpec, sample_rate: f32) -> Self {
+        Self {
+            module_id: spec.module_id.clone(),
+            port_name: spec.port_name.clone(),
+            channels: (spec.channels as usize).clamp(1, 2),
+            pan_source: spec.pan_source.clone(),
+            gain_source: spec.gain_source.clone(),
+            rms_sq: [0.0; 2],
+            window_peak: [0.0; 2],
+            pan_value: 0.0,
+            gain_value: 0.0,
+            rms_coeff: 1.0 - (-1.0f32 / (0.3 * sample_rate)).exp(),
+        }
+    }
+
+    #[inline]
+    pub fn set_pan_value(&mut self, v: f32) {
+        self.pan_value = v;
+    }
+
+    #[inline]
+    pub fn set_gain_value(&mut self, v: f32) {
+        self.gain_value = v;
+    }
+
+    /// Carry running levels over from this meter's predecessor so a patch
+    /// update doesn't blink the display.
+    pub fn transfer_levels_from(&mut self, prev: &VuMeterState) {
+        self.rms_sq = prev.rms_sq;
+        self.window_peak = prev.window_peak;
+    }
+
+    #[inline]
+    pub fn accumulate(&mut self, ch: usize, x: f32) {
+        self.rms_sq[ch] += self.rms_coeff * (x * x - self.rms_sq[ch]);
+        let a = x.abs();
+        if a > self.window_peak[ch] {
+            self.window_peak[ch] = a;
+        }
+    }
+
+    /// Snapshot the current levels and reset the peak window. Main thread only.
+    pub fn take_frame(&mut self) -> modular_core::types::VuMeterFrame {
+        let frame = modular_core::types::VuMeterFrame {
+            module_id: self.module_id.clone(),
+            rms: (0..self.channels)
+                .map(|c| self.rms_sq[c].sqrt() as f64)
+                .collect(),
+            peak: (0..self.channels)
+                .map(|c| self.window_peak[c] as f64)
+                .collect(),
+            pan: self.pan_source.as_ref().map(|_| self.pan_value as f64),
+            gain: self.gain_source.as_ref().map(|_| self.gain_value as f64),
+        };
+        self.window_peak = [0.0; 2];
+        frame
+    }
+}
+
+#[cfg(test)]
+mod vu_meter_state_tests {
+    use super::VuMeterState;
+    use modular_core::types::VuMeterSpec;
+
+    #[test]
+    fn rms_converges_to_sine_rms_and_peak_resets() {
+        let sample_rate = 48_000.0f32;
+        let spec = VuMeterSpec {
+            key: "t".to_string(),
+            module_id: "t".to_string(),
+            port_name: "output".to_string(),
+            channels: 1,
+            mute_module_id: Some("m".to_string()),
+            pan_source: None,
+            gain_source: None,
+        };
+        let mut state = VuMeterState::new(&spec, sample_rate);
+        let amp = 5.0f32;
+        let freq = 440.0f32;
+        for n in 0..sample_rate as usize {
+            let x = amp * (2.0 * std::f32::consts::PI * freq * n as f32 / sample_rate).sin();
+            state.accumulate(0, x);
+        }
+        let mut frame = state.take_frame();
+        let expected_rms = (amp / 2.0f32.sqrt()) as f64;
+        assert!(
+            (frame.rms[0] - expected_rms).abs() / expected_rms < 0.02,
+            "rms {} not within 2% of {}",
+            frame.rms[0],
+            expected_rms
+        );
+        assert!(
+            (frame.peak[0] - amp as f64).abs() < 0.01,
+            "peak {} != {}",
+            frame.peak[0],
+            amp
+        );
+        // The peak window resets on read; RMS keeps its running level.
+        frame = state.take_frame();
+        assert_eq!(frame.peak[0], 0.0);
+        assert!(frame.rms[0] > 0.0);
+    }
+}
+
 /// Sample-rate ring buffer for the $scopeXY visualizer.
 ///
 /// One buffer per (xChannel, yChannel) pair. The audio callback pushes
@@ -1030,6 +1157,9 @@ pub struct AudioState {
     stopped: Arc<AtomicBool>,
     /// Scope collection - shared with audio thread for UI reads
     scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    /// VU meter collection - shared with audio thread for UI reads. Replaced
+    /// wholesale on patch updates; entries are in the patch's display order.
+    vu_collection: Arc<Mutex<Vec<VuMeterState>>>,
     /// XY scope collection - shared with audio thread for UI reads.
     /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
     scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
@@ -1117,6 +1247,7 @@ impl AudioState {
             garbage_rx: Mutex::new(garbage_rx),
             stopped: Arc::new(AtomicBool::new(true)),
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
+            vu_collection: Arc::new(Mutex::new(Vec::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
             recording_feed: Arc::new(Mutex::new(None)),
@@ -1205,6 +1336,7 @@ impl AudioState {
         AudioSharedState {
             stopped: self.stopped.clone(),
             scope_collection: self.scope_collection.clone(),
+            vu_collection: self.vu_collection.clone(),
             scope_xy_collection: self.scope_xy_collection.clone(),
             scope_xy_ranges: self.scope_xy_ranges.clone(),
             recording_feed: self.recording_feed.clone(),
@@ -1303,6 +1435,20 @@ impl AudioState {
                 (key.clone(), data, stats)
             })
             .collect()
+    }
+
+    /// Snapshot every VU meter's current levels, resetting each peak window.
+    /// Mirrors `get_audio_buffers` — skipped while stopped, never blocks on
+    /// the audio-thread mutex.
+    pub fn get_vu_meter_frames(&self) -> Vec<modular_core::types::VuMeterFrame> {
+        if self.is_stopped() {
+            return Vec::new();
+        }
+        let mut vu_collection = match self.vu_collection.try_lock() {
+            Some(vc) => vc,
+            None => return Vec::new(),
+        };
+        vu_collection.iter_mut().map(|m| m.take_frame()).collect()
     }
 
     /// Snapshot every active $scopeXY pair as (key, xSamples, ySamples, ranges).
@@ -1426,6 +1572,7 @@ impl AudioState {
             module_id_remaps,
             scopes,
             scope_xy,
+            vu_meters,
             ..
         } = desired_graph;
 
@@ -1463,6 +1610,35 @@ impl AudioState {
                 (key, buffer)
             })
             .collect();
+
+        // Build the complete next VU meter membership. Running levels carry
+        // over from any current entry metering the same tap so a patch update
+        // doesn't blink the display. The lookup goes through the same remap
+        // table module state transfer uses, so a tap whose id shifted (e.g.
+        // an unlabeled out renumbered by an edit) keeps its levels. Briefly
+        // locking here is safe — the audio thread only ever try_locks this
+        // mutex.
+        {
+            update.vu_next = vu_meters
+                .iter()
+                .map(|spec| VuMeterState::new(spec, sample_rate))
+                .collect();
+            let vu_collection = self.vu_collection.lock();
+            for meter in update.vu_next.iter_mut() {
+                let source_id = match update.transfer_sources.get(&meter.module_id) {
+                    Some(Some(old_id)) => Some(old_id.as_str()),
+                    Some(None) => None,
+                    None => Some(meter.module_id.as_str()),
+                };
+                if let Some(source_id) = source_id
+                    && let Some(prev) = vu_collection
+                        .iter()
+                        .find(|p| p.module_id == source_id && p.port_name == meter.port_name)
+                {
+                    meter.transfer_levels_from(prev);
+                }
+            }
+        }
 
         // Build the complete next XY-scope membership. Single global $scopeXY;
         // keys are pair-indexed so re-ordering one pair forces a full rebuild
@@ -1685,6 +1861,7 @@ impl AudioState {
                 fresh_patch: Patch::new(),
             });
             self.scope_collection.lock().clear();
+            self.vu_collection.lock().clear();
             self.scope_xy_collection.lock().clear();
             self.request_start();
         }
@@ -1714,6 +1891,7 @@ impl AudioState {
 pub struct AudioSharedState {
     pub stopped: Arc<AtomicBool>,
     pub scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    pub vu_collection: Arc<Mutex<Vec<VuMeterState>>>,
     pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
     /// Display ranges for the active $scopeXY — written by the audio thread on
     /// apply, read by the main thread for the renderer.
@@ -1792,6 +1970,10 @@ struct AudioProcessor {
     stopped: Arc<AtomicBool>,
     /// Shared scope collection
     scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    /// Shared VU meter collection. Membership is swapped in wholesale on patch
+    /// updates (built on the main thread); the per-sample path only mutates
+    /// entries in place under a per-block `try_lock`.
+    vu_collection: Arc<Mutex<Vec<VuMeterState>>>,
     /// Shared XY scope collection (single global $scopeXY at most). Holds the
     /// canonical membership; co-owns each buffer with `scope_xy_audio`.
     scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
@@ -1871,6 +2053,7 @@ impl AudioProcessor {
             garbage_tx,
             stopped: shared.stopped,
             scope_collection: shared.scope_collection,
+            vu_collection: shared.vu_collection,
             scope_xy_collection: shared.scope_xy_collection,
             scope_xy_audio: Vec::new(),
             scope_xy_ranges: shared.scope_xy_ranges,
@@ -2176,6 +2359,14 @@ impl AudioProcessor {
                     }
                 }
             }
+        }
+
+        // Swap in the complete new VU meter membership built on the main
+        // thread (running levels already carried over there); the displaced
+        // Vec rides the husk back for a main-thread drop.
+        {
+            let mut vu = self.vu_collection.lock();
+            std::mem::swap(&mut *vu, &mut update.vu_next);
         }
 
         // Swap in the complete new XY-scope membership built on the main
@@ -2545,6 +2736,7 @@ where
                             if end > audio_processor.block_pos {
                                 let mut scope_guard = audio_processor.scope_collection.try_lock();
                                 let mut recording_guard = recording_feed.try_lock();
+                                let mut vu_guard = audio_processor.vu_collection.try_lock();
                                 for i in audio_processor.block_pos..end {
                                     let is_stopped = audio_processor.is_stopped();
                                     match (final_state_processor.prev_is_stopped, is_stopped) {
@@ -2639,6 +2831,60 @@ where
                                                         i,
                                                     );
                                                     scope_buffer.push(s);
+                                                }
+                                            }
+                                        }
+                                        if let Some(vu_lock) = vu_guard.as_mut() {
+                                            for meter in vu_lock.iter_mut() {
+                                                if let Some(module) = audio_processor
+                                                    .patch
+                                                    .sampleables
+                                                    .get(&meter.module_id)
+                                                {
+                                                    for ch in 0..meter.channels {
+                                                        meter.accumulate(
+                                                            ch,
+                                                            module.get_value_at(
+                                                                &meter.port_name,
+                                                                ch,
+                                                                i,
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                                // Signal-driven pan/gain are
+                                                // display-only and each write
+                                                // overwrites the last, so only
+                                                // the block's final sample ever
+                                                // reaches take_frame. Sample the
+                                                // taps once here, not per sample
+                                                // (a String-keyed HashMap lookup
+                                                // each time).
+                                                if i == end - 1 {
+                                                    let sampleables =
+                                                        &audio_processor.patch.sampleables;
+                                                    let sample_tap = |tap: &Option<
+                                                        modular_core::types::ScopeChannel,
+                                                    >| {
+                                                        tap.as_ref().and_then(|src| {
+                                                            sampleables
+                                                                .get(&src.module_id)
+                                                                .map(|m| {
+                                                                    m.get_value_at(
+                                                                        &src.port_name,
+                                                                        src.channel as usize,
+                                                                        i,
+                                                                    )
+                                                                })
+                                                        })
+                                                    };
+                                                    if let Some(v) = sample_tap(&meter.pan_source) {
+                                                        meter.set_pan_value(v);
+                                                    }
+                                                    if let Some(v) = sample_tap(&meter.gain_source)
+                                                    {
+                                                        meter.set_gain_value(v);
+                                                    }
                                                 }
                                             }
                                         }
@@ -3259,6 +3505,7 @@ mod tests {
         let shared = AudioSharedState {
             stopped: Arc::new(AtomicBool::new(true)),
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
+            vu_collection: Arc::new(Mutex::new(Vec::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
             recording_feed: Arc::new(Mutex::new(None)),
@@ -3514,6 +3761,7 @@ mod tests {
         let shared = AudioSharedState {
             stopped: Arc::new(AtomicBool::new(true)),
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
+            vu_collection: Arc::new(Mutex::new(Vec::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
             recording_feed: Arc::new(Mutex::new(None)),

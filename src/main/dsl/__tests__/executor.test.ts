@@ -33,16 +33,23 @@ function execPatch(source: string): PatchGraph {
     return exec(source).patch;
 }
 
-/** Find a module by type in the patch (excluding built-in ROOT_CLOCK, ROOT_INPUT) */
+/** Find a module by type in the patch, excluding the compiler-generated
+ *  VU meter chain (`__vu*` ids) the output stage adds per out group. */
 function findModules(patch: PatchGraph, moduleType: string) {
-    return patch.modules.filter((m) => m.moduleType === moduleType);
+    return patch.modules.filter(
+        (m) => m.moduleType === moduleType && !m.id.startsWith('__vu'),
+    );
 }
 
-/** $signal modules created by the DSL, excluding the built-in I/O signals. */
+/** $signal modules created by the DSL, excluding the built-in I/O signals
+ *  and the compiler-generated VU mute gates. */
 function liftedSignals(patch: PatchGraph) {
     const builtIns = new Set(['ROOT_INPUT', 'ROOT_OUTPUT']);
     return patch.modules.filter(
-        (m) => m.moduleType === '$signal' && !builtIns.has(m.id),
+        (m) =>
+            m.moduleType === '$signal' &&
+            !builtIns.has(m.id) &&
+            !m.id.startsWith('__vu'),
     );
 }
 
@@ -296,10 +303,8 @@ describe('mixing', () => {
         const patch = execPatch(
             '$stereoMix($sine(["C3", "E3", "G3"]), { width: 5 }).out()',
         );
-        // .out() also creates a $stereoMix in the output chain, so expect ≥ 2
-        expect(findModules(patch, '$stereoMix').length).toBeGreaterThanOrEqual(
-            2,
-        );
+        // .out() also creates a $stereoMix in the output chain, so expect 2.
+        expect(findModules(patch, '$stereoMix').length).toBe(2);
     });
 });
 

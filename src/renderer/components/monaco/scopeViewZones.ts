@@ -55,9 +55,8 @@ export function createScopeViewZones({
     /** Each zone's decoration index, for re-resolving positions on reposition */
     const viewDecorationIndexes: (number | null)[] = [];
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
-    let layoutListener: ReturnType<
-        editor.IStandaloneCodeEditor['onDidLayoutChange']
-    > | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let dprQuery: MediaQueryList | null = null;
 
     const dispose = () => {
         const idsToRemove = viewZoneIds.filter(
@@ -80,9 +79,13 @@ export function createScopeViewZones({
         });
         scopeCanvasMap.clear();
 
-        if (layoutListener) {
-            layoutListener.dispose();
-            layoutListener = null;
+        if (resizeObserver) {
+            resizeObserver.disconnect();
+            resizeObserver = null;
+        }
+        if (dprQuery) {
+            dprQuery.removeEventListener('change', onDprChange);
+            dprQuery = null;
         }
     };
 
@@ -242,7 +245,34 @@ export function createScopeViewZones({
     // Sync once now that the zones are attached and have a real display width.
     resizeCanvases();
 
-    layoutListener = editor.onDidLayoutChange(resizeCanvases);
+    // Track every display-size change of the canvases themselves (editor
+    // layout, window resize, panels squeezing the editor). Observation also
+    // fires once on attach, covering zones that mount after this call.
+    resizeObserver = new ResizeObserver(resizeCanvases);
+    scopeCanvasMap.forEach((canvas) => {
+        resizeObserver!.observe(canvas);
+    });
+
+    // A pure devicePixelRatio change — dragging the window between displays of
+    // different density — leaves the canvases' content box unchanged, so the
+    // ResizeObserver never fires. Watch the ratio directly; each media query
+    // matches a single dpr, so re-arm a fresh one after every change.
+    function onDprChange() {
+        resizeCanvases();
+        watchDpr();
+    }
+    function watchDpr() {
+        if (
+            typeof window === 'undefined' ||
+            typeof window.matchMedia !== 'function'
+        ) {
+            return;
+        }
+        const current = window.devicePixelRatio || 1;
+        dprQuery = window.matchMedia(`(resolution: ${current}dppx)`);
+        dprQuery.addEventListener('change', onDprChange, { once: true });
+    }
+    watchDpr();
 
     return { dispose, repositionZones };
 }

@@ -32,7 +32,10 @@ import {
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
-import { setActiveInterpolationResolutions } from '../../shared/dsl/spanTypes';
+import {
+    FIRST_LINE_COLUMN_OFFSET,
+    setActiveInterpolationResolutions,
+} from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import { $p } from './miniNotation';
 
@@ -952,7 +955,7 @@ export function executePatchScript(
 
     // The function body template indents the first line of source with 4 spaces
     // This affects the column reported by V8 for the first line only
-    const firstLineColumnOffset = 4;
+    const firstLineColumnOffset = FIRST_LINE_COLUMN_OFFSET;
 
     // Analyze source code to extract argument spans before execution
     // The registry maps call-site keys (line:column) to argument span info

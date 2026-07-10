@@ -5,8 +5,8 @@
  * test file and expose the first BrowserWindow as a Playwright Page.
  *
  * Requirements:
- *   - The webpack build must exist (.webpack/main and .webpack/renderer).
- *     Run `yarn start` once, or `npx electron-forge build` before running E2E.
+ *   - The Vite main/preload bundles must exist (.vite/build). Run `yarn start`
+ *     once before running E2E.
  *   - Set E2E_TEST=1 env var so the renderer exposes window.__TEST_API__.
  */
 
@@ -19,7 +19,7 @@ import * as os from 'os';
 // Resolve paths relative to the project root
 const projectRoot = path.resolve(__dirname, '..');
 const electronBin = path.join(projectRoot, 'node_modules', '.bin', 'electron');
-const mainEntry = path.join(projectRoot, '.webpack', 'main');
+const mainEntry = path.join(projectRoot, '.vite', 'build', 'main.js');
 
 export type TestFixtures = {
     electronApp: ElectronApplication;
@@ -40,9 +40,16 @@ export const test = base.extend<TestFixtures>({
         const tmpWorkspace = fs.mkdtempSync(
             path.join(os.tmpdir(), 'modular-e2e-'),
         );
+        // Isolated userData: the app holds a single-instance lock there, so
+        // sharing the default dir with a running dev session would make the
+        // test instance exit immediately (and tests would inherit the dev
+        // session's config).
+        const tmpUserData = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'modular-e2e-data-'),
+        );
 
         const app = await electron.launch({
-            args: [mainEntry],
+            args: [mainEntry, `--user-data-dir=${tmpUserData}`],
             executablePath: electronBin,
             env: {
                 ...process.env,
@@ -57,7 +64,7 @@ export const test = base.extend<TestFixtures>({
 
         // Override the workspace IPC handler in the main process so the
         // renderer sees an open workspace (avoids the "Open Folder" screen).
-        // This works even against an already-built webpack bundle.
+        // This works even against an already-built main bundle.
         await app.evaluate(({ ipcMain }, workspace) => {
             ipcMain.removeHandler('modular:fs:get-workspace');
             ipcMain.handle('modular:fs:get-workspace', () => ({
@@ -73,6 +80,7 @@ export const test = base.extend<TestFixtures>({
 
         // Clean up the temp workspace
         fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+        fs.rmSync(tmpUserData, { recursive: true, force: true });
     },
 
     window: async ({ electronApp }, use) => {
@@ -92,3 +100,13 @@ export const test = base.extend<TestFixtures>({
 });
 
 export { expect } from '@playwright/test';
+
+/**
+ * Open an untitled buffer so the editor exists. The test workspace starts
+ * empty with no open files, and both `setEditorValue` and `executePatch` are
+ * silent no-ops without an active buffer.
+ */
+export async function openUntitledBuffer(window: Page): Promise<void> {
+    await window.evaluate(() => window.__TEST_API__!.newUntitledFile());
+    await window.waitForSelector('.monaco-editor', { timeout: 10_000 });
+}

@@ -14,7 +14,7 @@ use rtrb::PushError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::audio::{ScopeBuffer, ScopeXyBuffer};
+use crate::audio::{ScopeBuffer, ScopeXyBuffer, VuMeterState};
 use crate::link::LinkResources;
 
 /// When a queued patch update should be applied.
@@ -84,6 +84,12 @@ pub struct PatchUpdate {
     /// thread iterates per sample. Swapped wholesale for the same reason.
     pub scope_xy_audio_next: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
 
+    /// The complete next VU meter membership, built on the main thread with
+    /// running levels carried over from matching current entries. The audio
+    /// thread swaps this in wholesale; the displaced Vec rides this update
+    /// back through the garbage queue.
+    pub vu_next: Vec<VuMeterState>,
+
     /// Empty, main-thread-allocated storage for the audio thread's processing
     /// order pointer list, with capacity for `process_order_ids.len()` entries
     /// so resolving the pointers never grows a Vec on the audio thread. The
@@ -132,6 +138,7 @@ impl PatchUpdate {
             scope_next: HashMap::new(),
             scope_xy_next: HashMap::new(),
             scope_xy_audio_next: Vec::new(),
+            vu_next: Vec::new(),
             process_order_scratch: Vec::new(),
             sample_rate,
             transport_meta: None,
