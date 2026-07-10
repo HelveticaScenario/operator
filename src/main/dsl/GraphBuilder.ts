@@ -10,6 +10,7 @@ import type {
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
+    DEFAULT_OUTPUT_GAIN,
     GAIN_CURVE_EXP,
     UNITY_OUT_GAIN,
 } from '../../shared/dsl/vuMeterTypes';
@@ -792,8 +793,8 @@ export class GraphBuilder {
     private tempo: number = 120;
     /** Whether $setTempo was explicitly called in the DSL */
     private tempoExplicitlySet: boolean = false;
-    /** Global output gain signal (default: 2.5) */
-    private outputGain: Signal = 2.5;
+    /** Global output gain signal. */
+    private outputGain: Signal = DEFAULT_OUTPUT_GAIN;
     /** Time signature numerator (beats per bar) for ROOT_CLOCK */
     private timeSignatureNumerator: number = 4;
     /** Time signature denominator (beat value) for ROOT_CLOCK */
@@ -1501,7 +1502,7 @@ export class GraphBuilder {
         this.sourceLocationMap.clear();
         this.deferredOutputs.clear();
         this.tempo = 120;
-        this.outputGain = 2.5;
+        this.outputGain = DEFAULT_OUTPUT_GAIN;
         this.timeSignatureNumerator = 4;
         this.timeSignatureDenominator = 4;
     }

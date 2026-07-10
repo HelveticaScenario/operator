@@ -88,6 +88,9 @@ export const GAIN_CURVE_EXP = 3;
 /** Out gain value producing unity amplitude: $curve(5, 3) = 5 → scale 5/5. */
 export const UNITY_OUT_GAIN = 5;
 
+/** Global master output-gain default, restored by a master-fader reset. */
+export const DEFAULT_OUTPUT_GAIN = 2.5;
+
 /**
  * Out gain (DSL units, 0…10) → dB. The gain passes through
  * `$curve(g, GAIN_CURVE_EXP)` (5·(g/5)^exp) into a `$scaleAndShift` scale

@@ -114,6 +114,8 @@ export interface VuMeterColors {
     hot: string;
     /** Externally-controlled (signal-driven, locked) control accents. */
     external: string;
+    /** Font family for the dB scale labels (the `--font-mono` CSS var). */
+    fontMono: string;
 }
 
 export function readVuMeterColors(): VuMeterColors {
@@ -128,6 +130,7 @@ export function readVuMeterColors(): VuMeterColors {
         hot: styles.getPropertyValue('--color-error').trim() || '#e05561',
         external:
             styles.getPropertyValue('--accent-primary').trim() || '#4ec9b0',
+        fontMono: styles.getPropertyValue('--font-mono').trim() || 'monospace',
     };
 }
 
@@ -361,7 +364,7 @@ export function drawVuMeter(
     // dB scale: minor dashes every 6 dB when there's room, labels by tier.
     ctx.strokeStyle = colors.muted;
     ctx.fillStyle = colors.muted;
-    ctx.font = `${9 * dpr}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-mono') || 'monospace'}`;
+    ctx.font = `${9 * dpr}px ${colors.fontMono}`;
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
 

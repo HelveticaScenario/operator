@@ -56,6 +56,7 @@ export function createScopeViewZones({
     const viewDecorationIndexes: (number | null)[] = [];
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
     let resizeObserver: ResizeObserver | null = null;
+    let dprQuery: MediaQueryList | null = null;
 
     const dispose = () => {
         const idsToRemove = viewZoneIds.filter(
@@ -81,6 +82,10 @@ export function createScopeViewZones({
         if (resizeObserver) {
             resizeObserver.disconnect();
             resizeObserver = null;
+        }
+        if (dprQuery) {
+            dprQuery.removeEventListener('change', onDprChange);
+            dprQuery = null;
         }
     };
 
@@ -247,6 +252,27 @@ export function createScopeViewZones({
     scopeCanvasMap.forEach((canvas) => {
         resizeObserver!.observe(canvas);
     });
+
+    // A pure devicePixelRatio change — dragging the window between displays of
+    // different density — leaves the canvases' content box unchanged, so the
+    // ResizeObserver never fires. Watch the ratio directly; each media query
+    // matches a single dpr, so re-arm a fresh one after every change.
+    function onDprChange() {
+        resizeCanvases();
+        watchDpr();
+    }
+    function watchDpr() {
+        if (
+            typeof window === 'undefined' ||
+            typeof window.matchMedia !== 'function'
+        ) {
+            return;
+        }
+        const current = window.devicePixelRatio || 1;
+        dprQuery = window.matchMedia(`(resolution: ${current}dppx)`);
+        dprQuery.addEventListener('change', onDprChange, { once: true });
+    }
+    watchDpr();
 
     return { dispose, repositionZones };
 }

@@ -29,6 +29,7 @@ import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
 import type { VuMeterDef, VuMeterGhost } from '../shared/dsl/vuMeterTypes';
 import {
+    DEFAULT_OUTPUT_GAIN,
     UNITY_OUT_GAIN,
     dbToOutGain,
     outGainToDb,
@@ -42,9 +43,6 @@ import {
     computeOutOptionEdit,
     computeSetOutputGainEdit,
 } from './dsl/outSourceEdit';
-
-/** The GraphBuilder's output-gain default, restored by a master-fader reset. */
-const DEFAULT_OUTPUT_GAIN = 2.5;
 import {
     VU_PANEL_MAX_HEIGHT,
     VU_PANEL_MIN_HEIGHT,
@@ -482,6 +480,9 @@ function App() {
             setVuGhostProp(key, prop, undefined);
 
             // Optimistic UI; the source of truth reasserts on the next eval.
+            // Mirror into the ref synchronously so a rapid second toggle reads
+            // these flags, not the pre-toggle state React has yet to commit.
+            vuOutputsRef.current = next;
             setVuOutputs(next);
         },
         [applyVuSourceEdit, setVuGhostProp],
@@ -1644,47 +1645,40 @@ function App() {
                 const vuDecorationDescs: editor.IModelDeltaDecoration[] = [];
                 for (const vu of newVuOutputs) {
                     const loc = vu.sourceLocation;
-                    if (model && loc) {
-                        const spanKey = `${loc.line}:${loc.column}`;
-                        const callSpan = callSiteSpans?.[spanKey];
-                        const endLine = callSpan?.endLine ?? loc.line;
-                        const endLineContent =
-                            model.getLineContent(endLine) ?? '';
-                        // Captured columns are V8 columns: shifted by the
-                        // executor wrapper's indent on line 1 only. The edit
-                        // anchor must sit exactly on the method name.
-                        const startColumn =
-                            loc.line === 1
-                                ? loc.column - FIRST_LINE_COLUMN_OFFSET
-                                : loc.column;
-                        vuDecorationDescs.push({
-                            options: {
-                                stickiness:
-                                    editor.TrackedRangeStickiness
-                                        .NeverGrowsWhenTypingAtEdges,
-                            },
-                            range: {
-                                endColumn: endLineContent.length + 1,
-                                endLineNumber: endLine,
-                                startColumn,
-                                startLineNumber: loc.line,
-                            },
-                        });
-                    } else {
-                        vuDecorationDescs.push({
-                            options: {
-                                stickiness:
-                                    editor.TrackedRangeStickiness
-                                        .NeverGrowsWhenTypingAtEdges,
-                            },
-                            range: {
-                                endColumn: 1,
-                                endLineNumber: 1,
-                                startColumn: 1,
-                                startLineNumber: 1,
-                            },
-                        });
-                    }
+                    // Captured columns are V8 columns: shifted by the executor
+                    // wrapper's indent on line 1 only, so the edit anchor sits
+                    // exactly on the method name. A call site edited past the
+                    // live document's end during the async round-trip resolves
+                    // to null and takes the degenerate range below — the same
+                    // clamp/guard the scope loop applies via resolveScopeCallRange.
+                    const range =
+                        model && loc
+                            ? resolveScopeCallRange(
+                                  model,
+                                  {
+                                      column:
+                                          loc.line === 1
+                                              ? loc.column -
+                                                FIRST_LINE_COLUMN_OFFSET
+                                              : loc.column,
+                                      line: loc.line,
+                                  },
+                                  callSiteSpans?.[`${loc.line}:${loc.column}`],
+                              )
+                            : null;
+                    vuDecorationDescs.push({
+                        options: {
+                            stickiness:
+                                editor.TrackedRangeStickiness
+                                    .NeverGrowsWhenTypingAtEdges,
+                        },
+                        range: range ?? {
+                            endColumn: 1,
+                            endLineNumber: 1,
+                            startColumn: 1,
+                            startLineNumber: 1,
+                        },
+                    });
                 }
                 let newVuDecorations: editor.IEditorDecorationsCollection | null =
                     null;

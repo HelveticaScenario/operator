@@ -336,7 +336,13 @@ function computeOptionPropertyEdit(
     }
 
     const args = splitArgs(source, open, close, ignored);
-    const optionsIndex = method === 'out' ? 0 : 1;
+    // `.out(...)` carries its options object as the sole argument. `.outMono`
+    // normally takes a leading positional channel, so its options object is
+    // the second argument — unless the single-object overload `.outMono({…})`
+    // placed it first (an object as the first argument).
+    const firstIsObject =
+        args[0] !== undefined && source[args[0].start] === '{';
+    const optionsIndex = method === 'out' || firstIsObject ? 0 : 1;
     const optionsArg = args[optionsIndex] as ArgSpan | undefined;
     const optionsIsObject =
         optionsArg !== undefined && source[optionsArg.start] === '{';

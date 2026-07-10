@@ -21,6 +21,20 @@ function apply(
     return source.slice(0, edit.start) + edit.text + source.slice(edit.end);
 }
 
+/** Apply a numeric-option edit and return the resulting source, or null. */
+function applyNumeric(
+    source: string,
+    anchor: number,
+    prop: string,
+    value: number | null,
+): string | null {
+    const edit = computeOutNumericOptionEdit(source, anchor, prop, value);
+    if (!edit) {
+        return null;
+    }
+    return source.slice(0, edit.start) + edit.text + source.slice(edit.end);
+}
+
 /** Anchor at the method name of the first `.out(` / `.outMono(` call. */
 function anchorOf(source: string, method: 'out' | 'outMono'): number {
     const idx = source.indexOf(`.${method}(`);
@@ -114,6 +128,36 @@ describe('computeOutOptionEdit — set on .outMono', () => {
     });
 });
 
+describe('computeOutOptionEdit — single-object .outMono overload', () => {
+    test('set adds the property to the leading options object', () => {
+        const source = `$saw('c2').outMono({ channel: 2, label: 'bass' })`;
+        expect(apply(source, anchorOf(source, 'outMono'), 'mute', true)).toBe(
+            `$saw('c2').outMono({ channel: 2, label: 'bass', mute: true })`,
+        );
+    });
+
+    test('numeric gain writes into the leading options object', () => {
+        const source = `$saw('c2').outMono({ channel: 2 })`;
+        expect(
+            applyNumeric(source, anchorOf(source, 'outMono'), 'gain', 3.1),
+        ).toBe(`$saw('c2').outMono({ channel: 2, gain: 3.1 })`);
+    });
+
+    test('removing the sole property drops the leading object', () => {
+        const source = `$saw('c2').outMono({ mute: true })`;
+        expect(apply(source, anchorOf(source, 'outMono'), 'mute', false)).toBe(
+            `$saw('c2').outMono()`,
+        );
+    });
+
+    test('removal keeps the leading object when other keys remain', () => {
+        const source = `$saw('c2').outMono({ channel: 2, mute: true })`;
+        expect(apply(source, anchorOf(source, 'outMono'), 'mute', false)).toBe(
+            `$saw('c2').outMono({ channel: 2 })`,
+        );
+    });
+});
+
 describe('computeOutOptionEdit — remove', () => {
     test('sole property removes the whole object', () => {
         const source = `$sine('c4').out({ mute: true })`;
@@ -166,21 +210,6 @@ describe('computeOutOptionEdit — remove', () => {
 });
 
 describe('computeOutNumericOptionEdit — pan', () => {
-    function applyNumeric(
-        source: string,
-        anchor: number,
-        prop: string,
-        value: number | null,
-    ): string | null {
-        const edit = computeOutNumericOptionEdit(source, anchor, prop, value);
-        if (!edit) {
-            return null;
-        }
-        return (
-            source.slice(0, edit.start) + edit.text + source.slice(edit.end)
-        );
-    }
-
     test('bare call gains a pan option', () => {
         const source = `$sine('c4').out()`;
         expect(

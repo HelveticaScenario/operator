@@ -37,9 +37,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use modular_core::module_state::{ModuleLiveState, ModuleStateMeta};
 use modular_core::patch::Patch;
-use modular_core::types::{
-    ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges,
-};
+use modular_core::types::{ROOT_OUTPUT_PORT, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges};
 use std::time::Instant;
 
 /// Shared map of live per-module editor state, keyed by module id. Each value is
@@ -2854,39 +2852,39 @@ where
                                                         );
                                                     }
                                                 }
-                                                let pan_v =
-                                                    meter.pan_source.as_ref().and_then(|src| {
-                                                        audio_processor
-                                                            .patch
-                                                            .sampleables
-                                                            .get(&src.module_id)
-                                                            .map(|m| {
-                                                                m.get_value_at(
-                                                                    &src.port_name,
-                                                                    src.channel as usize,
-                                                                    i,
-                                                                )
-                                                            })
-                                                    });
-                                                if let Some(v) = pan_v {
-                                                    meter.set_pan_value(v);
-                                                }
-                                                let gain_v =
-                                                    meter.gain_source.as_ref().and_then(|src| {
-                                                        audio_processor
-                                                            .patch
-                                                            .sampleables
-                                                            .get(&src.module_id)
-                                                            .map(|m| {
-                                                                m.get_value_at(
-                                                                    &src.port_name,
-                                                                    src.channel as usize,
-                                                                    i,
-                                                                )
-                                                            })
-                                                    });
-                                                if let Some(v) = gain_v {
-                                                    meter.set_gain_value(v);
+                                                // Signal-driven pan/gain are
+                                                // display-only and each write
+                                                // overwrites the last, so only
+                                                // the block's final sample ever
+                                                // reaches take_frame. Sample the
+                                                // taps once here, not per sample
+                                                // (a String-keyed HashMap lookup
+                                                // each time).
+                                                if i == end - 1 {
+                                                    let sampleables =
+                                                        &audio_processor.patch.sampleables;
+                                                    let sample_tap = |tap: &Option<
+                                                        modular_core::types::ScopeChannel,
+                                                    >| {
+                                                        tap.as_ref().and_then(|src| {
+                                                            sampleables
+                                                                .get(&src.module_id)
+                                                                .map(|m| {
+                                                                    m.get_value_at(
+                                                                        &src.port_name,
+                                                                        src.channel as usize,
+                                                                        i,
+                                                                    )
+                                                                })
+                                                        })
+                                                    };
+                                                    if let Some(v) = sample_tap(&meter.pan_source) {
+                                                        meter.set_pan_value(v);
+                                                    }
+                                                    if let Some(v) = sample_tap(&meter.gain_source)
+                                                    {
+                                                        meter.set_gain_value(v);
+                                                    }
                                                 }
                                             }
                                         }
