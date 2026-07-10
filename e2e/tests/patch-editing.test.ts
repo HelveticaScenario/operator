@@ -4,7 +4,7 @@
  * Verifies that patches can be modified and re-executed.
  */
 
-import { test, expect } from '../fixtures';
+import { test, expect, openUntitledBuffer } from '../fixtures';
 
 test.describe('patch editing', () => {
     test('can execute, modify, and re-execute a patch', async ({ window }) => {
@@ -12,6 +12,8 @@ test.describe('patch editing', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         // Execute initial patch
         await window.evaluate(() => {
@@ -54,6 +56,8 @@ test.describe('patch editing', () => {
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
 
+        await openUntitledBuffer(window);
+
         // Execute a patch
         await window.evaluate(() => {
             window.__TEST_API__!.setEditorValue('$sine($hz(440)).out()');
@@ -82,6 +86,8 @@ test.describe('patch editing', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         // Execute a patch first
         await window.evaluate(() => {

@@ -5,7 +5,7 @@
  * Update snapshots with: yarn test:e2e:update
  */
 
-import { test, expect } from '../fixtures';
+import { test, expect, openUntitledBuffer } from '../fixtures';
 
 test.describe('visual regression', () => {
     test('main window appearance', async ({ window }) => {
@@ -40,6 +40,8 @@ test.describe('visual regression', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         // Set and execute a patch
         await window.evaluate(() => {

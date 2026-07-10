@@ -12,10 +12,16 @@ interface TestAPI {
     executePatch: () => Promise<void>;
     getLastPatchResult: () => any;
     getScopeData: () => Promise<any>;
+    getVuMeterData: () => Promise<any>;
+    getVuOutputs: () => any[];
     getAudioHealth: () => Promise<any>;
     isClockRunning: () => boolean;
+    newUntitledFile: () => void;
     openEngineHealth: () => void;
     openModuleProfile: () => void;
+    setVuPanelVisible: (visible: boolean) => void;
+    toggleVuMute: (key: string, codeOnly?: boolean) => void;
+    toggleVuSolo: (key: string, codeOnly?: boolean) => void;
 }
 
 declare global {

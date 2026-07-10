@@ -280,6 +280,134 @@ pub fn validate_patch(
         }
     }
 
+    // === VU meter validation ===
+    for vu in &patch.vu_meters {
+        // Tap module must exist
+        if let Some(module) = module_by_id.get(vu.module_id.as_str()).copied() {
+            match schema_map.get(module.module_type.as_str()).copied() {
+                Some(schema) => {
+                    if !schema.outputs.iter().any(|o| o.name == *vu.port_name) {
+                        errors.push(ValidationError {
+                            field: "vuMeters".to_string(),
+                            message: format!(
+                                "VU meter '{}' references missing output port '{}' on module '{}'",
+                                vu.key, vu.port_name, vu.module_id
+                            ),
+                            location: None,
+                            expected_type: None,
+                            actual_value: None,
+                        });
+                    }
+                }
+                None => {
+                    errors.push(ValidationError {
+                        field: "vuMeters".to_string(),
+                        message: format!(
+                            "VU meter '{}' references module '{}' with unknown type '{}'",
+                            vu.key, vu.module_id, module.module_type
+                        ),
+                        location: None,
+                        expected_type: None,
+                        actual_value: None,
+                    });
+                }
+            }
+        } else {
+            errors.push(ValidationError {
+                field: "vuMeters".to_string(),
+                message: format!(
+                    "VU meter '{}' references missing module '{}'",
+                    vu.key, vu.module_id
+                ),
+                location: None,
+                expected_type: None,
+                actual_value: None,
+            });
+        }
+
+        // A mute gate, when present, must be a live $signal so the renderer
+        // can flip it via the single-module update path.
+        if let Some(mute_module_id) = &vu.mute_module_id {
+            match module_by_id.get(mute_module_id.as_str()).copied() {
+                Some(mute_module) if mute_module.module_type != "$signal" => {
+                    errors.push(ValidationError {
+                        field: "vuMeters".to_string(),
+                        message: format!(
+                            "VU meter '{}' mute module '{}' must be a $signal, got '{}'",
+                            vu.key, mute_module_id, mute_module.module_type
+                        ),
+                        location: None,
+                        expected_type: None,
+                        actual_value: None,
+                    });
+                }
+                Some(_) => {}
+                None => {
+                    errors.push(ValidationError {
+                        field: "vuMeters".to_string(),
+                        message: format!(
+                            "VU meter '{}' references missing mute module '{}'",
+                            vu.key, mute_module_id
+                        ),
+                        location: None,
+                        expected_type: None,
+                        actual_value: None,
+                    });
+                }
+            }
+        }
+
+        // Control-signal taps, when present, must point at real outputs.
+        for (name, source) in [
+            ("panSource", &vu.pan_source),
+            ("gainSource", &vu.gain_source),
+        ] {
+            let Some(src) = source else {
+                continue;
+            };
+            let Some(module) = module_by_id.get(src.module_id.as_str()).copied() else {
+                errors.push(ValidationError {
+                    field: "vuMeters".to_string(),
+                    message: format!(
+                        "VU meter '{}' {} references missing module '{}'",
+                        vu.key, name, src.module_id
+                    ),
+                    location: None,
+                    expected_type: None,
+                    actual_value: None,
+                });
+                continue;
+            };
+            if let Some(schema) = schema_map.get(module.module_type.as_str()).copied()
+                && !schema.outputs.iter().any(|o| o.name == *src.port_name)
+            {
+                errors.push(ValidationError {
+                    field: "vuMeters".to_string(),
+                    message: format!(
+                        "VU meter '{}' {} references missing output port '{}' on module '{}'",
+                        vu.key, name, src.port_name, src.module_id
+                    ),
+                    location: None,
+                    expected_type: None,
+                    actual_value: None,
+                });
+            }
+        }
+
+        if vu.channels != 1 && vu.channels != 2 {
+            errors.push(ValidationError {
+                field: "vuMeters".to_string(),
+                message: format!(
+                    "VU meter '{}' channels must be 1 or 2, got {}",
+                    vu.key, vu.channels
+                ),
+                location: None,
+                expected_type: None,
+                actual_value: None,
+            });
+        }
+    }
+
     // === Result ===
     // Return Ok for a clean patch; otherwise return all collected errors.
     if errors.is_empty() {

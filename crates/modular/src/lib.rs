@@ -1105,6 +1105,14 @@ impl Synthesizer {
         self.state.get_audio_buffers()
     }
 
+    /// Snapshot every VU meter's current levels (per-channel RMS + windowed
+    /// peak, in volts). Each read resets the peak windows. Returns empty
+    /// while stopped.
+    #[napi]
+    pub fn get_vu_meters(&self) -> Vec<modular_core::types::VuMeterFrame> {
+        self.state.get_vu_meter_frames()
+    }
+
     /// Drain the per-module profiler snapshot accumulated since the last
     /// call. Returns one entry per module instance that did work in that
     /// window. No-op (returns empty) when profiling is disabled.

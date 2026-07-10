@@ -26,7 +26,7 @@ export interface SourceSpanResult {
  *
  * @returns Sorted, non-overlapping `[start, end)` ranges to ignore.
  */
-function findIgnoredRanges(source: string): Array<[number, number]> {
+export function findIgnoredRanges(source: string): Array<[number, number]> {
     const ranges: Array<[number, number]> = [];
     const n = source.length;
     let i = 0;

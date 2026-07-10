@@ -55,9 +55,7 @@ export function createScopeViewZones({
     /** Each zone's decoration index, for re-resolving positions on reposition */
     const viewDecorationIndexes: (number | null)[] = [];
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
-    let layoutListener: ReturnType<
-        editor.IStandaloneCodeEditor['onDidLayoutChange']
-    > | null = null;
+    let resizeObserver: ResizeObserver | null = null;
 
     const dispose = () => {
         const idsToRemove = viewZoneIds.filter(
@@ -80,9 +78,9 @@ export function createScopeViewZones({
         });
         scopeCanvasMap.clear();
 
-        if (layoutListener) {
-            layoutListener.dispose();
-            layoutListener = null;
+        if (resizeObserver) {
+            resizeObserver.disconnect();
+            resizeObserver = null;
         }
     };
 
@@ -242,7 +240,13 @@ export function createScopeViewZones({
     // Sync once now that the zones are attached and have a real display width.
     resizeCanvases();
 
-    layoutListener = editor.onDidLayoutChange(resizeCanvases);
+    // Track every display-size change of the canvases themselves (editor
+    // layout, window resize, panels squeezing the editor). Observation also
+    // fires once on attach, covering zones that mount after this call.
+    resizeObserver = new ResizeObserver(resizeCanvases);
+    scopeCanvasMap.forEach((canvas) => {
+        resizeObserver!.observe(canvas);
+    });
 
     return { dispose, repositionZones };
 }

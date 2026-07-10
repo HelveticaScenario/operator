@@ -773,6 +773,30 @@ interface StereoOutOptions {
   pan?: Poly<Signal>;
   /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
   width?: Mono<Signal>;
+  /** Label shown on this output's VU meter. Must be unique across outs */
+  label?: string;
+  /** Silence this output. It is still metered; its VU meter greys out */
+  mute?: boolean;
+  /** When any output is soloed, only soloed outputs are audible */
+  solo?: boolean;
+}
+
+/**
+ * Options for mono output routing via the outMono() method.
+ * @see {@link ModuleOutput.outMono}
+ * @see {@link Collection.outMono}
+ */
+interface MonoOutOptions {
+  /** Output channel (0-15, default 0). Wins over the positional channel argument */
+  channel?: number;
+  /** Output gain. If set, a $scaleAndShift module is added after the mix */
+  gain?: Poly<Signal>;
+  /** Label shown on this output's VU meter. Must be unique across outs */
+  label?: string;
+  /** Silence this output. It is still metered; its VU meter greys out */
+  mute?: boolean;
+  /** When any output is soloed, only soloed outputs are audible */
+  solo?: boolean;
 }
 
 /**
@@ -875,16 +899,18 @@ interface ModuleOutput {
    * Send this output to speakers as stereo.
    * @param options - Stereo output options ({@link StereoOutOptions})
    * @example $sine("c4").out({ gain: 2.5, pan: -2 })
+   * @example $sine("c4").out({ label: 'lead' })
    */
   out(options?: StereoOutOptions): this;
-  
+
   /**
    * Send this output to speakers as mono.
-   * @param channel - Output channel (0-15, default 0)
-    * @param gain - Output gain as {@link Poly<Signal>} (optional)
+   * @param channelOrOptions - Output channel (0-15, default 0), or mono output options ({@link MonoOutOptions})
+    * @param gainOrOptions - Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
     * @example $sine("1hz").outMono(2, 0.3)
+    * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
     */
-   outMono(channel?: number, gain?: Poly<Signal>): this;
+   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
   /**
    * Pipe this output through a transform function.
@@ -1112,15 +1138,17 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   /**
    * Send all outputs to speakers as stereo, summed together.
    * @param options - Stereo output options ({@link StereoOutOptions})
+   * @example $saw(['c3', 'e3', 'g3']).out({ label: 'chord' })
    */
   out(options?: StereoOutOptions): this;
 
   /**
    * Send all outputs to speakers as mono, summed together.
-   * @param channel - Output channel (0-15, default 0)
-    * @param gain - Output gain as {@link Poly<Signal>} (optional)
+   * @param channelOrOptions - Output channel (0-15, default 0), or mono output options ({@link MonoOutOptions})
+    * @param gainOrOptions - Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+    * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
     */
-   outMono(channel?: number, gain?: Poly<Signal>): this;
+   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
 
   /**

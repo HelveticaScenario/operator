@@ -4,7 +4,7 @@
  * Verifies the core workflow: type DSL → execute → audio runs.
  */
 
-import { test, expect } from '../fixtures';
+import { test, expect, openUntitledBuffer } from '../fixtures';
 
 test.describe('DSL execution', () => {
     test('can set editor value via test API', async ({ window }) => {
@@ -13,6 +13,8 @@ test.describe('DSL execution', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         await window.evaluate(() => {
             window.__TEST_API__!.setEditorValue('// test code');
@@ -29,6 +31,8 @@ test.describe('DSL execution', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         // Set a simple sine patch
         await window.evaluate(() => {
@@ -54,6 +58,8 @@ test.describe('DSL execution', () => {
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
 
+        await openUntitledBuffer(window);
+
         await window.evaluate(() => {
             window.__TEST_API__!.setEditorValue('$sine($hz(440)).out()');
         });
@@ -76,6 +82,8 @@ test.describe('DSL execution', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         // Execute a patch with a scope
         await window.evaluate(() => {
@@ -100,6 +108,8 @@ test.describe('DSL execution', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         const health = await window.evaluate(() => {
             return window.__TEST_API__!.getAudioHealth();

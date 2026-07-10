@@ -2730,6 +2730,22 @@ pub struct ScopeStats {
     pub read_offset: u32,
 }
 
+/// One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct VuMeterFrame {
+    pub module_id: String,
+    /// Per-channel RMS in volts (0 dB reference = 5 V).
+    pub rms: Vec<f64>,
+    /// Per-channel max |sample| since the previous poll, in volts.
+    pub peak: Vec<f64>,
+    /// Live value of the signal-driven pan, when `pan_source` is set.
+    pub pan: Option<f64>,
+    /// Live value of the signal-driven gain, when `gain_source` is set.
+    pub gain: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[napi(object)]
 pub struct Scope {
@@ -2789,6 +2805,30 @@ pub struct ScopeXyRanges {
     pub y_max: f64,
 }
 
+/// One out-group VU meter tap. The DSL attaches extra renderer-only metadata
+/// to these entries; napi conversion reads only the fields declared here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct VuMeterSpec {
+    /// Stable identity used by the renderer to join meter frames to meters.
+    pub key: String,
+    /// Module whose output port is metered (the pre-mute tap).
+    pub module_id: String,
+    pub port_name: String,
+    /// 1 (mono) or 2 (stereo).
+    pub channels: u32,
+    /// `$signal` module driving the mute gate (source 5 = audible, 0 =
+    /// silenced). None for the end-of-chain master meter, which has no gate.
+    pub mute_module_id: Option<String>,
+    /// When the out's pan is signal-driven, the output to sample so the
+    /// panel's locked knob can track it live.
+    pub pan_source: Option<ScopeChannel>,
+    /// When the out's gain is signal-driven, the output to sample (in DSL
+    /// gain units, pre-curve) so the panel's locked fader can track it live.
+    pub gain_source: Option<ScopeChannel>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]
@@ -2798,6 +2838,7 @@ pub struct PatchGraph {
     // #[serde(default)]
     pub scopes: Vec<Scope>,
     pub scope_xy: Option<ScopeXy>,
+    pub vu_meters: Vec<VuMeterSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -84,6 +84,14 @@ function makeDecorations(rangesByIndex: (FakeRange | null)[]) {
 describe('createScopeViewZones', () => {
     beforeEach(() => {
         vi.stubGlobal('document', { createElement: () => makeElement() });
+        vi.stubGlobal(
+            'ResizeObserver',
+            class {
+                observe() {}
+                unobserve() {}
+                disconnect() {}
+            },
+        );
     });
     afterEach(() => {
         vi.unstubAllGlobals();

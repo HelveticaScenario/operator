@@ -957,6 +957,8 @@ registerIPCHandler('SYNTH_GET_SCOPES', () => synth.getScopes());
 
 registerIPCHandler('SYNTH_GET_SCOPE_XY', () => synth.getScopeXy());
 
+registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
+
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
@@ -2071,6 +2073,20 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Module Profile...',
+                },
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.TOGGLE_VU_METERS,
+                            );
+                        }
+                    },
+                    ...menuShortcut(
+                        'operator.toggleVuMeters',
+                        'CmdOrCtrl+Shift+M',
+                    ),
+                    label: 'Toggle VU Meters',
                 },
                 // Publish the window as a Syphon source (macOS 14+ only; hidden
                 // elsewhere so the helper never crash-loops on an unsupported OS).
