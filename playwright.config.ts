@@ -3,7 +3,6 @@
  *
  * Usage:
  *   yarn test:e2e           — run all E2E tests
- *   yarn test:e2e:update    — run with snapshot update
  *
  * Prerequisites:
  *   The Vite main/preload bundles must exist in .vite/build/ (run `yarn start`

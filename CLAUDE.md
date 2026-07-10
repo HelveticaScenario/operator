@@ -36,7 +36,6 @@ yarn lint:fix              # oxlint --fix
 | DSL factories/executor | `yarn test:unit`                                 |
 | N-API bindings         | `yarn test:unit`                                 |
 | Renderer UI/UX         | `yarn test:e2e`                                  |
-| Visual snapshots       | `yarn test:e2e:update`                           |
 | Everything             | `yarn test:all`                                  |
 
 E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run `yarn start` once first.
