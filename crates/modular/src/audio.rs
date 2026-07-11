@@ -1584,6 +1584,14 @@ impl AudioState {
         // thread reads during the swap.
         update.set_remaps(&module_id_remaps.unwrap_or_default());
 
+        // Runs after `set_remaps` so the forced `None` wins over any remap
+        // pairing the flagged module with a predecessor.
+        for m in &modules {
+            if m.skip_state_transfer == Some(true) {
+                update.transfer_sources.insert(m.id.clone(), None);
+            }
+        }
+
         // Build maps for efficient lookup
         let desired_modules: HashMap<String, _> =
             modules.into_iter().map(|m| (m.id.clone(), m)).collect();
@@ -2521,20 +2529,42 @@ impl AudioProcessor {
         }
     }
 
-    /// Scan ROOT_CLOCK's `port` trigger output for the first slot in
-    /// `[from, end)` where it goes `>= 1.0`. Pure cache reads — eager-fill
-    /// has already populated the requested range. Returns `None` if no
-    /// trigger fires within the range.
+    /// Advance ROOT_CLOCK one slot at a time through `[from, end)`, watching
+    /// its `port` trigger output for the first slot that goes `>= 1.0`, and
+    /// stop filling the moment it fires. Runs only while a queued update is
+    /// armed: the swap transfers the clock's state to the new patch, so the
+    /// clock must not run past the swap point — any slot filled beyond the
+    /// trigger would be integrated a second time when the post-swap refill
+    /// re-renders the block tail. The trigger slot itself is necessarily
+    /// processed (detecting the edge computes it) and is recomputed under the
+    /// new patch's params by the refill.
+    ///
+    /// `written_at_call` anchors Link sync: the cpal-frame index for in-block
+    /// slot `i` is `written_at_call + (i - from)`.
     ///
     /// Fallback: when ROOT_CLOCK is absent (e.g. immediately after a clear
     /// patch leaves only `HiddenAudioIn`), returns `Some(from)` so queued
     /// patches still apply rather than sticking around forever.
-    fn scan_trigger(&self, port: &str, from: usize, end: usize) -> Option<usize> {
+    fn fill_and_scan_trigger(
+        &self,
+        port: &str,
+        from: usize,
+        end: usize,
+        written_at_call: usize,
+    ) -> Option<usize> {
         use modular_core::types::ROOT_CLOCK_ID;
         let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) else {
             return Some(from);
         };
         for i in from..end {
+            let cb_frame = written_at_call + (i - from);
+            if let Some((bar_phase, tempo)) = self.link.phase_at_frame(cb_frame) {
+                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
+                    bar_phase,
+                    bpm: tempo,
+                });
+            }
+            root_clock.ensure_processed_to(i + 1);
             if root_clock.get_value_at(port, 0, i) >= 1.0 {
                 return Some(i);
             }
@@ -2594,7 +2624,7 @@ where
         block_size,
     );
 
-    let mut final_state_processor = FinalStateProcessor::new();
+    let mut final_state_processor = FinalStateProcessor::new(sample_rate);
 
     let stream = device
         .build_output_stream(
@@ -2673,7 +2703,10 @@ where
 
                     let mut written: usize = 0;
 
-                    {
+                    // While a queued update is armed the clock is advanced
+                    // inside the trigger scan instead, one slot at a time, so
+                    // its state never passes the eventual swap point.
+                    if audio_processor.queued_update.is_none() {
                         let eager_end = block_size.min(audio_processor.block_pos + num_frames);
                         audio_processor.eager_fill_clock(
                             audio_processor.block_pos,
@@ -2692,33 +2725,52 @@ where
                                 }
                                 audio_processor.pull_input_block(&mut input_reader);
                                 audio_processor.block_pos = 0;
-                                let eager_end = block_size.min(num_frames - written);
-                                audio_processor.eager_fill_clock(0, eager_end, written);
+                                if audio_processor.queued_update.is_none() {
+                                    let eager_end = block_size.min(num_frames - written);
+                                    audio_processor.eager_fill_clock(0, eager_end, written);
+                                }
                             }
 
                             let scan_end =
                                 block_size.min(audio_processor.block_pos + (num_frames - written));
 
-                            // Resolve trigger sample for queued patch swap.
+                            // Resolve trigger sample for queued patch swap. The
+                            // quantized scans fill ROOT_CLOCK as they go and
+                            // stop at the trigger slot; an armed Immediate
+                            // update leaves the clock untouched (the post-swap
+                            // refill fills it under the new patch).
                             let trigger_sample: Option<usize> =
                                 match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
                                     Some(QueuedTrigger::Immediate) => {
                                         Some(audio_processor.block_pos)
                                     }
-                                    Some(QueuedTrigger::NextBar) => audio_processor.scan_trigger(
-                                        "barTrigger",
-                                        audio_processor.block_pos,
-                                        scan_end,
-                                    ),
-                                    Some(QueuedTrigger::NextBeat) => audio_processor.scan_trigger(
-                                        "beatTrigger",
-                                        audio_processor.block_pos,
-                                        scan_end,
-                                    ),
+                                    Some(QueuedTrigger::NextBar) => audio_processor
+                                        .fill_and_scan_trigger(
+                                            "barTrigger",
+                                            audio_processor.block_pos,
+                                            scan_end,
+                                            written,
+                                        ),
+                                    Some(QueuedTrigger::NextBeat) => audio_processor
+                                        .fill_and_scan_trigger(
+                                            "beatTrigger",
+                                            audio_processor.block_pos,
+                                            scan_end,
+                                            written,
+                                        ),
                                     None => None,
                                 };
 
                             let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
+
+                            // Nothing may render past the emit boundary: a
+                            // queued update command can arrive between
+                            // callbacks and swap at any sample, and
+                            // `transfer_state_from` must hand the new patch
+                            // state that sits exactly at the swap point. The
+                            // ceiling clamps the drain's block-mode reads
+                            // below, which otherwise fill to the block end.
+                            modular_core::types::set_block_render_ceiling(end);
 
                             // Force every module to advance to `end`, in cache-efficient
                             // producer-before-consumer order, so modules not reachable from
@@ -2767,6 +2819,7 @@ where
                                     let frame_start = written * num_channels;
 
                                     if final_state_processor.attenuation_factor < f32::EPSILON {
+                                        final_state_processor.reset_declick();
                                         for ch in 0..num_channels {
                                             output[frame_start + ch] = T::from_sample(0.0f32);
                                         }
@@ -2779,11 +2832,19 @@ where
                                     {
                                         let mut any_audible = false;
                                         let mut samples = [0.0f32; PORT_MAX_CHANNELS];
+                                        // Compensated ch-0 volts, reused by the
+                                        // recording tap below so the file captures
+                                        // exactly what the declick emitted.
+                                        let mut declicked_ch0 = 0.0f32;
                                         for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                                            let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i)
-                                                * AUDIO_OUTPUT_ATTENUATION;
+                                            let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i);
+                                            let v = final_state_processor.declick(ch, raw);
+                                            if ch == 0 {
+                                                declicked_ch0 = v;
+                                            }
                                             let sample = safety_soft_clip(
-                                                raw * final_state_processor.attenuation_factor,
+                                                v * AUDIO_OUTPUT_ATTENUATION
+                                                    * final_state_processor.attenuation_factor,
                                             );
                                             samples[ch] = sample;
                                             if sample.abs() >= 0.0005 {
@@ -2794,6 +2855,7 @@ where
                                             final_state_processor.attenuation_factor = 0.0;
                                             final_state_processor.volume_change =
                                                 VolumeChange::None;
+                                            final_state_processor.reset_declick();
                                             for ch in 0..num_channels {
                                                 output[frame_start + ch] = T::from_sample(0.0f32);
                                             }
@@ -2813,7 +2875,7 @@ where
                                         if let Some(feed_lock) = recording_guard.as_mut()
                                             && let Some(feed) = feed_lock.as_mut()
                                         {
-                                            let v = root.get_value_at(&ROOT_OUTPUT_PORT, 0, i)
+                                            let v = declicked_ch0
                                                 * AUDIO_OUTPUT_ATTENUATION
                                                 * final_state_processor.attenuation_factor;
                                             feed.push(safety_soft_clip(v));
@@ -2914,6 +2976,7 @@ where
                                             xy_buffer.push(xv, yv);
                                         }
                                     } else {
+                                        final_state_processor.reset_declick();
                                         for ch in 0..num_channels {
                                             output[frame_start + ch] = T::from_sample(0.0f32);
                                         }
@@ -2938,14 +3001,20 @@ where
                                 let applied_id = update.update_id;
                                 let swap_pos = audio_processor.block_pos;
                                 audio_processor.apply_patch_update(update, swap_pos);
+                                // The swap may step the output (a muted patch
+                                // replacing a loud one, an out removed);
+                                // release the step at the emit stage.
+                                final_state_processor.arm_declick();
                                 audio_processor
                                     .transport_meter
                                     .write_applied_update_id(applied_id);
                                 // ROOT_CLOCK's transport state carries across the swap via
-                                // `transfer_state_from`. Its cache
-                                // for `[swap_pos, block_size)` was filled under the OLD params;
-                                // refill the remainder of this callback's range from `swap_pos`
-                                // forward under the NEW patch.
+                                // `transfer_state_from`. Fill this callback's remaining range
+                                // from `swap_pos` forward under the NEW patch's params. On a
+                                // quantized swap the trigger slot was already computed while
+                                // scanning, so recomputing it here runs the clock one sample
+                                // ahead — a bounded, sub-0.03 ms offset; an Immediate swap's
+                                // clock arrives untouched and fills exactly once.
                                 if let Some(root_clock) =
                                     audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
                                 {
@@ -3111,22 +3180,87 @@ enum VolumeChange {
     Decrease,
     None,
 }
+
+/// Patch-swap output declick time constant. The first sample emitted after a
+/// swap measures, per channel, the step between the last emitted sample and
+/// the new patch's first — a track-and-hold of the discontinuity — and
+/// releases it to zero exponentially. A swap whose output is continuous
+/// (state transferred cleanly) measures ≈0 and the tail is a no-op. 1 ms
+/// keeps the release's per-sample step of a full-scale tone below a low
+/// tone's own natural slope while landing the change within ~5 ms of the
+/// swap.
+const SWAP_DECLICK_TAU_SECONDS: f32 = 0.001;
+/// Tail magnitude (raw output volts) below which the declick tail snaps to
+/// zero and stops ticking.
+const SWAP_DECLICK_EPSILON: f32 = 1e-5;
+
 /// Per-stream attenuation state for fade-in/fade-out on stop/start
-/// transitions. Lives in the cpal closure and gets ticked once per
-/// emitted sample by the per-sample drain loop.
+/// transitions, plus the patch-swap output declick. Lives in the cpal closure
+/// and gets ticked once per emitted sample by the per-sample drain loop.
 struct FinalStateProcessor {
     attenuation_factor: f32,
     volume_change: VolumeChange,
     prev_is_stopped: bool,
+    /// Raw (pre-attenuation) output volts actually emitted last sample, per
+    /// channel, including any live declick tail — the reference the next
+    /// patch swap declicks against.
+    last_emitted: [f32; PORT_MAX_CHANNELS],
+    /// Additive declick tail per channel; decays toward zero each sample.
+    declick_level: [f32; PORT_MAX_CHANNELS],
+    /// Set on every channel when a swap applies; a channel's next emitted
+    /// sample resolves its tail and clears its flag, so resolution is
+    /// per-channel and immune to the drain splitting a block.
+    declick_armed: [bool; PORT_MAX_CHANNELS],
+    /// Per-sample decay coefficient derived from `SWAP_DECLICK_TAU_SECONDS`.
+    declick_decay: f32,
 }
 
 impl FinalStateProcessor {
-    fn new() -> Self {
+    fn new(sample_rate: f32) -> Self {
         Self {
             attenuation_factor: 0.0,
             volume_change: VolumeChange::None,
             prev_is_stopped: true,
+            last_emitted: [0.0; PORT_MAX_CHANNELS],
+            declick_level: [0.0; PORT_MAX_CHANNELS],
+            declick_armed: [false; PORT_MAX_CHANNELS],
+            declick_decay: (-1.0f32 / (SWAP_DECLICK_TAU_SECONDS * sample_rate)).exp(),
         }
+    }
+
+    /// Arm every channel's declick for its next emitted sample. Called at the
+    /// instant a patch swap applies.
+    fn arm_declick(&mut self) {
+        self.declick_armed = [true; PORT_MAX_CHANNELS];
+    }
+
+    /// Drop the tail and reference level. Called on paths that emit hard
+    /// silence, so a later swap declicks against what the listener actually
+    /// hears rather than a stale loud sample.
+    fn reset_declick(&mut self) {
+        self.last_emitted = [0.0; PORT_MAX_CHANNELS];
+        self.declick_level = [0.0; PORT_MAX_CHANNELS];
+        self.declick_armed = [false; PORT_MAX_CHANNELS];
+    }
+
+    /// Compensate one channel's raw output sample across patch swaps. Must be
+    /// called exactly once per channel per emitted sample: it ticks the tail
+    /// and records the emitted value. Operates in raw volts so the tail
+    /// composes with output attenuation and the soft clip exactly like patch
+    /// audio.
+    #[inline]
+    fn declick(&mut self, ch: usize, raw: f32) -> f32 {
+        if self.declick_armed[ch] {
+            self.declick_armed[ch] = false;
+            self.declick_level[ch] = self.last_emitted[ch] - raw;
+        }
+        let v = raw + self.declick_level[ch];
+        self.declick_level[ch] *= self.declick_decay;
+        if self.declick_level[ch].abs() < SWAP_DECLICK_EPSILON {
+            self.declick_level[ch] = 0.0;
+        }
+        self.last_emitted[ch] = v;
+        v
     }
 }
 
@@ -3952,6 +4086,97 @@ mod tests {
             7.0,
             "vca-2 inherits vca-1's state across the rename"
         );
+    }
+
+    #[test]
+    fn suppressed_transfer_source_starts_module_fresh() {
+        // A transfer source of `None` (set for skip_state_transfer modules,
+        // e.g. the per-out mute gate slew) must beat both the same-id default
+        // and a remap: the new module keeps its freshly-constructed state.
+        let (_cmd_producer, mut processor) = create_test_processor();
+
+        processor
+            .patch
+            .sampleables
+            .insert("gate-1".into(), MockModule::tagged("old-gate", 5.0));
+
+        let mut update = update_with(
+            48000.0,
+            vec![("gate-1", MockModule::tagged("new-gate", 0.0))],
+        );
+        update.set_remaps(&[ModuleIdRemap {
+            from: "gate-1".into(),
+            to: "gate-1".into(),
+        }]);
+        update.transfer_sources.insert("gate-1".into(), None);
+
+        processor.apply_patch_update(update, 0);
+
+        let gate = processor.patch.sampleables.get("gate-1").unwrap();
+        assert_eq!(gate.get_module_type(), "new-gate");
+        assert_eq!(
+            gate.get_value_at("", 0, 0),
+            0.0,
+            "suppressed module must not inherit the old state"
+        );
+    }
+
+    #[test]
+    fn declick_releases_step_and_terminates() {
+        let sr = 48_000.0;
+        let mut fsp = FinalStateProcessor::new(sr);
+
+        // Establish a loud steady output on channel 0.
+        for _ in 0..8 {
+            assert_eq!(fsp.declick(0, 2.0), 2.0);
+        }
+
+        // Swap to hard silence: the first post-swap sample must equal the
+        // last emitted one (continuity), then release monotonically.
+        fsp.arm_declick();
+        let first = fsp.declick(0, 0.0);
+        assert_eq!(first, 2.0, "first post-swap sample is continuous");
+        let mut prev = first;
+        for _ in 0..(sr as usize / 50) {
+            let v = fsp.declick(0, 0.0);
+            assert!(v >= 0.0 && v <= prev, "release must decay monotonically");
+            prev = v;
+        }
+        // Within 20 ms the tail has snapped to exactly zero.
+        assert_eq!(prev, 0.0);
+        assert_eq!(fsp.declick_level[0], 0.0);
+    }
+
+    #[test]
+    fn declick_is_noop_across_continuous_swap() {
+        let mut fsp = FinalStateProcessor::new(48_000.0);
+        for _ in 0..4 {
+            fsp.declick(0, 1.0);
+        }
+        // The new patch continues the old output exactly: no tail.
+        fsp.arm_declick();
+        assert_eq!(fsp.declick(0, 1.0), 1.0);
+        assert_eq!(fsp.declick_level[0], 0.0);
+        assert_eq!(fsp.declick(0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn declick_rearm_mid_tail_stays_continuous() {
+        let mut fsp = FinalStateProcessor::new(48_000.0);
+        for _ in 0..4 {
+            fsp.declick(0, 3.0);
+        }
+        fsp.arm_declick();
+        let mut last = 0.0;
+        for _ in 0..10 {
+            last = fsp.declick(0, 0.0);
+        }
+        assert!(last > 0.0, "tail still live mid-release");
+        // A second swap lands mid-tail: the next sample continues from the
+        // emitted (tail-inclusive) value, not from the raw input.
+        fsp.arm_declick();
+        let v = fsp.declick(0, 1.5);
+        assert_eq!(v, last, "re-arm composes against the emitted value");
     }
 
     #[test]

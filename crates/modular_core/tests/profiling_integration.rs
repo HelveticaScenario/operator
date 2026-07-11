@@ -28,6 +28,7 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
                 id: id.to_string(),
                 module_type: module_type.to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params,
             })
             .collect(),

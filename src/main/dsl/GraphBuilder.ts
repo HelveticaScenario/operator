@@ -1286,6 +1286,16 @@ export class GraphBuilder {
                         id: `__vuSlew_${sk}`,
                         rise: 0.002,
                     });
+                    // The gate must sit at this patch's mute state from a
+                    // swap's first sample — a carried-over open gate would
+                    // leak an on-bar attack while still closing. Live M/S
+                    // toggles replace only the $signal, so they still ramp
+                    // through this slew; the engine's swap declick smooths
+                    // the snap for sustained tones.
+                    const slewSpec = this.modules.get(`__vuSlew_${sk}`);
+                    if (slewSpec) {
+                        slewSpec.skipStateTransfer = true;
+                    }
                     const gated = scaleAndShiftFactory(
                         outputSignals,
                         smoothed,

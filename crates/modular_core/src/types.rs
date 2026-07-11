@@ -170,6 +170,34 @@ pub enum ProcessingMode {
     Sample,
 }
 
+thread_local! {
+    /// See [`set_block_render_ceiling`].
+    static BLOCK_RENDER_CEILING: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Cap Block-mode rendering at `ceiling` slots into the current internal
+/// block. The audio callback sets this to the emit boundary on every drain
+/// pass, so a module's state never advances past the samples actually sent
+/// to the device. A queued patch swap can then land on any sample and
+/// `transfer_state_from` hands the new patch state that sits exactly at the
+/// swap point; anything rendered beyond it would be lived through twice when
+/// the new patch fills the rest of the block, skipping every stateful module
+/// forward mid-waveform.
+///
+/// Thread-local so only the audio thread's setting takes effect; other
+/// threads (tests, benches) keep the permissive default and render whole
+/// blocks.
+pub fn set_block_render_ceiling(ceiling: usize) {
+    BLOCK_RENDER_CEILING.with(|c| c.set(ceiling));
+}
+
+/// Current Block-mode render cap. Read by generated wrappers' `get_value_at`
+/// when deciding how far to fill the block on a read.
+pub fn block_render_ceiling() -> usize {
+    BLOCK_RENDER_CEILING.with(|c| c.get())
+}
+
 /// Per-sample external clock state injected into ROOT_CLOCK by the audio callback.
 ///
 /// The callback pre-computes one entry per sample in the block by querying the
@@ -2689,6 +2717,12 @@ pub struct ModuleSpec {
     pub id: String,
     pub module_type: String,
     pub id_is_explicit: Option<bool>,
+    /// When true, this module never inherits a predecessor's runtime state on
+    /// a patch swap — it starts from its own params, even if a remap pairs it
+    /// with an outgoing module. Set on modules whose state must track the new
+    /// patch's params exactly at the swap sample (e.g. the per-out mute gate
+    /// slew, where a carried-over open gate would leak audio while closing).
+    pub skip_state_transfer: Option<bool>,
     // #[serde(default)]
     pub params: serde_json::Value,
 }

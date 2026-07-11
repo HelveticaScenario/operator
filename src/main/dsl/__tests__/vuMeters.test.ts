@@ -416,6 +416,10 @@ describe('gate chain compilation', () => {
         expect(slew.params.input).toMatchObject([
             { module: '__vuMute_lead', type: 'cable' },
         ]);
+        // The gate must sit at this patch's mute state from a swap's first
+        // sample; carrying the old slew level across would leak audio
+        // through a still-closing gate.
+        expect(slew.skipStateTransfer).toBe(true);
 
         // The gate stage is a $scaleAndShift whose input cables come from the
         // tap and whose scale comes from the slewed gate.

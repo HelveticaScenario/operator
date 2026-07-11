@@ -452,6 +452,14 @@ export interface ModuleSpec {
   id: string
   moduleType: string
   idIsExplicit?: boolean
+  /**
+   * When true, this module never inherits a predecessor's runtime state on
+   * a patch swap — it starts from its own params, even if a remap pairs it
+   * with an outgoing module. Set on modules whose state must track the new
+   * patch's params exactly at the swap sample (e.g. the per-out mute gate
+   * slew, where a carried-over open gate would leak audio while closing).
+   */
+  skipStateTransfer?: boolean
   params: any
 }
 

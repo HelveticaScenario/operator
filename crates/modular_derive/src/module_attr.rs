@@ -824,7 +824,13 @@ fn impl_module_macro_attr(
                     return outputs.get_at(port_idx, ch, prev);
                 }
                 let target = match self.mode {
-                    crate::types::ProcessingMode::Block => self.block_size,
+                    // Fill the block greedily, but never past the audio
+                    // callback's render ceiling: state that advances beyond
+                    // the emit boundary would be transferred "from the
+                    // future" by a mid-block patch swap.
+                    crate::types::ProcessingMode::Block => {
+                        self.block_size.min(crate::types::block_render_ceiling())
+                    }
                     // Inclusive — process up through the requested slot.
                     crate::types::ProcessingMode::Sample => index + 1,
                 };

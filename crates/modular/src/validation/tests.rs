@@ -16,6 +16,7 @@ fn test_valid_patch() {
             id: "sine-1".to_string(),
             module_type: "$sine".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!({
                 "freq": 4.0
             }),
@@ -37,6 +38,7 @@ fn patch_with_scope_xy(x_port: &str, x_module: &str) -> PatchGraph {
             id: "sine-1".to_string(),
             module_type: "$sine".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!({ "freq": 4.0 }),
         }],
         module_id_remaps: None,
@@ -101,18 +103,21 @@ fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
                 id: "tap-1".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: Some(true),
+                skip_state_transfer: None,
                 params: json!({ "freq": 4.0 }),
             },
             ModuleSpec {
                 id: "mute-1".to_string(),
                 module_type: "$signal".to_string(),
                 id_is_explicit: Some(true),
+                skip_state_transfer: None,
                 params: json!({ "source": 5.0 }),
             },
             ModuleSpec {
                 id: "not-signal".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: Some(true),
+                skip_state_transfer: None,
                 params: json!({ "freq": 4.0 }),
             },
         ],
@@ -228,6 +233,7 @@ fn test_unknown_module_type() {
             id: "foo-1".to_string(),
             module_type: "unknown-module".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!({}),
         }],
         module_id_remaps: None,
@@ -267,6 +273,7 @@ fn test_cable_to_nonexistent_module() {
             id: "root".to_string(),
             module_type: "$signal".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!({
                 "source": {"type": "cable", "module": "nonexistent", "port": "output"}
             }),
@@ -310,6 +317,7 @@ fn test_cable_in_slice_tuple_to_nonexistent_module() {
             id: "s1".to_string(),
             module_type: "$sampler".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!({
                 "wav": { "type": "wav_ref", "path": "test", "channels": 1 },
                 "gate": 0.0,
@@ -346,6 +354,7 @@ fn test_cable_to_invalid_port() {
                 id: "sine-1".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "freq": 4.0
                 }),
@@ -354,6 +363,7 @@ fn test_cable_to_invalid_port() {
                 id: "root".to_string(),
                 module_type: "$signal".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "source": {"type": "cable", "module": "sine-1", "port": "invalid_port"}
                 }),
@@ -385,6 +395,7 @@ fn test_nested_signal_cable_to_nonexistent_module() {
             id: "nested-1".to_string(),
             module_type: "$mix".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!({
                 "inputs": [
                   {"type": "cable", "module": "nonexistent", "port": "output"}
@@ -418,6 +429,7 @@ fn test_nested_signal_valid_cable_connection() {
                 id: "sine-1".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "freq": 4.0
                 }),
@@ -426,6 +438,7 @@ fn test_nested_signal_valid_cable_connection() {
                 id: "nested-1".to_string(),
                 module_type: "$mix".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "inputs": [
                       {"type": "cable", "module": "sine-1", "port": "output"}
@@ -452,6 +465,7 @@ fn test_valid_cable_connection() {
                 id: "sine-1".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "freq": 4.0
                 }),
@@ -460,6 +474,7 @@ fn test_valid_cable_connection() {
                 id: "signal-1".to_string(),
                 module_type: "$signal".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "source": {"type": "cable", "module": "sine-1", "port": "output"}
                 }),
@@ -509,6 +524,7 @@ fn test_non_object_multibyte_params_reported_not_panicking() {
             id: "sine-1".to_string(),
             module_type: "$sine".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: json!(format!("a{}", "あ".repeat(40))),
         }],
         module_id_remaps: None,
@@ -534,6 +550,7 @@ fn test_duplicate_module_ids_rejected() {
         id: "dup".to_string(),
         module_type: "$sine".to_string(),
         id_is_explicit: Some(true),
+        skip_state_transfer: None,
         params: json!({ "freq": 4.0 }),
     };
     let patch = PatchGraph {
@@ -562,6 +579,7 @@ fn test_hidden_audio_in_id_rejected() {
             id: "HIDDEN_AUDIO_IN".to_string(),
             module_type: "$sine".to_string(),
             id_is_explicit: Some(true),
+            skip_state_transfer: None,
             params: json!({ "freq": 4.0 }),
         }],
         module_id_remaps: None,
@@ -588,6 +606,7 @@ fn test_root_clock_id_requires_clock_type() {
             id: "ROOT_CLOCK".to_string(),
             module_type: module_type.to_string(),
             id_is_explicit: Some(true),
+            skip_state_transfer: None,
             params: json!({}),
         }],
         module_id_remaps: None,
@@ -615,18 +634,21 @@ fn patch_with_buffer_ref(target_module: &str, port: &str) -> PatchGraph {
                 id: "osc1".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({ "freq": 4.0 }),
             },
             ModuleSpec {
                 id: "buf1".to_string(),
                 module_type: "$buffer".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({ "input": 0.0 }),
             },
             ModuleSpec {
                 id: "read1".to_string(),
                 module_type: "$delayRead".to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params: json!({
                     "buffer": {
                         "type": "buffer_ref",
@@ -705,6 +727,7 @@ fn test_null_params_is_tolerated() {
             id: "noise-1".to_string(),
             module_type: "$noise".to_string(),
             id_is_explicit: None,
+            skip_state_transfer: None,
             params: serde_json::Value::Null,
         }],
         module_id_remaps: None,
