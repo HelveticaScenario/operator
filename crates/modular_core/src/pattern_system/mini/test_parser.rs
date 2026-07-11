@@ -32,7 +32,9 @@
 
 #![allow(dead_code)]
 
-use super::ast::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
+use super::ast::{
+    AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight,
+};
 use crate::pattern_system::SourceSpan;
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -168,7 +170,7 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr(&mut self) -> ParseResult<MiniAST> {
-        let mut elems: Vec<(MiniAST, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniAST, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             // `|` ends a sequence so the enclosing `choice_expr` can pick it
@@ -194,16 +196,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn element_with_weight(&mut self) -> ParseResult<(MiniAST, Option<f64>)> {
+    fn element_with_weight(&mut self) -> ParseResult<(MiniAST, Option<Weight>)> {
         let mut ast = self.element_base()?;
-        let mut weight: Option<f64> = None;
+        let mut weight: Option<Weight> = None;
         loop {
             match self.peek() {
                 Some(b'@') => {
                     self.pos += 1;
                     let n = self.maybe_number()?;
                     // Bare `@` is weight 2 (matches Tidal/krill and `_`).
-                    weight = Some(n.unwrap_or(2.0));
+                    weight = Some(Weight::Static(n.unwrap_or(2.0)));
                 }
                 Some(b'*') => {
                     self.pos += 1;
@@ -228,7 +230,7 @@ impl<'a> Parser<'a> {
                     if total < 0 {
                         return Err(ParseError("negative replicate count".into()));
                     }
-                    ast = MiniAST::Replicate(Box::new(ast), total as u32);
+                    ast = MiniAST::Replicate(Box::new(ast), ReplicateCount::Static(total as u32));
                 }
                 Some(b'?') => {
                     self.pos += 1;
@@ -580,7 +582,7 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr_f64(&mut self) -> ParseResult<MiniASTF64> {
-        let mut elems: Vec<(MiniASTF64, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniASTF64, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             if self.at_end()
@@ -595,7 +597,7 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             let weight = if self.peek() == Some(b'@') {
                 self.pos += 1;
-                self.maybe_number()?
+                self.maybe_number()?.map(Weight::Static)
             } else {
                 None
             };
@@ -681,7 +683,7 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr_u32(&mut self) -> ParseResult<MiniASTU32> {
-        let mut elems: Vec<(MiniASTU32, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniASTU32, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             if self.at_end()
@@ -772,7 +774,7 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr_i32(&mut self) -> ParseResult<MiniASTI32> {
-        let mut elems: Vec<(MiniASTI32, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniASTI32, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             if self.at_end()
@@ -890,7 +892,9 @@ mod tests {
             MiniAST::Sequence(items) => {
                 assert_eq!(items.len(), 2);
                 match &items[0].0 {
-                    MiniAST::Replicate(_, count) => assert_eq!(*count, 2),
+                    MiniAST::Replicate(_, count) => {
+                        assert_eq!(*count, ReplicateCount::Static(2))
+                    }
                     other => panic!("expected Replicate, got {:?}", other),
                 }
                 assert_eq!(num(&items[1].0), 2.0);
@@ -1006,7 +1010,7 @@ mod tests {
         match &ast {
             MiniAST::Sequence(items) => {
                 assert_eq!(items.len(), 2);
-                assert_eq!(items[0].1, Some(2.0));
+                assert_eq!(items[0].1, Some(Weight::Static(2.0)));
                 assert_eq!(items[1].1, None);
             }
             other => panic!("expected Sequence, got {:?}", other),
@@ -1018,7 +1022,7 @@ mod tests {
         let ast = parse("a!3").unwrap();
         match &ast {
             MiniAST::Replicate(inner, count) => {
-                assert_eq!(*count, 3);
+                assert_eq!(*count, ReplicateCount::Static(3));
                 match inner.as_ref() {
                     MiniAST::Pure(l) => {
                         assert!(matches!(l.node, AtomValue::Note { letter: 'a', .. }))

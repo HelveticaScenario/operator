@@ -3,7 +3,9 @@
 //! The conversion is parameterized by the target atom type through
 //! the `FromMiniAtom` trait.
 
-use super::ast::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
+use super::ast::{
+    AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight,
+};
 use crate::pattern_system::{
     Fraction, Pattern,
     combinators::{fastcat, slowcat, stack, timecat},
@@ -257,7 +259,15 @@ macro_rules! define_validate_limits {
                     node.iter().try_for_each(|a| $name(a, budget))
                 }
                 $ast::Sequence(items) | $ast::FastCat(items) | $ast::SlowCat(items) => {
-                    items.iter().try_for_each(|(p, _)| $name(p, budget))
+                    items.iter().try_for_each(|(p, w)| {
+                        if let Some(Weight::Pattern(wp)) = w {
+                            // A weight operand is a separate pattern,
+                            // materialized on its own, so it starts from a
+                            // fresh budget.
+                            validate_limits_f64(wp, 1)?;
+                        }
+                        $name(p, budget)
+                    })
                 }
                 $ast::Stack(items) | $ast::RandomChoice(items, _) => {
                     items.iter().try_for_each(|a| $name(a, budget))
@@ -269,12 +279,22 @@ macro_rules! define_validate_limits {
                     validate_limits_f64(factor, 1)
                 }
                 $ast::Replicate(pattern, count) => {
+                    let max_count = match count {
+                        ReplicateCount::Static(c) => *c,
+                        // A patterned count is a separate operand pattern
+                        // (fresh budget); its largest leaf bounds every value
+                        // the query path can ever sample.
+                        ReplicateCount::Pattern(cp) => {
+                            validate_limits_u32(cp, 1)?;
+                            max_u32_leaf(cp)
+                        }
+                    };
                     // A zero count must not zero the running budget: every
                     // nested product would stay 0 and slip under the cap.
-                    let expansion = budget.saturating_mul((*count).max(1));
+                    let expansion = budget.saturating_mul(max_count.max(1));
                     if expansion > MAX_EXPANSION {
                         return Err(ConvertError::OperatorError(format!(
-                            "replicate count {count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
+                            "replicate count {max_count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
                         )));
                     }
                     $name(pattern, expansion)
@@ -370,10 +390,15 @@ fn eval_f64(ast: &MiniASTF64) -> f64 {
 fn step_count_main(ast: &MiniAST) -> f64 {
     match ast {
         MiniAST::Sequence(items) | MiniAST::FastCat(items) | MiniAST::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniAST::Replicate(inner, count) => step_count_main(inner) * (*count as f64),
+        MiniAST::Replicate(inner, count) => {
+            step_count_main(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniAST::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -384,10 +409,15 @@ fn step_count_main(ast: &MiniAST) -> f64 {
 fn step_count_f64(ast: &MiniASTF64) -> f64 {
     match ast {
         MiniASTF64::Sequence(items) | MiniASTF64::FastCat(items) | MiniASTF64::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniASTF64::Replicate(inner, count) => step_count_f64(inner) * (*count as f64),
+        MiniASTF64::Replicate(inner, count) => {
+            step_count_f64(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniASTF64::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -398,10 +428,15 @@ fn step_count_f64(ast: &MiniASTF64) -> f64 {
 fn step_count_u32(ast: &MiniASTU32) -> f64 {
     match ast {
         MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniASTU32::Replicate(inner, count) => step_count_u32(inner) * (*count as f64),
+        MiniASTU32::Replicate(inner, count) => {
+            step_count_u32(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniASTU32::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -412,10 +447,15 @@ fn step_count_u32(ast: &MiniASTU32) -> f64 {
 fn step_count_i32(ast: &MiniASTI32) -> f64 {
     match ast {
         MiniASTI32::Sequence(items) | MiniASTI32::FastCat(items) | MiniASTI32::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniASTI32::Replicate(inner, count) => step_count_i32(inner) * (*count as f64),
+        MiniASTI32::Replicate(inner, count) => {
+            step_count_i32(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniASTI32::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -453,11 +493,12 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
             let expanded: Vec<(&MiniASTF64, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTF64::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTF64::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -485,11 +526,12 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
             let expanded: Vec<(&MiniASTF64, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTF64::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTF64::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -538,7 +580,9 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
 
         MiniASTF64::Replicate(pattern, count) => {
             let pat = convert_f64_pattern(pattern);
-            let pats: Vec<Pattern<Fraction>> = (0..*count).map(|_| pat.clone()).collect();
+            let pats: Vec<Pattern<Fraction>> = (0..count.as_static().unwrap_or(1))
+                .map(|_| pat.clone())
+                .collect();
             fastcat(pats)
         }
 
@@ -602,11 +646,12 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
             let expanded: Vec<(&MiniASTU32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTU32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTU32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -632,11 +677,12 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
             let expanded: Vec<(&MiniASTU32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTU32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTU32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -685,7 +731,9 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
 
         MiniASTU32::Replicate(pattern, count) => {
             let pat = convert_u32_pattern(pattern);
-            let pats: Vec<Pattern<u32>> = (0..*count).map(|_| pat.clone()).collect();
+            let pats: Vec<Pattern<u32>> = (0..count.as_static().unwrap_or(1))
+                .map(|_| pat.clone())
+                .collect();
             fastcat(pats)
         }
 
@@ -743,11 +791,12 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
             let expanded: Vec<(&MiniASTI32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTI32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTI32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -773,11 +822,12 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
             let expanded: Vec<(&MiniASTI32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTI32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTI32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -826,7 +876,9 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
 
         MiniASTI32::Replicate(pattern, count) => {
             let pat = convert_i32_pattern(pattern);
-            let pats: Vec<Pattern<i32>> = (0..*count).map(|_| pat.clone()).collect();
+            let pats: Vec<Pattern<i32>> = (0..count.as_static().unwrap_or(1))
+                .map(|_| pat.clone())
+                .collect();
             fastcat(pats)
         }
 
@@ -900,6 +952,15 @@ fn eval_i32(ast: &MiniASTI32) -> i32 {
         MiniASTI32::Euclidean { pattern, .. } => eval_i32(pattern),
         MiniASTI32::Polymeter { children, .. } => children.first().map(eval_i32).unwrap_or(0),
     }
+}
+
+/// True when any entry carries a patterned `@` weight or is a `!` replicate
+/// with a patterned count, so the sequence's layout varies per cycle.
+fn has_dynamic_entries(items: &[(MiniAST, Option<Weight>)]) -> bool {
+    items.iter().any(|(p, w)| {
+        matches!(w, Some(Weight::Pattern(_)))
+            || matches!(p, MiniAST::Replicate(_, ReplicateCount::Pattern(_)))
+    })
 }
 
 fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertError> {
@@ -993,6 +1054,11 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::Sequence(elements) | MiniAST::FastCat(elements) => {
+            if has_dynamic_entries(elements) {
+                return Err(ConvertError::OperatorError(
+                    "patterned @ weights and ! counts are not implemented".to_string(),
+                ));
+            }
             // Expand Replicate nodes into sibling steps. In Strudel `[a b!2 c]`
             // is `[a b b c]`: `!n` adds `n` sibling steps that share the
             // parent's stepping, not one step holding a fastcat of `n` copies.
@@ -1000,11 +1066,12 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
             let expanded: Vec<(&MiniAST, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniAST::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniAST::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -1026,6 +1093,11 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::SlowCat(patterns) => {
+            if has_dynamic_entries(patterns) {
+                return Err(ConvertError::OperatorError(
+                    "patterned @ weights and ! counts are not implemented".to_string(),
+                ));
+            }
             // Expand Replicate nodes within SlowCat.
             // In Strudel/Tidal, <a!3 b> means "slowcat of a, a, a, b" (each on separate cycles),
             // not "slowcat of fastcat(a,a,a), b" (which would be 3 a's in cycle 1, b in cycle 2).
@@ -1034,10 +1106,13 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 .flat_map(|(p, w)| match p {
                     MiniAST::Replicate(inner, count) => {
                         // Replicated entries each get weight 1 (or None)
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
+                        std::iter::repeat_n(
+                            (inner.as_ref(), None),
+                            count.as_static().unwrap_or(1) as usize,
+                        )
+                        .collect::<Vec<_>>()
                     }
-                    other => vec![(other, *w)],
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -1096,8 +1171,13 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::Replicate(pattern, count) => {
+            let Some(count) = count.as_static() else {
+                return Err(ConvertError::OperatorError(
+                    "patterned @ weights and ! counts are not implemented".to_string(),
+                ));
+            };
             let pat = convert_inner(pattern)?;
-            let pats: Vec<Pattern<T>> = (0..*count).map(|_| pat.clone()).collect();
+            let pats: Vec<Pattern<T>> = (0..count).map(|_| pat.clone()).collect();
             Ok(fastcat(pats))
         }
 
@@ -1730,7 +1810,10 @@ mod tests {
     fn test_eval_f64_sequence() {
         let ast = MiniASTF64::Sequence(vec![
             (MiniASTF64::Pure(Located::new(3.0, 0, 1)), None),
-            (MiniASTF64::Pure(Located::new(4.0, 2, 3)), Some(2.0)),
+            (
+                MiniASTF64::Pure(Located::new(4.0, 2, 3)),
+                Some(Weight::Static(2.0)),
+            ),
         ]);
         assert!((eval_f64(&ast) - 3.0).abs() < 0.001); // Returns first element
     }
@@ -1776,7 +1859,10 @@ mod tests {
 
     #[test]
     fn test_eval_f64_replicate() {
-        let ast = MiniASTF64::Replicate(Box::new(MiniASTF64::Pure(Located::new(11.0, 0, 2))), 3);
+        let ast = MiniASTF64::Replicate(
+            Box::new(MiniASTF64::Pure(Located::new(11.0, 0, 2))),
+            ReplicateCount::Static(3),
+        );
         assert!((eval_f64(&ast) - 11.0).abs() < 0.001);
     }
 
@@ -1859,7 +1945,7 @@ mod tests {
                 (MiniASTF64::Pure(Located::new(24.0, 0, 2)), None),
                 (MiniASTF64::Pure(Located::new(25.0, 3, 5)), None),
             ])),
-            3,
+            ReplicateCount::Static(3),
         );
         assert!((eval_f64(&ast) - 24.0).abs() < 0.001);
     }
@@ -1941,7 +2027,10 @@ mod tests {
     fn test_eval_u32_sequence() {
         let ast = MiniASTU32::Sequence(vec![
             (MiniASTU32::Pure(Located::new(3, 0, 1)), None),
-            (MiniASTU32::Pure(Located::new(4, 2, 3)), Some(2.0)),
+            (
+                MiniASTU32::Pure(Located::new(4, 2, 3)),
+                Some(Weight::Static(2.0)),
+            ),
         ]);
         assert_eq!(eval_u32(&ast), 3);
     }
@@ -1987,7 +2076,10 @@ mod tests {
 
     #[test]
     fn test_eval_u32_replicate() {
-        let ast = MiniASTU32::Replicate(Box::new(MiniASTU32::Pure(Located::new(11, 0, 2))), 3);
+        let ast = MiniASTU32::Replicate(
+            Box::new(MiniASTU32::Pure(Located::new(11, 0, 2))),
+            ReplicateCount::Static(3),
+        );
         assert_eq!(eval_u32(&ast), 11);
     }
 
@@ -2066,7 +2158,7 @@ mod tests {
                 (MiniASTU32::Pure(Located::new(24, 0, 2)), None),
                 (MiniASTU32::Pure(Located::new(25, 3, 5)), None),
             ])),
-            3,
+            ReplicateCount::Static(3),
         );
         assert_eq!(eval_u32(&ast), 24);
     }
@@ -2114,7 +2206,7 @@ mod tests {
                 (MiniASTF64::Pure(Located::new(1.5, 0, 3)), None),
                 (MiniASTF64::Pure(Located::new(2.5, 4, 7)), None),
             ])),
-            3,
+            ReplicateCount::Static(3),
         );
         assert!((eval_f64(&ast) - 1.5).abs() < 0.001);
     }
@@ -2533,7 +2625,7 @@ mod tests {
     #[test]
     fn test_replicate_count_limit_in_operand_pattern() {
         // Limits apply inside typed operand patterns (e.g. a `*` factor).
-        let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), 2000);
+        let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), ReplicateCount::Static(2000));
         let ast = MiniAST::Fast(Box::new(num_atom(1.0)), Box::new(factor));
         assert!(convert::<f64>(&ast).is_err());
     }
