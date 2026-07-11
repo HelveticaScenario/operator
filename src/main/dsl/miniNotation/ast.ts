@@ -13,8 +13,11 @@
  * with multiple positional fields serialize as a tuple (array) payload, so
  * `Fast(Box<MiniAST>, Box<MiniASTF64>)` becomes `{ "Fast": [ast, factor] }`.
  *
- * `Sequence(Vec<(MiniAST, Option<f64>)>)` serializes as
- * `{ "Sequence": [[child, weight | null], ...] }`.
+ * `Sequence(Vec<(MiniAST, Option<Weight>)>)` serializes as
+ * `{ "Sequence": [[child, weight], ...] }`, where the weight slot is
+ * untagged on the Rust side: a static weight is a bare number (or null),
+ * a patterned weight (`a@<1 2>`) is a `MiniASTF64` object. Replicate counts
+ * follow the same untagged scheme with `MiniASTU32`.
  */
 
 /** Source location in the original pattern string, half-open `[start, end)`. */
@@ -49,19 +52,25 @@ export type AtomValue =
      */
     | 'Truthy';
 
+/** `@` weight on a sequence entry: static number or pattern operand. */
+export type Weight = number | MiniASTF64;
+
+/** `!` replicate count: static number or pattern operand. */
+export type ReplicateCount = number | MiniASTU32;
+
 /** Top-level AST node. */
 export type MiniAST =
     | { Pure: Located<AtomValue> }
     | { Rest: SourceSpan }
     | { List: Located<MiniAST[]> }
-    | { Sequence: Array<[MiniAST, number | null]> }
-    | { FastCat: Array<[MiniAST, number | null]> }
-    | { SlowCat: Array<[MiniAST, number | null]> }
+    | { Sequence: Array<[MiniAST, Weight | null]> }
+    | { FastCat: Array<[MiniAST, Weight | null]> }
+    | { SlowCat: Array<[MiniAST, Weight | null]> }
     | { Stack: MiniAST[] }
     | { RandomChoice: [MiniAST[], number] }
     | { Fast: [MiniAST, MiniASTF64] }
     | { Slow: [MiniAST, MiniASTF64] }
-    | { Replicate: [MiniAST, number] }
+    | { Replicate: [MiniAST, ReplicateCount] }
     | { Degrade: [MiniAST, number | null, number] }
     | {
           Euclidean: {
@@ -83,14 +92,14 @@ export type MiniASTF64 =
     | { Pure: Located<number> }
     | { Rest: SourceSpan }
     | { List: Located<MiniASTF64[]> }
-    | { Sequence: Array<[MiniASTF64, number | null]> }
-    | { FastCat: Array<[MiniASTF64, number | null]> }
-    | { SlowCat: Array<[MiniASTF64, number | null]> }
+    | { Sequence: Array<[MiniASTF64, Weight | null]> }
+    | { FastCat: Array<[MiniASTF64, Weight | null]> }
+    | { SlowCat: Array<[MiniASTF64, Weight | null]> }
     | { Stack: MiniASTF64[] }
     | { RandomChoice: [MiniASTF64[], number] }
     | { Fast: [MiniASTF64, MiniASTF64] }
     | { Slow: [MiniASTF64, MiniASTF64] }
-    | { Replicate: [MiniASTF64, number] }
+    | { Replicate: [MiniASTF64, ReplicateCount] }
     | { Degrade: [MiniASTF64, number | null, number] }
     | {
           Euclidean: {
@@ -112,14 +121,14 @@ export type MiniASTU32 =
     | { Pure: Located<number> }
     | { Rest: SourceSpan }
     | { List: Located<MiniASTU32[]> }
-    | { Sequence: Array<[MiniASTU32, number | null]> }
-    | { FastCat: Array<[MiniASTU32, number | null]> }
-    | { SlowCat: Array<[MiniASTU32, number | null]> }
+    | { Sequence: Array<[MiniASTU32, Weight | null]> }
+    | { FastCat: Array<[MiniASTU32, Weight | null]> }
+    | { SlowCat: Array<[MiniASTU32, Weight | null]> }
     | { Stack: MiniASTU32[] }
     | { RandomChoice: [MiniASTU32[], number] }
     | { Fast: [MiniASTU32, MiniASTF64] }
     | { Slow: [MiniASTU32, MiniASTF64] }
-    | { Replicate: [MiniASTU32, number] }
+    | { Replicate: [MiniASTU32, ReplicateCount] }
     | { Degrade: [MiniASTU32, number | null, number] }
     | {
           Euclidean: {
@@ -141,14 +150,14 @@ export type MiniASTI32 =
     | { Pure: Located<number> }
     | { Rest: SourceSpan }
     | { List: Located<MiniASTI32[]> }
-    | { Sequence: Array<[MiniASTI32, number | null]> }
-    | { FastCat: Array<[MiniASTI32, number | null]> }
-    | { SlowCat: Array<[MiniASTI32, number | null]> }
+    | { Sequence: Array<[MiniASTI32, Weight | null]> }
+    | { FastCat: Array<[MiniASTI32, Weight | null]> }
+    | { SlowCat: Array<[MiniASTI32, Weight | null]> }
     | { Stack: MiniASTI32[] }
     | { RandomChoice: [MiniASTI32[], number] }
     | { Fast: [MiniASTI32, MiniASTF64] }
     | { Slow: [MiniASTI32, MiniASTF64] }
-    | { Replicate: [MiniASTI32, number] }
+    | { Replicate: [MiniASTI32, ReplicateCount] }
     | { Degrade: [MiniASTI32, number | null, number] }
     | {
           Euclidean: {

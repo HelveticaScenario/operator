@@ -18,7 +18,9 @@ import type {
     MiniASTF64,
     MiniASTI32,
     MiniASTU32,
+    ReplicateCount,
     SourceSpan,
+    Weight,
 } from './ast';
 
 type Span = [number, number];
@@ -53,18 +55,33 @@ function walkCommon<T extends AnyAst>(
         return 'handled';
     }
     if ('Sequence' in ast) {
-        for (const [child] of ast.Sequence as Array<[T, number | null]>)
+        for (const [child, weight] of ast.Sequence as Array<
+            [T, Weight | null]
+        >) {
             self(child, out);
+            if (typeof weight === 'object' && weight !== null)
+                walkF64(weight, out);
+        }
         return 'handled';
     }
     if ('FastCat' in ast) {
-        for (const [child] of ast.FastCat as Array<[T, number | null]>)
+        for (const [child, weight] of ast.FastCat as Array<
+            [T, Weight | null]
+        >) {
             self(child, out);
+            if (typeof weight === 'object' && weight !== null)
+                walkF64(weight, out);
+        }
         return 'handled';
     }
     if ('SlowCat' in ast) {
-        for (const [child] of ast.SlowCat as Array<[T, number | null]>)
+        for (const [child, weight] of ast.SlowCat as Array<
+            [T, Weight | null]
+        >) {
             self(child, out);
+            if (typeof weight === 'object' && weight !== null)
+                walkF64(weight, out);
+        }
         return 'handled';
     }
     if ('RandomChoice' in ast) {
@@ -77,8 +94,9 @@ function walkCommon<T extends AnyAst>(
         return 'handled';
     }
     if ('Replicate' in ast) {
-        const [pattern] = ast.Replicate as [T, number];
+        const [pattern, count] = ast.Replicate as [T, ReplicateCount];
         self(pattern, out);
+        if (typeof count === 'object') walkU32(count, out);
         return 'handled';
     }
     if ('Degrade' in ast) {

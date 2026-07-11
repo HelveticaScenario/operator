@@ -22,6 +22,13 @@
  *   - Replicate (`!`) accumulates: `x!!` / `x!2!3` sum into a single
  *     Replicate count (1 + Σ(value - 1)), and bare `@` weight defaults to 2 —
  *     both matching Tidal/krill (and `@` is then consistent with `_`).
+ *   - `@` and `!` operands may be patterns: an adjacent `[...]` / `<...>` /
+ *     `{...}` after the sigil parses through the typed operand grammar
+ *     (weights as MiniASTF64, counts as MiniASTU32). A patterned `!` cannot
+ *     be chained with other `!`s, and `_` cannot elongate a pattern-weighted
+ *     element.
+ *   - Modifier operands accept `{...}` polymeter subtrees (with `%n`)
+ *     alongside `[...]` / `<...>` / numbers / `|` choice.
  *   - Separator model matches Tidal/krill: top-level `,` and `|` are mutually
  *     exclusive (commit to one, never mix), feet (`.`) live inside each
  *     operand, and `<...>` / `{...}` are comma-only voices (no `|`).
@@ -61,6 +68,11 @@
           throw new Error("leading `_` has no element to elongate");
         }
         const last = out[out.length - 1];
+        // Elongation adds 1 to a numeric weight; a patterned weight has no
+        // meaningful +1.
+        if (typeof last[1] === 'object' && last[1] !== null) {
+          throw new Error("`_` cannot elongate an element whose weight is a pattern");
+        }
         last[1] = (last[1] ?? 1) + 1;
         continue;
       }
@@ -308,15 +320,25 @@ Modifier
 // Weight is captured at ElementWithWeight level as positional metadata
 // on the sequence entry — never mixed into a modifier chain.
 // Sigils whose operand is mandatory (`*`, `/`) — and `@` — permit whitespace
-// before the operand, mirroring pest's implicit WHITESPACE (`/ 4`, `* 2`,
-// `@ 3` all parse in the Rust grammar). The optional-operand sigils `!` and
-// `?` bind their number only when it is adjacent: `1! 2` / `1? 2` keep the
-// 2 as its own sequence element — matching Tidal/krill and the Rust descent
-// parser. Euclidean already spells its inner whitespace explicitly.
+// before a bare-number operand, mirroring pest's implicit WHITESPACE (`/ 4`,
+// `* 2`, `@ 3` all parse in the Rust grammar). The optional-operand sigils
+// `!` and `?` bind their number only when it is adjacent: `1! 2` / `1? 2`
+// keep the 2 as its own sequence element — matching Tidal/krill and the Rust
+// descent parser. Euclidean already spells its inner whitespace explicitly.
 // Bare `@` (no number) is weight 2 — matching Tidal's `pElongate = 1 + sum`
 // and krill, and consistent with `_` elongation.
+// A bracketed pattern operand (`[...]`, `<...>`, `{...}`) binds only when
+// adjacent to the sigil: `a@ [1 2]` keeps `[1 2]` as its own sequence
+// element. Bare `|` choice is not a weight operand (it stays a sequence-level
+// choice separator); use brackets: `a@[1|2]`.
 Weight
-  = "@" _ n:Number? { return n === null ? 2 : n; }
+  = "@" op:WeightPatternOperand { return op; }
+  / "@" _ n:Number? { return n === null ? 2 : n; }
+
+WeightPatternOperand
+  = "[" _ s:OperandStackExprF64 _ "]" { return s.fast; }
+  / "<" _ s:OperandStackExprF64 _ ">" { return s.slow; }
+  / OperandPolymeterF64
 
 FastMod
   = "*" _ op:ModOperandF64 {
@@ -331,12 +353,29 @@ SlowMod
 // Replicate accumulates: consecutive `!`/`!n` sum into a single Replicate, so
 // `x!` = 2 copies, `x!3` = 3, `x!!` = 3, `x!2!3` = 4 — matching Tidal's
 // `pRepeat = 1 + sum es` and krill. Total copies = 1 + Σ(value - 1).
+// An adjacent bracketed operand is a patterned count sampled per cycle; it
+// must be the sole `!` in the chain (accumulation is numeric).
 Replicate
-  = parts:(_ "!" n:Integer? { return n === null ? 2 : n; })+ {
-      const total = parts.reduce((acc, v) => acc + (v - 1), 1);
+  = parts:(_ "!" op:ReplicateOperand? { return op ?? null; })+ {
+      const patterned = parts.find(p => p !== null && typeof p === 'object');
+      if (patterned !== undefined) {
+        if (parts.length > 1) {
+          error("`!` with a patterned count cannot be chained with other `!`s");
+        }
+        return (ast, _c) => ({ Replicate: [ast, patterned] });
+      }
+      const total = parts.reduce((acc, v) => acc + ((v ?? 2) - 1), 1);
       if (total < 0) error("Replicate count must be a non-negative integer");
       return (ast, _c) => ({ Replicate: [ast, total] });
     }
+
+// `!` binds its operand only when adjacent (`1! 2` keeps the 2 separate).
+// Numeric parts may be negative; the accumulated total is checked instead.
+ReplicateOperand
+  = Integer
+  / "[" _ s:OperandStackExprU32 _ "]" { return s.fast; }
+  / "<" _ s:OperandStackExprU32 _ ">" { return s.slow; }
+  / OperandPolymeterU32
 
 Degrade
   = "?" p:Number? {
@@ -365,6 +404,7 @@ ModOperandF64
     }
   / "[" _ s:OperandStackExprF64 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprF64 _ ">" { return s.slow; }
+  / OperandPolymeterF64
 
 ModOperandU32
   = r:OperandRandomChoiceU32 { return r; }
@@ -374,6 +414,7 @@ ModOperandU32
     }
   / "[" _ s:OperandStackExprU32 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprU32 _ ">" { return s.slow; }
+  / OperandPolymeterU32
 
 ModOperandI32
   = r:OperandRandomChoiceI32 { return r; }
@@ -382,6 +423,7 @@ ModOperandI32
     }
   / "[" _ s:OperandStackExprI32 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprI32 _ ">" { return s.slow; }
+  / OperandPolymeterI32
 
 // Operand subsequence parsing — much simpler than full StackExpr since
 // modifier operands only carry numeric values. Each operand type has its
@@ -441,6 +483,17 @@ OperandBaseF64
   / n:Number { return { Pure: located(n, location()) }; }
   / "[" _ s:OperandStackExprF64 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprF64 _ ">" { return s.slow; }
+  / OperandPolymeterF64
+
+// Polymeter inside an operand subtree: `{...}` with optional adjacent `%n`,
+// comma-separated voices of operand sequences (no feet). A single-entry,
+// unweighted voice collapses to its bare element, like SequenceExpr.
+OperandPolymeterF64
+  = "{" _ head:OperandSequenceF64 tail:(_ "," _ @OperandSequenceF64)* _ "}" steps:PolymeterSteps? {
+      const toChild = (s) =>
+        s.asCat.length === 1 && s.asCat[0][1] === null ? s.asCat[0][0] : { Sequence: s.asCat };
+      return { Polymeter: { children: [head, ...tail].map(toChild), steps_per_cycle: steps } };
+    }
 
 // ------ u32 operand subtree ------
 
@@ -498,6 +551,15 @@ OperandBaseU32
     }
   / "[" _ s:OperandStackExprU32 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprU32 _ ">" { return s.slow; }
+  / OperandPolymeterU32
+
+// See OperandPolymeterF64.
+OperandPolymeterU32
+  = "{" _ head:OperandSequenceU32 tail:(_ "," _ @OperandSequenceU32)* _ "}" steps:PolymeterSteps? {
+      const toChild = (s) =>
+        s.asCat.length === 1 && s.asCat[0][1] === null ? s.asCat[0][0] : { Sequence: s.asCat };
+      return { Polymeter: { children: [head, ...tail].map(toChild), steps_per_cycle: steps } };
+    }
 
 // ------ i32 operand subtree ------
 
@@ -549,6 +611,15 @@ OperandBaseI32
   / n:Integer { return { Pure: located(n, location()) }; }
   / "[" _ s:OperandStackExprI32 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprI32 _ ">" { return s.slow; }
+  / OperandPolymeterI32
+
+// See OperandPolymeterF64.
+OperandPolymeterI32
+  = "{" _ head:OperandSequenceI32 tail:(_ "," _ @OperandSequenceI32)* _ "}" steps:PolymeterSteps? {
+      const toChild = (s) =>
+        s.asCat.length === 1 && s.asCat[0][1] === null ? s.asCat[0][0] : { Sequence: s.asCat };
+      return { Polymeter: { children: [head, ...tail].map(toChild), steps_per_cycle: steps } };
+    }
 
 // ---------------------------------------------------------------------------
 // Numbers & whitespace
