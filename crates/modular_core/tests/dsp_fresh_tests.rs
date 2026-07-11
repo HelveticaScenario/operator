@@ -1391,6 +1391,83 @@ fn cycle_ps_cv_holds_during_rest_after_state_transfer() {
     );
 }
 
+// ─── $tah held voltage survives transfer_state_from ──────────────────────────
+
+#[test]
+fn tah_holds_voltage_across_state_transfer() {
+    // A patch update reconstructs every module with empty outputs and carries
+    // only `state` / `channel_state` over. `$tah`'s held voltage must therefore
+    // live in per-channel state and be written to the output on every sample —
+    // otherwise the held value collapses to 0 V for as long as the gate stays
+    // high after the rebuild.
+
+    // Replicates apply_patch_update's reuse path: fresh patch, transfer state,
+    // reconnect, on_patch_update. No ClearPatch / transport reset.
+    let rebuild = |graph: &PatchGraph, old: &Patch| -> Patch {
+        let new_patch = from_graph(graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+            .expect("from_graph failed");
+        for (id, new_module) in &new_patch.sampleables {
+            if let Some(old_module) = old.sampleables.get(id) {
+                new_module.transfer_state_from(old_module.as_ref());
+            }
+        }
+        for module in new_patch.sampleables.values() {
+            module.connect(&new_patch);
+        }
+        for module in new_patch.sampleables.values() {
+            module.on_patch_update();
+        }
+        new_patch
+    };
+    let read = |patch: &Patch| {
+        patch
+            .sampleables
+            .get("tah")
+            .unwrap()
+            .get_value_at(DEFAULT_PORT, 0, 0)
+    };
+
+    // Gate low: the output tracks the input at 3 V.
+    let tracking = make_graph(vec![("tah", "$tah", json!({ "input": 3.0, "gate": 0.0 }))]);
+    let patch = from_graph(&tracking, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..16 {
+        process_frame(&patch);
+    }
+    assert!(
+        approx_eq(read(&patch), 3.0, 0.001),
+        "with the gate low the output should track the input (3 V), got {}",
+        read(&patch)
+    );
+
+    // Patch update raises the gate: the tracked 3 V must be held.
+    let holding = make_graph(vec![("tah", "$tah", json!({ "input": 3.0, "gate": 5.0 }))]);
+    let patch = rebuild(&holding, &patch);
+    for _ in 0..16 {
+        process_frame(&patch);
+    }
+    assert!(
+        approx_eq(read(&patch), 3.0, 0.001),
+        "after the gate rises the output should hold 3 V, got {} \
+         (0 V means the held value was not written to the reconstructed output)",
+        read(&patch)
+    );
+
+    // A second patch update with the gate still high moves the input to 1 V.
+    // No rising edge, so the output must keep holding the pre-update 3 V.
+    let moved_input = make_graph(vec![("tah", "$tah", json!({ "input": 1.0, "gate": 5.0 }))]);
+    let patch = rebuild(&moved_input, &patch);
+    for _ in 0..16 {
+        process_frame(&patch);
+    }
+    assert!(
+        approx_eq(read(&patch), 3.0, 0.001),
+        "a patch update while the gate is high must preserve the held 3 V, got {} \
+         (1 V means the held value was resampled from the new input)",
+        read(&patch)
+    );
+}
+
 // ─── Seq stale cached_hap survives transfer_state_from (highlight pin) ────────
 
 /// Build the `$p.s(...)` chained payload wire shape that the TS `$p.s` helper
