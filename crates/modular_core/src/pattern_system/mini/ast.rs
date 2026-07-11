@@ -385,7 +385,9 @@ pub(crate) mod test_builders {
     //! programmatically. These replace the Pest parser in existing Rust
     //! tests — see `pattern_system::mini::tests` / convert tests.
 
-    use super::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight};
+    use super::{
+        AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight,
+    };
     use crate::pattern_system::SourceSpan;
 
     pub fn span(start: usize, end: usize) -> SourceSpan {
