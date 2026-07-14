@@ -14779,11 +14779,14 @@
                         "$ref": "#/$defs/MiniAST"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -14809,11 +14812,14 @@
                         "$ref": "#/$defs/MiniAST"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -14839,11 +14845,14 @@
                         "$ref": "#/$defs/MiniAST"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -14945,7 +14954,7 @@
               ]
             },
             {
-              "description": "Replicate: pattern ! n (repeat n times).\nCount is a plain u32 since Strudel doesn't support patterned replicate counts.",
+              "description": "Replicate: pattern ! n (repeat n times).",
               "type": "object",
               "properties": {
                 "Replicate": {
@@ -14957,9 +14966,7 @@
                       "$ref": "#/$defs/MiniAST"
                     },
                     {
-                      "type": "integer",
-                      "format": "uint32",
-                      "minimum": 0
+                      "$ref": "#/$defs/ReplicateCount"
                     }
                   ]
                 }
@@ -15133,11 +15140,14 @@
                         "$ref": "#/$defs/MiniASTF64"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15163,11 +15173,14 @@
                         "$ref": "#/$defs/MiniASTF64"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15193,11 +15206,14 @@
                         "$ref": "#/$defs/MiniASTF64"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15299,7 +15315,7 @@
               ]
             },
             {
-              "description": "Replicate: pattern ! n (repeat n times).\nCount is a plain u32 since Strudel doesn't support patterned replicate counts.",
+              "description": "Replicate: pattern ! n (repeat n times).",
               "type": "object",
               "properties": {
                 "Replicate": {
@@ -15311,9 +15327,7 @@
                       "$ref": "#/$defs/MiniASTF64"
                     },
                     {
-                      "type": "integer",
-                      "format": "uint32",
-                      "minimum": 0
+                      "$ref": "#/$defs/ReplicateCount"
                     }
                   ]
                 }
@@ -15487,11 +15501,14 @@
                         "$ref": "#/$defs/MiniASTI32"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15517,11 +15534,14 @@
                         "$ref": "#/$defs/MiniASTI32"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15547,11 +15567,14 @@
                         "$ref": "#/$defs/MiniASTI32"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15665,9 +15688,7 @@
                       "$ref": "#/$defs/MiniASTI32"
                     },
                     {
-                      "type": "integer",
-                      "format": "uint32",
-                      "minimum": 0
+                      "$ref": "#/$defs/ReplicateCount"
                     }
                   ]
                 }
@@ -15841,11 +15862,14 @@
                         "$ref": "#/$defs/MiniASTU32"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15871,11 +15895,14 @@
                         "$ref": "#/$defs/MiniASTU32"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -15901,11 +15928,14 @@
                         "$ref": "#/$defs/MiniASTU32"
                       },
                       {
-                        "type": [
-                          "number",
-                          "null"
-                        ],
-                        "format": "double"
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Weight"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -16007,7 +16037,7 @@
               ]
             },
             {
-              "description": "Replicate: pattern ! n (repeat n times).\nCount is a plain u32 since Strudel doesn't support patterned replicate counts.",
+              "description": "Replicate: pattern ! n (repeat n times).",
               "type": "object",
               "properties": {
                 "Replicate": {
@@ -16019,9 +16049,7 @@
                       "$ref": "#/$defs/MiniASTU32"
                     },
                     {
-                      "type": "integer",
-                      "format": "uint32",
-                      "minimum": 0
+                      "$ref": "#/$defs/ReplicateCount"
                     }
                   ]
                 }
@@ -16189,6 +16217,19 @@
             "ast",
             "source",
             "all_spans"
+          ]
+        },
+        "ReplicateCount": {
+          "description": "Replicate count operand (`!`).\n\nSerialized untagged: a static count is a bare JSON number, a patterned\ncount (`a!<2 3>`) is a `MiniASTU32` object. `Static` must stay the first\nvariant so untagged deserialization matches the bare number before\nattempting the pattern shape.",
+          "anyOf": [
+            {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            {
+              "$ref": "#/$defs/MiniASTU32"
+            }
           ]
         },
         "SectionCycles": {
@@ -16433,6 +16474,18 @@
             "__kind",
             "pattern",
             "bool_pattern"
+          ]
+        },
+        "Weight": {
+          "description": "Weight operand carried by a sequence entry (`@` or `_` elongation).\n\nSerialized untagged: a static weight is a bare JSON number, a patterned\nweight (`a@<1 2>`) is a `MiniASTF64` object. `Static` must stay the first\nvariant so untagged deserialization matches the bare number before\nattempting the pattern shape.",
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "$ref": "#/$defs/MiniASTF64"
+            }
           ]
         }
       }

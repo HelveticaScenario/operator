@@ -449,13 +449,19 @@ type ParsedPattern = {
  *
  * | Modifier | Syntax | Meaning |
  * |----------|--------|---------|
- * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Weight | \`@n\`, \`@[…]\`, \`@<…>\`, \`@{…}\` | Relative duration within a sequence (default 1; whole cycles inside \`<>\`). A bracketed operand is a pattern sampled per cycle — \`'c4@<1 2> e4'\` alternates the width |
  * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'c4 _ _'\` is the same as \`'c4@3'\` |
  * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
  * | Slow down | \`/n\` | Stretch over \`n\` cycles |
- * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Replicate | \`!n\`, \`![…]\`, \`!<…>\`, \`!{…}\` | Duplicate the element \`n\` times (default 2); a bracketed count is sampled per cycle — \`'c4!<2 3> e4'\` |
  * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
  * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * Operands of \`*\`, \`/\`, \`(k,n)\`, \`@\`, and \`!\` may be subpatterns —
+ * \`[1 2]\`, \`<1 2>\`, \`{1 2 3}%4\`, \`[1|2]\` — sampled as the pattern
+ * plays. \`@\`/\`!\` operands must attach with no space, a patterned \`!\`
+ * cannot chain with other \`!\`s, and inside \`<>\` the operand advances
+ * once per pass and must repeat (\`|\` choice is rejected there).
  *
  * @param source - mini-notation source string
  */
@@ -505,13 +511,19 @@ declare namespace $p {
  *
  * | Modifier | Syntax | Meaning |
  * |----------|--------|---------|
- * | Weight | \`@n\` | Relative duration within a sequence (default 1) |
+ * | Weight | \`@n\`, \`@[…]\`, \`@<…>\`, \`@{…}\` | Relative duration within a sequence (default 1; whole cycles inside \`<>\`). A bracketed operand is a pattern sampled per cycle — \`'c4@<1 2> e4'\` alternates the width |
  * | Elongate | \`_\` | Bare \`_\` extends the preceding step's weight by 1; \`'0 _ _'\` is the same as \`'0@3'\` |
  * | Speed up | \`*n\` | Repeat \`n\` times within the slot |
  * | Slow down | \`/n\` | Stretch over \`n\` cycles |
- * | Replicate | \`!n\` | Duplicate the element \`n\` times (default 2) |
+ * | Replicate | \`!n\`, \`![…]\`, \`!<…>\`, \`!{…}\` | Duplicate the element \`n\` times (default 2); a bracketed count is sampled per cycle — \`'c4!<2 3> e4'\` |
  * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
  * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
+ *
+ * Operands of \`*\`, \`/\`, \`(k,n)\`, \`@\`, and \`!\` may be subpatterns —
+ * \`[1 2]\`, \`<1 2>\`, \`{1 2 3}%4\`, \`[1|2]\` — sampled as the pattern
+ * plays. \`@\`/\`!\` operands must attach with no space, a patterned \`!\`
+ * cannot chain with other \`!\`s, and inside \`<>\` the operand advances
+ * once per pass and must repeat (\`|\` choice is rejected there).
  *
  * ### Scale strings
  *

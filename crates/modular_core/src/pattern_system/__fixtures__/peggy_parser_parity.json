@@ -1696,5 +1696,805 @@
         }
       ]
     }
+  },
+  {
+    "label": "patterned weight @[...]",
+    "input": "0@[2 1] 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          {
+            "FastCat": [
+              [
+                {
+                  "Pure": {
+                    "node": 2,
+                    "span": {
+                      "start": 3,
+                      "end": 4
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": 1,
+                    "span": {
+                      "start": 5,
+                      "end": 6
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned weight @<...>",
+    "input": "0@<1 2> 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          {
+            "SlowCat": [
+              [
+                {
+                  "Pure": {
+                    "node": 1,
+                    "span": {
+                      "start": 3,
+                      "end": 4
+                    }
+                  }
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": 2,
+                    "span": {
+                      "start": 5,
+                      "end": 6
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned weight @{...}",
+    "input": "0@{1 2} 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          {
+            "Polymeter": {
+              "children": [
+                {
+                  "Sequence": [
+                    [
+                      {
+                        "Pure": {
+                          "node": 1,
+                          "span": {
+                            "start": 3,
+                            "end": 4
+                          }
+                        }
+                      },
+                      null
+                    ],
+                    [
+                      {
+                        "Pure": {
+                          "node": 2,
+                          "span": {
+                            "start": 5,
+                            "end": 6
+                          }
+                        }
+                      },
+                      null
+                    ]
+                  ]
+                }
+              ],
+              "steps_per_cycle": null
+            }
+          }
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned weight bracketed choice",
+    "input": "0@[1|2] 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 0,
+                "end": 1
+              }
+            }
+          },
+          {
+            "FastCat": [
+              [
+                {
+                  "RandomChoice": [
+                    [
+                      {
+                        "Pure": {
+                          "node": 1,
+                          "span": {
+                            "start": 3,
+                            "end": 4
+                          }
+                        }
+                      },
+                      {
+                        "Pure": {
+                          "node": 2,
+                          "span": {
+                            "start": 5,
+                            "end": 6
+                          }
+                        }
+                      }
+                    ],
+                    0
+                  ]
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned weight with operand replicate",
+    "input": "<0@<2!3 3> 1>",
+    "peggy_ast": {
+      "SlowCat": [
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 0
+              },
+              "span": {
+                "start": 1,
+                "end": 2
+              }
+            }
+          },
+          {
+            "SlowCat": [
+              [
+                {
+                  "Replicate": [
+                    {
+                      "Pure": {
+                        "node": 2,
+                        "span": {
+                          "start": 4,
+                          "end": 5
+                        }
+                      }
+                    },
+                    3
+                  ]
+                },
+                null
+              ],
+              [
+                {
+                  "Pure": {
+                    "node": 3,
+                    "span": {
+                      "start": 8,
+                      "end": 9
+                    }
+                  }
+                },
+                null
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 11,
+                "end": 12
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned replicate !<...>",
+    "input": "0!<2 3> 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Replicate": [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 0
+                  },
+                  "span": {
+                    "start": 0,
+                    "end": 1
+                  }
+                }
+              },
+              {
+                "SlowCat": [
+                  [
+                    {
+                      "Pure": {
+                        "node": 2,
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 3,
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ]
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned replicate ![...]",
+    "input": "0![2 3] 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Replicate": [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 0
+                  },
+                  "span": {
+                    "start": 0,
+                    "end": 1
+                  }
+                }
+              },
+              {
+                "FastCat": [
+                  [
+                    {
+                      "Pure": {
+                        "node": 2,
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 3,
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ]
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "patterned replicate !{...}",
+    "input": "0!{2 3} 1",
+    "peggy_ast": {
+      "Sequence": [
+        [
+          {
+            "Replicate": [
+              {
+                "Pure": {
+                  "node": {
+                    "Number": 0
+                  },
+                  "span": {
+                    "start": 0,
+                    "end": 1
+                  }
+                }
+              },
+              {
+                "Polymeter": {
+                  "children": [
+                    {
+                      "Sequence": [
+                        [
+                          {
+                            "Pure": {
+                              "node": 2,
+                              "span": {
+                                "start": 3,
+                                "end": 4
+                              }
+                            }
+                          },
+                          null
+                        ],
+                        [
+                          {
+                            "Pure": {
+                              "node": 3,
+                              "span": {
+                                "start": 5,
+                                "end": 6
+                              }
+                            }
+                          },
+                          null
+                        ]
+                      ]
+                    }
+                  ],
+                  "steps_per_cycle": null
+                }
+              }
+            ]
+          },
+          null
+        ],
+        [
+          {
+            "Pure": {
+              "node": {
+                "Number": 1
+              },
+              "span": {
+                "start": 8,
+                "end": 9
+              }
+            }
+          },
+          null
+        ]
+      ]
+    }
+  },
+  {
+    "label": "operand polymeter for fast",
+    "input": "0*{1 2 3}",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Polymeter": {
+            "children": [
+              {
+                "Sequence": [
+                  [
+                    {
+                      "Pure": {
+                        "node": 1,
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 2,
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 3,
+                        "span": {
+                          "start": 7,
+                          "end": 8
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ],
+            "steps_per_cycle": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "operand polymeter with % steps",
+    "input": "0*{1 2 3}%4",
+    "peggy_ast": {
+      "Fast": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Polymeter": {
+            "children": [
+              {
+                "Sequence": [
+                  [
+                    {
+                      "Pure": {
+                        "node": 1,
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 2,
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 3,
+                        "span": {
+                          "start": 7,
+                          "end": 8
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ],
+            "steps_per_cycle": {
+              "Pure": {
+                "node": 4,
+                "span": {
+                  "start": 10,
+                  "end": 11
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "operand polymeter for slow",
+    "input": "0/{2 3}",
+    "peggy_ast": {
+      "Slow": [
+        {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        {
+          "Polymeter": {
+            "children": [
+              {
+                "Sequence": [
+                  [
+                    {
+                      "Pure": {
+                        "node": 2,
+                        "span": {
+                          "start": 3,
+                          "end": 4
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 3,
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ],
+            "steps_per_cycle": null
+          }
+        }
+      ]
+    }
+  },
+  {
+    "label": "operand polymeter euclid steps",
+    "input": "0(3,{4 8})",
+    "peggy_ast": {
+      "Euclidean": {
+        "pattern": {
+          "Pure": {
+            "node": {
+              "Number": 0
+            },
+            "span": {
+              "start": 0,
+              "end": 1
+            }
+          }
+        },
+        "pulses": {
+          "Pure": {
+            "node": 3,
+            "span": {
+              "start": 2,
+              "end": 3
+            }
+          }
+        },
+        "steps": {
+          "Polymeter": {
+            "children": [
+              {
+                "Sequence": [
+                  [
+                    {
+                      "Pure": {
+                        "node": 4,
+                        "span": {
+                          "start": 5,
+                          "end": 6
+                        }
+                      }
+                    },
+                    null
+                  ],
+                  [
+                    {
+                      "Pure": {
+                        "node": 8,
+                        "span": {
+                          "start": 7,
+                          "end": 8
+                        }
+                      }
+                    },
+                    null
+                  ]
+                ]
+              }
+            ],
+            "steps_per_cycle": null
+          }
+        },
+        "rotation": null
+      }
+    }
   }
 ]

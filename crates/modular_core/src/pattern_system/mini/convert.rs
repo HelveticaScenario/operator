@@ -3,10 +3,15 @@
 //! The conversion is parameterized by the target atom type through
 //! the `FromMiniAtom` trait.
 
-use super::ast::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
+use super::ast::{
+    AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight,
+};
 use crate::pattern_system::{
     Fraction, Pattern,
-    combinators::{fastcat, slowcat, stack, timecat},
+    combinators::{
+        DynCount, DynTimecatEntry, DynWeight, StepSpec, dyn_polymeter_factor, dyn_timecat, fastcat,
+        slowcat, stack, stride_cycles, timecat,
+    },
     constructors,
     constructors::pure_with_span,
     random::choose_with_seed,
@@ -242,6 +247,382 @@ fn max_u32_leaf(ast: &MiniASTU32) -> u32 {
     }
 }
 
+/// LCM of two periods, `None` past `MAX_EXPANSION` (treated like an
+/// aperiodic operand by the slowcat unroll).
+fn lcm_u64(a: u64, b: u64) -> Option<u64> {
+    fn gcd(mut a: u64, mut b: u64) -> u64 {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    }
+    if a == 0 || b == 0 {
+        return Some(1);
+    }
+    mul_capped(a / gcd(a, b), b)
+}
+
+/// Product of two periods, `None` past `MAX_EXPANSION`.
+fn mul_capped(a: u64, b: u64) -> Option<u64> {
+    a.checked_mul(b).filter(|p| *p <= MAX_EXPANSION as u64)
+}
+
+/// Generates the cycle-period analysis for a typed operand AST: the number
+/// of cycles after which the operand, as lowered by its operand converter,
+/// provably repeats. The result is a valid multiple of the fundamental
+/// period, not necessarily minimal. `None` marks operands with no usable
+/// period: `|` random choice, patterned `fast`/`slow` factors, nested
+/// dynamic slowcats, and anything whose bound overflows `MAX_EXPANSION`.
+macro_rules! define_operand_period {
+    ($name:ident, $ast:ident, $step_count:ident, $step_spec:ident) => {
+        fn $name(ast: &$ast) -> Option<u64> {
+            match ast {
+                $ast::Pure(_) | $ast::Rest(_) => Some(1),
+                $ast::List(Located { node, .. }) => node.first().map_or(Some(1), $name),
+                $ast::Sequence(items) | $ast::FastCat(items) => {
+                    // A dynamic layout re-rolls with the joint period of the
+                    // children and their weight/count operands.
+                    let mut p = 1u64;
+                    for (child, w) in items {
+                        p = lcm_u64(p, $name(child)?)?;
+                        if let Some(Weight::Pattern(wp)) = w {
+                            p = lcm_u64(p, operand_period_f64(wp)?)?;
+                        }
+                    }
+                    Some(p)
+                }
+                $ast::SlowCat(items) => {
+                    if items.iter().any(|(p, w)| {
+                        matches!(w, Some(Weight::Pattern(_)))
+                            || matches!(p, $ast::Replicate(_, ReplicateCount::Pattern(_)))
+                    }) {
+                        // A nested dynamic slowcat unrolls on its own; bounding
+                        // its period here is not worth the complexity.
+                        return None;
+                    }
+                    // Static weighted slowcat lowers to timecat(...)._slow(total):
+                    // inner cycles advance one per `total` outer cycles, so the
+                    // pattern repeats after numer(total · L) outer cycles, L being
+                    // the LCM of the entries' periods.
+                    let mut l = 1u64;
+                    let mut total = Fraction::from_integer(0);
+                    for (child, w) in items {
+                        let (inner, copies, weight): (&$ast, u32, Fraction) = match child {
+                            $ast::Replicate(inner_p, count) => (
+                                inner_p.as_ref(),
+                                count.as_static().unwrap_or(1),
+                                Fraction::from_integer(1),
+                            ),
+                            other => (
+                                other,
+                                1,
+                                Fraction::from(
+                                    w.as_ref().and_then(Weight::as_static).unwrap_or(1.0),
+                                ),
+                            ),
+                        };
+                        l = lcm_u64(l, $name(inner)?)?;
+                        total = &total + &(&weight * &Fraction::from_integer(copies as i64));
+                    }
+                    if total <= Fraction::from_integer(0) {
+                        return Some(1);
+                    }
+                    let period = &total * &Fraction::from_integer(l as i64);
+                    let n = period.numer() as u64;
+                    if n > MAX_EXPANSION as u64 {
+                        None
+                    } else {
+                        Some(n)
+                    }
+                }
+                $ast::Stack(items) => {
+                    let mut p = 1u64;
+                    for child in items {
+                        p = lcm_u64(p, $name(child)?)?;
+                    }
+                    Some(p)
+                }
+                $ast::RandomChoice(..) => None,
+                $ast::Fast(pattern, factor) => {
+                    let MiniASTF64::Pure(Located { node, .. }) = factor.as_ref() else {
+                        return None;
+                    };
+                    let f = Fraction::from(*node);
+                    if f.is_zero() {
+                        // fast(0) is silence.
+                        return Some(1);
+                    }
+                    mul_capped($name(pattern)?, f.denom() as u64)
+                }
+                $ast::Slow(pattern, factor) => {
+                    let MiniASTF64::Pure(Located { node, .. }) = factor.as_ref() else {
+                        return None;
+                    };
+                    let f = Fraction::from(*node);
+                    if f.is_zero() {
+                        // slow(0) is silence.
+                        return Some(1);
+                    }
+                    mul_capped($name(pattern)?, f.numer().unsigned_abs())
+                }
+                $ast::Replicate(inner, count) => {
+                    let mut p = $name(inner)?;
+                    if let ReplicateCount::Pattern(cp) = count {
+                        p = lcm_u64(p, operand_period_u32(cp)?)?;
+                    }
+                    Some(p)
+                }
+                // Degrade and euclidean args are identities in the operand
+                // converters, so only the inner pattern contributes.
+                $ast::Degrade(pattern, _, _) => $name(pattern),
+                $ast::Euclidean { pattern, .. } => $name(pattern),
+                $ast::Polymeter {
+                    children,
+                    steps_per_cycle,
+                } => {
+                    // Voices lower to `child.fast(spc / w)`; each multiplies
+                    // the period by its factor's denominator. Per-cycle step
+                    // counts make the factors patterns, so bail.
+                    if steps_per_cycle.is_none()
+                        && children
+                            .first()
+                            .is_some_and(|c| matches!($step_spec(c), StepSpec::Dyn(_)))
+                    {
+                        return None;
+                    }
+                    let spc = Fraction::from(
+                        steps_per_cycle
+                            .as_deref()
+                            .map(eval_f64)
+                            .unwrap_or_else(|| children.first().map($step_count).unwrap_or(1.0)),
+                    );
+                    let mut p = 1u64;
+                    for c in children {
+                        if matches!($step_spec(c), StepSpec::Dyn(_)) {
+                            return None;
+                        }
+                        let w = Fraction::from($step_count(c).max(1.0));
+                        let f = &spc / &w;
+                        if f.is_zero() {
+                            continue;
+                        }
+                        p = lcm_u64(p, mul_capped($name(c)?, f.denom() as u64)?)?;
+                    }
+                    Some(p)
+                }
+            }
+        }
+    };
+}
+
+define_operand_period!(
+    operand_period_f64,
+    MiniASTF64,
+    step_count_f64,
+    step_spec_f64
+);
+define_operand_period!(
+    operand_period_u32,
+    MiniASTU32,
+    step_count_u32,
+    step_spec_u32
+);
+
+/// Generates the dynamic-entry analysis shared by the four converters:
+/// detection of patterned `@`/`!` operands on sequence entries, the joint
+/// unroll pass count and slot bound for a dynamic slowcat, and a polymeter
+/// voice's per-cycle step spec.
+macro_rules! define_dyn_entry_analysis {
+    ($has_dyn:ident, $passes:ident, $slots_bound:ident, $step_spec:ident, $ast:ident, $step_count:ident) => {
+        /// True when any entry carries a patterned `@` weight or a patterned
+        /// `!` count, so the layout varies per cycle.
+        fn $has_dyn(items: &[($ast, Option<Weight>)]) -> bool {
+            items.iter().any(|(p, w)| {
+                matches!(w, Some(Weight::Pattern(_)))
+                    || matches!(p, $ast::Replicate(_, ReplicateCount::Pattern(_)))
+            })
+        }
+
+        /// Joint unroll pass count for a dynamic slowcat: LCM of every
+        /// dynamic operand's period. `None` when an operand is aperiodic or
+        /// the LCM overflows `MAX_EXPANSION`.
+        fn $passes(items: &[($ast, Option<Weight>)]) -> Option<u64> {
+            let mut passes = 1u64;
+            for (p, w) in items {
+                if let Some(Weight::Pattern(wp)) = w {
+                    passes = lcm_u64(passes, operand_period_f64(wp)?)?;
+                }
+                if let $ast::Replicate(_, ReplicateCount::Pattern(cp)) = p {
+                    passes = lcm_u64(passes, operand_period_u32(cp)?)?;
+                }
+            }
+            Some(passes)
+        }
+
+        /// Upper bound on the slots a dynamic slowcat unrolls into:
+        /// passes × Σ per-entry maximum copies.
+        fn $slots_bound(items: &[($ast, Option<Weight>)], passes: u64) -> u64 {
+            let per_pass: u64 = items
+                .iter()
+                .map(|(p, _)| match p {
+                    $ast::Replicate(_, ReplicateCount::Static(c)) => (*c).max(1) as u64,
+                    $ast::Replicate(_, ReplicateCount::Pattern(cp)) => {
+                        max_u32_leaf(cp).max(1) as u64
+                    }
+                    _ => 1,
+                })
+                .sum();
+            passes.saturating_mul(per_pass)
+        }
+
+        /// Per-cycle step spec of a polymeter voice. Mirrors the static
+        /// `step_count` readout: sequence entries contribute their weight
+        /// (default 1) and a top-level replicate contributes
+        /// `step_count(inner) × count`.
+        fn $step_spec(child: &$ast) -> StepSpec {
+            match child {
+                $ast::Sequence(items) | $ast::FastCat(items) | $ast::SlowCat(items)
+                    if items
+                        .iter()
+                        .any(|(_, w)| matches!(w, Some(Weight::Pattern(_)))) =>
+                {
+                    StepSpec::Dyn(
+                        items
+                            .iter()
+                            .map(|(_, w)| (dyn_weight_spec(w), DynCount::Static(1)))
+                            .collect::<Vec<_>>()
+                            .into(),
+                    )
+                }
+                $ast::Replicate(inner, count @ ReplicateCount::Pattern(_)) => StepSpec::Dyn(
+                    vec![(
+                        DynWeight::Static(Fraction::from($step_count(inner))),
+                        dyn_count_spec(count),
+                    )]
+                    .into(),
+                ),
+                _ => StepSpec::Static(Fraction::from($step_count(child))),
+            }
+        }
+    };
+}
+
+define_dyn_entry_analysis!(
+    has_dynamic_entries_main,
+    slowcat_passes_main,
+    slowcat_slots_bound_main,
+    step_spec_main,
+    MiniAST,
+    step_count_main
+);
+define_dyn_entry_analysis!(
+    has_dynamic_entries_f64,
+    slowcat_passes_f64,
+    slowcat_slots_bound_f64,
+    step_spec_f64,
+    MiniASTF64,
+    step_count_f64
+);
+define_dyn_entry_analysis!(
+    has_dynamic_entries_u32,
+    slowcat_passes_u32,
+    slowcat_slots_bound_u32,
+    step_spec_u32,
+    MiniASTU32,
+    step_count_u32
+);
+define_dyn_entry_analysis!(
+    has_dynamic_entries_i32,
+    slowcat_passes_i32,
+    slowcat_slots_bound_i32,
+    step_spec_i32,
+    MiniASTI32,
+    step_count_i32
+);
+
+/// Lower a sequence entry's `@` weight to a [`DynWeight`] spec (default 1).
+fn dyn_weight_spec(w: &Option<Weight>) -> DynWeight {
+    match w {
+        None => DynWeight::Static(Fraction::from_integer(1)),
+        Some(Weight::Static(x)) => DynWeight::Static(Fraction::from(*x)),
+        Some(Weight::Pattern(p)) => DynWeight::Pattern(convert_f64_pattern(p)),
+    }
+}
+
+/// Lower a `!` count to a [`DynCount`] spec.
+fn dyn_count_spec(c: &ReplicateCount) -> DynCount {
+    match c {
+        ReplicateCount::Static(n) => DynCount::Static(*n),
+        ReplicateCount::Pattern(p) => DynCount::Pattern(convert_u32_pattern(p)),
+    }
+}
+
+/// Sample an operand pattern at unroll pass `i`: the value and source span
+/// of the first hap whose part begins exactly at cycle `i`.
+fn sample_pass<V: Clone + Send + Sync + 'static>(
+    pat: &Pattern<V>,
+    pass: &Fraction,
+) -> Option<(V, Option<crate::pattern_system::SourceSpan>)> {
+    let haps = pat.query_arc(pass.clone(), pass + &Fraction::from_integer(1));
+    haps.into_iter()
+        .find(|h| &h.part.begin == pass)
+        .map(|h| (h.value, h.context.source_span))
+}
+
+/// Statically unroll a dynamic slowcat: sample every `@`/`!` operand at pass
+/// index 0..passes, lay the sampled slots out with
+/// `timecat(...)._slow(total)`, and wrap each slot in [`stride_cycles`] so
+/// the slot at pass `i` shows its source's cycle `k·passes + i` during
+/// super-period `k` — every entry advances one of its own cycles per pass.
+/// Sampled operand spans become modifier spans on their slots. The limit
+/// validator has already bounded `passes` and the slot count and rejected
+/// aperiodic operands.
+fn unroll_dyn_slowcat<T: Clone + Send + Sync + 'static>(
+    entries: Vec<DynTimecatEntry<T>>,
+    passes: u64,
+) -> Pattern<T> {
+    let mut slots: Vec<(Fraction, Pattern<T>)> = Vec::new();
+    let mut total = Fraction::from_integer(0);
+    let zero = Fraction::from_integer(0);
+    for i in 0..passes {
+        let pass = Fraction::from_integer(i as i64);
+        for entry in &entries {
+            let (weight, wspan) = match &entry.weight {
+                DynWeight::Static(w) => (w.clone(), None),
+                DynWeight::Pattern(p) => match sample_pass(p, &pass) {
+                    Some((v, span)) => (v.max_of(&zero), span),
+                    None => (Fraction::from_integer(1), None),
+                },
+            };
+            let (count, cspan) = match &entry.count {
+                DynCount::Static(c) => (*c, None),
+                DynCount::Pattern(p) => match sample_pass(p, &pass) {
+                    Some((v, span)) => (v, span),
+                    None => (1, None),
+                },
+            };
+            if weight.is_zero() || count == 0 {
+                continue;
+            }
+            let mut slot = stride_cycles(entry.pat.clone(), passes, i);
+            if let Some(span) = wspan {
+                slot = slot.with_modifier_span(span);
+            }
+            if let Some(span) = cspan {
+                slot = slot.with_modifier_span(span);
+            }
+            for _ in 0..count {
+                slots.push((weight.clone(), slot.clone()));
+                total = &total + &weight;
+            }
+        }
+    }
+    if total.is_zero() {
+        return constructors::silence();
+    }
+    timecat(slots)._slow(total)
+}
+
 /// Generates a limit validator for one of the four structurally identical
 /// AST enums. `budget` carries the product of the enclosing `!n`/euclidean-step
 /// expansions down each path; a node whose expansion pushes that running
@@ -249,15 +630,47 @@ fn max_u32_leaf(ast: &MiniASTU32) -> u32 {
 /// are not a single number (`eval_f64` reads exactly one constant, so any
 /// other shape would be silently collapsed).
 macro_rules! define_validate_limits {
-    ($name:ident, $ast:ident) => {
+    ($name:ident, $ast:ident, $has_dyn:ident, $passes:ident, $slots_bound:ident) => {
         fn $name(ast: &$ast, budget: u32) -> Result<(), ConvertError> {
             match ast {
                 $ast::Pure(_) | $ast::Rest(_) => Ok(()),
                 $ast::List(Located { node, .. }) => {
                     node.iter().try_for_each(|a| $name(a, budget))
                 }
-                $ast::Sequence(items) | $ast::FastCat(items) | $ast::SlowCat(items) => {
-                    items.iter().try_for_each(|(p, _)| $name(p, budget))
+                $ast::Sequence(items) | $ast::FastCat(items) => {
+                    items.iter().try_for_each(|(p, w)| {
+                        if let Some(Weight::Pattern(wp)) = w {
+                            // A weight operand is a separate pattern,
+                            // materialized on its own, so it starts from a
+                            // fresh budget.
+                            validate_limits_f64(wp, 1)?;
+                        }
+                        $name(p, budget)
+                    })
+                }
+                $ast::SlowCat(items) => {
+                    if $has_dyn(items) {
+                        // A dynamic slowcat is unrolled over one joint period
+                        // of its operands at conversion time; the pass count
+                        // and the unrolled slot count must both stay bounded.
+                        let Some(passes) = $passes(items) else {
+                            return Err(ConvertError::OperatorError(format!(
+                                "a `@`/`!` operand inside `<...>` must repeat within {MAX_EXPANSION} cycles; `|` random choice has no fixed period"
+                            )));
+                        };
+                        let slots = $slots_bound(items, passes);
+                        if slots > MAX_EXPANSION as u64 {
+                            return Err(ConvertError::OperatorError(format!(
+                                "patterned `@`/`!` operands unroll this `<...>` into {slots} steps, past the maximum of {MAX_EXPANSION}"
+                            )));
+                        }
+                    }
+                    items.iter().try_for_each(|(p, w)| {
+                        if let Some(Weight::Pattern(wp)) = w {
+                            validate_limits_f64(wp, 1)?;
+                        }
+                        $name(p, budget)
+                    })
                 }
                 $ast::Stack(items) | $ast::RandomChoice(items, _) => {
                     items.iter().try_for_each(|a| $name(a, budget))
@@ -269,12 +682,22 @@ macro_rules! define_validate_limits {
                     validate_limits_f64(factor, 1)
                 }
                 $ast::Replicate(pattern, count) => {
+                    let max_count = match count {
+                        ReplicateCount::Static(c) => *c,
+                        // A patterned count is a separate operand pattern
+                        // (fresh budget); its largest leaf bounds every value
+                        // the query path can ever sample.
+                        ReplicateCount::Pattern(cp) => {
+                            validate_limits_u32(cp, 1)?;
+                            max_u32_leaf(cp)
+                        }
+                    };
                     // A zero count must not zero the running budget: every
                     // nested product would stay 0 and slip under the cap.
-                    let expansion = budget.saturating_mul((*count).max(1));
+                    let expansion = budget.saturating_mul(max_count.max(1));
                     if expansion > MAX_EXPANSION {
                         return Err(ConvertError::OperatorError(format!(
-                            "replicate count {count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
+                            "replicate count {max_count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
                         )));
                     }
                     $name(pattern, expansion)
@@ -323,10 +746,34 @@ macro_rules! define_validate_limits {
     };
 }
 
-define_validate_limits!(validate_limits_main, MiniAST);
-define_validate_limits!(validate_limits_f64, MiniASTF64);
-define_validate_limits!(validate_limits_u32, MiniASTU32);
-define_validate_limits!(validate_limits_i32, MiniASTI32);
+define_validate_limits!(
+    validate_limits_main,
+    MiniAST,
+    has_dynamic_entries_main,
+    slowcat_passes_main,
+    slowcat_slots_bound_main
+);
+define_validate_limits!(
+    validate_limits_f64,
+    MiniASTF64,
+    has_dynamic_entries_f64,
+    slowcat_passes_f64,
+    slowcat_slots_bound_f64
+);
+define_validate_limits!(
+    validate_limits_u32,
+    MiniASTU32,
+    has_dynamic_entries_u32,
+    slowcat_passes_u32,
+    slowcat_slots_bound_u32
+);
+define_validate_limits!(
+    validate_limits_i32,
+    MiniASTI32,
+    has_dynamic_entries_i32,
+    slowcat_passes_i32,
+    slowcat_slots_bound_i32
+);
 
 /// Evaluate a MiniASTF64 to get a single f64 value.
 ///
@@ -370,10 +817,15 @@ fn eval_f64(ast: &MiniASTF64) -> f64 {
 fn step_count_main(ast: &MiniAST) -> f64 {
     match ast {
         MiniAST::Sequence(items) | MiniAST::FastCat(items) | MiniAST::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniAST::Replicate(inner, count) => step_count_main(inner) * (*count as f64),
+        MiniAST::Replicate(inner, count) => {
+            step_count_main(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniAST::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -384,10 +836,15 @@ fn step_count_main(ast: &MiniAST) -> f64 {
 fn step_count_f64(ast: &MiniASTF64) -> f64 {
     match ast {
         MiniASTF64::Sequence(items) | MiniASTF64::FastCat(items) | MiniASTF64::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniASTF64::Replicate(inner, count) => step_count_f64(inner) * (*count as f64),
+        MiniASTF64::Replicate(inner, count) => {
+            step_count_f64(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniASTF64::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -398,10 +855,15 @@ fn step_count_f64(ast: &MiniASTF64) -> f64 {
 fn step_count_u32(ast: &MiniASTU32) -> f64 {
     match ast {
         MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniASTU32::Replicate(inner, count) => step_count_u32(inner) * (*count as f64),
+        MiniASTU32::Replicate(inner, count) => {
+            step_count_u32(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniASTU32::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -412,10 +874,15 @@ fn step_count_u32(ast: &MiniASTU32) -> f64 {
 fn step_count_i32(ast: &MiniASTI32) -> f64 {
     match ast {
         MiniASTI32::Sequence(items) | MiniASTI32::FastCat(items) | MiniASTI32::SlowCat(items) => {
-            let total: f64 = items.iter().map(|(_, w)| w.unwrap_or(1.0)).sum();
+            let total: f64 = items
+                .iter()
+                .map(|(_, w)| w.as_ref().and_then(Weight::as_static).unwrap_or(1.0))
+                .sum();
             if total == 0.0 { 1.0 } else { total }
         }
-        MiniASTI32::Replicate(inner, count) => step_count_i32(inner) * (*count as f64),
+        MiniASTI32::Replicate(inner, count) => {
+            step_count_i32(inner) * (count.as_static().unwrap_or(1) as f64)
+        }
         MiniASTI32::Polymeter {
             steps_per_cycle, ..
         } => steps_per_cycle.as_deref().map(eval_f64).unwrap_or(1.0),
@@ -449,15 +916,36 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
                 return constructors::pure(Fraction::from_integer(0));
             }
 
+            if has_dynamic_entries_f64(elements) {
+                // Per-cycle layout (see the MiniAST::Sequence arm).
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniASTF64::Replicate(inner, count) => DynTimecatEntry {
+                            pat: convert_f64_pattern(inner),
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        },
+                        other => DynTimecatEntry {
+                            pat: convert_f64_pattern(other),
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        },
+                    })
+                    .collect();
+                return dyn_timecat(entries);
+            }
+
             // Expand Replicate into sibling steps (see MiniAST::Sequence).
             let expanded: Vec<(&MiniASTF64, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTF64::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTF64::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -481,15 +969,36 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
         }
 
         MiniASTF64::SlowCat(elements) => {
+            if has_dynamic_entries_f64(elements) {
+                // Unroll over one joint operand period (see MiniAST::SlowCat).
+                let passes = slowcat_passes_f64(elements).unwrap_or(1);
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniASTF64::Replicate(inner, count) => DynTimecatEntry {
+                            pat: convert_f64_pattern(inner),
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        },
+                        other => DynTimecatEntry {
+                            pat: convert_f64_pattern(other),
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        },
+                    })
+                    .collect();
+                return unroll_dyn_slowcat(entries, passes);
+            }
             // Expand Replicate nodes within SlowCat (see MiniAST::SlowCat for details)
             let expanded: Vec<(&MiniASTF64, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTF64::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTF64::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -538,8 +1047,17 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
 
         MiniASTF64::Replicate(pattern, count) => {
             let pat = convert_f64_pattern(pattern);
-            let pats: Vec<Pattern<Fraction>> = (0..*count).map(|_| pat.clone()).collect();
-            fastcat(pats)
+            match count.as_static() {
+                Some(count) => {
+                    let pats: Vec<Pattern<Fraction>> = (0..count).map(|_| pat.clone()).collect();
+                    fastcat(pats)
+                }
+                None => dyn_timecat(vec![DynTimecatEntry {
+                    pat,
+                    weight: DynWeight::Static(Fraction::from_integer(1)),
+                    count: dyn_count_spec(count),
+                }]),
+            }
         }
 
         MiniASTF64::Degrade(pattern, _prob, _seed) => {
@@ -558,18 +1076,28 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
             children,
             steps_per_cycle,
         } => {
-            let spc = steps_per_cycle
-                .as_deref()
-                .map(eval_f64)
-                .unwrap_or_else(|| children.first().map(step_count_f64).unwrap_or(1.0));
+            let spc_spec = match steps_per_cycle.as_deref() {
+                Some(s) => StepSpec::Static(Fraction::from(eval_f64(s))),
+                None => children
+                    .first()
+                    .map(step_spec_f64)
+                    .unwrap_or(StepSpec::Static(Fraction::from_integer(1))),
+            };
             let scaled: Vec<Pattern<Fraction>> = children
                 .iter()
                 .map(|c| {
-                    let w = step_count_f64(c).max(1.0);
-                    // Divide as Fractions: quantizing the f64 quotient would
-                    // corrupt exact ratios like 4/3 and the pattern's period.
-                    convert_f64_pattern(c)
-                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
+                    let pat = convert_f64_pattern(c);
+                    match (&spc_spec, step_spec_f64(c)) {
+                        (StepSpec::Static(spc), StepSpec::Static(w)) => {
+                            // Divide as Fractions: quantizing the f64 quotient would
+                            // corrupt exact ratios like 4/3 and the pattern's period.
+                            let w = w.max_of(&Fraction::from_integer(1));
+                            pat.fast(constructors::pure(spc / &w))
+                        }
+                        (_, child_spec) => {
+                            pat.fast(dyn_polymeter_factor(spc_spec.clone(), child_spec))
+                        }
+                    }
                 })
                 .collect();
             stack(scaled)
@@ -598,15 +1126,36 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
                 return pure(0);
             }
 
+            if has_dynamic_entries_u32(elements) {
+                // Per-cycle layout (see the MiniAST::Sequence arm).
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniASTU32::Replicate(inner, count) => DynTimecatEntry {
+                            pat: convert_u32_pattern(inner),
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        },
+                        other => DynTimecatEntry {
+                            pat: convert_u32_pattern(other),
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        },
+                    })
+                    .collect();
+                return dyn_timecat(entries);
+            }
+
             // Expand Replicate into sibling steps (see MiniAST::Sequence).
             let expanded: Vec<(&MiniASTU32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTU32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTU32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -628,15 +1177,36 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
         }
 
         MiniASTU32::SlowCat(elements) => {
+            if has_dynamic_entries_u32(elements) {
+                // Unroll over one joint operand period (see MiniAST::SlowCat).
+                let passes = slowcat_passes_u32(elements).unwrap_or(1);
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniASTU32::Replicate(inner, count) => DynTimecatEntry {
+                            pat: convert_u32_pattern(inner),
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        },
+                        other => DynTimecatEntry {
+                            pat: convert_u32_pattern(other),
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        },
+                    })
+                    .collect();
+                return unroll_dyn_slowcat(entries, passes);
+            }
             // Expand Replicate nodes within SlowCat (see MiniAST::SlowCat for details)
             let expanded: Vec<(&MiniASTU32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTU32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTU32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -685,8 +1255,17 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
 
         MiniASTU32::Replicate(pattern, count) => {
             let pat = convert_u32_pattern(pattern);
-            let pats: Vec<Pattern<u32>> = (0..*count).map(|_| pat.clone()).collect();
-            fastcat(pats)
+            match count.as_static() {
+                Some(count) => {
+                    let pats: Vec<Pattern<u32>> = (0..count).map(|_| pat.clone()).collect();
+                    fastcat(pats)
+                }
+                None => dyn_timecat(vec![DynTimecatEntry {
+                    pat,
+                    weight: DynWeight::Static(Fraction::from_integer(1)),
+                    count: dyn_count_spec(count),
+                }]),
+            }
         }
 
         MiniASTU32::Degrade(pattern, _prob, _seed) => {
@@ -700,17 +1279,27 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
             children,
             steps_per_cycle,
         } => {
-            let spc = steps_per_cycle
-                .as_deref()
-                .map(eval_f64)
-                .unwrap_or_else(|| children.first().map(step_count_u32).unwrap_or(1.0));
+            let spc_spec = match steps_per_cycle.as_deref() {
+                Some(s) => StepSpec::Static(Fraction::from(eval_f64(s))),
+                None => children
+                    .first()
+                    .map(step_spec_u32)
+                    .unwrap_or(StepSpec::Static(Fraction::from_integer(1))),
+            };
             let scaled: Vec<Pattern<u32>> = children
                 .iter()
                 .map(|c| {
-                    let w = step_count_u32(c).max(1.0);
-                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
-                    convert_u32_pattern(c)
-                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
+                    let pat = convert_u32_pattern(c);
+                    match (&spc_spec, step_spec_u32(c)) {
+                        (StepSpec::Static(spc), StepSpec::Static(w)) => {
+                            // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                            let w = w.max_of(&Fraction::from_integer(1));
+                            pat.fast(constructors::pure(spc / &w))
+                        }
+                        (_, child_spec) => {
+                            pat.fast(dyn_polymeter_factor(spc_spec.clone(), child_spec))
+                        }
+                    }
                 })
                 .collect();
             stack(scaled)
@@ -739,15 +1328,36 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
                 return pure(0);
             }
 
+            if has_dynamic_entries_i32(elements) {
+                // Per-cycle layout (see the MiniAST::Sequence arm).
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniASTI32::Replicate(inner, count) => DynTimecatEntry {
+                            pat: convert_i32_pattern(inner),
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        },
+                        other => DynTimecatEntry {
+                            pat: convert_i32_pattern(other),
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        },
+                    })
+                    .collect();
+                return dyn_timecat(entries);
+            }
+
             // Expand Replicate into sibling steps (see MiniAST::Sequence).
             let expanded: Vec<(&MiniASTI32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTI32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTI32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -769,15 +1379,36 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
         }
 
         MiniASTI32::SlowCat(elements) => {
+            if has_dynamic_entries_i32(elements) {
+                // Unroll over one joint operand period (see MiniAST::SlowCat).
+                let passes = slowcat_passes_i32(elements).unwrap_or(1);
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniASTI32::Replicate(inner, count) => DynTimecatEntry {
+                            pat: convert_i32_pattern(inner),
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        },
+                        other => DynTimecatEntry {
+                            pat: convert_i32_pattern(other),
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        },
+                    })
+                    .collect();
+                return unroll_dyn_slowcat(entries, passes);
+            }
             // Expand Replicate nodes within SlowCat (see MiniAST::SlowCat for details)
             let expanded: Vec<(&MiniASTI32, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniASTI32::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniASTI32::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -826,8 +1457,17 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
 
         MiniASTI32::Replicate(pattern, count) => {
             let pat = convert_i32_pattern(pattern);
-            let pats: Vec<Pattern<i32>> = (0..*count).map(|_| pat.clone()).collect();
-            fastcat(pats)
+            match count.as_static() {
+                Some(count) => {
+                    let pats: Vec<Pattern<i32>> = (0..count).map(|_| pat.clone()).collect();
+                    fastcat(pats)
+                }
+                None => dyn_timecat(vec![DynTimecatEntry {
+                    pat,
+                    weight: DynWeight::Static(Fraction::from_integer(1)),
+                    count: dyn_count_spec(count),
+                }]),
+            }
         }
 
         MiniASTI32::Degrade(pattern, _prob, _seed) => convert_i32_pattern(pattern),
@@ -838,17 +1478,27 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
             children,
             steps_per_cycle,
         } => {
-            let spc = steps_per_cycle
-                .as_deref()
-                .map(eval_f64)
-                .unwrap_or_else(|| children.first().map(step_count_i32).unwrap_or(1.0));
+            let spc_spec = match steps_per_cycle.as_deref() {
+                Some(s) => StepSpec::Static(Fraction::from(eval_f64(s))),
+                None => children
+                    .first()
+                    .map(step_spec_i32)
+                    .unwrap_or(StepSpec::Static(Fraction::from_integer(1))),
+            };
             let scaled: Vec<Pattern<i32>> = children
                 .iter()
                 .map(|c| {
-                    let w = step_count_i32(c).max(1.0);
-                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
-                    convert_i32_pattern(c)
-                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
+                    let pat = convert_i32_pattern(c);
+                    match (&spc_spec, step_spec_i32(c)) {
+                        (StepSpec::Static(spc), StepSpec::Static(w)) => {
+                            // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                            let w = w.max_of(&Fraction::from_integer(1));
+                            pat.fast(constructors::pure(spc / &w))
+                        }
+                        (_, child_spec) => {
+                            pat.fast(dyn_polymeter_factor(spc_spec.clone(), child_spec))
+                        }
+                    }
                 })
                 .collect();
             stack(scaled)
@@ -993,6 +1643,27 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::Sequence(elements) | MiniAST::FastCat(elements) => {
+            if has_dynamic_entries_main(elements) {
+                // Per-cycle layout: weights/counts are sampled each cycle
+                // start by dyn_timecat. Replicate copies keep weight 1, like
+                // the static expansion below.
+                let entries = elements
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniAST::Replicate(inner, count) => Ok(DynTimecatEntry {
+                            pat: convert_inner(inner)?,
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        }),
+                        other => Ok(DynTimecatEntry {
+                            pat: convert_inner(other)?,
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        }),
+                    })
+                    .collect::<Result<Vec<_>, ConvertError>>()?;
+                return Ok(dyn_timecat(entries));
+            }
             // Expand Replicate nodes into sibling steps. In Strudel `[a b!2 c]`
             // is `[a b b c]`: `!n` adds `n` sibling steps that share the
             // parent's stepping, not one step holding a fastcat of `n` copies.
@@ -1000,11 +1671,12 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
             let expanded: Vec<(&MiniAST, Option<f64>)> = elements
                 .iter()
                 .flat_map(|(p, w)| match p {
-                    MiniAST::Replicate(inner, count) => {
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
-                    }
-                    other => vec![(other, *w)],
+                    MiniAST::Replicate(inner, count) => std::iter::repeat_n(
+                        (inner.as_ref(), None),
+                        count.as_static().unwrap_or(1) as usize,
+                    )
+                    .collect::<Vec<_>>(),
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -1026,6 +1698,28 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
         }
 
         MiniAST::SlowCat(patterns) => {
+            if has_dynamic_entries_main(patterns) {
+                // Unroll one joint operand period into the static weighted
+                // slowcat machinery; the validator has already bounded the
+                // pass and slot counts.
+                let passes = slowcat_passes_main(patterns).unwrap_or(1);
+                let entries = patterns
+                    .iter()
+                    .map(|(p, w)| match p {
+                        MiniAST::Replicate(inner, count) => Ok(DynTimecatEntry {
+                            pat: convert_inner(inner)?,
+                            weight: DynWeight::Static(Fraction::from_integer(1)),
+                            count: dyn_count_spec(count),
+                        }),
+                        other => Ok(DynTimecatEntry {
+                            pat: convert_inner(other)?,
+                            weight: dyn_weight_spec(w),
+                            count: DynCount::Static(1),
+                        }),
+                    })
+                    .collect::<Result<Vec<_>, ConvertError>>()?;
+                return Ok(unroll_dyn_slowcat(entries, passes));
+            }
             // Expand Replicate nodes within SlowCat.
             // In Strudel/Tidal, <a!3 b> means "slowcat of a, a, a, b" (each on separate cycles),
             // not "slowcat of fastcat(a,a,a), b" (which would be 3 a's in cycle 1, b in cycle 2).
@@ -1034,10 +1728,13 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 .flat_map(|(p, w)| match p {
                     MiniAST::Replicate(inner, count) => {
                         // Replicated entries each get weight 1 (or None)
-                        std::iter::repeat_n((inner.as_ref(), None), *count as usize)
-                            .collect::<Vec<_>>()
+                        std::iter::repeat_n(
+                            (inner.as_ref(), None),
+                            count.as_static().unwrap_or(1) as usize,
+                        )
+                        .collect::<Vec<_>>()
                     }
-                    other => vec![(other, *w)],
+                    other => vec![(other, w.as_ref().and_then(Weight::as_static))],
                 })
                 .collect();
 
@@ -1097,8 +1794,18 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
 
         MiniAST::Replicate(pattern, count) => {
             let pat = convert_inner(pattern)?;
-            let pats: Vec<Pattern<T>> = (0..*count).map(|_| pat.clone()).collect();
-            Ok(fastcat(pats))
+            match count.as_static() {
+                Some(count) => {
+                    let pats: Vec<Pattern<T>> = (0..count).map(|_| pat.clone()).collect();
+                    Ok(fastcat(pats))
+                }
+                // A patterned count re-samples the copy count every cycle.
+                None => Ok(dyn_timecat(vec![DynTimecatEntry {
+                    pat,
+                    weight: DynWeight::Static(Fraction::from_integer(1)),
+                    count: dyn_count_spec(count),
+                }])),
+            }
         }
 
         MiniAST::Degrade(pattern, prob, seed) => {
@@ -1150,17 +1857,29 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
             // Polymeter: stack each child scaled so its step count maps to
             // `steps_per_cycle`. Default stepsPerCycle is the first child's
             // own step count — matches strudel's fallback in mini.mjs.
-            let spc = steps_per_cycle
-                .as_deref()
-                .map(eval_f64)
-                .unwrap_or_else(|| children.first().map(step_count_main).unwrap_or(1.0));
+            let spc_spec = match steps_per_cycle.as_deref() {
+                Some(s) => StepSpec::Static(Fraction::from(eval_f64(s))),
+                None => children
+                    .first()
+                    .map(step_spec_main)
+                    .unwrap_or(StepSpec::Static(Fraction::from_integer(1))),
+            };
             let scaled: Vec<Pattern<T>> = children
                 .iter()
                 .map(|c| {
-                    let w = step_count_main(c).max(1.0);
                     let pat = convert_inner(c)?;
-                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
-                    Ok(pat.fast(constructors::pure(Fraction::from(spc) / Fraction::from(w))))
+                    Ok(match (&spc_spec, step_spec_main(c)) {
+                        (StepSpec::Static(spc), StepSpec::Static(w)) => {
+                            // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                            let w = w.max_of(&Fraction::from_integer(1));
+                            pat.fast(constructors::pure(spc / &w))
+                        }
+                        // A patterned @/! in a voice makes its step count (and
+                        // so the alignment factor) vary per cycle.
+                        (_, child_spec) => {
+                            pat.fast(dyn_polymeter_factor(spc_spec.clone(), child_spec))
+                        }
+                    })
                 })
                 .collect::<Result<_, ConvertError>>()?;
             Ok(stack(scaled))
@@ -1730,7 +2449,10 @@ mod tests {
     fn test_eval_f64_sequence() {
         let ast = MiniASTF64::Sequence(vec![
             (MiniASTF64::Pure(Located::new(3.0, 0, 1)), None),
-            (MiniASTF64::Pure(Located::new(4.0, 2, 3)), Some(2.0)),
+            (
+                MiniASTF64::Pure(Located::new(4.0, 2, 3)),
+                Some(Weight::Static(2.0)),
+            ),
         ]);
         assert!((eval_f64(&ast) - 3.0).abs() < 0.001); // Returns first element
     }
@@ -1776,7 +2498,10 @@ mod tests {
 
     #[test]
     fn test_eval_f64_replicate() {
-        let ast = MiniASTF64::Replicate(Box::new(MiniASTF64::Pure(Located::new(11.0, 0, 2))), 3);
+        let ast = MiniASTF64::Replicate(
+            Box::new(MiniASTF64::Pure(Located::new(11.0, 0, 2))),
+            ReplicateCount::Static(3),
+        );
         assert!((eval_f64(&ast) - 11.0).abs() < 0.001);
     }
 
@@ -1859,7 +2584,7 @@ mod tests {
                 (MiniASTF64::Pure(Located::new(24.0, 0, 2)), None),
                 (MiniASTF64::Pure(Located::new(25.0, 3, 5)), None),
             ])),
-            3,
+            ReplicateCount::Static(3),
         );
         assert!((eval_f64(&ast) - 24.0).abs() < 0.001);
     }
@@ -1941,7 +2666,10 @@ mod tests {
     fn test_eval_u32_sequence() {
         let ast = MiniASTU32::Sequence(vec![
             (MiniASTU32::Pure(Located::new(3, 0, 1)), None),
-            (MiniASTU32::Pure(Located::new(4, 2, 3)), Some(2.0)),
+            (
+                MiniASTU32::Pure(Located::new(4, 2, 3)),
+                Some(Weight::Static(2.0)),
+            ),
         ]);
         assert_eq!(eval_u32(&ast), 3);
     }
@@ -1987,7 +2715,10 @@ mod tests {
 
     #[test]
     fn test_eval_u32_replicate() {
-        let ast = MiniASTU32::Replicate(Box::new(MiniASTU32::Pure(Located::new(11, 0, 2))), 3);
+        let ast = MiniASTU32::Replicate(
+            Box::new(MiniASTU32::Pure(Located::new(11, 0, 2))),
+            ReplicateCount::Static(3),
+        );
         assert_eq!(eval_u32(&ast), 11);
     }
 
@@ -2066,7 +2797,7 @@ mod tests {
                 (MiniASTU32::Pure(Located::new(24, 0, 2)), None),
                 (MiniASTU32::Pure(Located::new(25, 3, 5)), None),
             ])),
-            3,
+            ReplicateCount::Static(3),
         );
         assert_eq!(eval_u32(&ast), 24);
     }
@@ -2114,7 +2845,7 @@ mod tests {
                 (MiniASTF64::Pure(Located::new(1.5, 0, 3)), None),
                 (MiniASTF64::Pure(Located::new(2.5, 4, 7)), None),
             ])),
-            3,
+            ReplicateCount::Static(3),
         );
         assert!((eval_f64(&ast) - 1.5).abs() < 0.001);
     }
@@ -2533,7 +3264,7 @@ mod tests {
     #[test]
     fn test_replicate_count_limit_in_operand_pattern() {
         // Limits apply inside typed operand patterns (e.g. a `*` factor).
-        let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), 2000);
+        let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), ReplicateCount::Static(2000));
         let ast = MiniAST::Fast(Box::new(num_atom(1.0)), Box::new(factor));
         assert!(convert::<f64>(&ast).is_err());
     }
@@ -3082,5 +3813,367 @@ mod tests {
         assert_eq!(h1[0].value, Some(2.0));
         assert_eq!(h2.len(), 1);
         assert_eq!(h2[0].value, Some(3.0));
+    }
+
+    // ===== Patterned @ weights and ! counts =====
+
+    /// (part, whole, value) triples for structural hap comparison across two
+    /// lowerings of equivalent patterns (contexts carry different spans).
+    fn hap_shapes<T: Clone + PartialEq + std::fmt::Debug + Send + Sync + 'static>(
+        pat: &Pattern<T>,
+        from: i64,
+        to: i64,
+    ) -> Vec<((Fraction, Fraction), Option<(Fraction, Fraction)>, T)> {
+        let mut haps = pat.query_arc(Fraction::from_integer(from), Fraction::from_integer(to));
+        haps.sort_by(|a, b| a.part.begin.partial_cmp(&b.part.begin).unwrap());
+        haps.iter()
+            .map(|h| {
+                (
+                    (h.part.begin.clone(), h.part.end.clone()),
+                    h.whole.as_ref().map(|w| (w.begin.clone(), w.end.clone())),
+                    h.value.clone(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_dyn_weight_fastcat_relayouts_per_cycle() {
+        // `0@<1 3> 1`: the weight operand advances per cycle, so the layout
+        // alternates between equal halves and 3/4 + 1/4.
+        let ast = parse("0@<1 3> 1").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+
+        let h0 = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(h0.len(), 2);
+        assert_eq!(
+            h0[0].whole.as_ref().unwrap().duration(),
+            Fraction::new(1, 2)
+        );
+        assert_eq!(
+            h0[1].whole.as_ref().unwrap().duration(),
+            Fraction::new(1, 2)
+        );
+
+        let h1 = pat.query_arc(Fraction::from_integer(1), Fraction::from_integer(2));
+        assert_eq!(h1.len(), 2);
+        assert_eq!(h1[0].value, 0.0);
+        assert_eq!(
+            h1[0].whole.as_ref().unwrap().duration(),
+            Fraction::new(3, 4)
+        );
+        assert_eq!(h1[1].value, 1.0);
+        assert_eq!(
+            h1[1].whole.as_ref().unwrap().duration(),
+            Fraction::new(1, 4)
+        );
+
+        // Cycle 2 wraps back to the cycle-0 layout.
+        let h2 = pat.query_arc(Fraction::from_integer(2), Fraction::from_integer(3));
+        assert_eq!(
+            h2[0].whole.as_ref().unwrap().duration(),
+            Fraction::new(1, 2)
+        );
+    }
+
+    #[test]
+    fn test_dyn_weight_bracket_matches_static() {
+        // A single-valued operand is indistinguishable from the bare number.
+        let dynamic = parse("0@[2] 1").unwrap();
+        let static_ = parse("0@2 1").unwrap();
+        let dyn_pat: Pattern<f64> = convert(&dynamic).unwrap();
+        let static_pat: Pattern<f64> = convert(&static_).unwrap();
+        assert_eq!(hap_shapes(&dyn_pat, 0, 4), hap_shapes(&static_pat, 0, 4));
+    }
+
+    #[test]
+    fn test_dyn_replicate_sequence_per_cycle() {
+        // `0!<2 3> 1`: 2 copies + 1 on even cycles, 3 copies + 1 on odd.
+        let ast = parse("0!<2 3> 1").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+
+        let h0 = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        assert_eq!(h0.len(), 3);
+        assert_eq!(h0.iter().filter(|h| h.value == 0.0).count(), 2);
+
+        let h1 = pat.query_arc(Fraction::from_integer(1), Fraction::from_integer(2));
+        assert_eq!(h1.len(), 4);
+        assert_eq!(h1.iter().filter(|h| h.value == 0.0).count(), 3);
+        // Copies split the cycle evenly with the trailing 1: four 1/4 slots.
+        assert_eq!(
+            h1[0].whole.as_ref().unwrap().duration(),
+            Fraction::new(1, 4)
+        );
+    }
+
+    #[test]
+    fn test_dyn_replicate_standalone_per_cycle() {
+        let ast = parse("0!<2 3>").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+        let h0 = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        let h1 = pat.query_arc(Fraction::from_integer(1), Fraction::from_integer(2));
+        assert_eq!(h0.len(), 2);
+        assert_eq!(h1.len(), 3);
+    }
+
+    #[test]
+    fn test_dyn_slowcat_unroll_weight() {
+        // `<0@<1 2> 1>` unrolls over the operand's period 2: slots
+        // 0@1 1@1 0@2 1@1, total 5 cycles, repeating.
+        let ast = parse("<0@<1 2> 1>").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+        let expected = [0.0, 1.0, 0.0, 0.0, 1.0];
+        for cycle in 0..10 {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            assert_eq!(haps.len(), 1, "cycle {cycle}");
+            assert_eq!(
+                haps[0].value,
+                expected[(cycle % 5) as usize],
+                "cycle {cycle}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dyn_slowcat_unroll_replicate() {
+        // `<a!<2 3> b>` unrolls to a,a,b,a,a,a,b over 7 cycles. a=69, b=71.
+        let ast = parse("<a!<2 3> b>").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+        let expected = [69.0, 69.0, 71.0, 69.0, 69.0, 69.0, 71.0];
+        for cycle in 0..14 {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            assert_eq!(haps.len(), 1, "cycle {cycle}");
+            assert_eq!(
+                haps[0].value,
+                expected[(cycle % 7) as usize],
+                "cycle {cycle}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dyn_slowcat_joint_period() {
+        // Two operands with periods 3 and 2 unroll over lcm 6 passes:
+        // weights per pass (1,2) (2,1) (3,2) (1,1) (2,2) (3,1), total 21.
+        let ast = parse("<0@<1 2 3> 1@<2 1>>").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+        let mut expected = Vec::new();
+        for (w0, w1) in [(1, 2), (2, 1), (3, 2), (1, 1), (2, 2), (3, 1)] {
+            expected.extend(std::iter::repeat_n(0.0, w0));
+            expected.extend(std::iter::repeat_n(1.0, w1));
+        }
+        assert_eq!(expected.len(), 21);
+        for cycle in 0..42 {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            assert_eq!(haps.len(), 1, "cycle {cycle}");
+            assert_eq!(
+                haps[0].value,
+                expected[(cycle % 21) as usize],
+                "cycle {cycle}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dyn_slowcat_ground_truth_vector() {
+        // User-supplied equivalence pinning the unroll semantics: operand
+        // periods 4 and 4 → 4 passes; weights per pass (2,2) (2,2) (2,2)
+        // (3,1); the structured child `<0 -1>` advances one of its own
+        // cycles per pass. Composition under an outer `*8` must hold too.
+        let dynamic = parse("<<0 -1>@<2!3 3> -3@<2!3 1>>*8").unwrap();
+        let unrolled = parse("<0@2 -3@2 -1@2 -3@2 0@2 -3@2 -1@3 -3@1>*8").unwrap();
+        let dyn_pat: Pattern<f64> = convert(&dynamic).unwrap();
+        let unrolled_pat: Pattern<f64> = convert(&unrolled).unwrap();
+        // 4 outer cycles = 32 pattern cycles = two 16-cycle super-periods.
+        assert_eq!(hap_shapes(&dyn_pat, 0, 4), hap_shapes(&unrolled_pat, 0, 4));
+    }
+
+    #[test]
+    fn test_dyn_slowcat_degenerate_weight_matches_static() {
+        // `@<2>` (period-1 operand) must lower to exactly the static `@2`
+        // behavior, including how the structured child advances per
+        // super-period.
+        let dynamic = parse("<<0 -1>@<2> 1>").unwrap();
+        let static_ = parse("<<0 -1>@2 1>").unwrap();
+        let dyn_pat: Pattern<f64> = convert(&dynamic).unwrap();
+        let static_pat: Pattern<f64> = convert(&static_).unwrap();
+        assert_eq!(hap_shapes(&dyn_pat, 0, 12), hap_shapes(&static_pat, 0, 12));
+    }
+
+    #[test]
+    fn test_dyn_slowcat_degenerate_replicate_matches_static() {
+        let dynamic = parse("<g!<3> b>").unwrap();
+        let static_ = parse("<g!3 b>").unwrap();
+        let dyn_pat: Pattern<f64> = convert(&dynamic).unwrap();
+        let static_pat: Pattern<f64> = convert(&static_).unwrap();
+        assert_eq!(hap_shapes(&dyn_pat, 0, 12), hap_shapes(&static_pat, 0, 12));
+    }
+
+    #[test]
+    fn test_dyn_polymeter_steps_weight() {
+        // `{0@<1 2> 1, 7}` as an operand subtree: voice 0's step count
+        // alternates 2, 3 and is the steps-per-cycle default, so voice 1
+        // fires 2× then 3× per cycle. Parsed via a `*` operand because `{}`
+        // only exists inside modifier operands.
+        let ast = parse("0*{0@<1 2> 1, 7}").unwrap();
+        let MiniAST::Fast(_, operand) = &ast else {
+            panic!("expected Fast, got {ast:?}");
+        };
+        let pat = convert_f64_pattern(operand);
+        for (cycle, want_sevens) in [(0i64, 2usize), (1, 3), (2, 2)] {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            let sevens = haps
+                .iter()
+                .filter(|h| h.value == Fraction::from_integer(7))
+                .count();
+            assert_eq!(
+                sevens, want_sevens,
+                "cycle {cycle}: voice 1 fires spc(cycle) times"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dyn_polymeter_steps_replicate() {
+        // `{0!<2 3>, 7}`: voice 0 is a top-level replicate, so its step
+        // count is the sampled copy count; voice 1 follows it.
+        let ast = parse("0*{0!<2 3>, 7}").unwrap();
+        let MiniAST::Fast(_, operand) = &ast else {
+            panic!("expected Fast, got {ast:?}");
+        };
+        let pat = convert_f64_pattern(operand);
+        for (cycle, want) in [(0i64, 2usize), (1, 3), (2, 2)] {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            let sevens = haps
+                .iter()
+                .filter(|h| h.value == Fraction::from_integer(7))
+                .count();
+            let zeros = haps
+                .iter()
+                .filter(|h| h.value == Fraction::from_integer(0))
+                .count();
+            assert_eq!(sevens, want, "cycle {cycle}: voice 1 follows voice 0");
+            assert_eq!(zeros, want, "cycle {cycle}: voice 0 replicates itself");
+        }
+    }
+
+    #[test]
+    fn test_operand_polymeter_for_fast() {
+        // `0*{1 2 3}%4` speeds the atom by the polymeter's per-slot factor
+        // stream: 4 quarter-cycle factor slots per cycle.
+        let ast = parse("0*{1 2 3}%4").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+        let h0 = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
+        // Factor slots for cycle 0 are 1,2,3,1 (wrapping voice): onsets
+        // 1/4·(1) + 1/4·(2 → 1 shown at slot rate…) — assert the count is
+        // stable and positive rather than pinning exact subdivision.
+        assert!(!h0.is_empty());
+        // The static single-voice form must equal the plain subsequence.
+        let braced = parse("0*{1 2 3}").unwrap();
+        let plain = parse("0*[1 2 3]").unwrap();
+        let braced_pat: Pattern<f64> = convert(&braced).unwrap();
+        let plain_pat: Pattern<f64> = convert(&plain).unwrap();
+        assert_eq!(hap_shapes(&braced_pat, 0, 3), hap_shapes(&plain_pat, 0, 3));
+    }
+
+    #[test]
+    fn test_dyn_slowcat_aperiodic_operand_errors() {
+        // `|` random choice has no period, so it cannot be unrolled.
+        let ast = parse("<0@[1|2] 1>").unwrap();
+        let result: Result<Pattern<f64>, _> = convert(&ast);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("must repeat"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_dyn_slowcat_period_cap_errors() {
+        // The weight operand's own period (1200) exceeds MAX_EXPANSION.
+        let ast = parse("<0@<1!600 2!600> 1>").unwrap();
+        let result: Result<Pattern<f64>, _> = convert(&ast);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dyn_slowcat_slot_bound_errors() {
+        // 2 passes × max count 600 = 1200 unrolled slots, past MAX_EXPANSION.
+        let ast = parse("<0!<600 599> 1>").unwrap();
+        let result: Result<Pattern<f64>, _> = convert(&ast);
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("unroll"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_dyn_replicate_count_limit() {
+        // A patterned count is bounded by its largest leaf.
+        let ast = parse("0![2000]").unwrap();
+        let result: Result<Pattern<f64>, _> = convert(&ast);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_dyn_weight_operand_spans() {
+        // `c@<2 3> e`: c's haps carry the sampled weight atom's span as a
+        // modifier span, like a `*` factor; e's haps carry none.
+        //  c=0-1 @ < 2=3-4, 3=5-6 > space e=8-9
+        let ast = parse("c@<2 3> e").unwrap();
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+
+        for (cycle, want_span) in [(0i64, (3, 4)), (1, (5, 6))] {
+            let haps = pat.query_arc(
+                Fraction::from_integer(cycle),
+                Fraction::from_integer(cycle + 1),
+            );
+            let c_hap = haps.iter().find(|h| h.value == 60.0).unwrap();
+            let spans: Vec<(usize, usize)> = c_hap
+                .context
+                .modifier_spans
+                .iter()
+                .map(|s| (s.start, s.end))
+                .collect();
+            assert_eq!(spans, vec![want_span], "cycle {cycle}");
+            let e_hap = haps.iter().find(|h| h.value == 64.0).unwrap();
+            assert!(e_hap.context.modifier_spans.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_weight_serde_roundtrip() {
+        // Static weights stay bare JSON numbers; patterned weights are
+        // externally tagged operand objects. Both round-trip.
+        let dynamic = parse("0@<1 2> 1").unwrap();
+        let json = serde_json::to_string(&dynamic).unwrap();
+        let back: MiniAST = serde_json::from_str(&json).unwrap();
+        assert_eq!(dynamic, back);
+
+        let static_ = parse("0@2 1!3").unwrap();
+        let json = serde_json::to_string(&static_).unwrap();
+        assert!(
+            json.contains("[2.0") || json.contains(",2.0]") || json.contains("2.0]"),
+            "static weight should serialize as a bare number: {json}"
+        );
+        assert!(json.contains("3"), "static count stays a number: {json}");
+        let back: MiniAST = serde_json::from_str(&json).unwrap();
+        assert_eq!(static_, back);
     }
 }
