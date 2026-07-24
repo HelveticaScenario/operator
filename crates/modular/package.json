@@ -5,7 +5,7 @@
     "main": "index.js",
     "repository": {
         "type": "git",
-        "url": "https://github.com/HelveticaScenario/operator.git"
+        "url": "https://gitlab.com/logpath/reef.git"
     },
     "license": "AGPL",
     "module": "index.js",

@@ -39,4 +39,4 @@ git tag "v$VERSION"
 git push origin HEAD
 git push origin "v$VERSION"
 
-echo "Successfully created and pushed tag v$VERSION. GitHub Actions will now deploy the release."
+echo "Successfully created and pushed tag v$VERSION. GitLab CI will now deploy the release."

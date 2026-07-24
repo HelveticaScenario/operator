@@ -6,7 +6,7 @@
     "main": ".vite/build/main.js",
     "repository": {
         "type": "git",
-        "url": "https://github.com/HelveticaScenario/operator"
+        "url": "https://gitlab.com/logpath/reef"
     },
     "scripts": {
         "start": "yarn build-native && yarn build-syphon-bridge && concurrently --handle-input --default-input-target app -n app,rust -c blue,yellow 'node scripts/start-dev.mjs' 'yarn watch-native'",
@@ -16,7 +16,8 @@
         "start:alloc": "yarn build-native-alloc && yarn build-syphon-bridge && concurrently --handle-input --default-input-target app -n app,rust -c blue,yellow 'node scripts/start-dev.mjs' 'yarn watch-native-alloc'",
         "package": "yarn build-native && yarn build-syphon-bridge --require && electron-forge package",
         "make": "yarn build-native && yarn build-syphon-bridge --require --universal && electron-forge make",
-        "forge-publish": "yarn build-native && yarn build-syphon-bridge --require --universal && electron-forge publish",
+        "forge-publish": "yarn make && yarn generate-update-metadata",
+        "generate-update-metadata": "node scripts/generate-update-metadata.mjs",
         "build-syphon-bridge": "node scripts/build-syphon-bridge.mjs",
         "deploy": "./release.sh",
         "test": "yarn test:unit",
@@ -58,7 +59,6 @@
         "@electron-forge/plugin-auto-unpack-natives": "^7.10.2",
         "@electron-forge/plugin-fuses": "^7.10.2",
         "@electron-forge/plugin-vite": "^7.11.1",
-        "@electron-forge/publisher-github": "^7.10.2",
         "@electron/fuses": "^1.8.0",
         "@electron/notarize": "^3.1.1",
         "@electron/osx-sign": "^2.3.0",
@@ -108,6 +108,7 @@
         "@tanstack/react-table": "^8.21.3",
         "cmdk": "^1.1.1",
         "electron-squirrel-startup": "^1.0.1",
+        "electron-updater": "^6.8.9",
         "jsonc-parser": "^3.3.1",
         "monaco-editor": "^0.55.1",
         "prettier": "^3.8.4",

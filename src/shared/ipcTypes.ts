@@ -155,7 +155,7 @@ export interface MainLogEntry {
 export interface UpdateAvailableInfo {
     /** Semver string, e.g. "0.0.25" */
     version: string;
-    /** URL to the GitHub release page */
+    /** URL to the release page */
     releaseUrl: string;
     /**
      * True on platforms where the app can download and install the update

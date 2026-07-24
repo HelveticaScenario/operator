@@ -1,0 +1,166 @@
+# GitLab CI/CD for Operator.
+#
+# - test:   Rust + JS unit tests on every merge request, master push, and tag.
+# - build:  On a `v*` tag, package installers on macOS, Windows, and Linux and
+#           upload each artifact (plus the electron-updater metadata) to the
+#           generic Package Registry.
+# - release: Collect the uploaded assets into a GitLab Release. The in-app
+#           updater reads them from the release "permalink/latest/downloads"
+#           URL, so every asset is attached with a filepath.
+#
+# Runner requirements (set per your GitLab plan): the macOS and Windows build
+# jobs need SaaS macOS/Windows runners (or self-hosted equivalents) — adjust the
+# `tags` and macOS `image` to what your instance offers. Apple signing +
+# notarization read these CI/CD variables (Settings → CI/CD → Variables, masked):
+#   APPLE_CERTIFICATE_BASE64, APPLE_CERTIFICATE_PASSWORD,
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID
+
+stages:
+    - test
+    - build
+    - release
+
+variables:
+    CARGO_TERM_COLOR: 'never'
+    NO_COLOR: '1'
+    # Keep yarn's cache inside the project so GitLab can cache it between runs.
+    YARN_ENABLE_GLOBAL_CACHE: 'false'
+
+# Node 24 image; the pinned Rust toolchain (rust-toolchain.toml) is installed
+# per-job so cargo, rustfmt, and clippy match local dev.
+.linux:
+    image: node:24-bookworm
+    cache:
+        key:
+            files:
+                - yarn.lock
+        paths:
+            - .yarn/cache
+    before_script:
+        - apt-get update
+        - apt-get install -y libasound2-dev libudev-dev libjack-jackd2-dev build-essential curl
+        - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+        - . "$HOME/.cargo/env"
+        # `rustup show` installs the channel + components pinned in rust-toolchain.toml.
+        - rustup show
+        - corepack enable
+        - yarn install --immutable
+
+test:
+    extends: .linux
+    stage: test
+    rules:
+        - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+        - if: '$CI_COMMIT_BRANCH == "master"'
+        - if: '$CI_COMMIT_TAG'
+    script:
+        - cargo fmt -p modular_core -p modular_derive -p modular -- --check
+        # The vitest suite loads the N-API binding at import time, so the native
+        # module must be built before the JS tests run.
+        - yarn build-native
+        # Non-gating: surface clippy findings without failing the pipeline.
+        - cargo clippy -p modular_core -p modular_derive -p modular --all-targets || true
+        - yarn build:grammar
+        - git diff --exit-code src/main/dsl/miniNotation/grammar.generated.ts
+        - yarn test:unit
+        - git diff --exit-code crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
+        - yarn gen:sp-fixtures
+        - cargo test -p modular_core
+
+build:linux:
+    extends: .linux
+    stage: build
+    rules:
+        - if: '$CI_COMMIT_TAG =~ /^v/'
+    script:
+        # MakerRpm needs rpmbuild.
+        - apt-get install -y rpm
+        - yarn make
+        - bash .gitlab/upload-release-assets.sh out/make
+    artifacts:
+        paths:
+            - assets/
+        expire_in: 1 week
+
+build:macos:
+    stage: build
+    rules:
+        - if: '$CI_COMMIT_TAG =~ /^v/'
+    # Adjust to a macOS image/runner your plan provides.
+    tags:
+        - saas-macos-medium-m1
+    image: macos-14-xcode-15
+    before_script:
+        - rustup show
+        - rustup target add aarch64-apple-darwin
+        - corepack enable
+        - yarn install --immutable
+        # The Metal compiler is a separate Xcode component on Xcode 26+.
+        - |
+            if ! xcrun --find metal >/dev/null 2>&1; then
+                xcodebuild -downloadComponent MetalToolchain
+            fi
+        # Import the Developer ID certificate into a temporary keychain so
+        # electron-forge can codesign the app during `make`.
+        - |
+            CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
+            KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+            KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
+            echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+            security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+            security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+            security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+            security list-keychain -d user -s "$KEYCHAIN_PATH"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+    script:
+        # forge.config.ts reads APPLE_PASSWORD for notarization.
+        - export APPLE_PASSWORD="$APPLE_APP_SPECIFIC_PASSWORD"
+        - yarn make
+        - yarn generate-update-metadata
+        - bash .gitlab/upload-release-assets.sh out/make
+    artifacts:
+        paths:
+            - assets/
+        expire_in: 1 week
+
+build:windows:
+    stage: build
+    rules:
+        - if: '$CI_COMMIT_TAG =~ /^v/'
+    # Adjust to a Windows runner your plan provides.
+    tags:
+        - saas-windows-medium-amd64
+    before_script:
+        - corepack enable
+        - yarn install --immutable
+    script:
+        - yarn make
+        # Upload the Squirrel updater manifest (RELEASES), the nupkg it
+        # references, and the Setup.exe, emitting an asset-link JSON per file.
+        - pwsh -File .gitlab/upload-release-assets.ps1
+    artifacts:
+        paths:
+            - assets/
+        expire_in: 1 week
+
+release:
+    stage: release
+    image: registry.gitlab.com/gitlab-org/release-cli:latest
+    rules:
+        - if: '$CI_COMMIT_TAG =~ /^v/'
+    needs:
+        - build:linux
+        - build:macos
+        - build:windows
+    script:
+        - |
+            set --
+            for f in assets/*.json; do
+                set -- "$@" --assets-link "$(cat "$f")"
+            done
+            release-cli create \
+                --name "Operator $CI_COMMIT_TAG" \
+                --tag-name "$CI_COMMIT_TAG" \
+                --description "Operator $CI_COMMIT_TAG" \
+                "$@"

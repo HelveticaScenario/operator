@@ -4,7 +4,6 @@ import { MakerZIP } from '@electron-forge/maker-zip';
 import { MakerDeb } from '@electron-forge/maker-deb';
 import { MakerRpm } from '@electron-forge/maker-rpm';
 // import { MakerFlatpak } from '@electron-forge/maker-flatpak';
-import { PublisherGithub } from '@electron-forge/publisher-github';
 import { AutoUnpackNativesPlugin } from '@electron-forge/plugin-auto-unpack-natives';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
@@ -256,16 +255,9 @@ const config: ForgeConfig = {
         //   },
         // }),
     ],
-    publishers: [
-        new PublisherGithub({
-            repository: {
-                owner: 'HelveticaScenario',
-                name: 'operator',
-            },
-            prerelease: false,
-            draft: false,
-        }),
-    ],
+    // Releases are published by GitLab CI, not an electron-forge publisher:
+    // `electron-forge make` produces the installers, then the pipeline uploads
+    // them (plus the electron-updater metadata) as GitLab Release assets.
     plugins: [
         new AutoUnpackNativesPlugin({}),
         new VitePlugin({

@@ -3,12 +3,14 @@ import {
     Menu,
     MenuItem,
     app,
-    autoUpdater,
+    autoUpdater as squirrelUpdater,
     dialog,
     globalShortcut,
     ipcMain,
     shell,
 } from 'electron';
+// electron-updater is CommonJS; the default export carries `autoUpdater`.
+import electronUpdater from 'electron-updater';
 import type { PatchGraph, AudioConfigOptions } from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
@@ -239,17 +241,33 @@ console.debug = createLogInterceptor('debug');
 // Update Service
 // ========================================================================
 
-const GITHUB_REPO = 'HelveticaScenario/operator';
-const UPDATE_FEED_URL = `https://update.electronjs.org/${GITHUB_REPO}`;
-const GITHUB_API_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
+// GitLab project the packaged app pulls releases from.
+const GITLAB_HOST = 'https://gitlab.com';
+const GITLAB_PROJECT = 'logpath/reef';
 
-/** True on platforms where autoUpdater (Squirrel) is supported */
-const supportsAutoUpdater =
+// Both installers download from the "latest" release permalink directory:
+// electron-updater (macOS) reads latest-mac.yml + the signed zip there, and
+// Squirrel.Windows reads the RELEASES manifest + nupkg. CI registers every
+// release asset with a matching filepath so these stable URLs 302 to the file.
+const UPDATE_DOWNLOADS_URL = `${GITLAB_HOST}/${GITLAB_PROJECT}/-/releases/permalink/latest/downloads`;
+
+// Metadata-only availability check; GitLab returns releases newest-first.
+const GITLAB_RELEASES_API = `${GITLAB_HOST}/api/v4/projects/${encodeURIComponent(
+    GITLAB_PROJECT,
+)}/releases?per_page=1`;
+
+// electron-updater drives the macOS in-app download/install (Squirrel.Mac over
+// a static latest-mac.yml).
+const macUpdater = electronUpdater.autoUpdater;
+
+// macOS and Windows install updates in-app; Linux ships as deb/rpm with no
+// in-app installer, so it opens the release page in the browser instead.
+const supportsInAppUpdate =
     process.platform === 'darwin' || process.platform === 'win32';
 
 /**
- * Latest release URL from the GitHub API check, stored so the Linux
- * fallback in UPDATE_DOWNLOAD can open it in the browser.
+ * Release page URL from the availability check, stored so the Linux fallback in
+ * UPDATE_DOWNLOAD can open it in the browser.
  */
 let latestReleaseUrl: string | null = null;
 
@@ -260,29 +278,30 @@ function sendUpdateEvent(channel: string, ...args: unknown[]) {
 }
 
 /**
- * Fetches the latest release from GitHub API and pushes UPDATE_AVAILABLE
- * to the renderer if a newer version is available and not skipped.
- * Does NOT trigger any download.
+ * Queries the GitLab Releases API for the newest release and pushes
+ * UPDATE_AVAILABLE to the renderer when it is strictly newer than the running
+ * version and not skipped. Does NOT trigger any download.
  */
 async function checkForUpdateAvailability(): Promise<void> {
     try {
-        const response = await fetch(GITHUB_API_URL, {
-            headers: { 'User-Agent': GITHUB_REPO },
-        });
+        const response = await fetch(GITLAB_RELEASES_API);
         if (!response.ok) {
-            console.warn('[update] GitHub API returned', response.status);
+            console.warn('[update] GitLab API returned', response.status);
             return;
         }
+        // The listing endpoint returns an array ordered newest-first; the
+        // release page URL lives under `_links.self`.
         const ReleaseSchema = z.object({
-            html_url: z.string(),
             tag_name: z.string(),
+            _links: z.object({ self: z.string() }),
         });
-        const parsed = ReleaseSchema.safeParse(await response.json());
-        if (!parsed.success) {
-            console.warn('[update] Unexpected GitHub API response shape');
+        const parsed = z.array(ReleaseSchema).safeParse(await response.json());
+        if (!parsed.success || parsed.data.length === 0) {
+            console.warn('[update] Unexpected GitLab API response shape');
             return;
         }
-        const latestVersion = parsed.data.tag_name.replace(/^v/, '');
+        const latest = parsed.data[0];
+        const latestVersion = latest.tag_name.replace(/^v/, '');
         const currentVersion = app.getVersion();
         if (latestVersion === currentVersion) {
             return;
@@ -308,11 +327,11 @@ async function checkForUpdateAvailability(): Promise<void> {
             return;
         }
 
-        latestReleaseUrl = parsed.data.html_url;
+        latestReleaseUrl = latest._links.self;
 
         const info: UpdateAvailableInfo = {
-            releaseUrl: parsed.data.html_url,
-            supportsInAppUpdate: supportsAutoUpdater,
+            releaseUrl: latest._links.self,
+            supportsInAppUpdate,
             version: latestVersion,
         };
         sendUpdateEvent(IPC_CHANNELS.UPDATE_AVAILABLE, info);
@@ -321,71 +340,77 @@ async function checkForUpdateAvailability(): Promise<void> {
     }
 }
 
-/**
- * The GitHub API availability check (checkForUpdateAvailability) is uncached
- * and sees a new release instantly, but the Squirrel feed
- * (update.electronjs.org) caches releases for several minutes. During that
- * window the feed still reports the old version, so autoUpdater fires
- * `update-not-available` even though the user accepted a real update. Retry
- * the feed until it catches up before surfacing anything, and only then show a
- * transient (not error) message.
- */
-const UPDATE_FEED_RETRY_DELAY_MS = 60_000;
-const UPDATE_FEED_MAX_RETRIES = 10;
 let updateDownloadActive = false;
-let updateFeedRetries = 0;
-let updateRetryTimer: NodeJS.Timeout | null = null;
 
 /**
- * Initialise the autoUpdater feed URL and event listeners.
- * Called once, after app.ready, only in packaged builds on supported platforms.
+ * Wire the platform updater feed URL and event listeners. Called once, after
+ * app.ready, only in packaged builds on platforms with an in-app installer.
  */
 function initAutoUpdater(): void {
-    if (!supportsAutoUpdater) {
+    if (!supportsInAppUpdate) {
         return;
     }
 
-    // Update.electronjs.org maps plain "darwin" to "darwin-x64", so we must
-    // Include the arch explicitly so it serves the arm64 asset on Apple Silicon.
-    const feedPlatform =
-        process.platform === 'darwin'
-            ? `darwin-${process.arch}` // E.g. "darwin-arm64" or "darwin-x64"
-            : process.platform;
-    autoUpdater.setFeedURL({
-        url: `${UPDATE_FEED_URL}/${feedPlatform}/${app.getVersion()}`,
-    });
+    if (process.platform === 'darwin') {
+        // Availability is decided by the GitLab API check above; the download
+        // is user-initiated, so electron-updater must not auto-download or
+        // auto-install behind the banner.
+        macUpdater.autoDownload = false;
+        macUpdater.autoInstallOnAppQuit = false;
+        macUpdater.setFeedURL({
+            provider: 'generic',
+            url: UPDATE_DOWNLOADS_URL,
+        });
+        // Availability is confirmed by the GitLab API check; when the user
+        // accepts, checkForUpdates() re-resolves the release and this starts the
+        // download (autoDownload is off, so nothing downloads before consent).
+        macUpdater.on('update-available', () => {
+            if (updateDownloadActive) {
+                void macUpdater.downloadUpdate();
+            }
+        });
+        macUpdater.on('update-not-available', () => {
+            if (!updateDownloadActive) {
+                return;
+            }
+            updateDownloadActive = false;
+            sendUpdateEvent(
+                IPC_CHANNELS.UPDATE_ERROR,
+                'The new release is not downloadable yet. Try again in a few minutes.',
+            );
+        });
+        macUpdater.on('update-downloaded', () => {
+            updateDownloadActive = false;
+            sendUpdateEvent(IPC_CHANNELS.UPDATE_DOWNLOADED);
+        });
+        macUpdater.on('error', (err) => {
+            updateDownloadActive = false;
+            console.error('[update] macUpdater error:', err.message);
+            sendUpdateEvent(IPC_CHANNELS.UPDATE_ERROR, err.message);
+        });
+        return;
+    }
 
-    autoUpdater.on('update-downloaded', () => {
+    // Windows: Squirrel.Windows fetches `${url}/RELEASES` from the GitLab feed.
+    squirrelUpdater.setFeedURL({ url: UPDATE_DOWNLOADS_URL });
+    squirrelUpdater.on('update-downloaded', () => {
         updateDownloadActive = false;
         sendUpdateEvent(IPC_CHANNELS.UPDATE_DOWNLOADED);
     });
-
-    autoUpdater.on('update-not-available', () => {
-        // checkForUpdates() only runs after the user accepted an update the
-        // GitHub API reported, so reaching here means the Squirrel feed is
-        // lagging behind that release. Retry until it catches up, then fall
-        // back to a transient message rather than a hard error.
+    squirrelUpdater.on('update-not-available', () => {
+        // Only meaningful once the user accepted a download; the availability
+        // check already confirmed a newer release exists, so a miss here means
+        // the release assets are not fully published yet.
         if (!updateDownloadActive) {
-            return;
-        }
-        if (updateFeedRetries < UPDATE_FEED_MAX_RETRIES) {
-            updateFeedRetries += 1;
-            sendUpdateEvent(IPC_CHANNELS.UPDATE_PREPARING);
-            updateRetryTimer = setTimeout(() => {
-                if (updateDownloadActive) {
-                    autoUpdater.checkForUpdates();
-                }
-            }, UPDATE_FEED_RETRY_DELAY_MS);
             return;
         }
         updateDownloadActive = false;
         sendUpdateEvent(
             IPC_CHANNELS.UPDATE_ERROR,
-            'The new release is still propagating from the update service and is not downloadable yet. Try again in a few minutes.',
+            'The new release is not downloadable yet. Try again in a few minutes.',
         );
     });
-
-    autoUpdater.on('error', (err: Error) => {
+    squirrelUpdater.on('error', (err: Error) => {
         updateDownloadActive = false;
         console.error('[update] autoUpdater error:', err.message);
         sendUpdateEvent(IPC_CHANNELS.UPDATE_ERROR, err.message);
@@ -1762,27 +1787,30 @@ ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, async () => {
 });
 
 ipcMain.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, () => {
-    if (!supportsAutoUpdater) {
+    if (!supportsInAppUpdate) {
         if (latestReleaseUrl) {
             void shell.openExternal(latestReleaseUrl);
         }
         return;
     }
-    if (updateRetryTimer) {
-        clearTimeout(updateRetryTimer);
-        updateRetryTimer = null;
-    }
     updateDownloadActive = true;
-    updateFeedRetries = 0;
     sendUpdateEvent(IPC_CHANNELS.UPDATE_DOWNLOADING);
-    autoUpdater.checkForUpdates();
+    if (process.platform === 'darwin') {
+        void macUpdater.checkForUpdates();
+    } else {
+        squirrelUpdater.checkForUpdates();
+    }
 });
 
 ipcMain.handle(IPC_CHANNELS.UPDATE_INSTALL, () => {
-    if (!supportsAutoUpdater) {
+    if (!supportsInAppUpdate) {
         return;
     }
-    autoUpdater.quitAndInstall();
+    if (process.platform === 'darwin') {
+        macUpdater.quitAndInstall();
+    } else {
+        squirrelUpdater.quitAndInstall();
+    }
 });
 
 /**
