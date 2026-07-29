@@ -280,18 +280,33 @@ type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
 
 /**
  * A potentially multi-channel signal for polyphonic patches.
- * 
+ *
  * Can be:
  * - A single {@link Signal}
  * - An array of {@link Signal}s (creates multiple voices)
  * - An iterable of {@link ModuleOutput}s
- * 
+ * - A {@link SignalGroup} from \`$g1\`/\`$g2\`/\`$g3\` (cartesian voice expansion)
+ *
  * @example $saw(["C3", "E3", "G3"]).out()                    // 3-voice chord
  * @example $saw([...$sine("1hz"), ...$sine("2hz")]).out()   // Spread outputs into voices
  * @see {@link Signal} - for single-channel signals
  * @see {@link Collection} - for grouping outputs
  */
-type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
+type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup;
+
+/**
+ * A param value tagged into a cartesian signal group by {@link $g1}, {@link $g2},
+ * or {@link $g3}. Params in different groups multiply within a module — its
+ * channel count becomes the product of the group widths — while params in the
+ * same group cycle against each other as usual. Untagged params are group 0.
+ * Lower-numbered groups vary fastest across the resulting channels.
+ *
+ * Opaque: construct only with \`$g1\`/\`$g2\`/\`$g3\`.
+ */
+interface SignalGroup {
+  readonly __kind: "SignalGroup";
+  readonly group: 1 | 2 | 3;
+}
 
 
 /**
@@ -1517,6 +1532,47 @@ function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection |
  * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
+
+/**
+ * Tag a parameter value into signal group 1.
+ *
+ * Parameters in different groups multiply (cartesian product of channels)
+ * within a module instead of cycling together; parameters in the same group
+ * cycle as usual, and untagged parameters are group 0. Lower-numbered groups
+ * vary fastest across the resulting channels. The product across groups may
+ * not exceed 64 channels, and \`$gN\` must wrap the entire parameter value —
+ * it cannot appear inside an array.
+ *
+ * @example
+ * // 3 pitches x 2 phase offsets = 6 voices
+ * $sine($g1(["c3", "e3", "g3"]), {
+ *   phaseOffset: $g2([0, 0.25]),
+ * }).out()
+ */
+function $g1(signals: Poly<Signal>): SignalGroup;
+
+/**
+ * Tag a parameter value into signal group 2 — see {@link $g1}.
+ *
+ * @example
+ * // 3 pitches x 2 phase offsets = 6 voices
+ * $sine($g1(["c3", "e3", "g3"]), {
+ *   phaseOffset: $g2([0, 0.25]),
+ * }).out()
+ */
+function $g2(signals: Poly<Signal>): SignalGroup;
+
+/**
+ * Tag a parameter value into signal group 3 — see {@link $g1}.
+ *
+ * @example
+ * // 2 pitches x 2 shapes x 2 phases = 8 voices
+ * $saw($g1(["c2", "c3"]), {
+ *   shape: $g2([0, 2.5]),
+ *   phaseOffset: $g3([0, 0.5]),
+ * }).out()
+ */
+function $g3(signals: Poly<Signal>): SignalGroup;
 
 /**
  * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.

@@ -21,6 +21,10 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import { captureSourceLocation } from './captureSourceLocation';
+import {
+    assertSignalGroupsTopLevelOnly,
+    expandSignalGroups,
+} from './signalGroups';
 
 import z from 'zod';
 
@@ -1012,6 +1016,9 @@ export class GraphBuilder {
         if (!module) {
             throw new Error(`Module not found: ${moduleId}`);
         }
+        // Every param write funnels through here, so this is the one place
+        // that can see a $gN wrapper misplaced below the root of its param.
+        assertSignalGroupsTopLevelOnly(value);
         module.params[paramName] = value;
     }
 
@@ -1469,9 +1476,22 @@ export class GraphBuilder {
                     replacedParams,
                     deferredStringMap,
                 );
+                const moduleSchema = this.schemaByName.get(m.moduleType);
+                if (!moduleSchema) {
+                    throw new Error(
+                        `Schema for module "${m.moduleType}" not found.`,
+                    );
+                }
+
+                // Finally resolve $gN signal groups into plain cartesian
+                // arrays — the emitted graph carries no wrapper objects.
                 return {
                     ...m,
-                    params: finalParams,
+                    params: expandSignalGroups(
+                        finalParams as Record<string, unknown>,
+                        moduleSchema,
+                        m.moduleType,
+                    ),
                 };
             }),
             scopes: this.scopes.map(
@@ -1793,10 +1813,12 @@ export class ModuleNode {
 
     /**
      * Get a snapshot of the current params for this module.
-     * Used for Rust-side channel count derivation.
+     * Used for Rust-side channel count derivation. Signal groups are
+     * expanded here so the engine only ever sees plain signal arrays.
      */
     getParamsSnapshot(): Record<string, unknown> {
-        return this.builder.getModule(this.id)?.params ?? {};
+        const raw = this.builder.getModule(this.id)?.params ?? {};
+        return expandSignalGroups(raw, this.schema, this.moduleType);
     }
 
     /**
@@ -2333,6 +2355,9 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
         // collapse the nulls in `accidental`/`octave`/weight slots to 0 via
         // valueToSignal, producing zero-duration haps and silence. Returning the
         // wrapper verbatim also preserves the nested pattern payloads it carries.
+        // SignalGroup wrappers are deliberately NOT listed: their signals
+        // payload must be walked so outputs become cables; expandSignalGroups
+        // later erases the wrapper itself.
         if (!Array.isArray(replaced)) {
             const kind = (replaced as { __kind?: unknown }).__kind;
             if (
@@ -2417,6 +2442,8 @@ export function replaceDeferredStrings(
         // .struct()/.beat() wrappers) are JSON-only data with no deferred-output
         // strings; mirror the replaceValues short-circuit and return them
         // verbatim instead of deep-walking their mini-notation AST sub-tree.
+        // SignalGroup wrappers are deliberately NOT listed here either — their
+        // signals payload may carry deferred-output strings to resolve.
         const kind = (input as { __kind?: unknown }).__kind;
         if (
             kind === 'ParsedPattern' ||

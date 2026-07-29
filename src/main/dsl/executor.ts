@@ -29,6 +29,7 @@ import {
     replaceSignals,
     PORT_MAX_CHANNELS,
 } from './GraphBuilder';
+import { $g1, $g2, $g3 } from './signalGroups';
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
@@ -920,6 +921,11 @@ export function executePatchScript(
         $c: builder.$c.bind(builder),
         $r,
         $cartesian,
+        // Cartesian signal groups — tag a param value so groups multiply
+        // across a module instead of cycling together
+        $g1,
+        $g2,
+        $g3,
         // Deferred signal helper
         $deferred,
         // Slider control
