@@ -69,6 +69,15 @@ export interface WavsFolderNode {
 
 export interface DSLExecutionOptions {
     sampleRate?: number;
+    /**
+     * Channel count of the audio input device, which is how wide `$input` is
+     * built. Read at execution time, so a device swap reaches `$input` on the
+     * next run of the patch. Clamped to 1..PORT_MAX_CHANNELS, and defaults to
+     * the maximum for callers with no device to report — `$input` never
+     * truncates silently, it only narrows when a host says how wide the
+     * device is.
+     */
+    inputChannels?: number;
     workspaceRoot?: string | null;
     wavsFolderTree?: WavsFolderNode | null;
     loadWav?: (path: string) => {
@@ -141,8 +150,12 @@ export function executePatchScript(
         id: 'ROOT_CLOCK',
     });
 
+    const inputChannels = Math.min(
+        Math.max(options.inputChannels ?? PORT_MAX_CHANNELS, 1),
+        PORT_MAX_CHANNELS,
+    );
     const rootInput = signal(
-        Array.from({ length: 16 }, (_, i) => ({
+        Array.from({ length: inputChannels }, (_, i) => ({
             channel: i,
             module: 'HIDDEN_AUDIO_IN',
             port: 'input',

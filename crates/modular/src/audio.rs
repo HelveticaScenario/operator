@@ -2837,7 +2837,19 @@ where
                                         // exactly what the declick emitted.
                                         let mut declicked_ch0 = 0.0f32;
                                         for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                                            let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i);
+                                            // Non-cycling: the root port is only
+                                            // as wide as the highest channel the
+                                            // patch's out groups name, and device
+                                            // channels above that are speakers to
+                                            // leave silent. The silence still goes
+                                            // through the declick, so an edit that
+                                            // narrows the output fades them out
+                                            // rather than cutting them.
+                                            let raw = root.get_value_at_no_cycle(
+                                                &ROOT_OUTPUT_PORT,
+                                                ch,
+                                                i,
+                                            );
                                             let v = final_state_processor.declick(ch, raw);
                                             if ch == 0 {
                                                 declicked_ch0 = v;

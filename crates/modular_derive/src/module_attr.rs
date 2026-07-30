@@ -839,6 +839,14 @@ fn impl_module_macro_attr(
                 outputs.get_at(port_idx, ch, index)
             }
 
+            fn port_channels(&self, port: &str) -> usize {
+                let Some(port_idx) = <#block_outputs_ty>::port_index(port) else {
+                    return 0;
+                };
+                let outputs = unsafe { &*self.block_outputs.get() };
+                outputs.channels_at(port_idx)
+            }
+
             fn get_module_type(&self) -> &str {
                 <#name as crate::types::Module>::MODULE_TYPE
             }

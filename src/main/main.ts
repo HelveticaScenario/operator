@@ -807,6 +807,7 @@ registerIPCHandler(
                 sliders,
                 callSiteSpans,
             } = executePatchScript(source, schemas, {
+                inputChannels: synth.inputChannels(),
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
                 wavsFolderTree: currentWavsFolderTree,

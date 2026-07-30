@@ -136,7 +136,7 @@ export function $cartesian<A extends unknown[][]>(
 
 /** Options for stereo output routing */
 export interface StereoOutOptions {
-    /** Base output channel (0-14, default 0). Left plays on baseChannel, right on baseChannel+1 */
+    /** Base output channel (0-62, default 0). Left plays on baseChannel, right on baseChannel+1 */
     baseChannel?: number;
     /** Output gain. If set, a scaleAndShift module is added after the stereo mix */
     gain?: PolySignal;
@@ -154,7 +154,7 @@ export interface StereoOutOptions {
 
 /** Options for mono output routing */
 export interface MonoOutOptions {
-    /** Output channel (0-15, default 0) */
+    /** Output channel (0-63, default 0) */
     channel?: number;
     /** Output gain. If set, a scaleAndShift module is added after the mix */
     gain?: PolySignal;
@@ -473,7 +473,7 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
     /**
      * Send all outputs to speakers as stereo
-     * @param options.baseChannel - Base output channel (0-15, default 0)
+     * @param options.baseChannel - Base output channel (0-62, default 0)
      * @param options.gain - Output gain
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
      * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
@@ -498,7 +498,7 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
     /**
      * Send all outputs to speakers as mono
-     * @param channelOrOptions - Output channel (0-15, default 0), or `{ channel, gain, label, mute, solo }` options
+     * @param channelOrOptions - Output channel (0-63, default 0), or `{ channel, gain, label, mute, solo }` options
      * @param gainOrOptions - Output gain, or the same options (an explicit `channel` there wins)
      */
     outMono(
@@ -1559,9 +1559,13 @@ export class GraphBuilder {
             );
         }
 
+        // The right channel lands on baseChannel + 1, so the pair has to fit
+        // inside the engine's port width.
         const baseChannel = options.baseChannel ?? 0;
-        if (baseChannel < 0 || baseChannel > 14) {
-            throw new Error(`baseChannel must be 0-14, got ${baseChannel}`);
+        if (baseChannel < 0 || baseChannel > PORT_MAX_CHANNELS - 2) {
+            throw new Error(
+                `baseChannel must be 0-${PORT_MAX_CHANNELS - 2}, got ${baseChannel}`,
+            );
         }
 
         this.registerOutLabel(options.label);
@@ -1600,8 +1604,10 @@ export class GraphBuilder {
         }
 
         const channel = options.channel ?? 0;
-        if (channel < 0 || channel > 15) {
-            throw new Error(`channel must be 0-15, got ${channel}`);
+        if (channel < 0 || channel > PORT_MAX_CHANNELS - 1) {
+            throw new Error(
+                `channel must be 0-${PORT_MAX_CHANNELS - 1}, got ${channel}`,
+            );
         }
 
         this.registerOutLabel(options.label);
@@ -1991,7 +1997,7 @@ export class ModuleOutput {
 
     /**
      * Send this output to speakers as stereo
-     * @param options.baseChannel - Base output channel (0-15, default 0)
+     * @param options.baseChannel - Base output channel (0-62, default 0)
      * @param options.gain - Output gain (adds util.scaleAndShift after stereo mix)
      * @param options.pan - Pan position (-5 = left, 0 = center, +5 = right)
      * @param options.width - Stereo width/spread (0 = no spread, 5 = full spread, default 0)
@@ -2007,7 +2013,7 @@ export class ModuleOutput {
 
     /**
      * Send this output to speakers as mono
-     * @param channelOrOptions - Output channel (0-15, default 0), or `{ channel, gain, label, mute, solo }` options
+     * @param channelOrOptions - Output channel (0-63, default 0), or `{ channel, gain, label, mute, solo }` options
      * @param gainOrOptions - Output gain, or the same options (an explicit `channel` there wins)
      */
     outMono(

@@ -346,6 +346,31 @@ describe('label validation', () => {
     });
 });
 
+describe('output channel bounds', () => {
+    test('a mono out reaches the engine’s last channel', () => {
+        const patch = execPatch(`$sine('c4').outMono(63)`);
+        const source = moduleById(patch, 'ROOT_OUTPUT').params.source as unknown[];
+        expect(source).toHaveLength(64);
+        expect(vuMeters(patch)[0].baseChannel).toBe(63);
+    });
+
+    test('a stereo out reaches the last pair', () => {
+        const patch = execPatch(`$sine('c4').out({ baseChannel: 62 })`);
+        const source = moduleById(patch, 'ROOT_OUTPUT').params.source as unknown[];
+        expect(source).toHaveLength(64);
+    });
+
+    test('channels past the engine width throw', () => {
+        expect(() => execPatch(`$sine('c4').outMono(64)`)).toThrow(
+            'channel must be 0-63',
+        );
+        // A stereo pair needs its right channel to fit too.
+        expect(() => execPatch(`$sine('c4').out({ baseChannel: 63 })`)).toThrow(
+            'baseChannel must be 0-62',
+        );
+    });
+});
+
 describe('outMono second-argument overload', () => {
     test('a numeric second argument is a gain', () => {
         const patch = execPatch(`$saw('c2').outMono(0, 2.5)`);

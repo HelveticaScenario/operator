@@ -553,6 +553,41 @@ fn from_graph_creates_patch_with_modules() {
     assert!(patch.sampleables.contains_key("HIDDEN_AUDIO_IN"));
 }
 
+/// Poly reads cycle past a port's width; the physical-channel read the audio
+/// device tap uses reports silence there instead.
+#[test]
+fn reads_cycle_past_port_width_unless_no_cycle() {
+    let module = make_module("$signal", "sig", json!({ "source": [1.0, 2.0] }));
+    module.start_block();
+    module.ensure_processed();
+
+    assert_eq!(module.port_channels(DEFAULT_PORT), 2);
+    assert_eq!(module.port_channels("nonexistent"), 0);
+
+    let cycling: Vec<f32> = (0..4)
+        .map(|ch| module.get_value_at(DEFAULT_PORT, ch, 0))
+        .collect();
+    let physical: Vec<f32> = (0..4)
+        .map(|ch| module.get_value_at_no_cycle(DEFAULT_PORT, ch, 0))
+        .collect();
+
+    for (ch, (&cycled, &expected)) in cycling.iter().zip([1.0, 2.0, 1.0, 2.0].iter()).enumerate() {
+        assert!(
+            approx_eq(cycled, expected, 1e-4),
+            "cycling read of ch {ch} should be {expected}, got {cycled}"
+        );
+    }
+    for (ch, (&physical, &expected)) in physical.iter().zip([1.0, 2.0, 0.0, 0.0].iter()).enumerate()
+    {
+        assert!(
+            approx_eq(physical, expected, 1e-4),
+            "non-cycling read of ch {ch} should be {expected}, got {physical}"
+        );
+    }
+
+    assert_eq!(module.get_value_at_no_cycle("nonexistent", 0, 0), 0.0);
+}
+
 #[test]
 fn from_graph_rejects_unknown_module_type() {
     let graph = make_graph(vec![("bad", "$nonexistent", json!({}))]);

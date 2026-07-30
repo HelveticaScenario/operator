@@ -1159,6 +1159,27 @@ describe('built-in modules', () => {
         const patch = execPatch('$input[0].out()');
         expect(patch.modules.find((m) => m.id === 'ROOT_INPUT')).toBeDefined();
     });
+
+    test('$input is as wide as the reported input device', () => {
+        const rootInputWidth = (channels: number | undefined): number => {
+            const patch = executePatchScript('$input[0].out()', schemas, {
+                ...DEFAULT_EXECUTION_OPTIONS,
+                inputChannels: channels,
+            }).patch;
+            const source = patch.modules.find((m) => m.id === 'ROOT_INPUT')!
+                .params.source as unknown[];
+            return source.length;
+        };
+
+        expect(rootInputWidth(1)).toBe(1);
+        expect(rootInputWidth(8)).toBe(8);
+        // A host with no device to report gets the full engine width, and a
+        // device wider than the engine is clamped to it.
+        expect(rootInputWidth(undefined)).toBe(64);
+        expect(rootInputWidth(128)).toBe(64);
+        // A device reporting no inputs still leaves one readable channel.
+        expect(rootInputWidth(0)).toBe(1);
+    });
 });
 
 // ─── FX modules ──────────────────────────────────────────────────────────────

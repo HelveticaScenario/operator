@@ -235,7 +235,7 @@ describe('expandSignalGroups', () => {
                 '$sine',
             ),
         ).toThrow(
-            'signal groups on $sine multiply to 128 channels (g1:16 × g2:8); the limit is 64',
+            'signal groups on $sine multiply to 128 channels (g1:16 x g2:8); the limit is 64',
         );
     });
 
@@ -371,6 +371,6 @@ describe('signal groups through the executor pipeline', () => {
                     phaseOffset: $g2(wide(8)),
                 }).out()
             `),
-        ).toThrow('multiply to 128 channels (g1:16 × g2:8); the limit is 64');
+        ).toThrow('multiply to 128 channels (g1:16 x g2:8); the limit is 64');
     });
 });

@@ -780,7 +780,7 @@ type WavHandle = {
  * @see {@link Collection.out}
  */
 interface StereoOutOptions {
-  /** Base output channel (0-15, default 0). Left plays on baseChannel, right on baseChannel+1 */
+  /** Base output channel (0-62, default 0). Left plays on baseChannel, right on baseChannel+1 */
   baseChannel?: number;
   /** Output gain. If set, a $scaleAndShift module is added after the stereo mix */
   gain?: Poly<Signal>;
@@ -802,7 +802,7 @@ interface StereoOutOptions {
  * @see {@link Collection.outMono}
  */
 interface MonoOutOptions {
-  /** Output channel (0-15, default 0). Wins over the positional channel argument */
+  /** Output channel (0-63, default 0). Wins over the positional channel argument */
   channel?: number;
   /** Output gain. If set, a $scaleAndShift module is added after the mix */
   gain?: Poly<Signal>;
@@ -920,7 +920,7 @@ interface ModuleOutput {
 
   /**
    * Send this output to speakers as mono.
-   * @param channelOrOptions - Output channel (0-15, default 0), or mono output options ({@link MonoOutOptions})
+   * @param channelOrOptions - Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
     * @param gainOrOptions - Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
     * @example $sine("1hz").outMono(2, 0.3)
     * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
@@ -1159,7 +1159,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Send all outputs to speakers as mono, summed together.
-   * @param channelOrOptions - Output channel (0-15, default 0), or mono output options ({@link MonoOutOptions})
+   * @param channelOrOptions - Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
     * @param gainOrOptions - Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
     * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
     */
@@ -2237,7 +2237,9 @@ export function generateDSL(schemas: Schemas): string {
     const signalSchema = schemas.find((s) => s.name === '$signal');
     if (signalSchema) {
         lines.push('');
-        lines.push('/** Input signals. */');
+        lines.push(
+            '/** Live audio input, one channel per input on the current device. */',
+        );
         const signalReturnType = getFactoryReturnType(signalSchema);
         lines.push(`export const $input: Readonly<${signalReturnType}>;`);
     }

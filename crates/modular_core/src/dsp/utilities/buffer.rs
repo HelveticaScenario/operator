@@ -125,6 +125,14 @@ impl BufferWriteBlockOutputs {
         }
     }
 
+    #[inline]
+    pub fn channels_at(&self, port_idx: usize) -> usize {
+        match port_idx {
+            0 => self.sample.channels(),
+            _ => 0,
+        }
+    }
+
     pub fn copy_from_inner(&mut self, inner: &BufferWriteOutputs, slot: usize) {
         for ch in 0..self.sample.channels() {
             self.sample.set(slot, ch, inner.sample.get_cycling(ch));

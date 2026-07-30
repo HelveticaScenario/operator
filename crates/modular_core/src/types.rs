@@ -276,6 +276,26 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
+    /// Read like [`get_value_at`](Self::get_value_at), but treat channels at or
+    /// above the port's width as silence rather than cycling back over the
+    /// lower ones. For consumers whose channels are physical rather than
+    /// polyphonic — the audio device tap, where channel 2 of a stereo patch is
+    /// a speaker that must stay silent, not a wrap onto the left channel.
+    fn get_value_at_no_cycle(&self, port: &str, ch: usize, index: usize) -> f32 {
+        if ch >= self.port_channels(port) {
+            return 0.0;
+        }
+        self.get_value_at(port, ch, index)
+    }
+    /// Number of channels port `port` actually carries; 0 for an unknown port.
+    /// The width [`get_value_at`](Self::get_value_at) cycles channel reads
+    /// modulo, which is what gives cables their mono-broadcast/poly-wrap
+    /// semantics. The default reports `PORT_MAX_CHANNELS`, i.e. "reads never
+    /// cycle", which holds for implementors that zero-fill beyond their live
+    /// channels.
+    fn port_channels(&self, _port: &str) -> usize {
+        crate::PORT_MAX_CHANNELS
+    }
     /// Write the module's live editor state into `out` (its type-erased
     /// [`ModuleLiveState`](crate::module_state::ModuleLiveState); only modules
     /// that publish state override this — today just `$cycle`). Runs on the audio

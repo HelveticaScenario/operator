@@ -74,3 +74,14 @@ fn get_at_out_of_range_returns_zero() {
     let bo = SimpleBlockOutputs::new(4, 1);
     assert_eq!(bo.get_at(99, 0, 0), 0.0);
 }
+
+#[test]
+fn channels_at_reports_port_width() {
+    let bo = SimpleBlockOutputs::new(4, 3);
+    let value_idx = SimpleBlockOutputs::port_index("value").unwrap();
+    let poly_idx = SimpleBlockOutputs::port_index("poly").unwrap();
+    // An f32 port is always mono; a poly port carries the module's channels.
+    assert_eq!(bo.channels_at(value_idx), 1);
+    assert_eq!(bo.channels_at(poly_idx), 3);
+    assert_eq!(bo.channels_at(99), 0);
+}
