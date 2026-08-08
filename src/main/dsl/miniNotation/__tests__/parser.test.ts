@@ -334,6 +334,114 @@ describe('modifiers', () => {
     });
 });
 
+describe('patterned @/! operands', () => {
+    test('weight @<...> stores a SlowCat operand AST', () => {
+        const r = $p('0@<1 2> 1');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        const weight = r.ast.Sequence[0][1];
+        expect(
+            typeof weight === 'object' && weight !== null && 'SlowCat' in weight,
+        ).toBe(true);
+        expect(r.ast.Sequence[1][1]).toBeNull();
+    });
+
+    test('weight @[...] stores a FastCat operand AST', () => {
+        const r = $p('0@[2 1] 1');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        const weight = r.ast.Sequence[0][1];
+        expect(
+            typeof weight === 'object' && weight !== null && 'FastCat' in weight,
+        ).toBe(true);
+    });
+
+    test('weight @{...} stores a Polymeter operand AST', () => {
+        const r = $p('0@{1 2} 1');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        const weight = r.ast.Sequence[0][1];
+        expect(
+            typeof weight === 'object' &&
+                weight !== null &&
+                'Polymeter' in weight,
+        ).toBe(true);
+    });
+
+    test('weight @[1|2] carries a bracketed random choice', () => {
+        const r = $p('0@[1|2] 1');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        const weight = r.ast.Sequence[0][1];
+        expect(JSON.stringify(weight)).toContain('RandomChoice');
+    });
+
+    test('bare | after @n stays a sequence-level choice', () => {
+        const r = $p('0@1|1');
+        expect('RandomChoice' in r.ast).toBe(true);
+    });
+
+    test('@ with whitespace before a bracket keeps the bracket separate', () => {
+        // `0@ [1 2]`: bare `@` (weight 2) followed by a fastcat element.
+        const r = $p('0@ [1 2]');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence).toHaveLength(2);
+        expect(r.ast.Sequence[0][1]).toBe(2);
+        expect('FastCat' in r.ast.Sequence[1][0]).toBe(true);
+    });
+
+    test('replicate !<...> stores a pattern count', () => {
+        const r = $p('0!<2 3>');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        const count = r.ast.Replicate[1];
+        expect(typeof count === 'object' && 'SlowCat' in count).toBe(true);
+    });
+
+    test('replicate ![...] stores a pattern count', () => {
+        const r = $p('0![2 3]');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        expect(typeof r.ast.Replicate[1]).toBe('object');
+    });
+
+    test('replicate !{...} stores a Polymeter count', () => {
+        const r = $p('0!{2 3}');
+        if (!('Replicate' in r.ast)) return expect.fail('expected Replicate');
+        const count = r.ast.Replicate[1];
+        expect(typeof count === 'object' && 'Polymeter' in count).toBe(true);
+    });
+
+    test('! with whitespace before a bracket keeps the bracket separate', () => {
+        // `0! [2 3]`: bare `!` (2 copies) followed by a fastcat element.
+        const r = $p('0! [2 3]');
+        if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
+        expect(r.ast.Sequence).toHaveLength(2);
+        const [first] = r.ast.Sequence[0];
+        if (!('Replicate' in first)) return expect.fail('expected Replicate');
+        expect(first.Replicate[1]).toBe(2);
+    });
+
+    test('chaining ! around a patterned count is a parse error', () => {
+        expect(() => $p('0![2 3]!2')).toThrow(MiniParseError);
+        expect(() => $p('0!2![2 3]')).toThrow(MiniParseError);
+    });
+
+    test('`_` cannot elongate a pattern-weighted element', () => {
+        expect(() => $p('0@<1 2> _')).toThrow(MiniParseError);
+    });
+
+    test('fast operand accepts {} polymeter with % steps', () => {
+        const r = $p('0*{1 2 3}%4');
+        if (!('Fast' in r.ast)) return expect.fail('expected Fast');
+        const factor = r.ast.Fast[1];
+        if (!('Polymeter' in factor)) return expect.fail('expected Polymeter');
+        expect(factor.Polymeter.children).toHaveLength(1);
+        expect(factor.Polymeter.steps_per_cycle).toEqual({
+            Pure: { node: 4, span: expect.anything() },
+        });
+    });
+
+    test('slow and euclid operands accept {} polymeter', () => {
+        expect(() => $p('0/{2 3}')).not.toThrow();
+        expect(() => $p('0(3,{4 8})')).not.toThrow();
+    });
+});
+
 // Whitespace is accepted between an element and its modifier sigils, and
 // between a mandatory-operand sigil (`*`, `/`, and `@`) and its operand —
 // e.g. `<...> / 4` is a Slow modifier. The optional-operand sigils `!` and

@@ -6,7 +6,8 @@
 //! - `fastcat` - Concatenate patterns within one cycle
 //! - `timecat` - Concatenate patterns with explicit weights
 
-use super::{ArenaHap, Fraction, Pattern, State};
+use super::hap::ArenaHapContext;
+use super::{ArenaHap, Fraction, Pattern, State, TimeSpan};
 use bumpalo::Bump;
 use bumpalo::collections::Vec as BumpVec;
 
@@ -137,6 +138,263 @@ pub fn timecat<T: Clone + Send + Sync + 'static>(
     }
 
     stack(compressed).with_steps(total)
+}
+
+/// Weight operand for one [`dyn_timecat`] entry or slowcat-unroll slot: a
+/// constant span width, or a pattern sampled once per cycle at the cycle
+/// start.
+#[derive(Clone)]
+pub enum DynWeight {
+    Static(Fraction),
+    Pattern(Pattern<Fraction>),
+}
+
+/// Replicate-count operand: a constant copy count, or a pattern sampled once
+/// per cycle at the cycle start. Sampled values are bounded by the
+/// mini-notation limit validator, so the query path trusts them.
+#[derive(Clone)]
+pub enum DynCount {
+    Static(u32),
+    Pattern(Pattern<u32>),
+}
+
+/// One [`dyn_timecat`] entry: `count` copies of `pat`, each `weight` wide.
+/// A `!` replicate entry carries weight `Static(1)`; a `@` weighted entry
+/// carries count `Static(1)`.
+pub struct DynTimecatEntry<T> {
+    pub pat: Pattern<T>,
+    pub weight: DynWeight,
+    pub count: DynCount,
+}
+
+/// Sample a scalar operand pattern at a cycle start: value and context of
+/// the first hap whose part begins exactly at `cycle`. `None` when the
+/// operand is silent there.
+fn sample_at_cycle_start<'b, V: Clone + Send + Sync + 'static>(
+    pat: &Pattern<V>,
+    cycle: &Fraction,
+    bump: &'b Bump,
+) -> Option<(V, &'b ArenaHapContext<'b>)> {
+    let span = TimeSpan::new(cycle.clone(), cycle + &Fraction::from_integer(1));
+    let mut scratch: BumpVec<'_, ArenaHap<'_, V>> = BumpVec::new_in(bump);
+    pat.query_into(&State::new(span), bump, &mut scratch);
+    scratch
+        .iter()
+        .find(|h| &h.part.begin == cycle)
+        .map(|h| (h.value.clone(), h.context))
+}
+
+/// Weighted concatenation whose slot layout is re-derived every cycle.
+///
+/// Pattern-valued weights and counts are sampled at each cycle's start, then
+/// the cycle is laid out like [`timecat`]: each slot takes `weight/Σ` of the
+/// cycle (zero-weight slots vanish; an all-zero cycle is silent). Sampled
+/// operand contexts are combined into every hap a slot emits, so `@`/`!`
+/// operand atoms highlight exactly like `*` factors. The query allocates
+/// only from the arena.
+pub fn dyn_timecat<T: Clone + Send + Sync + 'static>(
+    entries: Vec<DynTimecatEntry<T>>,
+) -> Pattern<T> {
+    if entries.is_empty() {
+        return super::constructors::silence();
+    }
+    Pattern::new_into(
+        move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, T>>| {
+            state.span.for_each_cycle_span(|cycle_span| {
+                let cycle = cycle_span.begin.sam();
+                // Sample pass: resolve every entry's weight and count for
+                // this cycle before any span math.
+                let zero = Fraction::from_integer(0);
+                let mut resolved: BumpVec<'_, (Fraction, u32, Option<&ArenaHapContext>)> =
+                    BumpVec::new_in(bump);
+                resolved.reserve(entries.len());
+                let mut total = Fraction::from_integer(0);
+                for entry in entries.iter() {
+                    let (weight, wctx) = match &entry.weight {
+                        DynWeight::Static(w) => (w.clone(), None),
+                        DynWeight::Pattern(p) => match sample_at_cycle_start(p, &cycle, bump) {
+                            // A negative sampled weight collapses the slot,
+                            // like timecat's zero-weight skip.
+                            Some((v, ctx)) => (v.max_of(&zero), Some(ctx)),
+                            None => (Fraction::from_integer(1), None),
+                        },
+                    };
+                    let (count, cctx) = match &entry.count {
+                        DynCount::Static(c) => (*c, None),
+                        DynCount::Pattern(p) => match sample_at_cycle_start(p, &cycle, bump) {
+                            Some((v, ctx)) => (v, Some(ctx)),
+                            None => (1, None),
+                        },
+                    };
+                    let op_ctx = match (wctx, cctx) {
+                        (Some(w), Some(c)) => Some(ArenaHapContext::combine_in(w, c, bump)),
+                        (Some(w), None) => Some(w),
+                        (None, Some(c)) => Some(c),
+                        (None, None) => None,
+                    };
+                    total = &total + &(&weight * &Fraction::from_integer(count as i64));
+                    resolved.push((weight, count, op_ctx));
+                }
+                if total.is_zero() {
+                    return;
+                }
+                // Emit pass: compress each slot into its per-cycle span
+                // fraction (the same linear maps as compress_query_into).
+                let mut begin = Fraction::from_integer(0);
+                for (entry, (weight, count, op_ctx)) in entries.iter().zip(resolved.iter()) {
+                    for _ in 0..*count {
+                        if weight.is_zero() {
+                            continue;
+                        }
+                        let start_frac = &begin / &total;
+                        begin = &begin + weight;
+                        let end_frac = &begin / &total;
+                        if start_frac >= end_frac {
+                            continue;
+                        }
+                        let compressed_begin = &cycle + &start_frac;
+                        let compressed_end = &cycle + &end_frac;
+                        let compressed_span =
+                            TimeSpan::new(compressed_begin.clone(), compressed_end);
+                        let Some(intersect) = cycle_span.intersection(&compressed_span) else {
+                            continue;
+                        };
+                        let duration = &end_frac - &start_frac;
+                        let inv_d = Fraction::from_integer(1) / duration.clone();
+                        let b_q = &cycle - &(&compressed_begin * &inv_d);
+                        let inner_span = intersect.with_time(|t| t * &inv_d + &b_q);
+                        let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                        entry
+                            .pat
+                            .query_into(&State::new(inner_span), bump, &mut scratch);
+                        let b_r = &compressed_begin - &(&cycle * &duration);
+                        for hap in scratch {
+                            let new_part = hap.part.with_time(|t| t * &duration + &b_r);
+                            let new_whole = hap
+                                .whole
+                                .as_ref()
+                                .map(|w| w.with_time(|t| t * &duration + &b_r));
+                            let Some(final_part) = new_part.intersection(&cycle_span) else {
+                                continue;
+                            };
+                            let context = match op_ctx {
+                                Some(op) => ArenaHapContext::combine_in(hap.context, op, bump),
+                                None => hap.context,
+                            };
+                            out.push(ArenaHap {
+                                whole: new_whole,
+                                part: final_part,
+                                value: hap.value,
+                                context,
+                            });
+                        }
+                    }
+                }
+            });
+        },
+    )
+}
+
+/// View a pattern through an affine cycle-index remap: wrapper cycle `k`
+/// shows source cycle `k·mul + offset` (intra-cycle position unchanged).
+/// The slowcat unroll wraps each slot in this so a slot re-queried at
+/// super-period `k` advances through its source's cycles instead of
+/// replaying one of them.
+pub fn stride_cycles<T: Clone + Send + Sync + 'static>(
+    pat: Pattern<T>,
+    mul: u64,
+    offset: u64,
+) -> Pattern<T> {
+    if mul == 1 && offset == 0 {
+        return pat;
+    }
+    let mul_minus_one = Fraction::from_integer(mul as i64 - 1);
+    let offset = Fraction::from_integer(offset as i64);
+    Pattern::new_into(
+        move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, T>>| {
+            state.span.for_each_cycle_span(|cycle_span| {
+                // Within one cycle the remap is a constant shift:
+                //   shift = k·(mul − 1) + offset.
+                let k = cycle_span.begin.sam();
+                let shift = &(&k * &mul_minus_one) + &offset;
+                let qspan = cycle_span.with_time(|t| t + &shift);
+                let mut scratch: BumpVec<'_, ArenaHap<'_, T>> = BumpVec::new_in(bump);
+                pat.query_into(&State::new(qspan), bump, &mut scratch);
+                out.reserve(scratch.len());
+                for hap in scratch {
+                    let new_part = hap.part.with_time(|t| t - &shift);
+                    let new_whole = hap.whole.as_ref().map(|w| w.with_time(|t| t - &shift));
+                    out.push(ArenaHap {
+                        whole: new_whole,
+                        part: new_part,
+                        value: hap.value,
+                        context: hap.context,
+                    });
+                }
+            });
+        },
+    )
+}
+
+/// Per-cycle step count of a polymeter voice: a static count or a set of
+/// `(weight, count)` operand specs whose sampled products are summed each
+/// cycle.
+#[derive(Clone)]
+pub enum StepSpec {
+    Static(Fraction),
+    Dyn(std::sync::Arc<[(DynWeight, DynCount)]>),
+}
+
+impl StepSpec {
+    /// Resolve the step count for the cycle starting at `cycle`.
+    fn sample(&self, cycle: &Fraction, bump: &Bump) -> Fraction {
+        match self {
+            StepSpec::Static(s) => s.clone(),
+            StepSpec::Dyn(entries) => {
+                let mut total = Fraction::from_integer(0);
+                for (weight, count) in entries.iter() {
+                    let w = match weight {
+                        DynWeight::Static(w) => w.clone(),
+                        DynWeight::Pattern(p) => sample_at_cycle_start(p, cycle, bump)
+                            .map(|(v, _)| v)
+                            .unwrap_or_else(|| Fraction::from_integer(1)),
+                    };
+                    let c = match count {
+                        DynCount::Static(c) => *c,
+                        DynCount::Pattern(p) => sample_at_cycle_start(p, cycle, bump)
+                            .map(|(v, _)| v)
+                            .unwrap_or(1),
+                    };
+                    total = &total + &(&w * &Fraction::from_integer(c as i64));
+                }
+                total
+            }
+        }
+    }
+}
+
+/// Per-cycle polymeter alignment factor: `spc(cycle) / steps(cycle)`, one
+/// hap per cycle, for feeding `Pattern::fast` when a voice's step count (or
+/// the steps-per-cycle default taken from the first voice) varies by cycle.
+/// The step count is clamped to at least 1, matching the static voice
+/// alignment.
+pub fn dyn_polymeter_factor(spc: StepSpec, steps: StepSpec) -> Pattern<Fraction> {
+    Pattern::new_into(
+        move |state: &State, bump: &Bump, out: &mut BumpVec<'_, ArenaHap<'_, Fraction>>| {
+            state.span.for_each_cycle_span(|cycle_span| {
+                let cycle = cycle_span.begin.sam();
+                let one = Fraction::from_integer(1);
+                let s = spc.sample(&cycle, bump);
+                let w = steps.sample(&cycle, bump).max_of(&one);
+                out.push(ArenaHap {
+                    whole: Some(cycle.whole_cycle()),
+                    part: cycle_span.clone(),
+                    value: &s / &w,
+                    context: ArenaHapContext::empty_ref(),
+                });
+            });
+        },
+    )
 }
 
 /// Arrange patterns over multiple cycles (Strudel's `arrange`).

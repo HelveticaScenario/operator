@@ -102,6 +102,18 @@ const PARITY_CASES: Array<{ label: string; input: string }> = [
     { label: 'truthy with euclidean', input: 'x(3,8)' },
     { label: 'truthy in slow subsequence', input: '<x ~>' },
     { label: 'truthy with fast modifier', input: 'x*2' },
+    { label: 'patterned weight @[...]', input: '0@[2 1] 1' },
+    { label: 'patterned weight @<...>', input: '0@<1 2> 1' },
+    { label: 'patterned weight @{...}', input: '0@{1 2} 1' },
+    { label: 'patterned weight bracketed choice', input: '0@[1|2] 1' },
+    { label: 'patterned weight with operand replicate', input: '<0@<2!3 3> 1>' },
+    { label: 'patterned replicate !<...>', input: '0!<2 3> 1' },
+    { label: 'patterned replicate ![...]', input: '0![2 3] 1' },
+    { label: 'patterned replicate !{...}', input: '0!{2 3} 1' },
+    { label: 'operand polymeter for fast', input: '0*{1 2 3}' },
+    { label: 'operand polymeter with % steps', input: '0*{1 2 3}%4' },
+    { label: 'operand polymeter for slow', input: '0/{2 3}' },
+    { label: 'operand polymeter euclid steps', input: '0(3,{4 8})' },
 ];
 
 /**

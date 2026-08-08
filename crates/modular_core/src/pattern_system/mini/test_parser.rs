@@ -26,13 +26,18 @@
 //! - Sequences, stacks (`,`), fast subsequences `[...]`, slow subsequences `<...>`
 //! - Atoms: numbers, hz (`440hz`), notes (`c4`, `d#4`, `cb3`), rest (`~`)
 //! - Note letters 'a'..'g' also parse as a note without octave.
-//! - Modifiers: `*`, `/`, `!`, `?`, `@`, `(k,n,rot?)`
+//! - Modifiers: `*`, `/`, `!`, `?`, `@`, `(k,n,rot?)`. Modifier operands are
+//!   numbers or adjacent `[...]` / `<...>` / `{...}%n` subtrees; `@` and `!`
+//!   accept the same bracketed operands (adjacent only, single `!`).
 //! - Random choice: `a|b|c`
-//! - No sample-name identifiers, no module refs, no midi/volts atoms.
+//! - No sample-name identifiers, no module refs, no midi/volts atoms, no `_`
+//!   elongation, no polymeter outside modifier operands.
 
 #![allow(dead_code)]
 
-use super::ast::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
+use super::ast::{
+    AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight,
+};
 use crate::pattern_system::SourceSpan;
 
 pub type ParseResult<T> = Result<T, ParseError>;
@@ -168,7 +173,7 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr(&mut self) -> ParseResult<MiniAST> {
-        let mut elems: Vec<(MiniAST, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniAST, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             // `|` ends a sequence so the enclosing `choice_expr` can pick it
@@ -194,16 +199,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn element_with_weight(&mut self) -> ParseResult<(MiniAST, Option<f64>)> {
+    fn element_with_weight(&mut self) -> ParseResult<(MiniAST, Option<Weight>)> {
         let mut ast = self.element_base()?;
-        let mut weight: Option<f64> = None;
+        let mut weight: Option<Weight> = None;
         loop {
             match self.peek() {
                 Some(b'@') => {
                     self.pos += 1;
-                    let n = self.maybe_number()?;
-                    // Bare `@` is weight 2 (matches Tidal/krill and `_`).
-                    weight = Some(n.unwrap_or(2.0));
+                    // A bracketed pattern operand binds only when adjacent
+                    // to `@`; `a@ [1 2]` keeps `[1 2]` as its own element.
+                    if matches!(self.peek(), Some(b'[') | Some(b'<') | Some(b'{')) {
+                        weight = Some(Weight::Pattern(Box::new(self.mod_operand_f64()?)));
+                    } else {
+                        let n = self.maybe_number()?;
+                        // Bare `@` is weight 2 (matches Tidal/krill and `_`).
+                        weight = Some(Weight::Static(n.unwrap_or(2.0)));
+                    }
                 }
                 Some(b'*') => {
                     self.pos += 1;
@@ -216,19 +227,8 @@ impl<'a> Parser<'a> {
                     ast = MiniAST::Slow(Box::new(ast), Box::new(op));
                 }
                 Some(b'!') => {
-                    // Accumulate consecutive `!`/`!n` into one Replicate:
-                    // total copies = 1 + Σ(value - 1), bare `!` = 2, `!n` = n.
-                    // Matches Tidal's `pRepeat = 1 + sum es` and krill. No
-                    // whitespace handling — the twin only sees adjacent `!`.
-                    let mut total: i64 = 1;
-                    while self.peek() == Some(b'!') {
-                        self.pos += 1;
-                        total += self.maybe_integer()?.unwrap_or(2) - 1;
-                    }
-                    if total < 0 {
-                        return Err(ParseError("negative replicate count".into()));
-                    }
-                    ast = MiniAST::Replicate(Box::new(ast), total as u32);
+                    let count = self.replicate_count()?;
+                    ast = MiniAST::Replicate(Box::new(ast), count);
                 }
                 Some(b'?') => {
                     self.pos += 1;
@@ -463,6 +463,43 @@ impl<'a> Parser<'a> {
         s.parse::<f64>().map_err(|e| ParseError(e.to_string()))
     }
 
+    /// Parse a chain of adjacent `!` modifiers into one replicate count:
+    /// total copies = 1 + Σ(value − 1), bare `!` = 2, `!n` = n — matching
+    /// Tidal's `pRepeat = 1 + sum es` and krill. No whitespace handling —
+    /// the twin only sees adjacent `!`. A bracketed pattern count binds only
+    /// when adjacent and must be the sole `!` in the chain. Assumes the
+    /// cursor sits on the first `!`.
+    fn replicate_count(&mut self) -> ParseResult<ReplicateCount> {
+        let mut total: i64 = 1;
+        let mut parts = 0usize;
+        let mut patterned = None;
+        while self.peek() == Some(b'!') {
+            self.pos += 1;
+            parts += 1;
+            if matches!(self.peek(), Some(b'[') | Some(b'<') | Some(b'{')) {
+                patterned = Some(self.mod_operand_u32()?);
+            } else {
+                total += self.maybe_integer()?.unwrap_or(2) - 1;
+            }
+        }
+        match patterned {
+            Some(op) => {
+                if parts > 1 {
+                    return Err(ParseError(
+                        "`!` with a patterned count cannot be chained with other `!`s".into(),
+                    ));
+                }
+                Ok(ReplicateCount::Pattern(Box::new(op)))
+            }
+            None => {
+                if total < 0 {
+                    return Err(ParseError("negative replicate count".into()));
+                }
+                Ok(ReplicateCount::Static(total as u32))
+            }
+        }
+    }
+
     fn maybe_number(&mut self) -> ParseResult<Option<f64>> {
         // A number also starts with `.` when a digit follows (`.5`).
         let starts_number = match (self.peek(), self.peek_at(1)) {
@@ -550,6 +587,35 @@ impl<'a> Parser<'a> {
                     other => to_slowcat(other),
                 })
             }
+            Some(b'{') => {
+                self.consume(b'{');
+                self.skip_ws();
+                let mut children = vec![self.sequence_expr_f64()?];
+                loop {
+                    self.skip_ws();
+                    if self.peek() == Some(b',') {
+                        self.pos += 1;
+                        self.skip_ws();
+                        children.push(self.sequence_expr_f64()?);
+                    } else {
+                        break;
+                    }
+                }
+                if !self.consume(b'}') {
+                    return Err(ParseError("expected }".into()));
+                }
+                // `%` steps override binds adjacently after the brace.
+                let steps_per_cycle = if self.peek() == Some(b'%') {
+                    self.pos += 1;
+                    Some(Box::new(self.mod_operand_f64()?))
+                } else {
+                    None
+                };
+                Ok(MiniASTF64::Polymeter {
+                    children,
+                    steps_per_cycle,
+                })
+            }
             _ => {
                 let start = self.pos;
                 let n = self.number()?;
@@ -580,25 +646,65 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr_f64(&mut self) -> ParseResult<MiniASTF64> {
-        let mut elems: Vec<(MiniASTF64, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniASTF64, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             if self.at_end()
                 || matches!(
                     self.peek(),
-                    Some(b']') | Some(b'>') | Some(b')') | Some(b',')
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',') | Some(b'}')
                 )
             {
                 break;
             }
-            let base = self.mod_operand_f64()?;
-            self.skip_ws();
-            let weight = if self.peek() == Some(b'@') {
-                self.pos += 1;
-                self.maybe_number()?
-            } else {
-                None
-            };
+            let mut base = self.mod_operand_f64()?;
+            // Numeric random choice binds at element level inside operand
+            // subtrees (`[1|2]`), mirroring OperandRandomChoiceF64.
+            {
+                let saved = self.pos;
+                self.skip_ws();
+                if self.peek() == Some(b'|') {
+                    let mut choices = vec![base];
+                    loop {
+                        self.skip_ws();
+                        if self.peek() != Some(b'|') {
+                            break;
+                        }
+                        self.pos += 1;
+                        self.skip_ws();
+                        let start = self.pos;
+                        let n = self.number()?;
+                        choices.push(MiniASTF64::Pure(Located::new(n, start, self.pos)));
+                    }
+                    let seed = self.next_seed();
+                    base = MiniASTF64::RandomChoice(choices, seed);
+                } else {
+                    self.pos = saved;
+                }
+            }
+            // Operand elements carry `!` replicate chains (adjacent) and an
+            // optional `@` weight, like main-grammar elements.
+            let mut weight: Option<Weight> = None;
+            loop {
+                if self.peek() == Some(b'!') {
+                    let count = self.replicate_count()?;
+                    base = MiniASTF64::Replicate(Box::new(base), count);
+                    continue;
+                }
+                let saved = self.pos;
+                self.skip_ws();
+                if self.peek() == Some(b'@') {
+                    self.pos += 1;
+                    if matches!(self.peek(), Some(b'[') | Some(b'<') | Some(b'{')) {
+                        weight = Some(Weight::Pattern(Box::new(self.mod_operand_f64()?)));
+                    } else {
+                        weight = self.maybe_number()?.map(Weight::Static);
+                    }
+                } else {
+                    self.pos = saved;
+                    break;
+                }
+            }
             elems.push((base, weight));
         }
         if elems.is_empty() {
@@ -648,6 +754,35 @@ impl<'a> Parser<'a> {
                     other => to_slowcat(other),
                 })
             }
+            Some(b'{') => {
+                self.consume(b'{');
+                self.skip_ws();
+                let mut children = vec![self.sequence_expr_u32()?];
+                loop {
+                    self.skip_ws();
+                    if self.peek() == Some(b',') {
+                        self.pos += 1;
+                        self.skip_ws();
+                        children.push(self.sequence_expr_u32()?);
+                    } else {
+                        break;
+                    }
+                }
+                if !self.consume(b'}') {
+                    return Err(ParseError("expected }".into()));
+                }
+                // `%` steps override binds adjacently after the brace.
+                let steps_per_cycle = if self.peek() == Some(b'%') {
+                    self.pos += 1;
+                    Some(Box::new(self.mod_operand_f64()?))
+                } else {
+                    None
+                };
+                Ok(MiniASTU32::Polymeter {
+                    children,
+                    steps_per_cycle,
+                })
+            }
             _ => {
                 let start = self.pos;
                 let n = self.integer()?;
@@ -681,13 +816,13 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr_u32(&mut self) -> ParseResult<MiniASTU32> {
-        let mut elems: Vec<(MiniASTU32, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniASTU32, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             if self.at_end()
                 || matches!(
                     self.peek(),
-                    Some(b']') | Some(b'>') | Some(b')') | Some(b',')
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',') | Some(b'}')
                 )
             {
                 break;
@@ -742,6 +877,35 @@ impl<'a> Parser<'a> {
                     other => to_slowcat(other),
                 })
             }
+            Some(b'{') => {
+                self.consume(b'{');
+                self.skip_ws();
+                let mut children = vec![self.sequence_expr_i32()?];
+                loop {
+                    self.skip_ws();
+                    if self.peek() == Some(b',') {
+                        self.pos += 1;
+                        self.skip_ws();
+                        children.push(self.sequence_expr_i32()?);
+                    } else {
+                        break;
+                    }
+                }
+                if !self.consume(b'}') {
+                    return Err(ParseError("expected }".into()));
+                }
+                // `%` steps override binds adjacently after the brace.
+                let steps_per_cycle = if self.peek() == Some(b'%') {
+                    self.pos += 1;
+                    Some(Box::new(self.mod_operand_f64()?))
+                } else {
+                    None
+                };
+                Ok(MiniASTI32::Polymeter {
+                    children,
+                    steps_per_cycle,
+                })
+            }
             _ => {
                 let start = self.pos;
                 let n = self.integer()?;
@@ -772,13 +936,13 @@ impl<'a> Parser<'a> {
     }
 
     fn sequence_expr_i32(&mut self) -> ParseResult<MiniASTI32> {
-        let mut elems: Vec<(MiniASTI32, Option<f64>)> = Vec::new();
+        let mut elems: Vec<(MiniASTI32, Option<Weight>)> = Vec::new();
         loop {
             self.skip_ws();
             if self.at_end()
                 || matches!(
                     self.peek(),
-                    Some(b']') | Some(b'>') | Some(b')') | Some(b',')
+                    Some(b']') | Some(b'>') | Some(b')') | Some(b',') | Some(b'}')
                 )
             {
                 break;
@@ -890,7 +1054,9 @@ mod tests {
             MiniAST::Sequence(items) => {
                 assert_eq!(items.len(), 2);
                 match &items[0].0 {
-                    MiniAST::Replicate(_, count) => assert_eq!(*count, 2),
+                    MiniAST::Replicate(_, count) => {
+                        assert_eq!(*count, ReplicateCount::Static(2))
+                    }
                     other => panic!("expected Replicate, got {:?}", other),
                 }
                 assert_eq!(num(&items[1].0), 2.0);
@@ -1006,7 +1172,7 @@ mod tests {
         match &ast {
             MiniAST::Sequence(items) => {
                 assert_eq!(items.len(), 2);
-                assert_eq!(items[0].1, Some(2.0));
+                assert_eq!(items[0].1, Some(Weight::Static(2.0)));
                 assert_eq!(items[1].1, None);
             }
             other => panic!("expected Sequence, got {:?}", other),
@@ -1018,7 +1184,7 @@ mod tests {
         let ast = parse("a!3").unwrap();
         match &ast {
             MiniAST::Replicate(inner, count) => {
-                assert_eq!(*count, 3);
+                assert_eq!(*count, ReplicateCount::Static(3));
                 match inner.as_ref() {
                     MiniAST::Pure(l) => {
                         assert!(matches!(l.node, AtomValue::Note { letter: 'a', .. }))

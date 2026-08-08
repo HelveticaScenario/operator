@@ -32,6 +32,50 @@ impl<T> Located<T> {
     }
 }
 
+/// Weight operand carried by a sequence entry (`@` or `_` elongation).
+///
+/// Serialized untagged: a static weight is a bare JSON number, a patterned
+/// weight (`a@<1 2>`) is a `MiniASTF64` object. `Static` must stay the first
+/// variant so untagged deserialization matches the bare number before
+/// attempting the pattern shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum Weight {
+    Static(f64),
+    Pattern(Box<MiniASTF64>),
+}
+
+impl Weight {
+    pub fn as_static(&self) -> Option<f64> {
+        match self {
+            Weight::Static(w) => Some(*w),
+            Weight::Pattern(_) => None,
+        }
+    }
+}
+
+/// Replicate count operand (`!`).
+///
+/// Serialized untagged: a static count is a bare JSON number, a patterned
+/// count (`a!<2 3>`) is a `MiniASTU32` object. `Static` must stay the first
+/// variant so untagged deserialization matches the bare number before
+/// attempting the pattern shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum ReplicateCount {
+    Static(u32),
+    Pattern(Box<MiniASTU32>),
+}
+
+impl ReplicateCount {
+    pub fn as_static(&self) -> Option<u32> {
+        match self {
+            ReplicateCount::Static(c) => Some(*c),
+            ReplicateCount::Pattern(_) => None,
+        }
+    }
+}
+
 /// AST for signed integer patterns (used for euclidean rotation).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum MiniASTI32 {
@@ -45,13 +89,13 @@ pub enum MiniASTI32 {
     List(Located<Vec<MiniASTI32>>),
 
     /// Sequence of patterns (space-separated, played in order).
-    Sequence(Vec<(MiniASTI32, Option<f64>)>), // (pattern, optional weight)
+    Sequence(Vec<(MiniASTI32, Option<Weight>)>), // (pattern, optional weight)
 
     /// Fast subsequence from [...] syntax (explicit fastcat).
-    FastCat(Vec<(MiniASTI32, Option<f64>)>), // (pattern, optional weight)
+    FastCat(Vec<(MiniASTI32, Option<Weight>)>), // (pattern, optional weight)
 
     /// Slow subsequence (one item per cycle, with optional @ weight).
-    SlowCat(Vec<(MiniASTI32, Option<f64>)>),
+    SlowCat(Vec<(MiniASTI32, Option<Weight>)>),
 
     /// Stack: comma-separated patterns play simultaneously.
     Stack(Vec<MiniASTI32>),
@@ -66,7 +110,7 @@ pub enum MiniASTI32 {
     Slow(Box<MiniASTI32>, Box<MiniASTF64>),
 
     /// Replicate: pattern ! n (repeat n times).
-    Replicate(Box<MiniASTI32>, u32),
+    Replicate(Box<MiniASTI32>, ReplicateCount),
 
     /// Degrade: pattern ? prob (randomly drop with probability).
     Degrade(Box<MiniASTI32>, Option<f64>, u64),
@@ -103,13 +147,13 @@ pub enum MiniASTU32 {
     List(Located<Vec<MiniASTU32>>),
 
     /// Sequence of patterns (space-separated, played in order).
-    Sequence(Vec<(MiniASTU32, Option<f64>)>), // (pattern, optional weight)
+    Sequence(Vec<(MiniASTU32, Option<Weight>)>), // (pattern, optional weight)
 
     /// Fast subsequence from [...] syntax (explicit fastcat).
-    FastCat(Vec<(MiniASTU32, Option<f64>)>), // (pattern, optional weight)
+    FastCat(Vec<(MiniASTU32, Option<Weight>)>), // (pattern, optional weight)
 
     /// Slow subsequence (one item per cycle, with optional @ weight).
-    SlowCat(Vec<(MiniASTU32, Option<f64>)>),
+    SlowCat(Vec<(MiniASTU32, Option<Weight>)>),
 
     /// Stack: comma-separated patterns play simultaneously.
     Stack(Vec<MiniASTU32>),
@@ -124,8 +168,7 @@ pub enum MiniASTU32 {
     Slow(Box<MiniASTU32>, Box<MiniASTF64>),
 
     /// Replicate: pattern ! n (repeat n times).
-    /// Count is a plain u32 since Strudel doesn't support patterned replicate counts.
-    Replicate(Box<MiniASTU32>, u32),
+    Replicate(Box<MiniASTU32>, ReplicateCount),
 
     /// Degrade: pattern ? prob (randomly drop with probability).
     Degrade(Box<MiniASTU32>, Option<f64>, u64),
@@ -159,13 +202,13 @@ pub enum MiniASTF64 {
     List(Located<Vec<MiniASTF64>>),
 
     /// Sequence of patterns (space-separated, played in order).
-    Sequence(Vec<(MiniASTF64, Option<f64>)>), // (pattern, optional weight)
+    Sequence(Vec<(MiniASTF64, Option<Weight>)>), // (pattern, optional weight)
 
     /// Fast subsequence from [...] syntax (explicit fastcat).
-    FastCat(Vec<(MiniASTF64, Option<f64>)>), // (pattern, optional weight)
+    FastCat(Vec<(MiniASTF64, Option<Weight>)>), // (pattern, optional weight)
 
     /// Slow subsequence (one item per cycle, with optional @ weight).
-    SlowCat(Vec<(MiniASTF64, Option<f64>)>),
+    SlowCat(Vec<(MiniASTF64, Option<Weight>)>),
 
     /// Stack: comma-separated patterns play simultaneously.
     Stack(Vec<MiniASTF64>),
@@ -180,8 +223,7 @@ pub enum MiniASTF64 {
     Slow(Box<MiniASTF64>, Box<MiniASTF64>),
 
     /// Replicate: pattern ! n (repeat n times).
-    /// Count is a plain u32 since Strudel doesn't support patterned replicate counts.
-    Replicate(Box<MiniASTF64>, u32),
+    Replicate(Box<MiniASTF64>, ReplicateCount),
 
     /// Degrade: pattern ? prob (randomly drop with probability).
     Degrade(Box<MiniASTF64>, Option<f64>, u64),
@@ -215,17 +257,17 @@ pub enum MiniAST {
     List(Located<Vec<MiniAST>>),
 
     /// Sequence of patterns (space-separated, played in order).
-    Sequence(Vec<(MiniAST, Option<f64>)>), // (pattern, optional weight)
+    Sequence(Vec<(MiniAST, Option<Weight>)>), // (pattern, optional weight)
 
     /// Fast subsequence from [...] syntax (explicit fastcat).
     /// Unlike Sequence which is the implicit result of space-separated elements,
     /// FastCat preserves that this came from explicit [...] grouping.
     /// This distinction matters for nesting: `<[c e]>` should be slowcat of one fastcat,
     /// not slowcat of two elements.
-    FastCat(Vec<(MiniAST, Option<f64>)>), // (pattern, optional weight)
+    FastCat(Vec<(MiniAST, Option<Weight>)>), // (pattern, optional weight)
 
     /// Slow subsequence (one item per cycle, with optional @ weight).
-    SlowCat(Vec<(MiniAST, Option<f64>)>),
+    SlowCat(Vec<(MiniAST, Option<Weight>)>),
 
     /// Stack: comma-separated patterns play simultaneously.
     Stack(Vec<MiniAST>),
@@ -240,8 +282,7 @@ pub enum MiniAST {
     Slow(Box<MiniAST>, Box<MiniASTF64>),
 
     /// Replicate: pattern ! n (repeat n times).
-    /// Count is a plain u32 since Strudel doesn't support patterned replicate counts.
-    Replicate(Box<MiniAST>, u32),
+    Replicate(Box<MiniAST>, ReplicateCount),
 
     /// Degrade: pattern ? prob (randomly drop with probability).
     Degrade(Box<MiniAST>, Option<f64>, u64),
@@ -344,7 +385,9 @@ pub(crate) mod test_builders {
     //! programmatically. These replace the Pest parser in existing Rust
     //! tests — see `pattern_system::mini::tests` / convert tests.
 
-    use super::{AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32};
+    use super::{
+        AtomValue, Located, MiniAST, MiniASTF64, MiniASTI32, MiniASTU32, ReplicateCount, Weight,
+    };
     use crate::pattern_system::SourceSpan;
 
     pub fn span(start: usize, end: usize) -> SourceSpan {
@@ -371,16 +414,23 @@ pub(crate) mod test_builders {
         MiniAST::Rest(span(start, end))
     }
 
+    fn static_weights(items: Vec<(MiniAST, Option<f64>)>) -> Vec<(MiniAST, Option<Weight>)> {
+        items
+            .into_iter()
+            .map(|(p, w)| (p, w.map(Weight::Static)))
+            .collect()
+    }
+
     pub fn seq(items: Vec<(MiniAST, Option<f64>)>) -> MiniAST {
-        MiniAST::Sequence(items)
+        MiniAST::Sequence(static_weights(items))
     }
 
     pub fn fastcat(items: Vec<(MiniAST, Option<f64>)>) -> MiniAST {
-        MiniAST::FastCat(items)
+        MiniAST::FastCat(static_weights(items))
     }
 
     pub fn slowcat(items: Vec<(MiniAST, Option<f64>)>) -> MiniAST {
-        MiniAST::SlowCat(items)
+        MiniAST::SlowCat(static_weights(items))
     }
 
     pub fn fast_f64(pattern: MiniAST, factor: f64, start: usize, end: usize) -> MiniAST {
@@ -415,7 +465,7 @@ pub(crate) mod test_builders {
     }
 
     pub fn replicate(pattern: MiniAST, count: u32) -> MiniAST {
-        MiniAST::Replicate(Box::new(pattern), count)
+        MiniAST::Replicate(Box::new(pattern), ReplicateCount::Static(count))
     }
 
     pub fn degrade(pattern: MiniAST, prob: Option<f64>, seed: u64) -> MiniAST {
@@ -444,14 +494,12 @@ fn collect_leaf_spans_recursive(ast: &MiniAST, spans: &mut Vec<(usize, usize)>) 
                 collect_leaf_spans_recursive(child, spans);
             }
         }
-        MiniAST::Sequence(items) | MiniAST::FastCat(items) => {
-            for (child, _weight) in items {
+        MiniAST::Sequence(items) | MiniAST::FastCat(items) | MiniAST::SlowCat(items) => {
+            for (child, weight) in items {
                 collect_leaf_spans_recursive(child, spans);
-            }
-        }
-        MiniAST::SlowCat(items) => {
-            for (child, _weight) in items {
-                collect_leaf_spans_recursive(child, spans);
+                if let Some(Weight::Pattern(w)) = weight {
+                    collect_f64_spans(w, spans);
+                }
             }
         }
         MiniAST::RandomChoice(items, _) | MiniAST::Stack(items) => {
@@ -467,8 +515,11 @@ fn collect_leaf_spans_recursive(ast: &MiniAST, spans: &mut Vec<(usize, usize)>) 
             collect_leaf_spans_recursive(pattern, spans);
             collect_f64_spans(factor, spans);
         }
-        MiniAST::Replicate(pattern, _count) => {
+        MiniAST::Replicate(pattern, count) => {
             collect_leaf_spans_recursive(pattern, spans);
+            if let ReplicateCount::Pattern(c) = count {
+                collect_u32_spans(c, spans);
+            }
         }
         MiniAST::Degrade(pattern, _prob, _) => {
             collect_leaf_spans_recursive(pattern, spans);
@@ -514,14 +565,12 @@ fn collect_f64_spans(ast: &MiniASTF64, spans: &mut Vec<(usize, usize)>) {
                 collect_f64_spans(child, spans);
             }
         }
-        MiniASTF64::Sequence(items) | MiniASTF64::FastCat(items) => {
-            for (child, _weight) in items {
+        MiniASTF64::Sequence(items) | MiniASTF64::FastCat(items) | MiniASTF64::SlowCat(items) => {
+            for (child, weight) in items {
                 collect_f64_spans(child, spans);
-            }
-        }
-        MiniASTF64::SlowCat(items) => {
-            for (child, _weight) in items {
-                collect_f64_spans(child, spans);
+                if let Some(Weight::Pattern(w)) = weight {
+                    collect_f64_spans(w, spans);
+                }
             }
         }
         MiniASTF64::RandomChoice(items, _) | MiniASTF64::Stack(items) => {
@@ -537,8 +586,11 @@ fn collect_f64_spans(ast: &MiniASTF64, spans: &mut Vec<(usize, usize)>) {
             collect_f64_spans(pattern, spans);
             collect_f64_spans(factor, spans);
         }
-        MiniASTF64::Replicate(pattern, _count) => {
+        MiniASTF64::Replicate(pattern, count) => {
             collect_f64_spans(pattern, spans);
+            if let ReplicateCount::Pattern(c) = count {
+                collect_u32_spans(c, spans);
+            }
         }
         MiniASTF64::Degrade(pattern, _prob, _) => {
             collect_f64_spans(pattern, spans);
@@ -584,14 +636,12 @@ fn collect_u32_spans(ast: &MiniASTU32, spans: &mut Vec<(usize, usize)>) {
                 collect_u32_spans(child, spans);
             }
         }
-        MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) => {
-            for (child, _weight) in items {
+        MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
+            for (child, weight) in items {
                 collect_u32_spans(child, spans);
-            }
-        }
-        MiniASTU32::SlowCat(items) => {
-            for (child, _weight) in items {
-                collect_u32_spans(child, spans);
+                if let Some(Weight::Pattern(w)) = weight {
+                    collect_f64_spans(w, spans);
+                }
             }
         }
         MiniASTU32::RandomChoice(items, _) | MiniASTU32::Stack(items) => {
@@ -607,8 +657,11 @@ fn collect_u32_spans(ast: &MiniASTU32, spans: &mut Vec<(usize, usize)>) {
             collect_u32_spans(pattern, spans);
             collect_f64_spans(factor, spans);
         }
-        MiniASTU32::Replicate(pattern, _count) => {
+        MiniASTU32::Replicate(pattern, count) => {
             collect_u32_spans(pattern, spans);
+            if let ReplicateCount::Pattern(c) = count {
+                collect_u32_spans(c, spans);
+            }
         }
         MiniASTU32::Degrade(pattern, _prob, _) => {
             collect_u32_spans(pattern, spans);
@@ -654,14 +707,12 @@ fn collect_i32_spans(ast: &MiniASTI32, spans: &mut Vec<(usize, usize)>) {
                 collect_i32_spans(child, spans);
             }
         }
-        MiniASTI32::Sequence(items) | MiniASTI32::FastCat(items) => {
-            for (child, _weight) in items {
+        MiniASTI32::Sequence(items) | MiniASTI32::FastCat(items) | MiniASTI32::SlowCat(items) => {
+            for (child, weight) in items {
                 collect_i32_spans(child, spans);
-            }
-        }
-        MiniASTI32::SlowCat(items) => {
-            for (child, _weight) in items {
-                collect_i32_spans(child, spans);
+                if let Some(Weight::Pattern(w)) = weight {
+                    collect_f64_spans(w, spans);
+                }
             }
         }
         MiniASTI32::RandomChoice(items, _) | MiniASTI32::Stack(items) => {
@@ -677,8 +728,11 @@ fn collect_i32_spans(ast: &MiniASTI32, spans: &mut Vec<(usize, usize)>) {
             collect_i32_spans(pattern, spans);
             collect_f64_spans(factor, spans);
         }
-        MiniASTI32::Replicate(pattern, _count) => {
+        MiniASTI32::Replicate(pattern, count) => {
             collect_i32_spans(pattern, spans);
+            if let ReplicateCount::Pattern(c) = count {
+                collect_u32_spans(c, spans);
+            }
         }
         MiniASTI32::Degrade(pattern, _prob, _) => {
             collect_i32_spans(pattern, spans);

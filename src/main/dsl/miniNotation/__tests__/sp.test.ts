@@ -264,6 +264,15 @@ const GRAMMAR_CASES: Array<{ label: string; source: string }> = [
     { label: 'weight @n positional', source: '0@2 1' },
     { label: 'random choice |', source: '0|1|2' },
     { label: 'rest inside choice', source: '0|~|2' },
+    { label: 'patterned weight @<...>', source: '0@<1 2> 1' },
+    { label: 'patterned weight @[...]', source: '0@[2 1] 1' },
+    { label: 'patterned weight @{...}', source: '0@{1 2} 1' },
+    { label: 'patterned weight bracketed choice', source: '0@[1|2] 1' },
+    { label: 'patterned replicate !<...>', source: '0!<2 3> 1' },
+    { label: 'patterned replicate ![...]', source: '0![2 3] 1' },
+    { label: 'operand polymeter for fast', source: '0*{1 2 3}' },
+    { label: 'operand polymeter with % steps', source: '0*{1 2 3}%4' },
+    { label: 'euclid arg polymeter', source: '0(3,{4 8})' },
 ];
 
 describe('peggy grammar survives replaceSignals (regression)', () => {
