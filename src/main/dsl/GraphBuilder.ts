@@ -356,6 +356,32 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
     }
 
     /**
+     * A collection of the same class holding the items from `start` up to but
+     * not including `end`, with `Array.prototype.slice` index semantics.
+     */
+    slice(start?: number, end?: number): this {
+        const ctor = this.constructor as new (...args: T[]) => this;
+        return new ctor(...this.items.slice(start, end));
+    }
+
+    /**
+     * Split into consecutive collections of the same class, each `size` items
+     * long except the last, which holds the remainder.
+     */
+    chunk(size: number): this[] {
+        if (!Number.isInteger(size) || size < 1) {
+            throw new Error(
+                `chunk() size must be a positive integer, got ${size}`,
+            );
+        }
+        const chunks: this[] = [];
+        for (let i = 0; i < this.items.length; i += size) {
+            chunks.push(this.slice(i, i + size));
+        }
+        return chunks;
+    }
+
+    /**
      * Scale all outputs by a linear factor (5 = unity, 2.5 = half, 10 = 2x).
      *
      * For perceptual (audio-taper) volume control, use {@link gain} instead.
