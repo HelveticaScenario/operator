@@ -1915,6 +1915,17 @@ function getFactoryReturnType(moduleSchema: Schema): string {
 }
 
 /**
+ * Param docs render as single JSDoc list items, so a doc comment wrapped over
+ * several lines is joined into one.
+ */
+function paramDescription(description: string): string {
+    return description
+        .split(/\s*\r?\n\s*/)
+        .filter(Boolean)
+        .join(' ');
+}
+
+/**
  * Build the trailing `config?: { ... }` argument shared by the factory-function
  * and `.$.`-method renderers: every non-positional param, plus an optional
  * `id`. `config` is required only when some non-positional param is required.
@@ -1952,8 +1963,7 @@ function buildConfigArg(moduleSchema: Schema): {
         // Collect config param descriptions
         const description = propSchema?.description;
         if (description) {
-            const firstLine = description.split(/\r?\n/)[0];
-            paramDocs.push(`${key} - ${firstLine}`);
+            paramDocs.push(`${key} - ${paramDescription(description)}`);
         }
 
         // Append enum variant descriptions as sub-bullets
@@ -2042,8 +2052,9 @@ function buildSignature(
 
         const description = propSchema?.description;
         if (description) {
-            const firstLine = description.split(/\r?\n/)[0];
-            docLines.push(`@param ${arg.name} - ${firstLine}`);
+            docLines.push(
+                `@param ${arg.name} - ${paramDescription(description)}`,
+            );
         } else {
             docLines.push(`@param ${arg.name}`);
         }
