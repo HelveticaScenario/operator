@@ -13,6 +13,7 @@ pub mod delay;
 pub mod lag;
 pub mod logic;
 pub mod math;
+pub mod motion_follower;
 pub mod mul_hz;
 pub mod percussion_envelope;
 pub mod quantizer;
@@ -41,6 +42,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     logic::RisingEdgeDetector::install_constructor(map);
     logic::FallingEdgeDetector::install_constructor(map);
     math::Math::install_constructor(map);
+    motion_follower::MotionFollower::install_constructor(map);
     mul_hz::MulHz::install_constructor(map);
     remap::Remap::install_constructor(map);
     sample_and_hold::SampleAndHold::install_constructor(map);
@@ -66,6 +68,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     logic::RisingEdgeDetector::install_params_deserializer(map);
     logic::FallingEdgeDetector::install_params_deserializer(map);
     math::Math::install_params_deserializer(map);
+    motion_follower::MotionFollower::install_params_deserializer(map);
     mul_hz::MulHz::install_params_deserializer(map);
     remap::Remap::install_params_deserializer(map);
     sample_and_hold::SampleAndHold::install_params_deserializer(map);
@@ -92,6 +95,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         logic::RisingEdgeDetector::get_schema(),
         logic::FallingEdgeDetector::get_schema(),
         math::Math::get_schema(),
+        motion_follower::MotionFollower::get_schema(),
         mul_hz::MulHz::get_schema(),
         remap::Remap::get_schema(),
         sample_and_hold::SampleAndHold::get_schema(),

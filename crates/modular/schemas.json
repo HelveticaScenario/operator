@@ -12962,6 +12962,220 @@
     ]
   },
   {
+    "name": "$motionFollower",
+    "documentation": "Turns controller movement into a level, like bowing a string: moving the\ninput in either direction swells the output, holding it still lets it fade.\n\nThe input's speed (volts per second, direction ignored) is averaged over\n**smooth** seconds, then followed with separate **attack** and **release**\ntimes. **gain** converts speed to volts and a soft clip keeps the output\nbelow **ceiling**.\n\n**pos** and **neg** are the same level driven only by rising or only by\nfalling input, so pushing and releasing a controller can steer different\ndestinations. Both are positive voltages.\n\nStepped controllers such as 7-bit MIDI CC jump in small increments, so\ntheir raw speed is a train of spikes; a **smooth** time several times longer\nthan the gap between updates averages them into a steady level.\n\n```js\n// a slowly swinging LFO bows a filter open on every sweep\n$lpf($saw('c3'), $motionFollower($sine('0.5hz'), { release: 0.5 }).range('c3', 'c7')).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MotionFollowerParams",
+      "type": "object",
+      "properties": {
+        "attack": {
+          "description": "seconds for the level to rise toward the current speed (default 0.02)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ceiling": {
+          "description": "soft-clip ceiling in volts; the output never exceeds it (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gain": {
+          "description": "volts of output per volt-per-second of movement (default 0.25)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "controller signal whose movement drives the output",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "release": {
+          "description": "seconds for the level to fall once movement slows or stops (default 0.3)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "smooth": {
+          "description": "seconds of averaging applied to the speed before attack/release; set it\nlonger than the gap between controller updates to hide stepping (default 0.02)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "movement level in either direction (0 V at rest)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "pos",
+        "description": "movement level from rising input only",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "neg",
+        "description": "movement level from falling input only",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "controller signal whose movement drives the output",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "attack",
+        "description": "seconds for the level to rise toward the current speed (default 0.02)",
+        "signalType": "control",
+        "defaultValue": 0.02,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "release",
+        "description": "seconds for the level to fall once movement slows or stops (default 0.3)",
+        "signalType": "control",
+        "defaultValue": 0.3,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "smooth",
+        "description": "seconds of averaging applied to the speed before attack/release; set it\nlonger than the gap between controller updates to hide stepping (default 0.02)",
+        "signalType": "control",
+        "defaultValue": 0.02,
+        "minValue": 0.0,
+        "maxValue": 1.0
+      },
+      {
+        "name": "gain",
+        "description": "volts of output per volt-per-second of movement (default 0.25)",
+        "signalType": "control",
+        "defaultValue": 0.25,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "ceiling",
+        "description": "soft-clip ceiling in volts; the output never exceeds it (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 20.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
     "name": "$mulHz",
     "documentation": "Multiplies a pitch's frequency by a factor.\n\nThe input V/Oct pitch is converted to Hz, multiplied by **factor**, then the\nresult is converted back to V/Oct. A factor of 1.5 is a just perfect fifth.\n\n```js\n// up a just fifth\n$mulHz($saw('C4'), 1.5)\n```",
     "paramsSchema": {
@@ -14031,7 +14245,7 @@
   },
   {
     "name": "$unison",
-    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–64)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `max(input_channels, spread_channels) × count`, clamped to\n64. **input** and **spread** cycle against each other, so a spread wider than\nthe input repeats the input across the extra channels, and vice versa.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV(), 5, $sine('0.2hz'))).out()\n```",
+    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–64)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `max(input_channels, spread_channels) × count`, clamped to\n64. **input** and **spread** cycle against each other, so a spread wider than\nthe input repeats the input across the extra channels, and vice versa.\n\nVoices are interleaved: each voice is a full copy of the input channels, so a\n3-channel input with count 3 outputs channels `1 2 3 1 2 3 1 2 3`. When the\n64-channel cap truncates, the highest voices are the ones dropped.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV(), 5, $sine('0.2hz'))).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "UnisonParams",
