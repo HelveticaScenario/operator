@@ -11,6 +11,7 @@ use crate::{
         sanitize,
     },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    types::hermite_clamped,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -49,8 +50,6 @@ enum GrainShape {
 
 #[derive(Default, Clone, Copy)]
 struct Grain {
-    /// Whether this slot is currently playing.
-    active: bool,
     /// Fractional frame index into the WAV buffer.
     read_pos: f64,
     /// Frames advanced per audio sample (positive = forward, negative = reverse).
@@ -73,6 +72,8 @@ struct Grain {
 
 struct GrainChannel {
     grains: [Grain; GRAINS_PER_CHANNEL],
+    /// Bit `i` is set while `grains[i]` is playing.
+    active: u64,
     /// Accumulator; a grain is spawned each time this crosses 1.0.
     spawn_phase: f32,
     /// Grains spawned since the last gate rising edge (for `loopCount`).
@@ -88,6 +89,7 @@ impl Default for GrainChannel {
     fn default() -> Self {
         Self {
             grains: std::array::from_fn(|_| Grain::default()),
+            active: 0,
             spawn_phase: 0.0,
             grains_spawned: 0,
             gate_trigger: SchmittTrigger::default(),
@@ -290,14 +292,12 @@ fn fill_window_lut(lut: &mut [f32], shape: GrainShape) {
 
 // ── Grain pool helpers ─────────────────────────────────────────────────────────
 
-/// Find a free grain slot. If all 64 are active, steal the oldest (highest
-/// `age`), which is closest to its natural end.
+/// Find a free grain slot — the lowest bit clear in `active`. If all 64 are
+/// active, steal the oldest (highest `age`), which is closest to its natural end.
 #[inline]
-fn alloc_grain(grains: &[Grain; GRAINS_PER_CHANNEL]) -> usize {
-    for (i, g) in grains.iter().enumerate() {
-        if !g.active {
-            return i;
-        }
+fn alloc_grain(grains: &[Grain; GRAINS_PER_CHANNEL], active: u64) -> usize {
+    if active != u64::MAX {
+        return (!active).trailing_zeros() as usize;
     }
     grains
         .iter()
@@ -369,10 +369,9 @@ impl Grains {
                 if is_high && !limit_reached {
                     let grains_per_sample = density * 10.0 / sample_rate;
                     cs.spawn_phase += grains_per_sample;
-
-                    // Capture params outside the grain-spawn inner loop to
-                    // avoid re-reading on every grain (values are stable per
-                    // sample tick).
+                }
+                // Grain parameters are only needed on a sample that spawns.
+                if is_high && !limit_reached && cs.spawn_phase >= 1.0 {
                     let pitch = self.params.pitch.get_value(ch);
                     let start_v = self.params.start.value_or(ch, 0.0).clamp(0.0, 5.0);
                     let length_v = self.params.length.value_or(ch, 1.0).max(0.01);
@@ -415,9 +414,8 @@ impl Grains {
                             (start_frame, playback_rate)
                         };
 
-                        let slot = alloc_grain(&cs.grains);
+                        let slot = alloc_grain(&cs.grains, cs.active);
                         cs.grains[slot] = Grain {
-                            active: true,
                             read_pos,
                             signed_rate,
                             age: 0,
@@ -426,6 +424,7 @@ impl Grains {
                             decay_level: 0.0,
                             decay_coeff,
                         };
+                        cs.active |= 1 << slot;
                         cs.grains_spawned += 1;
 
                         if loop_count.map_or(false, |n| cs.grains_spawned >= n) {
@@ -438,17 +437,19 @@ impl Grains {
             // ── Process active grains ──────────────────────────────────────
             let mut sum = 0.0_f32;
             let mut active_count = 0_u32;
-            let wav_ch = ch % wav_channels;
+            let samples = self.params.wav.channel(ch % wav_channels);
             let lut = &self.state.window_lut;
 
             let cs = &mut self.channel_state[ch];
-            for grain in cs.grains.iter_mut() {
-                if !grain.active {
-                    continue;
-                }
+            // Visit active slots in index order, as a scan of the pool would.
+            let mut pending = cs.active;
+            while pending != 0 {
+                let slot = pending.trailing_zeros() as usize;
+                pending &= pending - 1;
+                let grain = &mut cs.grains[slot];
                 let t = grain.age as f32 * grain.inv_life;
                 if t >= 1.0 {
-                    grain.active = false;
+                    cs.active &= !(1 << slot);
                     continue;
                 }
 
@@ -498,10 +499,7 @@ impl Grains {
                     _ => lut_read(lut, t),
                 };
 
-                let sample = self
-                    .params
-                    .wav
-                    .read_hermite_clamped(wav_ch, grain.read_pos as f32);
+                let sample = hermite_clamped(samples, grain.read_pos as f32);
 
                 sum += sample * window;
                 active_count += 1;
@@ -1059,8 +1057,8 @@ mod tests {
             wav,
         );
         let life = (1u64 << 24) + 50;
+        grains.channel_state[0].active = 1;
         grains.channel_state[0].grains[0] = Grain {
-            active: true,
             read_pos: 0.0,
             signed_rate: 0.0,
             age: (1 << 24) - 10,
@@ -1072,8 +1070,9 @@ mod tests {
         for _ in 0..100 {
             grains.update(SAMPLE_RATE);
         }
-        assert!(
-            !grains.channel_state[0].grains[0].active,
+        assert_eq!(
+            grains.channel_state[0].active & 1,
+            0,
             "a grain must deactivate once its age reaches its life"
         );
     }

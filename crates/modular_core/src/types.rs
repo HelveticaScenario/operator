@@ -1016,32 +1016,13 @@ impl SampleBuffer {
     /// Allocation-free; safe for the audio thread.
     #[inline]
     pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
-        if !frame.is_finite() || self.frame_count == 0 {
-            return 0.0;
-        }
+        hermite_clamped(self.channel(channel), frame)
+    }
 
-        let max_frame = (self.frame_count - 1) as f32;
-        if frame < 0.0 || frame > max_frame {
-            return 0.0;
-        }
-
-        let left = frame.floor() as usize;
-        let frac = frame - left as f32;
-        if frac <= f32::EPSILON {
-            return self.read(channel, left);
-        }
-
-        let i0 = left.saturating_sub(1);
-        let i1 = left;
-        let i2 = (left + 1).min(self.frame_count - 1);
-        let i3 = (left + 2).min(self.frame_count - 1);
-
-        let y0 = self.read(channel, i0);
-        let y1 = self.read(channel, i1);
-        let y2 = self.read(channel, i2);
-        let y3 = self.read(channel, i3);
-
-        hermite4(y0, y1, y2, y3, frac)
+    /// One channel's samples; empty for a channel the buffer does not have.
+    #[inline]
+    pub fn channel(&self, channel: usize) -> &[f32] {
+        self.samples.get(channel).map_or(&[], Vec::as_slice)
     }
 
     /// Hermite (4-point cubic) interpolation at a fractional frame position
@@ -1073,6 +1054,33 @@ impl SampleBuffer {
 
         hermite4(y0, y1, y2, y3, frac)
     }
+}
+
+/// Hermite (4-point cubic) read of `samples` at a fractional frame position,
+/// silent outside `[0, len - 1]` and clamping the neighbours at the ends.
+#[inline]
+pub fn hermite_clamped(samples: &[f32], frame: f32) -> f32 {
+    let frame_count = samples.len();
+    if !frame.is_finite() || frame_count == 0 {
+        return 0.0;
+    }
+
+    let max_frame = (frame_count - 1) as f32;
+    if frame < 0.0 || frame > max_frame {
+        return 0.0;
+    }
+
+    let left = frame.floor() as usize;
+    let frac = frame - left as f32;
+    if frac <= f32::EPSILON {
+        return samples[left];
+    }
+
+    let i0 = left.saturating_sub(1);
+    let i2 = (left + 1).min(frame_count - 1);
+    let i3 = (left + 2).min(frame_count - 1);
+
+    hermite4(samples[i0], samples[left], samples[i2], samples[i3], frac)
 }
 
 /// 4-point Hermite interpolation kernel.
@@ -1134,6 +1142,12 @@ impl WavData {
     #[inline]
     pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
         self.buffer.read_hermite_clamped(channel, frame)
+    }
+
+    /// One channel's samples; empty for a channel the file does not have.
+    #[inline]
+    pub fn channel(&self, channel: usize) -> &[f32] {
+        self.buffer.channel(channel)
     }
 
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> R {
@@ -1205,6 +1219,14 @@ impl Wav {
             .as_ref()
             .map(|d| d.read_hermite_clamped(channel, frame))
             .unwrap_or(0.0)
+    }
+
+    /// One channel's samples; empty when unloaded or for a channel the file
+    /// does not have. Reading through the slice skips the per-read lookups.
+    pub fn channel(&self, channel: usize) -> &[f32] {
+        self.cached_data
+            .as_ref()
+            .map_or(&[], |d| d.channel(channel))
     }
 
     pub fn sample_rate(&self) -> f32 {
