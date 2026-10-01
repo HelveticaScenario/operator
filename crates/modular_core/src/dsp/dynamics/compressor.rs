@@ -20,13 +20,56 @@ fn voltage_to_gain(voltage: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
 
+/// Convert a threshold voltage to dBV, flooring at ~-200 dB so 0 V stays finite.
+#[inline]
+fn threshold_to_db(threshold: f32) -> f32 {
+    20.0 * (threshold.max(0.0) + 1e-10).log10()
+}
+
+/// One-pole envelope follower coefficient for a time constant in seconds.
+#[inline]
+fn follower_coeff(time: f32, sample_rate: f32) -> f32 {
+    (-1.0 / (time.max(1e-6) * sample_rate)).exp()
+}
+
+/// A value derived from one input, recomputed only when that input changes.
+/// The comparison is exact, so the cached value is always the one a fresh
+/// computation would return.
+#[derive(Clone, Copy)]
+struct Derived {
+    input: f32,
+    value: f32,
+}
+
+impl Default for Derived {
+    fn default() -> Self {
+        // NaN never compares equal, so the first `get` always computes.
+        Self {
+            input: f32::NAN,
+            value: 0.0,
+        }
+    }
+}
+
+impl Derived {
+    #[inline]
+    fn get(&mut self, input: f32, derive: impl FnOnce(f32) -> f32) -> f32 {
+        if input != self.input {
+            self.input = input;
+            self.value = derive(input);
+        }
+        self.value
+    }
+}
+
 /// Compute compressor gain for a single sample.
 ///
 /// Envelope is updated from `detector_sample` (the side-chain signal — for
-/// internal detection this is the same as `sample`). Two stages run on every
-/// sample: a downward stage active above `threshold` and an upward stage
-/// active below `upward_threshold`. Each stage's `ratio` is interpreted via
-/// the gain factor `1 − 1/ratio`:
+/// internal detection this is the same as `sample`), using the
+/// [`follower_coeff`]s for attack and release. Two stages run on every
+/// sample: a downward stage active above `threshold_db` and an upward stage
+/// active below `upward_threshold_db` (both from [`threshold_to_db`]). Each
+/// stage's `ratio` is interpreted via the gain factor `1 − 1/ratio`:
 ///
 /// - `ratio == 1` → factor 0 → passthrough.
 /// - `ratio > 1` → positive factor → compression (pull toward threshold).
@@ -39,14 +82,13 @@ fn compress(
     sample: f32,
     detector_sample: f32,
     envelope: &mut f32,
-    threshold: f32,
+    threshold_db: f32,
     ratio: f32,
-    upward_threshold: f32,
+    upward_threshold_db: f32,
     upward_ratio: f32,
-    attack: f32,
-    release: f32,
+    attack_coeff: f32,
+    release_coeff: f32,
     makeup: f32,
-    sample_rate: f32,
 ) -> f32 {
     // Lower-bound the ratios at 1e-3 so `1/ratio` stays finite. The gain math
     // is shaped by `(1 - 1/ratio)`: ratio ∈ (0, 1) is expansion, ratio == 1 is
@@ -54,17 +96,13 @@ fn compress(
     // below is what actually keeps the output bounded at extreme ratios.
     let ratio = ratio.max(1e-3);
     let upward_ratio = upward_ratio.max(1e-3);
-    let threshold = threshold.max(0.0);
-    let upward_threshold = upward_threshold.max(0.0);
-    let attack = attack.max(1e-6);
-    let release = release.max(1e-6);
 
     // Envelope follower (peak detection with attack/release ballistics)
     let detector_abs = detector_sample.abs();
     let coeff = if detector_abs > *envelope {
-        (-1.0 / (attack * sample_rate)).exp()
+        attack_coeff
     } else {
-        (-1.0 / (release * sample_rate)).exp()
+        release_coeff
     };
     *envelope = detector_abs + coeff * (*envelope - detector_abs);
     *envelope = sanitize(*envelope);
@@ -74,8 +112,6 @@ fn compress(
     // without the floor, silence drives upward expansion to +∞ dB; without
     // the ceiling, very loud peaks drive downward expansion the same way.
     let level_db = (20.0 * (*envelope + 1e-10).log10()).clamp(-60.0, 60.0);
-    let threshold_db = 20.0 * (threshold + 1e-10).log10();
-    let upward_threshold_db = 20.0 * (upward_threshold + 1e-10).log10();
 
     // Downward stage (above threshold): compress when ratio > 1, expand when
     // ratio < 1. Factor is 0 at ratio == 1 → passthrough, no branch needed.
@@ -107,6 +143,13 @@ fn compress(
 #[derive(Clone, Copy, Default)]
 struct ChannelState {
     envelope: f32,
+    input_gain: Derived,
+    output_gain: Derived,
+    makeup: Derived,
+    threshold_db: Derived,
+    upward_threshold_db: Derived,
+    attack_coeff: Derived,
+    release_coeff: Derived,
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -253,7 +296,7 @@ impl Compressor {
 
             // Apply input gain
             let input_gain_voltage = self.params.input_gain.value_or(ch, 0.0);
-            let gained = input * voltage_to_gain(input_gain_voltage);
+            let gained = input * state.input_gain.get(input_gain_voltage, voltage_to_gain);
 
             // Side-chain: detector reads from sidechain input if connected,
             // otherwise from the gain-staged input itself.
@@ -273,26 +316,31 @@ impl Compressor {
             // (-5 V = -24 dB, 0 V = unity, +5 V = +24 dB). voltage_to_gain
             // clamps the voltage internally.
             let makeup_voltage = self.params.makeup.value_or(ch, 0.0);
-            let makeup = voltage_to_gain(makeup_voltage);
+            let makeup = state.makeup.get(makeup_voltage, voltage_to_gain);
 
             // Compress
             let compressed = compress(
                 gained,
                 detector,
                 &mut state.envelope,
-                threshold,
+                state.threshold_db.get(threshold, threshold_to_db),
                 ratio,
-                upward_threshold,
+                state
+                    .upward_threshold_db
+                    .get(upward_threshold, threshold_to_db),
                 upward_ratio,
-                attack,
-                release,
+                state
+                    .attack_coeff
+                    .get(attack, |t| follower_coeff(t, sample_rate)),
+                state
+                    .release_coeff
+                    .get(release, |t| follower_coeff(t, sample_rate)),
                 makeup,
-                sample_rate,
             );
 
             // Apply output gain
             let output_gain_voltage = self.params.output_gain.value_or(ch, 0.0);
-            let out = compressed * voltage_to_gain(output_gain_voltage);
+            let out = compressed * state.output_gain.get(output_gain_voltage, voltage_to_gain);
 
             // Dry/wet mix (dry signal is original input before gain staging)
             let mix_amount = self.params.mix.value_or(ch, 5.0).clamp(0.0, 5.0) / 5.0;
@@ -326,17 +374,32 @@ mod tests {
                 sample,
                 sample,
                 &mut env,
-                threshold,
+                threshold_to_db(threshold),
                 ratio,
-                upward_threshold,
+                threshold_to_db(upward_threshold),
                 upward_ratio,
-                0.001,
-                0.001,
+                follower_coeff(0.001, 48_000.0),
+                follower_coeff(0.001, 48_000.0),
                 1.0,
-                48_000.0,
             );
         }
         last
+    }
+
+    #[test]
+    fn derived_recomputes_only_on_input_change() {
+        let mut derived = Derived::default();
+        let mut calls = 0;
+        let mut get = |derived: &mut Derived, input: f32| {
+            derived.get(input, |x| {
+                calls += 1;
+                x * 2.0
+            })
+        };
+        assert_eq!(get(&mut derived, 1.0), 2.0);
+        assert_eq!(get(&mut derived, 1.0), 2.0);
+        assert_eq!(get(&mut derived, 3.0), 6.0);
+        assert_eq!(calls, 2);
     }
 
     #[test]

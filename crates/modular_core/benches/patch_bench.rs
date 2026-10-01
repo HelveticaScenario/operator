@@ -26,10 +26,10 @@ fn poly(base: f32, channels: usize) -> Value {
     )
 }
 
-fn poly_cable(module: &str, channels: usize) -> Value {
+fn poly_cable(module: &str, port: &str, channels: usize) -> Value {
     Value::Array(
         (0..channels)
-            .map(|ch| json!({ "type": "cable", "module": module, "port": "output", "channel": ch }))
+            .map(|ch| json!({ "type": "cable", "module": module, "port": port, "channel": ch }))
             .collect(),
     )
 }
@@ -94,7 +94,7 @@ fn lpf_chain(channels: usize) -> BenchPatch {
         modules.push((
             format!("f{i}"),
             "$lpf",
-            json!({ "input": poly_cable(&prev, channels), "cutoff": 2.0, "resonance": 1.0 }),
+            json!({ "input": poly_cable(&prev, "output", channels), "cutoff": 2.0, "resonance": 1.0 }),
         ));
     }
     BenchPatch::new(modules)
@@ -115,7 +115,7 @@ fn voices(channels: usize) -> BenchPatch {
             id("env"),
             "$adsr",
             json!({
-                "gate": poly_cable(&id("gate"), channels),
+                "gate": poly_cable(&id("gate"), "output", channels),
                 "attack": 0.01, "decay": 0.2, "sustain": 2.0, "release": 0.3,
             }),
         ));
@@ -124,8 +124,8 @@ fn voices(channels: usize) -> BenchPatch {
             id("lpf"),
             "$lpf",
             json!({
-                "input": poly_cable(&id("osc"), channels),
-                "cutoff": poly_cable(&id("env"), channels),
+                "input": poly_cable(&id("osc"), "output", channels),
+                "cutoff": poly_cable(&id("env"), "output", channels),
                 "resonance": 1.5,
             }),
         ));
@@ -133,22 +133,51 @@ fn voices(channels: usize) -> BenchPatch {
             id("vca"),
             "$scaleAndShift",
             json!({
-                "input": poly_cable(&id("lpf"), channels),
-                "scale": poly_cable(&id("env"), channels),
+                "input": poly_cable(&id("lpf"), "output", channels),
+                "scale": poly_cable(&id("env"), "output", channels),
             }),
         ));
         modules.push((
             id("mix"),
             "$mix",
-            json!({ "inputs": [poly_cable(&id("vca"), channels)] }),
+            json!({ "inputs": [poly_cable(&id("vca"), "output", channels)] }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// `$saw` into a chain of 8 `$comp`s with constant settings.
+fn comp_chain(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..8 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("c{}", i - 1)
+        };
+        modules.push((
+            format!("c{i}"),
+            "$comp",
+            json!({
+                "input": poly_cable(&prev, if i == 0 { "output" } else { "sample" }, channels),
+                "threshold": 2.0, "ratio": 4.0, "attack": 0.01, "release": 0.1,
+                "makeup": 1.0, "inputGain": 0.5, "outputGain": -0.5,
+            }),
         ));
     }
     BenchPatch::new(modules)
 }
 
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 2] =
-        [("lpf_chain_32", lpf_chain), ("voices_8", voices)];
+    let cases: [(&str, fn(usize) -> BenchPatch); 3] = [
+        ("lpf_chain_32", lpf_chain),
+        ("voices_8", voices),
+        ("comp_chain_8", comp_chain),
+    ];
     for (name, build) in cases {
         let mut group = c.benchmark_group(name);
         for channels in CHANNELS {
