@@ -102,6 +102,7 @@ impl WellKnownModule {
             port: port.into(),
             channel,
             index_ptr: std::ptr::null(),
+            view: None,
         }
     }
 
@@ -276,6 +277,14 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
+    /// Direct read access to port `port`'s block buffer, for cables to keep
+    /// as a [`CableView`]. `None` for an unknown port, a zero-width port, or a
+    /// module whose reads must always go through
+    /// [`get_value_at`](Self::get_value_at) — Sample-mode wrappers, whose
+    /// reads drive per-sample processing and the feedback delay.
+    fn port_view(&self, _port: &str) -> Option<PortView> {
+        None
+    }
     /// Read like [`get_value_at`](Self::get_value_at), but treat channels at or
     /// above the port's width as silence rather than cycling back over the
     /// lower ones. For consumers whose channels are physical rather than
@@ -2180,7 +2189,63 @@ pub enum Signal {
         ///   2. The cable is `Clone` and `Send`; raw pointers satisfy both
         ///      without further unsafe machinery.
         index_ptr: *const std::cell::Cell<usize>,
+        /// Direct view of the upstream port's block buffer, resolved during
+        /// `connect()` alongside `resolved`. `None` when the upstream offers
+        /// no view; reads then always go through `get_value_at`.
+        view: Option<CableView>,
     },
+}
+
+/// Raw read access to a Block-mode wrapper's output port, as returned by
+/// [`Sampleable::port_view`].
+#[derive(Clone, Copy, Debug)]
+pub struct PortView {
+    /// Start of the port's `BlockPort` data.
+    pub data: *const f32,
+    /// The port's channel width (`>= 1`).
+    pub channels: usize,
+    /// The producing wrapper's per-block cursor: slots below it are computed.
+    pub processed: *const std::cell::Cell<usize>,
+}
+
+/// A cable's resolved [`PortView`] with its channel offset precomputed.
+///
+/// Every pointer targets memory owned by the upstream wrapper, which outlives
+/// the cable until the next `connect()` re-resolves it. Block buffers never
+/// resize, and on a patch swap `connect()` runs after `transfer_state_from`
+/// has moved them into place.
+#[derive(Clone, Copy, Debug)]
+pub struct CableView {
+    data: *const f32,
+    stride: usize,
+    offset: usize,
+    processed: *const std::cell::Cell<usize>,
+}
+
+impl CableView {
+    fn new(port: PortView, channel: usize) -> Self {
+        Self {
+            data: port.data,
+            stride: port.channels,
+            offset: channel % port.channels,
+            processed: port.processed,
+        }
+    }
+
+    /// The value at slot `index`, or `None` when the producer has not
+    /// computed that slot yet.
+    #[inline]
+    fn read(&self, index: usize) -> Option<f32> {
+        // SAFETY: see the type-level invariant; `index < processed <=
+        // block_size` keeps the offset inside the buffer.
+        unsafe {
+            if index < (*self.processed).get() {
+                Some(*self.data.add(index * self.stride + self.offset))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 // SAFETY: cable variants cache a `NonNull<dyn Sampleable>` during `connect()`. That cached pointer
@@ -2189,7 +2254,7 @@ pub enum Signal {
 unsafe impl Send for Signal {}
 
 impl Signal {
-    /// Build an unresolved `Signal::Cable`. The `resolved` and `index_ptr`
+    /// Build an unresolved `Signal::Cable`. The `resolved`/`view` and `index_ptr`
     /// fields are populated later by `Connect::connect` and
     /// `Connect::inject_index_ptr`.
     pub fn cable(module: impl Into<String>, port: impl Into<String>, channel: usize) -> Self {
@@ -2199,6 +2264,7 @@ impl Signal {
             port: port.into(),
             channel,
             index_ptr: std::ptr::null(),
+            view: None,
         }
     }
 }
@@ -2255,6 +2321,7 @@ impl<'de> Deserialize<'de> for Signal {
                     port,
                     channel,
                     index_ptr: std::ptr::null(),
+                    view: None,
                 },
             }),
         }
@@ -2354,6 +2421,7 @@ impl<E: DeserializeError> deserr::Deserr<E> for Signal {
                             port,
                             channel,
                             index_ptr: std::ptr::null(),
+                            view: None,
                         })
                     }
                     Some(other) => Err(deserr::take_cf_content(E::error::<V>(
@@ -2429,6 +2497,7 @@ impl Signal {
                 port,
                 channel,
                 index_ptr,
+                view,
                 ..
             } => match resolved {
                 Some(ptr) => {
@@ -2441,6 +2510,11 @@ impl Signal {
                     } else {
                         unsafe { (*(*index_ptr)).get() }
                     };
+                    // An already-computed slot is a plain load; otherwise the
+                    // upstream wrapper renders up to it.
+                    if let Some(value) = view.and_then(|v| v.read(index)) {
+                        return value;
+                    }
                     unsafe { ptr.as_ref() }.get_value_at(port, *channel, index)
                 }
                 None => 0.0,
@@ -2488,13 +2562,19 @@ impl Connect for Signal {
     fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
         if let Signal::Cable {
-            module, resolved, ..
+            module,
+            resolved,
+            port,
+            channel,
+            view,
+            ..
         } = self
         {
-            *resolved = patch
-                .sampleables
-                .get(module)
-                .map(|sampleable| NonNull::from(sampleable.as_ref()));
+            let upstream = patch.sampleables.get(module);
+            *resolved = upstream.map(|sampleable| NonNull::from(sampleable.as_ref()));
+            *view = upstream
+                .and_then(|sampleable| sampleable.port_view(port))
+                .map(|port_view| CableView::new(port_view, *channel));
         }
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {

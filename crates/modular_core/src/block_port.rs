@@ -36,6 +36,12 @@ impl BlockPort {
         }
     }
 
+    /// Start of the flat sample data, for cables that read it directly.
+    #[inline]
+    pub fn as_ptr(&self) -> *const f32 {
+        self.data.as_ptr()
+    }
+
     /// This port's channel width.
     #[inline]
     pub fn channels(&self) -> usize {

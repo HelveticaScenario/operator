@@ -54,6 +54,10 @@ harness = false
 name = "shape_bench"
 harness = false
 
+[[bench]]
+name = "patch_bench"
+harness = false
+
 [dependencies.napi]
 version = "3.7.1"
 features = ["serde", "serde-json"]

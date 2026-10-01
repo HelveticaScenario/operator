@@ -427,6 +427,15 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
         })
         .collect();
 
+    let data_at_arms: Vec<_> = outputs
+        .iter()
+        .enumerate()
+        .map(|(i, o)| {
+            let field_name = &o.field_name;
+            quote! { #i => Some((self.#field_name.as_ptr(), self.#field_name.channels())), }
+        })
+        .collect();
+
     let copy_inner_stmts: Vec<_> = outputs
         .iter()
         .map(|o| {
@@ -512,6 +521,16 @@ pub fn impl_outputs_macro(ast: &DeriveInput) -> TokenStream {
                 match port_idx {
                     #(#channels_at_arms)*
                     _ => 0,
+                }
+            }
+
+            /// A port's data pointer and channel width, by index from
+            /// [`port_index`]; `None` for an out-of-range index.
+            #[inline]
+            pub fn data_at(&self, port_idx: usize) -> Option<(*const f32, usize)> {
+                match port_idx {
+                    #(#data_at_arms)*
+                    _ => None,
                 }
             }
 

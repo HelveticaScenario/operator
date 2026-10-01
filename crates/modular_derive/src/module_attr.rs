@@ -839,6 +839,23 @@ fn impl_module_macro_attr(
                 outputs.get_at(port_idx, ch, index)
             }
 
+            fn port_view(&self, port: &str) -> Option<crate::types::PortView> {
+                if self.mode != crate::types::ProcessingMode::Block {
+                    return None;
+                }
+                let port_idx = <#block_outputs_ty>::port_index(port)?;
+                let outputs = unsafe { &*self.block_outputs.get() };
+                let (data, channels) = outputs.data_at(port_idx)?;
+                if channels == 0 {
+                    return None;
+                }
+                Some(crate::types::PortView {
+                    data,
+                    channels,
+                    processed: &self.index,
+                })
+            }
+
             fn port_channels(&self, port: &str) -> usize {
                 let Some(port_idx) = <#block_outputs_ty>::port_index(port) else {
                     return 0;
