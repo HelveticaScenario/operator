@@ -175,66 +175,46 @@ type CaseVariants<T extends string> =
   | Capitalize<T>;
 
 type ModeString =
-  // Ionian (Major)
-  | \`M \${string}\`
   | "M"
-  | \`\${string}\${CaseVariants<"maj">}\${string}\`
-  | \`\${string}\${CaseVariants<"major">}\${string}\`
-  | \`\${string}\${CaseVariants<"ionian">}\${string}\`
-  
-  // Harmonic Minor
-  | \`\${string}\${CaseVariants<"har">} \${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"harmonic">}\${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"harmonic">} \${CaseVariants<"minor">}\${string}\`
-  
-  // Melodic Minor
-  | \`\${string}\${CaseVariants<"mel">} \${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"melodic">}\${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"melodic">} \${CaseVariants<"minor">}\${string}\`
-  
-  // Pentatonic Major
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"major">}\${string}\`
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"maj">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"maj">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"major">}\${string}\`
-  
-  // Pentatonic Minor
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"min">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"min">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"minor">}\${string}\`
-  
-  // Blues
-  | \`\${string}\${CaseVariants<"blues">}\${string}\`
-  
-  // Chromatic
-  | \`\${string}\${CaseVariants<"chromatic">}\${string}\`
-  
-  // Whole Tone
-  | \`\${string}\${CaseVariants<"whole">} \${CaseVariants<"tone">}\${string}\`
-  | \`\${string}\${CaseVariants<"whole">}\${CaseVariants<"tone">}\${string}\`
-  
-  // Aeolian (Minor)
-  | \`m \${string}\`
   | "m"
-  | \`\${string}\${CaseVariants<"min">}\${string}\`
-  | \`\${string}\${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"aeolian">}\${string}\`
-  
-  // Dorian (start of string)
-  | \`\${CaseVariants<"dorian">}\${string}\`
-  
-  // Locrian (start of string)
-  | \`\${CaseVariants<"locrian">}\${string}\`
-  
-  // Mixolydian (start of string)
-  | \`\${CaseVariants<"mixolydian">}\${string}\`
-  
-  // Phrygian (start of string)
-  | \`\${CaseVariants<"phrygian">}\${string}\`
-  
-  // Lydian (start of string)
-  | \`\${CaseVariants<"lydian">}\${string}\`;
+  | CaseVariants<
+      | "major" | "maj" | "ionian"
+      | "minor" | "min" | "aeolian"
+      | "dorian" | "phrygian" | "lydian" | "mixolydian" | "locrian"
+      | "harmonic minor" | "harmonicminor" | "har minor"
+      | "melodic minor" | "melodicminor" | "mel minor"
+      | "pentatonic major" | "pentatonic maj" | "pent major" | "pent maj"
+      | "pentatonic minor" | "pentatonic min" | "pent minor" | "pent min"
+      | "blues" | "whole tone" | "wholetone" | "chromatic"
+    >;
+
+/**
+ * A scale or chord spec: a root note (optional octave, default 4) followed by
+ * a scale in \`()\` or a chord in \`[]\`. Used by {@link $chord} and accepted
+ * by {@link $quantizer}'s \`scale\` (where it is shorthand for \`$chord(spec)\`).
+ *
+ * | Form | Example | Meaning |
+ * |------|---------|---------|
+ * | \`root(scale)\` | \`"C(major)"\`, \`"D3(dorian)"\` | Named scale |
+ * | \`root(intervals)\` | \`"C(0 3 7 10)"\` | Semitones from the root, reduced to one octave |
+ * | \`root(tuning)\` | \`"C(just)"\`, \`"A(pythag)"\` | All 12 steps in a non-equal tuning |
+ * | \`root(tuning intervals)\` | \`"C(just 0 4 7)"\` | Custom intervals in a non-equal tuning |
+ * | \`root[chord]\` | \`"C[maj7]"\`, \`"F#2[m9]"\` | Chord shorthand; extensions keep their register |
+ * | \`root[intervals]\` | \`"C[0 7 16]"\` | Custom voicing; intervals keep their register |
+ * | \`root[tuning chord]\` | \`"C[just maj]"\` | Chord in a non-equal tuning |
+ * | \`root[chord invN]\` | \`"C[maj7 inv1]"\` | Raises the lowest N notes an octave |
+ * | \`chromatic\` | \`"chromatic"\` | All 12 semitones from C4 |
+ *
+ * Scale names: major/maj/ionian/M, minor/min/aeolian/m, dorian, phrygian,
+ * lydian, mixolydian, locrian, harmonic minor, melodic minor, pentatonic
+ * major/minor, blues, whole tone, chromatic.
+ *
+ * Chord names (case-sensitive): maj/M/major, min/m/minor, dim/°, aug/+, sus2,
+ * sus4/sus, 5, 6, m6, 69, 7/dom7, maj7/M7/Δ/Δ7, m7/min7, mMaj7/mM7, dim7/°7,
+ * m7b5/ø/ø7, aug7/7#5/+7, maj7#5, 7sus4, 7sus2, 7b5, 9, maj9, m9, 11, maj11,
+ * m11, 13, maj13, m13, 7b9, 7#9, 7#11, add9/add2, madd9, add11/add4.
+ */
+type ScaleSpec = \`\${string}(\${string})\` | \`\${string}[\${string}]\` | "chromatic";
 
 /**
  * A scale pattern string for generating multiple pitches.
@@ -536,11 +516,13 @@ declare namespace $p {
  * | \`tonic<octave>(name)\` | \`"c3(major)"\`, \`"D#4(min)"\` | Same with an explicit octave (default 4 → root = C4 = 0 V) |
  * | \`tonic(custom intervals)\` | \`"c(0 2 4 5 7 9 11)"\` | Custom semitone offsets from the tonic |
  * | \`tonic(just)\` / \`tonic(pythagorean)\` | \`"c(just)"\`, \`"a(pythag)"\` | Non-equal 12-tone tunings |
+ * | \`tonic[chord]\` | \`"c[maj7]"\`, \`"a3[m9]"\` | Chord tones; degrees step through the chord |
+ * | \`tonic[chord invN]\` | \`"c[maj inv1]"\` | Inverted chord; degree 0 is the lowest note |
  * | \`chromatic\` | \`"chromatic"\` | All 12 semitones, 12-TET |
  *
- * Recognized scale names include major, minor, ionian, dorian, phrygian,
- * lydian, mixolydian, aeolian, locrian, harmonic/melodic minor,
- * pentatonic major/minor, blues, whole tone.
+ * Degrees wrap by an octave for scales. A chord wraps by its span rounded up
+ * to whole octaves, so \`"c[9]"\` repeats every two octaves. See
+ * {@link ScaleSpec} for the full list of scale and chord names.
  *
  * ### Chaining
  *

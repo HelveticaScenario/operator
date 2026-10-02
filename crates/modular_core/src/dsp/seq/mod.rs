@@ -14,7 +14,6 @@ use crate::types::{Module, ModuleSchema, SampleableConstructor};
 pub(crate) mod cache;
 pub mod highlight;
 pub mod interval_value;
-pub mod scale;
 pub mod seq;
 pub mod seq_value;
 pub mod step;
@@ -22,7 +21,6 @@ pub mod track;
 
 pub use highlight::{SeqHighlightMeta, SeqHighlightState, seq_state_builder};
 pub use interval_value::IntervalValue;
-pub use scale::{FixedRoot, ScaleRoot, ScaleSnapper};
 pub use seq_value::{SeqPatternParam, SeqValue};
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {

@@ -1,21 +1,17 @@
-//! Quantizer module - snaps input voltage to scale degrees.
-//!
-//! The Quantizer takes a V/Oct input signal and snaps it to the nearest note
-//! in a configurable scale. This is useful for constraining melodies to a key
-//! or for adding harmonic structure to random/noise sources.
+//! Quantizer module - snaps input voltage to the notes of a scale signal.
 
-use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, ValuePointerRef};
+use arrayvec::ArrayVec;
+use deserr::{DeserializeError, Deserr, IntoValue, ValuePointerRef};
 use schemars::JsonSchema;
-use std::sync::Arc;
 
 use crate::{
     Patch,
-    dsp::utils::{TempGate, TempGateState, min_gate_samples},
-    poly::{PolyOutput, PolySignal, PolySignalExt},
+    dsp::utils::{SchmittTrigger, TempGate, TempGateState, min_gate_samples},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::Connect,
 };
 
-use super::scale::{FixedRoot, ScaleSnapper, et_tuning, named_tuning, validate_scale_type};
+use super::scale::ScaleSpec;
 
 /// Hysteresis amount in V/Oct (~10 cents).
 /// Once a note is selected, the input must overshoot the snap boundary by this
@@ -23,208 +19,53 @@ use super::scale::{FixedRoot, ScaleSnapper, et_tuning, named_tuning, validate_sc
 /// toggling when the input hovers near a boundary.
 const HYSTERESIS_VOCT: f64 = 10.0 / 1200.0;
 
-/// Scale parameter that parses scale notation.
+/// The pitches a quantizer snaps to: one V/Oct note per channel.
 ///
-/// Supports formats:
-/// - `"chromatic"` - passes through all notes unchanged
-/// - `"C(major)"` - C major scale (root + scale type)
-/// - `"C#(minor)"` - C# minor scale
-/// - `"D(0 2 4 5 7 9 11)"` - D with custom intervals (semitones from root)
-/// - `"C(just)"` / `"C(pythagorean)"` (alias `pythag`) - 12-tone non-equal tunings
-/// - `"C(just 0 3 4 8)"` - custom intervals tuned with just intonation
-///
-/// An optional octave in the root (e.g. `"C3(major)"`, `"Db3(min)"`) is accepted.
-#[derive(Clone, Debug)]
-pub struct ScaleParam {
-    snapper: Option<Arc<ScaleSnapper>>,
-    source: String,
-    /// Base MIDI note for degree 0 (default 60 = C4).
-    /// Computed from the root note + optional octave.
-    base_midi: i32,
-}
+/// The engine only accepts a signal here. The DSL rewrites a spec string
+/// (`"C(major)"`, `"C[maj7]"`) into a `$chord` module feeding this param, so
+/// the schema advertises both forms to the editor.
+#[derive(Clone)]
+pub struct ScaleSignal(PolySignal);
 
-impl Connect for ScaleParam {
-    fn apply_default_connections(&mut self) {}
-    fn connect(&mut self, _patch: &Patch) {
-        // ScaleParam has no signals to connect
+impl Connect for ScaleSignal {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
     }
-    fn collect_cables(&self, _sink: &mut Vec<String>) {}
-    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
-}
-
-impl Default for ScaleParam {
-    fn default() -> Self {
-        Self {
-            snapper: None,
-            source: String::new(),
-            base_midi: 60,
-        }
+    fn connect(&mut self, patch: &Patch) {
+        self.0.connect(patch);
+    }
+    fn collect_cables(&self, sink: &mut Vec<String>) {
+        self.0.collect_cables(sink);
+    }
+    fn inject_index_ptr(&mut self, ptr: *const std::cell::Cell<usize>) {
+        self.0.inject_index_ptr(ptr);
     }
 }
 
-impl ScaleParam {
-    /// Parse a scale specification string. An optional octave in the root
-    /// (e.g. `"C3(major)"`, `"Db3(min)"`) is accepted.
-    pub fn parse(source: &str) -> Option<Self> {
-        let source = source.trim();
-
-        if source.is_empty() {
-            return Some(Self {
-                snapper: None,
-                source: source.to_string(),
-                base_midi: 60,
-            });
-        }
-
-        // Handle "chromatic" specially
-        if source.eq_ignore_ascii_case("chromatic") {
-            let root = FixedRoot::new('c', None);
-            let snapper = ScaleSnapper::new(&root, "chromatic")?;
-            return Some(Self {
-                snapper: Some(Arc::new(snapper)),
-                source: source.to_string(),
-                base_midi: 60,
-            });
-        }
-
-        // Parse "root(scale_type)" or "root(intervals)"
-        let open_paren = source.find('(')?;
-        let close_paren = source.rfind(')')?;
-
-        if close_paren <= open_paren {
-            return None;
-        }
-
-        let root_str = &source[..open_paren];
-        let scale_spec = &source[open_paren + 1..close_paren];
-
-        let root = FixedRoot::parse(root_str)?;
-        let base_midi = root.base_midi();
-
-        // Check if scale_spec is a known scale type or custom intervals
-        let snapper = if is_known_scale_type(scale_spec) {
-            ScaleSnapper::new(&root, scale_spec)?
-        } else {
-            // Custom intervals, optionally prefixed by a tuning keyword:
-            // "0 2 4" (12-TET), "just 0 3 4 8", "pythag 0 5 7".
-            let mut tokens = scale_spec.split_whitespace().peekable();
-            let tuning = match named_tuning(tokens.peek()?) {
-                Some(tuning) => {
-                    tokens.next();
-                    tuning
-                }
-                None => et_tuning(),
-            };
-
-            let intervals: Vec<i8> = tokens
-                .map(|s| s.parse::<i8>().ok())
-                .collect::<Option<_>>()?;
-            if intervals.is_empty() {
-                return None;
-            }
-
-            ScaleSnapper::from_intervals(&root, &intervals, tuning)
-        };
-
-        Some(Self {
-            snapper: Some(Arc::new(snapper)),
-            source: source.to_string(),
-            base_midi,
-        })
-    }
-
-    /// Get the scale snapper, if configured.
-    pub fn snapper(&self) -> Option<&ScaleSnapper> {
-        self.snapper.as_deref()
-    }
-
-    /// Get the base MIDI note for degree 0.
-    ///
-    /// When an octave is specified in the root (e.g. "C3(major)"), this returns
-    /// the MIDI note for that root+octave (e.g. 48 for C3).
-    /// Without an octave, defaults to octave 4 (MIDI 60 for C).
-    pub fn base_midi(&self) -> i32 {
-        self.base_midi
-    }
-}
-
-/// Convert a signed scale degree to a V/Oct voltage.
-///
-/// Used by `SeqValue::from_sp_payload` to resolve `$p.s` DSL helper patterns
-/// into cached voltage cycles.
-///
-/// `scale_intervals` is the list of semitone offsets per scale step (e.g.
-/// `[0, 2, 4, 5, 7, 9, 11]` for major). `tuning` is the 12-entry V/Oct table
-/// indexed by chromatic semitone within the octave (12-TET by default,
-/// adjusted for `just` / `pythagorean`).
-pub fn degree_to_voltage(
-    degree: i32,
-    base_midi: i32,
-    scale_intervals: &[i8],
-    tuning: &[f64],
-) -> f64 {
-    if scale_intervals.is_empty() {
-        // Chromatic fallback — no scale snapping.
-        return crate::dsp::utils::midi_to_voct_f64(60.0 + degree as f64);
-    }
-
-    let scale_len = scale_intervals.len() as i32;
-
-    let (octave, wrapped_degree) = if degree >= 0 {
-        (degree / scale_len, (degree % scale_len) as usize)
-    } else {
-        let adj_degree = degree + 1;
-        let octave = (adj_degree / scale_len) - 1;
-        let wrapped = ((degree % scale_len) + scale_len) % scale_len;
-        (octave, wrapped as usize)
-    };
-
-    let semitone_in_scale = scale_intervals.get(wrapped_degree).copied().unwrap_or(0) as i32;
-
-    let root_v = (base_midi - 60) as f64 / 12.0;
-    let step_v = tuning
-        .get(semitone_in_scale as usize)
-        .copied()
-        .unwrap_or(0.0);
-    root_v + octave as f64 + step_v
-}
-
-/// Check if a string is a known scale type name.
-fn is_known_scale_type(name: &str) -> bool {
-    validate_scale_type(name)
-}
-
-impl schemars::JsonSchema for ScaleParam {
+impl JsonSchema for ScaleSignal {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("ScaleParam")
+        std::borrow::Cow::Borrowed("ScaleSignal")
     }
 
-    fn json_schema(_gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        // ScaleParam is serialized as a string
-        String::json_schema(_gen)
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        #[derive(JsonSchema)]
+        #[serde(untagged)]
+        #[allow(dead_code)]
+        enum ScaleSignalSchema {
+            Spec(ScaleSpec),
+            Signal(PolySignal),
+        }
+        ScaleSignalSchema::json_schema(generator)
     }
 }
 
-impl<E: DeserializeError> deserr::Deserr<E> for ScaleParam {
+impl<E: DeserializeError> deserr::Deserr<E> for ScaleSignal {
     fn deserialize_from_value<V: IntoValue>(
         value: deserr::Value<V>,
         location: ValuePointerRef<'_>,
-    ) -> std::result::Result<Self, E> {
-        let source = String::deserialize_from_value(value, location)?;
-        Self::parse(&source).ok_or_else(|| {
-            deserr::take_cf_content(E::error::<V>(
-                None,
-                ErrorKind::Unexpected {
-                    msg: format!("Invalid scale specification: {}", source),
-                },
-                location,
-            ))
-        })
+    ) -> Result<Self, E> {
+        PolySignal::deserialize_from_value(value, location).map(Self)
     }
-}
-
-fn default_scale() -> ScaleParam {
-    ScaleParam::parse("chromatic").unwrap()
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -238,10 +79,26 @@ struct QuantizerParams {
     #[signal(type = pitch)]
     #[deserr(default)]
     offset: Option<PolySignal>,
-    /// Scale specification: "chromatic", "C(major)", "D(0 2 4 5 7 9 11)"
-    #[serde(default = "default_scale")]
-    #[deserr(default = default_scale())]
-    scale: ScaleParam,
+    /// Notes to snap to, one V/Oct pitch per channel (octave is ignored), or a
+    /// spec string like "C(major)" / "C[maj7]". Snaps to semitones if omitted.
+    #[deserr(default)]
+    scale: Option<ScaleSignal>,
+    /// Per-note gate for **scale**: scale channel N is used only while gate
+    /// channel N is high. While every gate channel is low the output holds.
+    #[signal(type = gate)]
+    #[deserr(default)]
+    gate: Option<PolySignal>,
+}
+
+/// As wide as `input` and `offset`. The scale and its gate describe one shared
+/// set of notes, so neither widens the module.
+#[allow(private_interfaces)]
+pub fn quantizer_derive_channel_count(params: &QuantizerParams) -> usize {
+    params
+        .input
+        .channels()
+        .max(params.offset.channel_count())
+        .max(1)
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -256,7 +113,7 @@ struct QuantizerOutputs {
 /// Per-channel state for tracking note changes.
 #[derive(Clone, Copy)]
 struct ChannelState {
-    /// Previous quantized voltage (None if first sample)
+    /// Previous quantized voltage (None until the first note is chosen)
     prev_quantized: Option<f64>,
     /// Trigger generator for this channel
     trigger: TempGate,
@@ -271,91 +128,162 @@ impl Default for ChannelState {
     }
 }
 
-/// Snaps a V/Oct signal to the nearest note in a given scale.
+struct QuantizerState {
+    /// One per scale channel, reading the matching gate channel.
+    gate_triggers: [SchmittTrigger; PORT_MAX_CHANNELS],
+}
+
+impl Default for QuantizerState {
+    fn default() -> Self {
+        Self {
+            gate_triggers: [SchmittTrigger::default(); PORT_MAX_CHANNELS],
+        }
+    }
+}
+
+/// Snap `x` to the nearest pitch in `notes` (octave-reduced to `[0, 1)`),
+/// in any octave. Ties resolve to the lower pitch.
+fn snap_to_notes(x: f64, notes: &[f64]) -> f64 {
+    let octave = x.floor();
+    let frac = x - octave;
+    let mut best = frac;
+    let mut best_dist = f64::INFINITY;
+    for &note in notes {
+        for candidate in [note - 1.0, note, note + 1.0] {
+            let dist = (candidate - frac).abs();
+            if dist < best_dist || (dist == best_dist && candidate < best) {
+                best = candidate;
+                best_dist = dist;
+            }
+        }
+    }
+    octave + best
+}
+
+/// Snap `x` to the nearest 12-TET semitone.
+fn snap_to_semitone(x: f64) -> f64 {
+    (x * 12.0).round() / 12.0
+}
+
+/// Snap with hysteresis: leave `prev` only once `x` overshoots the snap
+/// boundary by at least `HYSTERESIS_VOCT`.
+fn snap_with_hysteresis(x: f64, prev: Option<f64>, snap: impl Fn(f64) -> f64) -> f64 {
+    let raw = snap(x);
+    let Some(prev) = prev else {
+        return raw;
+    };
+    if (raw - prev).abs() <= 1e-6 {
+        return raw;
+    }
+    // Re-snap with a small bias toward the current note to see whether the
+    // input has truly crossed the threshold.
+    let bias = if raw > prev {
+        -HYSTERESIS_VOCT
+    } else {
+        HYSTERESIS_VOCT
+    };
+    if (snap(x + bias) - prev).abs() > 1e-6 {
+        raw
+    } else {
+        prev
+    }
+}
+
+/// Snaps a V/Oct signal to the nearest note of a scale.
 ///
-/// Feed any continuous pitch signal into **input** and choose a **scale** —
-/// the output locks to the closest scale degree. A **trig** pulse fires
-/// whenever the quantized note changes, useful for re-triggering envelopes.
+/// **scale** is a polyphonic signal: each channel is one V/Oct note, and the
+/// output snaps to the nearest of those notes in any octave. Feed it from
+/// `$chord`, a `$cycle`, or `$midiCV` — or pass a spec string such as
+/// `"C(major)"` or `"C[maj7]"`, which is shorthand for `$chord(spec)` (see
+/// `$chord` for the full grammar). Without a scale, the output snaps to
+/// semitones.
 ///
-/// Scale format examples:
-/// - `"chromatic"` — all 12 semitones
-/// - `"C(major)"` — C major scale
-/// - `"C#(minor)"` — C# minor scale
-/// - `"D(0 2 4 5 7 9 11)"` — custom intervals from root
-/// - `"C(just)"` / `"C(pythagorean)"` — 12-tone non-equal tunings
-/// - `"C(just 0 3 4 8)"` — custom intervals tuned with just intonation
+/// **gate** selects which scale notes are active: scale channel N is used only
+/// while gate channel N is high. While every gate channel is low, the output
+/// holds its last note.
+///
+/// A **trig** pulse fires whenever the quantized note changes, useful for
+/// re-triggering envelopes.
 ///
 /// ```js
-/// // quantize a random signal to C major
-/// $sine($quantizer($sine(".1hz").range(0,3), "C(major)"))
+/// // quantize a slow sine to C major
+/// $sine($quantizer($sine("0.1hz").range(0, 3), "C(major)")).out()
 /// ```
-#[module(name = "$quantizer", args(input, scale))]
+///
+/// ```js
+/// // quantize to whichever MIDI keys are held; holds when all are released
+/// const midi = $midiCV({ channels: 4 })
+/// $sine($quantizer($sine("0.1hz").range(-1, 1), midi, { gate: midi.gate })).out()
+/// ```
+#[module(name = "$quantizer", channels_derive = quantizer_derive_channel_count, args(input, scale))]
 pub struct Quantizer {
     outputs: QuantizerOutputs,
     params: QuantizerParams,
+    state: QuantizerState,
     channel_state: Box<[ChannelState]>,
 }
 
 impl Quantizer {
     pub fn update(&mut self, sample_rate: f32) {
-        // The module is as wide as its widest signal (input OR offset), so every
-        // declared channel must be written; narrower signals cycle.
         let num_channels = self.channel_count();
-        let hold = min_gate_samples(sample_rate);
+        let hold_samples = min_gate_samples(sample_rate);
+
+        // Collect the active scale notes once; every channel snaps to the same set.
+        let scale = self.params.scale.as_ref().map(|s| &s.0);
+        let gate = self.params.gate.as_ref();
+        let note_count = match (scale, gate) {
+            (Some(scale), _) => scale.channels(),
+            (None, Some(gate)) => gate.channels(),
+            (None, None) => 0,
+        };
+        let mut notes = ArrayVec::<f64, PORT_MAX_CHANNELS>::new();
+        let mut any_active = false;
+        for i in 0..note_count {
+            let active = match gate {
+                Some(gate) => {
+                    self.state.gate_triggers[i]
+                        .process_with_edge(gate.get_value(i))
+                        .0
+                }
+                None => true,
+            };
+            any_active |= active;
+            if let (true, Some(scale)) = (active, scale) {
+                let v = scale.get_value(i) as f64;
+                notes.push(v - v.floor());
+            }
+        }
+        let hold = gate.is_some() && !any_active;
 
         for ch in 0..num_channels {
             let input = self.params.input.get_value(ch) as f64;
             let offset = self.params.offset.value_or_zero(ch) as f64;
-
             let combined = input + offset;
-
-            let quantized = if let Some(snapper) = self.params.scale.snapper() {
-                let raw_quantized = snapper.snap_voct(combined);
-                let state = &self.channel_state[ch];
-
-                // Apply hysteresis: only change note if input overshoots the
-                // snap boundary by at least HYSTERESIS_VOCT.
-                if let Some(prev) = state.prev_quantized {
-                    if (raw_quantized - prev).abs() > 1e-6 {
-                        // The raw snap wants a different note — re-snap with a
-                        // small bias toward the current note to see if the
-                        // input has truly crossed the threshold.
-                        let bias = if raw_quantized > prev {
-                            -HYSTERESIS_VOCT
-                        } else {
-                            HYSTERESIS_VOCT
-                        };
-                        let biased = snapper.snap_voct(combined + bias);
-                        if (biased - prev).abs() > 1e-6 {
-                            raw_quantized // even with bias, still new note → accept
-                        } else {
-                            prev // bias pulls it back → stay on current note
-                        }
-                    } else {
-                        raw_quantized // same note, no change
-                    }
-                } else {
-                    raw_quantized // first sample
-                }
-            } else {
-                // No scale configured, pass through
-                combined
-            };
-
-            // Check if the note changed
             let state = &mut self.channel_state[ch];
-            let note_changed = match state.prev_quantized {
-                Some(prev) => (quantized - prev).abs() > 1e-6,
-                None => true, // First sample counts as a change
-            };
-            state.prev_quantized = Some(quantized);
 
-            // Set gate and trigger on note change
-            if note_changed {
-                state
-                    .trigger
-                    .set_state(TempGateState::High, TempGateState::Low, hold);
-            }
+            let quantized = if hold {
+                // Nothing to snap to: keep the last note, or pass the input
+                // through until a first note has been chosen.
+                state.prev_quantized.unwrap_or(combined)
+            } else {
+                let quantized = match scale {
+                    Some(_) => snap_with_hysteresis(combined, state.prev_quantized, |x| {
+                        snap_to_notes(x, &notes)
+                    }),
+                    None => snap_with_hysteresis(combined, state.prev_quantized, snap_to_semitone),
+                };
+                let note_changed = match state.prev_quantized {
+                    Some(prev) => (quantized - prev).abs() > 1e-6,
+                    None => true,
+                };
+                if note_changed {
+                    state
+                        .trigger
+                        .set_state(TempGateState::High, TempGateState::Low, hold_samples);
+                }
+                state.prev_quantized = Some(quantized);
+                quantized
+            };
 
             self.outputs.output.set(ch, quantized as f32);
             self.outputs.trig.set(ch, state.trigger.process());
@@ -368,294 +296,242 @@ message_handlers!(impl Quantizer {});
 #[cfg(test)]
 mod tests {
     use crate::dsp::utils::{GATE_HIGH_VOLTAGE, GATE_LOW_VOLTAGE};
+    use crate::types::{OutputStruct, Signal};
 
     use super::*;
 
-    #[test]
-    fn test_scale_param_parse_chromatic() {
-        let scale = ScaleParam::parse("chromatic").unwrap();
-        assert!(scale.snapper().is_some());
+    fn volts(values: &[f32]) -> PolySignal {
+        let signals: Vec<Signal> = values.iter().map(|&v| Signal::Volts(v)).collect();
+        PolySignal::poly(&signals)
     }
 
-    #[test]
-    fn test_scale_param_parse_major() {
-        let scale = ScaleParam::parse("C(major)").unwrap();
-        assert!(scale.snapper().is_some());
+    fn spec_signal(spec: &str) -> ScaleSignal {
+        ScaleSignal(volts(ScaleSpec::parse(spec).unwrap().voltages()))
     }
 
-    #[test]
-    fn test_scale_param_parse_minor_sharp() {
-        let scale = ScaleParam::parse("C#(minor)").unwrap();
-        assert!(scale.snapper().is_some());
-    }
-
-    #[test]
-    fn test_scale_param_parse_custom_intervals() {
-        let scale = ScaleParam::parse("D(0 2 4 5 7 9 11)").unwrap();
-        assert!(scale.snapper().is_some());
-    }
-
-    #[test]
-    fn test_scale_param_parse_empty() {
-        let scale = ScaleParam::parse("").unwrap();
-        assert!(scale.snapper().is_none());
-    }
-
-    #[test]
-    fn test_scale_param_parse_with_octave() {
-        let scale = ScaleParam::parse("C3(major)").unwrap();
-        assert_eq!(scale.base_midi(), 48);
-        assert!(scale.snapper().is_some());
-
-        let scale = ScaleParam::parse("Db3(min)").unwrap();
-        assert_eq!(scale.base_midi(), 49);
-
-        // Without octave still works and defaults to 4
-        let scale = ScaleParam::parse("C(major)").unwrap();
-        assert_eq!(scale.base_midi(), 60);
-    }
-
-    #[test]
-    fn test_scale_param_parse_just_pythagorean() {
-        let just = ScaleParam::parse("C(just)").unwrap();
-        assert!(just.snapper().is_some());
-
-        let pyth = ScaleParam::parse("D3(pythagorean)").unwrap();
-        assert!(pyth.snapper().is_some());
-        assert_eq!(pyth.base_midi(), 50); // D3
-
-        // "pythag" alias
-        assert!(ScaleParam::parse("A(pythag)").unwrap().snapper().is_some());
-    }
-
-    #[test]
-    fn test_scale_param_parse_tuned_intervals() {
-        // Tuning keyword prefixing custom intervals.
-        let just = ScaleParam::parse("C(just 0 3 4 8)").unwrap();
-        let just_snapper = just.snapper().unwrap();
-        assert_eq!(just_snapper.scale_intervals().as_slice(), &[0, 3, 4, 8]);
-        // The major-third degree (E4) snaps with the just 5/4 ratio.
-        assert!((just_snapper.snap_voct(4.0 / 12.0) - 1.25_f64.log2()).abs() < 1e-9);
-
-        // Pythagorean alias as a prefix works too.
-        let pyth = ScaleParam::parse("C(pythag 0 5 7)").unwrap();
-        assert!(pyth.snapper().is_some());
-
-        // Without a keyword, intervals stay 12-TET.
-        let et = ScaleParam::parse("C(0 3 4 8)").unwrap();
-        let et_snapper = et.snapper().unwrap();
-        assert_eq!(et_snapper.scale_intervals().as_slice(), &[0, 3, 4, 8]);
-        assert!((et_snapper.snap_voct(4.0 / 12.0) - 4.0 / 12.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_scale_param_quantize_c_major() {
-        let scale = ScaleParam::parse("C(major)").unwrap();
-        let snapper = scale.snapper().unwrap();
-
-        // C4 = MIDI 60 = V/Oct 0.0, should stay C
-        let c4_voct = (60.0 - 60.0) / 12.0;
-        let snapped = snapper.snap_voct(c4_voct);
-        assert!((snapped - c4_voct).abs() < 0.001);
-
-        // C#4 = MIDI 61 = V/Oct 0.0833, should snap to C
-        let cs4_voct = (61.0 - 60.0) / 12.0;
-        let snapped = snapper.snap_voct(cs4_voct);
-        assert!((snapped - c4_voct).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_channel_state_note_change_detection() {
-        // Test the note change detection logic directly
-        let mut state = ChannelState {
-            prev_quantized: None,
-            trigger: TempGate::new_gate(TempGateState::Low),
-        };
-
-        // First sample - should detect change (None -> Some)
-        let note_changed = match state.prev_quantized {
-            Some(prev) => (0.0_f64 - prev).abs() > 1e-6,
-            None => true,
-        };
-        assert!(note_changed, "first sample should count as change");
-        state.prev_quantized = Some(0.0);
-
-        // Second sample, same note - should NOT detect change
-        let note_changed = match state.prev_quantized {
-            Some(prev) => (0.0_f64 - prev).abs() > 1e-6,
-            None => true,
-        };
-        assert!(!note_changed, "same note should not trigger change");
-
-        // Third sample, different note - should detect change
-        let note_changed = match state.prev_quantized {
-            Some(prev) => (1.0_f64 / 12.0 - prev).abs() > 1e-6,
-            None => true,
-        };
-        assert!(note_changed, "different note should trigger change");
-    }
-
-    #[test]
-    fn test_temp_gate_trigger_behavior() {
-        // Test that TempGate produces correct multi-sample pulse
-        let mut trigger = TempGate::new_gate(TempGateState::Low);
-
-        // Initially low
-        assert_eq!(trigger.process(), GATE_LOW_VOLTAGE);
-
-        // Trigger a pulse (High then Low) with hold of 1 sample
-        trigger.set_state(TempGateState::High, TempGateState::Low, 1);
-        assert_eq!(
-            trigger.process(),
-            GATE_HIGH_VOLTAGE,
-            "should be high on first process after trigger"
-        );
-        assert_eq!(
-            trigger.process(),
-            GATE_LOW_VOLTAGE,
-            "should return to low on second process"
-        );
-        assert_eq!(trigger.process(), GATE_LOW_VOLTAGE, "should stay low");
-
-        // Trigger with hold of 3 samples
-        trigger.set_state(TempGateState::High, TempGateState::Low, 3);
-        assert_eq!(trigger.process(), GATE_HIGH_VOLTAGE, "hold sample 1");
-        assert_eq!(trigger.process(), GATE_HIGH_VOLTAGE, "hold sample 2");
-        assert_eq!(trigger.process(), GATE_HIGH_VOLTAGE, "hold sample 3");
-        assert_eq!(
-            trigger.process(),
-            GATE_LOW_VOLTAGE,
-            "should be low after hold expires"
-        );
-    }
-
-    #[test]
-    fn offset_wider_than_input_drives_all_declared_channels() {
-        // The module's width is the max across input and offset; with a mono
-        // input and a 2-channel offset, both output channels must be written —
-        // channel 1 quantizes input (cycled) plus its own offset channel.
-        use crate::types::{OutputStruct, Signal};
-
+    fn make_quantizer(params: QuantizerParams) -> Quantizer {
+        let channels = quantizer_derive_channel_count(&params);
         let mut outputs = QuantizerOutputs::default();
-        outputs.set_all_channels(2);
-        let g4 = 7.0 / 12.0;
-        let mut q = Quantizer {
+        outputs.set_all_channels(channels);
+        Quantizer {
             outputs,
-            params: QuantizerParams {
-                input: PolySignal::mono(Signal::Volts(0.0)),
-                offset: Some(PolySignal::poly(&[
-                    Signal::Volts(0.0),
-                    Signal::Volts(g4 as f32),
-                ])),
-                scale: ScaleParam::parse("C(major)").unwrap(),
-            },
-            channel_state: vec![ChannelState::default(); 2].into_boxed_slice(),
-            _channel_count: 2,
+            params,
+            state: QuantizerState::default(),
+            channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
+            _channel_count: channels,
             _block_index: Default::default(),
-        };
-
-        // The first sample counts as a note change on every channel, so trig
-        // fires on channel 1 too.
-        q.update(48000.0);
-        assert_eq!(q.outputs.trig.get(1), GATE_HIGH_VOLTAGE);
-
-        for _ in 0..32 {
-            q.update(48000.0);
         }
-        let ch0 = q.outputs.output.get(0);
-        let ch1 = q.outputs.output.get(1);
-        assert!(
-            ch0.abs() < 1e-6,
-            "channel 0 should quantize to C4, got {ch0}"
-        );
-        assert!(
-            (ch1 as f64 - g4).abs() < 1e-4,
-            "channel 1 should quantize to G4 ({g4}), got {ch1}"
-        );
+    }
+
+    fn quantizer(input: f32, scale: Option<ScaleSignal>, gate: Option<PolySignal>) -> Quantizer {
+        make_quantizer(QuantizerParams {
+            input: volts(&[input]),
+            offset: None,
+            scale,
+            gate,
+        })
+    }
+
+    fn set_input(q: &mut Quantizer, v: f32) {
+        q.params.input = volts(&[v]);
+    }
+
+    fn semis(q: &Quantizer) -> f32 {
+        q.outputs.output.get(0) * 12.0
     }
 
     #[test]
-    fn test_snap_voct_output_is_clean_step() {
-        // Sweeping input within a single semitone should produce a constant output
-        let scale = ScaleParam::parse("C(major)").unwrap();
-        let snapper = scale.snapper().unwrap();
-
-        let c4_voct = 0.0; // C4
-        // Sweep from C4 to ~C4 + 49 cents — all should snap to exactly C4
-        for i in 0..50 {
-            let input = c4_voct + (i as f64 * 0.01) / 12.0; // fractional semitone in V/Oct
-            let snapped = snapper.snap_voct(input);
+    fn snaps_to_scale_notes_in_any_octave() {
+        let mut q = quantizer(0.0, Some(spec_signal("C(major)")), None);
+        for (input, expected) in [
+            (0.0, 0.0),
+            (0.9, 0.0),
+            (1.1, 2.0),
+            (6.4, 7.0),
+            (12.9, 12.0),
+            (13.2, 14.0),
+            (-0.6, -1.0),
+            (-12.3, -12.0),
+        ] {
+            q.channel_state[0] = ChannelState::default();
+            set_input(&mut q, input / 12.0);
+            q.update(48000.0);
             assert!(
-                (snapped - c4_voct).abs() < 1e-9,
-                "input V/Oct {input} should snap to C4 (0.0), got {snapped}"
+                (semis(&q) - expected).abs() < 1e-4,
+                "{input} → {}",
+                semis(&q)
             );
         }
     }
 
     #[test]
-    fn test_hysteresis_prevents_boundary_chatter() {
-        // Simulate the quantizer's hysteresis logic at the C/D boundary in C major.
-        // C4 = 0.0 V/Oct,  D4 = 2/12 V/Oct ≈ 0.16667
-        // Midpoint ≈ 1/12 ≈ 0.08333 V/Oct  (MIDI 61, C#, snaps to C or D)
-        // With hysteresis the note should not flip until input overshoots by HYSTERESIS_VOCT.
+    fn chord_notes_ignore_their_octave() {
+        // A C major triad voiced across octaves still snaps every octave.
+        let scale = ScaleSignal(volts(&[-1.0, 4.0 / 12.0 + 2.0, 7.0 / 12.0]));
+        let mut q = quantizer(15.0 / 12.0, Some(scale), None);
+        q.update(48000.0);
+        assert!((semis(&q) - 16.0).abs() < 1e-4, "got {}", semis(&q));
+    }
 
-        let scale = ScaleParam::parse("C(major)").unwrap();
-        let snapper = scale.snapper().unwrap();
+    #[test]
+    fn ties_resolve_to_the_lower_note() {
+        let mut q = quantizer(2.0 / 12.0, Some(spec_signal("C[0 4]")), None);
+        q.update(48000.0);
+        assert!(semis(&q).abs() < 1e-4, "got {}", semis(&q));
+    }
 
-        let c4: f64 = 0.0;
-        let d4: f64 = 2.0 / 12.0;
+    #[test]
+    fn non_equal_tunings_pass_through() {
+        let mut q = quantizer(4.1 / 12.0, Some(spec_signal("C(just)")), None);
+        q.update(48000.0);
+        let out = q.outputs.output.get(0) as f64;
+        assert!((out - 1.25_f64.log2()).abs() < 1e-6, "got {out}");
+    }
 
-        // Boundary sits at 1.5 semitones above C in V/Oct = 1.5/12
-        let boundary = 1.5 / 12.0;
+    #[test]
+    fn without_a_scale_snaps_to_semitones() {
+        let mut q = quantizer(3.4 / 12.0, None, None);
+        q.update(48000.0);
+        assert!((semis(&q) - 3.0).abs() < 1e-4);
+    }
 
-        // Simulate: start on C4, slowly increase toward D4
-        let mut prev_quantized: f64 = c4;
-
-        // Just below boundary + hysteresis → should stay on C
-        let input_just_below = boundary + HYSTERESIS_VOCT * 0.5;
-        let raw = snapper.snap_voct(input_just_below);
-        let quantized = if (raw - prev_quantized).abs() > 1e-6 {
-            let bias = if raw > prev_quantized {
-                -HYSTERESIS_VOCT
-            } else {
-                HYSTERESIS_VOCT
-            };
-            let biased = snapper.snap_voct(input_just_below + bias);
-            if (biased - prev_quantized).abs() > 1e-6 {
-                raw
-            } else {
-                prev_quantized
-            }
-        } else {
-            raw
-        };
-        assert!(
-            (quantized - c4).abs() < 1e-6,
-            "near boundary should stay on C4 due to hysteresis, got {quantized}"
+    #[test]
+    fn gate_masks_scale_notes() {
+        // C E G with only G gated on: everything snaps to G.
+        let mut q = quantizer(
+            0.9 / 12.0,
+            Some(spec_signal("C[maj]")),
+            Some(volts(&[0.0, 0.0, 5.0])),
         );
+        q.update(48000.0);
+        assert!((semis(&q) - (-5.0)).abs() < 1e-4, "got {}", semis(&q));
+    }
 
-        // Well past boundary + hysteresis → should switch to D
-        prev_quantized = c4;
-        let input_well_past = boundary + HYSTERESIS_VOCT * 3.0;
-        let raw = snapper.snap_voct(input_well_past);
-        let quantized = if (raw - prev_quantized).abs() > 1e-6 {
-            let bias = if raw > prev_quantized {
-                -HYSTERESIS_VOCT
-            } else {
-                HYSTERESIS_VOCT
-            };
-            let biased = snapper.snap_voct(input_well_past + bias);
-            if (biased - prev_quantized).abs() > 1e-6 {
-                raw
-            } else {
-                prev_quantized
-            }
-        } else {
-            raw
-        };
-        assert!(
-            (quantized - d4).abs() < 1e-6,
-            "well past boundary should switch to D4, got {quantized}"
+    #[test]
+    fn narrower_gate_cycles_across_scale_channels() {
+        // Gate [high, low] over C E G → C and G active.
+        let mut q = quantizer(
+            5.0 / 12.0,
+            Some(spec_signal("C[maj]")),
+            Some(volts(&[5.0, 0.0])),
         );
+        q.update(48000.0);
+        assert!((semis(&q) - 7.0).abs() < 1e-4, "got {}", semis(&q));
+    }
+
+    #[test]
+    fn all_gates_low_holds_without_trig() {
+        let mut q = quantizer(4.0 / 12.0, Some(spec_signal("C[maj]")), Some(volts(&[5.0])));
+        q.update(48000.0);
+        assert!((semis(&q) - 4.0).abs() < 1e-4);
+        for _ in 0..1000 {
+            q.update(48000.0);
+        }
+        assert_eq!(q.outputs.trig.get(0), GATE_LOW_VOLTAGE);
+
+        q.params.gate = Some(volts(&[0.0]));
+        set_input(&mut q, 7.0 / 12.0);
+        for _ in 0..10 {
+            q.update(48000.0);
+            assert!((semis(&q) - 4.0).abs() < 1e-4, "held, got {}", semis(&q));
+            assert_eq!(q.outputs.trig.get(0), GATE_LOW_VOLTAGE);
+        }
+
+        q.params.gate = Some(volts(&[5.0]));
+        q.update(48000.0);
+        assert!((semis(&q) - 7.0).abs() < 1e-4);
+        assert_eq!(q.outputs.trig.get(0), GATE_HIGH_VOLTAGE);
+    }
+
+    #[test]
+    fn passes_input_through_before_any_note_is_active() {
+        let mut q = quantizer(0.123, Some(spec_signal("C[maj]")), Some(volts(&[0.0])));
+        q.update(48000.0);
+        assert!((q.outputs.output.get(0) - 0.123).abs() < 1e-6);
+        assert_eq!(q.outputs.trig.get(0), GATE_LOW_VOLTAGE);
+    }
+
+    #[test]
+    fn gate_without_scale_only_holds() {
+        let mut q = quantizer(3.2 / 12.0, None, Some(volts(&[5.0])));
+        q.update(48000.0);
+        assert!((semis(&q) - 3.0).abs() < 1e-4);
+        q.params.gate = Some(volts(&[0.0]));
+        set_input(&mut q, 9.0 / 12.0);
+        q.update(48000.0);
+        assert!((semis(&q) - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn changing_scale_moves_the_note() {
+        let mut q = quantizer(3.0 / 12.0, Some(spec_signal("C[maj]")), None);
+        q.update(48000.0);
+        assert!((semis(&q) - 4.0).abs() < 1e-4);
+        q.params.scale = Some(spec_signal("C[min]"));
+        q.update(48000.0);
+        assert!((semis(&q) - 3.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn hysteresis_prevents_boundary_chatter() {
+        // C/D boundary in C major sits at 1 semitone.
+        let boundary = 1.0 / 12.0;
+        let mut q = quantizer(0.0, Some(spec_signal("C(major)")), None);
+        q.update(48000.0);
+        set_input(&mut q, (boundary + HYSTERESIS_VOCT * 0.5) as f32);
+        q.update(48000.0);
+        assert!(
+            semis(&q).abs() < 1e-4,
+            "should stay on C, got {}",
+            semis(&q)
+        );
+        set_input(&mut q, (boundary + HYSTERESIS_VOCT * 3.0) as f32);
+        q.update(48000.0);
+        assert!(
+            (semis(&q) - 2.0).abs() < 1e-4,
+            "should move to D, got {}",
+            semis(&q)
+        );
+    }
+
+    #[test]
+    fn width_ignores_scale_and_gate() {
+        let q = make_quantizer(QuantizerParams {
+            input: volts(&[0.0]),
+            offset: None,
+            scale: Some(spec_signal("chromatic")),
+            gate: Some(volts(&[5.0; 8])),
+        });
+        assert_eq!(q.channel_count(), 1);
+    }
+
+    #[test]
+    fn offset_wider_than_input_drives_all_declared_channels() {
+        let g4 = 7.0 / 12.0;
+        let mut q = make_quantizer(QuantizerParams {
+            input: volts(&[0.0]),
+            offset: Some(volts(&[0.0, g4])),
+            scale: Some(spec_signal("C(major)")),
+            gate: None,
+        });
+        assert_eq!(q.channel_count(), 2);
+
+        // The first sample counts as a note change on every channel.
+        q.update(48000.0);
+        assert_eq!(q.outputs.trig.get(1), GATE_HIGH_VOLTAGE);
+        assert!(q.outputs.output.get(0).abs() < 1e-6);
+        assert!((q.outputs.output.get(1) - g4).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_temp_gate_trigger_behavior() {
+        let mut trigger = TempGate::new_gate(TempGateState::Low);
+        assert_eq!(trigger.process(), GATE_LOW_VOLTAGE);
+
+        trigger.set_state(TempGateState::High, TempGateState::Low, 3);
+        assert_eq!(trigger.process(), GATE_HIGH_VOLTAGE);
+        assert_eq!(trigger.process(), GATE_HIGH_VOLTAGE);
+        assert_eq!(trigger.process(), GATE_HIGH_VOLTAGE);
+        assert_eq!(trigger.process(), GATE_LOW_VOLTAGE);
     }
 }

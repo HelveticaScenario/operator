@@ -181,7 +181,9 @@ export interface SpPattern {
  *
  * Scale string accepts `"c(major)"`, `"D#3(min)"`, custom intervals
  * `"c(0 2 4 5 7 9 11)"`, just-intonation tunings `"c(just)"` /
- * `"c(pythagorean)"`, and the bare `"chromatic"` ladder.
+ * `"c(pythagorean)"`, the bare `"chromatic"` ladder, and chords in
+ * brackets (`"c[maj7]"`, `"a3[m9 inv1]"`) whose degrees step through the
+ * chord tones.
  */
 function $spImpl(source: string, scale: string): SpPattern & TimeModifiable {
     if (typeof source !== 'string') {

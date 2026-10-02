@@ -4,7 +4,6 @@ members = [
     "crates/modular_core",
     "crates/modular_derive",
     "crates/mi-plaits-dsp-rs",
-    "crates/rust-music-theory",
     "crates/modular",
 ]
 default-members = [

@@ -37,8 +37,6 @@ use napi::Result;
 use napi::bindgen_prelude::{FromNapiValue, Object, ToNapiValue};
 use napi_derive::napi;
 use regex::Regex;
-use rust_music_theory::note::{Notes, Pitch};
-use rust_music_theory::scale::Scale;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -818,24 +816,33 @@ pub trait SignalParamMeta {
 }
 
 struct ParsedNote {
-    pitch: Pitch,
+    pitch_class: i32,
     octave: i32,
+}
+
+impl ParsedNote {
+    /// Standard MIDI: (octave + 1) * 12 + pitch_class, where C4 = MIDI 60.
+    fn midi(&self) -> i32 {
+        (self.octave + 1) * 12 + self.pitch_class
+    }
 }
 
 fn parse_note_str(s: &str) -> StdResult<ParsedNote, String> {
     let caps = RE_NOTE
         .captures(s)
         .ok_or("Invalid note format".to_string())?;
-    let name = &caps[1];
-    let acc = &caps[2];
     let octave: i32 = caps
         .get(3)
         .map(|m| m.as_str().parse().unwrap_or(4))
         .unwrap_or(4);
 
-    let pitch_str = format!("{}{}", name, acc);
-    let pitch = Pitch::from_str(&pitch_str).ok_or("Invalid pitch".to_string())?;
-    Ok(ParsedNote { pitch, octave })
+    // Letter + accidental are a prefix of `s`.
+    let name = &s[..caps.get(2).map_or(1, |m| m.end())];
+    let root = crate::dsp::utilities::FixedRoot::parse(name).ok_or("Invalid pitch".to_string())?;
+    Ok(ParsedNote {
+        pitch_class: root.pitch_class() as i32,
+        octave,
+    })
 }
 
 fn parse_signal_string(s: &str) -> StdResult<f32, String> {
@@ -862,61 +869,24 @@ fn parse_signal_string(s: &str) -> StdResult<f32, String> {
         let val: f32 = caps[1]
             .parse()
             .map_err(|_| "Invalid scale interval number".to_string())?;
-        let root_str = &caps[2];
-        let scale_str = &caps[3];
-
-        let root_note = parse_note_str(root_str)?;
-        let scale_def = format!("{} {}", root_note.pitch, scale_str);
-        let scale =
-            Scale::from_regex(&scale_def).map_err(|_| "Invalid scale definition".to_string())?;
+        let root_note = parse_note_str(&caps[2])?;
+        let intervals = crate::dsp::utilities::scale_names::lookup(&caps[3])
+            .ok_or("Invalid scale definition".to_string())?;
 
         let interval_idx = val.floor() as i64;
         let cents = (val - interval_idx as f32) * 100.0;
 
-        let notes = scale.notes();
-        let note_len = notes.len();
-        if note_len == 0 {
-            return Err("Scale has no notes".to_string());
-        }
+        let len = intervals.len() as i64;
+        let octave_shift = interval_idx.div_euclid(len) as i32;
+        let interval = intervals[interval_idx.rem_euclid(len) as usize] as i32;
 
-        let effective_len = if note_len > 1 && notes[0].pitch == notes[note_len - 1].pitch {
-            note_len - 1
-        } else {
-            note_len
-        };
-        let len = effective_len as i64;
-
-        let scale_root_octave = notes[0].octave as i32;
-
-        let (octave_shift, note_idx) = if interval_idx >= 0 {
-            ((interval_idx / len), (interval_idx % len) as usize)
-        } else {
-            let abs_idx = -interval_idx - 1;
-            let octave_down = (abs_idx / len) + 1;
-            let note_from_end = (abs_idx % len) as usize;
-            (-octave_down, len as usize - 1 - note_from_end)
-        };
-
-        let base_note = &notes[note_idx];
-        let relative_octave = (base_note.octave as i32) - scale_root_octave;
-        let target_octave = (root_note.octave as i32) + relative_octave + (octave_shift as i32);
-
-        let pc_val = base_note.pitch.into_u8();
-
-        // Standard MIDI: (octave + 1) * 12 + pitch_class, where C4 = MIDI 60
-        let midi = (target_octave as f32 + 1.0) * 12.0 + (pc_val as f32);
-        let midi_with_cents = midi + (cents / 100.0);
-
-        let volts = midi_to_voct(midi_with_cents);
+        let midi = root_note.midi() + interval + 12 * octave_shift;
+        let volts = midi_to_voct(midi as f32 + cents / 100.0);
         return Ok(volts);
     }
 
     if let Ok(note) = parse_note_str(s) {
-        let pc_val = note.pitch.into_u8();
-        // Standard MIDI: (octave + 1) * 12 + pitch_class, where C4 = MIDI 60
-        let midi = (note.octave as f32 + 1.0) * 12.0 + (pc_val as f32);
-        let volts = midi_to_voct(midi);
-        return Ok(volts);
+        return Ok(midi_to_voct(note.midi() as f32));
     }
 
     Err("Invalid signal format".to_string())

@@ -966,7 +966,7 @@ impl SeqPatternParam {
         use crate::dsp::seq::interval_value::{
             IntervalValue, add_interval_values, sub_interval_values,
         };
-        use crate::dsp::utilities::quantizer::{ScaleParam, degree_to_voltage};
+        use crate::dsp::utilities::scale::ScaleSpec;
         use crate::pattern_system::sp_combine::combine_sp;
 
         if payload.sources.is_empty() {
@@ -991,16 +991,8 @@ impl SeqPatternParam {
 
         // Parse scale up front so a bad scale string fails before we do
         // any pattern work.
-        let scale = ScaleParam::parse(&payload.scale)
-            .ok_or_else(|| format!("invalid scale: {}", payload.scale))?;
-        let base_midi = scale.base_midi();
-        let (intervals, tuning): (Vec<i8>, [f64; 12]) = match scale.snapper() {
-            Some(s) => (s.scale_intervals().iter().copied().collect(), *s.tuning()),
-            None => (
-                (0i8..12).collect(),
-                std::array::from_fn(|i| i as f64 / 12.0),
-            ),
-        };
+        let scale = ScaleSpec::parse(&payload.scale)
+            .map_err(|reason| format!("invalid scale \"{}\": {reason}", payload.scale))?;
 
         // Lower each source AST into a Pattern<IntervalValue>. Strip
         // modifier spans before combining so each input's span tree
@@ -1027,9 +1019,7 @@ impl SeqPatternParam {
 
         // Resolve degrees -> SeqValue voltages, then cache cycles.
         let resolver = move |v: &IntervalValue| match v {
-            IntervalValue::Degree(d) => {
-                SeqValue::Voltage(degree_to_voltage(*d, base_midi, &intervals, &tuning))
-            }
+            IntervalValue::Degree(d) => SeqValue::Voltage(scale.degree_voltage(*d)),
             IntervalValue::Rest => SeqValue::Rest,
         };
         let voltage_pattern = combined.fmap(resolver);
@@ -1215,6 +1205,42 @@ mod tests {
         let v: Vec<f64> = haps.iter().map(|h| h.value.to_voltage().unwrap()).collect();
         assert!((v[0] - 0.0).abs() < 1e-9);
         assert!((v[1] - 2.0 / 12.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_sp_chord_degrees_step_through_chord_tones() {
+        let degrees = |scale: &str| -> Vec<f64> {
+            let payload = SpPatternPayload {
+                kind: SpKindTag::default(),
+                sources: vec![ParsedPatternPayload::parse_for_test("0 1 2 3 4 5")],
+                scale: scale.to_string(),
+                ops: vec![],
+                argument_spans: vec![],
+            };
+            let parsed = SeqPatternParam::from_sp_payload(payload).unwrap();
+            parsed
+                .pattern()
+                .unwrap()
+                .query_arc(Fraction::from_integer(0), Fraction::from_integer(1))
+                .iter()
+                .map(|h| (h.value.to_voltage().unwrap() * 12.0).round())
+                .collect()
+        };
+        assert_eq!(degrees("c[maj7]"), [0.0, 4.0, 7.0, 11.0, 12.0, 16.0]);
+        // A 9th chord spans past the octave, so it repeats every two octaves.
+        assert_eq!(degrees("c[9]"), [0.0, 4.0, 7.0, 10.0, 14.0, 24.0]);
+    }
+
+    #[test]
+    fn test_sp_invalid_scale_is_rejected() {
+        let payload = SpPatternPayload {
+            kind: SpKindTag::default(),
+            sources: vec![ParsedPatternPayload::parse_for_test("0")],
+            scale: "c(maj7)".to_string(),
+            ops: vec![],
+            argument_spans: vec![],
+        };
+        assert!(SeqPatternParam::from_sp_payload(payload).is_err());
     }
 
     #[test]

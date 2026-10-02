@@ -359,6 +359,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$spread" => json!({ "min": -1.0, "max": 1.0, "count": 3 }),
         "$signal" => json!({ "source": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
+        "$chord" => json!({ "chord": "C[maj]" }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
         "$overdrive" => json!({ "input": 0.0, "drive": 0.0 }),
         // Shape modules: `input` + required `mode` (drive is optional). digital
@@ -790,6 +791,76 @@ fn from_graph_process_frame_advances_all_modules() {
 }
 
 // ─── Step sequencer ──────────────────────────────────────────────────────────
+
+#[test]
+fn chord_outputs_spec_voltages() {
+    let module = make_module("$chord", "chord", json!({ "chord": "C3[maj7]" }));
+    for (ch, semis) in [-12.0_f32, -8.0, -5.0, -1.0].iter().enumerate() {
+        let v = *collect_channel(module.as_ref(), ch, 1).last().unwrap();
+        assert!(approx_eq(v, semis / 12.0, 1e-5), "channel {ch}: {v}");
+    }
+}
+
+#[test]
+fn chord_rejects_invalid_specs() {
+    let deserializers = get_params_deserializers();
+    let deserializer = deserializers
+        .get("$chord")
+        .expect("no deserializer for $chord");
+    for spec in ["", "C(maj7)", "C[maj8]", "C[maj inv3]"] {
+        match deserializer(json!({ "chord": spec })) {
+            Ok(_) => panic!("{spec:?} should be rejected"),
+            Err(err) => {
+                let errors = err.into_errors();
+                assert!(
+                    errors
+                        .iter()
+                        .any(|e| e.message.contains("Invalid scale specification")),
+                    "{spec:?}: unexpected errors {:?}",
+                    errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn quantizer_hold_survives_state_transfer() {
+    let c_major_triad = json!([0.0, 4.0 / 12.0, 7.0 / 12.0]);
+    let old = make_module(
+        "$quantizer",
+        "q",
+        json!({ "input": 4.0 / 12.0, "scale": c_major_triad, "gate": 5.0 }),
+    );
+    assert!(approx_eq(
+        settle_and_read(old.as_ref(), 64),
+        4.0 / 12.0,
+        1e-5
+    ));
+
+    // The rebuilt quantizer sees every gate low, so it must keep the note
+    // chosen before the update rather than pass its new input through.
+    let new = make_module(
+        "$quantizer",
+        "q",
+        json!({ "input": 7.0 / 12.0, "scale": c_major_triad, "gate": 0.0 }),
+    );
+    new.transfer_state_from(old.as_ref());
+    let mut stepper = Stepper::new();
+    for _ in 0..64 {
+        let slot = stepper.tick(new.as_ref());
+        let out = new.get_value_at(DEFAULT_PORT, 0, slot);
+        assert!(
+            approx_eq(out, 4.0 / 12.0, 1e-5),
+            "expected held E4, got {out}"
+        );
+        assert_eq!(
+            new.get_value_at("trig", 0, slot),
+            0.0,
+            "hold must not trigger"
+        );
+    }
+}
 
 #[test]
 fn step_rejects_empty_steps() {

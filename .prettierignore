@@ -10,7 +10,6 @@ crates/modular/schemas.json
 crates/modular/index.d.ts
 **/*.dSYM/**/*
 crates/mi-plaits-dsp-rs
-crates/rust-music-theory
 node_modules
 generated
 dist

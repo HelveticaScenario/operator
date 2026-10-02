@@ -78,6 +78,13 @@ export interface ParamDescriptor {
      * only the $defs name tells them apart.
      */
     isMonoSignalInput?: boolean;
+    /**
+     * Scale input (ScaleSignal): a poly signal of note pitches, or a spec
+     * string the factory rewrites into a `$chord` module. Its channels form one
+     * shared set of notes, so it never contributes to a module's channel count
+     * and takes no part in `$g` signal-group expansion.
+     */
+    isScaleSignalInput?: boolean;
 }
 
 export type ProcessedModuleSchema = ModuleSchema & {
@@ -513,8 +520,10 @@ export function processModuleSchema(
             const signalMeta = signalParamsByName.get(name);
 
             const isMonoSignalInput = referencesDef(s, 'MonoSignal');
+            const isScaleSignalInput = referencesDef(s, 'ScaleSignal');
             const isPolySignalInput =
                 !isMonoSignalInput &&
+                !isScaleSignalInput &&
                 (referencesDef(s, 'PolySignal') ||
                     inferredKind === 'polySignal');
 
@@ -526,6 +535,7 @@ export function processModuleSchema(
                 optional: !required.has(name),
                 ...(isPolySignalInput && { isPolySignalInput }),
                 ...(isMonoSignalInput && { isMonoSignalInput }),
+                ...(isScaleSignalInput && { isScaleSignalInput }),
                 ...(signalMeta && {
                     defaultValue: signalMeta.defaultValue,
                     maxValue: signalMeta.maxValue,

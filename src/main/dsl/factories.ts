@@ -4,6 +4,7 @@ import type { ModuleOutput } from './GraphBuilder';
 import { GraphBuilder, Collection, CollectionWithRange } from './GraphBuilder';
 import type { SourceSpan } from '../../shared/dsl/spanTypes';
 import type { CallSiteKey, SpanRegistry } from './analyzeSource';
+import { processModuleSchema } from './paramsSchema';
 import {
     captureSourceLocation,
     getDSLWrapperLineOffset,
@@ -354,6 +355,9 @@ export class DSLContext {
      */
     private createFactory(schema: ModuleSchema) {
         const outputs = schema.outputs || [];
+        const scaleParamNames = processModuleSchema(schema)
+            .params.filter((p) => p.isScaleSignalInput)
+            .map((p) => p.name);
 
         return (...args: any[]): ModuleReturn => {
             // Capture source location from stack trace
@@ -385,6 +389,16 @@ export class DSLContext {
                 // Merge other config params
                 for (const key of Object.keys(restConfig)) {
                     params[key] = restConfig[key];
+                }
+            }
+
+            // The engine only accepts a signal scale; a spec string is
+            // shorthand for the notes of `$chord(spec)`.
+            for (const name of scaleParamNames) {
+                if (typeof params[name] === 'string') {
+                    params[name] = this.builder.getFactory('$chord')(
+                        params[name],
+                    );
                 }
             }
 

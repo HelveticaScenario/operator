@@ -975,6 +975,65 @@ describe('utilities', () => {
         expect(findModules(patch, '$quantizer').length).toBe(1);
     });
 
+    test('$quantizer string scale becomes a $chord feeding the scale input', () => {
+        const patch = execPatch('$quantizer($sine("C4"), "C[maj7]").out()');
+        const [chord] = findModules(patch, '$chord');
+        expect(chord.params.chord).toBe('C[maj7]');
+        const [quantizer] = findModules(patch, '$quantizer');
+        const scale = quantizer.params.scale as Array<{
+            module: string;
+            port: string;
+        }>;
+        expect(scale).toHaveLength(4);
+        expect(
+            scale.every((c) => c.module === chord.id && c.port === 'output'),
+        ).toBe(true);
+    });
+
+    test('$quantizer takes a signal scale and a gate', () => {
+        const patch = execPatch(
+            'const midi = $midiCV({ channels: 4 })\n' +
+                '$quantizer($sine("1hz"), midi, { gate: midi.gate }).out()',
+        );
+        expect(findModules(patch, '$chord').length).toBe(0);
+        const [midi] = findModules(patch, '$midiCV');
+        const [quantizer] = findModules(patch, '$quantizer');
+        const scale = quantizer.params.scale as Array<{
+            module: string;
+            port: string;
+        }>;
+        const gate = quantizer.params.gate as Array<{
+            module: string;
+            port: string;
+        }>;
+        expect(scale).toHaveLength(4);
+        expect(
+            scale.every((c) => c.module === midi.id && c.port === 'pitch'),
+        ).toBe(true);
+        expect(
+            gate.every((c) => c.module === midi.id && c.port === 'gate'),
+        ).toBe(true);
+    });
+
+    test('$quantizer scale is not a signal-group input', () => {
+        expect(() =>
+            execPatch('$quantizer($sine("C4"), $g1(["c4", "e4"])).out()'),
+        ).toThrow(
+            /parameter "scale" of \$quantizer is not a polyphonic signal input/,
+        );
+    });
+
+    test('$chord', () => {
+        const patch = execPatch('$saw($chord("C3[m7 inv1]")).out()');
+        expect(findModules(patch, '$chord').length).toBe(1);
+    });
+
+    test('$chord rejects an invalid spec', () => {
+        expect(() => execPatch('$saw($chord("C(maj7)")).out()')).toThrow(
+            /Invalid scale specification/,
+        );
+    });
+
     test('$clockDivider', () => {
         const patch = execPatch('$clockDivider($clock.beatTrigger, 4).out()');
         expect(findModules(patch, '$clockDivider').length).toBe(1);
@@ -1422,7 +1481,7 @@ describe('script execution environment', () => {
         const patch = execPatch(
             [
                 'const cloned = structuredClone({ note: "c4" });',
-                "$sine(cloned.note).out();",
+                '$sine(cloned.note).out();',
             ].join('\n'),
         );
         const sine = findModules(patch, '$sine')[0];

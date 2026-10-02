@@ -56,7 +56,6 @@ E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run
 - **`crates/modular/`** — N-API bindings (`lib.rs`), audio callback (`audio.rs`), validation (`validation.rs`), MIDI input (`midi.rs`), command queue (`commands.rs`).
 - **`crates/modular_derive/`** — Proc macros for the module output system.
 - **`crates/mi-plaits-dsp-rs/`** — Mutable Instruments Plaits DSP port (git submodule, third-party).
-- **`crates/rust-music-theory/`** — Vendored fork (git submodule) for note/scale theory helpers. Treat as third-party.
 
 ### Frontend Structure
 

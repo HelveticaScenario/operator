@@ -70,7 +70,8 @@ export function resolveRef(
     | 'FastPattern'
     | 'SlowPattern'
     | 'StructPattern'
-    | 'BeatPattern' {
+    | 'BeatPattern'
+    | 'ScaleSpec' {
     if (ref === 'Signal') {
         return 'Signal';
     }
@@ -122,6 +123,11 @@ export function resolveRef(
     }
     if (defName === 'Table') {
         return 'Table';
+    }
+    // A scale/chord spec string ("C(major)", "C3[maj7]"); the DSL exposes it
+    // as the named `ScaleSpec` template-literal type.
+    if (defName === 'ScaleSpec') {
+        return 'ScaleSpec';
     }
     // ParsedPatternPayload is recursive (MiniAST references itself via
     // List/Sequence/...); the DSL exposes it as an opaque `ParsedPattern`
@@ -399,6 +405,9 @@ export function schemaToTypeExpr(
         }
         if (resolved === 'BeatPattern') {
             return 'BeatPattern';
+        }
+        if (resolved === 'ScaleSpec') {
+            return 'ScaleSpec';
         }
         return schemaToTypeExpr(resolved, rootSchema);
     }
