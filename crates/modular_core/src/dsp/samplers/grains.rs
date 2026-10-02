@@ -441,7 +441,7 @@ impl Grains {
             let lut = &self.state.window_lut;
 
             let cs = &mut self.channel_state[ch];
-            // Visit active slots in index order, as a scan of the pool would.
+            // Ascending slot order keeps the summation order deterministic.
             let mut pending = cs.active;
             while pending != 0 {
                 let slot = pending.trailing_zeros() as usize;
