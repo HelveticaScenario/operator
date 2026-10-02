@@ -173,6 +173,10 @@ pub enum GraphCommand {
         trigger: QueuedTrigger,
     },
 
+    /// Discard the queued patch update, if any, so the playing patch keeps
+    /// running. A no-op once the update has applied.
+    CancelQueuedUpdate,
+
     /// Lightweight single-module update (e.g., slider changes).
     /// The module is pre-constructed on the main thread; the audio thread
     /// does state transfer + replacement, then reconnects.

@@ -40,6 +40,9 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: 'Control+Enter', command: 'operator.updatePatch' },
     { key: 'Control+Shift+Enter', command: 'operator.updatePatchNextBeat' },
     { key: 'Control+.', command: 'operator.stop' },
+    // Matched by physical key (`event.code`), so it fires on layouts where
+    // typing `\` itself needs extra modifiers.
+    { key: 'Control+(Backslash)', command: 'operator.cancelQueuedUpdate' },
     // File / app commands use $mod (Cmd on macOS) and are named with their VS
     // Code command id; `aliasCommand` rewrites each to the `operator.*` it
     // dispatches to. Operator's "Open Folder" is a workspace/folder picker.

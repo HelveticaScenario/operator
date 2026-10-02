@@ -247,6 +247,9 @@ function App() {
         scopeDecorations: editor.IEditorDecorationsCollection | null;
         /** Same contract as scopeDecorations, for vuDecorationsRef. */
         vuDecorations: editor.IEditorDecorationsCollection | null;
+        /** The running buffer before this submit, restored if the queued
+         *  update is cancelled. */
+        previousRunning: { bufferId: string | null; sourceId: string | null };
     } | null>(null);
 
     const handleSliderChange = useCallback(
@@ -1225,6 +1228,11 @@ function App() {
         }
     }, [buffers]);
 
+    const runningBufferIdRef = useRef(runningBufferId);
+    useEffect(() => {
+        runningBufferIdRef.current = runningBufferId;
+    }, [runningBufferId]);
+
     const isClockRunningRef = useRef(isClockRunning);
     useEffect(() => {
         isClockRunningRef.current = isClockRunning;
@@ -1435,6 +1443,18 @@ function App() {
                                 pending.interpolationResolutions,
                             );
                         }
+                    } else if (
+                        pending &&
+                        transport.lastCancelledUpdateId === pending.updateId
+                    ) {
+                        // The queued update never applies: drop its UI state
+                        // and point back at the buffer that is still playing.
+                        pendingUIStateRef.current = null;
+                        pending.scopeDecorations?.clear();
+                        pending.vuDecorations?.clear();
+                        runningSourceIdRef.current =
+                            pending.previousRunning.sourceId;
+                        setRunningBufferId(pending.previousRunning.bufferId);
                     }
 
                     if (isClockRunningRef.current && !cancelled) {
@@ -1552,6 +1572,10 @@ function App() {
                     return;
                 }
 
+                const previousRunning = {
+                    bufferId: runningBufferIdRef.current,
+                    sourceId: runningSourceIdRef.current,
+                };
                 setIsClockRunning(true);
                 setRunningBufferId(activeBufferId);
                 runningSourceIdRef.current = activeSourceIdRef.current ?? null;
@@ -1705,6 +1729,7 @@ function App() {
                     pendingUIStateRef.current?.vuDecorations?.clear();
                     pendingUIStateRef.current = {
                         interpolationResolutions: interpolationMap,
+                        previousRunning,
                         scopeDecorations: newScopeDecorations,
                         scopeViews: views,
                         sliderDefs: newSliderDefs,
@@ -1890,6 +1915,17 @@ function App() {
             },
         );
         registerCommand(
+            'operator.cancelQueuedUpdate',
+            () => {
+                void electronAPI.synthesizer.cancelQueuedUpdate();
+            },
+            {
+                label: 'Cancel Queued Update',
+                category: 'Patch',
+                contextMenu: { group: '1_patch', order: 4 },
+            },
+        );
+        registerCommand(
             'operator.newFile',
             () => {
                 createUntitledFileRef.current();
@@ -1966,6 +2002,7 @@ function App() {
             unregisterCommand('operator.updatePatch');
             unregisterCommand('operator.updatePatchNextBeat');
             unregisterCommand('operator.stop');
+            unregisterCommand('operator.cancelQueuedUpdate');
             unregisterCommand('operator.newFile');
             unregisterCommand('operator.closeBuffer');
             unregisterCommand('operator.save');
@@ -2012,6 +2049,11 @@ function App() {
         const cleanupStop = electronAPI.onMenuStop(() => {
             executeCommand('operator.stop');
         });
+        const cleanupCancelQueuedUpdate = electronAPI.onMenuCancelQueuedUpdate(
+            () => {
+                executeCommand('operator.cancelQueuedUpdate');
+            },
+        );
         const cleanupUpdate = electronAPI.onMenuUpdatePatch(() => {
             executeCommand('operator.updatePatch');
         });
@@ -2181,6 +2223,7 @@ function App() {
             cleanupNewFile();
             cleanupSave();
             cleanupStop();
+            cleanupCancelQueuedUpdate();
             cleanupUpdate();
             cleanupUpdateNextBeat();
             cleanupOpenWorkspace();

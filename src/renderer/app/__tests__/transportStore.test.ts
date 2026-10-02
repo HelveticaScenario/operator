@@ -27,6 +27,7 @@ function makeSnapshot(
         isPlaying: false,
         hasQueuedUpdate: false,
         lastAppliedUpdateId: 0,
+        lastCancelledUpdateId: 0,
         linkEnabled: false,
         linkPeers: 0,
         linkPhase: 0,

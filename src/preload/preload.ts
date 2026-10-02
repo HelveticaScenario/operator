@@ -91,6 +91,9 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE]
         >;
         stop: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_STOP]>;
+        cancelQueuedUpdate: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_CANCEL_QUEUED_UPDATE]
+        >;
         isStopped: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_IS_STOPPED]>;
         setModuleParam: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_SET_MODULE_PARAM]
@@ -193,6 +196,7 @@ export interface ElectronAPI {
     onMenuNewFile: (callback: () => void) => () => void;
     onMenuSave: (callback: () => void) => () => void;
     onMenuStop: (callback: () => void) => () => void;
+    onMenuCancelQueuedUpdate: (callback: () => void) => () => void;
     onMenuUpdatePatch: (
         callback: (trigger?: QueuedTrigger) => void,
     ) => () => void;
@@ -368,6 +372,9 @@ const electronAPI: ElectronAPI = {
 
         stop: (...args) => invokeIPC('SYNTH_STOP', ...args),
 
+        cancelQueuedUpdate: (...args) =>
+            invokeIPC('SYNTH_CANCEL_QUEUED_UPDATE', ...args),
+
         stopRecording: (...args) => invokeIPC('SYNTH_STOP_RECORDING', ...args),
 
         updatePatch: (...args) => invokeIPC('SYNTH_UPDATE_PATCH', ...args),
@@ -461,6 +468,9 @@ const electronAPI: ElectronAPI = {
     onMenuNewFile: menuEventHandler(MENU_CHANNELS.NEW_FILE),
     onMenuSave: menuEventHandler(MENU_CHANNELS.SAVE),
     onMenuStop: menuEventHandler(MENU_CHANNELS.STOP),
+    onMenuCancelQueuedUpdate: menuEventHandler(
+        MENU_CHANNELS.CANCEL_QUEUED_UPDATE,
+    ),
     onMenuUpdatePatch: menuEventHandler(MENU_CHANNELS.UPDATE_PATCH),
     onMenuUpdatePatchNextBeat: menuEventHandler(
         MENU_CHANNELS.UPDATE_PATCH_NEXT_BEAT,

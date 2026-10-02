@@ -1061,6 +1061,16 @@ impl Synthesizer {
         self.state.request_stop();
     }
 
+    /// Discard the queued patch update so the playing patch keeps running. The
+    /// outcome surfaces in the transport snapshot: `last_cancelled_update_id`
+    /// reports the discarded update, and nothing changes if the update already
+    /// applied.
+    #[napi]
+    pub fn cancel_queued_update(&mut self) -> Result<()> {
+        self.state.drain_garbage();
+        self.state.send_command(GraphCommand::CancelQueuedUpdate)
+    }
+
     #[napi]
     pub fn is_stopped(&self) -> bool {
         self.state.is_stopped()

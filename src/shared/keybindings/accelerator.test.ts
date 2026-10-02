@@ -25,6 +25,7 @@ describe('toElectronAccelerator', () => {
             'Shift+Cmd+0',
         );
         expect(toElectronAccelerator('Alt+(BracketLeft)')).toBe('Alt+[');
+        expect(toElectronAccelerator('Control+(Backslash)')).toBe('Ctrl+\\');
     });
 
     test('orders modifiers canonically', () => {

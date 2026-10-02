@@ -8,6 +8,13 @@ export declare class Synthesizer {
    */
   constructor(config?: AudioConfigOptions | undefined | null)
   stop(): void
+  /**
+   * Discard the queued patch update so the playing patch keeps running. The
+   * outcome surfaces in the transport snapshot: `last_cancelled_update_id`
+   * reports the discarded update, and nothing changes if the update already
+   * applied.
+   */
+  cancelQueuedUpdate(): void
   isStopped(): boolean
   sampleRate(): number
   channels(): number
@@ -344,6 +351,11 @@ export interface TransportSnapshot {
   hasQueuedUpdate: boolean
   /** The update_id of the most recently applied patch update (as f64 for N-API compatibility) */
   lastAppliedUpdateId: number
+  /**
+   * The update_id of the most recently cancelled queued patch update (as f64
+   * for N-API compatibility). An update with this id never applies.
+   */
+  lastCancelledUpdateId: number
   /** Whether Ableton Link is currently enabled */
   linkEnabled: boolean
   /** Number of Link peers in the session */

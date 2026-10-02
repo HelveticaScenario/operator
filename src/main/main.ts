@@ -9,7 +9,7 @@ import {
     ipcMain,
     shell,
 } from 'electron';
-import type { PatchGraph, AudioConfigOptions } from '@modular/core';
+import type { AudioConfigOptions } from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
@@ -32,6 +32,7 @@ import {
     stripPatchVersionStamp,
 } from '../shared/patchVersionStamp';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
+import { AppliedPatchState } from './appliedPatchState';
 import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
@@ -650,8 +651,7 @@ function startWavsWatcher(workspaceRoot: string) {
 }
 
 // Patch reconciliation state (reset when a different file/buffer is evaluated)
-let lastAppliedPatchGraph: PatchGraph | null = null;
-let lastAppliedSourceId: string | null = null;
+const appliedPatch = new AppliedPatchState();
 
 const DEBUG_LOG =
     process.env.MODULAR_DEBUG_LOG === '1' ||
@@ -844,6 +844,11 @@ registerIPCHandler(
                 callSiteSpansRecord[key] = span;
             }
 
+            appliedPatch.resolve(
+                synth.getTransportState().lastCancelledUpdateId,
+            );
+            const lastAppliedSourceId = appliedPatch.sourceId;
+
             // Requirement: assume a full change when a different file/buffer is evaluated.
             const shouldReconcile =
                 Boolean(sourceId) && lastAppliedSourceId === sourceId;
@@ -870,7 +875,7 @@ registerIPCHandler(
 
             const { moduleIdRemap } = reconcilePatchBySimilarity(
                 patch,
-                shouldReconcile ? lastAppliedPatchGraph : null,
+                shouldReconcile ? appliedPatch.patchGraph : null,
                 {
                     ambiguityMargin: PATCH_REMAP_MARGIN,
                     debugLog: DEBUG_LOG
@@ -910,8 +915,7 @@ registerIPCHandler(
             );
 
             if (errors.length === 0) {
-                lastAppliedPatchGraph = patch;
-                lastAppliedSourceId = sourceId ?? null;
+                appliedPatch.record(patch, sourceId ?? null, updateId);
             }
 
             if (errors.length > 0) {
@@ -963,6 +967,9 @@ registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
+    appliedPatch.resolve(synth.getTransportState().lastCancelledUpdateId);
+    const lastAppliedSourceId = appliedPatch.sourceId;
+
     // Requirement: assume a full change when a different file/buffer is evaluated.
     const shouldReconcile =
         Boolean(sourceId) && lastAppliedSourceId === sourceId;
@@ -985,7 +992,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
 
     const { moduleIdRemap } = reconcilePatchBySimilarity(
         patch,
-        shouldReconcile ? lastAppliedPatchGraph : null,
+        shouldReconcile ? appliedPatch.patchGraph : null,
         {
             ambiguityMargin: PATCH_REMAP_MARGIN,
             debugLog: DEBUG_LOG ? (message) => console.log(message) : undefined,
@@ -1018,8 +1025,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
 
     if (errors.length === 0) {
-        lastAppliedPatchGraph = patch;
-        lastAppliedSourceId = sourceId ?? null;
+        appliedPatch.record(patch, sourceId ?? null, updateId);
     }
 
     return { appliedPatch: patch, errors, moduleIdRemap, updateId };
@@ -1062,6 +1068,10 @@ registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
 
 registerIPCHandler('SYNTH_STOP', () => {
     synth.stop();
+});
+
+registerIPCHandler('SYNTH_CANCEL_QUEUED_UPDATE', () => {
+    synth.cancelQueuedUpdate();
 });
 
 registerIPCHandler('SYNTH_IS_STOPPED', () => synth.isStopped());
@@ -2150,6 +2160,19 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Stop Sound',
+                },
+                {
+                    ...menuShortcut('operator.cancelQueuedUpdate', 'Ctrl+\\'),
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(
+                                MENU_CHANNELS.CANCEL_QUEUED_UPDATE,
+                            );
+                        }
+                    },
+                    label: 'Cancel Queued Update',
                 },
                 // { type: 'separator' },
                 // {

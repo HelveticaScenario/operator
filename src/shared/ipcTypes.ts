@@ -324,6 +324,7 @@ export const IPC_CHANNELS = {
         'modular:synth:set-module-profiling-sample-rate',
     SYNTH_GET_MODULE_STATES: 'modular:synth:get-module-states',
     SYNTH_STOP: 'modular:synth:stop',
+    SYNTH_CANCEL_QUEUED_UPDATE: 'modular:synth:cancel-queued-update',
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',
     SYNTH_SET_MODULE_PARAM: 'modular:synth:set-module-param',
     SYNTH_GET_TRANSPORT_STATE: 'modular:synth:get-transport-state',
@@ -424,6 +425,7 @@ export const MENU_CHANNELS = {
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
     STOP: 'modular:menu:stop',
+    CANCEL_QUEUED_UPDATE: 'modular:menu:cancel-queued-update',
     TOGGLE_RECORDING: 'modular:menu:toggle-recording',
     TOGGLE_VU_METERS: 'modular:menu:toggle-vu-meters',
     UPDATE_PATCH: 'modular:menu:update-patch',
@@ -479,6 +481,8 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_GET_MODULE_STATES]: typeof Synthesizer.prototype.getModuleStates;
 
     [IPC_CHANNELS.SYNTH_STOP]: typeof Synthesizer.prototype.stop;
+
+    [IPC_CHANNELS.SYNTH_CANCEL_QUEUED_UPDATE]: typeof Synthesizer.prototype.cancelQueuedUpdate;
 
     [IPC_CHANNELS.SYNTH_IS_STOPPED]: typeof Synthesizer.prototype.isStopped;
 

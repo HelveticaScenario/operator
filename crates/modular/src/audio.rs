@@ -2163,6 +2163,13 @@ impl AudioProcessor {
                         self.queued_update = Some((update, trigger));
                     }
                 }
+                GraphCommand::CancelQueuedUpdate => {
+                    if let Some((update, _)) = self.queued_update.take() {
+                        self.transport_meter
+                            .write_cancelled_update_id(update.update_id);
+                        self.try_push_garbage_item(GarbageItem::PatchUpdate(update));
+                    }
+                }
                 GraphCommand::SingleModuleUpdate {
                     module_id,
                     module: new_module,
@@ -3395,6 +3402,8 @@ pub struct TransportMeter {
     has_queued_update: AtomicBool,
     /// The update_id of the most recently applied patch update
     last_applied_update_id: AtomicU64,
+    /// The update_id of the most recently cancelled queued patch update
+    last_cancelled_update_id: AtomicU64,
     /// Whether Ableton Link is currently enabled
     link_enabled: AtomicBool,
     /// Number of Link peers in the session
@@ -3418,6 +3427,7 @@ impl Default for TransportMeter {
             is_playing: AtomicBool::new(false),
             has_queued_update: AtomicBool::new(false),
             last_applied_update_id: AtomicU64::new(0),
+            last_cancelled_update_id: AtomicU64::new(0),
             link_enabled: AtomicBool::new(false),
             link_peers: AtomicU32::new(0),
             link_phase_bits: AtomicU64::new(0f64.to_bits()),
@@ -3462,6 +3472,13 @@ impl TransportMeter {
     #[inline]
     pub fn write_applied_update_id(&self, update_id: u64) {
         self.last_applied_update_id
+            .store(update_id, Ordering::Relaxed);
+    }
+
+    /// Record that the audio thread discarded a queued patch update with this ID.
+    #[inline]
+    pub fn write_cancelled_update_id(&self, update_id: u64) {
+        self.last_cancelled_update_id
             .store(update_id, Ordering::Relaxed);
     }
 
@@ -3525,6 +3542,7 @@ impl TransportMeter {
             is_playing: self.is_playing.load(Ordering::Relaxed),
             has_queued_update: self.has_queued_update.load(Ordering::Relaxed),
             last_applied_update_id: self.last_applied_update_id.load(Ordering::Relaxed) as f64,
+            last_cancelled_update_id: self.last_cancelled_update_id.load(Ordering::Relaxed) as f64,
             link_enabled: self.link_enabled.load(Ordering::Relaxed),
             link_peers: self.link_peers.load(Ordering::Relaxed),
             link_phase: f64::from_bits(self.link_phase_bits.load(Ordering::Relaxed)),
@@ -3554,6 +3572,9 @@ pub struct TransportSnapshot {
     pub has_queued_update: bool,
     /// The update_id of the most recently applied patch update (as f64 for N-API compatibility)
     pub last_applied_update_id: f64,
+    /// The update_id of the most recently cancelled queued patch update (as f64
+    /// for N-API compatibility). An update with this id never applies.
+    pub last_cancelled_update_id: f64,
     /// Whether Ableton Link is currently enabled
     pub link_enabled: bool,
     /// Number of Link peers in the session
@@ -4480,6 +4501,73 @@ mod tests {
             matches!(trigger, QueuedTrigger::Immediate),
             "superseding update applies immediately"
         );
+    }
+
+    #[test]
+    fn cancel_discards_queued_update_and_reports_its_id() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+
+        let mut update = PatchUpdate::new(44_100.0);
+        update.update_id = 7;
+        cmd_producer
+            .push(GraphCommand::QueuedPatchUpdate {
+                update,
+                trigger: QueuedTrigger::NextBar,
+            })
+            .unwrap();
+        cmd_producer.push(GraphCommand::CancelQueuedUpdate).unwrap();
+
+        processor.process_commands();
+
+        assert!(processor.queued_update.is_none());
+        let snap = processor.transport_meter.snapshot();
+        assert_eq!(snap.last_cancelled_update_id, 7.0);
+        assert_eq!(snap.last_applied_update_id, 0.0);
+    }
+
+    #[test]
+    fn cancel_without_queued_update_is_a_no_op() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+
+        cmd_producer.push(GraphCommand::CancelQueuedUpdate).unwrap();
+        processor.process_commands();
+
+        assert!(processor.queued_update.is_none());
+        assert_eq!(
+            processor
+                .transport_meter
+                .snapshot()
+                .last_cancelled_update_id,
+            0.0
+        );
+    }
+
+    #[test]
+    fn update_after_cancel_keeps_its_trigger() {
+        // With nothing left queued, a later update keeps its own trigger; only
+        // an update that supersedes a queued one is promoted to Immediate.
+        let (mut cmd_producer, mut processor) = create_test_processor();
+
+        for cmd in [
+            GraphCommand::QueuedPatchUpdate {
+                update: PatchUpdate::new(44_100.0),
+                trigger: QueuedTrigger::NextBar,
+            },
+            GraphCommand::CancelQueuedUpdate,
+            GraphCommand::QueuedPatchUpdate {
+                update: PatchUpdate::new(44_100.0),
+                trigger: QueuedTrigger::NextBar,
+            },
+        ] {
+            cmd_producer.push(cmd).unwrap();
+        }
+        processor.process_commands();
+
+        let (_, trigger) = processor
+            .queued_update
+            .as_ref()
+            .expect("the later update should be queued");
+        assert!(matches!(trigger, QueuedTrigger::NextBar));
     }
 
     #[test]
