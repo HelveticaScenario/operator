@@ -5,11 +5,12 @@ import type {
     SliderView,
 } from '../app/controlBinding';
 import type { StaticGroup } from '../dsl/extractControls';
+import { voltsToHz, voltsToNoteName } from '../../shared/dsl/sliderUnits';
 import {
-    snapVoltsToSemitone,
-    voltsToHz,
-    voltsToNoteName,
-} from '../../shared/dsl/sliderUnits';
+    positionToVolts,
+    sliderPositionCount,
+    voltsToPosition,
+} from '../app/sliderPositions';
 import './ControlPanel.css';
 
 /** Controls and groups are identified by their call's offset (`callStart`):
@@ -307,19 +308,16 @@ function SliderControl({ slider, onChange, onJump }: SliderControlProps) {
         setPrevValue(slider.value);
     }
 
-    // Note sliders step in semitones; value/min/max are V/Oct volts.
-    const step =
-        slider.unit === 'note' ? 1 / 12 : (slider.max - slider.min) / 1000;
-
     const handleInput = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {
-            const raw = parseFloat(e.currentTarget.value);
-            const newValue =
-                slider.unit === 'note' ? snapVoltsToSemitone(raw) : raw;
+            const newValue = positionToVolts(
+                parseInt(e.currentTarget.value, 10),
+                slider,
+            );
             setLocalValue(newValue);
             onChange(slider.callStart, newValue);
         },
-        [slider.callStart, slider.unit, onChange],
+        [slider, onChange],
     );
 
     const formatValue = (v: number): string => {
@@ -350,10 +348,10 @@ function SliderControl({ slider, onChange, onJump }: SliderControlProps) {
             <input
                 type="range"
                 className="slider-input"
-                min={slider.min}
-                max={slider.max}
-                step={step}
-                value={localValue}
+                min={0}
+                max={sliderPositionCount(slider)}
+                step={1}
+                value={voltsToPosition(localValue, slider)}
                 disabled={slider.incomplete}
                 onChange={handleInput}
             />
