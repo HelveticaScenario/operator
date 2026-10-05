@@ -37,8 +37,6 @@ use napi::Result;
 use napi::bindgen_prelude::{FromNapiValue, Object, ToNapiValue};
 use napi_derive::napi;
 use regex::Regex;
-use rust_music_theory::note::{Notes, Pitch};
-use rust_music_theory::scale::Scale;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -102,6 +100,7 @@ impl WellKnownModule {
             port: port.into(),
             channel,
             index_ptr: std::ptr::null(),
+            view: None,
         }
     }
 
@@ -168,6 +167,34 @@ pub enum ProcessingMode {
     #[default]
     Block,
     Sample,
+}
+
+thread_local! {
+    /// See [`set_block_render_ceiling`].
+    static BLOCK_RENDER_CEILING: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(usize::MAX) };
+}
+
+/// Cap Block-mode rendering at `ceiling` slots into the current internal
+/// block. The audio callback sets this to the emit boundary on every drain
+/// pass, so a module's state never advances past the samples actually sent
+/// to the device. A queued patch swap can then land on any sample and
+/// `transfer_state_from` hands the new patch state that sits exactly at the
+/// swap point; anything rendered beyond it would be lived through twice when
+/// the new patch fills the rest of the block, skipping every stateful module
+/// forward mid-waveform.
+///
+/// Thread-local so only the audio thread's setting takes effect; other
+/// threads (tests, benches) keep the permissive default and render whole
+/// blocks.
+pub fn set_block_render_ceiling(ceiling: usize) {
+    BLOCK_RENDER_CEILING.with(|c| c.set(ceiling));
+}
+
+/// Current Block-mode render cap. Read by generated wrappers' `get_value_at`
+/// when deciding how far to fill the block on a read.
+pub fn block_render_ceiling() -> usize {
+    BLOCK_RENDER_CEILING.with(|c| c.get())
 }
 
 /// Per-sample external clock state injected into ROOT_CLOCK by the audio callback.
@@ -248,6 +275,34 @@ pub trait Sampleable: MessageHandler + Send {
     /// (wrapping at the block boundary) when called re-entrantly during the
     /// wrapper's own update loop — preserving the 1-sample feedback delay.
     fn get_value_at(&self, port: &str, ch: usize, index: usize) -> f32;
+    /// Direct read access to port `port`'s block buffer, for cables to keep
+    /// as a [`CableView`]. `None` for an unknown port, a zero-width port, or a
+    /// module whose reads must always go through
+    /// [`get_value_at`](Self::get_value_at) — Sample-mode wrappers, whose
+    /// reads drive per-sample processing and the feedback delay.
+    fn port_view(&self, _port: &str) -> Option<PortView> {
+        None
+    }
+    /// Read like [`get_value_at`](Self::get_value_at), but treat channels at or
+    /// above the port's width as silence rather than cycling back over the
+    /// lower ones. For consumers whose channels are physical rather than
+    /// polyphonic — the audio device tap, where channel 2 of a stereo patch is
+    /// a speaker that must stay silent, not a wrap onto the left channel.
+    fn get_value_at_no_cycle(&self, port: &str, ch: usize, index: usize) -> f32 {
+        if ch >= self.port_channels(port) {
+            return 0.0;
+        }
+        self.get_value_at(port, ch, index)
+    }
+    /// Number of channels port `port` actually carries; 0 for an unknown port.
+    /// The width [`get_value_at`](Self::get_value_at) cycles channel reads
+    /// modulo, which is what gives cables their mono-broadcast/poly-wrap
+    /// semantics. The default reports `PORT_MAX_CHANNELS`, i.e. "reads never
+    /// cycle", which holds for implementors that zero-fill beyond their live
+    /// channels.
+    fn port_channels(&self, _port: &str) -> usize {
+        crate::PORT_MAX_CHANNELS
+    }
     /// Write the module's live editor state into `out` (its type-erased
     /// [`ModuleLiveState`](crate::module_state::ModuleLiveState); only modules
     /// that publish state override this — today just `$cycle`). Runs on the audio
@@ -438,7 +493,15 @@ impl Div for Clickless {
 }
 
 pub trait Connect {
-    /// Resolve cable references to live module pointers.
+    /// Fill each disconnected `#[default_connection]` input with its default
+    /// cable. Runs once at module construction on the main thread and may
+    /// allocate; `connect` (audio thread) then only resolves connections that
+    /// are already present. Containers forward; leaf types are no-op — same
+    /// contract as `collect_cables`.
+    fn apply_default_connections(&mut self);
+
+    /// Resolve cable references to live module pointers. Runs on the audio
+    /// thread during patch apply, so it must not allocate.
     fn connect(&mut self, patch: &Patch);
 
     /// Walk this value and push every producer module ID it references
@@ -466,6 +529,7 @@ pub trait Connect {
 macro_rules! impl_connect_noop {
     ($($t:ty),*) => {
         $(impl Connect for $t {
+            fn apply_default_connections(&mut self) {}
             fn connect(&mut self, _patch: &Patch) {}
             fn collect_cables(&self, _sink: &mut Vec<String>) {}
             fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
@@ -482,6 +546,11 @@ impl_connect_noop!(
 // ============================================================================
 
 impl<T: Connect> Connect for Vec<T> {
+    fn apply_default_connections(&mut self) {
+        for item in self {
+            item.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for item in self {
             item.connect(patch);
@@ -500,6 +569,11 @@ impl<T: Connect> Connect for Vec<T> {
 }
 
 impl<T: Connect> Connect for Option<T> {
+    fn apply_default_connections(&mut self) {
+        if let Some(inner) = self {
+            inner.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         if let Some(inner) = self {
             inner.connect(patch);
@@ -518,6 +592,9 @@ impl<T: Connect> Connect for Option<T> {
 }
 
 impl<T: Connect> Connect for Box<T> {
+    fn apply_default_connections(&mut self) {
+        (**self).apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         (**self).connect(patch);
     }
@@ -530,6 +607,11 @@ impl<T: Connect> Connect for Box<T> {
 }
 
 impl<T: Connect, const N: usize> Connect for [T; N] {
+    fn apply_default_connections(&mut self) {
+        for item in self {
+            item.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for item in self {
             item.connect(patch);
@@ -548,6 +630,11 @@ impl<T: Connect, const N: usize> Connect for [T; N] {
 }
 
 impl<V: Connect> Connect for std::collections::HashMap<String, V> {
+    fn apply_default_connections(&mut self) {
+        for v in self.values_mut() {
+            v.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for v in self.values_mut() {
             v.connect(patch);
@@ -566,6 +653,11 @@ impl<V: Connect> Connect for std::collections::HashMap<String, V> {
 }
 
 impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
+    fn apply_default_connections(&mut self) {
+        for v in self.values_mut() {
+            v.apply_default_connections();
+        }
+    }
     fn connect(&mut self, patch: &Patch) {
         for v in self.values_mut() {
             v.connect(patch);
@@ -585,6 +677,9 @@ impl<V: Connect> Connect for std::collections::BTreeMap<String, V> {
 
 // Tuples (arity 1-5)
 impl<T1: Connect> Connect for (T1,) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
     }
@@ -597,6 +692,10 @@ impl<T1: Connect> Connect for (T1,) {
 }
 
 impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -612,6 +711,11 @@ impl<T1: Connect, T2: Connect> Connect for (T1, T2) {
 }
 
 impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+        self.2.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -630,6 +734,12 @@ impl<T1: Connect, T2: Connect, T3: Connect> Connect for (T1, T2, T3) {
 }
 
 impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3, T4) {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+        self.2.apply_default_connections();
+        self.3.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -653,6 +763,13 @@ impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect> Connect for (T1, T2, T3
 impl<T1: Connect, T2: Connect, T3: Connect, T4: Connect, T5: Connect> Connect
     for (T1, T2, T3, T4, T5)
 {
+    fn apply_default_connections(&mut self) {
+        self.0.apply_default_connections();
+        self.1.apply_default_connections();
+        self.2.apply_default_connections();
+        self.3.apply_default_connections();
+        self.4.apply_default_connections();
+    }
     fn connect(&mut self, patch: &Patch) {
         self.0.connect(patch);
         self.1.connect(patch);
@@ -699,24 +816,33 @@ pub trait SignalParamMeta {
 }
 
 struct ParsedNote {
-    pitch: Pitch,
+    pitch_class: i32,
     octave: i32,
+}
+
+impl ParsedNote {
+    /// Standard MIDI: (octave + 1) * 12 + pitch_class, where C4 = MIDI 60.
+    fn midi(&self) -> i32 {
+        (self.octave + 1) * 12 + self.pitch_class
+    }
 }
 
 fn parse_note_str(s: &str) -> StdResult<ParsedNote, String> {
     let caps = RE_NOTE
         .captures(s)
         .ok_or("Invalid note format".to_string())?;
-    let name = &caps[1];
-    let acc = &caps[2];
     let octave: i32 = caps
         .get(3)
         .map(|m| m.as_str().parse().unwrap_or(4))
         .unwrap_or(4);
 
-    let pitch_str = format!("{}{}", name, acc);
-    let pitch = Pitch::from_str(&pitch_str).ok_or("Invalid pitch".to_string())?;
-    Ok(ParsedNote { pitch, octave })
+    // Letter + accidental are a prefix of `s`.
+    let name = &s[..caps.get(2).map_or(1, |m| m.end())];
+    let root = crate::dsp::utilities::FixedRoot::parse(name).ok_or("Invalid pitch".to_string())?;
+    Ok(ParsedNote {
+        pitch_class: root.pitch_class() as i32,
+        octave,
+    })
 }
 
 fn parse_signal_string(s: &str) -> StdResult<f32, String> {
@@ -743,61 +869,24 @@ fn parse_signal_string(s: &str) -> StdResult<f32, String> {
         let val: f32 = caps[1]
             .parse()
             .map_err(|_| "Invalid scale interval number".to_string())?;
-        let root_str = &caps[2];
-        let scale_str = &caps[3];
-
-        let root_note = parse_note_str(root_str)?;
-        let scale_def = format!("{} {}", root_note.pitch, scale_str);
-        let scale =
-            Scale::from_regex(&scale_def).map_err(|_| "Invalid scale definition".to_string())?;
+        let root_note = parse_note_str(&caps[2])?;
+        let intervals = crate::dsp::utilities::scale_names::lookup(&caps[3])
+            .ok_or("Invalid scale definition".to_string())?;
 
         let interval_idx = val.floor() as i64;
         let cents = (val - interval_idx as f32) * 100.0;
 
-        let notes = scale.notes();
-        let note_len = notes.len();
-        if note_len == 0 {
-            return Err("Scale has no notes".to_string());
-        }
+        let len = intervals.len() as i64;
+        let octave_shift = interval_idx.div_euclid(len) as i32;
+        let interval = intervals[interval_idx.rem_euclid(len) as usize] as i32;
 
-        let effective_len = if note_len > 1 && notes[0].pitch == notes[note_len - 1].pitch {
-            note_len - 1
-        } else {
-            note_len
-        };
-        let len = effective_len as i64;
-
-        let scale_root_octave = notes[0].octave as i32;
-
-        let (octave_shift, note_idx) = if interval_idx >= 0 {
-            ((interval_idx / len), (interval_idx % len) as usize)
-        } else {
-            let abs_idx = -interval_idx - 1;
-            let octave_down = (abs_idx / len) + 1;
-            let note_from_end = (abs_idx % len) as usize;
-            (-octave_down, len as usize - 1 - note_from_end)
-        };
-
-        let base_note = &notes[note_idx];
-        let relative_octave = (base_note.octave as i32) - scale_root_octave;
-        let target_octave = (root_note.octave as i32) + relative_octave + (octave_shift as i32);
-
-        let pc_val = base_note.pitch.into_u8();
-
-        // Standard MIDI: (octave + 1) * 12 + pitch_class, where C4 = MIDI 60
-        let midi = (target_octave as f32 + 1.0) * 12.0 + (pc_val as f32);
-        let midi_with_cents = midi + (cents / 100.0);
-
-        let volts = midi_to_voct(midi_with_cents);
+        let midi = root_note.midi() + interval + 12 * octave_shift;
+        let volts = midi_to_voct(midi as f32 + cents / 100.0);
         return Ok(volts);
     }
 
     if let Ok(note) = parse_note_str(s) {
-        let pc_val = note.pitch.into_u8();
-        // Standard MIDI: (octave + 1) * 12 + pitch_class, where C4 = MIDI 60
-        let midi = (note.octave as f32 + 1.0) * 12.0 + (pc_val as f32);
-        let volts = midi_to_voct(midi);
-        return Ok(volts);
+        return Ok(midi_to_voct(note.midi() as f32));
     }
 
     Err("Invalid signal format".to_string())
@@ -897,32 +986,13 @@ impl SampleBuffer {
     /// Allocation-free; safe for the audio thread.
     #[inline]
     pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
-        if !frame.is_finite() || self.frame_count == 0 {
-            return 0.0;
-        }
+        hermite_clamped(self.channel(channel), frame)
+    }
 
-        let max_frame = (self.frame_count - 1) as f32;
-        if frame < 0.0 || frame > max_frame {
-            return 0.0;
-        }
-
-        let left = frame.floor() as usize;
-        let frac = frame - left as f32;
-        if frac <= f32::EPSILON {
-            return self.read(channel, left);
-        }
-
-        let i0 = left.saturating_sub(1);
-        let i1 = left;
-        let i2 = (left + 1).min(self.frame_count - 1);
-        let i3 = (left + 2).min(self.frame_count - 1);
-
-        let y0 = self.read(channel, i0);
-        let y1 = self.read(channel, i1);
-        let y2 = self.read(channel, i2);
-        let y3 = self.read(channel, i3);
-
-        hermite4(y0, y1, y2, y3, frac)
+    /// One channel's samples; empty for a channel the buffer does not have.
+    #[inline]
+    pub fn channel(&self, channel: usize) -> &[f32] {
+        self.samples.get(channel).map_or(&[], Vec::as_slice)
     }
 
     /// Hermite (4-point cubic) interpolation at a fractional frame position
@@ -954,6 +1024,33 @@ impl SampleBuffer {
 
         hermite4(y0, y1, y2, y3, frac)
     }
+}
+
+/// Hermite (4-point cubic) read of `samples` at a fractional frame position,
+/// silent outside `[0, len - 1]` and clamping the neighbours at the ends.
+#[inline]
+pub fn hermite_clamped(samples: &[f32], frame: f32) -> f32 {
+    let frame_count = samples.len();
+    if !frame.is_finite() || frame_count == 0 {
+        return 0.0;
+    }
+
+    let max_frame = (frame_count - 1) as f32;
+    if frame < 0.0 || frame > max_frame {
+        return 0.0;
+    }
+
+    let left = frame.floor() as usize;
+    let frac = frame - left as f32;
+    if frac <= f32::EPSILON {
+        return samples[left];
+    }
+
+    let i0 = left.saturating_sub(1);
+    let i2 = (left + 1).min(frame_count - 1);
+    let i3 = (left + 2).min(frame_count - 1);
+
+    hermite4(samples[i0], samples[left], samples[i2], samples[i3], frac)
 }
 
 /// 4-point Hermite interpolation kernel.
@@ -1015,6 +1112,12 @@ impl WavData {
     #[inline]
     pub fn read_hermite_clamped(&self, channel: usize, frame: f32) -> f32 {
         self.buffer.read_hermite_clamped(channel, frame)
+    }
+
+    /// One channel's samples; empty for a channel the file does not have.
+    #[inline]
+    pub fn channel(&self, channel: usize) -> &[f32] {
+        self.buffer.channel(channel)
     }
 
     pub fn with_data<R>(&self, f: impl FnOnce(&Vec<Vec<f32>>) -> R) -> R {
@@ -1088,6 +1191,14 @@ impl Wav {
             .unwrap_or(0.0)
     }
 
+    /// One channel's samples; empty when unloaded or for a channel the file
+    /// does not have. Reading through the slice skips the per-read lookups.
+    pub fn channel(&self, channel: usize) -> &[f32] {
+        self.cached_data
+            .as_ref()
+            .map_or(&[], |d| d.channel(channel))
+    }
+
     pub fn sample_rate(&self) -> f32 {
         self.cached_data
             .as_ref()
@@ -1097,6 +1208,7 @@ impl Wav {
 }
 
 impl Connect for Wav {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
         if let Some(data) = patch.wav_data.get(&self.path) {
             self.cached_data = Some(Arc::clone(data));
@@ -1674,28 +1786,20 @@ impl JsonSchema for Buffer {
 }
 
 impl Connect for Buffer {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
-        // Resolve source module and get its buffer output
+        // Resolve source module and get its buffer output. Runs on the audio
+        // thread, so an unresolvable reference is cached as None without any
+        // I/O — patch validation rejects such references before they get here.
         if let Some(module) = patch.sampleables.get(&self.source_module) {
-            self.cached_source_ptr = Some(NonNull::from(module.as_ref()));
             if let Some(buffer_data) = module.get_buffer_output(&self.source_port) {
+                self.cached_source_ptr = Some(NonNull::from(module.as_ref()));
                 self.cached_buffer = Some(NonNull::from(buffer_data));
-            } else {
-                eprintln!(
-                    "[Buffer] module '{}' has no buffer output on port '{}'",
-                    self.source_module, self.source_port
-                );
-                self.cached_source_ptr = None;
-                self.cached_buffer = None;
+                return;
             }
-        } else {
-            eprintln!(
-                "[Buffer] source module '{}' not found in patch",
-                self.source_module
-            );
-            self.cached_source_ptr = None;
-            self.cached_buffer = None;
         }
+        self.cached_source_ptr = None;
+        self.cached_buffer = None;
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {
         // `source_module` is a producer dependency, equivalent to a cable.
@@ -2077,7 +2181,63 @@ pub enum Signal {
         ///   2. The cable is `Clone` and `Send`; raw pointers satisfy both
         ///      without further unsafe machinery.
         index_ptr: *const std::cell::Cell<usize>,
+        /// Direct view of the upstream port's block buffer, resolved during
+        /// `connect()` alongside `resolved`. `None` when the upstream offers
+        /// no view; reads then always go through `get_value_at`.
+        view: Option<CableView>,
     },
+}
+
+/// Raw read access to a Block-mode wrapper's output port, as returned by
+/// [`Sampleable::port_view`].
+#[derive(Clone, Copy, Debug)]
+pub struct PortView {
+    /// Start of the port's `BlockPort` data.
+    pub data: *const f32,
+    /// The port's channel width (`>= 1`).
+    pub channels: usize,
+    /// The producing wrapper's per-block cursor: slots below it are computed.
+    pub processed: *const std::cell::Cell<usize>,
+}
+
+/// A cable's resolved [`PortView`] with its channel offset precomputed.
+///
+/// Every pointer targets memory owned by the upstream wrapper, which outlives
+/// the cable until the next `connect()` re-resolves it. Block buffers never
+/// resize, and on a patch swap `connect()` runs after `transfer_state_from`
+/// has moved them into place.
+#[derive(Clone, Copy, Debug)]
+pub struct CableView {
+    data: *const f32,
+    stride: usize,
+    offset: usize,
+    processed: *const std::cell::Cell<usize>,
+}
+
+impl CableView {
+    fn new(port: PortView, channel: usize) -> Self {
+        Self {
+            data: port.data,
+            stride: port.channels,
+            offset: channel % port.channels,
+            processed: port.processed,
+        }
+    }
+
+    /// The value at slot `index`, or `None` when the producer has not
+    /// computed that slot yet.
+    #[inline]
+    fn read(&self, index: usize) -> Option<f32> {
+        // SAFETY: see the type-level invariant; `index < processed <=
+        // block_size` keeps the offset inside the buffer.
+        unsafe {
+            if index < (*self.processed).get() {
+                Some(*self.data.add(index * self.stride + self.offset))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 // SAFETY: cable variants cache a `NonNull<dyn Sampleable>` during `connect()`. That cached pointer
@@ -2086,7 +2246,7 @@ pub enum Signal {
 unsafe impl Send for Signal {}
 
 impl Signal {
-    /// Build an unresolved `Signal::Cable`. The `resolved` and `index_ptr`
+    /// Build an unresolved `Signal::Cable`. The `resolved`/`view` and `index_ptr`
     /// fields are populated later by `Connect::connect` and
     /// `Connect::inject_index_ptr`.
     pub fn cable(module: impl Into<String>, port: impl Into<String>, channel: usize) -> Self {
@@ -2096,6 +2256,7 @@ impl Signal {
             port: port.into(),
             channel,
             index_ptr: std::ptr::null(),
+            view: None,
         }
     }
 }
@@ -2152,6 +2313,7 @@ impl<'de> Deserialize<'de> for Signal {
                     port,
                     channel,
                     index_ptr: std::ptr::null(),
+                    view: None,
                 },
             }),
         }
@@ -2251,6 +2413,7 @@ impl<E: DeserializeError> deserr::Deserr<E> for Signal {
                             port,
                             channel,
                             index_ptr: std::ptr::null(),
+                            view: None,
                         })
                     }
                     Some(other) => Err(deserr::take_cf_content(E::error::<V>(
@@ -2326,6 +2489,7 @@ impl Signal {
                 port,
                 channel,
                 index_ptr,
+                view,
                 ..
             } => match resolved {
                 Some(ptr) => {
@@ -2338,6 +2502,11 @@ impl Signal {
                     } else {
                         unsafe { (*(*index_ptr)).get() }
                     };
+                    // An already-computed slot is a plain load; otherwise the
+                    // upstream wrapper renders up to it.
+                    if let Some(value) = view.and_then(|v| v.read(index)) {
+                        return value;
+                    }
                     unsafe { ptr.as_ref() }.get_value_at(port, *channel, index)
                 }
                 None => 0.0,
@@ -2382,15 +2551,22 @@ impl SignalExt for Option<Signal> {
 }
 
 impl Connect for Signal {
+    fn apply_default_connections(&mut self) {}
     fn connect(&mut self, patch: &Patch) {
         if let Signal::Cable {
-            module, resolved, ..
+            module,
+            resolved,
+            port,
+            channel,
+            view,
+            ..
         } = self
         {
-            *resolved = patch
-                .sampleables
-                .get(module)
-                .map(|sampleable| NonNull::from(sampleable.as_ref()));
+            let upstream = patch.sampleables.get(module);
+            *resolved = upstream.map(|sampleable| NonNull::from(sampleable.as_ref()));
+            *view = upstream
+                .and_then(|sampleable| sampleable.port_view(port))
+                .map(|port_view| CableView::new(port_view, *channel));
         }
     }
     fn collect_cables(&self, sink: &mut Vec<String>) {
@@ -2534,6 +2710,15 @@ pub trait OutputStruct: Default + Send + 'static {
     fn get_buffer_output(&self, _port: &str) -> Option<&BufferData> {
         None
     }
+    /// Names of the ports `get_buffer_output` resolves, surfaced through the
+    /// module schema so patch validation can reject `buffer_ref`s to non-buffer
+    /// ports. Default: none.
+    fn buffer_port_names() -> Vec<String>
+    where
+        Self: Sized,
+    {
+        Vec::new()
+    }
     /// Advance any owned circular buffers by `block_size` once per internal
     /// block. Called from the wrapper's `start_block()` before any per-sample
     /// `update()` runs. Default: no-op. `BufferWrite` overrides this to bump
@@ -2598,6 +2783,12 @@ pub struct ModuleSchema {
     #[napi(ts_type = "Record<string, unknown>")]
     pub params_schema: SchemaContainer,
     pub outputs: Vec<OutputSchema>,
+    /// Ports that expose a circular buffer (targets for `buffer_ref` params)
+    /// rather than a sample output. Disjoint from `outputs`. Always
+    /// serialized (even when empty) because the generated TS `ModuleSchema`
+    /// declares the field as required.
+    #[serde(default)]
+    pub buffer_outputs: Vec<String>,
     pub signal_params: Vec<SignalParamSchema>,
     pub positional_args: Vec<PositionalArg>,
     /// If set, this module always produces exactly this many channels (no inference needed)
@@ -2618,6 +2809,12 @@ pub struct ModuleSpec {
     pub id: String,
     pub module_type: String,
     pub id_is_explicit: Option<bool>,
+    /// When true, this module never inherits a predecessor's runtime state on
+    /// a patch swap — it starts from its own params, even if a remap pairs it
+    /// with an outgoing module. Set on modules whose state must track the new
+    /// patch's params exactly at the swap sample (e.g. the per-out mute gate
+    /// slew, where a carried-over open gate would leak audio while closing).
+    pub skip_state_transfer: Option<bool>,
     // #[serde(default)]
     pub params: serde_json::Value,
 }
@@ -2657,6 +2854,22 @@ pub struct ScopeStats {
     pub max: f64,
     pub peak_to_peak: f64,
     pub read_offset: u32,
+}
+
+/// One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct VuMeterFrame {
+    pub module_id: String,
+    /// Per-channel RMS in volts (0 dB reference = 5 V).
+    pub rms: Vec<f64>,
+    /// Per-channel max |sample| since the previous poll, in volts.
+    pub peak: Vec<f64>,
+    /// Live value of the signal-driven pan, when `pan_source` is set.
+    pub pan: Option<f64>,
+    /// Live value of the signal-driven gain, when `gain_source` is set.
+    pub gain: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2718,6 +2931,30 @@ pub struct ScopeXyRanges {
     pub y_max: f64,
 }
 
+/// One out-group VU meter tap. The DSL attaches extra renderer-only metadata
+/// to these entries; napi conversion reads only the fields declared here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[napi(object)]
+pub struct VuMeterSpec {
+    /// Stable identity used by the renderer to join meter frames to meters.
+    pub key: String,
+    /// Module whose output port is metered (the pre-mute tap).
+    pub module_id: String,
+    pub port_name: String,
+    /// 1 (mono) or 2 (stereo).
+    pub channels: u32,
+    /// `$signal` module driving the mute gate (source 5 = audible, 0 =
+    /// silenced). None for the end-of-chain master meter, which has no gate.
+    pub mute_module_id: Option<String>,
+    /// When the out's pan is signal-driven, the output to sample so the
+    /// panel's locked knob can track it live.
+    pub pan_source: Option<ScopeChannel>,
+    /// When the out's gain is signal-driven, the output to sample (in DSL
+    /// gain units, pre-curve) so the panel's locked fader can track it live.
+    pub gain_source: Option<ScopeChannel>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 // #[serde(rename_all = "camelCase")]
 #[napi(object)]
@@ -2727,6 +2964,7 @@ pub struct PatchGraph {
     // #[serde(default)]
     pub scopes: Vec<Scope>,
     pub scope_xy: Option<ScopeXy>,
+    pub vu_meters: Vec<VuMeterSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

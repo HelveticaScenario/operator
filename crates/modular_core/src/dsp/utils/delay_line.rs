@@ -4,6 +4,8 @@
 //! All memory is allocated at construction time — no heap allocation
 //! during audio processing.
 
+use super::sanitize;
+
 /// A fixed-capacity delay line backed by a `Vec<f32>`.
 ///
 /// The buffer is sized to the next power of 2 >= `max_delay + 1`,
@@ -67,11 +69,12 @@ impl DelayLine {
     /// Process one sample through an allpass filter embedded in this delay line.
     ///
     /// Writes the input (mixed with feedback), reads from the delay tap,
-    /// and returns the allpass output.
+    /// and returns the allpass output. The written value is sanitized so a
+    /// non-finite input cannot recirculate through the feedback tap forever.
     #[inline]
     pub fn allpass(&mut self, input: f32, delay: usize, coefficient: f32) -> f32 {
         let delayed = self.read(delay);
-        let write_val = input + coefficient * delayed;
+        let write_val = sanitize(input + coefficient * delayed);
         self.write(write_val);
         delayed - coefficient * write_val
     }
@@ -83,7 +86,7 @@ impl DelayLine {
     #[inline]
     pub fn allpass_linear(&mut self, input: f32, delay: f32, coefficient: f32) -> f32 {
         let delayed = self.read_linear(delay);
-        let write_val = input + coefficient * delayed;
+        let write_val = sanitize(input + coefficient * delayed);
         self.write(write_val);
         delayed - coefficient * write_val
     }
@@ -212,6 +215,24 @@ mod tests {
         let dl = DelayLine::default();
         assert!(dl.buffer.is_empty());
         assert_eq!(dl.mask, 0);
+    }
+
+    #[test]
+    fn allpass_recovers_after_non_finite_input() {
+        // The allpass feedback tap must not recirculate a non-finite sample:
+        // once the input is finite again, the loop rings down to silence.
+        let delay = 8;
+        let coeff = 0.7;
+        let mut dl = DelayLine::new(delay);
+        for x in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            dl.allpass(x, delay, coeff);
+        }
+        let mut last = 0.0_f32;
+        for _ in 0..2000 {
+            last = dl.allpass(0.0, delay, coeff);
+            assert!(last.is_finite());
+        }
+        assert!(last.abs() < 1e-6, "loop should ring down, got {last}");
     }
 
     #[test]

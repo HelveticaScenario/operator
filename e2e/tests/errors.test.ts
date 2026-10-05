@@ -4,7 +4,7 @@
  * Verifies that invalid DSL produces visible errors.
  */
 
-import { test, expect } from '../fixtures';
+import { test, expect, openUntitledBuffer } from '../fixtures';
 
 test.describe('error handling', () => {
     test('syntax error shows error display', async ({ window }) => {
@@ -12,6 +12,8 @@ test.describe('error handling', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         // Set invalid DSL code (syntax error)
         await window.evaluate(() => {
@@ -44,6 +46,8 @@ test.describe('error handling', () => {
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
 
+        await openUntitledBuffer(window);
+
         // Use a nonexistent module function
         await window.evaluate(() => {
             window.__TEST_API__!.setEditorValue(
@@ -69,6 +73,8 @@ test.describe('error handling', () => {
 
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');
+
+        await openUntitledBuffer(window);
 
         await window.evaluate(() => {
             window.__TEST_API__!.setEditorValue(

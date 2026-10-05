@@ -33,16 +33,23 @@ function execPatch(source: string): PatchGraph {
     return exec(source).patch;
 }
 
-/** Find a module by type in the patch (excluding built-in ROOT_CLOCK, ROOT_INPUT) */
+/** Find a module by type in the patch, excluding the compiler-generated
+ *  VU meter chain (`__vu*` ids) the output stage adds per out group. */
 function findModules(patch: PatchGraph, moduleType: string) {
-    return patch.modules.filter((m) => m.moduleType === moduleType);
+    return patch.modules.filter(
+        (m) => m.moduleType === moduleType && !m.id.startsWith('__vu'),
+    );
 }
 
-/** $signal modules created by the DSL, excluding the built-in I/O signals. */
+/** $signal modules created by the DSL, excluding the built-in I/O signals
+ *  and the compiler-generated VU mute gates. */
 function liftedSignals(patch: PatchGraph) {
     const builtIns = new Set(['ROOT_INPUT', 'ROOT_OUTPUT']);
     return patch.modules.filter(
-        (m) => m.moduleType === '$signal' && !builtIns.has(m.id),
+        (m) =>
+            m.moduleType === '$signal' &&
+            !builtIns.has(m.id) &&
+            !m.id.startsWith('__vu'),
     );
 }
 
@@ -296,10 +303,8 @@ describe('mixing', () => {
         const patch = execPatch(
             '$stereoMix($sine(["C3", "E3", "G3"]), { width: 5 }).out()',
         );
-        // .out() also creates a $stereoMix in the output chain, so expect ≥ 2
-        expect(findModules(patch, '$stereoMix').length).toBeGreaterThanOrEqual(
-            2,
-        );
+        // .out() also creates a $stereoMix in the output chain, so expect 2.
+        expect(findModules(patch, '$stereoMix').length).toBe(2);
     });
 });
 
@@ -666,9 +671,9 @@ describe('sequencing', () => {
         const tSpan = pattern.argument_spans[1];
         expect(source.slice(tSpan.start, tSpan.end).includes('0,7')).toBe(true);
         const divSpan = pattern.argument_spans[2];
-        expect(source.slice(divSpan.start, divSpan.end).includes('<16 8>')).toBe(
-            true,
-        );
+        expect(
+            source.slice(divSpan.start, divSpan.end).includes('<16 8>'),
+        ).toBe(true);
     });
 
     test('.struct / .beat compose with the other pattern builders', () => {
@@ -970,6 +975,65 @@ describe('utilities', () => {
         expect(findModules(patch, '$quantizer').length).toBe(1);
     });
 
+    test('$quantizer string scale becomes a $chord feeding the scale input', () => {
+        const patch = execPatch('$quantizer($sine("C4"), "C[maj7]").out()');
+        const [chord] = findModules(patch, '$chord');
+        expect(chord.params.chord).toBe('C[maj7]');
+        const [quantizer] = findModules(patch, '$quantizer');
+        const scale = quantizer.params.scale as Array<{
+            module: string;
+            port: string;
+        }>;
+        expect(scale).toHaveLength(4);
+        expect(
+            scale.every((c) => c.module === chord.id && c.port === 'output'),
+        ).toBe(true);
+    });
+
+    test('$quantizer takes a signal scale and a gate', () => {
+        const patch = execPatch(
+            'const midi = $midiCV({ channels: 4 })\n' +
+                '$quantizer($sine("1hz"), midi, { gate: midi.gate }).out()',
+        );
+        expect(findModules(patch, '$chord').length).toBe(0);
+        const [midi] = findModules(patch, '$midiCV');
+        const [quantizer] = findModules(patch, '$quantizer');
+        const scale = quantizer.params.scale as Array<{
+            module: string;
+            port: string;
+        }>;
+        const gate = quantizer.params.gate as Array<{
+            module: string;
+            port: string;
+        }>;
+        expect(scale).toHaveLength(4);
+        expect(
+            scale.every((c) => c.module === midi.id && c.port === 'pitch'),
+        ).toBe(true);
+        expect(
+            gate.every((c) => c.module === midi.id && c.port === 'gate'),
+        ).toBe(true);
+    });
+
+    test('$quantizer scale is not a signal-group input', () => {
+        expect(() =>
+            execPatch('$quantizer($sine("C4"), $g1(["c4", "e4"])).out()'),
+        ).toThrow(
+            /parameter "scale" of \$quantizer is not a polyphonic signal input/,
+        );
+    });
+
+    test('$chord', () => {
+        const patch = execPatch('$saw($chord("C3[m7 inv1]")).out()');
+        expect(findModules(patch, '$chord').length).toBe(1);
+    });
+
+    test('$chord rejects an invalid spec', () => {
+        expect(() => execPatch('$saw($chord("C(maj7)")).out()')).toThrow(
+            /Invalid scale specification/,
+        );
+    });
+
     test('$clockDivider', () => {
         const patch = execPatch('$clockDivider($clock.beatTrigger, 4).out()');
         expect(findModules(patch, '$clockDivider').length).toBe(1);
@@ -1013,6 +1077,50 @@ describe('deferred signals', () => {
         `;
         const patch = execPatch(source);
         expect(findModules(patch, '$sine').length).toBe(1);
+    });
+
+    test('unset deferred used as a module param throws', () => {
+        expect(() =>
+            execPatch('const d = $deferred()\n$sine(d[0]).out()'),
+        ).toThrow(/Unset DeferredModuleOutput used as a module param/);
+    });
+
+    test('unset deferred used in a scope throws', () => {
+        expect(() =>
+            execPatch('const d = $deferred()\nd[0].scope()\n$sine(0).out()'),
+        ).toThrow(/Unset DeferredModuleOutput used in a scope/);
+    });
+
+    test('DeferredCollection.set lifts a bare number into one $signal shared by all channels', () => {
+        const patch = execPatch(
+            'const fb = $deferred(2)\n$sine(fb).out()\nfb.set(2.5)',
+        );
+        expect(liftedSignals(patch).length).toBe(1);
+        const sine = findModules(patch, '$sine')[0];
+        const freq = sine.params.freq as Array<{
+            type: string;
+            module: string;
+        }>;
+        expect(freq).toHaveLength(2);
+        for (const cable of freq) {
+            expect(cable.type).toBe('cable');
+            expect(
+                patch.modules.find((m) => m.id === cable.module)?.moduleType,
+            ).toBe('$signal');
+        }
+    });
+
+    test('DeferredCollection.set treats a note string as one signal, not spread chars', () => {
+        const patch = execPatch(
+            "const fb = $deferred(2)\n$sine(fb).out()\nfb.set('c4')",
+        );
+        expect(liftedSignals(patch).length).toBe(1);
+    });
+
+    test('DeferredCollection.set with an empty iterable throws', () => {
+        expect(() =>
+            execPatch('const fb = $deferred()\n$sine(fb[0]).out()\nfb.set([])'),
+        ).toThrow(/requires at least one signal/);
     });
 });
 
@@ -1243,6 +1351,18 @@ describe('global settings', () => {
     test('$setOutputGain does not throw', () => {
         expect(() => execPatch('$setOutputGain(5.0)')).not.toThrow();
     });
+
+    test('$setTempo rejects a non-finite tempo with a pointer to $setTempo', () => {
+        expect(() => execPatch('$setTempo(NaN)')).toThrow(
+            /\$setTempo: tempo must be a finite number greater than 0/,
+        );
+        expect(() => execPatch('$setTempo(Infinity)')).toThrow(/\$setTempo/);
+    });
+
+    test('$setTempo rejects zero and negative tempos', () => {
+        expect(() => execPatch('$setTempo(0)')).toThrow(/\$setTempo/);
+        expect(() => execPatch('$setTempo(-120)')).toThrow(/\$setTempo/);
+    });
 });
 
 // ─── Built-in modules ────────────────────────────────────────────────────────
@@ -1267,6 +1387,27 @@ describe('built-in modules', () => {
     test('$input is available', () => {
         const patch = execPatch('$input[0].out()');
         expect(patch.modules.find((m) => m.id === 'ROOT_INPUT')).toBeDefined();
+    });
+
+    test('$input is as wide as the reported input device', () => {
+        const rootInputWidth = (channels: number | undefined): number => {
+            const patch = executePatchScript('$input[0].out()', schemas, {
+                ...DEFAULT_EXECUTION_OPTIONS,
+                inputChannels: channels,
+            }).patch;
+            const source = patch.modules.find((m) => m.id === 'ROOT_INPUT')!
+                .params.source as unknown[];
+            return source.length;
+        };
+
+        expect(rootInputWidth(1)).toBe(1);
+        expect(rootInputWidth(8)).toBe(8);
+        // A host with no device to report gets the full engine width, and a
+        // device wider than the engine is clamped to it.
+        expect(rootInputWidth(undefined)).toBe(64);
+        expect(rootInputWidth(128)).toBe(64);
+        // A device reporting no inputs still leaves one readable channel.
+        expect(rootInputWidth(0)).toBe(1);
     });
 });
 
@@ -1423,6 +1564,125 @@ describe('error handling', () => {
 
     test('providing required param does not throw', () => {
         expect(() => execPatch('$lpf($sine("C4"), "C4").out()')).not.toThrow();
+    });
+
+    test('non-finite numeric param reports the module and line', () => {
+        expect(() => execPatch('$sine(0/0).out()')).toThrow(
+            '$sine at line 1: parameter `freq` must be a finite number',
+        );
+        expect(() => execPatch('\n$saw(Infinity).out()')).toThrow(
+            '$saw at line 2: parameter `freq` must be a finite number',
+        );
+    });
+
+    test('$buffer with a non-finite input param reports the module and line', () => {
+        expect(() => execPatch('$buffer(0/0, 1)')).toThrow(
+            '$buffer at line 1: parameter `input` must be a finite number',
+        );
+    });
+});
+
+// ─── Script execution environment ────────────────────────────────────────────
+
+describe('script execution environment', () => {
+    test('a non-terminating script raises a timeout error instead of hanging', () => {
+        expect(() => execPatch('while (true) {}')).toThrow(
+            /timed out after 5s — check for infinite loops/,
+        );
+    }, 15_000);
+
+    test('a timeout spent mostly loading wavs blames the disk, not a loop', () => {
+        const spinFor = (ms: number) => {
+            const end = performance.now() + ms;
+            while (performance.now() < end) {
+                // Burn wall-clock time synchronously, like a cold-disk decode.
+            }
+        };
+        expect(() =>
+            executePatchScript('$wavs().kick', schemas, {
+                ...DEFAULT_EXECUTION_OPTIONS,
+                loadWav: (path: string) => {
+                    spinFor(10_000);
+                    return {
+                        bitDepth: 16,
+                        channels: 1,
+                        cuePoints: [],
+                        duration: 1,
+                        frameCount: 48_000,
+                        loops: [],
+                        mtime: 0,
+                        path,
+                        sampleRate: 48_000,
+                    };
+                },
+                wavsFolderTree: { kick: 'file' },
+            }),
+        ).toThrow(/loading WAV files — loaded files stay cached/);
+    }, 15_000);
+
+    test('top-level return ends the patch script early', () => {
+        const patch = execPatch('$sine("c").out()\nreturn\n$saw("c").out()');
+        expect(findModules(patch, '$sine').length).toBe(1);
+        expect(findModules(patch, '$saw').length).toBe(0);
+    });
+
+    test('console is available inside patch scripts', () => {
+        expect(() => execPatch('console.log("patch")')).not.toThrow();
+    });
+
+    test('arrays created inside the script support pipe()', () => {
+        const patch = execPatch(
+            '[440, 880].pipe((a) => $mix(a.map((f) => $sine($hz(f))))).out()',
+        );
+        expect(findModules(patch, '$sine').length).toBe(2);
+    });
+
+    test('a factory passed directly to array pipe() is located at the pipe call site', () => {
+        // The sandbox pipe installer's own `pipe` frame must never win the
+        // stack scan — the module belongs to the user's `.pipe($mix)` line.
+        const result = exec(
+            'const xs = [440, 880].map((f) => $sine($hz(f)));\nxs.pipe($mix).out();',
+        );
+        const mix = findModules(result.patch, '$mix')[0];
+        expect(result.sourceLocationMap.get(mix.id)?.line).toBe(2);
+    });
+
+    test('structuredClone is available inside patch scripts', () => {
+        const patch = execPatch(
+            [
+                'const cloned = structuredClone({ note: "c4" });',
+                '$sine(cloned.note).out();',
+            ].join('\n'),
+        );
+        const sine = findModules(patch, '$sine')[0];
+        expect(sine.params.freq).toBe('c4');
+    });
+
+    test('scheduling APIs are not exposed to patch scripts', () => {
+        for (const call of [
+            'setTimeout(() => {}, 0)',
+            'setInterval(() => {}, 0)',
+            'queueMicrotask(() => {})',
+            'performance.now()',
+            'process.exit(0)',
+        ]) {
+            expect(() => execPatch(call)).toThrow(/is not defined/);
+        }
+    });
+});
+
+// ─── $cross ──────────────────────────────────────────────────────────────────
+
+describe('$cross', () => {
+    test('default weight range is [0, 5] (5 = unity), as the generated docs state', () => {
+        const patch = execPatch(
+            "$sine(['c', 'e']).amp($cross(2, $sine('0.25hz').range(0, 1))).out()",
+        );
+        const track = findModules(patch, '$track')[0];
+        expect(track.params.keyframes).toEqual([
+            [[5, 0], 0],
+            [[0, 5], 1],
+        ]);
     });
 });
 
@@ -2277,6 +2537,38 @@ describe('$scopeXY', () => {
                 a.out()
             `),
         ).toThrow(/yRange/);
+    });
+
+    test('lifts bare signal literals into $signal modules', () => {
+        const patch = execPatch(`
+            const a = $sine('c4')
+            $scopeXY(a, 2.5)
+            a.out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(1);
+        const y = patch.scopeXy!.pairs[0].y;
+        expect(patch.modules.find((m) => m.id === y.moduleId)?.moduleType).toBe(
+            '$signal',
+        );
+    });
+
+    test('lifts literals nested in arrays, cycling to the longer axis', () => {
+        const patch = execPatch(`
+            $scopeXY([$sine(0), 0], $saw('c3'))
+            $sine(0).out()
+        `);
+        expect(patch.scopeXy!.pairs).toHaveLength(2);
+    });
+
+    test('unset deferred used in $scopeXY throws', () => {
+        expect(() =>
+            execPatch(`
+                const d = $deferred()
+                const a = $sine($hz(440))
+                $scopeXY(d[0], a)
+                a.out()
+            `),
+        ).toThrow(/Unset DeferredModuleOutput used in a scope/);
     });
 });
 

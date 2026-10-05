@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './FileExplorer.css';
 import type { FileTreeEntry } from '../../shared/ipcTypes';
 import type { EditorBuffer } from '../types/editor';
-import { getBufferId } from '../app/buffers';
+import { getBufferId, toAbsoluteWorkspacePath } from '../app/buffers';
 import electronAPI from '../electronAPI';
 import { bindFileExplorerFocus } from '../keybindings/contextKeyBootstrap';
 
@@ -30,6 +30,7 @@ interface FileExplorerProps {
 
 function TreeNode({
     entry,
+    workspaceRoot,
     onOpenFile,
     onContextMenu,
     renamingPath,
@@ -39,6 +40,7 @@ function TreeNode({
     onToggleFolder,
 }: {
     entry: FileTreeEntry;
+    workspaceRoot: string;
     onOpenFile: (relPath: string, options?: { preview?: boolean }) => void;
     onContextMenu: (e: React.MouseEvent, entry: FileTreeEntry) => void;
     renamingPath: string | null;
@@ -50,7 +52,10 @@ function TreeNode({
     const expanded = expandedPaths.has(entry.path);
     const inputRef = useRef<HTMLInputElement>(null);
 
-    const isRenaming = renamingPath === entry.path;
+    // FileTreeEntry paths are workspace-relative; renamingPath (like buffer
+    // identity) is an absolute path, so resolve before comparing.
+    const absolutePath = toAbsoluteWorkspacePath(workspaceRoot, entry.path);
+    const isRenaming = renamingPath === absolutePath;
 
     useEffect(() => {
         if (isRenaming && inputRef.current) {
@@ -68,7 +73,7 @@ function TreeNode({
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter') {
             e.stopPropagation();
-            onRenameCommit(entry.path, inputRef.current?.value ?? entry.name);
+            onRenameCommit(absolutePath, inputRef.current?.value ?? entry.name);
         } else if (e.key === 'Escape') {
             e.stopPropagation();
             onRenameCancel();
@@ -130,6 +135,7 @@ function TreeNode({
                         <TreeNode
                             key={child.path}
                             entry={child}
+                            workspaceRoot={workspaceRoot}
                             onOpenFile={onOpenFile}
                             onContextMenu={onContextMenu}
                             renamingPath={renamingPath}
@@ -364,9 +370,11 @@ export function FileExplorer({
     ) => {
         e.preventDefault();
 
-        // Check if it's open
+        // Check if it's open. Buffer filePaths are absolute while tree entry
+        // paths are workspace-relative.
+        const absolutePath = toAbsoluteWorkspacePath(workspaceRoot, entry.path);
         const buffer = buffers.find(
-            (b) => b.kind === 'file' && b.filePath === entry.path,
+            (b) => b.kind === 'file' && b.filePath === absolutePath,
         );
 
         void electronAPI.showContextMenu({
@@ -454,6 +462,7 @@ export function FileExplorer({
                                         <TreeNode
                                             key={entry.path}
                                             entry={entry}
+                                            workspaceRoot={workspaceRoot}
                                             onOpenFile={onOpenFile}
                                             onContextMenu={
                                                 handleTreeContextMenu

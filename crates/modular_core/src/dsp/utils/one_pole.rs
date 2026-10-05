@@ -3,6 +3,8 @@
 //! A simple first-order IIR filter: `y[n] = x[n] * coeff + y[n-1] * (1 - coeff)`.
 //! Higher `coeff` values pass more high-frequency content.
 
+use super::sanitize;
+
 /// A one-pole (first-order) lowpass filter.
 ///
 /// The coefficient controls the cutoff: values near 1.0 pass almost
@@ -34,10 +36,12 @@ impl OnePole {
         self.coeff = coeff;
     }
 
-    /// Process one sample through the filter.
+    /// Process one sample through the filter. The stored state is sanitized
+    /// every sample so a non-finite input cannot lodge in the recursion — the
+    /// filter recovers as soon as the input does.
     #[inline]
     pub fn process(&mut self, input: f32) -> f32 {
-        self.state = input * self.coeff + self.state * (1.0 - self.coeff);
+        self.state = sanitize(input * self.coeff + self.state * (1.0 - self.coeff));
         self.state
     }
 
@@ -92,6 +96,25 @@ mod tests {
         }
         // After many samples, should approach 1.0
         assert!(prev > 0.99, "should converge to input, got {prev}");
+    }
+
+    #[test]
+    fn recovers_after_non_finite_input() {
+        // A non-finite sample must not lodge in the recursion: once the input
+        // is finite again, the filter converges to it as usual.
+        let mut f = OnePole::new(0.1);
+        for x in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            f.process(x);
+        }
+        let mut last = 0.0;
+        for _ in 0..200 {
+            last = f.process(1.0);
+            assert!(last.is_finite());
+        }
+        assert!(
+            last > 0.99,
+            "should converge to input after recovery, got {last}"
+        );
     }
 
     #[test]

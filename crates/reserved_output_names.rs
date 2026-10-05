@@ -40,6 +40,9 @@ const RESERVED_OUTPUT_NAMES: &[&str] = &[
     // BaseCollection / Collection / CollectionWithRange properties
     "items",
     "length",
+    // BaseCollection methods
+    "slice",
+    "chunk",
     // DeferredModuleOutput / DeferredCollection methods
     "set",
     // JavaScript built-in property names

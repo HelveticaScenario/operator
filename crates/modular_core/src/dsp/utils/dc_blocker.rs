@@ -1,5 +1,6 @@
 //! One-pole high-pass (DC blocker) primitive.
 
+use super::sanitize;
 use std::f32::consts::PI;
 
 /// Corner frequency, in Hz, for de-rumbling a signal's DC and sub-audio
@@ -31,10 +32,12 @@ impl DcBlocker {
     }
 
     /// Process one sample through the high-pass, advancing the internal state.
+    /// The stored state is sanitized every sample so a non-finite input cannot
+    /// lodge in the recursion — the filter recovers as soon as the input does.
     #[inline]
     pub fn process(&mut self, x: f32, coeff: f32) -> f32 {
-        let y = x - self.prev_in + coeff * self.prev_out;
-        self.prev_in = x;
+        let y = sanitize(x - self.prev_in + coeff * self.prev_out);
+        self.prev_in = sanitize(x);
         self.prev_out = y;
         y
     }
@@ -87,6 +90,31 @@ mod tests {
             prev_in = x;
             prev_out = expected;
         }
+    }
+
+    #[test]
+    fn recovers_after_non_finite_input() {
+        // A non-finite sample must not lodge in the feedback state: once the
+        // input is finite again, the blocker resumes passing AC content.
+        let coeff = DcBlocker::coeff(DEFAULT_DC_BLOCK_FC_HZ, 48000.0);
+        let mut dc = DcBlocker::default();
+        for x in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            dc.process(x, coeff);
+        }
+        let freq_norm = 0.01_f32;
+        let mut peak = 0.0_f32;
+        for n in 0..4000 {
+            let x = (2.0 * PI * freq_norm * n as f32).sin();
+            let y = dc.process(x, coeff);
+            assert!(y.is_finite());
+            if n >= 1000 {
+                peak = peak.max(y.abs());
+            }
+        }
+        assert!(
+            peak > 0.9,
+            "AC signal should pass after recovery, got {peak}"
+        );
     }
 
     #[test]

@@ -200,15 +200,140 @@ impl HasRest for bool {
 
 /// Convert an AST to a Pattern.
 pub fn convert<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertError> {
+    validate_limits_main(ast, 1)?;
     convert_inner(ast)
 }
+
+/// Upper bound on how far `!n` replicate and euclidean-step expansion may
+/// multiply a pattern.
+///
+/// Both multiply the amount of structure that conversion (and the seq
+/// module's eager ribbon bake) materializes, and they compound when nested:
+/// `[0!1024]!1024` is a million steps from two in-range counts. The validator
+/// tracks the running product down each path, so a compound expansion past
+/// this bound fails conversion with a clear error rather than exhausting
+/// memory.
+const MAX_EXPANSION: u32 = 1024;
+
+/// Largest `Pure` leaf in a u32 operand pattern (0 when there are none).
+fn max_u32_leaf(ast: &MiniASTU32) -> u32 {
+    match ast {
+        MiniASTU32::Pure(Located { node, .. }) => *node,
+        MiniASTU32::Rest(_) => 0,
+        MiniASTU32::List(Located { node, .. }) => node.iter().map(max_u32_leaf).max().unwrap_or(0),
+        MiniASTU32::Sequence(items) | MiniASTU32::FastCat(items) | MiniASTU32::SlowCat(items) => {
+            items
+                .iter()
+                .map(|(p, _)| max_u32_leaf(p))
+                .max()
+                .unwrap_or(0)
+        }
+        MiniASTU32::Stack(items) | MiniASTU32::RandomChoice(items, _) => {
+            items.iter().map(max_u32_leaf).max().unwrap_or(0)
+        }
+        MiniASTU32::Fast(pattern, _)
+        | MiniASTU32::Slow(pattern, _)
+        | MiniASTU32::Replicate(pattern, _)
+        | MiniASTU32::Degrade(pattern, _, _) => max_u32_leaf(pattern),
+        MiniASTU32::Euclidean { pattern, .. } => max_u32_leaf(pattern),
+        MiniASTU32::Polymeter { children, .. } => {
+            children.iter().map(max_u32_leaf).max().unwrap_or(0)
+        }
+    }
+}
+
+/// Generates a limit validator for one of the four structurally identical
+/// AST enums. `budget` carries the product of the enclosing `!n`/euclidean-step
+/// expansions down each path; a node whose expansion pushes that running
+/// product past `MAX_EXPANSION` is rejected, as are polymeter `%` steps that
+/// are not a single number (`eval_f64` reads exactly one constant, so any
+/// other shape would be silently collapsed).
+macro_rules! define_validate_limits {
+    ($name:ident, $ast:ident) => {
+        fn $name(ast: &$ast, budget: u32) -> Result<(), ConvertError> {
+            match ast {
+                $ast::Pure(_) | $ast::Rest(_) => Ok(()),
+                $ast::List(Located { node, .. }) => {
+                    node.iter().try_for_each(|a| $name(a, budget))
+                }
+                $ast::Sequence(items) | $ast::FastCat(items) | $ast::SlowCat(items) => {
+                    items.iter().try_for_each(|(p, _)| $name(p, budget))
+                }
+                $ast::Stack(items) | $ast::RandomChoice(items, _) => {
+                    items.iter().try_for_each(|a| $name(a, budget))
+                }
+                $ast::Fast(pattern, factor) | $ast::Slow(pattern, factor) => {
+                    $name(pattern, budget)?;
+                    // The factor is a separate operand pattern, materialized on
+                    // its own, so it starts from a fresh budget.
+                    validate_limits_f64(factor, 1)
+                }
+                $ast::Replicate(pattern, count) => {
+                    // A zero count must not zero the running budget: every
+                    // nested product would stay 0 and slip under the cap.
+                    let expansion = budget.saturating_mul((*count).max(1));
+                    if expansion > MAX_EXPANSION {
+                        return Err(ConvertError::OperatorError(format!(
+                            "replicate count {count} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
+                        )));
+                    }
+                    $name(pattern, expansion)
+                }
+                $ast::Degrade(pattern, _, _) => $name(pattern, budget),
+                $ast::Euclidean {
+                    pattern,
+                    pulses,
+                    steps,
+                    rotation,
+                } => {
+                    // Clamped to 1 for the same reason as the replicate arm: a
+                    // steps operand whose leaves are all 0 (or all rests) must
+                    // not zero the budget and bypass the cap for everything
+                    // nested inside the pattern.
+                    let max_steps = max_u32_leaf(steps).max(1);
+                    let expansion = budget.saturating_mul(max_steps);
+                    if expansion > MAX_EXPANSION {
+                        return Err(ConvertError::OperatorError(format!(
+                            "euclidean step count {max_steps} expands the pattern to {expansion} steps, past the maximum of {MAX_EXPANSION}"
+                        )));
+                    }
+                    // Operands are separate patterns with their own budgets.
+                    validate_limits_u32(pulses, 1)?;
+                    validate_limits_u32(steps, 1)?;
+                    if let Some(r) = rotation {
+                        validate_limits_i32(r, 1)?;
+                    }
+                    $name(pattern, expansion)
+                }
+                $ast::Polymeter {
+                    children,
+                    steps_per_cycle,
+                } => {
+                    if let Some(spc) = steps_per_cycle.as_deref() {
+                        if !matches!(spc, MiniASTF64::Pure(_)) {
+                            return Err(ConvertError::OperatorError(
+                                "polymeter steps must be a single number".to_string(),
+                            ));
+                        }
+                    }
+                    children.iter().try_for_each(|a| $name(a, budget))
+                }
+            }
+        }
+    };
+}
+
+define_validate_limits!(validate_limits_main, MiniAST);
+define_validate_limits!(validate_limits_f64, MiniASTF64);
+define_validate_limits!(validate_limits_u32, MiniASTU32);
+define_validate_limits!(validate_limits_i32, MiniASTI32);
 
 /// Evaluate a MiniASTF64 to get a single f64 value.
 ///
 /// Used by the polymeter converter for `%n` step-count overrides and by
-/// step-count helpers as a scalar readout. For complex patterns it
-/// returns the first value found (matches strudel's approach of using
-/// `children[0]` for the stepsPerCycle fallback).
+/// step-count helpers as a scalar readout. The limit validators guarantee
+/// `%` operands are single `Pure` numbers before conversion runs; the
+/// remaining arms keep the function total by reading the first leaf.
 fn eval_f64(ast: &MiniASTF64) -> f64 {
     match ast {
         MiniASTF64::Pure(Located { node, .. }) => *node,
@@ -441,7 +566,10 @@ fn convert_f64_pattern(ast: &MiniASTF64) -> Pattern<Fraction> {
                 .iter()
                 .map(|c| {
                     let w = step_count_f64(c).max(1.0);
-                    convert_f64_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                    // Divide as Fractions: quantizing the f64 quotient would
+                    // corrupt exact ratios like 4/3 and the pattern's period.
+                    convert_f64_pattern(c)
+                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
                 })
                 .collect();
             stack(scaled)
@@ -580,7 +708,9 @@ fn convert_u32_pattern(ast: &MiniASTU32) -> Pattern<u32> {
                 .iter()
                 .map(|c| {
                     let w = step_count_u32(c).max(1.0);
-                    convert_u32_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                    convert_u32_pattern(c)
+                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
                 })
                 .collect();
             stack(scaled)
@@ -716,7 +846,9 @@ fn convert_i32_pattern(ast: &MiniASTI32) -> Pattern<i32> {
                 .iter()
                 .map(|c| {
                     let w = step_count_i32(c).max(1.0);
-                    convert_i32_pattern(c).fast(constructors::pure(Fraction::from(spc / w)))
+                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                    convert_i32_pattern(c)
+                        .fast(constructors::pure(Fraction::from(spc) / Fraction::from(w)))
                 })
                 .collect();
             stack(scaled)
@@ -974,11 +1106,13 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 return Err(ConvertError::RestNotSupported("? (degrade)".to_string()));
             }
             let pat = convert_inner(pattern)?;
-            let probability = prob.unwrap_or(0.5);
+            // `?p` drops with probability p (Tidal/strudel semantics); the
+            // combinator takes a keep probability, so pass the complement.
+            let drop_probability = prob.unwrap_or(0.5);
             // Safe to unwrap because supports_rest() returned true
             let rest =
                 T::rest_value().expect("supports_rest() returned true but rest_value() is None");
-            Ok(pat.degrade_by_with_rest_seeded(probability, rest, *seed))
+            Ok(pat.degrade_by_with_rest_seeded(1.0 - drop_probability, rest, *seed))
         }
 
         MiniAST::Euclidean {
@@ -1025,7 +1159,8 @@ fn convert_inner<T: FromMiniAtom>(ast: &MiniAST) -> Result<Pattern<T>, ConvertEr
                 .map(|c| {
                     let w = step_count_main(c).max(1.0);
                     let pat = convert_inner(c)?;
-                    Ok(pat.fast(constructors::pure(Fraction::from(spc / w))))
+                    // Divide as Fractions (see the MiniASTF64::Polymeter arm).
+                    Ok(pat.fast(constructors::pure(Fraction::from(spc) / Fraction::from(w))))
                 })
                 .collect::<Result<_, ConvertError>>()?;
             Ok(stack(scaled))
@@ -2258,20 +2393,229 @@ mod tests {
 
     #[test]
     fn test_degrade_with_probability() {
-        // Degrade with 0% probability should keep all values (probability is "keep" probability)
-        // Actually, prob=0.5 means keep if random < 0.5
-        // So 1?0.9 means keep if random < 0.9 (keep 90% of the time)
-        let ast = parse("1?0.99").unwrap();
-        let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
+        // `?p` drops with probability p (Tidal/strudel semantics), so
+        // "1?0.9" sounds on only ~10% of cycles.
+        let kept_fraction = |source: &str| -> f64 {
+            let ast = parse(source).unwrap();
+            let pat: Pattern<Option<f64>> = convert(&ast).unwrap();
+            let mut kept = 0;
+            for cycle in 0..1000 {
+                let haps = pat.query_arc(
+                    Fraction::from_integer(cycle),
+                    Fraction::from_integer(cycle + 1),
+                );
+                assert_eq!(haps.len(), 1, "degrade preserves the time slot");
+                if haps[0].value.is_some() {
+                    kept += 1;
+                }
+            }
+            kept as f64 / 1000.0
+        };
 
-        // With 99% keep probability, most queries should return the value
-        let haps = pat.query_arc(Fraction::from_integer(0), Fraction::from_integer(1));
-        assert_eq!(haps.len(), 1);
-        // High probability of being kept
+        let sparse = kept_fraction("1?0.9");
         assert!(
-            haps[0].value.is_some(),
-            "With 99% keep probability, value should typically be kept"
+            sparse > 0.04 && sparse < 0.2,
+            "'1?0.9' should keep ~10% of cycles, kept {:.0}%",
+            sparse * 100.0
         );
+
+        let dense = kept_fraction("1?0.1");
+        assert!(
+            dense > 0.8 && dense < 0.96,
+            "'1?0.1' should keep ~90% of cycles, kept {:.0}%",
+            dense * 100.0
+        );
+    }
+
+    // --- Polymeter Lowering / Operand Limit Tests ---
+    //
+    // Polymeter `{...}` and pattern-shaped operands only reach Rust as ASTs
+    // built by the TS peggy parser, so these tests construct the ASTs
+    // directly.
+
+    fn num_atom(v: f64) -> MiniAST {
+        MiniAST::Pure(Located {
+            node: AtomValue::Number(v),
+            span: SourceSpan::new(0, 1),
+        })
+    }
+
+    fn f64_pure(v: f64) -> MiniASTF64 {
+        MiniASTF64::Pure(Located {
+            node: v,
+            span: SourceSpan::new(0, 1),
+        })
+    }
+
+    fn u32_pure(v: u32) -> MiniASTU32 {
+        MiniASTU32::Pure(Located {
+            node: v,
+            span: SourceSpan::new(0, 1),
+        })
+    }
+
+    fn polymeter_012(steps_per_cycle: Option<MiniASTF64>) -> MiniAST {
+        let child = MiniAST::Sequence(vec![
+            (num_atom(0.0), None),
+            (num_atom(1.0), None),
+            (num_atom(2.0), None),
+        ]);
+        MiniAST::Polymeter {
+            children: vec![child],
+            steps_per_cycle: steps_per_cycle.map(Box::new),
+        }
+    }
+
+    #[test]
+    fn test_polymeter_steps_ratio_is_exact() {
+        // {0 1 2}%4 runs the 3-step child at exactly 4/3 speed: onsets land
+        // exactly on the 1/4 grid, and the pattern's period is exactly 3
+        // cycles, so cycle 3000 is identical to cycle 0.
+        let ast = polymeter_012(Some(f64_pure(4.0)));
+        let pat: Pattern<f64> = convert(&ast).unwrap();
+
+        let onsets = |cycle: i64| -> Vec<(Fraction, f64)> {
+            let mut v: Vec<(Fraction, f64)> = pat
+                .query_arc(
+                    Fraction::from_integer(cycle),
+                    Fraction::from_integer(cycle + 1),
+                )
+                .into_iter()
+                .filter(|h| h.has_onset())
+                .map(|h| {
+                    (
+                        h.whole.as_ref().unwrap().begin.clone() - Fraction::from_integer(cycle),
+                        h.value,
+                    )
+                })
+                .collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0));
+            v
+        };
+
+        let expected = vec![
+            (Fraction::new(0, 1), 0.0),
+            (Fraction::new(1, 4), 1.0),
+            (Fraction::new(1, 2), 2.0),
+            (Fraction::new(3, 4), 0.0),
+        ];
+        assert_eq!(onsets(0), expected);
+        assert_eq!(onsets(3000), expected);
+    }
+
+    #[test]
+    fn test_polymeter_pattern_steps_operand_errors() {
+        // A `%` steps operand carries exactly one constant; a pattern
+        // operand like `%<2 4>` is rejected with a clear error.
+        let spc = MiniASTF64::SlowCat(vec![(f64_pure(2.0), None), (f64_pure(4.0), None)]);
+        let ast = polymeter_012(Some(spc));
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("polymeter steps must be a single number"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_replicate_count_limit() {
+        let ast = parse("0!1024").unwrap();
+        assert!(convert::<f64>(&ast).is_ok());
+
+        let ast = parse("0!2000").unwrap();
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("replicate count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_replicate_count_limit_in_operand_pattern() {
+        // Limits apply inside typed operand patterns (e.g. a `*` factor).
+        let factor = MiniASTF64::Replicate(Box::new(f64_pure(2.0)), 2000);
+        let ast = MiniAST::Fast(Box::new(num_atom(1.0)), Box::new(factor));
+        assert!(convert::<f64>(&ast).is_err());
+    }
+
+    #[test]
+    fn test_euclid_steps_limit() {
+        let ast = parse("x(3,1024)").unwrap();
+        assert!(convert::<bool>(&ast).is_ok());
+
+        let ast = parse("x(3,100000)").unwrap();
+        let err = convert::<bool>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("euclidean step count"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_euclid_steps_limit_covers_patterned_operands() {
+        // Every steps alternative is bounded, so `(3,<8 100000>)` is rejected.
+        let ast = MiniAST::Euclidean {
+            pattern: Box::new(num_atom(1.0)),
+            pulses: Box::new(u32_pure(3)),
+            steps: Box::new(MiniASTU32::SlowCat(vec![
+                (u32_pure(8), None),
+                (u32_pure(100000), None),
+            ])),
+            rotation: None,
+        };
+        assert!(convert::<Option<f64>>(&ast).is_err());
+    }
+
+    #[test]
+    fn test_replicate_expansion_compounds_when_nested() {
+        // The bound is on the product of nested `!n` counts, not each count
+        // alone: `[0!1024]!1024` is a million steps and is rejected even though
+        // both counts are within MAX_EXPANSION.
+        let ast = parse("[0!1024]!1024").unwrap();
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("replicate count"),
+            "unexpected error: {err}"
+        );
+
+        // A single `!1024` (product == MAX_EXPANSION) still converts.
+        let ast = parse("0!1024").unwrap();
+        assert!(convert::<f64>(&ast).is_ok());
+    }
+
+    #[test]
+    fn test_zero_step_euclid_does_not_zero_the_expansion_budget() {
+        // A euclid whose steps operand is 0 contributes a factor of at least 1
+        // to the running budget — otherwise every product nested inside it
+        // would be 0 and the cap would never trigger.
+        let ast = parse("[[[0!1024]!1024]!1024](3,0)").unwrap();
+        let err = convert::<f64>(&ast).unwrap_err();
+        assert!(
+            err.to_string().contains("replicate count"),
+            "unexpected error: {err}"
+        );
+
+        // Same for an all-rest steps operand (max leaf 0), which only the AST
+        // can express — the grammar requires an integer there.
+        let ast = MiniAST::Euclidean {
+            pattern: Box::new(parse("[[0!1024]!1024]!1024").unwrap()),
+            pulses: Box::new(u32_pure(3)),
+            steps: Box::new(MiniASTU32::Rest(SourceSpan::new(0, 1))),
+            rotation: None,
+        };
+        assert!(convert::<f64>(&ast).is_err());
+    }
+
+    #[test]
+    fn test_euclid_expansion_compounds_under_replicate() {
+        // A 1024-step euclid replicated 1024 times is 1024 * 1024 steps, so the
+        // compound expansion is rejected though each operand is within bounds.
+        let ast = parse("x(1,1024)!1024").unwrap();
+        assert!(convert::<bool>(&ast).is_err());
+
+        // The 1024-step euclid alone still converts.
+        let ast = parse("x(1,1024)").unwrap();
+        assert!(convert::<bool>(&ast).is_ok());
     }
 
     // --- Rest Pattern Behavior Tests ---

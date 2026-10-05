@@ -69,7 +69,8 @@ impl Default for ClockState {
     name = "_clock",
     channels = 2,
     args(tempo, numerator, denominator),
-    clock_sync
+    clock_sync,
+    patch_update
 )]
 pub struct Clock {
     outputs: ClockOutputs,
@@ -96,6 +97,8 @@ struct ClockOutputs {
     ppq_trigger: f32,
     #[output("beatInBar", "Current beat within the bar (0-indexed)")]
     beat_in_bar: f32,
+    #[output("tempo", "Current tempo in beats per minute")]
+    tempo: f32,
 }
 
 message_handlers!(impl Clock {
@@ -134,6 +137,7 @@ impl Clock {
         if let Some(sync) = self.state.external_sync.take() {
             self.state.running = true;
             self.params.tempo = sync.bpm;
+            self.outputs.tempo = sync.bpm as f32;
 
             let numerator = self.params.numerator.max(1) as f64;
             let denominator = self.params.denominator.max(1) as f64;
@@ -204,13 +208,16 @@ impl Clock {
             return;
         }
 
+        // Tempo is a plain BPM value. It describes the transport's configuration
+        // rather than its motion, so it is published even while stopped.
+        let tempo = self.params.tempo.max(1.0);
+        self.outputs.tempo = tempo as f32;
+
         if !self.state.running {
             return; // If not running, skip the rest of the update to keep outputs where they are until clock starts
         }
 
-        // Tempo is a plain BPM value
-        let bpm = self.params.tempo.max(1.0);
-        let frequency_hz = bpm / 60.0;
+        let frequency_hz = tempo / 60.0;
 
         // Time signature: numerator = beats per bar, denominator = beat value
         // Clamp to valid values (minimum 1) to avoid division by zero
@@ -343,6 +350,21 @@ impl Clock {
             }
         }
         Ok(())
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Clock {
+    fn on_patch_update(&mut self) {
+        // The bar phase is the transport's ground truth; beat_phase and
+        // ppq_phase are free-running offsets within it. Re-anchor them under
+        // the current meter so a live time-signature edit (params replaced,
+        // `state` carried over whole) keeps beatTrigger/ppqTrigger aligned
+        // with barTrigger and beatInBar.
+        let numerator = self.params.numerator.max(1) as f64;
+        let denominator = self.params.denominator.max(1) as f64;
+        self.state.beat_phase = self.state.phase % (1.0 / numerator);
+        let quarter_notes_per_bar = numerator * 4.0 / denominator;
+        self.state.ppq_phase = self.state.phase % (1.0 / (12.0 * quarter_notes_per_bar));
     }
 }
 
@@ -883,6 +905,67 @@ mod tests {
     }
 
     #[test]
+    fn clock_meter_change_reanchors_beat_grid_to_bar_phase() {
+        use crate::types::PatchUpdateHandler;
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+        let _ = c.on_clock_message(&ClockMessages::Start);
+
+        // 120 BPM 4/4: one bar = 96_000 samples. Land mid-bar at phase 0.6.
+        for _ in 0..57_600 {
+            c.update(sr);
+        }
+        assert!(
+            (c.state.phase - 0.6).abs() < 1e-3,
+            "expected bar phase ~0.6, got {}",
+            c.state.phase
+        );
+
+        // A live meter edit reaches the running clock as fresh params with the
+        // whole `state` carried over, then on_patch_update.
+        c.params.numerator = 3;
+        c.on_patch_update();
+
+        // The PPQ accumulator is anchored to the bar phase under the new meter.
+        let ppq_period = 1.0 / 36.0; // 12 PPQ × 3 quarter notes per 3/4 bar
+        assert!(
+            (c.state.ppq_phase - c.state.phase % ppq_period).abs() < 1e-12,
+            "ppq_phase must be the bar phase folded into the PPQ grid"
+        );
+
+        // In 3/4 the beat grid sits at bar phases 0, 1/3, 2/3. Every beat
+        // trigger over the next two bars must land on that grid, and beatInBar
+        // must agree with the grid between triggers.
+        let increment = 1.0 / 72_000.0; // per-sample phase step in 3/4
+        let mut was_high = c.outputs.beat_trigger == 5.0;
+        let mut edges = 0;
+        for n in 1..=(2 * 72_000) {
+            c.update(sr);
+            let is_high = c.outputs.beat_trigger == 5.0;
+            if is_high && !was_high {
+                edges += 1;
+                let phase = c.state.phase;
+                let beats = phase * 3.0;
+                assert!(
+                    (beats - beats.round()).abs() / 3.0 < 2.0 * increment,
+                    "beat trigger at bar phase {phase} is off the 3/4 beat grid"
+                );
+            }
+            was_high = is_high;
+            // Mid-beat probes (well clear of grid boundaries): beatInBar must
+            // match the beat the bar phase sits in.
+            if n % 4_800 == 2_400 {
+                let expected = (c.state.phase * 3.0).floor() as f32;
+                assert_eq!(
+                    c.outputs.beat_in_bar, expected,
+                    "beatInBar disagrees with the bar phase at sample {n}"
+                );
+            }
+        }
+        assert_eq!(edges, 6, "3/4 fires 3 beat triggers per bar over 2 bars");
+    }
+
+    #[test]
     fn clock_external_sync_clears_on_none() {
         let mut c = Clock::default();
         let sr = 48_000.0;
@@ -904,5 +987,73 @@ mod tests {
             c.state.phase > phase_before,
             "Clock should free-run after clearing external sync"
         );
+    }
+
+    #[test]
+    fn clock_tempo_output_reports_free_running_tempo() {
+        let mut c = Clock::default();
+        c.params.tempo = 137.5;
+        c.update(48_000.0);
+        assert_eq!(c.outputs.tempo, 137.5);
+    }
+
+    #[test]
+    fn clock_tempo_output_is_published_while_stopped() {
+        // Tempo describes the transport's configuration, not its motion, so a
+        // stopped clock still reports the tempo it would run at.
+        let mut c = Clock::default();
+        c.params.tempo = 90.0;
+        let _ = c.on_clock_message(&ClockMessages::Stop);
+        c.update(48_000.0);
+        assert_eq!(c.outputs.tempo, 90.0);
+    }
+
+    #[test]
+    fn clock_tempo_output_clamps_to_the_tempo_the_clock_runs_at() {
+        // Phase math floors the tempo at 1 BPM; the output must not claim a rate
+        // the clock is not actually advancing at.
+        let mut c = Clock::default();
+        c.params.tempo = 0.0;
+        c.update(48_000.0);
+        assert_eq!(c.outputs.tempo, 1.0);
+    }
+
+    #[test]
+    fn clock_tempo_output_follows_external_sync() {
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.25,
+            bpm: 128.0,
+        });
+        c.update(sr);
+        assert_eq!(c.outputs.tempo, 128.0);
+
+        // A peer tempo change is reflected on the very next synced sample.
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.26,
+            bpm: 174.0,
+        });
+        c.update(sr);
+        assert_eq!(c.outputs.tempo, 174.0);
+    }
+
+    #[test]
+    fn clock_tempo_output_holds_link_tempo_after_sync_clears() {
+        // Disabling Link hands the transport back to the free-running path at the
+        // tempo the session left it on, and the output tracks that handoff.
+        let mut c = Clock::default();
+        let sr = 48_000.0;
+
+        c.sync_external_clock_impl(ExternalClockState {
+            bar_phase: 0.5,
+            bpm: 100.0,
+        });
+        c.update(sr);
+
+        c.clear_external_sync();
+        c.update(sr);
+        assert_eq!(c.outputs.tempo, 100.0);
     }
 }

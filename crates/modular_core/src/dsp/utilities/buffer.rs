@@ -74,6 +74,10 @@ impl crate::types::OutputStruct for BufferWriteOutputs {
         }
     }
 
+    fn buffer_port_names() -> Vec<String> {
+        vec!["buffer".to_string()]
+    }
+
     /// Advance the circular buffer write position by `block_size` once per
     /// internal block. Called from the wrapper's `start_block()` before
     /// any per-sample `update()` runs, so `read_write_index()` becomes the
@@ -118,6 +122,22 @@ impl BufferWriteBlockOutputs {
         match port_idx {
             0 => self.sample.get(index, ch),
             _ => 0.0,
+        }
+    }
+
+    #[inline]
+    pub fn channels_at(&self, port_idx: usize) -> usize {
+        match port_idx {
+            0 => self.sample.channels(),
+            _ => 0,
+        }
+    }
+
+    #[inline]
+    pub fn data_at(&self, port_idx: usize) -> Option<(*const f32, usize)> {
+        match port_idx {
+            0 => Some((self.sample.as_ptr(), self.sample.channels())),
+            _ => None,
         }
     }
 

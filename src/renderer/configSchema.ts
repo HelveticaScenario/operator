@@ -135,6 +135,18 @@ export const configSchema = {
             },
             type: 'object',
         },
+        vuPanelVisible: {
+            default: false,
+            description: 'Show the VU meter panel at the bottom of the window',
+            type: 'boolean',
+        },
+        vuPanelHeight: {
+            default: 150,
+            description: 'Height of the VU meter panel in pixels',
+            maximum: 480,
+            minimum: 84,
+            type: 'number',
+        },
         theme: {
             default: 'modular-dark',
             description: 'The color theme for the application and editor',

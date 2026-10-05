@@ -126,6 +126,10 @@ export interface AppConfig {
     xyScopeUpsample?: boolean;
     /** XY scope beam half-width in clip-space units. Default 0.012. */
     xyScopeLineWidth?: number;
+    /** VU meter panel visibility. Default false. */
+    vuPanelVisible?: boolean;
+    /** VU meter panel height in px (84–480). Default 150. */
+    vuPanelHeight?: number;
 }
 
 /** Result of toggling the macOS Syphon window-output helper. */
@@ -310,6 +314,7 @@ export const IPC_CHANNELS = {
     SYNTH_GET_CHANNELS: 'modular:synth:get-channels',
     SYNTH_GET_SCOPES: 'modular:synth:get-scopes',
     SYNTH_GET_SCOPE_XY: 'modular:synth:get-scope-xy',
+    SYNTH_GET_VU_METERS: 'modular:synth:get-vu-meters',
     SYNTH_UPDATE_PATCH: 'modular:synth:update-patch',
     SYNTH_START_RECORDING: 'modular:synth:start-recording',
     SYNTH_STOP_RECORDING: 'modular:synth:stop-recording',
@@ -322,6 +327,7 @@ export const IPC_CHANNELS = {
         'modular:synth:set-module-profiling-sample-rate',
     SYNTH_GET_MODULE_STATES: 'modular:synth:get-module-states',
     SYNTH_STOP: 'modular:synth:stop',
+    SYNTH_CANCEL_QUEUED_UPDATE: 'modular:synth:cancel-queued-update',
     SYNTH_IS_STOPPED: 'modular:synth:is-stopped',
     SYNTH_SET_MODULE_PARAM: 'modular:synth:set-module-param',
     SYNTH_GET_TRANSPORT_STATE: 'modular:synth:get-transport-state',
@@ -422,7 +428,9 @@ export const MENU_CHANNELS = {
     OPEN_WORKSPACE: 'modular:menu:open-workspace',
     SAVE: 'modular:menu:save',
     STOP: 'modular:menu:stop',
+    CANCEL_QUEUED_UPDATE: 'modular:menu:cancel-queued-update',
     TOGGLE_RECORDING: 'modular:menu:toggle-recording',
+    TOGGLE_VU_METERS: 'modular:menu:toggle-vu-meters',
     UPDATE_PATCH: 'modular:menu:update-patch',
     UPDATE_PATCH_NEXT_BEAT: 'modular:menu:update-patch-next-beat',
 } as const;
@@ -451,6 +459,8 @@ export interface IPCHandlers {
 
     [IPC_CHANNELS.SYNTH_GET_SCOPE_XY]: typeof Synthesizer.prototype.getScopeXy;
 
+    [IPC_CHANNELS.SYNTH_GET_VU_METERS]: typeof Synthesizer.prototype.getVuMeters;
+
     [IPC_CHANNELS.SYNTH_UPDATE_PATCH]: (
         patch: PatchGraph,
         sourceId?: string,
@@ -474,6 +484,8 @@ export interface IPCHandlers {
     [IPC_CHANNELS.SYNTH_GET_MODULE_STATES]: typeof Synthesizer.prototype.getModuleStates;
 
     [IPC_CHANNELS.SYNTH_STOP]: typeof Synthesizer.prototype.stop;
+
+    [IPC_CHANNELS.SYNTH_CANCEL_QUEUED_UPDATE]: typeof Synthesizer.prototype.cancelQueuedUpdate;
 
     [IPC_CHANNELS.SYNTH_IS_STOPPED]: typeof Synthesizer.prototype.isStopped;
 

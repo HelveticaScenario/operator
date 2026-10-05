@@ -824,13 +824,44 @@ fn impl_module_macro_attr(
                     return outputs.get_at(port_idx, ch, prev);
                 }
                 let target = match self.mode {
-                    crate::types::ProcessingMode::Block => self.block_size,
+                    // Fill the block greedily, but never past the audio
+                    // callback's render ceiling: state that advances beyond
+                    // the emit boundary would be transferred "from the
+                    // future" by a mid-block patch swap.
+                    crate::types::ProcessingMode::Block => {
+                        self.block_size.min(crate::types::block_render_ceiling())
+                    }
                     // Inclusive — process up through the requested slot.
                     crate::types::ProcessingMode::Sample => index + 1,
                 };
                 self.ensure_processed_to(target);
                 let outputs = unsafe { &*self.block_outputs.get() };
                 outputs.get_at(port_idx, ch, index)
+            }
+
+            fn port_view(&self, port: &str) -> Option<crate::types::PortView> {
+                if self.mode != crate::types::ProcessingMode::Block {
+                    return None;
+                }
+                let port_idx = <#block_outputs_ty>::port_index(port)?;
+                let outputs = unsafe { &*self.block_outputs.get() };
+                let (data, channels) = outputs.data_at(port_idx)?;
+                if channels == 0 {
+                    return None;
+                }
+                Some(crate::types::PortView {
+                    data,
+                    channels,
+                    processed: &self.index,
+                })
+            }
+
+            fn port_channels(&self, port: &str) -> usize {
+                let Some(port_idx) = <#block_outputs_ty>::port_index(port) else {
+                    return 0;
+                };
+                let outputs = unsafe { &*self.block_outputs.get() };
+                outputs.channels_at(port_idx)
             }
 
             fn get_module_type(&self) -> &str {
@@ -926,6 +957,10 @@ fn impl_module_macro_attr(
                 #(#module_field_inits),*
             };
             crate::types::OutputStruct::set_all_channels(&mut inner.outputs, deserialized.channel_count);
+            // Fill `#[default_connection]` inputs here, on the main thread:
+            // the audio-thread `connect` must stay allocation-free, so it only
+            // resolves connections that are already present.
+            crate::types::Connect::apply_default_connections(&mut inner.params);
 
             let sampleable = #struct_name {
                 id: id.clone(),
@@ -972,6 +1007,7 @@ fn impl_module_macro_attr(
                         schema: params_schema,
                     },
                     outputs,
+                    buffer_outputs: <#outputs_ty as crate::types::OutputStruct>::buffer_port_names(),
                     signal_params: <#params_struct_name as crate::types::SignalParamMeta>::signal_param_schemas(),
                     positional_args: vec![
                         #(#positional_args_exprs),*

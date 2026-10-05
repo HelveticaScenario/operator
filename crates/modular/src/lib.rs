@@ -10,6 +10,7 @@ mod link;
 mod midi;
 mod panic_log;
 mod params_cache;
+mod recording;
 mod validation;
 mod wav_bpm;
 mod wav_metadata;
@@ -337,6 +338,13 @@ impl WavCache {
         let file_sample_rate = spec.sample_rate as f32;
         let num_channels = spec.channels as usize;
 
+        // The data-chunk length in the header is untrusted: a corrupt or
+        // truncated file can claim billions of samples the file doesn't hold,
+        // and the sample iterator yields an Err (masked to silence) for each
+        // of them. Cap the decode at what the file's byte size can contain.
+        let bytes_per_sample = u64::from(spec.bits_per_sample).div_ceil(8).max(1);
+        let sample_cap = u64::from(reader.len()).min(metadata.len() / bytes_per_sample) as usize;
+
         // Decode all samples into interleaved f32
         let raw_samples: Vec<f32> = match spec.sample_format {
             hound::SampleFormat::Int => {
@@ -344,21 +352,28 @@ impl WavCache {
                 let max_val = (1u32 << (bits - 1)) as f32;
                 reader
                     .into_samples::<i32>()
+                    .take(sample_cap)
                     .map(|s| s.unwrap_or(0) as f32 / max_val)
                     .collect()
             }
             hound::SampleFormat::Float => reader
                 .into_samples::<f32>()
+                .take(sample_cap)
                 .map(|s| s.unwrap_or(0.0))
                 .collect(),
         };
 
-        // Deinterleave into per-channel vectors
-        let total_frames = raw_samples.len() / num_channels.max(1);
+        // Deinterleave into per-channel vectors, keeping only whole frames. A
+        // truncated file caps the decode mid-frame; dropping the ragged tail
+        // keeps every channel the same length, so the mono mixdown below can
+        // never index past a shorter channel.
+        let nch = num_channels.max(1);
+        let total_frames = raw_samples.len() / nch;
         let mut channels: Vec<Vec<f32>> = vec![Vec::with_capacity(total_frames); num_channels];
-        for (i, sample) in raw_samples.iter().enumerate() {
-            let ch = i % num_channels;
-            channels[ch].push(*sample);
+        for frame in 0..total_frames {
+            for ch in 0..num_channels {
+                channels[ch].push(raw_samples[frame * nch + ch]);
+            }
         }
 
         let frame_count = channels.first().map_or(0, Vec::len);
@@ -473,6 +488,15 @@ pub struct WavLoadInfo {
 pub struct MidiInputInfo {
     pub name: String,
     pub index: u32,
+}
+
+/// A finished recording. `dropped_samples > 0` means the disk writer could
+/// not keep up with the stream and the file is shorter than the live take.
+#[napi(object)]
+pub struct RecordingResult {
+    pub path: String,
+    /// Samples lost to a full ring buffer (as f64: exact up to 2^53).
+    pub dropped_samples: f64,
 }
 
 /// Result of a patch update, including any validation errors and the assigned update ID.
@@ -1037,6 +1061,16 @@ impl Synthesizer {
         self.state.request_stop();
     }
 
+    /// Discard the queued patch update so the playing patch keeps running. The
+    /// outcome surfaces in the transport snapshot: `last_cancelled_update_id`
+    /// reports the discarded update, and nothing changes if the update already
+    /// applied.
+    #[napi]
+    pub fn cancel_queued_update(&mut self) -> Result<()> {
+        self.state.drain_garbage();
+        self.state.send_command(GraphCommand::CancelQueuedUpdate)
+    }
+
     #[napi]
     pub fn is_stopped(&self) -> bool {
         self.state.is_stopped()
@@ -1079,6 +1113,14 @@ impl Synthesizer {
     #[napi]
     pub fn get_scopes(&self) -> Vec<(ScopeBufferKey, Float32Array, ScopeStats)> {
         self.state.get_audio_buffers()
+    }
+
+    /// Snapshot every VU meter's current levels (per-channel RMS + windowed
+    /// peak, in volts). Each read resets the peak windows. Returns empty
+    /// while stopped.
+    #[napi]
+    pub fn get_vu_meters(&self) -> Vec<modular_core::types::VuMeterFrame> {
+        self.state.get_vu_meter_frames()
     }
 
     /// Drain the per-module profiler snapshot accumulated since the last
@@ -1300,23 +1342,28 @@ impl Synthesizer {
         use std::collections::HashSet;
 
         let mut devices: HashSet<String> = HashSet::new();
+        // A MIDI module with no device param receives from all devices, so its
+        // presence means every currently open device must stay open.
+        let mut wants_all_devices = false;
 
         for module in &patch.modules {
             // Check if this is a MIDI module type
             match module.module_type.as_str() {
                 "$midiCV" | "$midiCC" => {
                     // Extract device param from params JSON
-                    if let Some(device) = module.params.get("device").and_then(|v| v.as_str()) {
-                        if !device.is_empty() {
+                    match module.params.get("device").and_then(|v| v.as_str()) {
+                        Some(device) if !device.is_empty() => {
                             devices.insert(device.to_string());
                         }
+                        _ => wants_all_devices = true,
                     }
                 }
                 _ => {}
             }
         }
 
-        self.midi_manager.sync_devices(&devices, update_id);
+        self.midi_manager
+            .sync_devices(&devices, wants_all_devices, update_id);
     }
 
     #[napi]
@@ -1336,16 +1383,21 @@ impl Synthesizer {
     }
 
     #[napi]
-    pub fn stop_recording(&mut self) -> Result<Option<String>> {
+    pub fn stop_recording(&mut self) -> Result<Option<RecordingResult>> {
         if !self.is_recording {
             return Err(napi::Error::from_reason(
                 "No recording is in progress".to_string(),
             ));
         }
         match self.state.stop_recording() {
-            Ok(p) => {
+            Ok(finished) => {
                 self.is_recording = false;
-                Ok(p)
+                Ok(finished.map(|f| RecordingResult {
+                    path: f.path.to_string_lossy().to_string(),
+                    // f64 carries counts exactly up to 2^53 — far past any
+                    // real recording length — and maps to a plain JS number.
+                    dropped_samples: f.dropped_samples as f64,
+                }))
             }
             Err(e) => Err(e),
         }
@@ -1369,9 +1421,14 @@ impl Synthesizer {
         self.state.drain_garbage();
     }
 
-    #[napi]
-    pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
-        self.state.get_module_states()
+    /// Serialized straight from the shared snapshot `Arc`, so the poll never
+    /// deep-clones the per-module JSON map on the Rust side.
+    #[napi(ts_return_type = "Record<string, any>")]
+    pub fn get_module_states<'env>(
+        &self,
+        env: &'env napi::Env,
+    ) -> Result<napi::bindgen_prelude::Unknown<'env>> {
+        env.to_js_value(&*self.state.get_module_states())
     }
 
     #[napi]
@@ -2140,5 +2197,127 @@ mod detect_wavetable_tests {
         let result = detect_wavetable_frame_size(&path);
         let _ = std::fs::remove_file(&path);
         assert_eq!(result, Some(512));
+    }
+}
+
+#[cfg(test)]
+mod wav_cache_tests {
+    use super::WavCache;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    /// Build a 16-bit mono PCM wav whose data chunk claims
+    /// `claimed_data_bytes` but actually holds only `real_samples`.
+    fn wav_with_claimed_data_len(claimed_data_bytes: u32, real_samples: &[i16]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + claimed_data_bytes).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&1u16.to_le_bytes()); // mono
+        buf.extend_from_slice(&44100u32.to_le_bytes());
+        buf.extend_from_slice(&(44100u32 * 2).to_le_bytes()); // byte rate
+        buf.extend_from_slice(&2u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&claimed_data_bytes.to_le_bytes());
+        for s in real_samples {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    /// Unique temp workspace with a `wavs/` directory (test helper).
+    fn temp_workspace(name: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        path.push(format!(
+            "modular_wav_cache_{}_{}_{}",
+            name,
+            std::process::id(),
+            nanos
+        ));
+        std::fs::create_dir_all(path.join("wavs")).expect("create workspace");
+        path
+    }
+
+    #[test]
+    fn decode_is_bounded_by_actual_file_size() {
+        // The data chunk claims ~80 MB (40M samples) but the file holds two
+        // samples; the decode must be bounded by the file's byte size, not the
+        // claimed chunk length.
+        let workspace = temp_workspace("hostile_len");
+        let bytes = wav_with_claimed_data_len(80_000_000, &[i16::MAX, i16::MIN]);
+        let wav_path = workspace.join("wavs").join("hostile.wav");
+        std::fs::File::create(&wav_path)
+            .and_then(|mut f| f.write_all(&bytes))
+            .expect("write wav");
+        let file_len = std::fs::metadata(&wav_path).expect("stat wav").len();
+
+        let mut cache = WavCache::new(workspace.clone());
+        let result = cache.load("hostile", 48000.0);
+        if let Ok(_info) = result {
+            let frames = cache.entries["hostile"].data.frame_count() as u64;
+            assert!(
+                frames <= file_len / 2,
+                "decoded {} frames from a {}-byte file",
+                frames,
+                file_len
+            );
+        }
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// Build a 16-bit stereo PCM wav whose data chunk claims
+    /// `claimed_data_bytes` (a multiple of the 4-byte frame so hound accepts
+    /// the header) but actually holds only `real_samples` interleaved samples.
+    fn stereo_wav_with_claimed_data_len(claimed_data_bytes: u32, real_samples: &[i16]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"RIFF");
+        buf.extend_from_slice(&(36 + claimed_data_bytes).to_le_bytes());
+        buf.extend_from_slice(b"WAVE");
+        buf.extend_from_slice(b"fmt ");
+        buf.extend_from_slice(&16u32.to_le_bytes());
+        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        buf.extend_from_slice(&2u16.to_le_bytes()); // stereo
+        buf.extend_from_slice(&44100u32.to_le_bytes());
+        buf.extend_from_slice(&(44100u32 * 4).to_le_bytes()); // byte rate
+        buf.extend_from_slice(&4u16.to_le_bytes()); // block align
+        buf.extend_from_slice(&16u16.to_le_bytes());
+        buf.extend_from_slice(b"data");
+        buf.extend_from_slice(&claimed_data_bytes.to_le_bytes());
+        for s in real_samples {
+            buf.extend_from_slice(&s.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn truncated_stereo_decodes_without_panicking() {
+        // A truncated stereo file caps the decode on an odd interleaved-sample
+        // count; deinterleaving must drop the ragged final frame so the two
+        // channels stay equal length and the mono mixdown stays in bounds.
+        let workspace = temp_workspace("truncated_stereo");
+        // Claim ~80 MB of stereo data but write a single real sample: the file
+        // is 46 bytes, so the byte-size cap lands on 23 samples (odd).
+        let bytes = stereo_wav_with_claimed_data_len(80_000_000, &[i16::MAX]);
+        std::fs::File::create(workspace.join("wavs").join("trunc.wav"))
+            .and_then(|mut f| f.write_all(&bytes))
+            .expect("write wav");
+
+        let mut cache = WavCache::new(workspace.clone());
+        let result = cache.load("trunc", 48000.0);
+        let _ = std::fs::remove_dir_all(&workspace);
+
+        result.expect("truncated stereo wav must decode without error");
+        let data = &cache.entries["trunc"].data;
+        assert_eq!(data.channel_count(), 2);
+        // 23 interleaved samples over 2 channels → 11 whole frames.
+        assert_eq!(data.frame_count(), 11);
     }
 }

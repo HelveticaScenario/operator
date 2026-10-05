@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { v4 } from 'uuid';
 import electronAPI from '../../electronAPI';
 import type { EditorBuffer } from '../../types/editor';
@@ -9,6 +9,7 @@ import {
     normalizeFileName,
     readUnsavedBuffers,
     saveUnsavedBuffers,
+    toAbsoluteWorkspacePath,
 } from '../buffers';
 
 interface UseEditorBuffersParams {
@@ -35,24 +36,12 @@ export function useEditorBuffers({
         },
     );
 
-    const usedUntitledNumbers = useMemo(() => {
-        const used = new Set<number>();
-        buffers.forEach((b) => {
-            if (b.kind === 'untitled') {
-                const match = b.id.match(/^untitled-(\d+)$/);
-                if (match) {
-                    used.add(parseInt(match[1], 10));
-                }
-            }
-        });
-        return used;
-    }, [buffers]);
-    const usedUntitledNumbersRef = useRef(usedUntitledNumbers);
-    useEffect(() => {
-        usedUntitledNumbersRef.current = usedUntitledNumbers;
-    });
-
     const [renamingPath, setRenamingPath] = useState<string | null>(null);
+
+    const resolvePath = useCallback(
+        (path: string) => toAbsoluteWorkspacePath(workspaceRoot, path),
+        [workspaceRoot],
+    );
 
     const activeBuffer = buffers.find((b) => getBufferId(b) === activeBufferId);
     const patchCode = activeBuffer?.content ?? DEFAULT_PATCH;
@@ -85,7 +74,7 @@ export function useEditorBuffers({
                 throw new Error('No workspace open');
             }
 
-            const absPath = `${workspaceRoot}/${relPath}`;
+            const absPath = toAbsoluteWorkspacePath(workspaceRoot, relPath);
 
             const existing = buffers.find(
                 (b) => b.kind === 'file' && b.filePath === absPath,
@@ -164,14 +153,16 @@ export function useEditorBuffers({
 
     const createUntitledFile = useCallback(() => {
         setBuffers((prev) => {
-            // Derive next ID from current state to avoid race conditions
+            // Reserve every in-use untitled number from current state (avoiding
+            // races). Files saved from an untitled buffer keep their
+            // `untitled-N` id, so scan by id across all kinds — otherwise a new
+            // untitled could re-mint a number a saved file still holds, giving
+            // two buffers the same id.
             const currentUsed = new Set<number>();
             prev.forEach((b) => {
-                if (b.kind === 'untitled') {
-                    const match = b.id.match(/^untitled-(\d+)$/);
-                    if (match) {
-                        currentUsed.add(parseInt(match[1], 10));
-                    }
+                const match = b.id.match(/^untitled-(\d+)$/);
+                if (match) {
+                    currentUsed.add(parseInt(match[1], 10));
                 }
             });
 
@@ -188,99 +179,141 @@ export function useEditorBuffers({
                 kind: 'untitled',
             };
 
-            // Update ref for useMemo dependency
-            const next = new Set(currentUsed);
-            next.add(nextIdNum);
-            usedUntitledNumbersRef.current = next;
-
             setActiveBufferId(nextId);
             return [...prev, newBuffer];
         });
     }, []);
 
+    /**
+     * Save a buffer to disk. Returns the buffer's id after the save (the
+     * absolute file path — saving an untitled buffer changes its id), or
+     * undefined when nothing was saved (buffer missing, dialog cancelled).
+     *
+     * Edits can land while the async write is in flight, so the dirty flag is
+     * only cleared on buffers whose content still equals the snapshot that
+     * reached disk.
+     */
     const saveFile = useCallback(
         async (targetId?: string) => {
             const idToSave = targetId || activeBufferId;
             const buffer = buffers.find((b) => getBufferId(b) === idToSave);
             if (!buffer) {
-                return;
+                return undefined;
             }
+            const savedContent = buffer.content;
 
             if (buffer.kind === 'untitled') {
                 const input =
                     await electronAPI.filesystem.showSaveDialog('untitled.mjs');
                 if (!input) {
-                    return;
+                    return undefined;
                 }
 
                 const normalized = normalizeFileName(input);
                 if (!normalized) {
-                    return;
+                    return undefined;
                 }
 
+                // The save dialog only ever returns workspace-relative paths.
+                const filePath = resolvePath(normalized);
+
                 const result = await electronAPI.filesystem.writeFile(
-                    normalized,
-                    buffer.content,
+                    filePath,
+                    savedContent,
                 );
 
                 if (result.success) {
-                    setBuffers((prev) =>
-                        prev.map((b) =>
+                    setBuffers((prev) => {
+                        const source = prev.find(
+                            (b) => getBufferId(b) === idToSave,
+                        );
+                        const existing = prev.find(
+                            (b) =>
+                                b.kind === 'file' &&
+                                b.filePath === filePath &&
+                                getBufferId(b) !== idToSave,
+                        );
+                        if (source && existing) {
+                            // The chosen path is already open: fold the
+                            // untitled buffer into the existing one so the
+                            // path keeps a single buffer identity — two
+                            // buffers sharing an id would make every id
+                            // lookup act on whichever comes first.
+                            return prev
+                                .filter((b) => getBufferId(b) !== idToSave)
+                                .map((b) =>
+                                    b.kind === 'file' &&
+                                    b.filePath === filePath
+                                        ? {
+                                              ...b,
+                                              content: source.content,
+                                              dirty:
+                                                  source.content !==
+                                                  savedContent,
+                                              isPreview: false,
+                                          }
+                                        : b,
+                                );
+                        }
+                        return prev.map((b) =>
                             getBufferId(b) === idToSave
                                 ? {
-                                      content: buffer.content,
-                                      dirty: false,
-                                      filePath: normalized,
+                                      content: b.content,
+                                      dirty: b.content !== savedContent,
+                                      filePath,
                                       id: b.id,
                                       kind: 'file' as const,
                                   }
                                 : b,
-                        ),
-                    );
+                        );
+                    });
                     if (idToSave === activeBufferId) {
-                        setActiveBufferId(normalized);
+                        setActiveBufferId(filePath);
                     }
                     await refreshFileTree();
-                    onFileSaved?.(normalized);
+                    onFileSaved?.(filePath);
+                    return filePath;
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
             } else {
                 const result = await electronAPI.filesystem.writeFile(
                     buffer.filePath,
-                    buffer.content,
+                    savedContent,
                 );
 
                 if (result.success) {
                     setBuffers((prev) =>
                         prev.map((b) =>
-                            getBufferId(b) === idToSave
+                            getBufferId(b) === idToSave &&
+                            b.content === savedContent
                                 ? { ...b, dirty: false }
                                 : b,
                         ),
                     );
                     onFileSaved?.(buffer.filePath);
+                    return buffer.filePath;
                 } else {
                     throw new Error(result.error || 'Failed to save file');
                 }
             }
         },
-        [activeBufferId, buffers, refreshFileTree, onFileSaved],
+        [
+            activeBufferId,
+            buffers,
+            refreshFileTree,
+            onFileSaved,
+            resolvePath,
+        ],
     );
 
     const renameFile = useCallback(
         async (targetIdOrPath?: string) => {
             let filePath: string | undefined;
 
-            let resolvedPath = targetIdOrPath;
-            if (
-                targetIdOrPath &&
-                workspaceRoot &&
-                !targetIdOrPath.startsWith('/') &&
-                !targetIdOrPath.match(/^[a-zA-Z]:/)
-            ) {
-                resolvedPath = `${workspaceRoot}/${targetIdOrPath}`;
-            }
+            const resolvedPath = targetIdOrPath
+                ? resolvePath(targetIdOrPath)
+                : targetIdOrPath;
 
             const buffer =
                 buffers.find((b) => getBufferId(b) === targetIdOrPath) ||
@@ -306,7 +339,7 @@ export function useEditorBuffers({
             }
             setRenamingPath(filePath);
         },
-        [activeBufferId, buffers, workspaceRoot],
+        [activeBufferId, buffers, resolvePath],
     );
 
     const handleRenameCommit = useCallback(
@@ -368,15 +401,9 @@ export function useEditorBuffers({
             let filePath: string | undefined;
             let bufferId: string | undefined;
 
-            let resolvedPath = targetIdOrPath;
-            if (
-                targetIdOrPath &&
-                workspaceRoot &&
-                !targetIdOrPath.startsWith('/') &&
-                !targetIdOrPath.match(/^[a-zA-Z]:/)
-            ) {
-                resolvedPath = `${workspaceRoot}/${targetIdOrPath}`;
-            }
+            const resolvedPath = targetIdOrPath
+                ? resolvePath(targetIdOrPath)
+                : targetIdOrPath;
 
             const buffer =
                 buffers.find((b) => getBufferId(b) === targetIdOrPath) ||
@@ -444,47 +471,50 @@ export function useEditorBuffers({
                 throw new Error(result.error || 'Failed to delete file');
             }
         },
-        [activeBufferId, buffers, refreshFileTree, workspaceRoot],
+        [activeBufferId, buffers, refreshFileTree, resolvePath],
     );
 
-    const performCloseBuffer = useCallback(
-        (bufferId: string) => {
-            // Capture current activeBufferId to avoid stale closure
-            const currentActiveId = activeBufferId;
-            setTimeout(() => {
-                setBuffers((prev) => {
-                    const buffer = prev.find(
+    // Mirror of activeBufferId for deferred callbacks that run after state
+    // updates (e.g. a save that re-identified the buffer) have flushed.
+    const activeBufferIdRef = useRef(activeBufferId);
+    useEffect(() => {
+        activeBufferIdRef.current = activeBufferId;
+    });
+
+    const performCloseBuffer = useCallback((bufferId: string) => {
+        setTimeout(() => {
+            // Read the active id when the deferred update runs, so a
+            // just-completed save that changed either id is observed.
+            const currentActiveId = activeBufferIdRef.current;
+            setBuffers((prev) => {
+                const buffer = prev.find((b) => getBufferId(b) === bufferId);
+                if (!buffer) {
+                    return prev;
+                }
+
+                const remaining = prev.filter(
+                    (b) => getBufferId(b) !== bufferId,
+                );
+
+                // Update active buffer if we're closing the active one
+                if (currentActiveId === bufferId) {
+                    const idx = prev.findIndex(
                         (b) => getBufferId(b) === bufferId,
                     );
-                    if (!buffer) {
-                        return prev;
+                    if (remaining.length > 0) {
+                        // Select the buffer that was immediately after the closed one,
+                        // Or the last one if we closed the tail.
+                        const nextIdx = Math.min(idx, remaining.length - 1);
+                        setActiveBufferId(getBufferId(remaining[nextIdx]));
+                    } else {
+                        setActiveBufferId(undefined);
                     }
+                }
 
-                    const remaining = prev.filter(
-                        (b) => getBufferId(b) !== bufferId,
-                    );
-
-                    // Update active buffer if we're closing the active one
-                    if (currentActiveId === bufferId) {
-                        const idx = prev.findIndex(
-                            (b) => getBufferId(b) === bufferId,
-                        );
-                        if (remaining.length > 0) {
-                            // Select the buffer that was immediately after the closed one,
-                            // Or the last one if we closed the tail.
-                            const nextIdx = Math.min(idx, remaining.length - 1);
-                            setActiveBufferId(getBufferId(remaining[nextIdx]));
-                        } else {
-                            setActiveBufferId(undefined);
-                        }
-                    }
-
-                    return remaining;
-                });
-            }, 50);
-        },
-        [activeBufferId],
-    );
+                return remaining;
+            });
+        }, 50);
+    }, []);
 
     const closeBuffer = useCallback(
         async (bufferId: string) => {
@@ -502,11 +532,19 @@ export function useEditorBuffers({
                     return;
                 } else if (response === 0) {
                     try {
-                        await saveFile(bufferId);
-                        performCloseBuffer(bufferId);
+                        // Saving an untitled buffer changes its id to the
+                        // chosen file path; close under the post-save id. A
+                        // cancelled save dialog aborts the close so the
+                        // unsaved content is not discarded.
+                        const savedId = await saveFile(bufferId);
+                        if (savedId === undefined) {
+                            return;
+                        }
+                        performCloseBuffer(savedId);
                     } catch (error) {
+                        // A failed save aborts the close: the content never
+                        // reached disk, so the buffer must stay open.
                         console.error('Error saving file:', error);
-                        performCloseBuffer(bufferId);
                     }
                 } else {
                     performCloseBuffer(bufferId);

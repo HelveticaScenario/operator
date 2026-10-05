@@ -6,7 +6,7 @@ interface ScopeViewZoneParams {
     editor: editor.IStandaloneCodeEditor;
     monaco: Monaco;
     views: ScopeView[];
-    /** Tracked decoration collection whose ranges correspond 1:1 with `views`. */
+    /** Tracked decoration collection addressed by each view's `decorationIndex`. */
     scopeDecorations: editor.IEditorDecorationsCollection | null;
     onRegisterScopeCanvas?: (key: string, canvas: HTMLCanvasElement) => void;
     onUnregisterScopeCanvas?: (key: string) => void;
@@ -21,17 +21,17 @@ export interface ScopeViewZoneHandle {
 }
 
 /**
- * Resolve the afterLineNumber for a scope view zone.
- * Reads from the tracked decoration collection when available.
- * Returns `null` if the decoration range has been deleted (empty/missing),
- * signalling that the view zone should be hidden.
+ * Resolve the afterLineNumber for a scope view zone from its view's
+ * decoration index. Returns `null` for anchorless views (null index) and
+ * when the decoration range has been deleted (empty/missing), signalling
+ * that the view zone should be hidden.
  */
 function resolveLineNumber(
     scopeDecorations: editor.IEditorDecorationsCollection | null,
-    index: number,
+    decorationIndex: number | null,
 ): number | null {
-    if (scopeDecorations) {
-        const range = scopeDecorations.getRange(index);
+    if (scopeDecorations && decorationIndex !== null) {
+        const range = scopeDecorations.getRange(decorationIndex);
         if (range && !range.isEmpty()) {
             return range.endLineNumber;
         }
@@ -52,10 +52,11 @@ export function createScopeViewZones({
     const viewZoneDelegates: (editor.IViewZone | null)[] = [];
     /** Scope keys corresponding 1:1 with viewZoneIds, for canvas unregistration */
     const viewKeys: string[] = [];
+    /** Each zone's decoration index, for re-resolving positions on reposition */
+    const viewDecorationIndexes: (number | null)[] = [];
     const scopeCanvasMap = new Map<string, HTMLCanvasElement>();
-    let layoutListener: ReturnType<
-        editor.IStandaloneCodeEditor['onDidLayoutChange']
-    > | null = null;
+    let resizeObserver: ResizeObserver | null = null;
+    let dprQuery: MediaQueryList | null = null;
 
     const dispose = () => {
         const idsToRemove = viewZoneIds.filter(
@@ -71,15 +72,20 @@ export function createScopeViewZones({
         viewZoneIds.length = 0;
         viewZoneDelegates.length = 0;
         viewKeys.length = 0;
+        viewDecorationIndexes.length = 0;
 
         scopeCanvasMap.forEach((_canvas, key) => {
             onUnregisterScopeCanvas?.(key);
         });
         scopeCanvasMap.clear();
 
-        if (layoutListener) {
-            layoutListener.dispose();
-            layoutListener = null;
+        if (resizeObserver) {
+            resizeObserver.disconnect();
+            resizeObserver = null;
+        }
+        if (dprQuery) {
+            dprQuery.removeEventListener('change', onDprChange);
+            dprQuery = null;
         }
     };
 
@@ -99,7 +105,23 @@ export function createScopeViewZones({
     const layoutInfo = editor.getLayoutInfo();
     const scopeHeight = 80; // Increased height for legend and stats
 
-    const zones = views.map((view, index) => {
+    const zones = views.map((view) => {
+        // A view without a resolvable anchor (null decorationIndex, or a
+        // decoration range that has collapsed) has no anchor line in the
+        // document, so it gets no zone and no canvas — mirroring the removal
+        // path in repositionZones.
+        const resolvedLine = resolveLineNumber(
+            scopeDecorations,
+            view.decorationIndex,
+        );
+        if (resolvedLine === null) {
+            return {
+                decorationIndex: view.decorationIndex,
+                delegate: null,
+                key: view.key,
+            };
+        }
+
         const container = document.createElement('div');
         container.className = 'scope-view-zone';
         container.style.height = `${scopeHeight}px`;
@@ -125,24 +147,22 @@ export function createScopeViewZones({
         scopeCanvasMap.set(view.key, canvas);
         onRegisterScopeCanvas?.(view.key, canvas);
 
-        const resolvedLine = resolveLineNumber(scopeDecorations, index);
-        const afterLineNumber = resolvedLine ?? 1;
-
         const delegate: editor.IViewZone = {
-            afterLineNumber,
+            afterLineNumber: resolvedLine,
             domNode: container,
             heightInPx: scopeHeight,
             marginDomNode: undefined,
         };
 
-        return { delegate, key: view.key };
+        return { decorationIndex: view.decorationIndex, delegate, key: view.key };
     });
 
     editor.changeViewZones((accessor) => {
-        for (const { delegate, key } of zones) {
+        for (const { decorationIndex, delegate, key } of zones) {
             viewZoneDelegates.push(delegate);
-            viewZoneIds.push(accessor.addZone(delegate));
+            viewZoneIds.push(delegate ? accessor.addZone(delegate) : null);
             viewKeys.push(key);
+            viewDecorationIndexes.push(decorationIndex);
         }
     });
 
@@ -159,7 +179,10 @@ export function createScopeViewZones({
                 continue;
             } // Already removed
 
-            const resolvedLine = resolveLineNumber(scopeDecorations, i);
+            const resolvedLine = resolveLineNumber(
+                scopeDecorations,
+                viewDecorationIndexes[i],
+            );
 
             if (resolvedLine === null) {
                 // Decoration was deleted — remove the view zone entirely and
@@ -222,7 +245,34 @@ export function createScopeViewZones({
     // Sync once now that the zones are attached and have a real display width.
     resizeCanvases();
 
-    layoutListener = editor.onDidLayoutChange(resizeCanvases);
+    // Track every display-size change of the canvases themselves (editor
+    // layout, window resize, panels squeezing the editor). Observation also
+    // fires once on attach, covering zones that mount after this call.
+    resizeObserver = new ResizeObserver(resizeCanvases);
+    scopeCanvasMap.forEach((canvas) => {
+        resizeObserver!.observe(canvas);
+    });
+
+    // A pure devicePixelRatio change — dragging the window between displays of
+    // different density — leaves the canvases' content box unchanged, so the
+    // ResizeObserver never fires. Watch the ratio directly; each media query
+    // matches a single dpr, so re-arm a fresh one after every change.
+    function onDprChange() {
+        resizeCanvases();
+        watchDpr();
+    }
+    function watchDpr() {
+        if (
+            typeof window === 'undefined' ||
+            typeof window.matchMedia !== 'function'
+        ) {
+            return;
+        }
+        const current = window.devicePixelRatio || 1;
+        dprQuery = window.matchMedia(`(resolution: ${current}dppx)`);
+        dprQuery.addEventListener('change', onDprChange, { once: true });
+    }
+    watchDpr();
 
     return { dispose, repositionZones };
 }

@@ -151,7 +151,7 @@ interface Array<T> {
    * Passes \`this\` to \`pipeFn\` and returns the result, enabling inline
    * functional transforms and method chaining on any array.
    *
-   * @param pipeFn - A function that receives this array and returns a transformed value
+   * @param pipeFn A function that receives this array and returns a transformed value
    * @returns The return value of \`pipeFn\`
    *
    * @example
@@ -175,66 +175,46 @@ type CaseVariants<T extends string> =
   | Capitalize<T>;
 
 type ModeString =
-  // Ionian (Major)
-  | \`M \${string}\`
   | "M"
-  | \`\${string}\${CaseVariants<"maj">}\${string}\`
-  | \`\${string}\${CaseVariants<"major">}\${string}\`
-  | \`\${string}\${CaseVariants<"ionian">}\${string}\`
-  
-  // Harmonic Minor
-  | \`\${string}\${CaseVariants<"har">} \${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"harmonic">}\${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"harmonic">} \${CaseVariants<"minor">}\${string}\`
-  
-  // Melodic Minor
-  | \`\${string}\${CaseVariants<"mel">} \${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"melodic">}\${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"melodic">} \${CaseVariants<"minor">}\${string}\`
-  
-  // Pentatonic Major
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"major">}\${string}\`
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"maj">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"maj">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"major">}\${string}\`
-  
-  // Pentatonic Minor
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"pentatonic">} \${CaseVariants<"min">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"min">}\${string}\`
-  | \`\${string}\${CaseVariants<"pent">} \${CaseVariants<"minor">}\${string}\`
-  
-  // Blues
-  | \`\${string}\${CaseVariants<"blues">}\${string}\`
-  
-  // Chromatic
-  | \`\${string}\${CaseVariants<"chromatic">}\${string}\`
-  
-  // Whole Tone
-  | \`\${string}\${CaseVariants<"whole">} \${CaseVariants<"tone">}\${string}\`
-  | \`\${string}\${CaseVariants<"whole">}\${CaseVariants<"tone">}\${string}\`
-  
-  // Aeolian (Minor)
-  | \`m \${string}\`
   | "m"
-  | \`\${string}\${CaseVariants<"min">}\${string}\`
-  | \`\${string}\${CaseVariants<"minor">}\${string}\`
-  | \`\${string}\${CaseVariants<"aeolian">}\${string}\`
-  
-  // Dorian (start of string)
-  | \`\${CaseVariants<"dorian">}\${string}\`
-  
-  // Locrian (start of string)
-  | \`\${CaseVariants<"locrian">}\${string}\`
-  
-  // Mixolydian (start of string)
-  | \`\${CaseVariants<"mixolydian">}\${string}\`
-  
-  // Phrygian (start of string)
-  | \`\${CaseVariants<"phrygian">}\${string}\`
-  
-  // Lydian (start of string)
-  | \`\${CaseVariants<"lydian">}\${string}\`;
+  | CaseVariants<
+      | "major" | "maj" | "ionian"
+      | "minor" | "min" | "aeolian"
+      | "dorian" | "phrygian" | "lydian" | "mixolydian" | "locrian"
+      | "harmonic minor" | "harmonicminor" | "har minor"
+      | "melodic minor" | "melodicminor" | "mel minor"
+      | "pentatonic major" | "pentatonic maj" | "pent major" | "pent maj"
+      | "pentatonic minor" | "pentatonic min" | "pent minor" | "pent min"
+      | "blues" | "whole tone" | "wholetone" | "chromatic"
+    >;
+
+/**
+ * A scale or chord spec: a root note (optional octave, default 4) followed by
+ * a scale in \`()\` or a chord in \`[]\`. Used by {@link $chord} and accepted
+ * by {@link $quantizer}'s \`scale\` (where it is shorthand for \`$chord(spec)\`).
+ *
+ * | Form | Example | Meaning |
+ * |------|---------|---------|
+ * | \`root(scale)\` | \`"C(major)"\`, \`"D3(dorian)"\` | Named scale |
+ * | \`root(intervals)\` | \`"C(0 3 7 10)"\` | Semitones from the root, reduced to one octave |
+ * | \`root(tuning)\` | \`"C(just)"\`, \`"A(pythag)"\` | All 12 steps in a non-equal tuning |
+ * | \`root(tuning intervals)\` | \`"C(just 0 4 7)"\` | Custom intervals in a non-equal tuning |
+ * | \`root[chord]\` | \`"C[maj7]"\`, \`"F#2[m9]"\` | Chord shorthand; extensions keep their register |
+ * | \`root[intervals]\` | \`"C[0 7 16]"\` | Custom voicing; intervals keep their register |
+ * | \`root[tuning chord]\` | \`"C[just maj]"\` | Chord in a non-equal tuning |
+ * | \`root[chord invN]\` | \`"C[maj7 inv1]"\` | Raises the lowest N notes an octave |
+ * | \`chromatic\` | \`"chromatic"\` | All 12 semitones from C4 |
+ *
+ * Scale names: major/maj/ionian/M, minor/min/aeolian/m, dorian, phrygian,
+ * lydian, mixolydian, locrian, harmonic minor, melodic minor, pentatonic
+ * major/minor, blues, whole tone, chromatic.
+ *
+ * Chord names (case-sensitive): maj/M/major, min/m/minor, dim/°, aug/+, sus2,
+ * sus4/sus, 5, 6, m6, 69, 7/dom7, maj7/M7/Δ/Δ7, m7/min7, mMaj7/mM7, dim7/°7,
+ * m7b5/ø/ø7, aug7/7#5/+7, maj7#5, 7sus4, 7sus2, 7b5, 9, maj9, m9, 11, maj11,
+ * m11, 13, maj13, m13, 7b9, 7#9, 7#11, add9/add2, madd9, add11/add4.
+ */
+type ScaleSpec = \`\${string}(\${string})\` | \`\${string}[\${string}]\` | "chromatic";
 
 /**
  * A scale pattern string for generating multiple pitches.
@@ -280,18 +260,33 @@ type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
 
 /**
  * A potentially multi-channel signal for polyphonic patches.
- * 
+ *
  * Can be:
  * - A single {@link Signal}
  * - An array of {@link Signal}s (creates multiple voices)
  * - An iterable of {@link ModuleOutput}s
- * 
+ * - A {@link SignalGroup} from \`$g1\`/\`$g2\`/\`$g3\` (cartesian voice expansion)
+ *
  * @example $saw(["C3", "E3", "G3"]).out()                    // 3-voice chord
  * @example $saw([...$sine("1hz"), ...$sine("2hz")]).out()   // Spread outputs into voices
  * @see {@link Signal} - for single-channel signals
  * @see {@link Collection} - for grouping outputs
  */
-type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
+type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup;
+
+/**
+ * A param value tagged into a cartesian signal group by {@link $g1}, {@link $g2},
+ * or {@link $g3}. Params in different groups multiply within a module — its
+ * channel count becomes the product of the group widths — while params in the
+ * same group cycle against each other as usual. Untagged params are group 0.
+ * Lower-numbered groups vary fastest across the resulting channels.
+ *
+ * Opaque: construct only with \`$g1\`/\`$g2\`/\`$g3\`.
+ */
+interface SignalGroup {
+  readonly __kind: "SignalGroup";
+  readonly group: 1 | 2 | 3;
+}
 
 
 /**
@@ -457,7 +452,7 @@ type ParsedPattern = {
  * | Degrade | \`?\` or \`?n\` | Randomly drop the element (\`?\` ≈ 50 %) |
  * | Euclidean | \`(k,n)\` or \`(k,n,offset)\` | Distribute \`k\` pulses over \`n\` steps |
  *
- * @param source - mini-notation source string
+ * @param source mini-notation source string
  */
 declare function $p(source: string): ParsedPattern;
 
@@ -521,11 +516,13 @@ declare namespace $p {
  * | \`tonic<octave>(name)\` | \`"c3(major)"\`, \`"D#4(min)"\` | Same with an explicit octave (default 4 → root = C4 = 0 V) |
  * | \`tonic(custom intervals)\` | \`"c(0 2 4 5 7 9 11)"\` | Custom semitone offsets from the tonic |
  * | \`tonic(just)\` / \`tonic(pythagorean)\` | \`"c(just)"\`, \`"a(pythag)"\` | Non-equal 12-tone tunings |
+ * | \`tonic[chord]\` | \`"c[maj7]"\`, \`"a3[m9]"\` | Chord tones; degrees step through the chord |
+ * | \`tonic[chord invN]\` | \`"c[maj inv1]"\` | Inverted chord; degree 0 is the lowest note |
  * | \`chromatic\` | \`"chromatic"\` | All 12 semitones, 12-TET |
  *
- * Recognized scale names include major, minor, ionian, dorian, phrygian,
- * lydian, mixolydian, aeolian, locrian, harmonic/melodic minor,
- * pentatonic major/minor, blues, whole tone.
+ * Degrees wrap by an octave for scales. A chord wraps by its span rounded up
+ * to whole octaves, so \`"c[9]"\` repeats every two octaves. See
+ * {@link ScaleSpec} for the full list of scale and chord names.
  *
  * ### Chaining
  *
@@ -550,8 +547,8 @@ declare namespace $p {
  * $cycle($p.s("0 1 2", "c(maj)").sub.squeeze("1 2 3"))
  * \`\`\`
  *
- * @param source - integer scale-degree mini-notation source
- * @param scale - scale string, e.g. "c(major)", "D#3(min)", "a(just)"
+ * @param source integer scale-degree mini-notation source
+ * @param scale scale string, e.g. "c(major)", "D#3(min)", "a(just)"
  */
 function s(source: string, scale: string): SpPattern;
 
@@ -586,7 +583,7 @@ function s(source: string, scale: string): SpPattern;
  * The result is an \`ArrangePattern\`, itself usable as a section of another
  * \`$p.arrange(...)\` (arrangements nest) or as a \`$cycle\` argument.
  *
- * @param sections - \`[cycles, pattern]\` tuples, in play order
+ * @param sections \`[cycles, pattern]\` tuples, in play order
  */
 function arrange(
   ...sections: [number, ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern][]
@@ -765,7 +762,7 @@ type WavHandle = {
  * @see {@link Collection.out}
  */
 interface StereoOutOptions {
-  /** Base output channel (0-15, default 0). Left plays on baseChannel, right on baseChannel+1 */
+  /** Base output channel (0-62, default 0). Left plays on baseChannel, right on baseChannel+1 */
   baseChannel?: number;
   /** Output gain. If set, a $scaleAndShift module is added after the stereo mix */
   gain?: Poly<Signal>;
@@ -773,6 +770,30 @@ interface StereoOutOptions {
   pan?: Poly<Signal>;
   /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
   width?: Mono<Signal>;
+  /** Label shown on this output's VU meter. Must be unique across outs */
+  label?: string;
+  /** Silence this output. It is still metered; its VU meter greys out */
+  mute?: boolean;
+  /** When any output is soloed, only soloed outputs are audible */
+  solo?: boolean;
+}
+
+/**
+ * Options for mono output routing via the outMono() method.
+ * @see {@link ModuleOutput.outMono}
+ * @see {@link Collection.outMono}
+ */
+interface MonoOutOptions {
+  /** Output channel (0-63, default 0). Wins over the positional channel argument */
+  channel?: number;
+  /** Output gain. If set, a $scaleAndShift module is added after the mix */
+  gain?: Poly<Signal>;
+  /** Label shown on this output's VU meter. Must be unique across outs */
+  label?: string;
+  /** Silence this output. It is still metered; its VU meter greys out */
+  mute?: boolean;
+  /** When any output is soloed, only soloed outputs are audible */
+  solo?: boolean;
 }
 
 /**
@@ -804,7 +825,7 @@ interface ModuleOutput {
      * Creates a $scaleAndShift module internally.
      *
      * For perceptual (audio-taper) volume control, use {@link gain} instead.
-     * @param factor - Scale factor as {@link Poly<Signal>}
+     * @param factor Scale factor as {@link Poly<Signal>}
      * @returns The scaled {@link Collection} for chaining
      * @example $sine("c4").amplitude(2.5)  // Half amplitude
      */
@@ -815,7 +836,7 @@ interface ModuleOutput {
   
   /**
    * Add a DC offset to the signal. Creates a $scaleAndShift module internally.
-   * @param offset - Offset value as {@link Poly<Signal>}
+   * @param offset Offset value as {@link Poly<Signal>}
    * @returns The shifted {@link Collection} for chaining
    * @example $sine("1hz").shift(2.5)  // Add a +2.5V DC offset
    */
@@ -825,7 +846,7 @@ interface ModuleOutput {
    * Offset this pitch by an absolute frequency amount, in Hz. The V/Oct signal
    * is converted to Hz, the offset added, then converted back. Creates an
    * $addHz module internally.
-   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @param offset Hz offset as {@link Poly<Signal>}
    * @returns The retuned {@link Collection} for chaining
    * @example $saw('C4').addHz(0.5)  // slight detune
    */
@@ -835,7 +856,7 @@ interface ModuleOutput {
    * Multiply this pitch by a frequency factor (2 = octave up, 0.5 = down).
    * The V/Oct signal is converted to Hz, multiplied, then converted back.
    * Creates a $mulHz module internally.
-   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @param factor Frequency multiplier as {@link Poly<Signal>}
    * @returns The retuned {@link Collection} for chaining
    * @example $saw('C4').mulHz(1.5)  // up a just fifth
    */
@@ -846,7 +867,7 @@ interface ModuleOutput {
      * (5 = unity, 0 = silence).
      *
      * For linear amplitude scaling, use {@link amplitude} instead.
-     * @param level - Amplitude level as {@link Poly<Signal>}
+     * @param level Amplitude level as {@link Poly<Signal>}
      * @returns The scaled {@link Collection} for chaining
      * @example $sine("c4").gain(2.5)
      */
@@ -854,7 +875,7 @@ interface ModuleOutput {
 
   /**
    * Apply a power curve to this signal. Creates a \\$curve module internally.
-   * @param factor - Exponent for the curve (default 3)
+   * @param factor Exponent for the curve (default 3)
    * @returns The curved {@link Collection} for chaining
    * @example $sine("1hz").exp(2)  // Quadratic curve
    */
@@ -863,28 +884,30 @@ interface ModuleOutput {
   /**
    * Add scope visualization for this output.
    * The scope appears as an overlay in the editor.
-   * @param config - Scope configuration options
-   * @param config.msPerFrame - Time window in milliseconds (default 500)
-   * @param config.triggerThreshold - Trigger threshold in volts (optional)
-   * @param config.triggerWaitToRender - Whether the scope should wait to render until the buffer fills (default true). Only applicable if triggerThreshold is set.
-   * @param config.range - Voltage range for display as [min, max] tuple (default [-5, 5])
+   * @param config Scope configuration options
+   * @param config.msPerFrame Time window in milliseconds (default 500)
+   * @param config.triggerThreshold Trigger threshold in volts (optional)
+   * @param config.triggerWaitToRender Whether the scope should wait to render until the buffer fills (default true). Only applicable if triggerThreshold is set.
+   * @param config.range Voltage range for display as [min, max] tuple (default [-5, 5])
    */
   scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number] }): this;
   
   /**
    * Send this output to speakers as stereo.
-   * @param options - Stereo output options ({@link StereoOutOptions})
+   * @param options Stereo output options ({@link StereoOutOptions})
    * @example $sine("c4").out({ gain: 2.5, pan: -2 })
+   * @example $sine("c4").out({ label: 'lead' })
    */
   out(options?: StereoOutOptions): this;
-  
+
   /**
    * Send this output to speakers as mono.
-   * @param channel - Output channel (0-15, default 0)
-    * @param gain - Output gain as {@link Poly<Signal>} (optional)
+   * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
+    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
     * @example $sine("1hz").outMono(2, 0.3)
+    * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
     */
-   outMono(channel?: number, gain?: Poly<Signal>): this;
+   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
   /**
    * Pipe this output through a transform function.
@@ -892,7 +915,7 @@ interface ModuleOutput {
    * Passes \`this\` to \`pipeFn\` and returns the result, enabling inline
    * functional transforms and reusable signal-processing helpers.
    *
-   * @param pipeFn - A function that receives this output and returns a transformed value
+   * @param pipeFn A function that receives this output and returns a transformed value
    * @returns The return value of \`pipeFn\`
    *
    * @example
@@ -909,8 +932,8 @@ interface ModuleOutput {
    * Pipe this output through a transform for each element of an array.
    * Returns a {@link Collection} containing one output per element.
    *
-   * @param pipeFn - A function that receives this output and one element from the array
-   * @param array - An array whose elements are passed to \`pipeFn\` one by one
+   * @param pipeFn A function that receives this output and one element from the array
+   * @param array An array whose elements are passed to \`pipeFn\` one by one
    * @returns A {@link Collection} with one item per element
    *
    * @example
@@ -929,8 +952,8 @@ interface ModuleOutput {
    * Pipe this output through a transform, then mix the original and transformed
    * signals together using a \\$mix module.
    *
-   * @param pipeFn - A function that receives this output and returns a signal to mix with the original
-   * @param mix - Optional crossfade as {@link Poly<Signal>}. 0 for only original, 5 for only transformed. Default is 2.5 for equal mix.
+   * @param pipeFn A function that receives this output and returns a signal to mix with the original
+   * @param mix Optional crossfade as {@link Poly<Signal>}. 0 for only original, 5 for only transformed. Default is 2.5 for equal mix.
    * @returns A Collection from the \\$mix output
    *
    * @example
@@ -948,8 +971,8 @@ interface ModuleOutput {
    * evenly across the output field with an equal-power law. Creates a \\$mixDown
    * module internally.
    *
-   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
-   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @param channels Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode How channels landing on the same output combine. Defaults to "sum".
    * @returns A Collection from the \\$mixDown output
    *
    * @example
@@ -961,10 +984,10 @@ interface ModuleOutput {
   /**
    * Remap this output from an explicit input range to a new output range.
    * Creates a $remap module internally.
-   * @param outMin - New minimum as {@link Poly<Signal>}
-   * @param outMax - New maximum as {@link Poly<Signal>}
-   * @param inMin - Input minimum as {@link Poly<Signal>}
-   * @param inMax - Input maximum as {@link Poly<Signal>}
+   * @param outMin New minimum as {@link Poly<Signal>}
+   * @param outMax New maximum as {@link Poly<Signal>}
+   * @param inMin Input minimum as {@link Poly<Signal>}
+   * @param inMax Input maximum as {@link Poly<Signal>}
    * @returns A {@link CollectionWithRange} carrying the remapped signal
    * @example $sine('c4').range(0, 1, -5, 5)
    */
@@ -972,8 +995,8 @@ interface ModuleOutput {
 
   /**
    * Register this output as a send to a bus, with optional gain.
-   * @param bus - The {@link Bus} to send to
-   * @param gain - Send level as {@link Poly<Signal>}
+   * @param bus The {@link Bus} to send to
+   * @param gain Send level as {@link Poly<Signal>}
    * @returns This output for chaining
    */
   send(bus: Bus, gain?: Poly<Signal>): this;
@@ -1003,7 +1026,9 @@ interface ModuleOutput {
 interface DeferredModuleOutput extends ModuleOutput {
   /**
    * Set the actual signal this deferred output should resolve to.
-   * @param signal - The signal to resolve to (number, string, or ModuleOutput)
+   * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
+   * $signal modules, matching $c.
+   * @param signal The signal to resolve to (number, string, or ModuleOutput)
    */
   set(signal: Signal): void;
 }
@@ -1031,8 +1056,8 @@ interface ModuleOutputWithRange extends ModuleOutput {
   /**
    * Remap the output from its native range to a new range.
    * Uses the stored minValue/maxValue automatically.
-   * @param outMin - New minimum as {@link Poly<Signal>}
-   * @param outMax - New maximum as {@link Poly<Signal>}
+   * @param outMin New minimum as {@link Poly<Signal>}
+   * @param outMax New maximum as {@link Poly<Signal>}
    * @returns A {@link CollectionWithRange} carrying the remapped signal
    * @example $sine("1hz").range("C3", "C5")
    */
@@ -1047,11 +1072,34 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
   readonly [index: number]: T;
   [Symbol.iterator](): Iterator<T>;
 
+  /**
+   * A collection of the same type holding the outputs from \`start\` up to but
+   * not including \`end\`. Negative indices count from the end, as with
+   * \`Array.prototype.slice\`.
+   * @param start First index to include (default 0)
+   * @param end Index to stop before (default: the collection's length)
+   * @example $saw(['c3', 'e3', 'g3', 'b3']).slice(1, 3).out()
+   */
+  slice(start?: number, end?: number): this;
+
+  /**
+   * Split into an array of consecutive collections of the same type, each
+   * \`size\` outputs long except the last, which holds the remainder.
+   *
+   * \`\`\`js
+   * const [low, high] = $saw(['c3', 'e3', 'g3', 'b3']).chunk(2)
+   * low.out({ pan: -5 })
+   * high.out({ pan: 5 })
+   * \`\`\`
+   * @param size Outputs per chunk (a positive integer)
+   */
+  chunk(size: number): this[];
+
     /**
      * Scale all signals by a linear factor (5 = unity, 2.5 = half, 10 = 2x).
      *
      * For perceptual (audio-taper) volume control, use {@link gain} instead.
-     * @param factor - Scale factor as {@link Poly<Signal>}
+     * @param factor Scale factor as {@link Poly<Signal>}
      * @see {@link ModuleOutput.amplitude}
      */
    amplitude(factor: Poly<Signal>): Collection;
@@ -1061,21 +1109,21 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Add DC offset to all signals.
-   * @param offset - Offset as {@link Poly<Signal>}
+   * @param offset Offset as {@link Poly<Signal>}
    * @see {@link ModuleOutput.shift}
    */
   shift(offset: Poly<Signal>): Collection;
 
   /**
    * Offset all pitches by an absolute frequency amount, in Hz.
-   * @param offset - Hz offset as {@link Poly<Signal>}
+   * @param offset Hz offset as {@link Poly<Signal>}
    * @see {@link ModuleOutput.addHz}
    */
   addHz(offset: Poly<Signal>): Collection;
 
   /**
    * Multiply all pitches by a frequency factor (2 = octave up, 0.5 = down).
-   * @param factor - Frequency multiplier as {@link Poly<Signal>}
+   * @param factor Frequency multiplier as {@link Poly<Signal>}
    * @see {@link ModuleOutput.mulHz}
    */
   mulHz(factor: Poly<Signal>): Collection;
@@ -1085,49 +1133,51 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
      * (5 = unity, 0 = silence).
      *
      * For linear amplitude scaling, use {@link amplitude} instead.
-     * @param level - Amplitude level as {@link Poly<Signal>}
+     * @param level Amplitude level as {@link Poly<Signal>}
      * @see {@link ModuleOutput.gain}
      */
   gain(level: Poly<Signal>): Collection;
 
   /**
    * Apply a power curve to all signals. Creates a \\$curve module internally.
-   * @param factor - Exponent for the curve (default 3)
+   * @param factor Exponent for the curve (default 3)
    * @see {@link ModuleOutput.exp}
    */
   exp(factor?: Poly<Signal>): Collection;
 
   /**
    * Add scope visualization for the first output in the collection.
-   * @param config - Scope configuration options
-   * @param config.msPerFrame - Time window in milliseconds (default 500)
-   * @param config.triggerThreshold - Trigger threshold in volts (optional)
-   * @param config.triggerWaitToRender - Whether the scope should wait to render until the buffer fills (default true). Only applicable if triggerThreshold is set.
-   * @param config.range - Voltage range for display as [min, max] tuple (default [-5, 5])
+   * @param config Scope configuration options
+   * @param config.msPerFrame Time window in milliseconds (default 500)
+   * @param config.triggerThreshold Trigger threshold in volts (optional)
+   * @param config.triggerWaitToRender Whether the scope should wait to render until the buffer fills (default true). Only applicable if triggerThreshold is set.
+   * @param config.range Voltage range for display as [min, max] tuple (default [-5, 5])
    */
   scope(config?: { msPerFrame?: number; triggerThreshold?: number; triggerWaitToRender?: boolean; range?: [number, number] }): this;
 
   /**
    * Send all outputs to speakers as stereo, summed together.
-   * @param options - Stereo output options ({@link StereoOutOptions})
+   * @param options Stereo output options ({@link StereoOutOptions})
+   * @example $saw(['c3', 'e3', 'g3']).out({ label: 'chord' })
    */
   out(options?: StereoOutOptions): this;
 
   /**
    * Send all outputs to speakers as mono, summed together.
-   * @param channel - Output channel (0-15, default 0)
-    * @param gain - Output gain as {@link Poly<Signal>} (optional)
+   * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
+    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+    * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
     */
-   outMono(channel?: number, gain?: Poly<Signal>): this;
+   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
 
   /**
    * Remap all outputs from input range to output range.
    * Requires explicit input min/max values.
-   * @param inMin - Input minimum as {@link Poly<Signal>}
-   * @param inMax - Input maximum as {@link Poly<Signal>}
-   * @param outMin - Output minimum as {@link Poly<Signal>}
-   * @param outMax - Output maximum as {@link Poly<Signal>}
+   * @param inMin Input minimum as {@link Poly<Signal>}
+   * @param inMax Input maximum as {@link Poly<Signal>}
+   * @param outMin Output minimum as {@link Poly<Signal>}
+   * @param outMax Output maximum as {@link Poly<Signal>}
    * @see {@link CollectionWithRange.range} - for automatic input range
    */
   range(outMin: Poly<Signal>, outMax: Poly<Signal>, inMin: Poly<Signal>, inMax: Poly<Signal>): CollectionWithRange;
@@ -1138,7 +1188,7 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * Passes \`this\` to \`pipeFn\` and returns the result, enabling inline
    * functional transforms and reusable signal-processing helpers.
    *
-   * @param pipeFn - A function that receives this collection and returns a transformed value
+   * @param pipeFn A function that receives this collection and returns a transformed value
    * @returns The return value of \`pipeFn\`
    *
    * @example
@@ -1155,8 +1205,8 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * Pipe this collection through a transform for each element of an array.
    * Returns a {@link Collection} containing one output per element.
    *
-   * @param pipeFn - A function that receives this collection and one element from the array
-   * @param array - An array whose elements are passed to \`pipeFn\` one by one
+   * @param pipeFn A function that receives this collection and one element from the array
+   * @param array An array whose elements are passed to \`pipeFn\` one by one
    * @returns A {@link Collection} with one item per element
    *
    * @example
@@ -1175,8 +1225,8 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * Pipe this collection through a transform, then mix the original and transformed
    * signals together using a \\$mix module.
    *
-   * @param pipeFn - A function that receives this collection and returns a signal to mix with the original
-   * @param mix - Optional crossfade as {@link Poly<Signal>}. 0 for only original, 5 for only transformed. Default is 2.5 for equal mix.
+   * @param pipeFn A function that receives this collection and returns a signal to mix with the original
+   * @param mix Optional crossfade as {@link Poly<Signal>}. 0 for only original, 5 for only transformed. Default is 2.5 for equal mix.
    * @returns A Collection from the \\$mix output
    *
    * @example
@@ -1194,8 +1244,8 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * them evenly across the output field with an equal-power law. Creates a
    * \\$mixDown module internally.
    *
-   * @param channels - Target output channel count (1–16). Defaults to 1 (mono).
-   * @param mode - How channels landing on the same output combine. Defaults to "sum".
+   * @param channels Target output channel count (1–16). Defaults to 1 (mono).
+   * @param mode How channels landing on the same output combine. Defaults to "sum".
    * @returns A Collection from the \\$mixDown output
    *
    * @example
@@ -1206,8 +1256,8 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Register all outputs in this collection as a send to a bus, with optional gain.
-   * @param bus - The {@link Bus} to send to
-   * @param gain - Send level as {@link Poly<Signal>}
+   * @param bus The {@link Bus} to send to
+   * @param gain Send level as {@link Poly<Signal>}
    * @returns This collection for chaining
    */
   send(bus: Bus, gain?: Poly<Signal>): this;
@@ -1270,8 +1320,8 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
   /**
    * Remap all outputs from their native ranges to a new range.
    * Uses each output's stored minValue/maxValue.
-   * @param outMin - Output minimum as {@link Poly<Signal>}
-   * @param outMax - Output maximum as {@link Poly<Signal>}
+   * @param outMin Output minimum as {@link Poly<Signal>}
+   * @param outMax Output maximum as {@link Poly<Signal>}
    * @see {@link Collection.range} - for explicit input range
    */
   override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
@@ -1285,8 +1335,11 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
   constructor(...outputs: DeferredModuleOutput[]);
 
   /**
-   * Set the signals for all deferred outputs in this collection.
-   * @param polySignal - A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
+   * Set the signals for all deferred outputs in this collection, cycling a
+   * narrower argument across the channels. Bare {@link Signal} literals
+   * (numbers, note/Hz strings) are lifted into $signal modules, matching $c —
+   * a string is one signal, not spread into characters.
+   * @param polySignal A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
    */
   set(polySignal: Poly<Signal>): void;
 }
@@ -1296,7 +1349,7 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
 
 /**
  * Convert a frequency in Hertz to a voltage value (1V/octave).
- * @param frequency - Frequency in Hz
+ * @param frequency Frequency in Hz
  * @returns Voltage value for use as a {@link Signal}
  * @example $hz(440)  // A4
  * @example $hz(261.63)  // ~C4
@@ -1305,7 +1358,7 @@ function $hz(frequency: number): number;
 
 /**
  * Convert a note name string to a voltage value (1V/octave).
- * @param noteName - Note name like "C4", "A#3", "Bb5"
+ * @param noteName Note name like "C4", "A#3", "Bb5"
  * @returns Voltage value for use as a {@link Signal}
  * @example $note("C4")  // Middle C
  * @example $note("A4")  // 440 Hz
@@ -1318,7 +1371,7 @@ function $note(noteName: string): number;
  * Collections support chainable DSP methods, iteration, indexing, and spreading.
  * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
  * $signal modules, so they can be mixed in alongside module outputs.
- * @param args - One or more {@link ModuleOutput}s or {@link Signal} literals to group
+ * @param args One or more {@link ModuleOutput}s or {@link Signal} literals to group
  * @returns A {@link Collection} of the outputs
  * @example $c($sine('c3'), $sine('e3')).amplitude(0.5).out()
  * @example $c(440, 'c4', $sine('e3'))  // Bare number/string lifted into $signal
@@ -1332,7 +1385,7 @@ function $c(...args: (Signal | Iterable<Signal>)[]): Collection;
  * Create a {@link CollectionWithRange} from {@link ModuleOutputWithRange} instances.
  * 
  * Like $() but the range() method uses stored min/max values.
- * @param args - One or more {@link ModuleOutputWithRange}s to group
+ * @param args One or more {@link ModuleOutputWithRange}s to group
  * @returns A {@link CollectionWithRange} of the outputs
  * @example $r($sine('1hz'), $sine('2hz')).range(0, 5)  // Uses stored ranges
  * @example $r(...[$sine('3hz'), $sine('4hz')]).range(0, 1)
@@ -1342,7 +1395,7 @@ function $r(...args: (ModuleOutputWithRange | Iterable<ModuleOutputWithRange>)[]
 
 /**
  * Set the global tempo for the root clock.
- * @param tempo - Tempo in BPM
+ * @param tempo Tempo in BPM
  * @example $setTempo(120)  // 120 beats per minute
  * @example $setTempo(140)  // 140 beats per minute
  */
@@ -1350,7 +1403,7 @@ function $setTempo(tempo: number): void;
 
 /**
  * Set the global output gain applied to the final mix.
- * @param gain - Gain as a Mono<Signal> (2.5 is default, 5.0 is unity)
+ * @param gain Gain as a Mono<Signal> (2.5 is default, 5.0 is unity)
  * @example $setOutputGain(2.5) // 50% gain (default)
  * @example $setOutputGain(5.0) // unity
  * @example $setOutputGain($adsr($clock.beatTrigger, {})) // modulate gain from envelope
@@ -1360,11 +1413,13 @@ function $setOutputGain(gain: Mono<Signal>): void;
 /**
  * Render a Lissajous-style XY oscilloscope as the editor background.
  * Each axis is cycled to the longer arity, producing one trace per pair.
+ * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
+ * $signal modules, matching $c.
  * Last call wins; only one global XY scope can be active at a time.
- * @param x - Horizontal channel(s)
- * @param y - Vertical channel(s)
- * @param config.xRange - Horizontal voltage window (default [-5, 5])
- * @param config.yRange - Vertical voltage window (default [-5, 5])
+ * @param x Horizontal channel(s)
+ * @param y Vertical channel(s)
+ * @param config.xRange Horizontal voltage window (default [-5, 5])
+ * @param config.yRange Vertical voltage window (default [-5, 5])
  * @example $scopeXY($sine($hz(440)), $sine($hz(311)))
  * @example $scopeXY($c($sine('c3'), $sine('e3')), $sine('g3')) // 2 traces, both share the same Y
  */
@@ -1377,8 +1432,8 @@ function $scopeXY(
 /**
  * Set the time signature for the root clock.
  * Both values must be positive integers.
- * @param numerator - Beats per bar (e.g. 3, 4, 6, 7)
- * @param denominator - Beat value (e.g. 4 for quarter note, 8 for eighth note)
+ * @param numerator Beats per bar (e.g. 3, 4, 6, 7)
+ * @param denominator Beat value (e.g. 4 for quarter note, 8 for eighth note)
  * @example $setTimeSignature(4, 4)  // 4/4 time (default)
  * @example $setTimeSignature(3, 4)  // 3/4 waltz time
  * @example $setTimeSignature(6, 8)  // 6/8 compound time
@@ -1390,7 +1445,7 @@ function $setTimeSignature(numerator: number, denominator: number): void;
 /**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
  * Useful for feedback loops and forward references.
- * @param channels - Number of deferred outputs (1-64, default 1)
+ * @param channels Number of deferred outputs (1-64, default 1)
  * @example
  * const fb = $deferred();
  * // the delay's buffer breaks the cycle, so the deferred can feed back in
@@ -1410,10 +1465,10 @@ function $deferred(channels?: number): DeferredCollection;
  * or all note strings. Hz and note sliders travel linearly in V/Oct (evenly
  * spaced octaves); note sliders snap to semitones.
  *
- * @param label - Display label for the slider (must be a string literal)
- * @param value - Initial value (must be a numeric or string literal)
- * @param min - Minimum slider value
- * @param max - Maximum slider value
+ * @param label Display label for the slider (must be a string literal)
+ * @param value Initial value (must be a numeric or string literal)
+ * @param min Minimum slider value
+ * @param max Maximum slider value
  * @returns A CollectionWithRange carrying the slider's current value (range [min, max])
  *
  * @example
@@ -1432,7 +1487,7 @@ function $slider(label: string, value: Note, min: Note, max: Note): CollectionWi
  * Create a momentary gate button in the Control panel: 5V while held, 0V
  * otherwise. Chain through .$.hold for a fixed-length trigger per press.
  *
- * @param label - Display label for the button (must be a string literal)
+ * @param label Display label for the button (must be a string literal)
  * @returns A CollectionWithRange carrying the button output (range [0, 5])
  *
  * @example
@@ -1448,8 +1503,8 @@ function $btn(label: string): CollectionWithRange;
  * 0V and 5V and rewrites the initial-state literal in the source, so the
  * state survives re-execution.
  *
- * @param label - Display label for the button (must be a string literal)
- * @param initial - Initial state (must be a true/false literal)
+ * @param label Display label for the button (must be a string literal)
+ * @param initial Initial state (must be a true/false literal)
  * @returns A CollectionWithRange carrying the button output (range [0, 5])
  *
  * @example
@@ -1474,7 +1529,7 @@ class Bus {
  * sent to this bus via \`.send(bus, gain)\`. Use it to add effects or route the
  * mixed signal to an output.
  *
- * @param cb - Called during patch finalization with the mixed sends.
+ * @param cb Called during patch finalization with the mixed sends.
  *             The return value of this function is discarded, it's up to the cb to
  *             call \`.out()\` or \`.outMono()\` to actually hear anything.
  * @returns A {@link Bus} handle passed to \`.send()\`
@@ -1492,7 +1547,7 @@ function $bus(cb: (mixed: Collection) => unknown): Bus;
  * The callback receives the fully mixed {@link Collection} and should return a
  * processed signal. It is called once during patch finalization.
  *
- * @param cb - Transform applied to the final mix
+ * @param cb Transform applied to the final mix
  *
  * @example
  * $setEndOfChainCb((mix) => $lpf(mix, '2000hz'));
@@ -1506,7 +1561,7 @@ function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection |
  * as a typed tuple array. Pairs well with the array overload of \`.pipe()\`
  * to fan a signal across multiple parameter dimensions.
  *
- * @param arrays - Zero or more arrays to combine
+ * @param arrays Zero or more arrays to combine
  * @returns Array of typed tuples, one per combination
  *
  * @example
@@ -1521,6 +1576,47 @@ function $setEndOfChainCb(cb: (mixed: Collection) => ModuleOutput | Collection |
  * // → [[1,'a'], [1,'b'], [2,'a'], [2,'b']]
  */
 function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
+
+/**
+ * Tag a parameter value into signal group 1.
+ *
+ * Parameters in different groups multiply (cartesian product of channels)
+ * within a module instead of cycling together; parameters in the same group
+ * cycle as usual, and untagged parameters are group 0. Lower-numbered groups
+ * vary fastest across the resulting channels. The product across groups may
+ * not exceed 64 channels, and \`$gN\` must wrap the entire parameter value —
+ * it cannot appear inside an array.
+ *
+ * @example
+ * // 3 pitches x 2 phase offsets = 6 voices
+ * $sine($g1(["c3", "e3", "g3"]), {
+ *   phaseOffset: $g2([0, 0.25]),
+ * }).out()
+ */
+function $g1(signals: Poly<Signal>): SignalGroup;
+
+/**
+ * Tag a parameter value into signal group 2 — see {@link $g1}.
+ *
+ * @example
+ * // 3 pitches x 2 phase offsets = 6 voices
+ * $sine($g1(["c3", "e3", "g3"]), {
+ *   phaseOffset: $g2([0, 0.25]),
+ * }).out()
+ */
+function $g2(signals: Poly<Signal>): SignalGroup;
+
+/**
+ * Tag a parameter value into signal group 3 — see {@link $g1}.
+ *
+ * @example
+ * // 2 pitches x 2 shapes x 2 phases = 8 voices
+ * $saw($g1(["c2", "c3"]), {
+ *   shape: $g2([0, 2.5]),
+ *   phaseOffset: $g3([0, 0.5]),
+ * }).out()
+ */
+function $g3(signals: Poly<Signal>): SignalGroup;
 
 /**
  * \`$ott\` — three-band upward + downward compressor in the style of Xfer's OTT.
@@ -1575,10 +1671,10 @@ function $ott(input: Collection | ModuleOutput, config?: {
 }): Collection;
 
 /**
- * @param count - Size of the output
- * @param playhead - 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
- * @param range - \`[off, on]\` weight pair (default \`[0, 1]\`)
- * @param interpolationType - Easing between keyframes (default linear)
+ * @param count Size of the output
+ * @param playhead 0..1 position (wraps), e.g. an LFO into \`.range(0, 1)\`
+ * @param range \`[off, on]\` weight pair (default \`[0, 5]\`, 5 = unity)
+ * @param interpolationType Easing between keyframes (default linear)
  *
  * @example
  * // Crossfade the amplitude of the different voices
@@ -1863,6 +1959,17 @@ function getFactoryReturnType(moduleSchema: Schema): string {
 }
 
 /**
+ * Param docs render as single JSDoc list items, so a doc comment wrapped over
+ * several lines is joined into one.
+ */
+function paramDescription(description: string): string {
+    return description
+        .split(/\s*\r?\n\s*/)
+        .filter(Boolean)
+        .join(' ');
+}
+
+/**
  * Build the trailing `config?: { ... }` argument shared by the factory-function
  * and `.$.`-method renderers: every non-positional param, plus an optional
  * `id`. `config` is required only when some non-positional param is required.
@@ -1900,8 +2007,7 @@ function buildConfigArg(moduleSchema: Schema): {
         // Collect config param descriptions
         const description = propSchema?.description;
         if (description) {
-            const firstLine = description.split(/\r?\n/)[0];
-            paramDocs.push(`${key} - ${firstLine}`);
+            paramDocs.push(`${key} - ${paramDescription(description)}`);
         }
 
         // Append enum variant descriptions as sub-bullets
@@ -1990,8 +2096,9 @@ function buildSignature(
 
         const description = propSchema?.description;
         if (description) {
-            const firstLine = description.split(/\r?\n/)[0];
-            docLines.push(`@param ${arg.name} - ${firstLine}`);
+            docLines.push(
+                `@param ${arg.name} ${paramDescription(description)}`,
+            );
         } else {
             docLines.push(`@param ${arg.name}`);
         }
@@ -2010,12 +2117,12 @@ function buildSignature(
     const { arg: configArg, paramDocs } = buildConfigArg(moduleSchema);
     args.push(configArg);
     if (paramDocs.length > 0) {
-        docLines.push(`@param config - Configuration object`);
+        docLines.push(`@param config Configuration object`);
         for (const doc of paramDocs) {
             docLines.push(`  - ${doc}`);
         }
     } else {
-        docLines.push(`@param config - Configuration object`);
+        docLines.push(`@param config Configuration object`);
     }
 
     return { args, docLines };
@@ -2057,7 +2164,7 @@ function renderDollarMethod(
         ? [
               {
                   decl: 'mix: Poly<Signal>',
-                  doc: '@param mix - Dry/wet crossfade as {@link Poly<Signal>}. 0 = dry input only, 5 = wet result only, 2.5 = equal.',
+                  doc: '@param mix Dry/wet crossfade as {@link Poly<Signal>}. 0 = dry input only, 5 = wet result only, 2.5 = equal.',
               },
           ]
         : [];
@@ -2185,7 +2292,9 @@ export function generateDSL(schemas: Schemas): string {
     const signalSchema = schemas.find((s) => s.name === '$signal');
     if (signalSchema) {
         lines.push('');
-        lines.push('/** Input signals. */');
+        lines.push(
+            '/** Live audio input, one channel per input on the current device. */',
+        );
         const signalReturnType = getFactoryReturnType(signalSchema);
         lines.push(`export const $input: Readonly<${signalReturnType}>;`);
     }

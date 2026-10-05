@@ -7,6 +7,15 @@
  */
 
 /**
+ * The DSL executor's function-body template indents the first line of user
+ * source by this many columns, so V8 stack columns (and therefore
+ * `captureSourceLocation` results and call-site span keys) are shifted by
+ * this amount on line 1 only. Consumers mapping a captured column back to an
+ * editor column must subtract it for line-1 locations.
+ */
+export const FIRST_LINE_COLUMN_OFFSET = 4;
+
+/**
  * Span representing a character range in source code
  */
 export interface SourceSpan {

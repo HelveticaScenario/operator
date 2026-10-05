@@ -36,7 +36,7 @@ export {
  *
  * @param source - The DSL source code to analyze
  * @param schemas - Module schemas to determine which calls to track
- * @param lineOffset - Line offset to add (for wrapped code in new Function)
+ * @param lineOffset - Line offset to add (for the executor's script wrapper lines)
  * @param firstLineColumnOffset - Column offset for the first line
  * @returns Analysis result with span registry, interpolation resolution map,
  *          and call site span registry

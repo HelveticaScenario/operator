@@ -78,6 +78,26 @@ export const saveUnsavedBuffers = (buffers: EditorBuffer[]) => {
 export const getBufferId = (buffer: EditorBuffer): string =>
     buffer.kind === 'file' ? buffer.filePath : buffer.id;
 
+/**
+ * File-buffer identity is the absolute path (see `getBufferId`), but several
+ * IPC surfaces hand back workspace-relative paths (the save dialog, the file
+ * tree, context menus). Resolve through here before a path is stored or
+ * compared, so every surface produces the same identity for the same file.
+ * Already-absolute paths — POSIX or Windows drive-letter — pass through
+ * unchanged; the drive check requires a separator after the colon so a
+ * relative name like 'c:song.mjs' (legal on macOS/Linux) still resolves
+ * against the workspace.
+ */
+export const toAbsoluteWorkspacePath = (
+    workspaceRoot: string | null,
+    path: string,
+): string => {
+    if (workspaceRoot && !path.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(path)) {
+        return `${workspaceRoot}/${path}`;
+    }
+    return path;
+};
+
 export const formatBufferLabel = (buffer: EditorBuffer) => {
     if (buffer.kind === 'untitled') {
         return buffer.id;

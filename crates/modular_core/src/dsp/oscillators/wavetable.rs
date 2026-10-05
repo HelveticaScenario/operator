@@ -86,6 +86,15 @@ struct ChannelState {
     sync_prev: f32,
     /// PolyBLEP residual carried into the next sample from a sync reset.
     blep_carry: f32,
+    /// The pitch and FM inputs `freq` and `level` were derived from. Compared
+    /// exactly, so the cached values are always the ones a fresh computation
+    /// would give; `NaN` never matches, forcing the first computation.
+    last_pitch: f32,
+    last_fm: f32,
+    /// Playback frequency in Hz.
+    freq: f32,
+    /// Mipmap level for `freq`.
+    level: usize,
 }
 
 impl Default for ChannelState {
@@ -95,6 +104,10 @@ impl Default for ChannelState {
             sync_schmitt: SchmittTrigger::default(),
             sync_prev: 0.0,
             blep_carry: 0.0,
+            last_pitch: f32::NAN,
+            last_fm: f32::NAN,
+            freq: 0.0,
+            level: 0,
         }
     }
 }
@@ -141,6 +154,7 @@ pub fn wavetable_derive_channel_count(params: &WavetableOscParams) -> usize {
     channels_derive = wavetable_derive_channel_count,
     args(pitch, wav, position),
     has_prepare_resources,
+    patch_update,
 )]
 pub struct WavetableOsc {
     params: WavetableOscParams,
@@ -178,7 +192,13 @@ impl WavetableOsc {
 
             let pitch_v = self.params.pitch.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
-            let freq = apply_fm(pitch_v, fm, self.params.fm_mode);
+            if pitch_v != state.last_pitch || fm != state.last_fm {
+                state.freq = apply_fm(pitch_v, fm, self.params.fm_mode);
+                state.level = prepared.mipmap_level_for_freq(state.freq);
+                state.last_pitch = pitch_v;
+                state.last_fm = fm;
+            }
+            let (freq, level) = (state.freq, state.level);
 
             // Frame index: 0–5V → 0..=frame_count-1.
             let pos_v = self.params.position.value_or(ch, 0.0).clamp(0.0, 5.0);
@@ -197,7 +217,6 @@ impl WavetableOsc {
                 None => raw_phase,
             };
 
-            let level = prepared.mipmap_level_for_freq(freq);
             let before = prepared.read_sample(level, frame_f, warped_phase);
 
             // Naive read plus any residual carried from a sync reset on the
@@ -266,6 +285,16 @@ impl WavetableOsc {
     }
 }
 
+impl crate::types::PatchUpdateHandler for WavetableOsc {
+    fn on_patch_update(&mut self) {
+        // The cached frequency and level also depend on `fmMode` and the table,
+        // either of which a patch update can change.
+        for state in self.channel_state.iter_mut() {
+            state.last_pitch = f32::NAN;
+        }
+    }
+}
+
 message_handlers!(impl WavetableOsc {});
 
 #[cfg(test)]
@@ -319,6 +348,30 @@ mod tests {
             phase_offset: None,
             prepared: None,
         }
+    }
+
+    /// The cached frequency follows a patch update that changes `fmMode` while
+    /// the pitch and FM inputs stay the same.
+    #[test]
+    fn fm_mode_change_refreshes_cached_frequency() {
+        use crate::types::PatchUpdateHandler;
+
+        let mut params = base_params();
+        params.fm = Some(PolySignal::mono(Signal::Volts(0.5)));
+        params.fm_mode = FmMode::Exp;
+        params.prepared = Some(PreparedWavetable::from_wav_data(&make_wav(256, 1), 48000.0));
+        let mut osc = make_osc(params);
+        osc.update(48000.0);
+        assert_eq!(osc.channel_state[0].freq, apply_fm(0.0, 0.5, FmMode::Exp));
+
+        osc.params.fm_mode = FmMode::Lin;
+        osc.on_patch_update();
+        osc.update(48000.0);
+        assert_eq!(osc.channel_state[0].freq, apply_fm(0.0, 0.5, FmMode::Lin));
+        assert_ne!(
+            apply_fm(0.0, 0.5, FmMode::Lin),
+            apply_fm(0.0, 0.5, FmMode::Exp)
+        );
     }
 
     #[test]

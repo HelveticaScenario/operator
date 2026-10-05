@@ -14,7 +14,7 @@ use rtrb::PushError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::audio::{ScopeBuffer, ScopeXyBuffer};
+use crate::audio::{ScopeBuffer, ScopeXyBuffer, VuMeterState};
 use crate::link::LinkResources;
 
 /// When a queued patch update should be applied.
@@ -64,11 +64,14 @@ pub struct PatchUpdate {
     /// ID remappings (applied before inserts/deletes)
     pub transfer_sources: HashMap<String, Option<String>>,
 
-    /// Pre-built scope buffers to add (constructed on main thread)
-    pub scope_adds: Vec<(ScopeBufferKey, ScopeBuffer)>,
-
-    /// Scopes to remove
-    pub scope_removes: Vec<ScopeBufferKey>,
+    /// The complete next scope membership, built on the main thread with a
+    /// fresh buffer per key. At apply time the audio thread moves each
+    /// carried-over key's live buffer into this map in place (no allocation)
+    /// and swaps the whole map in — it never inserts into or removes from the
+    /// shared collection, and membership never depends on a snapshot taken
+    /// before other updates applied. The displaced map rides this update back
+    /// through the garbage queue.
+    pub scope_next: HashMap<ScopeBufferKey, ScopeBuffer>,
 
     /// The complete next XY-scope membership, built on the main thread:
     /// carried-over pairs keep their live buffer `Arc` (ring continuity), new
@@ -80,6 +83,12 @@ pub struct PatchUpdate {
     /// The same membership as `scope_xy_next`, as the flat list the audio
     /// thread iterates per sample. Swapped wholesale for the same reason.
     pub scope_xy_audio_next: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
+
+    /// The complete next VU meter membership, built on the main thread with
+    /// running levels carried over from matching current entries. The audio
+    /// thread swaps this in wholesale; the displaced Vec rides this update
+    /// back through the garbage queue.
+    pub vu_next: Vec<VuMeterState>,
 
     /// Empty, main-thread-allocated storage for the audio thread's processing
     /// order pointer list, with capacity for `process_order_ids.len()` entries
@@ -126,10 +135,10 @@ impl PatchUpdate {
             new_patch: Patch::new(),
             process_order_ids: Vec::new(),
             transfer_sources: HashMap::new(),
-            scope_adds: Vec::new(),
-            scope_removes: Vec::new(),
+            scope_next: HashMap::new(),
             scope_xy_next: HashMap::new(),
             scope_xy_audio_next: Vec::new(),
+            vu_next: Vec::new(),
             process_order_scratch: Vec::new(),
             sample_rate,
             transport_meta: None,
@@ -163,6 +172,10 @@ pub enum GraphCommand {
         update: PatchUpdate,
         trigger: QueuedTrigger,
     },
+
+    /// Discard the queued patch update, if any, so the playing patch keeps
+    /// running. A no-op once the update has applied.
+    CancelQueuedUpdate,
 
     /// Lightweight single-module update (e.g., slider changes).
     /// The module is pre-constructed on the main thread; the audio thread
@@ -241,14 +254,11 @@ pub enum GarbageItem {
     /// A module replaced by `SingleModuleUpdate`, paired with the command's id
     /// string so both heap owners drop together on the main thread.
     Module((String, Box<dyn Sampleable>)),
-    /// A scope entry removed from the collection. Carries the map's owned key
-    /// so its strings drop on the main thread, not inside `remove_entry`.
-    Scope((ScopeBufferKey, ScopeBuffer)),
     /// The audio thread's private XY-scope list, taken on `ClearPatch`.
     ScopeXyAudio(Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>),
     /// A patch update after it is applied (carrying everything it displaced:
-    /// old patch, order ids, XY scope map/list, evicted profiler maps) or one
-    /// superseded by a newer update before it was applied.
+    /// old patch, order ids, scope map, XY scope map/list, evicted profiler
+    /// maps) or one superseded by a newer update before it was applied.
     PatchUpdate(PatchUpdate),
     /// The old patch swapped out by `ClearPatch`.
     Patch(Patch),

@@ -352,13 +352,16 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$mulHz" => json!({ "input": 0.0, "factor": 1.0 }),
         "$curve" => json!({ "input": 0.0, "exp": 1.0 }),
         "$cycle" => json!({ "pattern": mini_payload("0") }),
-        "$slew" | "$hold" | "$quantizer" | "$unison" | "$crush" | "$feedback" | "$pulsar"
-        | "$rising" | "$falling" | "$stereoMix" | "$mixDown" => json!({ "input": 0.0 }),
+        "$slew" | "$hold" | "$motionFollower" | "$quantizer" | "$unison" | "$crush"
+        | "$feedback" | "$pulsar" | "$rising" | "$falling" | "$stereoMix" | "$mixDown" => {
+            json!({ "input": 0.0 })
+        }
         "$track" => json!({ "keyframes": [] }),
         "$math" => json!({ "expression": "1+1" }),
         "$spread" => json!({ "min": -1.0, "max": 1.0, "count": 3 }),
         "$signal" => json!({ "source": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
+        "$chord" => json!({ "chord": "C[maj]" }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
         "$overdrive" => json!({ "input": 0.0, "drive": 0.0 }),
         // Shape modules: `input` + required `mode` (drive is optional). digital
@@ -525,11 +528,13 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
                 id: id.to_string(),
                 module_type: module_type.to_string(),
                 id_is_explicit: None,
+                skip_state_transfer: None,
                 params,
             })
             .collect(),
         module_id_remaps: None,
         scopes: vec![],
+        vu_meters: vec![],
         scope_xy: None,
     }
 }
@@ -549,6 +554,41 @@ fn from_graph_creates_patch_with_modules() {
     assert!(patch.sampleables.contains_key("osc1"));
     assert!(patch.sampleables.contains_key("osc2"));
     assert!(patch.sampleables.contains_key("HIDDEN_AUDIO_IN"));
+}
+
+/// Poly reads cycle past a port's width; the physical-channel read the audio
+/// device tap uses reports silence there instead.
+#[test]
+fn reads_cycle_past_port_width_unless_no_cycle() {
+    let module = make_module("$signal", "sig", json!({ "source": [1.0, 2.0] }));
+    module.start_block();
+    module.ensure_processed();
+
+    assert_eq!(module.port_channels(DEFAULT_PORT), 2);
+    assert_eq!(module.port_channels("nonexistent"), 0);
+
+    let cycling: Vec<f32> = (0..4)
+        .map(|ch| module.get_value_at(DEFAULT_PORT, ch, 0))
+        .collect();
+    let physical: Vec<f32> = (0..4)
+        .map(|ch| module.get_value_at_no_cycle(DEFAULT_PORT, ch, 0))
+        .collect();
+
+    for (ch, (&cycled, &expected)) in cycling.iter().zip([1.0, 2.0, 1.0, 2.0].iter()).enumerate() {
+        assert!(
+            approx_eq(cycled, expected, 1e-4),
+            "cycling read of ch {ch} should be {expected}, got {cycled}"
+        );
+    }
+    for (ch, (&physical, &expected)) in physical.iter().zip([1.0, 2.0, 0.0, 0.0].iter()).enumerate()
+    {
+        assert!(
+            approx_eq(physical, expected, 1e-4),
+            "non-cycling read of ch {ch} should be {expected}, got {physical}"
+        );
+    }
+
+    assert_eq!(module.get_value_at_no_cycle("nonexistent", 0, 0), 0.0);
 }
 
 #[test]
@@ -753,6 +793,76 @@ fn from_graph_process_frame_advances_all_modules() {
 }
 
 // ─── Step sequencer ──────────────────────────────────────────────────────────
+
+#[test]
+fn chord_outputs_spec_voltages() {
+    let module = make_module("$chord", "chord", json!({ "chord": "C3[maj7]" }));
+    for (ch, semis) in [-12.0_f32, -8.0, -5.0, -1.0].iter().enumerate() {
+        let v = *collect_channel(module.as_ref(), ch, 1).last().unwrap();
+        assert!(approx_eq(v, semis / 12.0, 1e-5), "channel {ch}: {v}");
+    }
+}
+
+#[test]
+fn chord_rejects_invalid_specs() {
+    let deserializers = get_params_deserializers();
+    let deserializer = deserializers
+        .get("$chord")
+        .expect("no deserializer for $chord");
+    for spec in ["", "C(maj7)", "C[maj8]", "C[maj inv3]"] {
+        match deserializer(json!({ "chord": spec })) {
+            Ok(_) => panic!("{spec:?} should be rejected"),
+            Err(err) => {
+                let errors = err.into_errors();
+                assert!(
+                    errors
+                        .iter()
+                        .any(|e| e.message.contains("Invalid scale specification")),
+                    "{spec:?}: unexpected errors {:?}",
+                    errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn quantizer_hold_survives_state_transfer() {
+    let c_major_triad = json!([0.0, 4.0 / 12.0, 7.0 / 12.0]);
+    let old = make_module(
+        "$quantizer",
+        "q",
+        json!({ "input": 4.0 / 12.0, "scale": c_major_triad, "gate": 5.0 }),
+    );
+    assert!(approx_eq(
+        settle_and_read(old.as_ref(), 64),
+        4.0 / 12.0,
+        1e-5
+    ));
+
+    // The rebuilt quantizer sees every gate low, so it must keep the note
+    // chosen before the update rather than pass its new input through.
+    let new = make_module(
+        "$quantizer",
+        "q",
+        json!({ "input": 7.0 / 12.0, "scale": c_major_triad, "gate": 0.0 }),
+    );
+    new.transfer_state_from(old.as_ref());
+    let mut stepper = Stepper::new();
+    for _ in 0..64 {
+        let slot = stepper.tick(new.as_ref());
+        let out = new.get_value_at(DEFAULT_PORT, 0, slot);
+        assert!(
+            approx_eq(out, 4.0 / 12.0, 1e-5),
+            "expected held E4, got {out}"
+        );
+        assert_eq!(
+            new.get_value_at("trig", 0, slot),
+            0.0,
+            "hold must not trigger"
+        );
+    }
+}
 
 #[test]
 fn step_rejects_empty_steps() {
@@ -1171,6 +1281,134 @@ fn transfer_state_from_preserves_wrapper_outputs_for_feedback_cycles() {
     );
 }
 
+/// A live time-signature edit reaches a running clock as a rebuild + state
+/// transfer: the bar phase carries over, and the beat grid re-anchors to it,
+/// so after a mid-bar 4/4 → 3/4 switch the beat triggers land at bar phases
+/// 0, 1/3, 2/3 — never at a constant offset inherited from the old meter.
+#[test]
+fn clock_meter_change_keeps_beat_triggers_on_bar_grid() {
+    let make = |numerator: u64| {
+        make_graph(vec![(
+            "ROOT_CLOCK",
+            "_clock",
+            json!({ "tempo": 48000.0, "numerator": numerator, "denominator": 4 }),
+        )])
+    };
+    let old_patch =
+        from_graph(&make(4), SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("4/4 patch");
+    // 48000 BPM 4/4: one bar = 240 samples. Land mid-bar at phase 0.6.
+    for _ in 0..144 {
+        process_frame(&old_patch);
+    }
+
+    let new_patch =
+        from_graph(&make(3), SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new()).expect("3/4 patch");
+    for (id, new_module) in &new_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    new_patch.connect_all();
+
+    // 3/4 at this tempo: one bar = 180 samples, one beat = 60. Collect the
+    // bar phase at every beat-trigger rising edge over the next two bars.
+    let clock = new_patch.sampleables.get("ROOT_CLOCK").unwrap();
+    let mut was_high = clock.get_value_at("beatTrigger", 0, 0) > 2.5;
+    let mut edge_phases: Vec<f32> = Vec::new();
+    for _ in 0..360 {
+        process_frame(&new_patch);
+        let is_high = clock.get_value_at("beatTrigger", 0, 0) > 2.5;
+        if is_high && !was_high {
+            edge_phases.push(clock.get_value_at("playhead", 0, 0));
+        }
+        was_high = is_high;
+    }
+    assert_eq!(
+        edge_phases.len(),
+        6,
+        "3 beats per 3/4 bar over 2 bars: {edge_phases:?}"
+    );
+    for p in edge_phases {
+        let beats = p as f64 * 3.0;
+        assert!(
+            (beats - beats.round()).abs() < 0.1,
+            "beat trigger off the 3/4 beat grid at bar phase {p}"
+        );
+    }
+}
+
+#[test]
+fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
+    // Supersaw's channel_state is a [voice][input_ch] matrix with a fixed row
+    // stride, so the element-wise state transfer must keep every surviving
+    // voice's per-channel runtime state at its own coordinates when the
+    // `voices` param changes: carried voices stay phase-continuous on the
+    // transfer frame, and freshly added voices arrive with their zero-cross
+    // mute armed (silent) instead of inheriting another voice's mid-cycle,
+    // already-unmuted state.
+    let supersaw_params = |voices: u32| {
+        json!({
+            // Two-channel poly pitch (~C2): the matrix has more than one live
+            // column, so a stride mismatch would land channel >= 1 cells on
+            // the wrong (voice, channel) coordinates.
+            "freq": [-2.0, -1.9],
+            "voices": voices
+        })
+    };
+
+    let old_graph = make_graph(vec![("ss", "$supersaw", supersaw_params(5))]);
+    let old_patch = from_graph(&old_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    // Run past several C2 periods (~734 samples each) so every voice's
+    // zero-cross mute has released and phases sit at arbitrary points.
+    for _ in 0..4000 {
+        process_frame(&old_patch);
+    }
+    let old_ss = old_patch.sampleables.get("ss").unwrap();
+    let old_out: Vec<f32> = (0..5)
+        .map(|v| old_ss.get_value_at(DEFAULT_PORT, v, 0))
+        .collect();
+
+    let new_graph = make_graph(vec![("ss", "$supersaw", supersaw_params(7))]);
+    let new_patch = from_graph(&new_graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    // Mirror apply_patch_update: transfer state, then connect (which also
+    // re-runs on_patch_update so param-derived caches reflect the new params).
+    for (id, new_module) in &new_patch.sampleables {
+        if let Some(old_module) = old_patch.sampleables.get(id) {
+            new_module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    new_patch.connect_all();
+
+    process_frame(&new_patch);
+    let new_ss = new_patch.sampleables.get("ss").unwrap();
+
+    // The added voices must be silent on the transfer frame: their mute is
+    // armed and releases only at their own first zero crossing.
+    for voice in 5..7 {
+        let v = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
+        assert_eq!(
+            v, 0.0,
+            "fresh voice {voice} must start muted on the transfer frame, got {v}"
+        );
+    }
+
+    // Carried voices continue from their transferred phases: one frame of
+    // evolution, not a jump to another voice's state.
+    for (voice, &before) in old_out.iter().enumerate() {
+        let after = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
+        let delta = (after - before).abs();
+        assert!(
+            delta < 0.5,
+            "voice {voice} must be continuous across the transfer.\n\
+             Before: {before}, after: {after}, delta: {delta}"
+        );
+    }
+}
+
 // ─── $cycle($p.s) CV hold during rest after state transfer ───────────────────
 
 #[test]
@@ -1258,6 +1496,83 @@ fn cycle_ps_cv_holds_during_rest_after_state_transfer() {
         (new_cv - expected_voltage).abs() < 0.01,
         "after state transfer during rest, CV should hold {expected_voltage} V, got {new_cv}\n\
          (0.0 means last_cv was not preserved across state transfer)"
+    );
+}
+
+// ─── $tah held voltage survives transfer_state_from ──────────────────────────
+
+#[test]
+fn tah_holds_voltage_across_state_transfer() {
+    // A patch update reconstructs every module with empty outputs and carries
+    // only `state` / `channel_state` over. `$tah`'s held voltage must therefore
+    // live in per-channel state and be written to the output on every sample —
+    // otherwise the held value collapses to 0 V for as long as the gate stays
+    // high after the rebuild.
+
+    // Replicates apply_patch_update's reuse path: fresh patch, transfer state,
+    // reconnect, on_patch_update. No ClearPatch / transport reset.
+    let rebuild = |graph: &PatchGraph, old: &Patch| -> Patch {
+        let new_patch = from_graph(graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+            .expect("from_graph failed");
+        for (id, new_module) in &new_patch.sampleables {
+            if let Some(old_module) = old.sampleables.get(id) {
+                new_module.transfer_state_from(old_module.as_ref());
+            }
+        }
+        for module in new_patch.sampleables.values() {
+            module.connect(&new_patch);
+        }
+        for module in new_patch.sampleables.values() {
+            module.on_patch_update();
+        }
+        new_patch
+    };
+    let read = |patch: &Patch| {
+        patch
+            .sampleables
+            .get("tah")
+            .unwrap()
+            .get_value_at(DEFAULT_PORT, 0, 0)
+    };
+
+    // Gate low: the output tracks the input at 3 V.
+    let tracking = make_graph(vec![("tah", "$tah", json!({ "input": 3.0, "gate": 0.0 }))]);
+    let patch = from_graph(&tracking, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for _ in 0..16 {
+        process_frame(&patch);
+    }
+    assert!(
+        approx_eq(read(&patch), 3.0, 0.001),
+        "with the gate low the output should track the input (3 V), got {}",
+        read(&patch)
+    );
+
+    // Patch update raises the gate: the tracked 3 V must be held.
+    let holding = make_graph(vec![("tah", "$tah", json!({ "input": 3.0, "gate": 5.0 }))]);
+    let patch = rebuild(&holding, &patch);
+    for _ in 0..16 {
+        process_frame(&patch);
+    }
+    assert!(
+        approx_eq(read(&patch), 3.0, 0.001),
+        "after the gate rises the output should hold 3 V, got {} \
+         (0 V means the held value was not written to the reconstructed output)",
+        read(&patch)
+    );
+
+    // A second patch update with the gate still high moves the input to 1 V.
+    // No rising edge, so the output must keep holding the pre-update 3 V.
+    let moved_input = make_graph(vec![("tah", "$tah", json!({ "input": 1.0, "gate": 5.0 }))]);
+    let patch = rebuild(&moved_input, &patch);
+    for _ in 0..16 {
+        process_frame(&patch);
+    }
+    assert!(
+        approx_eq(read(&patch), 3.0, 0.001),
+        "a patch update while the gate is high must preserve the held 3 V, got {} \
+         (1 V means the held value was resampled from the new input)",
+        read(&patch)
     );
 }
 
@@ -1893,6 +2208,47 @@ fn seq_ribbon_note_dividing_window_loops_seamlessly() {
     assert!(
         mids4.iter().all(|&g| g),
         "4-cycle note (4 % 2 == 0) also loops with no gap: {mids4:?}"
+    );
+}
+
+/// A note whose part covers the ENTIRE ribbon window re-articulates on every
+/// lap: crossing the seam is a fresh pass through the window, so the onset
+/// fires once per lap, not only on the first.
+#[test]
+fn seq_ribbon_whole_window_note_retriggers_every_lap() {
+    const SPC: usize = 240;
+    // `c4` fills the [0, 1] window exactly — the folded playhead never leaves
+    // the hap's part.
+    let gate = cycle_port_trace(
+        &make_cycle_patch(mini_payload("c4"), Some([0, 1])),
+        "gate",
+        4 * SPC,
+    );
+    for c in 0..4 {
+        assert!(
+            gate[c * SPC + SPC / 2] > 2.5,
+            "whole-window note sounds at every cycle midpoint, silent at cycle {c}"
+        );
+    }
+    // End the trig trace mid-lap so no seam onset straddles the boundary.
+    let trig = cycle_port_trace(
+        &make_cycle_patch(mini_payload("c4"), Some([0, 1])),
+        "trig",
+        3 * SPC + SPC / 2,
+    );
+    assert_eq!(rising_edges(&trig), 4, "one onset per lap over 4 laps");
+
+    // Same invariant with a fractional window: "c4 e4" folded into [0, 0.5]
+    // plays only c4, whose part fills the window — one onset per half-cycle lap.
+    let trig = cycle_port_trace(
+        &make_cycle_patch_frac(mini_payload("c4 e4"), [0.0, 0.5]),
+        "trig",
+        3 * SPC / 2 + SPC / 4,
+    );
+    assert_eq!(
+        rising_edges(&trig),
+        4,
+        "one onset per half-cycle lap over 4 laps"
     );
 }
 

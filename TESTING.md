@@ -25,7 +25,6 @@ This project is an Electron app (React/TypeScript renderer) + Rust DSP engine wi
 ### Layer 3: Playwright E2E Tests
 
 - **Command:** `yarn test:e2e`
-- **Update snapshots:** `yarn test:e2e:update`
 - **Config:** `playwright.config.ts`
 - **Fixtures:** `e2e/fixtures.ts` — launches Electron with `E2E_TEST=1` env var
 - **Test files:**
@@ -35,7 +34,6 @@ This project is an Electron app (React/TypeScript renderer) + Rust DSP engine wi
     - `e2e/tests/errors.test.ts` — error handling for invalid DSL
     - `e2e/tests/settings.test.ts` — settings panel interaction
     - `e2e/tests/patch-editing.test.ts` — patch modification and re-execution
-    - `e2e/tests/visual.test.ts` — full-window screenshot comparison
 - **Prerequisites:** `.webpack/main` and `.webpack/renderer` must exist (run `yarn start` once, or `npx electron-forge build`)
 - The renderer exposes `window.__TEST_API__` when `E2E_TEST=1`, providing:
     - `getEditorValue()` / `setEditorValue(code)` — interact with Monaco programmatically
@@ -69,20 +67,6 @@ yarn test:unit
 ```bash
 yarn test:e2e
 ```
-
-### To update visual snapshots after intentional UI changes:
-
-```bash
-yarn test:e2e:update
-```
-
-### Screenshot-based verification workflow:
-
-When making UI changes, agents can:
-
-1. Run `yarn test:e2e`
-2. If visual regression tests fail, examine diff images in `test-results/`
-3. Decide whether to update snapshots (`yarn test:e2e:update`) or fix the code
 
 ### Quick Reference
 

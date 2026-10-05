@@ -5,7 +5,6 @@ use cpal::Sample;
 use cpal::SizedSample;
 use cpal::traits::{DeviceTrait, HostTrait};
 
-use hound::{WavSpec, WavWriter};
 use modular_core::PORT_MAX_CHANNELS;
 use modular_core::PatchGraph;
 use modular_core::dsp::schema;
@@ -28,8 +27,6 @@ use rtrb::{Consumer as RtrbConsumer, Producer as RtrbProducer, RingBuffer};
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -59,12 +56,14 @@ struct ModuleStateMetaCache {
     /// Metadata for the patch currently playing on the audio thread, keyed by
     /// module id. Paired with the live slots in `get_module_states`.
     live: HashMap<String, Box<dyn ModuleStateMeta>>,
-    /// Metadata for a queued patch update that has not yet swapped in, tagged
-    /// with its `update_id`. Promoted into `live` once the audio thread reports
-    /// the swap applied (`applied_update_id >= id`), so a poll during the queue
-    /// window never pairs the new patch's metadata with the old patch's still-
-    /// live state.
-    pending: Option<(u64, HashMap<String, Box<dyn ModuleStateMeta>>)>,
+    /// Metadata for patch updates sent to the audio thread but not yet swapped
+    /// in, each tagged with its `update_id`, in submission (ascending-id)
+    /// order. Multiple entries coexist because a superseded update can still
+    /// swap in first — its quantized trigger may fire before the superseding
+    /// command is popped. Once the audio thread reports an applied id, the
+    /// newest entry at or below it promotes into `live`, so a poll never pairs
+    /// one patch's metadata with another patch's still-live state.
+    pending: Vec<(u64, HashMap<String, Box<dyn ModuleStateMeta>>)>,
 }
 
 impl ModuleStateMetaCache {
@@ -72,13 +71,23 @@ impl ModuleStateMetaCache {
     /// applied. Called from the poll path and `apply_patch` so orphan slots can't
     /// accumulate while the editor isn't polling.
     fn promote_if_applied(&mut self, states: &mut ModuleStateMap, applied_update_id: u64) {
-        if let Some((id, _)) = self.pending.as_ref()
-            && applied_update_id >= *id
-            && let Some((_, metas)) = self.pending.take()
-        {
-            states.retain(|id, _| metas.contains_key(id));
-            self.live = metas;
-        }
+        // Entries are id-ascending, so the applied ones are exactly a prefix.
+        // Only the newest applied entry promotes: an older one was superseded
+        // and its patch is no longer the one playing.
+        let applied = self
+            .pending
+            .iter()
+            .take_while(|(id, _)| *id <= applied_update_id)
+            .count();
+        let Some((_, metas)) = self.pending.drain(..applied).last() else {
+            return;
+        };
+        // Keep any slot a still-pending update pre-added — its patch may swap
+        // in next and the audio thread only ever writes into existing slots.
+        states.retain(|id, _| {
+            metas.contains_key(id) || self.pending.iter().any(|(_, m)| m.contains_key(id))
+        });
+        self.live = metas;
     }
 }
 
@@ -87,6 +96,7 @@ use crate::commands::{
     GraphCommand, PatchUpdate, QueuedTrigger, TransportMeta,
 };
 use crate::midi::MidiInputManager;
+use crate::recording::{RecordingFeed, RecordingSession};
 
 // ============================================================================
 // Audio Host Information
@@ -812,6 +822,133 @@ impl ScopeBuffer {
     }
 }
 
+/// Per-out-group loudness accumulator. Constructed on the main thread (the
+/// strings allocate there); `accumulate` runs on the audio thread and must
+/// not allocate.
+pub struct VuMeterState {
+    pub module_id: String,
+    pub port_name: String,
+    /// 1 (mono) or 2 (stereo).
+    pub channels: usize,
+    /// Signal-driven pan/gain control taps, sampled so the panel's locked
+    /// controls can track them live.
+    pub pan_source: Option<modular_core::types::ScopeChannel>,
+    pub gain_source: Option<modular_core::types::ScopeChannel>,
+    /// One-pole EMA of x² per channel (300 ms time constant), in volts².
+    rms_sq: [f32; 2],
+    /// Max |x| per channel since the last `get_vu_meter_frames` read.
+    window_peak: [f32; 2],
+    /// Most recent samples of the control taps.
+    pan_value: f32,
+    gain_value: f32,
+    rms_coeff: f32,
+}
+
+impl VuMeterState {
+    pub fn new(spec: &modular_core::types::VuMeterSpec, sample_rate: f32) -> Self {
+        Self {
+            module_id: spec.module_id.clone(),
+            port_name: spec.port_name.clone(),
+            channels: (spec.channels as usize).clamp(1, 2),
+            pan_source: spec.pan_source.clone(),
+            gain_source: spec.gain_source.clone(),
+            rms_sq: [0.0; 2],
+            window_peak: [0.0; 2],
+            pan_value: 0.0,
+            gain_value: 0.0,
+            rms_coeff: 1.0 - (-1.0f32 / (0.3 * sample_rate)).exp(),
+        }
+    }
+
+    #[inline]
+    pub fn set_pan_value(&mut self, v: f32) {
+        self.pan_value = v;
+    }
+
+    #[inline]
+    pub fn set_gain_value(&mut self, v: f32) {
+        self.gain_value = v;
+    }
+
+    /// Carry running levels over from this meter's predecessor so a patch
+    /// update doesn't blink the display.
+    pub fn transfer_levels_from(&mut self, prev: &VuMeterState) {
+        self.rms_sq = prev.rms_sq;
+        self.window_peak = prev.window_peak;
+    }
+
+    #[inline]
+    pub fn accumulate(&mut self, ch: usize, x: f32) {
+        self.rms_sq[ch] += self.rms_coeff * (x * x - self.rms_sq[ch]);
+        let a = x.abs();
+        if a > self.window_peak[ch] {
+            self.window_peak[ch] = a;
+        }
+    }
+
+    /// Snapshot the current levels and reset the peak window. Main thread only.
+    pub fn take_frame(&mut self) -> modular_core::types::VuMeterFrame {
+        let frame = modular_core::types::VuMeterFrame {
+            module_id: self.module_id.clone(),
+            rms: (0..self.channels)
+                .map(|c| self.rms_sq[c].sqrt() as f64)
+                .collect(),
+            peak: (0..self.channels)
+                .map(|c| self.window_peak[c] as f64)
+                .collect(),
+            pan: self.pan_source.as_ref().map(|_| self.pan_value as f64),
+            gain: self.gain_source.as_ref().map(|_| self.gain_value as f64),
+        };
+        self.window_peak = [0.0; 2];
+        frame
+    }
+}
+
+#[cfg(test)]
+mod vu_meter_state_tests {
+    use super::VuMeterState;
+    use modular_core::types::VuMeterSpec;
+
+    #[test]
+    fn rms_converges_to_sine_rms_and_peak_resets() {
+        let sample_rate = 48_000.0f32;
+        let spec = VuMeterSpec {
+            key: "t".to_string(),
+            module_id: "t".to_string(),
+            port_name: "output".to_string(),
+            channels: 1,
+            mute_module_id: Some("m".to_string()),
+            pan_source: None,
+            gain_source: None,
+        };
+        let mut state = VuMeterState::new(&spec, sample_rate);
+        let amp = 5.0f32;
+        let freq = 440.0f32;
+        for n in 0..sample_rate as usize {
+            let x = amp * (2.0 * std::f32::consts::PI * freq * n as f32 / sample_rate).sin();
+            state.accumulate(0, x);
+        }
+        let mut frame = state.take_frame();
+        let expected_rms = (amp / 2.0f32.sqrt()) as f64;
+        assert!(
+            (frame.rms[0] - expected_rms).abs() / expected_rms < 0.02,
+            "rms {} not within 2% of {}",
+            frame.rms[0],
+            expected_rms
+        );
+        assert!(
+            (frame.peak[0] - amp as f64).abs() < 0.01,
+            "peak {} != {}",
+            frame.peak[0],
+            amp
+        );
+        // The peak window resets on read; RMS keeps its running level.
+        frame = state.take_frame();
+        assert_eq!(frame.peak[0], 0.0);
+        assert!(frame.rms[0] > 0.0);
+    }
+}
+
 /// Sample-rate ring buffer for the $scopeXY visualizer.
 ///
 /// One buffer per (xChannel, yChannel) pair. The audio callback pushes
@@ -1020,6 +1157,9 @@ pub struct AudioState {
     stopped: Arc<AtomicBool>,
     /// Scope collection - shared with audio thread for UI reads
     scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    /// VU meter collection - shared with audio thread for UI reads. Replaced
+    /// wholesale on patch updates; entries are in the patch's display order.
+    vu_collection: Arc<Mutex<Vec<VuMeterState>>>,
     /// XY scope collection - shared with audio thread for UI reads.
     /// Replaced wholesale (single global $scopeXY); each pair owns its own ring buffer.
     scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
@@ -1029,10 +1169,12 @@ pub struct AudioState {
     /// read on the main thread by `get_scope_xy_buffers` to ship the
     /// volt→clip window. Shared with the audio thread via `AudioSharedState`.
     scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    /// Recording writer - shared with audio thread
-    recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
-    /// Recording path
-    recording_path: Arc<Mutex<Option<PathBuf>>>,
+    /// Audio-thread half of the active recording session, shared with the
+    /// callback: a lock-free ring the callback pushes f32 samples into. All
+    /// disk I/O happens on the session's writer thread.
+    recording_feed: Arc<Mutex<Option<RecordingFeed>>>,
+    /// Main-thread handle to the active recording session's writer thread.
+    recording_session: Mutex<Option<RecordingSession>>,
     /// Sample rate
     sample_rate: f32,
     /// Output channels
@@ -1047,6 +1189,12 @@ pub struct AudioState {
     /// build the editor JSON in `get_module_states`. Single lock for `&self`
     /// mutation; the audio thread never touches it. See [`ModuleStateMetaCache`].
     module_state_meta: Mutex<ModuleStateMetaCache>,
+    /// The last successfully built editor-state JSON, served when a poll loses
+    /// the `module_states` try_lock race with the audio thread — so contention
+    /// reads as an unchanged poll, never as "all modules removed". Shared via
+    /// `Arc` so both retaining and serving it are pointer swaps, never deep
+    /// clones of the map.
+    module_states_snapshot: Mutex<Arc<HashMap<String, serde_json::Value>>>,
     /// MIDI input manager - shared with audio thread for polling
     midi_manager: Arc<MidiInputManager>,
     /// Transport state meter - written by audio thread, read by main thread
@@ -1099,15 +1247,17 @@ impl AudioState {
             garbage_rx: Mutex::new(garbage_rx),
             stopped: Arc::new(AtomicBool::new(true)),
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
+            vu_collection: Arc::new(Mutex::new(Vec::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
-            recording_writer: Arc::new(Mutex::new(None)),
-            recording_path: Arc::new(Mutex::new(None)),
+            recording_feed: Arc::new(Mutex::new(None)),
+            recording_session: Mutex::new(None),
             sample_rate,
             channels,
             audio_budget_meter: Arc::new(AudioBudgetMeter::default()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             module_state_meta: Mutex::new(ModuleStateMetaCache::default()),
+            module_states_snapshot: Mutex::new(Arc::new(HashMap::new())),
             midi_manager,
             transport_meter: Arc::new(TransportMeter::default()),
             audio_thread_panicked: Arc::new(AtomicBool::new(false)),
@@ -1186,9 +1336,10 @@ impl AudioState {
         AudioSharedState {
             stopped: self.stopped.clone(),
             scope_collection: self.scope_collection.clone(),
+            vu_collection: self.vu_collection.clone(),
             scope_xy_collection: self.scope_xy_collection.clone(),
             scope_xy_ranges: self.scope_xy_ranges.clone(),
-            recording_writer: self.recording_writer.clone(),
+            recording_feed: self.recording_feed.clone(),
             audio_budget_meter: self.audio_budget_meter.clone(),
             module_states: self.module_states.clone(),
             midi_manager: self.midi_manager.clone(),
@@ -1241,32 +1392,29 @@ impl AudioState {
             filename.unwrap_or_else(|| format!("recording_{}.wav", chrono_simple_timestamp()));
         let path = PathBuf::from(&filename);
 
-        let spec = WavSpec {
-            channels: 1,
-            sample_rate: self.sample_rate as u32,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-
-        let writer = WavWriter::create(&path, spec)
+        let (feed, session) = crate::recording::start(path, self.sample_rate as u32)
             .map_err(|e| napi::Error::from_reason(format!("Failed to start file write: {}", e)))?;
-        *self.recording_writer.lock() = Some(writer);
-        *self.recording_path.lock() = Some(path);
+        *self.recording_feed.lock() = Some(feed);
+        *self.recording_session.lock() = Some(session);
 
         Ok(filename)
     }
 
-    pub fn stop_recording(&self) -> Result<Option<String>> {
-        let writer = self.recording_writer.lock().take();
-        let path = self.recording_path.lock().take();
+    pub fn stop_recording(&self) -> Result<Option<crate::recording::FinishedRecording>> {
+        // Remove the callback's feed first: dropping it closes the ring's write
+        // side, so the writer thread's final drain sees every pushed sample.
+        drop(self.recording_feed.lock().take());
+        let session = self.recording_session.lock().take();
 
-        if let Some(w) = writer {
-            w.finalize().map_err(|e| {
-                napi::Error::from_reason(format!("Failed to finalize file writer: {}", e))
-            })?;
+        match session {
+            Some(session) => {
+                let finished = session.finish().map_err(|e| {
+                    napi::Error::from_reason(format!("Failed to finalize file writer: {}", e))
+                })?;
+                Ok(Some(finished))
+            }
+            None => Ok(None),
         }
-
-        Ok(path.map(|p| p.to_string_lossy().to_string()))
     }
 
     pub fn get_audio_buffers(&self) -> Vec<(ScopeBufferKey, Float32Array, ScopeStats)> {
@@ -1287,6 +1435,20 @@ impl AudioState {
                 (key.clone(), data, stats)
             })
             .collect()
+    }
+
+    /// Snapshot every VU meter's current levels, resetting each peak window.
+    /// Mirrors `get_audio_buffers` — skipped while stopped, never blocks on
+    /// the audio-thread mutex.
+    pub fn get_vu_meter_frames(&self) -> Vec<modular_core::types::VuMeterFrame> {
+        if self.is_stopped() {
+            return Vec::new();
+        }
+        let mut vu_collection = match self.vu_collection.try_lock() {
+            Some(vc) => vc,
+            None => return Vec::new(),
+        };
+        vu_collection.iter_mut().map(|m| m.take_frame()).collect()
     }
 
     /// Snapshot every active $scopeXY pair as (key, xSamples, ySamples, ranges).
@@ -1329,12 +1491,14 @@ impl AudioState {
         out
     }
 
-    pub fn get_module_states(&self) -> HashMap<String, serde_json::Value> {
+    pub fn get_module_states(&self) -> Arc<HashMap<String, serde_json::Value>> {
         // Snapshot under the lock, then build JSON after releasing it, so the audio
         // thread's `try_lock` never fails across JSON construction.
         let mut states_guard = match self.module_states.try_lock() {
             Some(guard) => guard,
-            None => return HashMap::new(), // audio thread is writing; skip this poll
+            // The audio thread is writing; serve the previous snapshot so the
+            // renderer never mistakes contention for module removal.
+            None => return Arc::clone(&self.module_states_snapshot.lock()),
         };
         let mut meta = self.module_state_meta.lock();
         // Promotion (and the slot prune it drives) happens once the swap applies, so
@@ -1359,6 +1523,8 @@ impl AudioState {
                 out.insert(id, m.build_json(live.as_ref()));
             }
         }
+        let out = Arc::new(out);
+        *self.module_states_snapshot.lock() = Arc::clone(&out);
         out
     }
 
@@ -1406,6 +1572,7 @@ impl AudioState {
             module_id_remaps,
             scopes,
             scope_xy,
+            vu_meters,
             ..
         } = desired_graph;
 
@@ -1417,47 +1584,68 @@ impl AudioState {
         // thread reads during the swap.
         update.set_remaps(&module_id_remaps.unwrap_or_default());
 
+        // Runs after `set_remaps` so the forced `None` wins over any remap
+        // pairing the flagged module with a predecessor.
+        for m in &modules {
+            if m.skip_state_transfer == Some(true) {
+                update.transfer_sources.insert(m.id.clone(), None);
+            }
+        }
+
         // Build maps for efficient lookup
         let desired_modules: HashMap<String, _> =
             modules.into_iter().map(|m| (m.id.clone(), m)).collect();
 
-        // Compute scopes to add/remove (no updates — key includes config)
+        // Build the complete next scope membership: one fresh buffer per
+        // desired per-channel key (a key includes the scope's config, so a
+        // config change is a new key). At apply time the audio thread moves
+        // each carried-over key's live buffer state into this map and swaps it
+        // in wholesale, so the resulting membership is exactly this update's
+        // desired set no matter which other updates apply in between.
+        update.scope_next = scopes
+            .iter()
+            .flat_map(|scope| {
+                scope.channels.iter().map(move |ch| ScopeBufferKey {
+                    module_id: ch.module_id.clone(),
+                    port_name: ch.port_name.clone(),
+                    channel: ch.channel,
+                    ms_per_frame: scope.ms_per_frame,
+                    trigger_threshold: scope.trigger_threshold,
+                })
+            })
+            .map(|key| {
+                let buffer = ScopeBuffer::new(key.ms_per_frame, key.trigger_threshold, sample_rate);
+                (key, buffer)
+            })
+            .collect();
+
+        // Build the complete next VU meter membership. Running levels carry
+        // over from any current entry metering the same tap so a patch update
+        // doesn't blink the display. The lookup goes through the same remap
+        // table module state transfer uses, so a tap whose id shifted (e.g.
+        // an unlabeled out renumbered by an edit) keeps its levels. Briefly
+        // locking here is safe — the audio thread only ever try_locks this
+        // mutex.
         {
-            let mut scope_collection = self.scope_collection.lock();
-            let current_keys: HashSet<ScopeBufferKey> = scope_collection.keys().cloned().collect();
-
-            // Expand desired scopes into per-channel buffer keys
-            let desired_keys: HashSet<ScopeBufferKey> = scopes
+            update.vu_next = vu_meters
                 .iter()
-                .flat_map(|scope| {
-                    scope.channels.iter().map(move |ch| ScopeBufferKey {
-                        module_id: ch.module_id.clone(),
-                        port_name: ch.port_name.clone(),
-                        channel: ch.channel,
-                        ms_per_frame: scope.ms_per_frame,
-                        trigger_threshold: scope.trigger_threshold,
-                    })
-                })
+                .map(|spec| VuMeterState::new(spec, sample_rate))
                 .collect();
-
-            // Scopes to remove
-            update.scope_removes = current_keys.difference(&desired_keys).cloned().collect();
-
-            // Scopes to add (pre-build ScopeBuffers on main thread)
-            update.scope_adds = desired_keys
-                .difference(&current_keys)
-                .map(|key| {
-                    let buffer =
-                        ScopeBuffer::new(key.ms_per_frame, key.trigger_threshold, sample_rate);
-                    (key.clone(), buffer)
-                })
-                .collect();
-
-            // Grow the map here so the audio thread's inserts at apply time
-            // never rehash. The collection only shrinks between now and then
-            // (removals happen at apply; a superseding update re-reserves), so
-            // this bound holds.
-            scope_collection.reserve(update.scope_adds.len());
+            let vu_collection = self.vu_collection.lock();
+            for meter in update.vu_next.iter_mut() {
+                let source_id = match update.transfer_sources.get(&meter.module_id) {
+                    Some(Some(old_id)) => Some(old_id.as_str()),
+                    Some(None) => None,
+                    None => Some(meter.module_id.as_str()),
+                };
+                if let Some(source_id) = source_id
+                    && let Some(prev) = vu_collection
+                        .iter()
+                        .find(|p| p.module_id == source_id && p.port_name == meter.port_name)
+                {
+                    meter.transfer_levels_from(prev);
+                }
+            }
         }
 
         // Build the complete next XY-scope membership. Single global $scopeXY;
@@ -1646,7 +1834,7 @@ impl AudioState {
             for (id, live) in state_live {
                 states.entry(id).or_insert(live);
             }
-            meta.pending = Some((update_id, state_metas));
+            meta.pending.push((update_id, state_metas));
         }
 
         // Send the update to audio thread
@@ -1681,6 +1869,7 @@ impl AudioState {
                 fresh_patch: Patch::new(),
             });
             self.scope_collection.lock().clear();
+            self.vu_collection.lock().clear();
             self.scope_xy_collection.lock().clear();
             self.request_start();
         }
@@ -1710,11 +1899,15 @@ impl AudioState {
 pub struct AudioSharedState {
     pub stopped: Arc<AtomicBool>,
     pub scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    pub vu_collection: Arc<Mutex<Vec<VuMeterState>>>,
     pub scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
     /// Display ranges for the active $scopeXY — written by the audio thread on
     /// apply, read by the main thread for the renderer.
     pub scope_xy_ranges: Arc<Mutex<Option<ScopeXyRanges>>>,
-    pub recording_writer: Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>,
+    /// Audio-thread half of the active recording session: a lock-free ring the
+    /// callback pushes f32 samples into. Disk I/O stays on the session's
+    /// writer thread.
+    pub recording_feed: Arc<Mutex<Option<RecordingFeed>>>,
     pub audio_budget_meter: Arc<AudioBudgetMeter>,
     /// Live per-module editor state - written by audio thread, read by main thread
     pub module_states: Arc<Mutex<ModuleStateMap>>,
@@ -1762,23 +1955,6 @@ pub(crate) struct ProcessHandle(modular_core::types::SampleablePtr);
 // `unsafe impl Send` on `Signal`/`Buffer`, which cache the same pointer type.
 unsafe impl Send for ProcessHandle {}
 
-/// Ship `item` to the main thread for deallocation. On a full garbage queue the
-/// item reroutes through the error queue, which the main thread also drains and
-/// drops; only with both queues saturated does the drop land here (memory-safe
-/// but a violation of the no-audio-thread-dealloc invariant, so both capacities
-/// are sized to make that unreachable). A free function so call sites that hold
-/// a borrow of another `AudioProcessor` field (e.g. a scope-collection lock
-/// guard) can still push.
-fn try_push_garbage(
-    garbage_tx: &mut GarbageProducer,
-    error_tx: &mut ErrorProducer,
-    item: GarbageItem,
-) {
-    if let Err(err) = garbage_tx.push(item) {
-        let _ = error_tx.push(AudioError::GarbageQueueFull { message: err });
-    }
-}
-
 struct AudioProcessor {
     /// The DSP patch graph - owned directly, no mutex needed
     patch: Patch,
@@ -1802,6 +1978,10 @@ struct AudioProcessor {
     stopped: Arc<AtomicBool>,
     /// Shared scope collection
     scope_collection: Arc<Mutex<HashMap<ScopeBufferKey, ScopeBuffer>>>,
+    /// Shared VU meter collection. Membership is swapped in wholesale on patch
+    /// updates (built on the main thread); the per-sample path only mutates
+    /// entries in place under a per-block `try_lock`.
+    vu_collection: Arc<Mutex<Vec<VuMeterState>>>,
     /// Shared XY scope collection (single global $scopeXY at most). Holds the
     /// canonical membership; co-owns each buffer with `scope_xy_audio`.
     scope_xy_collection: Arc<Mutex<HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>>>,
@@ -1881,6 +2061,7 @@ impl AudioProcessor {
             garbage_tx,
             stopped: shared.stopped,
             scope_collection: shared.scope_collection,
+            vu_collection: shared.vu_collection,
             scope_xy_collection: shared.scope_xy_collection,
             scope_xy_audio: Vec::new(),
             scope_xy_ranges: shared.scope_xy_ranges,
@@ -1921,8 +2102,17 @@ impl AudioProcessor {
         }
     }
 
+    /// Ship `item` to the main thread for deallocation. On a full garbage
+    /// queue the item reroutes through the error queue, which the main thread
+    /// also drains and drops; only with both queues saturated does the drop
+    /// land here (memory-safe but a violation of the no-audio-thread-dealloc
+    /// invariant, so both capacities are sized to make that unreachable).
     fn try_push_garbage_item(&mut self, item: GarbageItem) {
-        try_push_garbage(&mut self.garbage_tx, &mut self.error_tx, item);
+        if let Err(err) = self.garbage_tx.push(item) {
+            let _ = self
+                .error_tx
+                .push(AudioError::GarbageQueueFull { message: err });
+        }
     }
 
     /// Process all pending commands from the main thread and poll MIDI.
@@ -1971,6 +2161,13 @@ impl AudioProcessor {
                         self.queued_update = Some((update, QueuedTrigger::Immediate));
                     } else {
                         self.queued_update = Some((update, trigger));
+                    }
+                }
+                GraphCommand::CancelQueuedUpdate => {
+                    if let Some((update, _)) = self.queued_update.take() {
+                        self.transport_meter
+                            .write_cancelled_update_id(update.update_id);
+                        self.try_push_garbage_item(GarbageItem::PatchUpdate(update));
                     }
                 }
                 GraphCommand::SingleModuleUpdate {
@@ -2096,10 +2293,10 @@ impl AudioProcessor {
     /// Slots `[0, swap_pos)` were already emitted by the pre-swap modules.
     ///
     /// Everything the update displaces — the old patch, processing order and
-    /// pointer capacity, XY scope map and list, evicted profiler maps — is
-    /// stowed back into the consumed `update` (the "husk") and shipped to the
-    /// garbage queue in a single push at the end, so applying a patch neither
-    /// allocates nor deallocates on the audio thread.
+    /// pointer capacity, scope map, XY scope map and list, evicted profiler
+    /// maps — is stowed back into the consumed `update` (the "husk") and
+    /// shipped to the garbage queue in a single push at the end, so applying a
+    /// patch neither allocates nor deallocates on the audio thread.
     fn apply_patch_update(&mut self, mut update: PatchUpdate, swap_pos: usize) {
         // The new patch arrives fully constructed but unconnected. Bring it to liveness
         // without ever touching the live patch's map, then swap.
@@ -2136,31 +2333,20 @@ impl AudioProcessor {
         // run after every structural change above so no pointer dangles
         self.rebuild_process_order_ptrs();
 
-        // Update scopes. `remove_entry` hands back the map's owned key so its
-        // strings drop on the main thread; adds insert into capacity the main
-        // thread reserved when building this update, so no rehash happens
-        // here. Adds are diffed against the live collection so an add never
-        // collides with a resident key, but evicting first keeps even that
-        // case off this thread.
+        // Swap in the complete new scope membership built on the main thread.
+        // A key also present in the live map first takes over that buffer's
+        // state (`mem::swap` in place — no allocation), so an unchanged
+        // scope's display stays continuous across the swap. The displaced map
+        // — removed keys' buffers plus the unused fresh ones — rides the husk
+        // back for main-thread drop.
         {
-            let AudioProcessor {
-                scope_collection,
-                garbage_tx,
-                error_tx,
-                ..
-            } = self;
-            let mut scope_collection = scope_collection.lock();
-            for key in update.scope_removes.iter() {
-                if let Some(entry) = scope_collection.remove_entry(key) {
-                    try_push_garbage(garbage_tx, error_tx, GarbageItem::Scope(entry));
+            let mut scope_collection = self.scope_collection.lock();
+            for (key, buffer) in update.scope_next.iter_mut() {
+                if let Some(live) = scope_collection.get_mut(key) {
+                    std::mem::swap(buffer, live);
                 }
             }
-            for (key, buffer) in update.scope_adds.drain(..) {
-                if let Some(entry) = scope_collection.remove_entry(&key) {
-                    try_push_garbage(garbage_tx, error_tx, GarbageItem::Scope(entry));
-                }
-                scope_collection.insert(key, buffer);
-            }
+            std::mem::swap(&mut *scope_collection, &mut update.scope_next);
         }
 
         // Profiler-map swap: `swap_records` updates the audio thread's TLS
@@ -2188,6 +2374,14 @@ impl AudioProcessor {
                     }
                 }
             }
+        }
+
+        // Swap in the complete new VU meter membership built on the main
+        // thread (running levels already carried over there); the displaced
+        // Vec rides the husk back for a main-thread drop.
+        {
+            let mut vu = self.vu_collection.lock();
+            std::mem::swap(&mut *vu, &mut update.vu_next);
         }
 
         // Swap in the complete new XY-scope membership built on the main
@@ -2243,8 +2437,8 @@ impl AudioProcessor {
             }
         }
 
-        // Ship the husk — old patch, old order ids and pointer capacity, old
-        // XY map/list, evicted profiler maps, drained add/remove lists — in a
+        // Ship the husk — old patch, old order ids and pointer capacity, the
+        // displaced scope map, old XY map/list, evicted profiler maps — in a
         // single push for main-thread deallocation.
         self.try_push_garbage_item(GarbageItem::PatchUpdate(update));
     }
@@ -2342,20 +2536,42 @@ impl AudioProcessor {
         }
     }
 
-    /// Scan ROOT_CLOCK's `port` trigger output for the first slot in
-    /// `[from, end)` where it goes `>= 1.0`. Pure cache reads — eager-fill
-    /// has already populated the requested range. Returns `None` if no
-    /// trigger fires within the range.
+    /// Advance ROOT_CLOCK one slot at a time through `[from, end)`, watching
+    /// its `port` trigger output for the first slot that goes `>= 1.0`, and
+    /// stop filling the moment it fires. Runs only while a queued update is
+    /// armed: the swap transfers the clock's state to the new patch, so the
+    /// clock must not run past the swap point — any slot filled beyond the
+    /// trigger would be integrated a second time when the post-swap refill
+    /// re-renders the block tail. The trigger slot itself is necessarily
+    /// processed (detecting the edge computes it) and is recomputed under the
+    /// new patch's params by the refill.
+    ///
+    /// `written_at_call` anchors Link sync: the cpal-frame index for in-block
+    /// slot `i` is `written_at_call + (i - from)`.
     ///
     /// Fallback: when ROOT_CLOCK is absent (e.g. immediately after a clear
     /// patch leaves only `HiddenAudioIn`), returns `Some(from)` so queued
     /// patches still apply rather than sticking around forever.
-    fn scan_trigger(&self, port: &str, from: usize, end: usize) -> Option<usize> {
+    fn fill_and_scan_trigger(
+        &self,
+        port: &str,
+        from: usize,
+        end: usize,
+        written_at_call: usize,
+    ) -> Option<usize> {
         use modular_core::types::ROOT_CLOCK_ID;
         let Some(root_clock) = self.patch.sampleables.get(&*ROOT_CLOCK_ID) else {
             return Some(from);
         };
         for i in from..end {
+            let cb_frame = written_at_call + (i - from);
+            if let Some((bar_phase, tempo)) = self.link.phase_at_frame(cb_frame) {
+                root_clock.sync_external_clock(modular_core::types::ExternalClockState {
+                    bar_phase,
+                    bpm: tempo,
+                });
+            }
+            root_clock.ensure_processed_to(i + 1);
             if root_clock.get_value_at(port, 0, i) >= 1.0 {
                 return Some(i);
             }
@@ -2390,7 +2606,7 @@ pub fn make_stream<T>(
     block_size: usize,
 ) -> Result<cpal::Stream>
 where
-    T: SizedSample + FromSample<f32> + hound::Sample,
+    T: SizedSample + FromSample<f32>,
 {
     let num_channels = config.channels as usize;
 
@@ -2400,7 +2616,7 @@ where
     println!("Time at start: {time_at_start:?}");
 
     // Clone shared state for the closure
-    let recording_writer = shared.recording_writer.clone();
+    let recording_feed = shared.recording_feed.clone();
     let audio_budget_meter = shared.audio_budget_meter.clone();
     let panicked_flag = shared.audio_thread_panicked.clone();
 
@@ -2415,7 +2631,7 @@ where
         block_size,
     );
 
-    let mut final_state_processor = FinalStateProcessor::new();
+    let mut final_state_processor = FinalStateProcessor::new(sample_rate);
 
     let stream = device
         .build_output_stream(
@@ -2494,7 +2710,10 @@ where
 
                     let mut written: usize = 0;
 
-                    {
+                    // While a queued update is armed the clock is advanced
+                    // inside the trigger scan instead, one slot at a time, so
+                    // its state never passes the eventual swap point.
+                    if audio_processor.queued_update.is_none() {
                         let eager_end = block_size.min(audio_processor.block_pos + num_frames);
                         audio_processor.eager_fill_clock(
                             audio_processor.block_pos,
@@ -2513,33 +2732,52 @@ where
                                 }
                                 audio_processor.pull_input_block(&mut input_reader);
                                 audio_processor.block_pos = 0;
-                                let eager_end = block_size.min(num_frames - written);
-                                audio_processor.eager_fill_clock(0, eager_end, written);
+                                if audio_processor.queued_update.is_none() {
+                                    let eager_end = block_size.min(num_frames - written);
+                                    audio_processor.eager_fill_clock(0, eager_end, written);
+                                }
                             }
 
                             let scan_end =
                                 block_size.min(audio_processor.block_pos + (num_frames - written));
 
-                            // Resolve trigger sample for queued patch swap.
+                            // Resolve trigger sample for queued patch swap. The
+                            // quantized scans fill ROOT_CLOCK as they go and
+                            // stop at the trigger slot; an armed Immediate
+                            // update leaves the clock untouched (the post-swap
+                            // refill fills it under the new patch).
                             let trigger_sample: Option<usize> =
                                 match audio_processor.queued_update.as_ref().map(|(_, t)| t) {
                                     Some(QueuedTrigger::Immediate) => {
                                         Some(audio_processor.block_pos)
                                     }
-                                    Some(QueuedTrigger::NextBar) => audio_processor.scan_trigger(
-                                        "barTrigger",
-                                        audio_processor.block_pos,
-                                        scan_end,
-                                    ),
-                                    Some(QueuedTrigger::NextBeat) => audio_processor.scan_trigger(
-                                        "beatTrigger",
-                                        audio_processor.block_pos,
-                                        scan_end,
-                                    ),
+                                    Some(QueuedTrigger::NextBar) => audio_processor
+                                        .fill_and_scan_trigger(
+                                            "barTrigger",
+                                            audio_processor.block_pos,
+                                            scan_end,
+                                            written,
+                                        ),
+                                    Some(QueuedTrigger::NextBeat) => audio_processor
+                                        .fill_and_scan_trigger(
+                                            "beatTrigger",
+                                            audio_processor.block_pos,
+                                            scan_end,
+                                            written,
+                                        ),
                                     None => None,
                                 };
 
                             let end = trigger_sample.map(|n| n.min(scan_end)).unwrap_or(scan_end);
+
+                            // Nothing may render past the emit boundary: a
+                            // queued update command can arrive between
+                            // callbacks and swap at any sample, and
+                            // `transfer_state_from` must hand the new patch
+                            // state that sits exactly at the swap point. The
+                            // ceiling clamps the drain's block-mode reads
+                            // below, which otherwise fill to the block end.
+                            modular_core::types::set_block_render_ceiling(end);
 
                             // Force every module to advance to `end`, in cache-efficient
                             // producer-before-consumer order, so modules not reachable from
@@ -2556,7 +2794,8 @@ where
                             // `FinalStateProcessor` used to provide per-frame.
                             if end > audio_processor.block_pos {
                                 let mut scope_guard = audio_processor.scope_collection.try_lock();
-                                let mut writer_guard = recording_writer.try_lock();
+                                let mut recording_guard = recording_feed.try_lock();
+                                let mut vu_guard = audio_processor.vu_collection.try_lock();
                                 for i in audio_processor.block_pos..end {
                                     let is_stopped = audio_processor.is_stopped();
                                     match (final_state_processor.prev_is_stopped, is_stopped) {
@@ -2587,6 +2826,7 @@ where
                                     let frame_start = written * num_channels;
 
                                     if final_state_processor.attenuation_factor < f32::EPSILON {
+                                        final_state_processor.reset_declick();
                                         for ch in 0..num_channels {
                                             output[frame_start + ch] = T::from_sample(0.0f32);
                                         }
@@ -2599,11 +2839,31 @@ where
                                     {
                                         let mut any_audible = false;
                                         let mut samples = [0.0f32; PORT_MAX_CHANNELS];
+                                        // Compensated ch-0 volts, reused by the
+                                        // recording tap below so the file captures
+                                        // exactly what the declick emitted.
+                                        let mut declicked_ch0 = 0.0f32;
                                         for ch in 0..num_channels.min(PORT_MAX_CHANNELS) {
-                                            let raw = root.get_value_at(&ROOT_OUTPUT_PORT, ch, i)
-                                                * AUDIO_OUTPUT_ATTENUATION;
+                                            // Non-cycling: the root port is only
+                                            // as wide as the highest channel the
+                                            // patch's out groups name, and device
+                                            // channels above that are speakers to
+                                            // leave silent. The silence still goes
+                                            // through the declick, so an edit that
+                                            // narrows the output fades them out
+                                            // rather than cutting them.
+                                            let raw = root.get_value_at_no_cycle(
+                                                &ROOT_OUTPUT_PORT,
+                                                ch,
+                                                i,
+                                            );
+                                            let v = final_state_processor.declick(ch, raw);
+                                            if ch == 0 {
+                                                declicked_ch0 = v;
+                                            }
                                             let sample = safety_soft_clip(
-                                                raw * final_state_processor.attenuation_factor,
+                                                v * AUDIO_OUTPUT_ATTENUATION
+                                                    * final_state_processor.attenuation_factor,
                                             );
                                             samples[ch] = sample;
                                             if sample.abs() >= 0.0005 {
@@ -2614,6 +2874,7 @@ where
                                             final_state_processor.attenuation_factor = 0.0;
                                             final_state_processor.volume_change =
                                                 VolumeChange::None;
+                                            final_state_processor.reset_declick();
                                             for ch in 0..num_channels {
                                                 output[frame_start + ch] = T::from_sample(0.0f32);
                                             }
@@ -2627,14 +2888,16 @@ where
                                                 output[frame_start + ch] = T::from_sample(v);
                                             }
                                         }
-                                        if let Some(writer_lock) = writer_guard.as_mut()
-                                            && let Some(writer) = writer_lock.as_mut()
+                                        // Recorded samples stay f32 — the WAV
+                                        // header declares Float32 regardless of
+                                        // the stream's sample type `T`.
+                                        if let Some(feed_lock) = recording_guard.as_mut()
+                                            && let Some(feed) = feed_lock.as_mut()
                                         {
-                                            let v = root.get_value_at(&ROOT_OUTPUT_PORT, 0, i)
+                                            let v = declicked_ch0
                                                 * AUDIO_OUTPUT_ATTENUATION
                                                 * final_state_processor.attenuation_factor;
-                                            let _ = writer
-                                                .write_sample(T::from_sample(safety_soft_clip(v)));
+                                            feed.push(safety_soft_clip(v));
                                         }
                                         if let Some(scope_lock) = scope_guard.as_mut() {
                                             for (key, scope_buffer) in scope_lock.iter_mut() {
@@ -2649,6 +2912,60 @@ where
                                                         i,
                                                     );
                                                     scope_buffer.push(s);
+                                                }
+                                            }
+                                        }
+                                        if let Some(vu_lock) = vu_guard.as_mut() {
+                                            for meter in vu_lock.iter_mut() {
+                                                if let Some(module) = audio_processor
+                                                    .patch
+                                                    .sampleables
+                                                    .get(&meter.module_id)
+                                                {
+                                                    for ch in 0..meter.channels {
+                                                        meter.accumulate(
+                                                            ch,
+                                                            module.get_value_at(
+                                                                &meter.port_name,
+                                                                ch,
+                                                                i,
+                                                            ),
+                                                        );
+                                                    }
+                                                }
+                                                // Signal-driven pan/gain are
+                                                // display-only and each write
+                                                // overwrites the last, so only
+                                                // the block's final sample ever
+                                                // reaches take_frame. Sample the
+                                                // taps once here, not per sample
+                                                // (a String-keyed HashMap lookup
+                                                // each time).
+                                                if i == end - 1 {
+                                                    let sampleables =
+                                                        &audio_processor.patch.sampleables;
+                                                    let sample_tap = |tap: &Option<
+                                                        modular_core::types::ScopeChannel,
+                                                    >| {
+                                                        tap.as_ref().and_then(|src| {
+                                                            sampleables
+                                                                .get(&src.module_id)
+                                                                .map(|m| {
+                                                                    m.get_value_at(
+                                                                        &src.port_name,
+                                                                        src.channel as usize,
+                                                                        i,
+                                                                    )
+                                                                })
+                                                        })
+                                                    };
+                                                    if let Some(v) = sample_tap(&meter.pan_source) {
+                                                        meter.set_pan_value(v);
+                                                    }
+                                                    if let Some(v) = sample_tap(&meter.gain_source)
+                                                    {
+                                                        meter.set_gain_value(v);
+                                                    }
                                                 }
                                             }
                                         }
@@ -2678,6 +2995,7 @@ where
                                             xy_buffer.push(xv, yv);
                                         }
                                     } else {
+                                        final_state_processor.reset_declick();
                                         for ch in 0..num_channels {
                                             output[frame_start + ch] = T::from_sample(0.0f32);
                                         }
@@ -2702,14 +3020,20 @@ where
                                 let applied_id = update.update_id;
                                 let swap_pos = audio_processor.block_pos;
                                 audio_processor.apply_patch_update(update, swap_pos);
+                                // The swap may step the output (a muted patch
+                                // replacing a loud one, an out removed);
+                                // release the step at the emit stage.
+                                final_state_processor.arm_declick();
                                 audio_processor
                                     .transport_meter
                                     .write_applied_update_id(applied_id);
                                 // ROOT_CLOCK's transport state carries across the swap via
-                                // `transfer_state_from`. Its cache
-                                // for `[swap_pos, block_size)` was filled under the OLD params;
-                                // refill the remainder of this callback's range from `swap_pos`
-                                // forward under the NEW patch.
+                                // `transfer_state_from`. Fill this callback's remaining range
+                                // from `swap_pos` forward under the NEW patch's params. On a
+                                // quantized swap the trigger slot was already computed while
+                                // scanning, so recomputing it here runs the clock one sample
+                                // ahead — a bounded, sub-0.03 ms offset; an Immediate swap's
+                                // clock arrives untouched and fills exactly once.
                                 if let Some(root_clock) =
                                     audio_processor.patch.sampleables.get(&*ROOT_CLOCK_ID)
                                 {
@@ -2875,22 +3199,87 @@ enum VolumeChange {
     Decrease,
     None,
 }
+
+/// Patch-swap output declick time constant. The first sample emitted after a
+/// swap measures, per channel, the step between the last emitted sample and
+/// the new patch's first — a track-and-hold of the discontinuity — and
+/// releases it to zero exponentially. A swap whose output is continuous
+/// (state transferred cleanly) measures ≈0 and the tail is a no-op. 1 ms
+/// keeps the release's per-sample step of a full-scale tone below a low
+/// tone's own natural slope while landing the change within ~5 ms of the
+/// swap.
+const SWAP_DECLICK_TAU_SECONDS: f32 = 0.001;
+/// Tail magnitude (raw output volts) below which the declick tail snaps to
+/// zero and stops ticking.
+const SWAP_DECLICK_EPSILON: f32 = 1e-5;
+
 /// Per-stream attenuation state for fade-in/fade-out on stop/start
-/// transitions. Lives in the cpal closure and gets ticked once per
-/// emitted sample by the per-sample drain loop.
+/// transitions, plus the patch-swap output declick. Lives in the cpal closure
+/// and gets ticked once per emitted sample by the per-sample drain loop.
 struct FinalStateProcessor {
     attenuation_factor: f32,
     volume_change: VolumeChange,
     prev_is_stopped: bool,
+    /// Raw (pre-attenuation) output volts actually emitted last sample, per
+    /// channel, including any live declick tail — the reference the next
+    /// patch swap declicks against.
+    last_emitted: [f32; PORT_MAX_CHANNELS],
+    /// Additive declick tail per channel; decays toward zero each sample.
+    declick_level: [f32; PORT_MAX_CHANNELS],
+    /// Set on every channel when a swap applies; a channel's next emitted
+    /// sample resolves its tail and clears its flag, so resolution is
+    /// per-channel and immune to the drain splitting a block.
+    declick_armed: [bool; PORT_MAX_CHANNELS],
+    /// Per-sample decay coefficient derived from `SWAP_DECLICK_TAU_SECONDS`.
+    declick_decay: f32,
 }
 
 impl FinalStateProcessor {
-    fn new() -> Self {
+    fn new(sample_rate: f32) -> Self {
         Self {
             attenuation_factor: 0.0,
             volume_change: VolumeChange::None,
             prev_is_stopped: true,
+            last_emitted: [0.0; PORT_MAX_CHANNELS],
+            declick_level: [0.0; PORT_MAX_CHANNELS],
+            declick_armed: [false; PORT_MAX_CHANNELS],
+            declick_decay: (-1.0f32 / (SWAP_DECLICK_TAU_SECONDS * sample_rate)).exp(),
         }
+    }
+
+    /// Arm every channel's declick for its next emitted sample. Called at the
+    /// instant a patch swap applies.
+    fn arm_declick(&mut self) {
+        self.declick_armed = [true; PORT_MAX_CHANNELS];
+    }
+
+    /// Drop the tail and reference level. Called on paths that emit hard
+    /// silence, so a later swap declicks against what the listener actually
+    /// hears rather than a stale loud sample.
+    fn reset_declick(&mut self) {
+        self.last_emitted = [0.0; PORT_MAX_CHANNELS];
+        self.declick_level = [0.0; PORT_MAX_CHANNELS];
+        self.declick_armed = [false; PORT_MAX_CHANNELS];
+    }
+
+    /// Compensate one channel's raw output sample across patch swaps. Must be
+    /// called exactly once per channel per emitted sample: it ticks the tail
+    /// and records the emitted value. Operates in raw volts so the tail
+    /// composes with output attenuation and the soft clip exactly like patch
+    /// audio.
+    #[inline]
+    fn declick(&mut self, ch: usize, raw: f32) -> f32 {
+        if self.declick_armed[ch] {
+            self.declick_armed[ch] = false;
+            self.declick_level[ch] = self.last_emitted[ch] - raw;
+        }
+        let v = raw + self.declick_level[ch];
+        self.declick_level[ch] *= self.declick_decay;
+        if self.declick_level[ch].abs() < SWAP_DECLICK_EPSILON {
+            self.declick_level[ch] = 0.0;
+        }
+        self.last_emitted[ch] = v;
+        v
     }
 }
 
@@ -3013,6 +3402,8 @@ pub struct TransportMeter {
     has_queued_update: AtomicBool,
     /// The update_id of the most recently applied patch update
     last_applied_update_id: AtomicU64,
+    /// The update_id of the most recently cancelled queued patch update
+    last_cancelled_update_id: AtomicU64,
     /// Whether Ableton Link is currently enabled
     link_enabled: AtomicBool,
     /// Number of Link peers in the session
@@ -3036,6 +3427,7 @@ impl Default for TransportMeter {
             is_playing: AtomicBool::new(false),
             has_queued_update: AtomicBool::new(false),
             last_applied_update_id: AtomicU64::new(0),
+            last_cancelled_update_id: AtomicU64::new(0),
             link_enabled: AtomicBool::new(false),
             link_peers: AtomicU32::new(0),
             link_phase_bits: AtomicU64::new(0f64.to_bits()),
@@ -3080,6 +3472,13 @@ impl TransportMeter {
     #[inline]
     pub fn write_applied_update_id(&self, update_id: u64) {
         self.last_applied_update_id
+            .store(update_id, Ordering::Relaxed);
+    }
+
+    /// Record that the audio thread discarded a queued patch update with this ID.
+    #[inline]
+    pub fn write_cancelled_update_id(&self, update_id: u64) {
+        self.last_cancelled_update_id
             .store(update_id, Ordering::Relaxed);
     }
 
@@ -3143,6 +3542,7 @@ impl TransportMeter {
             is_playing: self.is_playing.load(Ordering::Relaxed),
             has_queued_update: self.has_queued_update.load(Ordering::Relaxed),
             last_applied_update_id: self.last_applied_update_id.load(Ordering::Relaxed) as f64,
+            last_cancelled_update_id: self.last_cancelled_update_id.load(Ordering::Relaxed) as f64,
             link_enabled: self.link_enabled.load(Ordering::Relaxed),
             link_peers: self.link_peers.load(Ordering::Relaxed),
             link_phase: f64::from_bits(self.link_phase_bits.load(Ordering::Relaxed)),
@@ -3172,6 +3572,9 @@ pub struct TransportSnapshot {
     pub has_queued_update: bool,
     /// The update_id of the most recently applied patch update (as f64 for N-API compatibility)
     pub last_applied_update_id: f64,
+    /// The update_id of the most recently cancelled queued patch update (as f64
+    /// for N-API compatibility). An update with this id never applies.
+    pub last_cancelled_update_id: f64,
     /// Whether Ableton Link is currently enabled
     pub link_enabled: bool,
     /// Number of Link peers in the session
@@ -3269,9 +3672,10 @@ mod tests {
         let shared = AudioSharedState {
             stopped: Arc::new(AtomicBool::new(true)),
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
+            vu_collection: Arc::new(Mutex::new(Vec::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
-            recording_writer: Arc::new(Mutex::new(None)),
+            recording_feed: Arc::new(Mutex::new(None)),
             audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             midi_manager: Arc::new(MidiInputManager::new()),
@@ -3524,9 +3928,10 @@ mod tests {
         let shared = AudioSharedState {
             stopped: Arc::new(AtomicBool::new(true)),
             scope_collection: Arc::new(Mutex::new(HashMap::new())),
+            vu_collection: Arc::new(Mutex::new(Vec::new())),
             scope_xy_collection: Arc::new(Mutex::new(HashMap::new())),
             scope_xy_ranges: Arc::new(Mutex::new(None)),
-            recording_writer: Arc::new(Mutex::new(None)),
+            recording_feed: Arc::new(Mutex::new(None)),
             audio_budget_meter: Arc::new(AudioBudgetMeter::new()),
             module_states: Arc::new(Mutex::new(HashMap::new())),
             midi_manager: Arc::new(MidiInputManager::new()),
@@ -3714,6 +4119,97 @@ mod tests {
             7.0,
             "vca-2 inherits vca-1's state across the rename"
         );
+    }
+
+    #[test]
+    fn suppressed_transfer_source_starts_module_fresh() {
+        // A transfer source of `None` (set for skip_state_transfer modules,
+        // e.g. the per-out mute gate slew) must beat both the same-id default
+        // and a remap: the new module keeps its freshly-constructed state.
+        let (_cmd_producer, mut processor) = create_test_processor();
+
+        processor
+            .patch
+            .sampleables
+            .insert("gate-1".into(), MockModule::tagged("old-gate", 5.0));
+
+        let mut update = update_with(
+            48000.0,
+            vec![("gate-1", MockModule::tagged("new-gate", 0.0))],
+        );
+        update.set_remaps(&[ModuleIdRemap {
+            from: "gate-1".into(),
+            to: "gate-1".into(),
+        }]);
+        update.transfer_sources.insert("gate-1".into(), None);
+
+        processor.apply_patch_update(update, 0);
+
+        let gate = processor.patch.sampleables.get("gate-1").unwrap();
+        assert_eq!(gate.get_module_type(), "new-gate");
+        assert_eq!(
+            gate.get_value_at("", 0, 0),
+            0.0,
+            "suppressed module must not inherit the old state"
+        );
+    }
+
+    #[test]
+    fn declick_releases_step_and_terminates() {
+        let sr = 48_000.0;
+        let mut fsp = FinalStateProcessor::new(sr);
+
+        // Establish a loud steady output on channel 0.
+        for _ in 0..8 {
+            assert_eq!(fsp.declick(0, 2.0), 2.0);
+        }
+
+        // Swap to hard silence: the first post-swap sample must equal the
+        // last emitted one (continuity), then release monotonically.
+        fsp.arm_declick();
+        let first = fsp.declick(0, 0.0);
+        assert_eq!(first, 2.0, "first post-swap sample is continuous");
+        let mut prev = first;
+        for _ in 0..(sr as usize / 50) {
+            let v = fsp.declick(0, 0.0);
+            assert!(v >= 0.0 && v <= prev, "release must decay monotonically");
+            prev = v;
+        }
+        // Within 20 ms the tail has snapped to exactly zero.
+        assert_eq!(prev, 0.0);
+        assert_eq!(fsp.declick_level[0], 0.0);
+    }
+
+    #[test]
+    fn declick_is_noop_across_continuous_swap() {
+        let mut fsp = FinalStateProcessor::new(48_000.0);
+        for _ in 0..4 {
+            fsp.declick(0, 1.0);
+        }
+        // The new patch continues the old output exactly: no tail.
+        fsp.arm_declick();
+        assert_eq!(fsp.declick(0, 1.0), 1.0);
+        assert_eq!(fsp.declick_level[0], 0.0);
+        assert_eq!(fsp.declick(0, 1.0), 1.0);
+    }
+
+    #[test]
+    fn declick_rearm_mid_tail_stays_continuous() {
+        let mut fsp = FinalStateProcessor::new(48_000.0);
+        for _ in 0..4 {
+            fsp.declick(0, 3.0);
+        }
+        fsp.arm_declick();
+        let mut last = 0.0;
+        for _ in 0..10 {
+            last = fsp.declick(0, 0.0);
+        }
+        assert!(last > 0.0, "tail still live mid-release");
+        // A second swap lands mid-tail: the next sample continues from the
+        // emitted (tail-inclusive) value, not from the raw input.
+        fsp.arm_declick();
+        let v = fsp.declick(0, 1.5);
+        assert_eq!(v, last, "re-arm composes against the emitted value");
     }
 
     #[test]
@@ -4005,6 +4501,73 @@ mod tests {
             matches!(trigger, QueuedTrigger::Immediate),
             "superseding update applies immediately"
         );
+    }
+
+    #[test]
+    fn cancel_discards_queued_update_and_reports_its_id() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+
+        let mut update = PatchUpdate::new(44_100.0);
+        update.update_id = 7;
+        cmd_producer
+            .push(GraphCommand::QueuedPatchUpdate {
+                update,
+                trigger: QueuedTrigger::NextBar,
+            })
+            .unwrap();
+        cmd_producer.push(GraphCommand::CancelQueuedUpdate).unwrap();
+
+        processor.process_commands();
+
+        assert!(processor.queued_update.is_none());
+        let snap = processor.transport_meter.snapshot();
+        assert_eq!(snap.last_cancelled_update_id, 7.0);
+        assert_eq!(snap.last_applied_update_id, 0.0);
+    }
+
+    #[test]
+    fn cancel_without_queued_update_is_a_no_op() {
+        let (mut cmd_producer, mut processor) = create_test_processor();
+
+        cmd_producer.push(GraphCommand::CancelQueuedUpdate).unwrap();
+        processor.process_commands();
+
+        assert!(processor.queued_update.is_none());
+        assert_eq!(
+            processor
+                .transport_meter
+                .snapshot()
+                .last_cancelled_update_id,
+            0.0
+        );
+    }
+
+    #[test]
+    fn update_after_cancel_keeps_its_trigger() {
+        // With nothing left queued, a later update keeps its own trigger; only
+        // an update that supersedes a queued one is promoted to Immediate.
+        let (mut cmd_producer, mut processor) = create_test_processor();
+
+        for cmd in [
+            GraphCommand::QueuedPatchUpdate {
+                update: PatchUpdate::new(44_100.0),
+                trigger: QueuedTrigger::NextBar,
+            },
+            GraphCommand::CancelQueuedUpdate,
+            GraphCommand::QueuedPatchUpdate {
+                update: PatchUpdate::new(44_100.0),
+                trigger: QueuedTrigger::NextBar,
+            },
+        ] {
+            cmd_producer.push(cmd).unwrap();
+        }
+        processor.process_commands();
+
+        let (_, trigger) = processor
+            .queued_update
+            .as_ref()
+            .expect("the later update should be queued");
+        assert!(matches!(trigger, QueuedTrigger::NextBar));
     }
 
     #[test]
@@ -4405,6 +4968,218 @@ mod tests {
         assert_eq!(old_hits.load(Ordering::SeqCst), 0, "old id is gone");
         assert!(!processor.patch.sampleables.contains_key("old-id"));
         assert!(processor.patch.sampleables.contains_key("new-id"));
+    }
+
+    // ============================================================================
+    // Scope collection swap tests
+    // ============================================================================
+
+    fn scope_key(module_id: &str) -> ScopeBufferKey {
+        ScopeBufferKey {
+            module_id: module_id.into(),
+            port_name: "output".into(),
+            channel: 0,
+            ms_per_frame: 100,
+            trigger_threshold: None,
+        }
+    }
+
+    #[test]
+    fn scope_swap_membership_is_exactly_the_last_applied_updates_set() {
+        // Two updates built back-to-back before either applies: each carries
+        // its complete desired membership, so after both apply the collection
+        // holds exactly the later update's set — no orphan from the first, no
+        // dependence on the collection state at build time.
+        let (_cmd_producer, mut processor) = create_test_processor();
+        let key1 = scope_key("m1");
+        let key2 = scope_key("m2");
+
+        let mut u1 = PatchUpdate::new(44_100.0);
+        u1.scope_next
+            .insert(key1.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        let mut u2 = PatchUpdate::new(44_100.0);
+        u2.scope_next
+            .insert(key2.clone(), ScopeBuffer::new(100, None, 44_100.0));
+
+        processor.apply_patch_update(u1, 0);
+        processor.apply_patch_update(u2, 0);
+
+        let collection = processor.scope_collection.lock();
+        assert!(collection.contains_key(&key2));
+        assert!(
+            !collection.contains_key(&key1),
+            "a key absent from the applied update's membership must not linger"
+        );
+        assert_eq!(collection.len(), 1);
+    }
+
+    #[test]
+    fn scope_swap_carries_live_buffer_state_for_kept_keys() {
+        // A key present in both the live collection and the incoming
+        // membership keeps its buffer contents across the swap, so an
+        // unchanged scope's display never blanks on a patch edit.
+        let (_cmd_producer, mut processor) = create_test_processor();
+        let kept = scope_key("kept");
+        let added = scope_key("added");
+
+        let mut u1 = PatchUpdate::new(44_100.0);
+        u1.scope_next
+            .insert(kept.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        processor.apply_patch_update(u1, 0);
+        processor
+            .scope_collection
+            .lock()
+            .get_mut(&kept)
+            .unwrap()
+            .push(0.75);
+
+        let mut u2 = PatchUpdate::new(44_100.0);
+        u2.scope_next
+            .insert(kept.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        u2.scope_next
+            .insert(added.clone(), ScopeBuffer::new(100, None, 44_100.0));
+        processor.apply_patch_update(u2, 0);
+
+        let collection = processor.scope_collection.lock();
+        assert_eq!(
+            collection.get(&kept).unwrap().get_buffer()[0],
+            0.75,
+            "a kept scope's buffer state survives the swap"
+        );
+        assert!(collection.contains_key(&added));
+    }
+
+    // ============================================================================
+    // Module-state metadata cache tests
+    // ============================================================================
+
+    #[derive(Clone)]
+    struct TestLiveState;
+
+    impl ModuleLiveState for TestLiveState {
+        fn reset(&mut self) {}
+        fn clone_box(&self) -> Box<dyn ModuleLiveState> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    struct TestStateMeta(&'static str);
+
+    impl ModuleStateMeta for TestStateMeta {
+        fn build_json(&self, _live: &dyn ModuleLiveState) -> serde_json::Value {
+            serde_json::Value::String(self.0.into())
+        }
+    }
+
+    fn pending_entry(
+        id: u64,
+        module: &str,
+        tag: &'static str,
+    ) -> (u64, HashMap<String, Box<dyn ModuleStateMeta>>) {
+        let mut metas: HashMap<String, Box<dyn ModuleStateMeta>> = HashMap::new();
+        metas.insert(module.into(), Box::new(TestStateMeta(tag)));
+        (id, metas)
+    }
+
+    #[test]
+    fn pending_meta_survives_supersession_until_its_update_applies() {
+        // Update 1 is registered, then update 2 before 1 applies. Update 1's
+        // quantized trigger can still fire before update 2's command is
+        // popped, so its metadata must promote at watermark 1 — with update
+        // 2's entry (and its pre-added slot) intact for the later swap.
+        let mut cache = ModuleStateMetaCache::default();
+        let mut states: ModuleStateMap = HashMap::new();
+        states.insert("a".into(), Box::new(TestLiveState));
+        cache.pending.push(pending_entry(1, "a", "one"));
+        states.insert("b".into(), Box::new(TestLiveState));
+        cache.pending.push(pending_entry(2, "b", "two"));
+
+        cache.promote_if_applied(&mut states, 1);
+        assert!(cache.live.contains_key("a"));
+        assert!(!cache.live.contains_key("b"));
+        assert_eq!(cache.pending.len(), 1);
+        assert!(
+            states.contains_key("b"),
+            "a still-pending update's pre-added slot survives the prune"
+        );
+
+        cache.promote_if_applied(&mut states, 2);
+        assert!(cache.live.contains_key("b"));
+        assert!(!cache.live.contains_key("a"));
+        assert!(!states.contains_key("a"));
+        assert!(cache.pending.is_empty());
+    }
+
+    #[test]
+    fn promotion_picks_newest_applied_pending_entry() {
+        // A watermark covering several pendings promotes only the newest one;
+        // the older entries were superseded before ever pairing with state.
+        let mut cache = ModuleStateMetaCache::default();
+        let mut states: ModuleStateMap = HashMap::new();
+        states.insert("a".into(), Box::new(TestLiveState));
+        states.insert("b".into(), Box::new(TestLiveState));
+        cache.pending.push(pending_entry(1, "a", "one"));
+        cache.pending.push(pending_entry(2, "b", "two"));
+
+        cache.promote_if_applied(&mut states, 2);
+        assert!(cache.live.contains_key("b"));
+        assert!(!cache.live.contains_key("a"));
+        assert!(!states.contains_key("a"));
+        assert!(cache.pending.is_empty());
+    }
+
+    fn create_test_audio_state() -> AudioState {
+        let (
+            cmd_producer,
+            _cmd_consumer,
+            _err_producer,
+            err_consumer,
+            _garbage_producer,
+            garbage_consumer,
+        ) = create_audio_channels();
+        AudioState::new_with_channels(
+            cmd_producer,
+            err_consumer,
+            garbage_consumer,
+            44_100.0,
+            2,
+            Arc::new(MidiInputManager::new()),
+            1,
+        )
+    }
+
+    #[test]
+    fn module_states_poll_under_contention_serves_last_snapshot() {
+        let state = create_test_audio_state();
+        state
+            .module_states
+            .lock()
+            .insert("m1".into(), Box::new(TestLiveState));
+        state
+            .module_state_meta
+            .lock()
+            .live
+            .insert("m1".into(), Box::new(TestStateMeta("one")));
+
+        let first = state.get_module_states();
+        assert_eq!(
+            first.get("m1"),
+            Some(&serde_json::Value::String("one".into()))
+        );
+
+        // Hold the live-state lock as the audio thread does mid-callback: the
+        // poll must serve the previous snapshot, never an empty map the
+        // renderer would read as "all modules removed".
+        let states_arc = Arc::clone(&state.module_states);
+        let _audio_thread_guard = states_arc.lock();
+        let contended = state.get_module_states();
+        assert_eq!(contended, first);
     }
 
     // ============================================================================

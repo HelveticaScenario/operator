@@ -92,9 +92,12 @@ struct TrackAndHoldOutputs {
     sample: PolyOutput,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 struct TrackAndHoldChannelState {
     gate: SchmittTrigger,
+    /// The output voltage, kept here rather than read back from the output port
+    /// so it survives the patch update that reconstructs the module's outputs.
+    held_value: f32,
 }
 
 /// Follows the input while the gate is low, and holds the value when the
@@ -123,11 +126,12 @@ impl TrackAndHold {
             let input = self.params.input.get_value(ch);
             let gate = self.params.gate.get_value(ch);
 
-            // Track while gate is low or on rising edge
             state.gate.process(gate);
-            if state.gate.state() != crate::dsp::utils::SchmittState::High {
-                self.outputs.sample.set(ch, input);
+            if state.gate.state() != SchmittState::High {
+                state.held_value = input;
             }
+
+            self.outputs.sample.set(ch, state.held_value);
         }
     }
 }

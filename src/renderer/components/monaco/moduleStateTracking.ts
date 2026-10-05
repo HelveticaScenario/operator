@@ -14,9 +14,13 @@
  * back to source positions so highlighting works correctly.
  *
  * IMPORTANT: This system uses Monaco's tracked decorations with stickiness so that
- * decorations automatically move when the user types. We create tracked decorations
- * for each span when we first see a module's argument_spans, then during polling
- * we use model.getDecorationRange() to get the current (tracked) positions.
+ * decorations automatically move when the user types. Tracked decorations are
+ * created for every span on the first poll after a patch evaluates — while
+ * `argument_spans` (evaluation-time document offsets) still match the document,
+ * before any edit can shift it. The decorations are owned by the model (not an
+ * editor) and the cache is keyed by model, so anchors survive polling restarts,
+ * tab switches, and editor recreation. During polling,
+ * model.getDecorationRange() supplies the current (tracked) positions.
  * This applies to both interpolated and non-interpolated spans.
  */
 
@@ -258,6 +262,13 @@ function buildPositionMapper(
     };
 }
 
+/** Strip a surrounding quote/backtick pair from a literal's source text. */
+function stripQuotes(text: string): string {
+    return text.startsWith('`') || text.startsWith('"') || text.startsWith("'")
+        ? text.slice(1, -1)
+        : text;
+}
+
 /**
  * Resolve an evaluated position that falls inside an interpolation result
  * to a document offset by looking up the interpolation resolution map.
@@ -267,40 +278,70 @@ function buildPositionMapper(
  * redirects the highlight to the original const literal's location in the document.
  *
  * Handles recursive resolution: if the const is itself a template with
- * interpolations, recurses into nested resolutions.
+ * interpolations, recurses into nested resolutions and re-maps positions in
+ * the nested template's own literal text from evaluated to raw offsets.
+ *
+ * Span ends are exclusive, so a position on the boundary of two adjacent
+ * interpolation results belongs to the earlier one when it is a span end and
+ * to the later one when it is a span start; `bias` selects the boundary side.
  *
  * @param evalPos - Position in evaluated string that fell inside an interpolation
  * @param resolutions - Resolved interpolations for this argument span
+ * @param getTextInSpan - Reads the document text covered by a span
+ * @param bias - Whether evalPos is a span start or a span end
  * @returns Document offset to highlight, or null if no resolution found
  */
 function resolveInterpolatedPosition(
     evalPos: number,
     resolutions: ResolvedInterpolation[],
+    getTextInSpan: (span: SourceSpan) => string,
+    bias: 'start' | 'end',
 ): number | null {
     for (const r of resolutions) {
         const rEnd = r.evaluatedStart + r.evaluatedLength;
-        // Use <= for the end check because span ends are exclusive:
-        // A Rust span [0, 2] means characters 0-1, and position 2 is the
-        // Exclusive end that should map to the exclusive end of the const literal.
-        if (evalPos >= r.evaluatedStart && evalPos <= rEnd) {
-            const offsetInResult = evalPos - r.evaluatedStart;
+        const inRegion =
+            bias === 'start'
+                ? evalPos >= r.evaluatedStart && evalPos < rEnd
+                : evalPos > r.evaluatedStart && evalPos <= rEnd;
+        if (!inRegion) {
+            continue;
+        }
+        const offsetInResult = evalPos - r.evaluatedStart;
 
-            // If the const has nested resolutions (it's a template with interpolations),
-            // Check if this offset falls inside one of the nested interpolations
-            if (r.nestedResolutions && r.nestedResolutions.length > 0) {
-                const nestedResult = resolveInterpolatedPosition(
-                    offsetInResult,
-                    r.nestedResolutions,
-                );
-                if (nestedResult !== null) {
-                    return nestedResult;
-                }
+        // If the const has nested resolutions (it's a template with interpolations),
+        // Check if this offset falls inside one of the nested interpolations
+        if (r.nestedResolutions && r.nestedResolutions.length > 0) {
+            const nestedResult = resolveInterpolatedPosition(
+                offsetInResult,
+                r.nestedResolutions,
+                getTextInSpan,
+                bias,
+            );
+            if (nestedResult !== null) {
+                return nestedResult;
             }
 
-            // Simple case or fallback: map directly into the const literal
-            // +1 to skip the opening quote character
-            return r.constLiteralSpan.start + 1 + offsetInResult;
+            // Position in the nested template's own literal text: each nested
+            // ${...} occupies a different width in the raw literal than in its
+            // evaluated result, so the evaluated offset must be re-mapped
+            // through the nested template's literal regions.
+            const rawContent = stripQuotes(getTextInSpan(r.constLiteralSpan));
+            const nestedRegions = buildInterpolationRegionsFromResolutions(
+                rawContent,
+                r.nestedResolutions,
+            );
+            if (nestedRegions) {
+                const rawOffset =
+                    buildPositionMapper(nestedRegions)(offsetInResult);
+                if (rawOffset !== null) {
+                    return r.constLiteralSpan.start + 1 + rawOffset;
+                }
+            }
         }
+
+        // Plain string const: evaluated offsets equal literal offsets
+        // +1 to skip the opening quote character
+        return r.constLiteralSpan.start + 1 + offsetInResult;
     }
     return null;
 }
@@ -323,14 +364,11 @@ interface ParamCache {
     /**
      * Map of span ID (e.g., "0:5") to Monaco decoration ID.
      * These decorations are tracked and automatically move with text edits.
+     * They are owned by the model (not an editor) so they survive editor
+     * disposal and model detach/re-attach across tab switches.
      * Used for both interpolated and non-interpolated spans.
      */
     trackedDecorationIds?: Map<string, string>;
-    /**
-     * The decoration collection that holds all tracked decorations for this param.
-     * Used for both interpolated and non-interpolated spans.
-     */
-    decorationCollection?: editor.IEditorDecorationsCollection;
     /**
      * Whether we've already created tracked decorations for all_spans.
      * This prevents re-creating them on every poll.
@@ -360,6 +398,29 @@ type ModuleCache = Map<string, ParamCache>;
  * Cache for all modules
  */
 type GlobalCache = Map<string, ModuleCache>;
+
+/**
+ * Per-model caches. Keyed by model so tracked anchor state survives polling
+ * restarts and editor recreation; anchoring only happens while the cached
+ * span data still matches the document, never re-derived from stale
+ * evaluation-time offsets after edits.
+ */
+const modelCaches = new WeakMap<editor.ITextModel, GlobalCache>();
+
+/** Remove a param's tracked anchor decorations from the model. */
+function clearTrackedDecorations(
+    model: editor.ITextModel,
+    paramCache: ParamCache,
+): void {
+    if (paramCache.trackedDecorationIds) {
+        model.deltaDecorations(
+            [...paramCache.trackedDecorationIds.values()],
+            [],
+        );
+    }
+    paramCache.trackedDecorationIds = undefined;
+    paramCache.trackedDecorationsCreated = false;
+}
 
 /**
  * Parameters for starting module state polling
@@ -402,16 +463,18 @@ export function startModuleStatePolling({
     activeClassName = 'active-seq-step',
     pollInterval = 50,
 }: ModuleStatePollingParams): () => void {
-    // Only track if viewing the running buffer
-    if (currentFile !== runningBufferId) {
-        if (activeDecorationRef.current) {
-            activeDecorationRef.current.clear();
-        }
-        return () => {};
+    // The active-highlight collection is bound to a single editor instance,
+    // and this session may target a recreated editor. Drop any collection
+    // from a previous session so the first poll creates one on this editor.
+    if (activeDecorationRef.current) {
+        activeDecorationRef.current.clear();
+        activeDecorationRef.current = null;
     }
 
-    // Global cache for all modules and their params
-    const globalCache: GlobalCache = new Map();
+    // Only track if viewing the running buffer
+    if (currentFile !== runningBufferId) {
+        return () => {};
+    }
 
     const interval = setInterval(async () => {
         try {
@@ -422,14 +485,33 @@ export function startModuleStatePolling({
                 return;
             }
 
+            // Reuse the model's cache: its tracked decorations are live in
+            // the model and already follow edits, whereas rebuilding from
+            // argument_spans would resolve evaluation-time offsets against a
+            // possibly-edited document.
+            let globalCache = modelCaches.get(model);
+            if (!globalCache) {
+                globalCache = new Map();
+                modelCaches.set(model, globalCache);
+            }
+
+            const getTextInSpan = (span: SourceSpan): string => {
+                const startPos = model.getPositionAt(span.start);
+                const endPos = model.getPositionAt(span.end);
+                return model.getValueInRange({
+                    endColumn: endPos.column,
+                    endLineNumber: endPos.lineNumber,
+                    startColumn: startPos.column,
+                    startLineNumber: startPos.lineNumber,
+                });
+            };
+
             // Clean up cache entries for modules that no longer exist in the patch.
             // Without this, tracked decorations from removed modules would linger.
             for (const [cachedModuleId, moduleCache] of globalCache) {
                 if (!(cachedModuleId in states)) {
                     for (const paramCache of moduleCache.values()) {
-                        if (paramCache.decorationCollection) {
-                            paramCache.decorationCollection.clear();
-                        }
+                        clearTrackedDecorations(model, paramCache);
                     }
                     globalCache.delete(cachedModuleId);
                 }
@@ -459,10 +541,12 @@ export function startModuleStatePolling({
                 )) {
                     const { spans, source: evaluatedSource } = paramInfo;
 
-                    // Skip if no spans to highlight
-                    if (!spans || spans.length === 0) {
-                        continue;
-                    }
+                    // A param with no currently active spans (e.g. an arrange
+                    // section that has not started playing) still gets its
+                    // tracked decorations created below: anchoring must
+                    // happen on the first poll after evaluate, while the
+                    // offsets still match the document.
+                    const activeSpans = spans ?? [];
 
                     // Get the document position for this argument
                     const argSpan = argumentSpans[paramName];
@@ -493,12 +577,7 @@ export function startModuleStatePolling({
 
                     if (argSpanChanged || sourceChanged) {
                         // Clear old tracked decorations if any
-                        if (paramCache.decorationCollection) {
-                            paramCache.decorationCollection.clear();
-                        }
-                        paramCache.trackedDecorationIds = undefined;
-                        paramCache.decorationCollection = undefined;
-                        paramCache.trackedDecorationsCreated = false;
+                        clearTrackedDecorations(model, paramCache);
                         paramCache.lastSource = evaluatedSource;
 
                         paramCache.argumentSpan = argSpan;
@@ -536,18 +615,9 @@ export function startModuleStatePolling({
                             evaluatedSource
                         ) {
                             // Strip quotes from source content for mapping
-                            let sourceWithoutQuotes =
-                                paramCache.sourceContent || '';
-                            if (
-                                sourceWithoutQuotes.startsWith('`') ||
-                                sourceWithoutQuotes.startsWith('"') ||
-                                sourceWithoutQuotes.startsWith("'")
-                            ) {
-                                sourceWithoutQuotes = sourceWithoutQuotes.slice(
-                                    1,
-                                    -1,
-                                );
-                            }
+                            const sourceWithoutQuotes = stripQuotes(
+                                paramCache.sourceContent || '',
+                            );
 
                             // Prefer building regions from resolution data (accurate)
                             // Over indexOf-based text matching (can fail when
@@ -576,11 +646,7 @@ export function startModuleStatePolling({
                                 evaluatedSource;
 
                             // Mapper changed — tracked decorations need recreating
-                            paramCache.trackedDecorationsCreated = false;
-                            if (paramCache.decorationCollection) {
-                                paramCache.decorationCollection.clear();
-                            }
-                            paramCache.trackedDecorationIds = undefined;
+                            clearTrackedDecorations(model, paramCache);
                         }
 
                         if (!paramCache.positionMapper) {
@@ -624,11 +690,15 @@ export function startModuleStatePolling({
                                         resolveInterpolatedPosition(
                                             evalStart,
                                             resolutions,
+                                            getTextInSpan,
+                                            'start',
                                         );
                                     const resolvedEnd =
                                         resolveInterpolatedPosition(
                                             evalEnd,
                                             resolutions,
+                                            getTextInSpan,
+                                            'end',
                                         );
                                     if (
                                         resolvedStart !== null &&
@@ -669,12 +739,10 @@ export function startModuleStatePolling({
                             }
 
                             if (decorationsToCreate.length > 0) {
-                                paramCache.decorationCollection =
-                                    editor.createDecorationsCollection();
-                                const ids =
-                                    paramCache.decorationCollection.set(
-                                        decorationsToCreate,
-                                    );
+                                const ids = model.deltaDecorations(
+                                    [],
+                                    decorationsToCreate,
+                                );
                                 paramCache.trackedDecorationIds = new Map();
                                 for (let i = 0; i < spanIds.length; i++) {
                                     paramCache.trackedDecorationIds.set(
@@ -689,7 +757,7 @@ export function startModuleStatePolling({
 
                         // Use tracked decorations for active spans
                         if (paramCache.trackedDecorationIds) {
-                            for (const [spanStart, spanEnd] of spans) {
+                            for (const [spanStart, spanEnd] of activeSpans) {
                                 const spanId = `${spanStart}:${spanEnd}`;
                                 const decoId =
                                     paramCache.trackedDecorationIds.get(spanId);
@@ -758,13 +826,10 @@ export function startModuleStatePolling({
                                 });
                             }
 
-                            // Create the decoration collection and get IDs
-                            paramCache.decorationCollection =
-                                editor.createDecorationsCollection();
-                            const ids =
-                                paramCache.decorationCollection.set(
-                                    decorationsToCreate,
-                                );
+                            const ids = model.deltaDecorations(
+                                [],
+                                decorationsToCreate,
+                            );
 
                             // Build span ID -> decoration ID map
                             paramCache.trackedDecorationIds = new Map();
@@ -780,7 +845,7 @@ export function startModuleStatePolling({
 
                         // If we have tracked decorations, use them to get current positions for active spans
                         if (paramCache.trackedDecorationIds) {
-                            for (const [spanStart, spanEnd] of spans) {
+                            for (const [spanStart, spanEnd] of activeSpans) {
                                 const spanId = `${spanStart}:${spanEnd}`;
                                 const decoId =
                                     paramCache.trackedDecorationIds.get(spanId);
@@ -821,15 +886,10 @@ export function startModuleStatePolling({
         }
     }, pollInterval);
 
-    // Cleanup: clear all tracked decoration collections
+    // Tracked anchor decorations are owned by the model and cached per model,
+    // so a later session reuses their live (edit-tracked) ranges;
+    // evaluation-time offsets are stale after any edit.
     return () => {
         clearInterval(interval);
-        for (const moduleCache of globalCache.values()) {
-            for (const paramCache of moduleCache.values()) {
-                if (paramCache.decorationCollection) {
-                    paramCache.decorationCollection.clear();
-                }
-            }
-        }
     };
 }

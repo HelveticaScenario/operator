@@ -11,6 +11,7 @@ use crate::{
         sanitize,
     },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
+    types::hermite_clamped,
 };
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -49,14 +50,14 @@ enum GrainShape {
 
 #[derive(Default, Clone, Copy)]
 struct Grain {
-    /// Whether this slot is currently playing.
-    active: bool,
     /// Fractional frame index into the WAV buffer.
     read_pos: f64,
     /// Frames advanced per audio sample (positive = forward, negative = reverse).
     signed_rate: f64,
-    /// Samples elapsed since spawn; window phase t = age * inv_life.
-    age: f32,
+    /// Samples elapsed since spawn; window phase t = age × inv_life. An
+    /// integer counter always advances by exactly 1, so a grain reaches the
+    /// end of its life no matter how long that life is.
+    age: u64,
     /// Reciprocal of the grain length in samples.
     inv_life: f32,
     /// Fraction of normalised grain time equal to 1 ms (for ramp / square / decay).
@@ -71,6 +72,8 @@ struct Grain {
 
 struct GrainChannel {
     grains: [Grain; GRAINS_PER_CHANNEL],
+    /// Bit `i` is set while `grains[i]` is playing.
+    active: u64,
     /// Accumulator; a grain is spawned each time this crosses 1.0.
     spawn_phase: f32,
     /// Grains spawned since the last gate rising edge (for `loopCount`).
@@ -86,6 +89,7 @@ impl Default for GrainChannel {
     fn default() -> Self {
         Self {
             grains: std::array::from_fn(|_| Grain::default()),
+            active: 0,
             spawn_phase: 0.0,
             grains_spawned: 0,
             gate_trigger: SchmittTrigger::default(),
@@ -288,23 +292,17 @@ fn fill_window_lut(lut: &mut [f32], shape: GrainShape) {
 
 // ── Grain pool helpers ─────────────────────────────────────────────────────────
 
-/// Find a free grain slot. If all 64 are active, steal the oldest (highest
-/// `age`), which is closest to its natural end.
+/// Find a free grain slot — the lowest bit clear in `active`. If all 64 are
+/// active, steal the oldest (highest `age`), which is closest to its natural end.
 #[inline]
-fn alloc_grain(grains: &[Grain; GRAINS_PER_CHANNEL]) -> usize {
-    for (i, g) in grains.iter().enumerate() {
-        if !g.active {
-            return i;
-        }
+fn alloc_grain(grains: &[Grain; GRAINS_PER_CHANNEL], active: u64) -> usize {
+    if active != u64::MAX {
+        return (!active).trailing_zeros() as usize;
     }
     grains
         .iter()
         .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            a.age
-                .partial_cmp(&b.age)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        .max_by_key(|(_, g)| g.age)
         .map(|(i, _)| i)
         .unwrap_or(0)
 }
@@ -345,7 +343,15 @@ impl Grains {
         for ch in 0..channels {
             // ── Read params for this channel ───────────────────────────────
             let gate_val = self.params.gate.get_value(ch);
-            let density = self.params.density.value_or(ch, 2.5).max(0.0001);
+            // A cable can carry any f32, so enforce the documented range
+            // here (non-finite falls back to the default): the spawn drain
+            // loop below only terminates for a finite, bounded rate.
+            let density = self.params.density.value_or(ch, 2.5);
+            let density = if density.is_finite() {
+                density.clamp(0.0001, 100.0)
+            } else {
+                2.5
+            };
             let loop_count = self.params.loop_count;
 
             // ── Gate / spawn control ───────────────────────────────────────
@@ -363,10 +369,9 @@ impl Grains {
                 if is_high && !limit_reached {
                     let grains_per_sample = density * 10.0 / sample_rate;
                     cs.spawn_phase += grains_per_sample;
-
-                    // Capture params outside the grain-spawn inner loop to
-                    // avoid re-reading on every grain (values are stable per
-                    // sample tick).
+                }
+                // Grain parameters are only needed on a sample that spawns.
+                if is_high && !limit_reached && cs.spawn_phase >= 1.0 {
                     let pitch = self.params.pitch.get_value(ch);
                     let start_v = self.params.start.value_or(ch, 0.0).clamp(0.0, 5.0);
                     let length_v = self.params.length.value_or(ch, 1.0).max(0.01);
@@ -386,7 +391,17 @@ impl Grains {
                     let decay_coeff = (-6.9 / decay_samps).exp() as f32;
 
                     let cs = &mut self.channel_state[ch];
+                    // The pool holds GRAINS_PER_CHANNEL slots, so any spawn
+                    // beyond that within one sample only overwrites a grain
+                    // spawned this same sample; dropping the residual keeps
+                    // the drain loop bounded for any spawn_phase value.
+                    let mut spawn_budget = GRAINS_PER_CHANNEL;
                     while cs.spawn_phase >= 1.0 {
+                        if spawn_budget == 0 {
+                            cs.spawn_phase = 0.0;
+                            break;
+                        }
+                        spawn_budget -= 1;
                         cs.spawn_phase -= 1.0;
 
                         let reverse = cs.rng.next_unit() < reverse_prob;
@@ -399,17 +414,17 @@ impl Grains {
                             (start_frame, playback_rate)
                         };
 
-                        let slot = alloc_grain(&cs.grains);
+                        let slot = alloc_grain(&cs.grains, cs.active);
                         cs.grains[slot] = Grain {
-                            active: true,
                             read_pos,
                             signed_rate,
-                            age: 0.0,
+                            age: 0,
                             inv_life,
                             d_ratio,
                             decay_level: 0.0,
                             decay_coeff,
                         };
+                        cs.active |= 1 << slot;
                         cs.grains_spawned += 1;
 
                         if loop_count.map_or(false, |n| cs.grains_spawned >= n) {
@@ -422,17 +437,19 @@ impl Grains {
             // ── Process active grains ──────────────────────────────────────
             let mut sum = 0.0_f32;
             let mut active_count = 0_u32;
-            let wav_ch = ch % wav_channels;
+            let samples = self.params.wav.channel(ch % wav_channels);
             let lut = &self.state.window_lut;
 
             let cs = &mut self.channel_state[ch];
-            for grain in cs.grains.iter_mut() {
-                if !grain.active {
-                    continue;
-                }
-                let t = grain.age * grain.inv_life;
+            // Ascending slot order keeps the summation order deterministic.
+            let mut pending = cs.active;
+            while pending != 0 {
+                let slot = pending.trailing_zeros() as usize;
+                pending &= pending - 1;
+                let grain = &mut cs.grains[slot];
+                let t = grain.age as f32 * grain.inv_life;
                 if t >= 1.0 {
-                    grain.active = false;
+                    cs.active &= !(1 << slot);
                     continue;
                 }
 
@@ -482,16 +499,13 @@ impl Grains {
                     _ => lut_read(lut, t),
                 };
 
-                let sample = self
-                    .params
-                    .wav
-                    .read_hermite_clamped(wav_ch, grain.read_pos as f32);
+                let sample = hermite_clamped(samples, grain.read_pos as f32);
 
                 sum += sample * window;
                 active_count += 1;
 
                 grain.read_pos += grain.signed_rate;
-                grain.age += 1.0;
+                grain.age += 1;
             }
 
             // ── Normalise (Clouds-style) ───────────────────────────────────
@@ -563,10 +577,14 @@ message_handlers!(impl Grains {});
 mod tests {
     use std::sync::Arc;
 
+    use super::*;
     use crate::dsp::{get_constructors, get_params_deserializers};
+    use crate::param_errors::ModuleParamErrors;
     use crate::params::DeserializedParams;
     use crate::patch::Patch;
-    use crate::types::{SampleBuffer, Sampleable, WavData};
+    use crate::types::{
+        Connect, OutputStruct, PatchUpdateHandler, SampleBuffer, Sampleable, Signal, WavData,
+    };
 
     const SAMPLE_RATE: f32 = 48000.0;
     const TEST_BLOCK_SIZE: usize = 1;
@@ -966,6 +984,96 @@ mod tests {
         assert!(
             peak <= 5.01,
             "single grain should not exceed ±5 V: peak was {peak}"
+        );
+    }
+
+    // ── Direct construction (tests that mutate signals or grain state) ────────
+
+    fn make_direct(params_json: serde_json::Value, wav_data: Arc<WavData>) -> Grains {
+        let mut params: GrainsParams = deserr::deserialize::<_, _, ModuleParamErrors>(params_json)
+            .unwrap_or_else(|e| panic!("params deserialization failed: {e}"));
+        let mut patch = Patch::new();
+        patch.wav_data.insert("t".to_string(), wav_data);
+        params.connect(&patch);
+        let mut outputs = GrainsOutputs::default();
+        outputs.set_all_channels(1);
+        let mut grains = Grains {
+            params,
+            outputs,
+            state: GrainsState::default(),
+            channel_state: vec![GrainChannel::default()].into_boxed_slice(),
+            _channel_count: 1,
+            _block_index: Default::default(),
+        };
+        grains.init(SAMPLE_RATE);
+        grains.on_patch_update();
+        grains
+    }
+
+    // ── Density from a cable can be any f32; the spawn loop stays bounded ─────
+
+    #[test]
+    fn grains_extreme_density_does_not_stall_the_spawn_loop() {
+        let wav = make_test_wav(vec![vec![0.5; 2000]], SAMPLE_RATE);
+        let mut grains = make_direct(
+            serde_json::json!({
+                "pitch": 0.0,
+                "wav": { "type": "wav_ref", "path": "t", "channels": 1 },
+                "gate": 5.0,
+                "shape": "triangle",
+            }),
+            wav,
+        );
+        for density in [f32::INFINITY, 1e30, f32::NAN] {
+            grains.params.density = Some(PolySignal::mono(Signal::Volts(density)));
+            grains.update(SAMPLE_RATE);
+            assert!(
+                grains.channel_state[0].spawn_phase.is_finite(),
+                "spawn_phase must stay finite for density {density}"
+            );
+        }
+        // Recovery: a sane density keeps producing finite output.
+        grains.params.density = Some(PolySignal::mono(Signal::Volts(2.5)));
+        for _ in 0..100 {
+            grains.update(SAMPLE_RATE);
+            let v = grains.outputs.sample.get(0);
+            assert!(v.is_finite(), "output must stay finite, got {v}");
+        }
+    }
+
+    // ── Grain age keeps advancing past f32's contiguous-integer range ─────────
+
+    #[test]
+    fn grains_long_grain_still_terminates() {
+        // Gate low: no spawns. Plant a grain whose remaining life crosses
+        // 2^24 samples, past the range where an f32 counter can advance by 1.
+        let wav = make_test_wav(vec![vec![0.5; 16]], SAMPLE_RATE);
+        let mut grains = make_direct(
+            serde_json::json!({
+                "pitch": 0.0,
+                "wav": { "type": "wav_ref", "path": "t", "channels": 1 },
+                "gate": 0.0,
+            }),
+            wav,
+        );
+        let life = (1u64 << 24) + 50;
+        grains.channel_state[0].active = 1;
+        grains.channel_state[0].grains[0] = Grain {
+            read_pos: 0.0,
+            signed_rate: 0.0,
+            age: (1 << 24) - 10,
+            inv_life: 1.0 / life as f32,
+            d_ratio: 0.001,
+            decay_level: 0.0,
+            decay_coeff: 0.0,
+        };
+        for _ in 0..100 {
+            grains.update(SAMPLE_RATE);
+        }
+        assert_eq!(
+            grains.channel_state[0].active & 1,
+            0,
+            "a grain must deactivate once its age reaches its life"
         );
     }
 

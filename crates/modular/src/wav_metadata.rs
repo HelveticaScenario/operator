@@ -100,9 +100,10 @@ pub fn extract<T: Read + Seek>(
         .map_err(|e| format!("Failed to iterate chunks: {}", e))?;
 
     for child in &children {
-        let id = child.id().as_str().to_string();
-        match id.as_str() {
-            "fmt " => {
+        // Compare fourccs as raw bytes: `ChunkId::as_str` panics on ids that
+        // are not valid UTF-8, which corrupt-but-decodable files can contain.
+        match &child.id().value {
+            b"fmt " => {
                 let data = child
                     .read_contents(stream)
                     .map_err(|e| format!("Failed to read fmt: {}", e))?;
@@ -113,7 +114,7 @@ pub fn extract<T: Read + Seek>(
                 sample_rate = Some(read_u32_le(&data, 4));
                 bit_depth = Some(read_u16_le(&data, 14));
             }
-            "smpl" => {
+            b"smpl" => {
                 let data = child
                     .read_contents(stream)
                     .map_err(|e| format!("Failed to read smpl: {}", e))?;
@@ -145,7 +146,7 @@ pub fn extract<T: Read + Seek>(
                     }
                 }
             }
-            "cue " => {
+            b"cue " => {
                 let data = child
                     .read_contents(stream)
                     .map_err(|e| format!("Failed to read cue: {}", e))?;
@@ -162,17 +163,17 @@ pub fn extract<T: Read + Seek>(
                     }
                 }
             }
-            "LIST" => {
+            b"LIST" => {
                 let list_type = child
                     .read_type(stream)
                     .map_err(|e| format!("Failed to read LIST type: {}", e))?;
-                if list_type.as_str() == "adtl" {
+                if list_type.value == *b"adtl" {
                     let sub_chunks: Vec<riff::Chunk> = child
                         .iter(stream)
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|e| format!("Failed to iterate adtl: {}", e))?;
                     for sub in &sub_chunks {
-                        if sub.id().as_str() == "labl" {
+                        if sub.id().value == *b"labl" {
                             let data = sub
                                 .read_contents(stream)
                                 .map_err(|e| format!("Failed to read labl: {}", e))?;
@@ -194,8 +195,10 @@ pub fn extract<T: Read + Seek>(
                     }
                 }
             }
-            // Sony Acid chunk format: flags(4) root_note(2) padding(2) padding(4) beats(4) ts_num(2) ts_den(2) tempo(4)
-            "acid" => {
+            // Sony Acid chunk format: flags(4) root_note(2) padding(2) padding(4)
+            // beats(4) ts_den(2) ts_num(2) tempo(4). The meter denominator
+            // precedes the numerator, per the de-facto layout libsndfile uses.
+            b"acid" => {
                 let data = child
                     .read_contents(stream)
                     .map_err(|e| format!("Failed to read acid: {}", e))?;
@@ -203,8 +206,8 @@ pub fn extract<T: Read + Seek>(
                     let flags = read_u32_le(&data, 0);
                     let root_note = read_u16_le(&data, 4);
                     let beats = read_u32_le(&data, 12);
-                    let ts_num = read_u16_le(&data, 16);
-                    let ts_den = read_u16_le(&data, 18);
+                    let ts_den = read_u16_le(&data, 16);
+                    let ts_num = read_u16_le(&data, 18);
                     let tempo = read_f32_le(&data, 20);
 
                     if flags & 1 != 0 {
@@ -443,8 +446,8 @@ mod tests {
         write_u16_le(wav, 0); // padding
         write_u32_le(wav, 0); // padding
         write_u32_le(wav, beats);
+        write_u16_le(wav, ts_den); // meter denominator precedes numerator
         write_u16_le(wav, ts_num);
-        write_u16_le(wav, ts_den);
         write_f32_le(wav, tempo);
 
         let riff_size = (wav.len() - 8) as u32;
@@ -565,6 +568,53 @@ mod tests {
         let mut cursor = Cursor::new(wav);
         let meta = extract(&mut cursor, 100, None, None).unwrap();
         assert!((meta.pitch.unwrap() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_non_utf8_chunk_ids_are_skipped() {
+        // Chunk (and adtl sub-chunk) fourccs with invalid UTF-8 bytes are
+        // legal RIFF; extraction must skip them, not fail.
+        let mut wav = minimal_wav(44100, 1, 16, 100);
+
+        wav.extend_from_slice(&[0x74, 0xFF, 0x65, 0x74]); // garbage fourcc
+        write_u32_le(&mut wav, 4);
+        write_u32_le(&mut wav, 0);
+
+        // LIST/adtl with a garbage sub-chunk id alongside a valid labl.
+        append_cue_chunk(&mut wav, &[(1, 0)]);
+        let mut list_content = Vec::new();
+        list_content.extend_from_slice(b"adtl");
+        list_content.extend_from_slice(&[0x6C, 0x80, 0x62, 0x6C]); // garbage fourcc
+        write_u32_le(&mut list_content, 4);
+        write_u32_le(&mut list_content, 0);
+        list_content.extend_from_slice(b"labl");
+        write_u32_le(&mut list_content, 8);
+        write_u32_le(&mut list_content, 1);
+        list_content.extend_from_slice(b"hi\0\0");
+        wav.extend_from_slice(b"LIST");
+        write_u32_le(&mut wav, list_content.len() as u32);
+        wav.extend_from_slice(&list_content);
+
+        let riff_size = (wav.len() - 8) as u32;
+        wav[4..8].copy_from_slice(&riff_size.to_le_bytes());
+
+        let mut cursor = Cursor::new(wav);
+        let meta = extract(&mut cursor, 100, None, None).unwrap();
+        assert_eq!(meta.sample_rate, 44100);
+        assert_eq!(meta.cue_points.len(), 1);
+        assert_eq!(meta.cue_points[0].label, "hi");
+    }
+
+    #[test]
+    fn test_acid_three_four_time_signature() {
+        // 1s of audio at 90 BPM in 3/4: bar = 3 * (60/90) * (4/4) = 2s.
+        let mut wav = minimal_wav(44100, 1, 16, 44100);
+        append_acid_chunk(&mut wav, 0, 0, 3, 3, 4, 90.0);
+        let mut cursor = Cursor::new(wav);
+        let meta = extract(&mut cursor, 44100, None, None).unwrap();
+
+        assert_eq!(meta.time_signature.unwrap(), (3, 4));
+        assert!((meta.bar_count.unwrap() - 0.5).abs() < 1e-9);
     }
 
     #[test]

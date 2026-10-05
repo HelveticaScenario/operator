@@ -1,14 +1,25 @@
-//! Scale snapping infrastructure for quantizers.
+//! Scale and chord specifications.
 //!
-//! This module provides:
-//! - `ScaleSnapper`: A lookup table for snapping MIDI notes to a scale
-//! - Scale type validation and known scale types
+//! A spec string names a set of pitches relative to a root:
+//! - `root(…)` — a scale: a named scale, a tuning keyword, or custom intervals
+//!   (optionally prefixed by a tuning keyword). Intervals reduce to pitch
+//!   classes within one octave.
+//! - `root[…]` — a chord: a chord shorthand or custom voicing intervals that
+//!   keep their register, optionally prefixed by a tuning keyword and suffixed
+//!   by an inversion (`invN`).
+//! - `chromatic` — all 12 semitones from C.
+//!
+//! The root is a note letter, optional accidental and optional octave
+//! (`C`, `Db3`, `f#5`); the octave defaults to 4, so `C` is C4 = 0 V.
 
-use std::fmt::Write as FmtWrite;
+use arrayvec::ArrayVec;
+use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
 
-use arrayvec::{ArrayString, ArrayVec};
-use rust_music_theory::note::{Note, Notes, Pitch};
-use rust_music_theory::scale::Scale;
+use crate::Patch;
+use crate::poly::PORT_MAX_CHANNELS;
+use crate::types::Connect;
+
+use super::{chord_names, scale_names};
 
 /// A fixed scale root (note letter + optional accidental + optional octave).
 #[derive(Clone, Debug, PartialEq)]
@@ -19,15 +30,6 @@ pub struct FixedRoot {
 }
 
 impl FixedRoot {
-    /// Create a new fixed root.
-    pub fn new(letter: char, accidental: Option<char>) -> Self {
-        Self {
-            letter,
-            accidental,
-            octave: None,
-        }
-    }
-
     /// Parse from a string like "c", "c#", "bb", "c3", "c#4", "db3".
     /// The optional octave number follows the note letter and accidental.
     pub fn parse(s: &str) -> Option<Self> {
@@ -106,35 +108,6 @@ impl FixedRoot {
             None => 60 + pc,
         }
     }
-
-    /// Convert to rust_music_theory Pitch.
-    pub fn to_pitch(&self) -> Option<Pitch> {
-        // At most 2 chars: letter + optional accidental.
-        let mut pitch_str = ArrayString::<2>::new();
-        pitch_str.push(self.letter.to_ascii_uppercase());
-        if let Some(acc) = self.accidental {
-            pitch_str.push(acc);
-        }
-        Pitch::from_str(pitch_str.as_str())
-    }
-}
-
-/// Remove consecutive duplicates from a sorted `ArrayVec<i8, 12>` in-place.
-///
-/// Equivalent to `[T]::dedup()` but works around the auto-deref resolution
-/// issue with unsized `[T]` receivers in the 2024 edition.
-fn dedup_sorted(v: &mut ArrayVec<i8, 12>) {
-    if v.len() <= 1 {
-        return;
-    }
-    let mut write = 1usize;
-    for read in 1..v.len() {
-        if v[read] != v[write - 1] {
-            v[write] = v[read];
-            write += 1;
-        }
-    }
-    v.truncate(write);
 }
 
 /// 5-limit just intonation, 12 tones, ratios relative to the root.
@@ -170,7 +143,7 @@ const PYTHAGOREAN_RATIOS: [f64; 12] = [
 ];
 
 /// 12-tone equal temperament tuning: each step is an exact 1/12 V.
-pub fn et_tuning() -> [f64; 12] {
+fn et_tuning() -> [f64; 12] {
     std::array::from_fn(|i| i as f64 / 12.0)
 }
 
@@ -183,8 +156,8 @@ fn tuning_from_ratios(ratios: &[f64; 12]) -> [f64; 12] {
 ///
 /// Recognized: `chromatic` (12-TET), `just` (5-limit just intonation),
 /// `pythagorean` / `pythag` (Pythagorean tuning).
-pub fn named_tuning(name: &str) -> Option<[f64; 12]> {
-    // ASCII case-insensitive compares — no allocation, unlike `to_lowercase`.
+fn named_tuning(name: &str) -> Option<[f64; 12]> {
+    // ASCII case-insensitive; does not allocate.
     if name.eq_ignore_ascii_case("chromatic") {
         Some(et_tuning())
     } else if name.eq_ignore_ascii_case("just") {
@@ -196,304 +169,280 @@ pub fn named_tuning(name: &str) -> Option<[f64; 12]> {
     }
 }
 
-/// A scale snapper with precomputed lookup table for fast MIDI→scale snapping.
+const CHROMATIC: [i8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+/// A parsed scale or chord spec: a root, a tuning, and an ascending voicing.
 ///
-/// The `snap_table` contains 13 entries (0-12 inclusive, where 12 wraps to next octave):
-/// - Index 0 = offset for pitch class at root
-/// - Index 1 = offset for pitch class 1 semitone above root
-/// - ...up to index 12 = octave boundary handling
-///
-/// Each table entry is the signed offset to the nearest scale degree.
-/// When equidistant, prefers the lower pitch.
-#[derive(Clone, Debug)]
-pub struct ScaleSnapper {
-    /// Snap offsets for each chromatic pitch relative to root (0-12).
-    /// Value is the signed semitone offset to snap to the nearest scale tone.
-    snap_table: [i8; 13],
-
-    /// Root offset in semitones (C=0, C#=1, ..., B=11).
-    root_offset: i8,
-
-    /// The scale type name (for reference).
-    scale_name: ArrayString<64>,
-
-    /// Scale intervals (semitones from root for each scale degree).
-    scale_intervals: ArrayVec<i8, 12>,
-
+/// Parsed on the main thread; holds no heap data, so it is cheap to clone into
+/// pattern closures.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScaleSpec {
+    /// MIDI note of the root (degree 0 at interval 0).
+    base_midi: i32,
     /// V/Oct offset of each chromatic step above the root (index 0-11).
-    /// 12-TET by default; non-equal for just / Pythagorean tunings.
     tuning: [f64; 12],
+    /// Semitone offsets from the root, strictly ascending. Scales lie within
+    /// `0..12`; chords may span several octaves or omit the root.
+    voicing: ArrayVec<i8, PORT_MAX_CHANNELS>,
+    /// Semitones between repeats of the voicing when indexing degrees: the
+    /// voicing's span rounded up to whole octaves.
+    period_semitones: i32,
+    /// V/Oct voltage of each voicing note, ascending.
+    voltages: ArrayVec<f32, PORT_MAX_CHANNELS>,
 }
 
-impl ScaleSnapper {
-    /// Build a ScaleSnapper from a scale type name and root.
-    ///
-    /// # Arguments
-    /// * `root` - The root note of the scale
-    /// * `scale_name` - The scale type (e.g., "major", "minor", "dorian")
-    ///
-    /// # Returns
-    /// `Some(ScaleSnapper)` if the scale is valid, `None` otherwise.
-    pub fn new(root: &FixedRoot, scale_name: &str) -> Option<Self> {
-        // "chromatic", "just", "pythagorean" / "pythag" all keep every chromatic
-        // step; they differ only in the per-step tuning table.
-        if let Some(tuning) = named_tuning(scale_name) {
-            let mut name = ArrayString::<64>::new();
-            name.push_str(scale_name);
-            let mut intervals = ArrayVec::<i8, 12>::new();
-            for i in 0i8..12 {
-                intervals.push(i);
+impl ScaleSpec {
+    /// Parse a spec string (see the module docs for the grammar).
+    pub fn parse(source: &str) -> Result<Self, String> {
+        let source = source.trim();
+
+        if source.is_empty() {
+            return Err("scale spec is empty".to_string());
+        }
+
+        if source.eq_ignore_ascii_case("chromatic") {
+            return Self::new(60, et_tuning(), &CHROMATIC);
+        }
+
+        let (open, close, is_chord) = match source.find(['(', '[']) {
+            Some(i) if source.as_bytes()[i] == b'(' => (i, ')', false),
+            Some(i) => (i, ']', true),
+            None => {
+                return Err(
+                    "expected root(scale), root[chord] or \"chromatic\" (e.g. \"C(major)\", \"C3[maj7]\")"
+                        .to_string(),
+                );
             }
-            return Some(Self {
-                snap_table: [0; 13],
-                root_offset: root.pitch_class(),
-                scale_name: name,
-                scale_intervals: intervals,
-                tuning,
-            });
+        };
+        if !source.ends_with(close) {
+            return Err(format!("missing closing '{close}'"));
         }
 
-        let pitch = root.to_pitch()?;
-        let root_note = Note::new(pitch, 4); // Octave doesn't matter for interval calculation
+        let root_str = &source[..open];
+        let root = FixedRoot::parse(root_str)
+            .ok_or_else(|| format!("invalid root note \"{root_str}\""))?;
+        let body = &source[open + 1..source.len() - close.len_utf8()];
 
-        // Build scale definition string — at most ~20 chars (pitch 1-2, space, name ≤15).
-        let mut scale_def = ArrayString::<64>::new();
-        write!(scale_def, "{} {}", root_note.pitch, scale_name).ok()?;
-        let scale = Scale::from_regex(scale_def.as_str()).ok()?;
+        if is_chord {
+            Self::parse_chord(&root, body)
+        } else {
+            Self::parse_scale(&root, body)
+        }
+    }
 
-        let notes = scale.notes();
-        if notes.is_empty() {
-            return None;
+    /// `root(…)`: named scale, tuning keyword, or `[tuning] intervals…`.
+    fn parse_scale(root: &FixedRoot, body: &str) -> Result<Self, String> {
+        let body = body.trim();
+        let base_midi = root.base_midi();
+
+        if let Some(tuning) = named_tuning(body) {
+            return Self::new(base_midi, tuning, &CHROMATIC);
+        }
+        if let Some(intervals) = scale_names::lookup(body) {
+            return Self::new(base_midi, et_tuning(), intervals);
         }
 
-        // Build set of scale degrees (pitch classes relative to root).
-        // A scale has at most 12 distinct degrees.
-        let root_pc = root.pitch_class();
-        let mut scale_degrees = ArrayVec::<i8, 12>::new();
-        for n in notes.iter().take(12) {
-            let pc = n.pitch.into_u8() as i8;
-            scale_degrees.push(((pc - root_pc) % 12 + 12) % 12);
+        let mut tokens = body.split_whitespace().peekable();
+        let tuning = match tokens.peek().and_then(|t| named_tuning(t)) {
+            Some(tuning) => {
+                tokens.next();
+                tuning
+            }
+            None => et_tuning(),
+        };
+
+        // Custom intervals reduce to pitch classes; the root is always a degree.
+        let mut pitch_classes = ArrayVec::<i8, 12>::new();
+        pitch_classes.push(0);
+        let mut any = false;
+        for token in tokens {
+            let interval = token.parse::<i8>().map_err(|_| {
+                format!("unknown scale \"{body}\" (\"{token}\" is not a scale name or interval)")
+            })?;
+            any = true;
+            let pc = interval.rem_euclid(12);
+            if !pitch_classes.contains(&pc) {
+                pitch_classes.push(pc);
+            }
+        }
+        if !any {
+            return Err(format!("scale \"{body}\" has no intervals"));
+        }
+        pitch_classes.sort_unstable();
+        Self::new(base_midi, tuning, &pitch_classes)
+    }
+
+    /// `root[…]`: `[tuning] (chord-name | intervals…) [invN]`.
+    fn parse_chord(root: &FixedRoot, body: &str) -> Result<Self, String> {
+        let mut tokens: ArrayVec<&str, { PORT_MAX_CHANNELS + 2 }> = ArrayVec::new();
+        for token in body.split_whitespace() {
+            tokens
+                .try_push(token)
+                .map_err(|_| format!("chord has more than {PORT_MAX_CHANNELS} notes"))?;
         }
 
-        // Remove duplicates and sort.
-        scale_degrees.sort();
-        dedup_sorted(&mut scale_degrees);
-
-        // degrees_with_octave = scale_degrees + boundary 12.
-        let mut degrees_with_octave = ArrayVec::<i8, 13>::new();
-        degrees_with_octave.extend(scale_degrees.iter().copied());
-        degrees_with_octave.push(12);
-
-        // degrees_extended = degrees_with_octave + (scale_degrees shifted down an octave).
-        let mut degrees_extended = ArrayVec::<i8, 25>::new();
-        degrees_extended.extend(degrees_with_octave.iter().copied());
-        for &d in &scale_degrees {
-            degrees_extended.push(d - 12);
+        let mut tuning = et_tuning();
+        if let Some(t) = tokens.first().and_then(|t| named_tuning(t)) {
+            tuning = t;
+            tokens.remove(0);
         }
-        degrees_extended.sort();
 
-        // Build snap table: for each chromatic pitch (0-12), find nearest scale degree.
-        let mut snap_table = [0i8; 13];
-        for chromatic in 0..=12 {
-            let mut best_offset = 0i8;
-            let mut best_dist = i8::MAX;
+        let mut inversion = 0usize;
+        if let Some(n) = tokens.last().and_then(|t| t.strip_prefix("inv")) {
+            inversion = n
+                .parse()
+                .map_err(|_| format!("invalid inversion \"inv{n}\" (expected inv1, inv2, …)"))?;
+            tokens.pop();
+        }
 
-            for &degree in &degrees_extended {
-                let offset = degree - chromatic;
-                let dist = offset.abs();
-
-                if dist < best_dist || (dist == best_dist && offset < 0) {
-                    best_dist = dist;
-                    best_offset = offset;
+        let mut voicing = ArrayVec::<i8, PORT_MAX_CHANNELS>::new();
+        match tokens.as_slice() {
+            [] => return Err("chord is empty".to_string()),
+            [name] if chord_names::lookup(name).is_some() => {
+                voicing.extend(chord_names::lookup(name).unwrap().iter().copied());
+            }
+            _ => {
+                for token in &tokens {
+                    let interval = token.parse::<i8>().map_err(|_| {
+                        format!(
+                            "unknown chord \"{body}\" (\"{token}\" is not a chord name or interval)"
+                        )
+                    })?;
+                    if !voicing.contains(&interval) {
+                        voicing.try_push(interval).map_err(|_| {
+                            format!("chord has more than {PORT_MAX_CHANNELS} notes")
+                        })?;
+                    }
                 }
+                voicing.sort_unstable();
             }
-
-            snap_table[chromatic as usize] = best_offset;
         }
 
-        let root_offset = root.pitch_class();
-        let mut name = ArrayString::<64>::new();
-        name.push_str(scale_name);
+        if inversion >= voicing.len() {
+            return Err(format!(
+                "inversion inv{inversion} needs more than {} chord notes",
+                voicing.len()
+            ));
+        }
+        for interval in &mut voicing[..inversion] {
+            *interval = interval
+                .checked_add(12)
+                .ok_or_else(|| "inverted interval out of range".to_string())?;
+        }
+        voicing.sort_unstable();
+        voicing.dedup_sorted();
 
-        Some(Self {
-            snap_table,
-            root_offset,
-            scale_name: name,
-            scale_intervals: scale_degrees,
-            tuning: et_tuning(),
+        Self::new(root.base_midi(), tuning, &voicing)
+    }
+
+    fn new(base_midi: i32, tuning: [f64; 12], voicing: &[i8]) -> Result<Self, String> {
+        let (Some(&min), Some(&max)) = (voicing.first(), voicing.last()) else {
+            return Err("scale spec has no notes".to_string());
+        };
+        let span = (max as i32 - min as i32) + 1;
+        let mut spec = Self {
+            base_midi,
+            tuning,
+            voicing: voicing.iter().copied().collect(),
+            period_semitones: (span + 11) / 12 * 12,
+            voltages: ArrayVec::new(),
+        };
+        spec.voltages = voicing
+            .iter()
+            .map(|&n| spec.interval_voltage(n as i32) as f32)
+            .collect();
+        Ok(spec)
+    }
+
+    /// V/Oct voltage of a semitone offset from the root, applying the tuning.
+    fn interval_voltage(&self, semitones: i32) -> f64 {
+        let root_v = (self.base_midi - 60) as f64 / 12.0;
+        root_v + semitones.div_euclid(12) as f64 + self.tuning[semitones.rem_euclid(12) as usize]
+    }
+
+    /// V/Oct voltage of each voicing note, ascending.
+    pub fn voltages(&self) -> &[f32] {
+        &self.voltages
+    }
+
+    /// V/Oct voltage of a signed degree. Degrees index the voicing and wrap by
+    /// `period_semitones` (one octave for scales) in both directions.
+    pub fn degree_voltage(&self, degree: i32) -> f64 {
+        let len = self.voicing.len() as i32;
+        let period = degree.div_euclid(len);
+        let note = self.voicing[degree.rem_euclid(len) as usize] as i32;
+        self.interval_voltage(note) + (period * self.period_semitones / 12) as f64
+    }
+}
+
+trait DedupSorted {
+    fn dedup_sorted(&mut self);
+}
+
+impl<const N: usize> DedupSorted for ArrayVec<i8, N> {
+    fn dedup_sorted(&mut self) {
+        let mut write = 0usize;
+        for read in 0..self.len() {
+            if write == 0 || self[read] != self[write - 1] {
+                self[write] = self[read];
+                write += 1;
+            }
+        }
+        self.truncate(write);
+    }
+}
+
+impl Connect for ScaleSpec {
+    fn apply_default_connections(&mut self) {}
+    fn connect(&mut self, _patch: &Patch) {}
+    fn collect_cables(&self, _sink: &mut Vec<String>) {}
+    fn inject_index_ptr(&mut self, _ptr: *const std::cell::Cell<usize>) {}
+}
+
+impl schemars::JsonSchema for ScaleSpec {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ScaleSpec")
+    }
+
+    fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        String::json_schema(generator)
+    }
+}
+
+impl<E: DeserializeError> deserr::Deserr<E> for ScaleSpec {
+    fn deserialize_from_value<V: IntoValue>(
+        value: deserr::Value<V>,
+        location: ValuePointerRef<'_>,
+    ) -> Result<Self, E> {
+        let source = String::deserialize_from_value(value, location)?;
+        Self::parse(&source).map_err(|reason| {
+            deserr::take_cf_content(E::error::<V>(
+                None,
+                ErrorKind::Unexpected {
+                    msg: format!("Invalid scale specification \"{source}\": {reason}"),
+                },
+                location,
+            ))
         })
     }
-
-    /// Build a ScaleSnapper from custom intervals (0-11) with a given tuning.
-    ///
-    /// # Arguments
-    /// * `root` - The root note of the scale
-    /// * `intervals` - Slice of semitone offsets from root (0 = root, 2 = major second, etc.)
-    /// * `tuning` - V/Oct offset of each chromatic step (use [`et_tuning`] for 12-TET)
-    ///
-    /// # Returns
-    /// A ScaleSnapper configured for the custom scale.
-    pub fn from_intervals(root: &FixedRoot, intervals: &[i8], tuning: [f64; 12]) -> Self {
-        let root_pc = root.pitch_class();
-
-        // Normalize intervals to 0-11 range, take at most 12, then deduplicate.
-        let mut scale_degrees = ArrayVec::<i8, 12>::new();
-        for &i in intervals.iter().take(12) {
-            scale_degrees.push(((i % 12) + 12) % 12);
-        }
-        scale_degrees.sort();
-        dedup_sorted(&mut scale_degrees);
-
-        // Ensure root is included.
-        if !scale_degrees.contains(&0) {
-            scale_degrees.insert(0, 0);
-        }
-
-        // degrees_with_octave = scale_degrees + boundary 12.
-        let mut degrees_with_octave = ArrayVec::<i8, 13>::new();
-        degrees_with_octave.extend(scale_degrees.iter().copied());
-        degrees_with_octave.push(12);
-
-        // degrees_extended = degrees_with_octave + (scale_degrees shifted down an octave).
-        let mut degrees_extended = ArrayVec::<i8, 25>::new();
-        degrees_extended.extend(degrees_with_octave.iter().copied());
-        for &d in &scale_degrees {
-            degrees_extended.push(d - 12);
-        }
-        degrees_extended.sort();
-
-        // Build snap table.
-        let mut snap_table = [0i8; 13];
-        for chromatic in 0..=12 {
-            let mut best_offset = 0i8;
-            let mut best_dist = i8::MAX;
-
-            for &degree in &degrees_extended {
-                let offset = degree - chromatic;
-                let dist = offset.abs();
-
-                if dist < best_dist || (dist == best_dist && offset < 0) {
-                    best_dist = dist;
-                    best_offset = offset;
-                }
-            }
-
-            snap_table[chromatic as usize] = best_offset;
-        }
-
-        let mut name = ArrayString::<64>::new();
-        name.push_str("custom");
-
-        Self {
-            snap_table,
-            root_offset: root_pc,
-            scale_name: name,
-            scale_intervals: scale_degrees,
-            tuning,
-        }
-    }
-
-    /// Snap a MIDI note to the nearest scale degree.
-    ///
-    /// # Arguments
-    /// * `midi` - The MIDI note number (can be fractional)
-    ///
-    /// # Returns
-    /// The snapped MIDI note number (always an exact integer — no fractional cents).
-    pub fn snap_midi(&self, midi: f64) -> f64 {
-        // Round to nearest semitone so e.g. 59.9 resolves as C4 (60) not B3 (59)
-        let midi_int = midi.round() as i32;
-
-        // Convert MIDI to pitch class (C=0, C#=1, ..., B=11)
-        // MIDI 60 = C4, so midi % 12 gives pitch class with C=0
-        let midi_pc = ((midi_int % 12) + 12) % 12;
-
-        // Convert to position relative to scale root
-        let pc_in_scale = ((midi_pc - self.root_offset as i32) % 12 + 12) % 12;
-
-        // Look up snap offset
-        let snap_offset = self.snap_table[pc_in_scale as usize];
-
-        // Apply snap — return clean integer MIDI note (no cents)
-        (midi_int + snap_offset as i32) as f64
-    }
-
-    /// Snap a V/Oct voltage to the nearest scale degree.
-    ///
-    /// # Arguments
-    /// * `voct` - V/Oct voltage (C4 = 0V)
-    ///
-    /// # Returns
-    /// The snapped V/Oct voltage.
-    pub fn snap_voct(&self, voct: f64) -> f64 {
-        // Convert V/Oct to MIDI
-        let midi = voct * 12.0 + 60.0;
-        // Snap in MIDI domain (12-TET nearest semitone)
-        let snapped_midi = self.snap_midi(midi);
-        // Convert back to V/Oct, applying the tuning table
-        self.tuned_voct(snapped_midi as i32)
-    }
-
-    /// Convert an integer 12-TET MIDI note to V/Oct using this scale's tuning.
-    ///
-    /// For 12-TET this is identity with `(midi - 60) / 12`; for just /
-    /// Pythagorean tunings each chromatic step is offset by its ratio.
-    fn tuned_voct(&self, midi_int: i32) -> f64 {
-        let root = self.root_offset as i32;
-        let pc = ((midi_int - root) % 12 + 12) % 12;
-        let octave = (midi_int - 60 - root - pc) / 12;
-        root as f64 / 12.0 + octave as f64 + self.tuning[pc as usize]
-    }
-
-    /// Check if a MIDI note is in the scale.
-    pub fn is_in_scale(&self, midi: f64) -> bool {
-        let midi_int = midi.round() as i32;
-        let midi_pc = ((midi_int % 12) + 12) % 12;
-        let pc_in_scale = ((midi_pc - self.root_offset as i32) % 12 + 12) % 12;
-        self.snap_table[pc_in_scale as usize] == 0
-    }
-
-    /// Get the scale type name.
-    pub fn scale_name(&self) -> &str {
-        self.scale_name.as_str()
-    }
-
-    /// Get the scale intervals (semitone offsets from root for each degree).
-    pub fn scale_intervals(&self) -> &ArrayVec<i8, 12> {
-        &self.scale_intervals
-    }
-
-    /// Get the tuning table: V/Oct offset of each chromatic step above the root.
-    pub fn tuning(&self) -> &[f64; 12] {
-        &self.tuning
-    }
-
-    /// Get the root offset in semitones (C=0, C#=1, ..., B=11).
-    pub fn root_offset(&self) -> i8 {
-        self.root_offset
-    }
-}
-
-/// Validate that a scale type name is recognized by rust_music_theory.
-///
-/// This uses `Scale::from_regex` to validate the scale name. Supported scales include:
-/// - Diatonic modes: major/ionian, minor/aeolian, dorian, phrygian, lydian, mixolydian, locrian
-/// - Other scales: harmonic minor, melodic minor, pentatonic major/minor, blues, chromatic, whole tone
-/// - Abbreviations: maj, min, pent maj, pent min, har minor, mel minor, wholetone, etc.
-pub fn validate_scale_type(name: &str) -> bool {
-    // Tuning keywords (chromatic / just / pythagorean / pythag) bypass
-    // Scale::from_regex in ScaleSnapper::new.
-    if named_tuning(name).is_some() {
-        return true;
-    }
-
-    // Try to parse with a C root - if it works, the scale type is valid
-    Scale::from_regex(&format!("C {}", name)).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn voltages(spec: &str) -> Vec<f64> {
+        ScaleSpec::parse(spec)
+            .unwrap()
+            .voltages()
+            .iter()
+            .map(|&v| v as f64)
+            .collect()
+    }
+
+    fn semitones(spec: &str) -> Vec<f64> {
+        voltages(spec).iter().map(|v| (v * 12.0).round()).collect()
+    }
 
     #[test]
     fn test_fixed_root_parse() {
@@ -503,41 +452,19 @@ mod tests {
         assert_eq!(c.octave, None);
 
         let cs = FixedRoot::parse("c#").unwrap();
-        assert_eq!(cs.letter, 'c');
         assert_eq!(cs.accidental, Some('#'));
-        assert_eq!(cs.octave, None);
 
         let bb = FixedRoot::parse("bb").unwrap();
         assert_eq!(bb.letter, 'b');
         assert_eq!(bb.accidental, Some('b'));
-        assert_eq!(bb.octave, None);
     }
 
     #[test]
     fn test_fixed_root_parse_with_octave() {
-        let c3 = FixedRoot::parse("c3").unwrap();
-        assert_eq!(c3.letter, 'c');
-        assert_eq!(c3.accidental, None);
-        assert_eq!(c3.octave, Some(3));
-        assert_eq!(c3.base_midi(), 48); // C3
-
-        let cs4 = FixedRoot::parse("c#4").unwrap();
-        assert_eq!(cs4.letter, 'c');
-        assert_eq!(cs4.accidental, Some('#'));
-        assert_eq!(cs4.octave, Some(4));
-        assert_eq!(cs4.base_midi(), 61); // C#4
-
-        let db3 = FixedRoot::parse("db3").unwrap();
-        assert_eq!(db3.letter, 'd');
-        assert_eq!(db3.accidental, Some('b'));
-        assert_eq!(db3.octave, Some(3));
-        assert_eq!(db3.base_midi(), 49); // Db3
-
-        let b5 = FixedRoot::parse("b5").unwrap();
-        assert_eq!(b5.letter, 'b');
-        assert_eq!(b5.accidental, None);
-        assert_eq!(b5.octave, Some(5));
-        assert_eq!(b5.base_midi(), 83); // B5
+        assert_eq!(FixedRoot::parse("c3").unwrap().base_midi(), 48);
+        assert_eq!(FixedRoot::parse("c#4").unwrap().base_midi(), 61);
+        assert_eq!(FixedRoot::parse("db3").unwrap().base_midi(), 49);
+        assert_eq!(FixedRoot::parse("b5").unwrap().base_midi(), 83);
     }
 
     #[test]
@@ -550,215 +477,101 @@ mod tests {
     }
 
     #[test]
-    fn test_scale_snapper_c_major() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "major").unwrap();
-
-        // C major: C D E F G A B
-        // C (60) should stay C
-        assert_eq!(snapper.snap_midi(60.0), 60.0);
-
-        // D (62) should stay D
-        assert_eq!(snapper.snap_midi(62.0), 62.0);
-
-        // C# (61) should snap to C (60) - prefer lower when equidistant
-        assert_eq!(snapper.snap_midi(61.0), 60.0);
-
-        // F# (66) should snap to F (65) or G (67)
-        // F# is equidistant, should prefer lower (F)
-        let snapped = snapper.snap_midi(66.0);
-        assert!(snapped == 65.0 || snapped == 67.0);
+    fn named_scales() {
+        assert_eq!(semitones("C(major)"), [0.0, 2.0, 4.0, 5.0, 7.0, 9.0, 11.0]);
+        assert_eq!(semitones("A3(min)"), [-3.0, -1.0, 0.0, 2.0, 4.0, 5.0, 7.0]);
+        assert_eq!(semitones("d(M)"), [2.0, 4.0, 6.0, 7.0, 9.0, 11.0, 13.0]);
+        assert_eq!(semitones("C(Harmonic Minor)").len(), 7);
+        assert_eq!(semitones("chromatic").len(), 12);
+        assert_eq!(semitones("C(chromatic)").len(), 12);
     }
 
     #[test]
-    fn test_scale_snapper_chromatic() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "chromatic").unwrap();
+    fn custom_scale_intervals_reduce_to_pitch_classes() {
+        assert_eq!(semitones("D(0 2 4 5 7 9 11)").len(), 7);
+        // The root is always included; intervals wrap into one octave.
+        assert_eq!(semitones("C(4 7 14)"), [0.0, 2.0, 4.0, 7.0]);
+    }
 
-        // Chromatic should pass through all notes unchanged
-        for midi in 0..128 {
-            assert_eq!(snapper.snap_midi(midi as f64), midi as f64);
+    #[test]
+    fn just_and_pythagorean_tunings() {
+        let just = voltages("C(just)");
+        assert!((just[4] - 1.25_f64.log2()).abs() < 1e-6);
+        assert!((just[7] - 1.5_f64.log2()).abs() < 1e-6);
+        let pyth = voltages("C(pythag)");
+        assert!((pyth[4] - (81.0_f64 / 64.0).log2()).abs() < 1e-6);
+        // Tuning prefix on custom intervals.
+        let tuned = voltages("C(just 0 3 4 8)");
+        assert!((tuned[2] - 1.25_f64.log2()).abs() < 1e-6);
+        // Root offset: the just fifth above D.
+        let d = voltages("D(just)");
+        assert!((d[7] - (2.0 / 12.0 + 1.5_f64.log2())).abs() < 1e-6);
+    }
+
+    #[test]
+    fn chord_names_and_octaves() {
+        assert_eq!(semitones("C[maj]"), [0.0, 4.0, 7.0]);
+        assert_eq!(semitones("C3[maj7]"), [-12.0, -8.0, -5.0, -1.0]);
+        assert_eq!(semitones("A[m7]"), [9.0, 12.0, 16.0, 19.0]);
+        assert_eq!(semitones("C[9]"), [0.0, 4.0, 7.0, 10.0, 14.0]);
+    }
+
+    #[test]
+    fn chord_voicing_intervals_keep_register() {
+        assert_eq!(semitones("C[0 7 16]"), [0.0, 7.0, 16.0]);
+        assert_eq!(semitones("C[16 0 7]"), [0.0, 7.0, 16.0]);
+        assert_eq!(semitones("C[-12 0 4 7]"), [-12.0, 0.0, 4.0, 7.0]);
+    }
+
+    #[test]
+    fn chord_tuning_prefix_and_inversion() {
+        let just = voltages("C[just maj]");
+        assert!((just[1] - 1.25_f64.log2()).abs() < 1e-6);
+        assert_eq!(semitones("C[maj inv1]"), [4.0, 7.0, 12.0]);
+        assert_eq!(semitones("C[maj7 inv2]"), [7.0, 11.0, 12.0, 16.0]);
+        let pyth = voltages("C[pythag 0 4 7 inv1]");
+        assert!((pyth[0] - (81.0_f64 / 64.0).log2()).abs() < 1e-6);
+        assert!((pyth[2] - 1.0).abs() < 1e-6);
+        // A single numeric token is a chord name, not an interval.
+        assert_eq!(semitones("C[7]"), [0.0, 4.0, 7.0, 10.0]);
+    }
+
+    #[test]
+    fn invalid_specs_are_rejected() {
+        for bad in [
+            "",
+            "major",
+            "C(maj7)",
+            "C(major foo)",
+            "C(M anything)",
+            "C[maj",
+            "C(major",
+            "C[maj8]",
+            "C[]",
+            "C[maj inv3]",
+            "C[maj invx]",
+            "H(major)",
+            "C()",
+        ] {
+            assert!(ScaleSpec::parse(bad).is_err(), "{bad:?} should be rejected");
         }
     }
 
     #[test]
-    fn test_scale_snapper_discards_cents() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "major").unwrap();
+    fn degree_voltage_wraps_by_period() {
+        let major = ScaleSpec::parse("C(major)").unwrap();
+        assert!((major.degree_voltage(7) - 1.0).abs() < 1e-9);
+        assert!((major.degree_voltage(-1) - (-1.0 / 12.0)).abs() < 1e-9);
+        assert!((major.degree_voltage(-7) - (-1.0)).abs() < 1e-9);
 
-        // 60.3 (C + 30 cents) should snap to exactly 60.0 (C)
-        assert_eq!(snapper.snap_midi(60.3), 60.0);
+        // A 9th chord spans more than an octave, so it repeats every two.
+        let ninth = ScaleSpec::parse("C[9]").unwrap();
+        assert!((ninth.degree_voltage(4) - 14.0 / 12.0).abs() < 1e-9);
+        assert!((ninth.degree_voltage(5) - 2.0).abs() < 1e-9);
+        assert!((ninth.degree_voltage(-1) - (14.0 / 12.0 - 2.0)).abs() < 1e-9);
 
-        // 60.6 (closer to 61 = C#, which snaps to C in C major) → 60.0
-        assert_eq!(snapper.snap_midi(60.6), 60.0);
-
-        // 61.4 (C# + 40 cents, rounds to 61, snaps to C) → 60.0
-        assert_eq!(snapper.snap_midi(61.4), 60.0);
-
-        // 61.6 (closer to 62 = D, which is in C major) → 62.0
-        assert_eq!(snapper.snap_midi(61.6), 62.0);
-    }
-
-    #[test]
-    fn test_scale_snapper_stable_within_semitone() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "major").unwrap();
-
-        // Sweeping from 60.0 to 60.49 should always produce 60.0 (C)
-        // since all round to MIDI 60
-        for i in 0..50 {
-            let midi = 60.0 + i as f64 * 0.01;
-            assert_eq!(
-                snapper.snap_midi(midi),
-                60.0,
-                "MIDI {midi} should snap to 60.0"
-            );
-        }
-    }
-
-    #[test]
-    fn test_scale_snapper_from_intervals() {
-        let root = FixedRoot::parse("c").unwrap();
-        // Major scale intervals: 0, 2, 4, 5, 7, 9, 11
-        let snapper = ScaleSnapper::from_intervals(&root, &[0, 2, 4, 5, 7, 9, 11], et_tuning());
-
-        // C (60) should stay C
-        assert_eq!(snapper.snap_midi(60.0), 60.0);
-        // D (62) should stay D
-        assert_eq!(snapper.snap_midi(62.0), 62.0);
-        // C# (61) should snap to C (60)
-        assert_eq!(snapper.snap_midi(61.0), 60.0);
-    }
-
-    #[test]
-    fn test_scale_snapper_voct() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "major").unwrap();
-
-        // C4 = MIDI 60 = V/Oct 0.0
-        let c4_voct = (60.0 - 60.0) / 12.0;
-        let snapped = snapper.snap_voct(c4_voct);
-        assert!((snapped - c4_voct).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_validate_scale_type() {
-        // Standard scale names
-        assert!(validate_scale_type("major"));
-        assert!(validate_scale_type("Minor"));
-        assert!(validate_scale_type("dorian"));
-        assert!(validate_scale_type("harmonic minor"));
-        assert!(validate_scale_type("harmonicminor"));
-        assert!(validate_scale_type("chromatic"));
-
-        // Diatonic modes
-        assert!(validate_scale_type("ionian"));
-        assert!(validate_scale_type("phrygian"));
-        assert!(validate_scale_type("lydian"));
-        assert!(validate_scale_type("mixolydian"));
-        assert!(validate_scale_type("aeolian"));
-        assert!(validate_scale_type("locrian"));
-
-        // Additional scale types
-        assert!(validate_scale_type("melodic minor"));
-        assert!(validate_scale_type("pentatonic major"));
-        assert!(validate_scale_type("pentatonic minor"));
-        assert!(validate_scale_type("blues"));
-        assert!(validate_scale_type("whole tone"));
-
-        // Abbreviations supported by rust_music_theory
-        assert!(validate_scale_type("maj"));
-        assert!(validate_scale_type("min"));
-        assert!(validate_scale_type("pent maj"));
-        assert!(validate_scale_type("pent min"));
-        assert!(validate_scale_type("har minor"));
-        assert!(validate_scale_type("mel minor"));
-        assert!(validate_scale_type("wholetone"));
-
-        // Invalid scale types should fail
-        assert!(!validate_scale_type("unknown_scale"));
-        assert!(!validate_scale_type("fake_mode"));
-        assert!(!validate_scale_type(""));
-
-        // Just / Pythagorean tunings are recognized
-        assert!(validate_scale_type("just"));
-        assert!(validate_scale_type("Just"));
-        assert!(validate_scale_type("pythagorean"));
-        assert!(validate_scale_type("Pythagorean"));
-        assert!(validate_scale_type("pythag"));
-        assert!(validate_scale_type("Pythag"));
-    }
-
-    #[test]
-    fn test_from_intervals_just_tuning() {
-        let root = FixedRoot::parse("c").unwrap();
-        // Custom subset {0,3,4,8} tuned with just intonation.
-        let just =
-            ScaleSnapper::from_intervals(&root, &[0, 3, 4, 8], named_tuning("just").unwrap());
-        assert_eq!(just.scale_intervals().as_slice(), &[0, 3, 4, 8]);
-        // The major third (4 semitones) carries the just 5/4 ratio.
-        assert!((just.tuned_voct(64) - 1.25_f64.log2()).abs() < 1e-9);
-
-        // The same intervals at 12-TET keep the third at 4/12 V.
-        let et = ScaleSnapper::from_intervals(&root, &[0, 3, 4, 8], et_tuning());
-        assert_eq!(et.scale_intervals().as_slice(), &[0, 3, 4, 8]);
-        assert!((et.tuned_voct(64) - 4.0 / 12.0).abs() < 1e-9);
-
-        // Pythagorean alias resolves to the same table as the full name.
-        assert_eq!(named_tuning("pythag"), named_tuning("pythagorean"));
-    }
-
-    #[test]
-    fn test_just_intonation_tuning() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "just").unwrap();
-
-        // Root unchanged.
-        assert!((snapper.tuned_voct(60) - 0.0).abs() < 1e-9);
-        // Perfect fifth = 3/2.
-        assert!((snapper.tuned_voct(67) - 1.5_f64.log2()).abs() < 1e-9);
-        // Major third = 5/4.
-        assert!((snapper.tuned_voct(64) - 1.25_f64.log2()).abs() < 1e-9);
-        // Octave = exactly +1 V.
-        assert!((snapper.tuned_voct(72) - 1.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_pythagorean_tuning() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "pythagorean").unwrap();
-
-        // Perfect fifth = 3/2 (same as just).
-        assert!((snapper.tuned_voct(67) - 1.5_f64.log2()).abs() < 1e-9);
-        // Major third = 81/64 (wider than the just third).
-        assert!((snapper.tuned_voct(64) - (81.0_f64 / 64.0).log2()).abs() < 1e-9);
-        assert!(snapper.tuned_voct(64) > 1.25_f64.log2());
-    }
-
-    #[test]
-    fn test_just_tuning_root_offset() {
-        // Root D: the fifth above D is A, MIDI 69.
-        let root = FixedRoot::parse("d").unwrap();
-        let snapper = ScaleSnapper::new(&root, "just").unwrap();
-
-        // D4 (MIDI 62) sits at 2/12 V.
-        assert!((snapper.tuned_voct(62) - 2.0 / 12.0).abs() < 1e-9);
-        // A above D is a just fifth higher.
-        assert!((snapper.tuned_voct(69) - (2.0 / 12.0 + 1.5_f64.log2())).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_just_snap_voct() {
-        let root = FixedRoot::parse("c").unwrap();
-        let snapper = ScaleSnapper::new(&root, "just").unwrap();
-
-        // An equal-tempered major third input snaps to the just major third.
-        let et_third = 4.0 / 12.0;
-        let snapped = snapper.snap_voct(et_third);
-        assert!((snapped - 1.25_f64.log2()).abs() < 1e-9);
-
-        // A 12-TET snapper leaves the same input unchanged.
-        let et_snapper = ScaleSnapper::new(&root, "chromatic").unwrap();
-        assert!((et_snapper.snap_voct(et_third) - et_third).abs() < 1e-9);
+        // An inverted triad repeats every octave from its lowest note.
+        let inv = ScaleSpec::parse("C[maj inv1]").unwrap();
+        assert!((inv.degree_voltage(3) - 16.0 / 12.0).abs() < 1e-9);
     }
 }

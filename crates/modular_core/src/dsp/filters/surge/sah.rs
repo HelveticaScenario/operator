@@ -4,7 +4,7 @@
 //!
 //! Ported from https://github.com/surge-synthesizer/sst-filters (GPL-3.0).
 
-use super::coeffs::note_to_hz;
+use super::coeffs::{bound_freq, note_to_hz};
 use super::fastmath::softclip;
 use super::filter_core::{Filter, N_COEFFS, N_REGISTERS};
 
@@ -18,10 +18,12 @@ impl Filter for SampleHold {
     type Extra = ();
 
     /// Surge `Coeff_SNH`: the per-sample phase increment of the sample clock, plus
-    /// the resonance feedback amount.
+    /// the resonance feedback amount. The pitch is bounded so an extreme cutoff
+    /// cannot overflow `exp2` into a non-finite increment, which would lock up
+    /// the coefficient glide and the sample clock.
     fn coeffs(_mode: (), freq_semi: f32, reso: f32, rate: f32) -> [f32; N_COEFFS] {
         let mut c = [0.0f32; N_COEFFS];
-        c[0] = note_to_hz(freq_semi) / rate;
+        c[0] = note_to_hz(bound_freq(freq_semi)) / rate;
         c[1] = reso;
         c
     }
@@ -106,5 +108,39 @@ mod tests {
     #[test]
     fn survives_resonant_cutoff_sweep() {
         sweep_stays_bounded::<SampleHold>(&[()]);
+    }
+
+    /// An extreme (finite) cutoff must yield finite coefficient targets, and the
+    /// filter must keep sampling normally once the cutoff returns to range.
+    #[test]
+    fn extreme_cutoff_keeps_coeffs_finite_and_recovers() {
+        let sr = 96_000.0;
+        let extreme = SampleHold::coeffs((), 2_000.0, 0.0, sr);
+        assert!(extreme.iter().all(|c| c.is_finite()), "got {extreme:?}");
+
+        // Drive at the extreme cutoff, then return to a low clock: the held
+        // output must track the input again (finite, non-frozen).
+        let mut c = extreme;
+        let dc = [0.0f32; N_COEFFS];
+        let mut r = [0.0f32; N_REGISTERS];
+        for i in 0..4096 {
+            let x = (i as f32 * 0.01).sin();
+            let y = SampleHold::process((), x, &mut c, &dc, &mut r, &mut ());
+            assert!(y.is_finite());
+        }
+        let clock_semi = 12.0 * (100.0f32 / 440.0).log2();
+        c = SampleHold::coeffs((), clock_semi, 0.0, sr);
+        let mut changes = 0u32;
+        let mut prev = f32::NAN;
+        for i in 0..9600 {
+            let x = i as f32 / 9600.0;
+            let y = SampleHold::process((), x, &mut c, &dc, &mut r, &mut ());
+            assert!(y.is_finite());
+            if y != prev {
+                changes += 1;
+            }
+            prev = y;
+        }
+        assert!(changes >= 5, "sample clock should keep ticking: {changes}");
     }
 }

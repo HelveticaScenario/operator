@@ -65,6 +65,26 @@ export interface ParamDescriptor {
     defaultValue?: number;
     minValue?: number;
     maxValue?: number;
+    /**
+     * True polyphonic signal input (PolySignal, required or optional).
+     * Unlike `kind`, this also covers `Option<PolySignal>` params, which
+     * surface as a nullable union rather than a direct ref.
+     */
+    isPolySignalInput?: boolean;
+    /**
+     * Summing input (MonoSignal): accepts a polyphonic connection but
+     * collapses all channels into one value, so it never contributes to a
+     * module's channel count. MonoSignal reuses PolySignal's schema body —
+     * only the $defs name tells them apart.
+     */
+    isMonoSignalInput?: boolean;
+    /**
+     * Scale input (ScaleSignal): a poly signal of note pitches, or a spec
+     * string the factory rewrites into a `$chord` module. Its channels form one
+     * shared set of notes, so it never contributes to a module's channel count
+     * and takes no part in `$g` signal-group expansion.
+     */
+    isScaleSignalInput?: boolean;
 }
 
 export type ProcessedModuleSchema = ModuleSchema & {
@@ -316,6 +336,23 @@ function isPolySignalParamSchema(
     return hasSignal && hasSignalArray;
 }
 
+/**
+ * Whether a param schema references the given top-level $def, either directly
+ * or as a branch of a union (how `Option<T>` fields surface: anyOf [ref, null]).
+ */
+function referencesDef(schema: JsonSchema, defName: string): boolean {
+    const ref = `#/$defs/${defName}`;
+    if (schema.$ref === ref) {
+        return true;
+    }
+    for (const branches of [schema.oneOf, schema.anyOf, schema.allOf]) {
+        if (Array.isArray(branches) && branches.some((b) => b.$ref === ref)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function isBufferParamSchema(root: JsonSchema, schema: JsonSchema): boolean {
     if (schema.$ref === '#/$defs/Buffer') {
         return true;
@@ -478,16 +515,27 @@ export function processModuleSchema(
         ([name, s]) => {
             const resolved = resolveAndMerge(root, s);
             const enumValues = extractStringEnum(resolved);
-            const inferedKind = inferKind(root, s);
+            const inferredKind = inferKind(root, s);
 
             const signalMeta = signalParamsByName.get(name);
+
+            const isMonoSignalInput = referencesDef(s, 'MonoSignal');
+            const isScaleSignalInput = referencesDef(s, 'ScaleSignal');
+            const isPolySignalInput =
+                !isMonoSignalInput &&
+                !isScaleSignalInput &&
+                (referencesDef(s, 'PolySignal') ||
+                    inferredKind === 'polySignal');
 
             return {
                 description: resolved.description,
                 enumValues,
-                kind: inferedKind,
+                kind: inferredKind,
                 name,
                 optional: !required.has(name),
+                ...(isPolySignalInput && { isPolySignalInput }),
+                ...(isMonoSignalInput && { isMonoSignalInput }),
+                ...(isScaleSignalInput && { isScaleSignalInput }),
                 ...(signalMeta && {
                     defaultValue: signalMeta.defaultValue,
                     maxValue: signalMeta.maxValue,

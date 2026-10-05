@@ -15,7 +15,7 @@ import {
 
 describe('validatePatchGraph', () => {
     test('empty patch is valid', () => {
-        const patch: PatchGraph = { modules: [], scopes: [] };
+        const patch: PatchGraph = { modules: [], scopes: [], vuMeters: [] };
         const errors = validatePatchGraph(patch);
         expect(errors).toEqual([]);
     });
@@ -31,6 +31,7 @@ describe('validatePatchGraph', () => {
                 },
             ],
             scopes: [],
+            vuMeters: [],
         };
         const errors = validatePatchGraph(patch);
         expect(errors).toEqual([]);
@@ -57,6 +58,7 @@ describe('validatePatchGraph', () => {
                 },
             ],
             scopes: [],
+            vuMeters: [],
         };
         const errors = validatePatchGraph(patch);
         expect(errors.length).toBeGreaterThan(0);
@@ -92,6 +94,7 @@ describe('validatePatchGraph', () => {
                     range: [-5, 5] as [number, number],
                 },
             ],
+            vuMeters: [],
         };
         const errors = validatePatchGraph(patch);
         expect(errors.length).toBeGreaterThan(0);
@@ -116,6 +119,7 @@ describe('validatePatchGraph', () => {
                 },
             ],
             scopes: [],
+            vuMeters: [],
         };
         const errors = validatePatchGraph(patch);
         expect(errors.length).toBeGreaterThan(0);
@@ -132,6 +136,7 @@ describe('validatePatchGraph', () => {
                 },
             ],
             scopes: [],
+            vuMeters: [],
         };
         const errors = validatePatchGraph(patch);
         expect(errors.length).toBeGreaterThan(0);

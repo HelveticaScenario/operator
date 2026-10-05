@@ -36,16 +36,15 @@ yarn lint:fix              # oxlint --fix
 | DSL factories/executor | `yarn test:unit`                                 |
 | N-API bindings         | `yarn test:unit`                                 |
 | Renderer UI/UX         | `yarn test:e2e`                                  |
-| Visual snapshots       | `yarn test:e2e:update`                           |
 | Everything             | `yarn test:all`                                  |
 
-E2E tests require the webpack build to exist — run `yarn start` once first.
+E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run `yarn start` once first.
 
 ## Architecture
 
 ### Data Flow
 
-1. **DSL execution** — JavaScript code runs via `new Function(...)` in `src/main/dsl/executor.ts`, producing a `PatchGraph` JSON structure.
+1. **DSL execution** — JavaScript code runs in a `node:vm` context with an execution timeout in `src/main/dsl/executor.ts`, producing a `PatchGraph` JSON structure.
 2. **IPC transport** — PatchGraph sent from renderer to main process over Electron IPC (channels defined in `src/shared/ipcTypes.ts`), which calls `synthesizer.updatePatch(graph)`.
 3. **Validation** — Rust validates the graph on the main thread (`crates/modular/src/validation.rs`).
 4. **Audio thread** — Applied via lock-free command queue (rtrb SPSC) to the audio thread (`crates/modular/src/audio.rs`). Modules instantiated and processed here.
@@ -57,7 +56,6 @@ E2E tests require the webpack build to exist — run `yarn start` once first.
 - **`crates/modular/`** — N-API bindings (`lib.rs`), audio callback (`audio.rs`), validation (`validation.rs`), MIDI input (`midi.rs`), command queue (`commands.rs`).
 - **`crates/modular_derive/`** — Proc macros for the module output system.
 - **`crates/mi-plaits-dsp-rs/`** — Mutable Instruments Plaits DSP port (git submodule, third-party).
-- **`crates/rust-music-theory/`** — Vendored fork (git submodule) for note/scale theory helpers. Treat as third-party.
 
 ### Frontend Structure
 

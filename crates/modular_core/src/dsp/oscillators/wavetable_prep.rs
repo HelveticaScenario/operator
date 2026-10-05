@@ -226,8 +226,11 @@ impl PreparedWavetable {
     /// Choose a mipmap level for a given playback frequency.
     ///
     /// Each level halves the spectral bandwidth; level `l` is appropriate
-    /// when the playback frequency is `base_frequency * 2^l` or higher. The
-    /// result is clamped to `[0, mipmap_count - 1]`.
+    /// when the playback frequency's magnitude is `base_frequency * 2^l` or
+    /// higher. Only the magnitude matters: backwards (negative-frequency)
+    /// playback from through-zero FM has the same magnitude spectrum, so it
+    /// needs the same band-limiting. The result is clamped to
+    /// `[0, mipmap_count - 1]`.
     ///
     /// Allocation-free; safe to call from the audio thread.
     #[inline]
@@ -235,6 +238,7 @@ impl PreparedWavetable {
         if self.mipmap_count == 0 {
             return 0;
         }
+        let freq = freq.abs();
         if self.base_frequency <= 0.0 || freq <= self.base_frequency {
             return 0;
         }
@@ -385,6 +389,26 @@ mod tests {
         // Clamped at the top: base * 2^10 ≈ 24000 Hz; anything well above
         // that saturates.
         assert_eq!(prep.mipmap_level_for_freq(96000.0), prep.mipmap_count - 1);
+    }
+
+    #[test]
+    fn mipmap_level_uses_frequency_magnitude() {
+        let size = 2048;
+        let ch = make_sine_frame(size, 0.0);
+        let wav = WavData::new(SampleBuffer::from_samples(vec![ch], 48000.0), Some(size));
+        let prep = PreparedWavetable::from_wav_data(&wav, 48000.0);
+
+        // Backwards (negative-frequency) playback from through-zero FM has
+        // the same magnitude spectrum, so it must select the same
+        // band-limited level as forward playback at the same speed.
+        for f in [100.0, 200.0, 5000.0, 10000.0, 96000.0] {
+            assert_eq!(
+                prep.mipmap_level_for_freq(-f),
+                prep.mipmap_level_for_freq(f),
+                "level for -{f} Hz must match +{f} Hz"
+            );
+        }
+        assert!(prep.mipmap_level_for_freq(-5000.0) > 0);
     }
 
     #[test]

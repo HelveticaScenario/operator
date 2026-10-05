@@ -9,7 +9,7 @@ import {
     ipcMain,
     shell,
 } from 'electron';
-import type { PatchGraph, AudioConfigOptions } from '@modular/core';
+import type { AudioConfigOptions } from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
@@ -32,7 +32,13 @@ import {
     stripPatchVersionStamp,
 } from '../shared/patchVersionStamp';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
+import { AppliedPatchState } from './appliedPatchState';
 import { isBufferSwitch } from './bufferSwitch';
+import { createConfigStore, type AppConfig } from './appConfig';
+import { createFallbackWarningChannel } from './fallbackWarning';
+import { sendNavigateToSymbol } from './helpNavigation';
+import { serializeForIPC } from './serializeForIPC';
+import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
@@ -224,101 +230,6 @@ function createLogInterceptor(level: MainLogLevel) {
     };
 }
 
-/**
- * Serialize a value for IPC transfer, handling non-transferable types
- */
-function serializeForIPC(
-    value: unknown,
-    seen = new WeakSet<object>(),
-): unknown {
-    // Handle primitives
-    if (value === null || value === undefined) {
-        return value;
-    }
-
-    if (
-        typeof value === 'string' ||
-        typeof value === 'number' ||
-        typeof value === 'boolean'
-    ) {
-        return value;
-    }
-
-    // Handle BigInt by converting to string with 'n' suffix for clarity
-    if (typeof value === 'bigint') {
-        return `${value}n`;
-    }
-
-    // Handle symbols
-    if (typeof value === 'symbol') {
-        return value.toString();
-    }
-
-    // Handle functions
-    if (typeof value === 'function') {
-        return `[Function: ${value.name || 'anonymous'}]`;
-    }
-
-    // Handle Error objects specially
-    if (value instanceof Error) {
-        return {
-            __error: true,
-            message: value.message,
-            name: value.name,
-            stack: value.stack,
-        };
-    }
-
-    // Handle objects and arrays
-    if (typeof value === 'object') {
-        // Detect circular references
-        if (seen.has(value)) {
-            return '[Circular]';
-        }
-        seen.add(value);
-
-        // Handle arrays
-        if (Array.isArray(value)) {
-            return value.map((item) => serializeForIPC(item, seen));
-        }
-
-        // Handle Date
-        if (value instanceof Date) {
-            return value.toISOString();
-        }
-
-        // Handle Map
-        if (value instanceof Map) {
-            const obj: Record<string, unknown> = { __type: 'Map' };
-            for (const [k, v] of value) {
-                obj[String(k)] = serializeForIPC(v, seen);
-            }
-            return obj;
-        }
-
-        // Handle Set
-        if (value instanceof Set) {
-            return {
-                __type: 'Set',
-                values: Array.from(value).map((v) => serializeForIPC(v, seen)),
-            };
-        }
-
-        // Handle plain objects
-        const result: Record<string, unknown> = {};
-        for (const key of Object.keys(value)) {
-            result[key] = serializeForIPC(
-                (value as Record<string, unknown>)[key],
-                seen,
-            );
-        }
-        return result;
-    }
-
-    // Fallback (should be unreachable; all types handled above)
-    return JSON.stringify(value);
-}
-
 console.log = createLogInterceptor('log');
 console.info = createLogInterceptor('info');
 console.warn = createLogInterceptor('warn');
@@ -393,7 +304,7 @@ async function checkForUpdateAvailability(): Promise<void> {
         }
 
         // Check if this version was skipped
-        const config = loadConfig();
+        const config = configStore.load();
         if (config.skippedUpdateVersion === latestVersion) {
             return;
         }
@@ -526,100 +437,10 @@ try {
     KEYBINDINGS_FILE = 'keybindings.json';
 }
 
-const AppConfigSchema = z.object({
-    audioConfig: z
-        .object({
-            hostId: z.string().optional(),
-            inputDeviceId: z.string().nullable().optional(),
-            outputDeviceId: z.string().optional(),
-            sampleRate: z.number().optional(),
-            bufferSize: z.number().optional(),
-        })
-        .optional(),
-    cursorStyle: z
-        .enum([
-            'line',
-            'block',
-            'underline',
-            'line-thin',
-            'block-outline',
-            'underline-thin',
-        ])
-        .optional(),
-    font: z
-        .enum([
-            // Bundled fonts
-            'Fira Code',
-            'JetBrains Mono',
-            'Cascadia Code',
-            'Source Code Pro',
-            'IBM Plex Mono',
-            'Hack',
-            'Inconsolata',
-            'Monaspace Neon',
-            'Monaspace Argon',
-            'Monaspace Xenon',
-            'Monaspace Krypton',
-            'Monaspace Radon',
-            'Geist Mono',
-            'Iosevka',
-            'Victor Mono',
-            'Roboto Mono',
-            'Maple Mono',
-            'Commit Mono',
-            '0xProto',
-            'Intel One Mono',
-            'Mononoki',
-            'Anonymous Pro',
-            'Recursive',
-            // System fonts (available only if installed)
-            'SF Mono',
-            'Monaco',
-            'Menlo',
-            'Consolas',
-        ])
-        .optional(),
-    fontLigatures: z.boolean().optional(),
-    fontSize: z.number().min(8).max(72).optional(),
-    lastOpenedFolder: z.string().optional(),
-    prettier: z.record(z.string(), z.unknown()).optional(),
-    skippedUpdateVersion: z.string().optional(),
-    theme: z.string().optional(),
-    xyScopeIntensity: z.number().min(0).max(1).optional(),
-    xyScopePersistence: z.number().min(0).max(1).optional(),
-    xyScopeUpsample: z.boolean().optional(),
-    xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
-});
-
-type AppConfig = z.infer<typeof AppConfigSchema>;
-
-function loadConfig(): AppConfig {
-    try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const data = fs.readFileSync(CONFIG_FILE, 'utf-8');
-            const json = JSON.parse(data);
-            const result = AppConfigSchema.safeParse(json);
-            if (result.success) {
-                return result.data;
-            }
-            console.error('Config validation failed:', result.error);
-        }
-    } catch (error) {
-        console.error('Error loading config:', error);
-    }
-    return {};
-}
-
-function saveConfig(config: AppConfig) {
-    try {
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
-    } catch (error) {
-        console.error('Error saving config:', error);
-    }
-}
+const configStore = createConfigStore(CONFIG_FILE);
 
 // Load saved config to pass to synthesizer
-const savedConfig = loadConfig();
+const savedConfig = configStore.load();
 const audioConfigOptions: AudioConfigOptions | undefined =
     savedConfig.audioConfig
         ? {
@@ -640,16 +461,22 @@ const synth = new Synthesizer(audioConfigOptions);
 const actualAudioState = synth.getCurrentAudioState();
 console.log('Actual audio state after construction:', actualAudioState);
 
+// Forwards device-fallback warnings to the renderer's AUDIO_FALLBACK_WARNING
+// channel; a warning raised here at startup is held until the main window
+// loads.
+const fallbackWarnings = createFallbackWarningChannel();
+
 // Check for fallback warning and update saved config if devices changed
 if (actualAudioState.fallbackWarning) {
     console.warn(
         'Audio device fallback occurred:',
         actualAudioState.fallbackWarning,
     );
+    fallbackWarnings.report(actualAudioState.fallbackWarning);
 }
 
 // Update saved config with actual devices used (in case of fallback)
-const actualConfig = loadConfig();
+const actualConfig = configStore.load();
 const configNeedsUpdate =
     actualConfig.audioConfig?.hostId !== actualAudioState.hostId ||
     actualConfig.audioConfig?.outputDeviceId !==
@@ -660,32 +487,31 @@ const configNeedsUpdate =
     actualConfig.audioConfig?.bufferSize !== actualAudioState.bufferSize;
 
 if (configNeedsUpdate) {
-    actualConfig.audioConfig = {
-        bufferSize: actualAudioState.bufferSize ?? undefined,
-        hostId: actualAudioState.hostId,
-        inputDeviceId: actualAudioState.inputDeviceId ?? null,
-        outputDeviceId: actualAudioState.outputDeviceId ?? undefined,
-        sampleRate: actualAudioState.sampleRate,
-    };
-    saveConfig(actualConfig);
+    configStore.update((config) => {
+        config.audioConfig = {
+            bufferSize: actualAudioState.bufferSize ?? undefined,
+            hostId: actualAudioState.hostId,
+            inputDeviceId: actualAudioState.inputDeviceId ?? null,
+            outputDeviceId: actualAudioState.outputDeviceId ?? undefined,
+            sampleRate: actualAudioState.sampleRate,
+        };
+    });
     console.log('Saved updated audio config after fallback');
 }
 
 // Save audio configuration to config file
 function saveAudioConfig() {
     try {
-        const config = loadConfig();
         const state = synth.getCurrentAudioState();
-
-        config.audioConfig = {
-            bufferSize: state.bufferSize ?? undefined,
-            hostId: state.hostId,
-            inputDeviceId: state.inputDeviceId ?? null,
-            outputDeviceId: state.outputDeviceId ?? undefined,
-            sampleRate: state.sampleRate,
-        };
-
-        saveConfig(config);
+        configStore.update((config) => {
+            config.audioConfig = {
+                bufferSize: state.bufferSize ?? undefined,
+                hostId: state.hostId,
+                inputDeviceId: state.inputDeviceId ?? null,
+                outputDeviceId: state.outputDeviceId ?? undefined,
+                sampleRate: state.sampleRate,
+            };
+        });
         console.log('Audio configuration saved');
     } catch (error) {
         console.error('Error saving audio config:', error);
@@ -709,36 +535,18 @@ let currentWorkspaceRoot: string | null = null;
 // File watcher for config changes
 let configWatcher: fs.FSWatcher | null = null;
 
-function ensureConfigExists() {
-    if (!fs.existsSync(CONFIG_FILE)) {
-        const defaultConfig: AppConfig = {
-            cursorStyle: 'block',
-            font: 'Fira Code',
-            fontSize: 17,
-            theme: 'modular-dark',
-        };
-        saveConfig(defaultConfig);
-    }
-}
-
 function startConfigWatcher() {
     if (configWatcher) {
         configWatcher.close();
     }
 
-    ensureConfigExists();
+    configStore.ensureExists();
 
     // Watch for config file changes
-    configWatcher = fs.watch(CONFIG_FILE, (eventType) => {
-        if (eventType === 'change') {
-            const config = loadConfig();
-            // Send updated config to renderer
-            if (mainWindow && !mainWindow.isDestroyed()) {
-                mainWindow.webContents.send(
-                    IPC_CHANNELS.CONFIG_ON_CHANGE,
-                    config,
-                );
-            }
+    configWatcher = configStore.watch((config) => {
+        // Send updated config to renderer
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send(IPC_CHANNELS.CONFIG_ON_CHANGE, config);
         }
     });
 }
@@ -843,8 +651,7 @@ function startWavsWatcher(workspaceRoot: string) {
 }
 
 // Patch reconciliation state (reset when a different file/buffer is evaluated)
-let lastAppliedPatchGraph: PatchGraph | null = null;
-let lastAppliedSourceId: string | null = null;
+const appliedPatch = new AppliedPatchState();
 
 const DEBUG_LOG =
     process.env.MODULAR_DEBUG_LOG === '1' ||
@@ -860,18 +667,18 @@ const PATCH_REMAP_MARGIN = process.env.MODULAR_PATCH_REMAP_MARGIN
 console.log('Patch remap debug mode:', DEBUG_LOG);
 
 /**
- * Validate that a path is valid (absolute or relative to workspace)
+ * Resolve a renderer-supplied path to an absolute path the filesystem IPC
+ * handlers may touch. Absolute paths pass through (normalized): buffer
+ * identity is the absolute path, and buffers that outlive a workspace switch
+ * — or app-managed files like keybindings.json — must stay saveable.
+ * Relative paths resolve against the current workspace and must not escape
+ * it. Returns null for everything else.
  */
 function validatePathInWorkspace(filePath: string): string | null {
     if (path.isAbsolute(filePath)) {
-        return filePath;
+        return path.resolve(filePath);
     }
-
-    if (!currentWorkspaceRoot) {
-        return null;
-    }
-
-    return path.resolve(currentWorkspaceRoot, filePath);
+    return resolveWorkspacePath(currentWorkspaceRoot, filePath);
 }
 
 /**
@@ -1001,6 +808,7 @@ registerIPCHandler(
                 buttons,
                 callSiteSpans,
             } = executePatchScript(source, schemas, {
+                inputChannels: synth.inputChannels(),
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
                 wavsFolderTree: currentWavsFolderTree,
@@ -1037,6 +845,11 @@ registerIPCHandler(
                 callSiteSpansRecord[key] = span;
             }
 
+            appliedPatch.resolve(
+                synth.getTransportState().lastCancelledUpdateId,
+            );
+            const lastAppliedSourceId = appliedPatch.sourceId;
+
             // Requirement: assume a full change when a different file/buffer is evaluated.
             const shouldReconcile =
                 Boolean(sourceId) && lastAppliedSourceId === sourceId;
@@ -1063,7 +876,7 @@ registerIPCHandler(
 
             const { moduleIdRemap } = reconcilePatchBySimilarity(
                 patch,
-                shouldReconcile ? lastAppliedPatchGraph : null,
+                shouldReconcile ? appliedPatch.patchGraph : null,
                 {
                     ambiguityMargin: PATCH_REMAP_MARGIN,
                     debugLog: DEBUG_LOG
@@ -1103,8 +916,7 @@ registerIPCHandler(
             );
 
             if (errors.length === 0) {
-                lastAppliedPatchGraph = patch;
-                lastAppliedSourceId = sourceId ?? null;
+                appliedPatch.record(patch, sourceId ?? null, updateId);
             }
 
             if (errors.length > 0) {
@@ -1153,9 +965,14 @@ registerIPCHandler('SYNTH_GET_SCOPES', () => synth.getScopes());
 
 registerIPCHandler('SYNTH_GET_SCOPE_XY', () => synth.getScopeXy());
 
+registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
+
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
+    appliedPatch.resolve(synth.getTransportState().lastCancelledUpdateId);
+    const lastAppliedSourceId = appliedPatch.sourceId;
+
     // Requirement: assume a full change when a different file/buffer is evaluated.
     const shouldReconcile =
         Boolean(sourceId) && lastAppliedSourceId === sourceId;
@@ -1178,7 +995,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
 
     const { moduleIdRemap } = reconcilePatchBySimilarity(
         patch,
-        shouldReconcile ? lastAppliedPatchGraph : null,
+        shouldReconcile ? appliedPatch.patchGraph : null,
         {
             ambiguityMargin: PATCH_REMAP_MARGIN,
             debugLog: DEBUG_LOG ? (message) => console.log(message) : undefined,
@@ -1211,8 +1028,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
 
     if (errors.length === 0) {
-        lastAppliedPatchGraph = patch;
-        lastAppliedSourceId = sourceId ?? null;
+        appliedPatch.record(patch, sourceId ?? null, updateId);
     }
 
     return { appliedPatch: patch, errors, moduleIdRemap, updateId };
@@ -1222,7 +1038,22 @@ registerIPCHandler('SYNTH_START_RECORDING', (filePath) =>
     synth.startRecording(filePath),
 );
 
-registerIPCHandler('SYNTH_STOP_RECORDING', () => synth.stopRecording());
+registerIPCHandler('SYNTH_STOP_RECORDING', () => {
+    const result = synth.stopRecording();
+    // A nonzero drop count means the disk writer fell behind and the file is
+    // shorter than the live take — warn rather than let the recording read
+    // as an unqualified success.
+    if (result && result.droppedSamples > 0) {
+        void dialog.showMessageBox({
+            detail:
+                `${result.droppedSamples} samples were lost because the disk ` +
+                `could not keep up. The file at ${result.path} has gaps.`,
+            message: 'Recording dropped samples',
+            type: 'warning',
+        });
+    }
+    return result;
+});
 
 registerIPCHandler('SYNTH_IS_RECORDING', () => synth.isRecording());
 
@@ -1240,6 +1071,10 @@ registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
 
 registerIPCHandler('SYNTH_STOP', () => {
     synth.stop();
+});
+
+registerIPCHandler('SYNTH_CANCEL_QUEUED_UPDATE', () => {
+    synth.cancelQueuedUpdate();
 });
 
 registerIPCHandler('SYNTH_IS_STOPPED', () => synth.isStopped());
@@ -1303,6 +1138,7 @@ registerIPCHandler(
             bufferSize ?? undefined,
             inputDeviceId ?? undefined,
         );
+        fallbackWarnings.report(synth.getCurrentAudioState().fallbackWarning);
         saveAudioConfig();
     },
 );
@@ -1500,18 +1336,19 @@ registerIPCHandler('FS_SELECT_WORKSPACE', async () => {
         return null;
     }
 
-    currentWorkspaceRoot = result.filePaths[0];
-    console.log('Workspace selected:', currentWorkspaceRoot);
+    const workspaceRoot = result.filePaths[0];
+    currentWorkspaceRoot = workspaceRoot;
+    console.log('Workspace selected:', workspaceRoot);
 
     // Start watching wavs/ folder for the new workspace
-    startWavsWatcher(currentWorkspaceRoot);
+    startWavsWatcher(workspaceRoot);
 
     // Save to config (load-merge-save to preserve other settings)
-    const config = loadConfig();
-    config.lastOpenedFolder = currentWorkspaceRoot;
-    saveConfig(config);
+    configStore.update((config) => {
+        config.lastOpenedFolder = workspaceRoot;
+    });
 
-    return { path: currentWorkspaceRoot };
+    return { path: workspaceRoot };
 });
 
 registerIPCHandler('FS_GET_WORKSPACE', () =>
@@ -1627,13 +1464,21 @@ registerIPCHandler('FS_RENAME_FILE', (oldPath, newPath) => {
     }
 });
 
-registerIPCHandler('FS_DELETE_FILE', async (absolutePath) => {
+registerIPCHandler('FS_DELETE_FILE', async (filePath) => {
+    const absolutePath = validatePathInWorkspace(filePath);
+    if (!absolutePath) {
+        return {
+            error: 'Invalid file path or no workspace selected',
+            success: false,
+        };
+    }
+
     try {
         await shell.trashItem(absolutePath);
         return { success: true };
     } catch (error) {
         console.error('Error deleting file:', error);
-        return { error: `Failed to delete: ${absolutePath}`, success: false };
+        return { error: `Failed to delete: ${filePath}`, success: false };
     }
 });
 
@@ -1686,28 +1531,47 @@ registerIPCHandler('FS_CREATE_FOLDER', (relativePath) => {
 
 // @ts-expect-error - async handler returns Promise
 registerIPCHandler('FS_SHOW_SAVE_DIALOG', async (defaultPath?: string) => {
-    console.log('defaultPath:', defaultPath);
-    const result = await dialog.showSaveDialog({
-        defaultPath: defaultPath || 'untitled.mjs',
-        filters: [
-            { extensions: ['js', 'mjs'], name: 'JavaScript Files' },
-            { extensions: ['*'], name: 'All Files' },
-        ],
-    });
-
-    if (result.canceled || !result.filePath) {
+    // The dialog hands back workspace-relative paths, which the renderer
+    // resolves against the workspace root — so only in-workspace locations
+    // round-trip. It opens anchored at the workspace root, and an
+    // out-of-workspace choice re-prompts instead of returning a path that
+    // would be mis-resolved.
+    if (!currentWorkspaceRoot) {
+        await dialog.showMessageBox({
+            message: 'Open a workspace folder before saving files.',
+            type: 'warning',
+        });
         return null;
     }
 
-    // Return relative path if within workspace, otherwise absolute
-    if (
-        currentWorkspaceRoot &&
-        result.filePath.startsWith(currentWorkspaceRoot)
-    ) {
-        return path.relative(currentWorkspaceRoot, result.filePath);
-    }
+    const fileName = defaultPath || 'untitled.mjs';
+    for (;;) {
+        const result = await dialog.showSaveDialog({
+            defaultPath: path.join(currentWorkspaceRoot, fileName),
+            filters: [
+                { extensions: ['js', 'mjs'], name: 'JavaScript Files' },
+                { extensions: ['*'], name: 'All Files' },
+            ],
+        });
 
-    return result.filePath;
+        if (result.canceled || !result.filePath) {
+            return null;
+        }
+
+        const contained = resolveWorkspacePath(
+            currentWorkspaceRoot,
+            result.filePath,
+        );
+        if (contained) {
+            return path.relative(currentWorkspaceRoot, contained);
+        }
+
+        await dialog.showMessageBox({
+            detail: `Choose a location inside ${currentWorkspaceRoot}.`,
+            message: 'Files can only be saved inside the current workspace.',
+            type: 'warning',
+        });
+    }
 });
 
 registerIPCHandler(
@@ -1790,41 +1654,32 @@ registerIPCHandler(
     'OPEN_HELP_FOR_SYMBOL',
     async (symbolType: 'type' | 'module' | 'namespace', symbolName: string) => {
         createHelpWindow();
-        // Send navigation message to help window after it loads
         if (helpWindow) {
-            helpWindow.webContents.once('did-finish-load', () => {
-                helpWindow?.webContents.send('navigate-to-symbol', {
-                    symbolName,
-                    symbolType,
-                });
-            });
-            // If already loaded, send immediately
-            if (!helpWindow.webContents.isLoading()) {
-                helpWindow.webContents.send('navigate-to-symbol', {
-                    symbolName,
-                    symbolType,
-                });
-            }
+            sendNavigateToSymbol(
+                helpWindow.webContents,
+                symbolType,
+                symbolName,
+            );
         }
     },
 );
 
 // Config IPC handlers
 registerIPCHandler('CONFIG_GET_PATH', () => {
-    ensureConfigExists();
+    configStore.ensureExists();
     return CONFIG_FILE;
 });
 
 registerIPCHandler('CONFIG_READ', () => {
-    ensureConfigExists();
-    return loadConfig();
+    configStore.ensureExists();
+    return configStore.load();
 });
 
 registerIPCHandler('CONFIG_WRITE', (partial: Partial<AppConfig>) => {
-    ensureConfigExists();
-    const current = loadConfig();
-    const merged = { ...current, ...partial };
-    saveConfig(merged);
+    configStore.ensureExists();
+    configStore.update((config) => {
+        Object.assign(config, partial);
+    });
 });
 
 // User keybinding overrides. The file is VS Code-style `keybindings.json`,
@@ -2000,9 +1855,18 @@ const createWindow = (): void => {
         setTimeout(loadRenderer, 500);
     });
 
-    // Flush pending logs when the renderer is ready
+    // Flush pending logs and held fallback warnings when the renderer is
+    // ready — anything sent earlier would be dropped by the loading page.
     mainWindow.webContents.on('did-finish-load', () => {
         flushPendingLogs();
+        fallbackWarnings.attach((warning) => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send(
+                    IPC_CHANNELS.AUDIO_FALLBACK_WARNING,
+                    warning,
+                );
+            }
+        });
     });
 
     loadRenderer();
@@ -2224,6 +2088,20 @@ const createMenu = (): void => {
                     },
                     label: 'Module Profile...',
                 },
+                {
+                    click: () => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.TOGGLE_VU_METERS,
+                            );
+                        }
+                    },
+                    ...menuShortcut(
+                        'operator.toggleVuMeters',
+                        'CmdOrCtrl+Shift+M',
+                    ),
+                    label: 'Toggle VU Meters',
+                },
                 // Publish the window as a Syphon source (macOS 14+ only; hidden
                 // elsewhere so the helper never crash-loops on an unsupported OS).
                 ...(SyphonBridge.supported
@@ -2285,6 +2163,19 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Stop Sound',
+                },
+                {
+                    ...menuShortcut('operator.cancelQueuedUpdate', 'Ctrl+\\'),
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(
+                                MENU_CHANNELS.CANCEL_QUEUED_UPDATE,
+                            );
+                        }
+                    },
+                    label: 'Cancel Queued Update',
                 },
                 // { type: 'separator' },
                 // {
@@ -2381,7 +2272,7 @@ app.on('ready', () => {
         console.log('E2E workspace:', currentWorkspaceRoot);
     } else {
         // Load last opened folder
-        const config = loadConfig();
+        const config = configStore.load();
         if (config.lastOpenedFolder && fs.existsSync(config.lastOpenedFolder)) {
             currentWorkspaceRoot = config.lastOpenedFolder;
             console.log('Restored last opened folder:', currentWorkspaceRoot);

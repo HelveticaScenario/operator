@@ -8,6 +8,13 @@ export declare class Synthesizer {
    */
   constructor(config?: AudioConfigOptions | undefined | null)
   stop(): void
+  /**
+   * Discard the queued patch update so the playing patch keeps running. The
+   * outcome surfaces in the transport snapshot: `last_cancelled_update_id`
+   * reports the discarded update, and nothing changes if the update already
+   * applied.
+   */
+  cancelQueuedUpdate(): void
   isStopped(): boolean
   sampleRate(): number
   channels(): number
@@ -28,6 +35,12 @@ export declare class Synthesizer {
    */
   panicLogDir(): string
   getScopes(): Array<[ScopeBufferKey, Float32Array, ScopeStats]>
+  /**
+   * Snapshot every VU meter's current levels (per-channel RMS + windowed
+   * peak, in volts). Each read resets the peak windows. Returns empty
+   * while stopped.
+   */
+  getVuMeters(): Array<VuMeterFrame>
   /**
    * Drain the per-module profiler snapshot accumulated since the last
    * call. Returns one entry per module instance that did work in that
@@ -65,7 +78,7 @@ export declare class Synthesizer {
    */
   setModuleParam(moduleId: string, moduleType: string, params: any): void
   startRecording(path?: string | undefined | null): string
-  stopRecording(): string | null
+  stopRecording(): RecordingResult | null
   isRecording(): boolean
   getHealth(): AudioBudgetSnapshot
   /**
@@ -74,6 +87,10 @@ export declare class Synthesizer {
    * garbage queue. Call this periodically from the main thread to drop them.
    */
   drainGarbage(): void
+  /**
+   * Serialized straight from the shared snapshot `Arc`, so the poll never
+   * deep-clones the per-module JSON map on the Rust side.
+   */
   getModuleStates(): Record<string, any>
   getTransportState(): TransportSnapshot
   enableLink(enabled: boolean): void
@@ -305,6 +322,16 @@ export type QueuedTrigger = /** Apply immediately (no waiting). */
 /** Apply at the next beat (ROOT_CLOCK beat_trigger). */
 'NextBeat';
 
+/**
+ * A finished recording. `dropped_samples > 0` means the disk writer could
+ * not keep up with the stream and the file is shorter than the live take.
+ */
+export interface RecordingResult {
+  path: string
+  /** Samples lost to a full ring buffer (as f64: exact up to 2^53). */
+  droppedSamples: number
+}
+
 export interface TransportSnapshot {
   /** Current bar phase (0..1 over one bar) */
   barPhase: number
@@ -324,6 +351,11 @@ export interface TransportSnapshot {
   hasQueuedUpdate: boolean
   /** The update_id of the most recently applied patch update (as f64 for N-API compatibility) */
   lastAppliedUpdateId: number
+  /**
+   * The update_id of the most recently cancelled queued patch update (as f64
+   * for N-API compatibility). An update with this id never applies.
+   */
+  lastCancelledUpdateId: number
   /** Whether Ableton Link is currently enabled */
   linkEnabled: boolean
   /** Number of Link peers in the session */
@@ -411,6 +443,13 @@ export interface ModuleSchema {
   documentation: string
   paramsSchema: Record<string, unknown>
   outputs: Array<OutputSchema>
+  /**
+   * Ports that expose a circular buffer (targets for `buffer_ref` params)
+   * rather than a sample output. Disjoint from `outputs`. Always
+   * serialized (even when empty) because the generated TS `ModuleSchema`
+   * declares the field as required.
+   */
+  bufferOutputs: Array<string>
   signalParams: Array<SignalParamSchema>
   positionalArgs: Array<PositionalArg>
   /** If set, this module always produces exactly this many channels (no inference needed) */
@@ -425,6 +464,14 @@ export interface ModuleSpec {
   id: string
   moduleType: string
   idIsExplicit?: boolean
+  /**
+   * When true, this module never inherits a predecessor's runtime state on
+   * a patch swap — it starts from its own params, even if a remap pairs it
+   * with an outgoing module. Set on modules whose state must track the new
+   * patch's params exactly at the swap sample (e.g. the per-out mute gate
+   * slew, where a carried-over open gate would leak audio while closing).
+   */
+  skipStateTransfer?: boolean
   params: any
 }
 
@@ -446,6 +493,7 @@ export interface PatchGraph {
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
   scopeXy?: ScopeXy
+  vuMeters: Array<VuMeterSpec>
 }
 
 export interface PositionalArg {
@@ -526,4 +574,46 @@ export interface SignalParamSchema {
   defaultValue: number
   minValue: number
   maxValue: number
+}
+
+/** One VU meter's loudness snapshot, joined to its `VuMeterSpec` by `module_id`. */
+export interface VuMeterFrame {
+  moduleId: string
+  /** Per-channel RMS in volts (0 dB reference = 5 V). */
+  rms: Array<number>
+  /** Per-channel max |sample| since the previous poll, in volts. */
+  peak: Array<number>
+  /** Live value of the signal-driven pan, when `pan_source` is set. */
+  pan?: number
+  /** Live value of the signal-driven gain, when `gain_source` is set. */
+  gain?: number
+}
+
+/**
+ * One out-group VU meter tap. The DSL attaches extra renderer-only metadata
+ * to these entries; napi conversion reads only the fields declared here.
+ */
+export interface VuMeterSpec {
+  /** Stable identity used by the renderer to join meter frames to meters. */
+  key: string
+  /** Module whose output port is metered (the pre-mute tap). */
+  moduleId: string
+  portName: string
+  /** 1 (mono) or 2 (stereo). */
+  channels: number
+  /**
+   * `$signal` module driving the mute gate (source 5 = audible, 0 =
+   * silenced). None for the end-of-chain master meter, which has no gate.
+   */
+  muteModuleId?: string
+  /**
+   * When the out's pan is signal-driven, the output to sample so the
+   * panel's locked knob can track it live.
+   */
+  panSource?: ScopeChannel
+  /**
+   * When the out's gain is signal-driven, the output to sample (in DSL
+   * gain units, pre-curve) so the panel's locked fader can track it live.
+   */
+  gainSource?: ScopeChannel
 }

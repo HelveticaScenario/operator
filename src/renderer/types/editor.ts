@@ -33,4 +33,11 @@ export interface ScopeView {
     file: string;
     range: [number, number];
     channelKeys: string[];
+    /**
+     * Index of this view's tracked range in the scope decoration collection,
+     * or null when the call site could not be resolved — the view then gets
+     * no zone in the editor. Carried explicitly so views and decorations
+     * never rely on sharing array positions.
+     */
+    decorationIndex: number | null;
 }

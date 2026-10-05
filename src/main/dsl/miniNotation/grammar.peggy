@@ -227,8 +227,9 @@ Atom
   = Rest
   / Value
 
+// A bare `-` is a rest only when it does not begin a number (`-5`, `-.5`).
 Rest
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
+  = ("~" / "-" !("."? [0-9])) { return { Rest: spanOf(location()) }; }
 
 // ---------------------------------------------------------------------------
 // Values
@@ -306,9 +307,12 @@ Modifier
 
 // Weight is captured at ElementWithWeight level as positional metadata
 // on the sequence entry — never mixed into a modifier chain.
-// The `_` after each sigil mirrors pest's implicit WHITESPACE between a
-// modifier operator and its operand (`/ 4`, `* 2`, `@ 3` all parsed in the
-// Rust grammar). Euclidean already spells its inner whitespace explicitly.
+// Sigils whose operand is mandatory (`*`, `/`) — and `@` — permit whitespace
+// before the operand, mirroring pest's implicit WHITESPACE (`/ 4`, `* 2`,
+// `@ 3` all parse in the Rust grammar). The optional-operand sigils `!` and
+// `?` bind their number only when it is adjacent: `1! 2` / `1? 2` keep the
+// 2 as its own sequence element — matching Tidal/krill and the Rust descent
+// parser. Euclidean already spells its inner whitespace explicitly.
 // Bare `@` (no number) is weight 2 — matching Tidal's `pElongate = 1 + sum`
 // and krill, and consistent with `_` elongation.
 Weight
@@ -328,14 +332,14 @@ SlowMod
 // `x!` = 2 copies, `x!3` = 3, `x!!` = 3, `x!2!3` = 4 — matching Tidal's
 // `pRepeat = 1 + sum es` and krill. Total copies = 1 + Σ(value - 1).
 Replicate
-  = parts:(_ "!" _ n:Integer? { return n === null ? 2 : n; })+ {
+  = parts:(_ "!" n:Integer? { return n === null ? 2 : n; })+ {
       const total = parts.reduce((acc, v) => acc + (v - 1), 1);
       if (total < 0) error("Replicate count must be a non-negative integer");
       return (ast, _c) => ({ Replicate: [ast, total] });
     }
 
 Degrade
-  = "?" _ p:Number? {
+  = "?" p:Number? {
       return (ast, c) => ({ Degrade: [ast, p, c.nextSeed()] });
     }
 
@@ -429,11 +433,11 @@ OperandRandomChoiceF64
     }
 
 OperandChoiceF64
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
+  = ("~" / "-" !("."? [0-9])) { return { Rest: spanOf(location()) }; }
   / n:Number { return { Pure: located(n, location()) }; }
 
 OperandBaseF64
-  = ("~" / "-" ![0-9]) { return { Rest: spanOf(location()) }; }
+  = ("~" / "-" !("."? [0-9])) { return { Rest: spanOf(location()) }; }
   / n:Number { return { Pure: located(n, location()) }; }
   / "[" _ s:OperandStackExprF64 _ "]" { return s.fast; }
   / "<" _ s:OperandStackExprF64 _ ">" { return s.slow; }
@@ -550,8 +554,10 @@ OperandBaseI32
 // Numbers & whitespace
 // ---------------------------------------------------------------------------
 
+// The integer part may be empty (`.5`, `-.5`); the fractional part needs at
+// least one digit after the dot so a trailing `.` stays a feet separator.
 Number "number"
-  = s:$("-"? [0-9]+ ("." [0-9]+)?) { return parseFloat(s); }
+  = s:$("-"? ([0-9]+ ("." [0-9]+)? / "." [0-9]+)) { return parseFloat(s); }
 
 Integer "integer"
   = s:$("-"? [0-9]+) { return parseInt(s, 10); }

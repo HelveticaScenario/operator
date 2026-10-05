@@ -43,8 +43,10 @@ pub fn silence<T: Clone + Send + Sync + 'static>() -> Pattern<T> {
 /// Create a continuous signal pattern.
 ///
 /// Unlike discrete patterns, signals have no `whole` span - they're sampled
-/// continuously at the query time. The function receives the time and returns
-/// a value.
+/// continuously. The function receives the midpoint of the queried span, so
+/// the sample is a pure function of that span: any consumer that queries an
+/// event's own span (e.g. `app_left`) gets a draw determined by the event
+/// alone, not by how the enclosing query is shaped.
 ///
 /// # Example
 /// ```ignore
@@ -61,7 +63,7 @@ where
             out.push(ArenaHap {
                 whole: None,
                 part: state.span.clone(),
-                value: f(&state.span.begin),
+                value: f(&state.span.midpoint()),
                 context: ArenaHapContext::empty_ref(),
             });
         },
@@ -100,6 +102,15 @@ mod tests {
 
         assert_eq!(haps.len(), 1);
         assert_eq!(haps[0].context.source_span, Some(SourceSpan::new(0, 2)));
+    }
+
+    #[test]
+    fn test_signal_samples_span_midpoint() {
+        let pat = signal(|t| t.to_f64());
+        let haps = pat.query_arc(Fraction::new(1, 4), Fraction::new(3, 4));
+
+        assert_eq!(haps.len(), 1);
+        assert_eq!(haps[0].value, 0.5);
     }
 
     #[test]

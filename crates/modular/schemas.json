@@ -138,6 +138,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "sigma",
@@ -258,6 +259,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "source",
@@ -401,6 +403,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "gain",
@@ -537,6 +540,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -676,6 +680,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -785,8 +790,15 @@
         "description": "Current beat within the bar (0-indexed)",
         "polyphonic": false,
         "default": false
+      },
+      {
+        "name": "tempo",
+        "description": "Current tempo in beats per minute",
+        "polyphonic": false,
+        "default": false
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [
       {
@@ -1006,6 +1018,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1234,6 +1247,7 @@
         "default": false
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1368,6 +1382,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1510,6 +1525,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1708,6 +1724,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -1904,6 +1921,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2023,6 +2041,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2180,6 +2199,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2340,6 +2360,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2546,6 +2567,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2774,6 +2796,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -2941,6 +2964,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -3120,6 +3144,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -3320,6 +3345,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -3534,6 +3560,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -3676,6 +3703,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "phase",
@@ -3789,6 +3817,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "phase",
@@ -3921,6 +3950,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "phase",
@@ -4005,6 +4035,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [
       {
@@ -4377,6 +4408,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -4648,6 +4680,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -4999,6 +5032,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "pitch",
@@ -5153,6 +5187,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5291,6 +5326,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5429,6 +5465,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5593,6 +5630,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5776,6 +5814,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -5959,6 +5998,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6152,6 +6192,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6330,6 +6371,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6470,6 +6512,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6639,6 +6682,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6808,6 +6852,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -6977,6 +7022,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7151,6 +7197,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7325,6 +7372,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7484,6 +7532,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7643,6 +7692,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7802,6 +7852,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -7961,6 +8012,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8135,6 +8187,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8359,6 +8412,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8533,6 +8587,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8707,6 +8762,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -8881,6 +8937,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9055,6 +9112,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9229,6 +9287,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9398,6 +9457,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9567,6 +9627,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9736,6 +9797,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -9905,6 +9967,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10074,6 +10137,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10253,6 +10317,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10432,6 +10497,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10572,6 +10638,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10750,6 +10817,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -10885,6 +10953,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11020,6 +11089,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11163,6 +11233,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11284,6 +11355,7 @@
         "maxValue": 1.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "freq",
@@ -11389,6 +11461,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -11573,6 +11646,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "gate",
@@ -11751,6 +11825,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "frame",
@@ -11853,6 +11928,9 @@
         "default": true
       }
     ],
+    "bufferOutputs": [
+      "buffer"
+    ],
     "signalParams": [
       {
         "name": "input",
@@ -11869,6 +11947,44 @@
       },
       {
         "name": "length"
+      }
+    ]
+  },
+  {
+    "name": "$chord",
+    "documentation": "Outputs the notes of a scale or chord as a polyphonic V/Oct signal, one\nchannel per note in ascending pitch.\n\nThe spec is a root note (optional octave, default 4) followed by a scale in\n`()` or a chord in `[]`:\n\n| Form | Example | Notes |\n|------|---------|-------|\n| `root(scale)` | `\"C(major)\"`, `\"D3(dorian)\"` | Named scale, one octave |\n| `root(intervals)` | `\"C(0 3 7 10)\"` | Semitones from the root, reduced to one octave |\n| `root(tuning)` | `\"C(just)\"`, `\"A(pythag)\"` | All 12 steps in a non-equal tuning |\n| `root[chord]` | `\"C[maj7]\"`, `\"F#2[m9]\"` | Chord shorthand; extensions keep their register |\n| `root[intervals]` | `\"C[0 7 16]\"` | Custom voicing; intervals keep their register |\n| `root[tuning chord]` | `\"C[just maj]\"` | Tuning prefix (`just`, `pythag`, `pythagorean`) |\n| `root[chord invN]` | `\"C[maj7 inv1]\"` | Raises the lowest N notes an octave |\n| `chromatic` | `\"chromatic\"` | All 12 semitones from C4 |\n\nScale names: major/maj/ionian/M, minor/min/aeolian/m, dorian, phrygian,\nlydian, mixolydian, locrian, harmonic minor, melodic minor, pentatonic\nmajor/minor, blues, whole tone, chromatic.\n\nChord names (case-sensitive): maj/M/major, min/m/minor, dim/°, aug/+,\nsus2, sus4/sus, 5, 6, m6, 69, 7/dom7, maj7/M7/Δ/Δ7, m7/min7, mMaj7/mM7,\ndim7/°7, m7b5/ø/ø7, aug7/7#5/+7, maj7#5, 7sus4, 7sus2, 7b5, 9, maj9, m9,\n11, maj11, m11, 13, maj13, m13, 7b9, 7#9, 7#11, add9/add2, madd9,\nadd11/add4.\n\n```js\n// a C major 7th chord on four saw voices\n$saw($chord(\"C3[maj7]\")).out()\n```\n\n```js\n// quantize a slow LFO to the notes of a minor 9th chord\n$sine($quantizer($sine(\"0.1hz\").range(-1, 1), $chord(\"A[m9]\"))).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ChordParams",
+      "type": "object",
+      "properties": {
+        "chord": {
+          "description": "scale or chord spec, e.g. \"C(major)\", \"Eb3[m7]\", \"C[just maj7 inv1]\"",
+          "$ref": "#/$defs/ScaleSpec"
+        }
+      },
+      "required": [
+        "chord"
+      ],
+      "$defs": {
+        "ScaleSpec": {
+          "type": "string"
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "V/Oct pitch of each note, ascending",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [],
+    "positionalArgs": [
+      {
+        "name": "chord"
       }
     ]
   },
@@ -11978,6 +12094,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12112,6 +12229,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12228,6 +12346,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12369,6 +12488,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "time",
@@ -12485,6 +12605,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12618,6 +12739,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12734,6 +12856,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12834,6 +12957,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -12852,7 +12976,7 @@
   },
   {
     "name": "$math",
-    "documentation": "Evaluates a math expression every sample, giving you arbitrary control\nvoltage transformations.\n\nWrite an expression string using `x`, `y`, `z` as input variables.\nThe built-in variable `t` (time in seconds) is also available.\n\n**Functions:** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,\n`sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,\n`log(base?, val)`, `abs`, `sign`, `int`, `ceil`, `floor`,\n`round(modulus?, val)`, `min(val, ...)`, `max(val, ...)`,\n`e()`, `pi()`, `vToHz(volts)`, `hzToV(hz)`\n\n**Operators** (highest to lowest precedence):\n`^`, `%`, `/`, `*`, `-`, `+`,\n`== != < <= >= >`,\n`&& and`, `|| or`\n\n```js\n// crossfade between two oscillators\n$math(\"x * sin(t) + y * cos(t)\", { x: $saw('c3'), y: $pulse('c3') })\n```",
+    "documentation": "Evaluates a math expression every sample, giving you arbitrary control\nvoltage transformations.\n\nWrite an expression string using `x`, `y`, `z` as input variables.\nThe built-in variable `t` (time in seconds) is also available.\n\nThe inputs are polyphonic: the module is as wide as its widest input, the\nexpression is evaluated once per channel, and narrower inputs cycle. A\nnon-finite result (e.g. `0/0`) is emitted as 0.\n\n**Functions:** `sin`, `cos`, `tan`, `asin`, `acos`, `atan`,\n`sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh`,\n`log(base?, val)`, `abs`, `sign`, `int`, `ceil`, `floor`,\n`round(modulus?, val)`, `min(val, ...)`, `max(val, ...)`,\n`e()`, `pi()`, `vToHz(volts)`, `hzToV(hz)`\n\n**Operators** (highest to lowest precedence):\n`^`, `%`, `/`, `*`, `-`, `+`,\n`== != < <= >= >`,\n`&& and`, `|| or`\n\n```js\n// crossfade between two oscillators\n$math(\"x * sin(t) + y * cos(t)\", { x: $saw('c3'), y: $pulse('c3') })\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "MathParams",
@@ -12866,7 +12990,7 @@
           "description": "first input variable, referenced as `x` in the expression",
           "anyOf": [
             {
-              "$ref": "#/$defs/MonoSignal"
+              "$ref": "#/$defs/PolySignal"
             },
             {
               "type": "null"
@@ -12877,7 +13001,7 @@
           "description": "second input variable, referenced as `y` in the expression",
           "anyOf": [
             {
-              "$ref": "#/$defs/MonoSignal"
+              "$ref": "#/$defs/PolySignal"
             },
             {
               "type": "null"
@@ -12888,7 +13012,7 @@
           "description": "third input variable, referenced as `z` in the expression",
           "anyOf": [
             {
-              "$ref": "#/$defs/MonoSignal"
+              "$ref": "#/$defs/PolySignal"
             },
             {
               "type": "null"
@@ -12900,7 +13024,7 @@
         "expression"
       ],
       "$defs": {
-        "MonoSignal": {
+        "PolySignal": {
           "anyOf": [
             {
               "$ref": "#/$defs/Signal"
@@ -12963,10 +13087,11 @@
       {
         "name": "output",
         "description": "result of the expression",
-        "polyphonic": false,
+        "polyphonic": true,
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "x",
@@ -12996,6 +13121,220 @@
     "positionalArgs": [
       {
         "name": "expression"
+      }
+    ]
+  },
+  {
+    "name": "$motionFollower",
+    "documentation": "Turns controller movement into a level, like bowing a string: moving the\ninput in either direction swells the output, holding it still lets it fade.\n\nThe input's speed (volts per second, direction ignored) is averaged over\n**smooth** seconds, then followed with separate **attack** and **release**\ntimes. **gain** converts speed to volts and a soft clip keeps the output\nbelow **ceiling**.\n\n**pos** and **neg** are the same level driven only by rising or only by\nfalling input, so pushing and releasing a controller can steer different\ndestinations. Both are positive voltages.\n\nStepped controllers such as 7-bit MIDI CC jump in small increments, so\ntheir raw speed is a train of spikes; a **smooth** time several times longer\nthan the gap between updates averages them into a steady level.\n\n```js\n// a slowly swinging LFO bows a filter open on every sweep\n$lpf($saw('c3'), $motionFollower($sine('0.5hz'), { release: 0.5 }).range('c3', 'c7')).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MotionFollowerParams",
+      "type": "object",
+      "properties": {
+        "attack": {
+          "description": "seconds for the level to rise toward the current speed (default 0.02)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ceiling": {
+          "description": "soft-clip ceiling in volts; the output never exceeds it (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gain": {
+          "description": "volts of output per volt-per-second of movement (default 0.25)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "controller signal whose movement drives the output",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "release": {
+          "description": "seconds for the level to fall once movement slows or stops (default 0.3)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "smooth": {
+          "description": "seconds of averaging applied to the speed before attack/release; set it\nlonger than the gap between controller updates to hide stepping (default 0.02)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "movement level in either direction (0 V at rest)",
+        "polyphonic": true,
+        "default": true,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "pos",
+        "description": "movement level from rising input only",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "neg",
+        "description": "movement level from falling input only",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "controller signal whose movement drives the output",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "attack",
+        "description": "seconds for the level to rise toward the current speed (default 0.02)",
+        "signalType": "control",
+        "defaultValue": 0.02,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "release",
+        "description": "seconds for the level to fall once movement slows or stops (default 0.3)",
+        "signalType": "control",
+        "defaultValue": 0.3,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "smooth",
+        "description": "seconds of averaging applied to the speed before attack/release; set it\nlonger than the gap between controller updates to hide stepping (default 0.02)",
+        "signalType": "control",
+        "defaultValue": 0.02,
+        "minValue": 0.0,
+        "maxValue": 1.0
+      },
+      {
+        "name": "gain",
+        "description": "volts of output per volt-per-second of movement (default 0.25)",
+        "signalType": "control",
+        "defaultValue": 0.25,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "ceiling",
+        "description": "soft-clip ceiling in volts; the output never exceeds it (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 20.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
       }
     ]
   },
@@ -13088,6 +13427,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13219,6 +13559,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13368,6 +13709,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13484,6 +13826,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13608,6 +13951,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "trigger",
@@ -13634,12 +13978,23 @@
   },
   {
     "name": "$quantizer",
-    "documentation": "Snaps a V/Oct signal to the nearest note in a given scale.\n\nFeed any continuous pitch signal into **input** and choose a **scale** —\nthe output locks to the closest scale degree. A **trig** pulse fires\nwhenever the quantized note changes, useful for re-triggering envelopes.\n\nScale format examples:\n- `\"chromatic\"` — all 12 semitones\n- `\"C(major)\"` — C major scale\n- `\"C#(minor)\"` — C# minor scale\n- `\"D(0 2 4 5 7 9 11)\"` — custom intervals from root\n- `\"C(just)\"` / `\"C(pythagorean)\"` — 12-tone non-equal tunings\n- `\"C(just 0 3 4 8)\"` — custom intervals tuned with just intonation\n\n```js\n// quantize a random signal to C major\n$sine($quantizer($sine(\".1hz\").range(0,3), \"C(major)\"))\n```",
+    "documentation": "Snaps a V/Oct signal to the nearest note of a scale.\n\n**scale** is a polyphonic signal: each channel is one V/Oct note, and the\noutput snaps to the nearest of those notes in any octave. Feed it from\n`$chord`, a `$cycle`, or `$midiCV` — or pass a spec string such as\n`\"C(major)\"` or `\"C[maj7]\"`, which is shorthand for `$chord(spec)` (see\n`$chord` for the full grammar). Without a scale, the output snaps to\nsemitones.\n\n**gate** selects which scale notes are active: scale channel N is used only\nwhile gate channel N is high. While every gate channel is low, the output\nholds its last note.\n\nA **trig** pulse fires whenever the quantized note changes, useful for\nre-triggering envelopes.\n\n```js\n// quantize a slow sine to C major\n$sine($quantizer($sine(\"0.1hz\").range(0, 3), \"C(major)\")).out()\n```\n\n```js\n// quantize to whichever MIDI keys are held; holds when all are released\nconst midi = $midiCV({ channels: 4 })\n$sine($quantizer($sine(\"0.1hz\").range(-1, 1), midi, { gate: midi.gate })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "QuantizerParams",
       "type": "object",
       "properties": {
+        "gate": {
+          "description": "Per-note gate for **scale**: scale channel N is used only while gate\nchannel N is high. While every gate channel is low the output holds.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "input": {
           "description": "Input V/Oct signal to quantize",
           "$ref": "#/$defs/PolySignal"
@@ -13656,8 +14011,15 @@
           ]
         },
         "scale": {
-          "description": "Scale specification: \"chromatic\", \"C(major)\", \"D(0 2 4 5 7 9 11)\"",
-          "$ref": "#/$defs/ScaleParam"
+          "description": "Notes to snap to, one V/Oct pitch per channel (octave is ignored), or a\nspec string like \"C(major)\" / \"C[maj7]\". Snaps to semitones if omitted.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScaleSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -13677,7 +14039,17 @@
             }
           ]
         },
-        "ScaleParam": {
+        "ScaleSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScaleSpec"
+            },
+            {
+              "$ref": "#/$defs/PolySignal"
+            }
+          ]
+        },
+        "ScaleSpec": {
           "type": "string"
         },
         "Signal": {
@@ -13742,6 +14114,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -13755,6 +14128,14 @@
         "name": "offset",
         "description": "Offset added to input before quantization (in V/Oct)",
         "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "gate",
+        "description": "Per-note gate for **scale**: scale channel N is used only while gate\nchannel N is high. While every gate channel is low the output holds.",
+        "signalType": "gate",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -13875,6 +14256,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -14020,6 +14402,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "min",
@@ -14061,7 +14444,7 @@
   },
   {
     "name": "$unison",
-    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–64)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `input_channels × count`, clamped to 64.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV(), 5, $sine('0.2hz'))).out()\n```",
+    "documentation": "Expands each input channel into multiple detuned copies for unison effects.\n\nTakes a signal (typically V/Oct pitch) and multiplies channels by the\nunison count, applying symmetric detuning controlled by the spread parameter.\n\n- **count** — number of detuned copies per input channel (1–64)\n- **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)\n\nOutput channels = `max(input_channels, spread_channels) × count`, clamped to\n64. **input** and **spread** cycle against each other, so a spread wider than\nthe input repeats the input across the extra channels, and vice versa.\n\nVoices are interleaved: each voice is a full copy of the input channels, so a\n3-channel input with count 3 outputs channels `1 2 3 1 2 3 1 2 3`. When the\n64-channel cap truncates, the highest voices are the ones dropped.\n\n## Example\n\n```js\n// 7-voice unison saw with moderate spread\n$saw($unison('c4', 7, 5)).out()\n\n// With modulated spread\n$saw($unison($midiCV(), 5, $sine('0.2hz'))).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "UnisonParams",
@@ -14161,6 +14544,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -14290,6 +14674,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -16489,6 +16874,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "playhead",
@@ -16663,6 +17049,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "playhead",
@@ -16795,6 +17182,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "next",
@@ -16982,6 +17370,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": [],
     "channelsParam": "channels"
@@ -17044,6 +17433,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [],
     "positionalArgs": []
   },
@@ -17263,6 +17653,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "pitch",
@@ -17486,6 +17877,7 @@
         "default": true
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "gate",
@@ -17645,6 +18037,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -17837,6 +18230,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -17994,6 +18388,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18161,6 +18556,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18323,6 +18719,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18515,6 +18912,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18642,6 +19040,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
@@ -18766,6 +19165,7 @@
         "maxValue": 5.0
       }
     ],
+    "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",

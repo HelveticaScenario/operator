@@ -398,6 +398,10 @@ export const HelpWindow: React.FC = () => {
                             <li>
                                 <b>Ctrl + .</b>: Stop Sound
                             </li>
+                            <li>
+                                <b>Ctrl + \</b>: Cancel Queued Update (the
+                                playing patch keeps running)
+                            </li>
                         </ul>
                         <p style={{ fontSize: '0.9em', opacity: 0.7 }}>
                             Pressing Ctrl+Enter again while an update is already

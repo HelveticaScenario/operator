@@ -72,11 +72,13 @@ fn parse_default_connection_attr(attr: &Attribute) -> syn::Result<DefaultConnect
 }
 
 /// Per-struct-field codegen: emits `default_connection` defaulting plus
-/// `connect`, `collect_cables`, and `inject_index_ptr` calls. Used by
-/// struct-with-named-fields (variant fields don't carry `default_connection`).
+/// `apply_default_connections`, `connect`, `collect_cables`, and
+/// `inject_index_ptr` calls. Used by struct-with-named-fields (variant fields
+/// don't carry `default_connection`).
 fn emit_field_named_struct(
     field: &syn::Field,
     default_stmts: &mut TokenStream2,
+    apply_defaults_stmts: &mut TokenStream2,
     connect_stmts: &mut TokenStream2,
     collect_cables_stmts: &mut TokenStream2,
     inject_index_stmts: &mut TokenStream2,
@@ -153,6 +155,9 @@ fn emit_field_named_struct(
         }
     }
 
+    apply_defaults_stmts.extend(quote_spanned! {field.span()=>
+        crate::types::Connect::apply_default_connections(&mut self.#field_ident);
+    });
     connect_stmts.extend(quote_spanned! {field.span()=>
         crate::types::Connect::connect(&mut self.#field_ident, patch);
     });
@@ -166,12 +171,13 @@ fn emit_field_named_struct(
     Ok(())
 }
 
-/// For one enum variant, build (connect-arm, collect-arm, inject-arm) tokens.
-/// Bindings are named `field_<ident>` for named fields and `field_<n>` for unnamed.
+/// For one enum variant, build (defaults-arm, connect-arm, collect-arm,
+/// inject-arm) tokens. Bindings are named `field_<ident>` for named fields
+/// and `field_<n>` for unnamed.
 fn emit_variant_arms(
     enum_name: &Ident,
     variant: &syn::Variant,
-) -> Result<(TokenStream2, TokenStream2, TokenStream2), syn::Error> {
+) -> Result<(TokenStream2, TokenStream2, TokenStream2, TokenStream2), syn::Error> {
     // Reject `#[default_connection]` on enum variants — it's struct-only.
     for field in variant.fields.iter() {
         for attr in &field.attrs {
@@ -192,16 +198,21 @@ fn emit_variant_arms(
                 quote! { #pat => {} },
                 quote! { #pat => {} },
                 quote! { #pat => {} },
+                quote! { #pat => {} },
             ))
         }
         Fields::Named(fields) => {
             let mut binds = Vec::new();
+            let mut defaults_calls = TokenStream2::new();
             let mut connect_calls = TokenStream2::new();
             let mut collect_calls = TokenStream2::new();
             let mut inject_calls = TokenStream2::new();
             for f in fields.named.iter() {
                 let ident = f.ident.clone().expect("named field");
                 binds.push(ident.clone());
+                defaults_calls.extend(quote_spanned! {f.span()=>
+                    crate::types::Connect::apply_default_connections(#ident);
+                });
                 connect_calls.extend(quote_spanned! {f.span()=>
                     crate::types::Connect::connect(#ident, patch);
                 });
@@ -214,6 +225,7 @@ fn emit_variant_arms(
             }
             let pat = quote! { #enum_name::#var_name { #(#binds),* } };
             Ok((
+                quote! { #pat => { #defaults_calls } },
                 quote! { #pat => { #connect_calls } },
                 quote! { #pat => { #collect_calls } },
                 quote! { #pat => { #inject_calls } },
@@ -221,12 +233,16 @@ fn emit_variant_arms(
         }
         Fields::Unnamed(fields) => {
             let mut binds = Vec::new();
+            let mut defaults_calls = TokenStream2::new();
             let mut connect_calls = TokenStream2::new();
             let mut collect_calls = TokenStream2::new();
             let mut inject_calls = TokenStream2::new();
             for (i, f) in fields.unnamed.iter().enumerate() {
                 let ident = Ident::new(&format!("field_{}", i), Span::call_site());
                 binds.push(ident.clone());
+                defaults_calls.extend(quote_spanned! {f.span()=>
+                    crate::types::Connect::apply_default_connections(#ident);
+                });
                 connect_calls.extend(quote_spanned! {f.span()=>
                     crate::types::Connect::connect(#ident, patch);
                 });
@@ -239,6 +255,7 @@ fn emit_variant_arms(
             }
             let pat = quote! { #enum_name::#var_name(#(#binds),*) };
             Ok((
+                quote! { #pat => { #defaults_calls } },
                 quote! { #pat => { #connect_calls } },
                 quote! { #pat => { #collect_calls } },
                 quote! { #pat => { #inject_calls } },
@@ -250,11 +267,12 @@ fn emit_variant_arms(
 pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
     let name = &ast.ident;
 
-    let (default_connection_stmts, connect_body, collect_cables_body, inject_index_body) =
+    let (apply_defaults_body, connect_body, collect_cables_body, inject_index_body) =
         match &ast.data {
             Data::Struct(data) => match &data.fields {
                 Fields::Named(fields) => {
                     let mut default_stmts = TokenStream2::new();
+                    let mut apply_defaults_stmts = TokenStream2::new();
                     let mut connect_stmts = TokenStream2::new();
                     let mut collect_cables_stmts = TokenStream2::new();
                     let mut inject_index_stmts = TokenStream2::new();
@@ -263,6 +281,7 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
                         if let Err(e) = emit_field_named_struct(
                             field,
                             &mut default_stmts,
+                            &mut apply_defaults_stmts,
                             &mut connect_stmts,
                             &mut collect_cables_stmts,
                             &mut inject_index_stmts,
@@ -271,6 +290,9 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
                         }
                     }
 
+                    // Own-field `#[default_connection]` fills run before the
+                    // per-field recursion into nested `Connect` values.
+                    default_stmts.extend(apply_defaults_stmts);
                     (
                         default_stmts,
                         connect_stmts,
@@ -288,12 +310,15 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
                 }
             },
             Data::Enum(data) => {
+                let mut defaults_arms = TokenStream2::new();
                 let mut connect_arms = TokenStream2::new();
                 let mut collect_arms = TokenStream2::new();
                 let mut inject_arms = TokenStream2::new();
                 for variant in data.variants.iter() {
                     match emit_variant_arms(name, variant) {
-                        Ok((c_arm, cc_arm, ii_arm)) => {
+                        Ok((d_arm, c_arm, cc_arm, ii_arm)) => {
+                            defaults_arms.extend(d_arm);
+                            defaults_arms.extend(quote! { , });
                             connect_arms.extend(c_arm);
                             connect_arms.extend(quote! { , });
                             collect_arms.extend(cc_arm);
@@ -305,7 +330,7 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
                     }
                 }
                 (
-                    TokenStream2::new(),
+                    quote! { match self { #defaults_arms } },
                     quote! { match self { #connect_arms } },
                     quote! { match self { #collect_arms } },
                     quote! { match self { #inject_arms } },
@@ -320,10 +345,10 @@ pub fn impl_connect_macro(ast: &DeriveInput) -> TokenStream {
 
     let generated = quote! {
         impl crate::types::Connect for #name {
+            fn apply_default_connections(&mut self) {
+                #apply_defaults_body
+            }
             fn connect(&mut self, patch: &crate::Patch) {
-                // Apply default connections for disconnected inputs
-                #default_connection_stmts
-                // Connect all fields
                 #connect_body
             }
             fn collect_cables(&self, sink: &mut Vec<String>) {

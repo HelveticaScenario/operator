@@ -2,7 +2,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt};
-use crate::types::PolySignalFields;
 
 fn default_count() -> usize {
     1
@@ -23,14 +22,21 @@ struct UnisonParams {
     spread: Option<PolySignal>,
 }
 
-/// Custom channel count: max(all PolySignal channels) * count, clamped to 64.
+/// Channels of the widest of `input`/`spread`. The two cycle against each other,
+/// so the narrower one repeats across the wider one's channels.
+///
+/// `update` drives its loop from this and the channel count derives from it, so
+/// the two agree: every channel the module declares is a channel it writes.
+fn unison_poly_channels(input: &PolySignal, spread: &Option<PolySignal>) -> usize {
+    input.channels().max(spread.channel_count()).max(1)
+}
+
+/// Custom channel count: max(input, spread) channels * count, clamped to 64.
 #[allow(private_interfaces)]
 pub fn unison_derive_channel_count(params: &UnisonParams) -> usize {
-    let fields = params.poly_signal_fields();
-    let refs: Vec<&PolySignal> = fields.into_iter().collect();
-    let max_poly = PolySignal::max_channels(&refs).max(1);
+    let poly_channels = unison_poly_channels(&params.input, &params.spread);
     let count = params.count.clamp(1, PORT_MAX_CHANNELS);
-    (max_poly * count).min(PORT_MAX_CHANNELS)
+    (poly_channels * count).min(PORT_MAX_CHANNELS)
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -49,7 +55,13 @@ struct UnisonOutputs {
 /// - **count** — number of detuned copies per input channel (1–64)
 /// - **spread** — detune amount with exponential curve (0–10V → 0–1 octave V/Oct)
 ///
-/// Output channels = `input_channels × count`, clamped to 64.
+/// Output channels = `max(input_channels, spread_channels) × count`, clamped to
+/// 64. **input** and **spread** cycle against each other, so a spread wider than
+/// the input repeats the input across the extra channels, and vice versa.
+///
+/// Voices are interleaved: each voice is a full copy of the input channels, so a
+/// 3-channel input with count 3 outputs channels `1 2 3 1 2 3 1 2 3`. When the
+/// 64-channel cap truncates, the highest voices are the ones dropped.
 ///
 /// ## Example
 ///
@@ -72,23 +84,22 @@ impl Unison {
         let input = &self.params.input;
         let spread = &self.params.spread;
 
-        // Determine input channel count (at least 1)
-        let input_channels = input.channels().max(1);
-
+        let poly_channels = unison_poly_channels(input, spread);
         let output_channels = self.channel_count();
 
-        for input_ch in 0..input_channels {
-            let input_val = input.get_value(input_ch);
-            // Spread cycles across input channels
-            let spread_v = spread.value_or(input_ch, 0.0).clamp(0.0, 10.0);
+        for poly_ch in 0..poly_channels {
+            // Both reads cycle, so whichever of the two is narrower repeats
+            // across the wider one's channels.
+            let input_val = input.get_value(poly_ch);
+            let spread_v = spread.value_or(poly_ch, 0.0).clamp(0.0, 10.0);
             // Exponential mapping: (spread_v / 10)^2 gives 0–1 V/Oct (0–1 octave)
             let normalized = spread_v / 10.0;
             let max_detune_voct = normalized * normalized;
 
             for voice in 0..count {
-                let out_ch = input_ch * count + voice;
+                let out_ch = voice * poly_channels + poly_ch;
                 if out_ch >= output_channels {
-                    return;
+                    break;
                 }
 
                 let offset = if count > 1 {
@@ -191,12 +202,14 @@ mod tests {
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 6);
-        // Input ch 0 (0.0V): voices at -1.0, 0.0, +1.0
+        // Voices are interleaved: each voice spans both input channels.
+        // Voice 0 (-1.0 detune): input ch 0, input ch 1
         assert!((u.outputs.sample.get(0) - (-1.0)).abs() < 1e-6);
         assert!((u.outputs.sample.get(1) - 0.0).abs() < 1e-6);
-        assert!((u.outputs.sample.get(2) - 1.0).abs() < 1e-6);
-        // Input ch 1 (1.0V): voices at 0.0, 1.0, 2.0
-        assert!((u.outputs.sample.get(3) - 0.0).abs() < 1e-6);
+        // Voice 1 (no detune)
+        assert!((u.outputs.sample.get(2) - 0.0).abs() < 1e-6);
+        assert!((u.outputs.sample.get(3) - 1.0).abs() < 1e-6);
+        // Voice 2 (+1.0 detune)
         assert!((u.outputs.sample.get(4) - 1.0).abs() < 1e-6);
         assert!((u.outputs.sample.get(5) - 2.0).abs() < 1e-6);
     }
@@ -242,6 +255,61 @@ mod tests {
     }
 
     #[test]
+    fn test_spread_wider_than_input_cycles_the_input() {
+        // Spread is the wider signal, so it sizes the output and the mono input
+        // repeats across its channels. Every declared channel must be written —
+        // an unwritten one would read as a silent 0 V forever.
+        let params = UnisonParams {
+            input: PolySignal::mono(Signal::Volts(0.0)),
+            count: 2,
+            spread: Some(PolySignal::poly(&[
+                Signal::Volts(10.0), // poly ch 0: 1.0 V/Oct detune
+                Signal::Volts(0.0),  // poly ch 1: no detune
+                Signal::Volts(10.0), // poly ch 2: 1.0 V/Oct detune
+                Signal::Volts(0.0),  // poly ch 3: no detune
+            ])),
+        };
+        assert_eq!(unison_derive_channel_count(&params), 8);
+
+        let mut u = make_unison(params);
+        u.update(48000.0);
+        assert_eq!(u.outputs.sample.channels(), 8);
+        // The 0 V input is cycled into all four spread channels.
+        let expected = [-1.0, 0.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.0];
+        for (ch, want) in expected.iter().enumerate() {
+            assert!(
+                (u.outputs.sample.get(ch) - want).abs() < 1e-6,
+                "channel {ch}: expected {want}, got {}",
+                u.outputs.sample.get(ch)
+            );
+        }
+    }
+
+    #[test]
+    fn test_input_wider_than_spread_cycles_the_spread() {
+        // The mirror case: input is wider, so the mono spread repeats across it.
+        let params = UnisonParams {
+            input: PolySignal::poly(&[Signal::Volts(0.0), Signal::Volts(1.0), Signal::Volts(2.0)]),
+            count: 2,
+            spread: Some(PolySignal::mono(Signal::Volts(10.0))),
+        };
+        assert_eq!(unison_derive_channel_count(&params), 6);
+
+        let mut u = make_unison(params);
+        u.update(48000.0);
+        assert_eq!(u.outputs.sample.channels(), 6);
+        // Every input channel gets the same ±1.0 V/Oct detune.
+        let expected = [-1.0, 0.0, 1.0, 1.0, 2.0, 3.0];
+        for (ch, want) in expected.iter().enumerate() {
+            assert!(
+                (u.outputs.sample.get(ch) - want).abs() < 1e-6,
+                "channel {ch}: expected {want}, got {}",
+                u.outputs.sample.get(ch)
+            );
+        }
+    }
+
+    #[test]
     fn test_spread_cycles_across_input_channels() {
         // 2-channel input, 2-channel spread with different values
         let mut u = make_unison(UnisonParams {
@@ -254,11 +322,43 @@ mod tests {
         });
         u.update(48000.0);
         assert_eq!(u.outputs.sample.channels(), 4);
-        // Input ch 0 with spread 10V: voices at -1.0, +1.0
+        // Voice 0: input ch 0 (spread 10V) at -1.0, input ch 1 (spread 0V) at 0.0
         assert!((u.outputs.sample.get(0) - (-1.0)).abs() < 1e-6);
-        assert!((u.outputs.sample.get(1) - 1.0).abs() < 1e-6);
-        // Input ch 1 with spread 0V: voices at 0.0, 0.0
-        assert!((u.outputs.sample.get(2) - 0.0).abs() < 1e-6);
+        assert!((u.outputs.sample.get(1) - 0.0).abs() < 1e-6);
+        // Voice 1: input ch 0 at +1.0, input ch 1 at 0.0
+        assert!((u.outputs.sample.get(2) - 1.0).abs() < 1e-6);
         assert!((u.outputs.sample.get(3) - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_voices_interleave_input_channels() {
+        // 3-channel input, count=3 -> channel order 1 2 3 1 2 3 1 2 3
+        let mut u = make_unison(UnisonParams {
+            input: PolySignal::poly(&[Signal::Volts(1.0), Signal::Volts(2.0), Signal::Volts(3.0)]),
+            count: 3,
+            spread: None,
+        });
+        u.update(48000.0);
+        assert_eq!(u.outputs.sample.channels(), 9);
+        let expected = [1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0];
+        for (ch, want) in expected.iter().enumerate() {
+            assert_eq!(u.outputs.sample.get(ch), *want, "channel {ch}");
+        }
+    }
+
+    #[test]
+    fn test_clamp_drops_highest_voices() {
+        // 16-channel input, count=5 -> 80 desired; the cap keeps 4 full voices,
+        // each a complete copy of the input channels.
+        let input: Vec<Signal> = (0..16).map(|i| Signal::Volts(i as f32)).collect();
+        let mut u = make_unison(UnisonParams {
+            input: PolySignal::poly(&input),
+            count: 5,
+            spread: None,
+        });
+        u.update(48000.0);
+        for ch in 0..PORT_MAX_CHANNELS {
+            assert_eq!(u.outputs.sample.get(ch), (ch % 16) as f32, "channel {ch}");
+        }
     }
 }

@@ -4,6 +4,7 @@ import type { ModuleOutput } from './GraphBuilder';
 import { GraphBuilder, Collection, CollectionWithRange } from './GraphBuilder';
 import type { SourceSpan } from '../../shared/dsl/spanTypes';
 import type { CallSiteKey, SpanRegistry } from './analyzeSource';
+import { processModuleSchema } from './paramsSchema';
 import {
     captureSourceLocation,
     getDSLWrapperLineOffset,
@@ -154,6 +155,67 @@ export function lookupArgumentSpan(
     return spans ? spans[argName] : undefined;
 }
 
+/**
+ * Throw a module-and-line formatted error if any number nested anywhere in
+ * `params` is non-finite. The N-API boundary rejects NaN/Infinity with a
+ * context-free conversion error, so this must run before any native call
+ * (deriveChannelCount) that receives the params.
+ */
+function assertFiniteNumericParams(
+    moduleName: string,
+    params: unknown,
+    sourceLocation: { line: number; column: number } | undefined,
+): void {
+    const walk = (value: unknown, path: string): void => {
+        if (typeof value === 'number') {
+            if (!Number.isFinite(value)) {
+                const loc = sourceLocation
+                    ? ` at line ${sourceLocation.line}`
+                    : '';
+                throw new Error(
+                    `${moduleName}${loc}: parameter \`${path}\` must be a finite number, got ${value}`,
+                );
+            }
+            return;
+        }
+        if (Array.isArray(value)) {
+            value.forEach((v, i) => walk(v, `${path}[${i}]`));
+            return;
+        }
+        if (typeof value === 'object' && value !== null) {
+            for (const [k, v] of Object.entries(value)) {
+                walk(v, path === '' ? k : `${path}.${k}`);
+            }
+        }
+    };
+    walk(params, '');
+}
+
+/**
+ * Derive a module's channel count with the guards every caller needs:
+ * `assertFiniteNumericParams` first (the N-API boundary rejects NaN/Infinity
+ * with a context-free conversion error, so the finite check must precede the
+ * native call), then module-and-line formatting for any deserialization
+ * errors. Returns the derived channel count, or undefined when the module
+ * has no derivation.
+ */
+export function deriveChannelCountChecked(
+    moduleName: string,
+    params: unknown,
+    sourceLocation: { line: number; column: number } | undefined,
+): number | undefined {
+    assertFiniteNumericParams(moduleName, params, sourceLocation);
+    const deriveResult = deriveChannelCount(moduleName, params);
+    if (deriveResult.errors && deriveResult.errors.length > 0) {
+        const messages = deriveResult.errors
+            .map((e: { message: string }) => e.message)
+            .join('; ');
+        const loc = sourceLocation ? ` at line ${sourceLocation.line}` : '';
+        throw new Error(`${moduleName}${loc}: ${messages}`);
+    }
+    return deriveResult.channelCount;
+}
+
 // Return type for module factories - varies by output configuration
 type SingleOutput = ModuleOutput;
 type PolyOutput = Collection | CollectionWithRange;
@@ -293,6 +355,9 @@ export class DSLContext {
      */
     private createFactory(schema: ModuleSchema) {
         const outputs = schema.outputs || [];
+        const scaleParamNames = processModuleSchema(schema)
+            .params.filter((p) => p.isScaleSignalInput)
+            .map((p) => p.name);
 
         return (...args: any[]): ModuleReturn => {
             // Capture source location from stack trace
@@ -324,6 +389,16 @@ export class DSLContext {
                 // Merge other config params
                 for (const key of Object.keys(restConfig)) {
                     params[key] = restConfig[key];
+                }
+            }
+
+            // The engine only accepts a signal scale; a spec string is
+            // shorthand for the notes of `$chord(spec)`.
+            for (const name of scaleParamNames) {
+                if (typeof params[name] === 'string') {
+                    params[name] = this.builder.getFactory('$chord')(
+                        params[name],
+                    );
                 }
             }
 
@@ -391,27 +466,13 @@ export class DSLContext {
             // Derive channel count from params using Rust-side derivation (backed by LRU cache)
             // This handles modules with custom derivation logic (like mix, seq)
             // As well as standard inference from PolySignal inputs
-            const deriveResult = deriveChannelCount(
+            const channelCount = deriveChannelCountChecked(
                 schema.name,
                 node.getParamsSnapshot(),
+                sourceLocation,
             );
-
-            // Check for errors from param deserialization
-            if (deriveResult.errors && deriveResult.errors.length > 0) {
-                const messages = deriveResult.errors
-                    .map((e) => e.message)
-                    .join('; ');
-                const loc = sourceLocation
-                    ? ` at line ${sourceLocation.line}`
-                    : '';
-                throw new Error(`${schema.name}${loc}: ${messages}`);
-            }
-
-            if (
-                deriveResult.channelCount !== null &&
-                deriveResult.channelCount !== undefined
-            ) {
-                node._setDerivedChannelCount(deriveResult.channelCount);
+            if (channelCount !== undefined) {
+                node._setDerivedChannelCount(channelCount);
             }
 
             // Return based on output configuration

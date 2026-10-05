@@ -62,6 +62,9 @@ export interface ElectronAPI {
         getScopeXy: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPE_XY]
         >;
+        getVuMeters: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_VU_METERS]
+        >;
         getModuleStates: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_MODULE_STATES]
         >;
@@ -88,6 +91,9 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE]
         >;
         stop: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_STOP]>;
+        cancelQueuedUpdate: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.SYNTH_CANCEL_QUEUED_UPDATE]
+        >;
         isStopped: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_IS_STOPPED]>;
         setModuleParam: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_SET_MODULE_PARAM]
@@ -190,6 +196,7 @@ export interface ElectronAPI {
     onMenuNewFile: (callback: () => void) => () => void;
     onMenuSave: (callback: () => void) => () => void;
     onMenuStop: (callback: () => void) => () => void;
+    onMenuCancelQueuedUpdate: (callback: () => void) => () => void;
     onMenuUpdatePatch: (
         callback: (trigger?: QueuedTrigger) => void,
     ) => () => void;
@@ -197,6 +204,7 @@ export interface ElectronAPI {
     onMenuOpenWorkspace: (callback: () => void) => () => void;
     onMenuCloseBuffer: (callback: () => void) => () => void;
     onMenuToggleRecording: (callback: () => void) => () => void;
+    onMenuToggleVuMeters: (callback: () => void) => () => void;
     onMenuOpenSettings: (callback: () => void) => () => void;
     onMenuOpenEngineHealth: (callback: () => void) => () => void;
     onMenuOpenModuleProfile: (callback: () => void) => () => void;
@@ -338,6 +346,8 @@ const electronAPI: ElectronAPI = {
 
         getScopeXy: (...args) => invokeIPC('SYNTH_GET_SCOPE_XY', ...args),
 
+        getVuMeters: (...args) => invokeIPC('SYNTH_GET_VU_METERS', ...args),
+
         getTransportState: (...args) =>
             invokeIPC('SYNTH_GET_TRANSPORT_STATE', ...args),
 
@@ -361,6 +371,9 @@ const electronAPI: ElectronAPI = {
             invokeIPC('SYNTH_START_RECORDING', ...args),
 
         stop: (...args) => invokeIPC('SYNTH_STOP', ...args),
+
+        cancelQueuedUpdate: (...args) =>
+            invokeIPC('SYNTH_CANCEL_QUEUED_UPDATE', ...args),
 
         stopRecording: (...args) => invokeIPC('SYNTH_STOP_RECORDING', ...args),
 
@@ -455,6 +468,9 @@ const electronAPI: ElectronAPI = {
     onMenuNewFile: menuEventHandler(MENU_CHANNELS.NEW_FILE),
     onMenuSave: menuEventHandler(MENU_CHANNELS.SAVE),
     onMenuStop: menuEventHandler(MENU_CHANNELS.STOP),
+    onMenuCancelQueuedUpdate: menuEventHandler(
+        MENU_CHANNELS.CANCEL_QUEUED_UPDATE,
+    ),
     onMenuUpdatePatch: menuEventHandler(MENU_CHANNELS.UPDATE_PATCH),
     onMenuUpdatePatchNextBeat: menuEventHandler(
         MENU_CHANNELS.UPDATE_PATCH_NEXT_BEAT,
@@ -462,6 +478,7 @@ const electronAPI: ElectronAPI = {
     onMenuOpenWorkspace: menuEventHandler(MENU_CHANNELS.OPEN_WORKSPACE),
     onMenuCloseBuffer: menuEventHandler(MENU_CHANNELS.CLOSE_BUFFER),
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
+    onMenuToggleVuMeters: menuEventHandler(MENU_CHANNELS.TOGGLE_VU_METERS),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
     onMenuOpenModuleProfile: menuEventHandler(

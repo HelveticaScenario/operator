@@ -1,5 +1,5 @@
+import vm from 'node:vm';
 import type { ModuleSchema, PatchGraph } from '@modular/core';
-import { deriveChannelCount } from '@modular/core';
 import {
     DSLContext,
     hz,
@@ -7,6 +7,7 @@ import {
     setActiveSpanRegistry,
     setDSLWrapperLineOffset,
     captureSourceLocation,
+    deriveChannelCountChecked,
 } from './factories';
 import type {
     BufferOutputRef,
@@ -28,10 +29,14 @@ import {
     replaceSignals,
     PORT_MAX_CHANNELS,
 } from './GraphBuilder';
+import { $g1, $g2, $g3 } from './signalGroups';
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
-import { setActiveInterpolationResolutions } from '../../shared/dsl/spanTypes';
+import {
+    FIRST_LINE_COLUMN_OFFSET,
+    setActiveInterpolationResolutions,
+} from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
@@ -69,6 +74,15 @@ export interface WavsFolderNode {
 
 export interface DSLExecutionOptions {
     sampleRate?: number;
+    /**
+     * Channel count of the audio input device, which is how wide `$input` is
+     * built. Read at execution time, so a device swap reaches `$input` on the
+     * next run of the patch. Clamped to 1..PORT_MAX_CHANNELS, and defaults to
+     * the maximum for callers with no device to report — `$input` never
+     * truncates silently, it only narrows when a host says how wide the
+     * device is.
+     */
+    inputChannels?: number;
     workspaceRoot?: string | null;
     wavsFolderTree?: WavsFolderNode | null;
     loadWav?: (path: string) => {
@@ -141,8 +155,12 @@ export function executePatchScript(
         id: 'ROOT_CLOCK',
     });
 
+    const inputChannels = Math.min(
+        Math.max(options.inputChannels ?? PORT_MAX_CHANNELS, 1),
+        PORT_MAX_CHANNELS,
+    );
     const rootInput = signal(
-        Array.from({ length: 16 }, (_, i) => ({
+        Array.from({ length: inputChannels }, (_, i) => ({
             channel: i,
             module: 'HIDDEN_AUDIO_IN',
             port: 'input',
@@ -154,6 +172,15 @@ export function executePatchScript(
     // Create functions to set global tempo and output gain
     const builder = context.getBuilder();
     const $setTempo = (tempo: number) => {
+        if (
+            typeof tempo !== 'number' ||
+            !Number.isFinite(tempo) ||
+            tempo <= 0
+        ) {
+            throw new Error(
+                `$setTempo: tempo must be a finite number greater than 0, got ${tempo}`,
+            );
+        }
         builder.setTempo(tempo);
     };
     const $setOutputGain = (gain: Signal) => {
@@ -179,11 +206,17 @@ export function executePatchScript(
         config?: ScopeXYConfig,
     ): void => {
         const flatten = (v: unknown): ModuleOutput[] => {
+            // Bare Signal literals (numbers, note/Hz strings) are lifted into
+            // $signal modules, matching `$c`. A string is one signal, not
+            // spread into characters.
+            if (typeof v === 'number' || typeof v === 'string') {
+                return [...(signal(v) as Collection)];
+            }
             if (v instanceof ModuleOutput) return [v];
             if (v instanceof BaseCollection) return [...v];
             if (Array.isArray(v)) return v.flatMap((e: unknown) => flatten(e));
             throw new Error(
-                '$scopeXY: arguments must be a ModuleOutput, Collection, or array thereof',
+                '$scopeXY: arguments must be a number, note/Hz string, ModuleOutput, Collection, or array thereof',
             );
         };
         const xs = flatten(x);
@@ -301,25 +334,15 @@ export function executePatchScript(
         node._setParam('length', lengthSeconds);
 
         // Derive channel count from the input signal
-        const deriveResult = deriveChannelCount(
+        const derivedChannels = deriveChannelCountChecked(
             '$buffer',
             node.getParamsSnapshot(),
+            sourceLocation,
         );
-
-        if (deriveResult.errors && deriveResult.errors.length > 0) {
-            const messages = deriveResult.errors
-                .map((e: { message: string }) => e.message)
-                .join('; ');
-            const loc = sourceLocation ? ` at line ${sourceLocation.line}` : '';
-            throw new Error(`$buffer${loc}: ${messages}`);
+        if (derivedChannels !== undefined) {
+            node._setDerivedChannelCount(derivedChannels);
         }
-
-        const channels =
-            deriveResult.channelCount != null ? deriveResult.channelCount : 1;
-
-        if (deriveResult.channelCount != null) {
-            node._setDerivedChannelCount(deriveResult.channelCount);
-        }
+        const channels = derivedChannels ?? 1;
 
         const frameCount = Math.max(1, Math.ceil(lengthSeconds * sampleRate));
 
@@ -745,6 +768,16 @@ export function executePatchScript(
      * Returns a proxy tree matching the folder structure; leaf nodes trigger
      * loadWav() and return `{ type: 'wav_ref', path, channels }` objects.
      */
+    // Wall-clock time this run spends inside synchronous loadWav host calls.
+    // The vm timeout below measures total wall-clock time of the run, so this
+    // distinguishes a patch stuck in a loop from one legitimately spending
+    // its budget decoding samples from disk. `wavLoadStart` marks a load in
+    // flight: the timeout terminates all JS in the isolate, so the
+    // post-load accumulation may never run and the catch block below must
+    // count the interrupted load itself.
+    let wavLoadMs = 0;
+    let wavLoadStart: number | null = null;
+
     const $wavs = (): unknown => {
         const tree = options.wavsFolderTree;
         if (!tree) {
@@ -784,7 +817,18 @@ export function executePatchScript(
                 if (!options.loadWav) {
                     throw new Error('$wavs(): loadWav function not provided');
                 }
-                const info = options.loadWav(relPath);
+                const loadStart = performance.now();
+                wavLoadStart = loadStart;
+                let info;
+                try {
+                    info = options.loadWav(relPath);
+                } finally {
+                    // Also on throw: the time was still spent loading, and a
+                    // stale wavLoadStart would bill everything after a caught
+                    // load failure — even an infinite loop — to WAV loading.
+                    wavLoadMs += performance.now() - loadStart;
+                    wavLoadStart = null;
+                }
                 return {
                     type: 'wav_ref' as const,
                     path: relPath,
@@ -983,6 +1027,11 @@ export function executePatchScript(
         $c: builder.$c.bind(builder),
         $r,
         $cartesian,
+        // Cartesian signal groups — tag a param value so groups multiply
+        // across a module instead of cycling together
+        $g1,
+        $g2,
+        $g3,
         // Deferred signal helper
         $deferred,
         // Slider control
@@ -1012,16 +1061,16 @@ export function executePatchScript(
 
     // Console.log(dslGlobals);
 
-    // Build the function body - count wrapper lines for source mapping
-    // When new Function() executes code, line numbers in stack traces are relative
-    // To the function body string. The template literal structure plus new Function's
-    // Own wrapper results in user code starting at line 5 in stack traces.
-    const wrapperLineCount = 4;
+    // Build the script body - count wrapper lines for source mapping.
+    // Stack-trace line numbers are relative to the compiled vm script: the
+    // template literal's leading newline, the 'use strict' line, and the
+    // IIFE opener put user code at line 4 in stack traces.
+    const wrapperLineCount = 3;
     setDSLWrapperLineOffset(wrapperLineCount);
 
     // The function body template indents the first line of source with 4 spaces
     // This affects the column reported by V8 for the first line only
-    const firstLineColumnOffset = 4;
+    const firstLineColumnOffset = FIRST_LINE_COLUMN_OFFSET;
 
     // Analyze source code to extract argument spans before execution
     // The registry maps call-site keys (line:column) to argument span info
@@ -1038,19 +1087,49 @@ export function executePatchScript(
     setActiveSpanRegistry(spanRegistry);
     setActiveInterpolationResolutions(interpolationResolutions);
 
-    const functionBody = `
+    // The user source runs as a function body (an IIFE), not at the script's
+    // top level, so top-level `return` is legal in a patch script.
+    const scriptBody = `
     'use strict';
+    (function () {
     ${source}
+    })();
   `;
 
-    // Create parameter names and values
-    const paramNames = Object.keys(dslGlobals);
-    const paramValues = Object.values(dslGlobals);
+    // Cap on synchronous script execution. A non-terminating patch script
+    // (e.g. an accidental infinite loop) raises a catchable error instead of
+    // blocking the Electron main process forever.
+    const executionTimeoutMs = 5000;
 
     try {
-        // Execute the script
-        const fn = new Function(...paramNames, functionBody);
-        fn(...paramValues);
+        // Execute the script in a vm context so the timeout applies. The DSL
+        // globals are the sandbox's globals; they are host objects, so
+        // instanceof checks against host classes keep working. The default
+        // script filename contains `<anonymous>`, which captureSourceLocation
+        // relies on to find DSL stack frames.
+        const script = new vm.Script(scriptBody);
+        const sandbox = vm.createContext({
+            ...dslGlobals,
+            console,
+            structuredClone,
+        });
+        // The sandbox is its own realm: array literals in the patch script use
+        // the sandbox's Array.prototype, so pipe() must be installed there too
+        // (mirroring the host-side installation above). The explicit filename
+        // keeps `<anonymous>` out of the installer's stack frames, so
+        // captureSourceLocation never mistakes the installer's `pipe` frame
+        // for the user's call site.
+        vm.runInContext(
+            `Object.defineProperty(Array.prototype, 'pipe', {
+                configurable: true,
+                enumerable: false,
+                value: function pipe(pipelineFunc) { return pipelineFunc(this); },
+                writable: true,
+            });`,
+            sandbox,
+            { filename: 'dsl-pipe-installer.js' },
+        );
+        script.runInContext(sandbox, { timeout: executionTimeoutMs });
 
         // Build and return the patch with source locations
         const resultBuilder = context.getBuilder();
@@ -1066,8 +1145,34 @@ export function executePatchScript(
             sourceLocationMap,
         };
     } catch (error) {
-        if (error instanceof Error) {
-            throw new Error(`DSL execution error: ${error.message}`, {
+        if (
+            (error as NodeJS.ErrnoException | null)?.code ===
+            'ERR_SCRIPT_EXECUTION_TIMEOUT'
+        ) {
+            // The timeout counts wall-clock time, including synchronous host
+            // call-outs. When most of the budget went to loading WAV files
+            // (slow/cold disk, big library), say so — the wav cache keeps
+            // everything already decoded, so a re-run makes progress.
+            const seconds = executionTimeoutMs / 1000;
+            const totalWavMs =
+                wavLoadMs +
+                (wavLoadStart !== null ? performance.now() - wavLoadStart : 0);
+            const message =
+                totalWavMs >= executionTimeoutMs / 2
+                    ? `DSL execution error: Patch script timed out after ${seconds}s, ${(totalWavMs / 1000).toFixed(1)}s of it loading WAV files — loaded files stay cached, so run again to continue`
+                    : `DSL execution error: Patch script timed out after ${seconds}s — check for infinite loops`;
+            throw new Error(message, { cause: error });
+        }
+        // Errors thrown by code inside the vm are sandbox-realm Error
+        // instances, so duck-type on `message` rather than instanceof.
+        const message =
+            typeof error === 'object' &&
+            error !== null &&
+            typeof (error as { message?: unknown }).message === 'string'
+                ? (error as { message: string }).message
+                : null;
+        if (message !== null) {
+            throw new Error(`DSL execution error: ${message}`, {
                 cause: error,
             });
         }
@@ -1079,24 +1184,5 @@ export function executePatchScript(
         // NOTE: Do NOT clear interpolation resolutions here. They are read
         // Asynchronously by moduleStateTracking during decoration polling and
         // Must persist until the next execution replaces them.
-    }
-}
-
-/**
- * Validate DSL script syntax without executing
- */
-export function validateDSLSyntax(source: string): {
-    valid: boolean;
-    error?: string;
-} {
-    try {
-        // Create function only for syntax validation - not executed
-        const _fn = new Function(source);
-        return { valid: true };
-    } catch (error) {
-        if (error instanceof Error) {
-            return { error: error.message, valid: false };
-        }
-        return { error: 'Unknown syntax error', valid: false };
     }
 }

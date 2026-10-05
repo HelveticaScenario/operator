@@ -164,6 +164,11 @@ export const AudioSettingsTab = forwardRef<
             setDeviceCache(cache);
             setCurrentState(state);
 
+            // The engine keeps reporting a device fallback in its state until
+            // the streams are recreated, so surface it even when this panel
+            // opens long after the fallback happened.
+            setWarning(state.fallbackWarning ?? null);
+
             // Initialize selections from current state
             setSelectedHostId(state.hostId);
             setSelectedOutputDeviceId(state.outputDeviceId ?? null);
