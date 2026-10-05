@@ -31,8 +31,17 @@ import type {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
+import type { ButtonDefinition } from '../shared/dsl/buttonTypes';
+import { GATE_HIGH_VOLTAGE } from '../shared/dsl/buttonTypes';
+import {
+    formatHzLiteral,
+    voltsToHz,
+    voltsToNoteName,
+} from '../shared/dsl/sliderUnits';
 import type { EditorBuffer } from './types/editor';
 import { findSliderValueSpan } from './dsl/sliderSourceEdit';
+import type { SourceSpanResult } from './dsl/sliderSourceEdit';
+import { findToggleBtnStateSpan } from './dsl/buttonSourceEdit';
 import type { ScopeView } from './types/editor';
 import { setActiveInterpolationResolutions } from '../shared/dsl/spanTypes';
 import {
@@ -183,6 +192,7 @@ function App() {
     const [scopeViews, setScopeViews] = useState<ScopeView[]>([]);
     const [runningBufferId, setRunningBufferId] = useState<string | null>(null);
     const [sliderDefs, setSliderDefs] = useState<SliderDefinition[]>([]);
+    const [buttonDefs, setButtonDefs] = useState<ButtonDefinition[]>([]);
     // Per-frame transport lives in an external store (see transportStore) so
     // updating it ~60×/s does not re-render the whole App tree — only the
     // transport display, which subscribes directly. App only needs to know
@@ -216,15 +226,80 @@ function App() {
         updateId: number;
         scopeViews: ScopeView[];
         sliderDefs: SliderDefinition[];
+        buttonDefs: ButtonDefinition[];
         interpolationResolutions?: Map<string, any[]>;
         /** Tracked decorations created at submit time, swapped into
          *  scopeDecorationsRef when the pending state is committed. */
         scopeDecorations: editor.IEditorDecorationsCollection | null;
     } | null>(null);
 
+    /**
+     * Rewrite a control's source literal in the buffer the running patch was
+     * executed from — never in an unrelated buffer the user happens to be
+     * viewing. When the running buffer is displayed the edit goes through
+     * Monaco (preserving the undo stack); otherwise it lands in the stored
+     * buffer content so re-running that patch sees the updated literal.
+     */
+    const editRunningPatchSource = useCallback(
+        (
+            computeEdit: (
+                source: string,
+            ) => { span: SourceSpanResult; text: string } | null,
+        ) => {
+            if (!runningBufferId) {
+                return;
+            }
+            if (runningBufferId === activeBufferId) {
+                const model = editorRef.current?.getModel();
+                if (!model) {
+                    return;
+                }
+                const edit = computeEdit(model.getValue());
+                if (!edit) {
+                    return;
+                }
+                const startPos = model.getPositionAt(edit.span.start);
+                const endPos = model.getPositionAt(edit.span.end);
+                const range = new (window as any).monaco.Range(
+                    startPos.lineNumber,
+                    startPos.column,
+                    endPos.lineNumber,
+                    endPos.column,
+                );
+                // Use pushEditOperations for proper undo stack integration
+                model.pushEditOperations(
+                    [],
+                    [{ range, text: edit.text }],
+                    () => null,
+                );
+            } else {
+                setBuffers((prev) =>
+                    prev.map((b) => {
+                        if (getBufferId(b) !== runningBufferId) {
+                            return b;
+                        }
+                        const edit = computeEdit(b.content);
+                        if (!edit) {
+                            return b;
+                        }
+                        return {
+                            ...b,
+                            content:
+                                b.content.slice(0, edit.span.start) +
+                                edit.text +
+                                b.content.slice(edit.span.end),
+                            dirty: true,
+                            isPreview: false,
+                        };
+                    }),
+                );
+            }
+        },
+        [runningBufferId, activeBufferId, setBuffers],
+    );
+
     const handleSliderChange = useCallback(
         (label: string, newValue: number) => {
-            // Find the slider definition
             const slider = sliderDefs.find((s) => s.label === label);
             if (!slider) {
                 return;
@@ -239,43 +314,67 @@ function App() {
                 },
             );
 
-            // Update the source code in the editor
-            const editorInstance = editorRef.current;
-            if (editorInstance) {
-                const model = editorInstance.getModel();
-                if (model) {
-                    const source = model.getValue();
-                    const span = findSliderValueSpan(source, label);
-                    if (span) {
-                        const startPos = model.getPositionAt(span.start);
-                        const endPos = model.getPositionAt(span.end);
-                        const range = new (window as any).monaco.Range(
-                            startPos.lineNumber,
-                            startPos.column,
-                            endPos.lineNumber,
-                            endPos.column,
-                        );
-                        const formattedValue = Number(
-                            newValue.toPrecision(6),
-                        ).toString();
-                        // Use pushEditOperations for proper undo stack integration
-                        model.pushEditOperations(
-                            [],
-                            [{ range, text: formattedValue }],
-                            () => null,
-                        );
-                    }
+            // Persist the new value into the source literal
+            editRunningPatchSource((source) => {
+                const span = findSliderValueSpan(source, label);
+                if (!span) {
+                    return null;
                 }
-            }
+                let text: string;
+                if (slider.unit === 'hz') {
+                    const q = source[span.start] === '"' ? '"' : "'";
+                    text = `${q}${formatHzLiteral(voltsToHz(newValue))}${q}`;
+                } else if (slider.unit === 'note') {
+                    const q = source[span.start] === '"' ? '"' : "'";
+                    text = `${q}${voltsToNoteName(newValue)}${q}`;
+                } else {
+                    text = Number(newValue.toPrecision(6)).toString();
+                }
+                return { span, text };
+            });
 
-            // Update slider state
             setSliderDefs((prev) =>
                 prev.map((s) =>
                     s.label === label ? { ...s, value: newValue } : s,
                 ),
             );
         },
-        [sliderDefs],
+        [sliderDefs, editRunningPatchSource],
+    );
+
+    const handleButtonChange = useCallback(
+        (label: string, pressed: boolean) => {
+            const button = buttonDefs.find((b) => b.label === label);
+            if (!button) {
+                return;
+            }
+
+            // Update audio engine via lightweight param update
+            void electronAPI.synthesizer.setModuleParam(
+                button.moduleId,
+                '$signal',
+                {
+                    source: pressed ? GATE_HIGH_VOLTAGE : 0,
+                },
+            );
+
+            if (button.mode !== 'toggle') {
+                return;
+            }
+
+            // Persist toggle state into the source literal
+            editRunningPatchSource((source) => {
+                const span = findToggleBtnStateSpan(source, label);
+                return span ? { span, text: String(pressed) } : null;
+            });
+
+            setButtonDefs((prev) =>
+                prev.map((b) =>
+                    b.label === label ? { ...b, value: pressed } : b,
+                ),
+            );
+        },
+        [buttonDefs, editRunningPatchSource],
     );
 
     // Load workspace and file tree on mount
@@ -632,6 +731,7 @@ function App() {
                         scopeDecorationsRef.current = pending.scopeDecorations;
                         setScopeViews(pending.scopeViews);
                         setSliderDefs(pending.sliderDefs);
+                        setButtonDefs(pending.buttonDefs);
                         if (pending.interpolationResolutions) {
                             setActiveInterpolationResolutions(
                                 pending.interpolationResolutions,
@@ -834,6 +934,7 @@ function App() {
                 }
 
                 const newSliderDefs = result.sliders ?? [];
+                const newButtonDefs = result.buttons ?? [];
 
                 // For queued (non-immediate) triggers, defer UI state until the
                 // Audio thread actually applies the patch update.
@@ -847,6 +948,7 @@ function App() {
                     // Are cleaned up before storing the new pending state.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current = {
+                        buttonDefs: newButtonDefs,
                         interpolationResolutions: interpolationMap,
                         scopeDecorations: newScopeDecorations,
                         scopeViews: views,
@@ -862,6 +964,7 @@ function App() {
                     scopeDecorationsRef.current = newScopeDecorations;
                     setScopeViews(views);
                     setSliderDefs(newSliderDefs);
+                    setButtonDefs(newButtonDefs);
                     if (interpolationMap) {
                         setActiveInterpolationResolutions(interpolationMap);
                     }
@@ -1525,7 +1628,9 @@ function App() {
                             controlContent={
                                 <ControlPanel
                                     sliders={sliderDefs}
+                                    buttons={buttonDefs}
                                     onSliderChange={handleSliderChange}
+                                    onButtonChange={handleButtonChange}
                                 />
                             }
                         />

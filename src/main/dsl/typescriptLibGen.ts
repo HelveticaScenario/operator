@@ -1406,8 +1406,12 @@ function $deferred(channels?: number): DeferredCollection;
  * The slider appears in the Control panel and allows real-time parameter adjustment.
  * Dragging the slider updates both the audio engine and the source code value.
  *
+ * Value, min, and max must share one unit: all numbers (volts), all hz strings,
+ * or all note strings. Hz and note sliders travel linearly in V/Oct (evenly
+ * spaced octaves); note sliders snap to semitones.
+ *
  * @param label - Display label for the slider (must be a string literal)
- * @param value - Initial value (must be a numeric literal)
+ * @param value - Initial value (must be a numeric or string literal)
  * @param min - Minimum slider value
  * @param max - Maximum slider value
  * @returns A CollectionWithRange carrying the slider's current value (range [min, max])
@@ -1415,8 +1419,43 @@ function $deferred(channels?: number): DeferredCollection;
  * @example
  * const vol = $slider("Volume", 0.5, 0, 1);
  * $sine(440).amplitude(vol).out();
+ * @example
+ * $sine($slider("Pitch", "440hz", "55hz", "1760hz")).out();
+ * @example
+ * $saw($slider("Root", "c3", "c2", "c5")).out();
  */
 function $slider(label: string, value: number, min: number, max: number): CollectionWithRange;
+function $slider(label: string, value: HZ, min: HZ, max: HZ): CollectionWithRange;
+function $slider(label: string, value: Note, min: Note, max: Note): CollectionWithRange;
+
+/**
+ * Create a momentary gate button in the Control panel: 5V while held, 0V
+ * otherwise. Chain through .$.hold for a fixed-length trigger per press.
+ *
+ * @param label - Display label for the button (must be a string literal)
+ * @returns A CollectionWithRange carrying the button output (range [0, 5])
+ *
+ * @example
+ * $sine('c4').amplitude($adsr($btn("play"))).out();
+ * @example
+ * // fixed 100 ms trigger per press, however long the button is held
+ * $sine('c4').amplitude($adsr($btn("hit").$.hold(0.1))).out();
+ */
+function $btn(label: string): CollectionWithRange;
+
+/**
+ * Create a latched toggle button in the Control panel: clicking flips between
+ * 0V and 5V and rewrites the initial-state literal in the source, so the
+ * state survives re-execution.
+ *
+ * @param label - Display label for the button (must be a string literal)
+ * @param initial - Initial state (must be a true/false literal)
+ * @returns A CollectionWithRange carrying the button output (range [0, 5])
+ *
+ * @example
+ * $saw('c2').amplitude($toggleBtn("drone", false)).out();
+ */
+function $toggleBtn(label: string, initial: boolean): CollectionWithRange;
 
 /**
  * A send-return bus. Create one with {@link $bus}, then call \`.send(bus, gain)\` on

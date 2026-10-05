@@ -3,7 +3,8 @@
  *
  * Uses lightweight string parsing (no ts-morph) to locate `$slider(label, value, ...)`
  * calls by matching the label string literal. Returns character offsets of the value
- * argument so the UI can replace it via Monaco edits.
+ * argument — a numeric literal or a quoted hz/note string — so the UI can replace it
+ * via Monaco edits.
  *
  * This runs in the renderer process, so it must not depend on Node.js-only modules.
  */
@@ -83,13 +84,190 @@ function findIgnoredRanges(source: string): Array<[number, number]> {
 }
 
 /** True if `offset` falls within any ignored range. */
-function isIgnored(offset: number, ranges: Array<[number, number]>): boolean {
+function isIgnored(
+    offset: number,
+    ranges: Array<[number, number]>,
+): boolean {
     for (const [start, end] of ranges) {
         if (offset >= start && offset < end) {
             return true;
         }
     }
     return false;
+}
+
+/** Advance past whitespace and comments, returning the next code offset. */
+function skipTrivia(source: string, i: number): number {
+    const n = source.length;
+    for (;;) {
+        while (i < n && /\s/.test(source[i])) {
+            i++;
+        }
+        if (source[i] === '/' && source[i + 1] === '/') {
+            i += 2;
+            while (i < n && source[i] !== '\n') {
+                i++;
+            }
+            continue;
+        }
+        if (source[i] === '/' && source[i + 1] === '*') {
+            i += 2;
+            while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
+                i++;
+            }
+            i = Math.min(n, i + 2);
+            continue;
+        }
+        return i;
+    }
+}
+
+/**
+ * Decode the escape sequences of a single- or double-quoted JS string literal
+ * body, matching JS semantics so a decoded label compares equal to the value
+ * the executed source produced at runtime.
+ */
+function decodeStringLiteral(body: string): string {
+    let out = '';
+    let i = 0;
+    while (i < body.length) {
+        const c = body[i];
+        if (c !== '\\') {
+            out += c;
+            i++;
+            continue;
+        }
+        const e = body[i + 1];
+        i += 2;
+        switch (e) {
+            case 'n':
+                out += '\n';
+                break;
+            case 't':
+                out += '\t';
+                break;
+            case 'r':
+                out += '\r';
+                break;
+            case 'b':
+                out += '\b';
+                break;
+            case 'f':
+                out += '\f';
+                break;
+            case 'v':
+                out += '\v';
+                break;
+            case '0':
+                out += '\0';
+                break;
+            case 'x':
+                out += String.fromCharCode(
+                    parseInt(body.slice(i, i + 2), 16),
+                );
+                i += 2;
+                break;
+            case 'u':
+                if (body[i] === '{') {
+                    const close = body.indexOf('}', i);
+                    out += String.fromCodePoint(
+                        parseInt(body.slice(i + 1, close), 16),
+                    );
+                    i = close + 1;
+                } else {
+                    out += String.fromCharCode(
+                        parseInt(body.slice(i, i + 4), 16),
+                    );
+                    i += 4;
+                }
+                break;
+            // Escaped line terminators are line continuations: no output.
+            case '\n':
+                break;
+            case '\r':
+                if (body[i] === '\n') {
+                    i++;
+                }
+                break;
+            default:
+                out += e ?? '';
+        }
+    }
+    return out;
+}
+
+/** Parse the quoted string literal starting at `start` (which must be a `"`
+ *  or `'`), returning its decoded value and the offset just past the closing
+ *  quote, or null if unterminated. */
+function parseStringLiteralAt(
+    source: string,
+    start: number,
+): { value: string; end: number } | null {
+    const quote = source[start];
+    let i = start + 1;
+    while (i < source.length) {
+        if (source[i] === '\\') {
+            i += 2;
+            continue;
+        }
+        if (source[i] === quote) {
+            return {
+                end: i + 1,
+                value: decodeStringLiteral(source.slice(start + 1, i)),
+            };
+        }
+        if (source[i] === '\n') {
+            return null;
+        }
+        i++;
+    }
+    return null;
+}
+
+/**
+ * Find the offset of the second argument's first token in a
+ * `fnName("label", …)` call whose decoded label equals `label`. The label is
+ * compared by decoded value (not source text), so labels whose literals use
+ * escape sequences still match; whitespace and comments may appear anywhere
+ * between the tokens.
+ *
+ * @param source - The full DSL source code
+ * @param fnName - The callee name including its `$` prefix, e.g. "$slider"
+ * @param label  - The runtime label string to match against
+ * @returns The offset of the second argument, or null if no live call matches
+ */
+export function findLabeledCallSecondArgStart(
+    source: string,
+    fnName: string,
+    label: string,
+): number | null {
+    const pattern = new RegExp(`\\${fnName}\\s*\\(`, 'g');
+    const ignored = findIgnoredRanges(source);
+
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(source)) !== null) {
+        // Skip occurrences inside comments or string literals — only a live
+        // call edits the audio engine, so only it may be edited.
+        if (isIgnored(match.index, ignored)) {
+            continue;
+        }
+
+        let i = skipTrivia(source, match.index + match[0].length);
+        if (source[i] !== '"' && source[i] !== "'") {
+            continue;
+        }
+        const lit = parseStringLiteralAt(source, i);
+        if (!lit || lit.value !== label) {
+            continue;
+        }
+        i = skipTrivia(source, lit.end);
+        if (source[i] !== ',') {
+            continue;
+        }
+        return skipTrivia(source, i + 1);
+    }
+
+    return null;
 }
 
 /**
@@ -104,48 +282,28 @@ export function findSliderValueSpan(
     source: string,
     label: string,
 ): SourceSpanResult | null {
-    // Build regex to find $slider( with the exact label string.
-    // The label is a validated string literal, so we escape it for regex safety.
-    const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Match: $slider( optional-whitespace, "label" or 'label', optional-whitespace, comma
-    const pattern = new RegExp(
-        `\\$slider\\s*\\(\\s*(?:"${escapedLabel}"|'${escapedLabel}')\\s*,`,
-        'g',
-    );
+    const start = findLabeledCallSecondArgStart(source, '$slider', label);
+    if (start === null || start >= source.length) {
+        return null;
+    }
 
-    const ignored = findIgnoredRanges(source);
-
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(source)) !== null) {
-        // Skip occurrences inside comments or string literals — only a live
-        // `$slider(...)` call edits the audio engine, so only it may be edited.
-        if (isIgnored(match.index, ignored)) {
-            continue;
-        }
-
-        // Match[0] ends right after the comma following the label
-        const afterComma = match.index + match[0].length;
-
-        // Skip whitespace after the comma
-        let start = afterComma;
-        while (start < source.length && /\s/.test(source[start])) {
-            start++;
-        }
-
-        if (start >= source.length) {
-            continue;
-        }
-
-        // Parse the numeric literal: optional minus, digits, optional decimal + digits
-        const numMatch = source
-            .slice(start)
-            .match(/^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/);
-        if (!numMatch) {
-            continue;
-        }
-
+    // Numeric literal: optional minus, digits, optional decimal + digits
+    const numMatch = source
+        .slice(start)
+        .match(/^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/);
+    if (numMatch) {
         return {
             end: start + numMatch[0].length,
+            start,
+        };
+    }
+
+    // Quoted string literal (hz/note sliders) — the span includes the
+    // quotes so writeback replaces the whole literal.
+    const strMatch = source.slice(start).match(/^(["'])(?:\\.|[^\\])*?\1/);
+    if (strMatch) {
+        return {
+            end: start + strMatch[0].length,
             start,
         };
     }

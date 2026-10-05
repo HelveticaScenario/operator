@@ -998,6 +998,7 @@ registerIPCHandler(
                 sourceLocationMap,
                 interpolationResolutions,
                 sliders,
+                buttons,
                 callSiteSpans,
             } = executePatchScript(source, schemas, {
                 sampleRate: synth.sampleRate(),
@@ -1109,6 +1110,7 @@ registerIPCHandler(
             if (errors.length > 0) {
                 return {
                     appliedPatch: patch,
+                    buttons,
                     callSiteSpans: callSiteSpansRecord,
                     errors,
                     interpolationResolutions: interpolationResolutionsRecord,
@@ -1122,6 +1124,7 @@ registerIPCHandler(
 
             return {
                 appliedPatch: patch,
+                buttons,
                 callSiteSpans: callSiteSpansRecord,
                 errors: [],
                 interpolationResolutions: interpolationResolutionsRecord,

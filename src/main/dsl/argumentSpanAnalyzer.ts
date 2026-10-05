@@ -14,7 +14,12 @@
  */
 
 import type { CallExpression } from 'ts-morph';
-import { Node, VariableDeclarationKind, type SourceFile } from 'ts-morph';
+import {
+    Node,
+    SyntaxKind,
+    VariableDeclarationKind,
+    type SourceFile,
+} from 'ts-morph';
 import type { ModuleSchema } from '@modular/core';
 
 import type {
@@ -642,6 +647,23 @@ function getTrackableNode(
  * @param firstLineColumnOffset - Column offset for the first line
  * @returns Span registry and interpolation resolution map
  */
+/** Throw unless a control factory's label argument is a string literal —
+ *  the control panel keys widgets by label, so it must be statically known. */
+function requireStringLiteralLabel(
+    fnName: string,
+    args: Node[],
+    sourceFile: SourceFile,
+): void {
+    if (args.length >= 1 && !Node.isStringLiteral(args[0])) {
+        const { line, column } = sourceFile.getLineAndColumnAtPos(
+            args[0].getStart(),
+        );
+        throw new Error(
+            `${fnName}() label (argument 1) must be a string literal at line ${line}, column ${column}`,
+        );
+    }
+}
+
 export function analyzeArgumentSpans(
     sourceFile: SourceFile,
     schemas: ModuleSchema[],
@@ -675,27 +697,50 @@ export function analyzeArgumentSpans(
         // Validate $slider() calls: label (arg 0) and value (arg 1) must be literals
         if (funcName === '$slider') {
             const args = call.getArguments();
-            if (args.length >= 1 && !Node.isStringLiteral(args[0])) {
-                const { line, column } = sourceFile.getLineAndColumnAtPos(
-                    args[0].getStart(),
-                );
-                throw new Error(
-                    `$slider() label (argument 1) must be a string literal at line ${line}, column ${column}`,
-                );
-            }
+            requireStringLiteralLabel('$slider', args, sourceFile);
             if (
                 args.length >= 2 &&
                 !Node.isNumericLiteral(args[1]) &&
-                !Node.isPrefixUnaryExpression(args[1])
+                !Node.isPrefixUnaryExpression(args[1]) &&
+                !Node.isStringLiteral(args[1])
             ) {
                 const { line, column } = sourceFile.getLineAndColumnAtPos(
                     args[1].getStart(),
                 );
                 throw new Error(
-                    `$slider() value (argument 2) must be a numeric literal at line ${line}, column ${column}`,
+                    `$slider() value (argument 2) must be a numeric or string literal at line ${line}, column ${column}`,
                 );
             }
             return; // $slider is not a module factory, skip further processing
+        }
+
+        // Validate $btn() calls: the label must be a literal so the control
+        // panel can key widgets by it.
+        if (funcName === '$btn') {
+            requireStringLiteralLabel('$btn', call.getArguments(), sourceFile);
+            return; // $btn is not a module factory, skip further processing
+        }
+
+        // Validate $toggleBtn() calls: the initial state must be a bare
+        // true/false so the UI can rewrite it in place.
+        if (funcName === '$toggleBtn') {
+            const args = call.getArguments();
+            requireStringLiteralLabel('$toggleBtn', args, sourceFile);
+            if (args.length >= 2) {
+                const kind = args[1].getKind();
+                if (
+                    kind !== SyntaxKind.TrueKeyword &&
+                    kind !== SyntaxKind.FalseKeyword
+                ) {
+                    const { line, column } = sourceFile.getLineAndColumnAtPos(
+                        args[1].getStart(),
+                    );
+                    throw new Error(
+                        `$toggleBtn() initial state (argument 2) must be a true or false literal at line ${line}, column ${column}`,
+                    );
+                }
+            }
+            return; // $toggleBtn is not a module factory, skip further processing
         }
 
         // Track $p(literal) and $p.s(literal, scale) calls: register the

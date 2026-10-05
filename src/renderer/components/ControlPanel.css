@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Control Panel - slider controls for DSL parameters
+   Control Panel - slider and button controls for DSL parameters
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .control-panel {
@@ -38,6 +38,84 @@
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
+}
+
+.control-panel-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+}
+
+/* Individual button control */
+.button-control {
+    display: flex;
+}
+
+.button-input {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-1);
+    font-family: var(--font-mono);
+    font-size: var(--font-size);
+    font-weight: 500;
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    padding: var(--sp-half) var(--sp-1);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.button-input:hover {
+    border-color: var(--text-secondary);
+}
+
+.button-input:focus-visible {
+    outline: 1px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+.button-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.button-led {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border: 1px solid var(--text-muted);
+}
+
+.button-input.active .button-led {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 4px var(--accent-primary);
+}
+
+/* Momentary gate: a solid pad that brightens while held */
+.button-gate {
+    background: var(--bg-hover);
+}
+
+.button-gate.active {
+    background: var(--bg-active);
+}
+
+/* Latched toggle: a dashed outline that goes solid while latched on */
+.button-toggle {
+    background: var(--bg-tertiary);
+    border-style: dashed;
+}
+
+.button-toggle.active {
+    background: var(--accent-muted);
+    border-style: solid;
+    border-color: var(--accent-primary);
 }
 
 /* Individual slider control */

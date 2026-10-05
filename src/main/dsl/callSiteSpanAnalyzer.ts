@@ -17,7 +17,7 @@ import type { CallSiteKey, CallSiteSpanRegistry } from './sourceAnalysisTypes';
 const DSL_METHODS_TO_TRACK = new Set(['scope']);
 
 /** Standalone function names tracked for call expression spans */
-const DSL_FUNCTIONS_TO_TRACK = new Set(['$slider']);
+const DSL_FUNCTIONS_TO_TRACK = new Set(['$slider', '$btn', '$toggleBtn']);
 
 /**
  * Analyze call site expression spans in a parsed source file.

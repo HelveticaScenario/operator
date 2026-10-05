@@ -1053,6 +1053,184 @@ describe('sliders', () => {
         expect(remaps[0].params.outMin).toBe(0);
         expect(remaps[0].params.outMax).toBe(5);
     });
+
+    test('$slider number values report the number unit', () => {
+        const result = exec('$slider("Level", 2.5, 0, 5).out()');
+        expect(result.sliders[0].unit).toBe('number');
+        expect(result.sliders[0].value).toBe(2.5);
+    });
+
+    test('$slider hz strings convert to V/Oct volts', () => {
+        const result = exec(
+            '$sine($slider("Pitch", "440hz", "55hz", "1760hz")).out()',
+        );
+        const s = result.sliders[0];
+        const C4_HZ = 261.6255653005986;
+        expect(s.unit).toBe('hz');
+        expect(s.value).toBeCloseTo(Math.log2(440 / C4_HZ), 10);
+        expect(s.min).toBeCloseTo(Math.log2(55 / C4_HZ), 10);
+        expect(s.max).toBeCloseTo(Math.log2(1760 / C4_HZ), 10);
+    });
+
+    test('$slider note strings convert to V/Oct volts', () => {
+        const result = exec('$saw($slider("Root", "c4", "c2", "c6")).out()');
+        const s = result.sliders[0];
+        expect(s.unit).toBe('note');
+        expect(s.value).toBe(0);
+        expect(s.min).toBe(-2);
+        expect(s.max).toBe(2);
+    });
+
+    test('$slider bare note letter defaults to octave 4', () => {
+        const result = exec('$sine($slider("Root", "a", "c2", "c6")).out()');
+        expect(result.sliders[0].value).toBeCloseTo(9 / 12, 10);
+    });
+
+    test('$slider mixed units throw', () => {
+        expect(() => execPatch('$slider("x", "440hz", 0, 5)')).toThrow(
+            'must all be numbers, all hz strings, or all note strings',
+        );
+        expect(() =>
+            execPatch('$slider("x", "c4", "20hz", "2000hz")'),
+        ).toThrow('must all be numbers, all hz strings, or all note strings');
+    });
+
+    test('$slider invalid strings throw', () => {
+        expect(() =>
+            execPatch('$slider("x", "0hz", "1hz", "2hz")'),
+        ).toThrow('positive');
+        expect(() =>
+            execPatch('$slider("x", "-5hz", "1hz", "2hz")'),
+        ).toThrow('positive');
+        expect(() =>
+            execPatch('$slider("x", "h4", "c2", "c6")'),
+        ).toThrow('invalid slider value');
+        expect(() =>
+            execPatch('$slider("x", "440 hz", "55hz", "880hz")'),
+        ).toThrow('invalid slider value');
+    });
+
+    test('$slider min >= max in volts throws for hz strings', () => {
+        expect(() =>
+            execPatch('$slider("x", "440hz", "880hz", "220hz")'),
+        ).toThrow('less than max');
+    });
+
+    test('$slider errors name the slider and the offending argument', () => {
+        expect(() => execPatch('$slider("cutoff", 500, NaN, 1000)')).toThrow(
+            '$slider("cutoff") min:',
+        );
+        expect(() =>
+            execPatch('$slider("lfo", "0hz", "1hz", "2hz")'),
+        ).toThrow('$slider("lfo") value:');
+    });
+
+    test('$slider labels differing only in punctuation get distinct modules', () => {
+        const result = exec(`
+            $slider("run fast", 0, -1, 1).out()
+            $slider("run.fast", 0, -1, 1).out()
+        `);
+        const ids = result.sliders.map((s) => s.moduleId);
+        expect(new Set(ids).size).toBe(2);
+    });
+});
+
+// ─── Buttons ─────────────────────────────────────────────────────────────────
+
+describe('buttons', () => {
+    /** Read the constant source volts off a $signal module's params. */
+    function signalSource(patch: PatchGraph, id: string): unknown {
+        const m = patch.modules.find((mod) => mod.id === id);
+        expect(m).toBeDefined();
+        const source = (m as { params: { source: unknown } }).params.source;
+        return Array.isArray(source) ? source[0] : source;
+    }
+
+    test('$btn creates a gate button backed by a low signal', () => {
+        const result = exec(
+            '$sine("c4").amplitude($adsr($btn("play"))).out()',
+        );
+        expect(result.buttons.length).toBe(1);
+        expect(result.buttons[0]).toEqual({
+            label: 'play',
+            mode: 'gate',
+            moduleId: '__button_play',
+            value: false,
+        });
+        expect(signalSource(result.patch, '__button_play')).toBe(0);
+    });
+
+    test('$btn with extra arguments throws', () => {
+        expect(() => execPatch('$btn("x", 0.1)')).toThrow(
+            'only a label argument',
+        );
+    });
+
+    test('$toggleBtn requires a boolean initial state', () => {
+        expect(() => execPatch('$toggleBtn("t")')).toThrow('true or false');
+        expect(() => execPatch('$toggleBtn("t", 1)')).toThrow('true or false');
+    });
+
+    test('$toggleBtn with extra arguments throws', () => {
+        expect(() => execPatch('$toggleBtn("t", false, 0.2)')).toThrow(
+            'takes only label and initial-state arguments',
+        );
+    });
+
+    test('button labels differing only in punctuation get distinct modules', () => {
+        const result = exec(`
+            $btn("run fast").out()
+            $toggleBtn("run.fast", false).out()
+        `);
+        const ids = result.buttons.map((b) => b.moduleId);
+        expect(new Set(ids).size).toBe(2);
+    });
+
+    test('$toggleBtn initial true starts the signal high', () => {
+        const result = exec(
+            '$saw("c2").amplitude($toggleBtn("drone", true)).out()',
+        );
+        expect(result.buttons[0]).toEqual({
+            label: 'drone',
+            mode: 'toggle',
+            moduleId: '__button_drone',
+            value: true,
+        });
+        expect(signalSource(result.patch, '__button_drone')).toBe(5);
+    });
+
+    test('duplicate labels throw across sliders and buttons', () => {
+        expect(() =>
+            execPatch('$slider("a", 0, -1, 1)\n$btn("a")'),
+        ).toThrow('already used by a $slider()');
+        expect(() =>
+            execPatch('$btn("a")\n$toggleBtn("a", false)'),
+        ).toThrow('unique');
+        expect(() =>
+            execPatch('$toggleBtn("a", false)\n$slider("a", 0, -1, 1)'),
+        ).toThrow('already used by a button');
+    });
+
+    test('$btn chains through .$.hold for fixed-length triggers', () => {
+        const result = exec(
+            '$sine("c4").amplitude($adsr($btn("hit").$.hold(0.2))).out()',
+        );
+        const holds = findModules(result.patch, '$hold');
+        expect(holds.length).toBe(1);
+        expect(JSON.stringify(holds[0].params.input)).toContain(
+            '__button_hit',
+        );
+        expect(holds[0].params.time).toBe(0.2);
+    });
+
+    test('$btn result is re-rangeable via 2-arg .range()', () => {
+        const result = exec('$btn("mod").range(0, 1).out()');
+        expect(result.buttons.length).toBe(1);
+        const remaps = findModules(result.patch, '$remap');
+        expect(remaps.length).toBe(1);
+        expect(remaps[0].params.inMin).toEqual([0]);
+        expect(remaps[0].params.inMax).toEqual([5]);
+    });
 });
 
 // ─── Global settings ─────────────────────────────────────────────────────────

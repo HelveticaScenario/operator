@@ -23,7 +23,7 @@ impl<T: Clone + Send + Sync + 'static> Pattern<T> {
     /// Strudel's `beat`: for each `(t, div)` pair, place the sampled source
     /// value in the beat slot `[t/div, (t+1)/div)` of every cycle, with
     /// silence elsewhere. `t` wraps modulo `div` and may be fractional. Slots
-    /// not fully inside the cycle are silent: a negative `t` — unless an exact 
+    /// not fully inside the cycle are silent: a negative `t` — unless an exact
     /// multiple of `div`, which lands on beat 0 — and a fractional `t` within
     /// `1` of the cycle end produce no onset. A non-positive `div` yields silence
     /// (like `fast(0)`).

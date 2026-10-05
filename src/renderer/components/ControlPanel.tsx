@@ -1,21 +1,35 @@
 import { useCallback, useState } from 'react';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
+import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
+import {
+    snapVoltsToSemitone,
+    voltsToHz,
+    voltsToNoteName,
+} from '../../shared/dsl/sliderUnits';
 import './ControlPanel.css';
 
 interface ControlPanelProps {
     sliders: SliderDefinition[];
+    buttons: ButtonDefinition[];
     onSliderChange: (label: string, newValue: number) => void;
+    onButtonChange: (label: string, pressed: boolean) => void;
 }
 
-export function ControlPanel({ sliders, onSliderChange }: ControlPanelProps) {
-    if (sliders.length === 0) {
+export function ControlPanel({
+    sliders,
+    buttons,
+    onSliderChange,
+    onButtonChange,
+}: ControlPanelProps) {
+    if (sliders.length === 0 && buttons.length === 0) {
         return (
             <div className="control-panel control-panel-empty">
                 <div className="control-panel-placeholder">
-                    <p>No sliders defined.</p>
+                    <p>No controls defined.</p>
                     <p className="control-panel-hint">
-                        Use <code>$slider(label, value, min, max)</code> in your
-                        patch.
+                        Use <code>$slider(label, value, min, max)</code>,{' '}
+                        <code>$btn(label)</code>, or{' '}
+                        <code>$toggleBtn(label, initial)</code> in your patch.
                     </p>
                 </div>
             </div>
@@ -24,6 +38,17 @@ export function ControlPanel({ sliders, onSliderChange }: ControlPanelProps) {
 
     return (
         <div className="control-panel">
+            {buttons.length > 0 && (
+                <div className="control-panel-buttons">
+                    {buttons.map((b) => (
+                        <ButtonControl
+                            key={b.label}
+                            button={b}
+                            onChange={onButtonChange}
+                        />
+                    ))}
+                </div>
+            )}
             <div className="control-panel-sliders">
                 {sliders.map((s) => (
                     <SliderControl
@@ -52,19 +77,30 @@ function SliderControl({ slider, onChange }: SliderControlProps) {
         setPrevValue(slider.value);
     }
 
-    const step = (slider.max - slider.min) / 1000;
+    // Note sliders step in semitones; value/min/max are V/Oct volts.
+    const step =
+        slider.unit === 'note' ? 1 / 12 : (slider.max - slider.min) / 1000;
 
     const handleInput = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {
-            const newValue = parseFloat(e.currentTarget.value);
+            const raw = parseFloat(e.currentTarget.value);
+            const newValue =
+                slider.unit === 'note' ? snapVoltsToSemitone(raw) : raw;
             setLocalValue(newValue);
             onChange(slider.label, newValue);
         },
-        [slider.label, onChange],
+        [slider.label, slider.unit, onChange],
     );
 
-    const formatValue = (v: number): string =>
-        Number(v.toPrecision(4)).toString();
+    const formatValue = (v: number): string => {
+        if (slider.unit === 'hz') {
+            return `${Number(voltsToHz(v).toPrecision(4))} Hz`;
+        }
+        if (slider.unit === 'note') {
+            return voltsToNoteName(v);
+        }
+        return Number(v.toPrecision(4)).toString();
+    };
 
     return (
         <div className="slider-control">
@@ -85,6 +121,57 @@ function SliderControl({ slider, onChange }: SliderControlProps) {
                 <span>{formatValue(slider.min)}</span>
                 <span>{formatValue(slider.max)}</span>
             </div>
+        </div>
+    );
+}
+
+interface ButtonControlProps {
+    button: ButtonDefinition;
+    onChange: (label: string, pressed: boolean) => void;
+}
+
+function ButtonControl({ button, onChange }: ButtonControlProps) {
+    const [held, setHeld] = useState(false);
+
+    const press = useCallback(
+        (pressed: boolean) => {
+            setHeld(pressed);
+            onChange(button.label, pressed);
+        },
+        [button.label, onChange],
+    );
+
+    if (button.mode === 'toggle') {
+        return (
+            <div className="button-control">
+                <button
+                    type="button"
+                    aria-pressed={button.value}
+                    className={`button-input button-toggle${button.value ? ' active' : ''}`}
+                    onClick={() => onChange(button.label, !button.value)}
+                >
+                    <span className="button-label">{button.label}</span>
+                    <span className="button-led" />
+                </button>
+            </div>
+        );
+    }
+
+    // Momentary gate: pointer down raises the backing signal; pointer
+    // up/leave/cancel lowers it so gates can't stick.
+    return (
+        <div className="button-control">
+            <button
+                type="button"
+                className={`button-input button-gate${held ? ' active' : ''}`}
+                onPointerDown={() => press(true)}
+                onPointerUp={() => press(false)}
+                onPointerLeave={() => held && press(false)}
+                onPointerCancel={() => press(false)}
+            >
+                <span className="button-label">{button.label}</span>
+                <span className="button-led" />
+            </button>
         </div>
     );
 }

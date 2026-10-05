@@ -22,6 +22,7 @@ import type {
 } from '@modular/core';
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
+import type { ButtonDefinition } from './dsl/buttonTypes';
 
 export type {
     PatchGraph,
@@ -209,6 +210,8 @@ export interface DSLExecuteResult {
     >;
     /** Slider definitions created by $slider() DSL function calls */
     sliders?: SliderDefinition[];
+    /** Button definitions created by $btn()/$toggleBtn() DSL function calls */
+    buttons?: ButtonDefinition[];
     /** Unique ID assigned to this patch update, used for deferred UI updates */
     updateId?: number;
     /** Full call expression spans for DSL methods, keyed by "line:column" */
