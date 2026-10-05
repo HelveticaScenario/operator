@@ -11,6 +11,7 @@ import { describe, expect, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
+import { FIRST_LINE_COLUMN_OFFSET } from '../../../shared/dsl/spanTypes';
 import {
     isBeatPattern,
     isFastPattern,
@@ -1162,6 +1163,14 @@ describe('sliders', () => {
         expect(remaps[0].params.outMax).toBe(5);
     });
 
+    test('$slider records its call site', () => {
+        const result = exec('const a = 1\n  $slider("x", 1, 0, 2).out()');
+        expect(result.sliders[0].sourceLocation).toEqual({
+            column: 3,
+            line: 2,
+        });
+    });
+
     test('$slider number values report the number unit', () => {
         const result = exec('$slider("Level", 2.5, 0, 5).out()');
         expect(result.sliders[0].unit).toBe('number');
@@ -1224,8 +1233,23 @@ describe('sliders', () => {
         ).toThrow('less than max');
     });
 
+    test('$slider value, min, and max must be literals', () => {
+        expect(() => execPatch('const v = 1\n$slider("x", v, 0, 5)')).toThrow(
+            'value (argument 2) must be a numeric or string literal',
+        );
+        expect(() => execPatch('const lo = 0\n$slider("x", 1, lo, 5)')).toThrow(
+            'min (argument 3) must be a numeric or string literal',
+        );
+        expect(() => execPatch('$slider("x", 1, 0, 2 + 3)')).toThrow(
+            'max (argument 4) must be a numeric or string literal',
+        );
+        expect(() =>
+            execPatch('$slider("x", -1, -2, -0.5).out()'),
+        ).not.toThrow();
+    });
+
     test('$slider errors name the slider and the offending argument', () => {
-        expect(() => execPatch('$slider("cutoff", 500, NaN, 1000)')).toThrow(
+        expect(() => execPatch('$slider("cutoff", 500, "h4", 1000)')).toThrow(
             '$slider("cutoff") min:',
         );
         expect(() =>
@@ -1243,6 +1267,93 @@ describe('sliders', () => {
     });
 });
 
+// ─── Control groups ─────────────────────────────────────────────────────────
+
+describe('control groups', () => {
+    test('controls created through a group carry its path', () => {
+        const result = exec(`
+            const synth = $cGroup("Synth")
+            const amp = synth.cGroup("Amp", true)
+            $saw(synth.slider("Root", "c3", "c2", "c5"))
+                .amplitude(amp.slider("Level", 0.5, 0, 1))
+                .out()
+            $cGroup("Fx").btn("Kick").out()
+        `);
+        expect(result.sliders.map((s) => [s.group, s.label])).toEqual([
+            [['Synth'], 'Root'],
+            [['Synth', 'Amp'], 'Level'],
+        ]);
+        expect(result.buttons.map((b) => [b.group, b.label])).toEqual([
+            [['Fx'], 'Kick'],
+        ]);
+    });
+
+    test('labels are unique within a group, not across groups', () => {
+        const result = exec(`
+            $slider("cut", 1, 0, 2).out()
+            $cGroup("A").slider("cut", 1, 0, 2).out()
+            $cGroup("B").slider("cut", 1, 0, 2).out()
+        `);
+        expect(new Set(result.sliders.map((s) => s.moduleId)).size).toBe(3);
+        expect(() =>
+            execPatch(`
+                const a = $cGroup("A")
+                a.slider("cut", 1, 0, 2)
+                a.btn("cut")
+            `),
+        ).toThrow('label "cut" is already used by a $slider() in group "A"');
+    });
+
+    test('group labels are unique among siblings', () => {
+        expect(() => execPatch('$cGroup("A")\n$cGroup("A")')).toThrow(
+            '$cGroup() label "A" must be unique',
+        );
+        expect(() =>
+            execPatch('$cGroup("A").cGroup("X")\n$cGroup("B").cGroup("X")'),
+        ).not.toThrow();
+    });
+
+    test('the collapsed state must be a boolean literal', () => {
+        expect(() => execPatch('$cGroup("A", 1)')).toThrow(
+            'collapsed state (argument 2) must be a true or false literal',
+        );
+        expect(() => execPatch('$cGroup("A", true, 2)')).toThrow(
+            'takes only label and collapsed-state arguments',
+        );
+    });
+
+    test('a control the Control panel cannot place is rejected', () => {
+        // A group passed as a parameter, and an aliased factory.
+        expect(() =>
+            execPatch(`
+                function voice(g) { return g.btn("b") }
+                voice($cGroup("A")).out()
+            `),
+        ).toThrow('Control "b" at line 2 must be created by');
+        expect(() =>
+            execPatch('const s = $slider\ns("x", 1, 0, 2).out()'),
+        ).toThrow('Control "x" at line 2 must be created by');
+    });
+
+    test('an unrelated .slider() method is not treated as a control', () => {
+        expect(() =>
+            execPatch(
+                'const ui = { slider: (x) => x }\n$sine(ui.slider(440)).out()',
+            ),
+        ).not.toThrow();
+    });
+
+    test('a group call records its controls at the method name', () => {
+        const result = exec(
+            'const g = $cGroup("G")\ng.slider("x", 1, 0, 2).out()',
+        );
+        expect(result.sliders[0].sourceLocation).toEqual({
+            column: 3,
+            line: 2,
+        });
+    });
+});
+
 // ─── Buttons ─────────────────────────────────────────────────────────────────
 
 describe('buttons', () => {
@@ -1255,14 +1366,20 @@ describe('buttons', () => {
     }
 
     test('$btn creates a gate button backed by a low signal', () => {
-        const result = exec(
-            '$sine("c4").amplitude($adsr($btn("play"))).out()',
-        );
+        const source = '$sine("c4").amplitude($adsr($btn("play"))).out()';
+        const result = exec(source);
         expect(result.buttons.length).toBe(1);
         expect(result.buttons[0]).toEqual({
+            group: [],
             label: 'play',
             mode: 'gate',
             moduleId: '__button_play',
+            // V8 call-site columns are 1-based and carry the wrapper indent
+            // on line 1.
+            sourceLocation: {
+                column: source.indexOf('$btn') + 1 + FIRST_LINE_COLUMN_OFFSET,
+                line: 1,
+            },
             value: false,
         });
         expect(signalSource(result.patch, '__button_play')).toBe(0);
@@ -1296,12 +1413,14 @@ describe('buttons', () => {
 
     test('$toggleBtn initial true starts the signal high', () => {
         const result = exec(
-            '$saw("c2").amplitude($toggleBtn("drone", true)).out()',
+            '$saw("c2").amplitude(\n    $toggleBtn("drone", true)).out()',
         );
         expect(result.buttons[0]).toEqual({
+            group: [],
             label: 'drone',
             mode: 'toggle',
             moduleId: '__button_drone',
+            sourceLocation: { column: 5, line: 2 },
             value: true,
         });
         expect(signalSource(result.patch, '__button_drone')).toBe(5);

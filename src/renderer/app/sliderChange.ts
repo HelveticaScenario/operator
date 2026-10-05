@@ -1,11 +1,12 @@
-import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import {
     formatHzLiteral,
+    parseSliderValue,
     voltsToHz,
     voltsToNoteName,
 } from '../../shared/dsl/sliderUnits';
-import { findSliderValueSpan } from '../dsl/sliderSourceEdit';
-import type { SourceSpanResult } from '../dsl/sliderSourceEdit';
+import type { SliderUnit } from '../../shared/dsl/sliderUnits';
+import { extractControls, isIncomplete } from '../dsl/extractControls';
+import type { SourceRange } from '../dsl/extractControls';
 
 /** Minimal Monaco text-model surface needed to rewrite a control literal. */
 export interface SliderEditModel {
@@ -27,23 +28,15 @@ export interface SliderEditModel {
 }
 
 /**
- * Replace the literal that `computeEdit` locates in the running patch's
- * source.
- *
- * Control definitions belong to the running patch, but `activeModel` is the
- * editor's currently visible buffer — which can be a different file. The
- * rewrite therefore only happens when `activeModelIsRunning` is true;
- * otherwise no document is touched, even if the visible buffer contains a
- * control call with the same label.
+ * Replace the range that `computeEdit` locates in the visible buffer's
+ * current text. The control panel only shows the visible buffer's controls,
+ * so this is always the buffer the control was declared in.
  */
-export function rewriteRunningSource(
+export function rewriteSource(
     activeModel: SliderEditModel | null,
-    activeModelIsRunning: boolean,
-    computeEdit: (
-        source: string,
-    ) => { span: SourceSpanResult; text: string } | null,
+    computeEdit: (source: string) => { span: SourceRange; text: string } | null,
 ): void {
-    if (!activeModelIsRunning || !activeModel) {
+    if (!activeModel) {
         return;
     }
 
@@ -72,48 +65,64 @@ export function rewriteRunningSource(
     );
 }
 
-/** Format slider volts as a source literal in the slider's own unit,
- *  keeping the quote style of the literal it replaces. */
-function formatSliderLiteral(
-    slider: SliderDefinition,
+/**
+ * Format slider volts as a source literal in the slider's own unit, keeping
+ * the quote style of the literal it replaces. Also returns the volts that
+ * literal parses back to, so the engine and the code agree exactly.
+ */
+function sliderLiteral(
+    unit: SliderUnit,
     volts: number,
     quote: string,
-): string {
+): { text: string; volts: number } {
+    if (unit === 'number') {
+        const text = Number(volts.toPrecision(6)).toString();
+        return { text, volts: Number(text) };
+    }
+    const body =
+        unit === 'hz'
+            ? formatHzLiteral(voltsToHz(volts))
+            : voltsToNoteName(volts);
     const q = quote === '"' ? '"' : "'";
-    if (slider.unit === 'hz') {
-        return `${q}${formatHzLiteral(voltsToHz(volts))}${q}`;
-    }
-    if (slider.unit === 'note') {
-        return `${q}${voltsToNoteName(volts)}${q}`;
-    }
-    return Number(volts.toPrecision(6)).toString();
+    return { text: `${q}${body}${q}`, volts: parseSliderValue(body).volts };
 }
 
 /**
- * Push a slider drag to the audio engine and mirror it into the source text
- * of the running patch (see {@link rewriteRunningSource}).
+ * Mirror a slider drag into the visible buffer's `$slider` value literal and,
+ * when the slider is live (`moduleId` non-null), into the audio engine. The
+ * slider is found by its call position, re-parsed from the current text.
+ *
+ * @returns The volts written, as the rewritten literal parses back
  */
 export function applySliderChange(
-    slider: SliderDefinition,
+    slider: { callStart: number; unit: SliderUnit },
     newValue: number,
+    moduleId: string | null,
     activeModel: SliderEditModel | null,
-    activeModelIsRunning: boolean,
     setModuleParam: (
         moduleId: string,
         moduleType: string,
         params: Record<string, unknown>,
     ) => void,
-): void {
-    setModuleParam(slider.moduleId, '$signal', { source: newValue });
-
-    rewriteRunningSource(activeModel, activeModelIsRunning, (source) => {
-        const span = findSliderValueSpan(source, slider.label);
-        if (!span) {
+): number {
+    const written = sliderLiteral(slider.unit, newValue, "'").volts;
+    rewriteSource(activeModel, (source) => {
+        const current = extractControls(source).sliders.find(
+            (s) => s.callStart === slider.callStart,
+        );
+        if (!current || isIncomplete(current)) {
             return null;
         }
-        return {
-            span,
-            text: formatSliderLiteral(slider, newValue, source[span.start]),
-        };
+        const { text } = sliderLiteral(
+            slider.unit,
+            newValue,
+            source[current.valueRange.start],
+        );
+        return { span: current.valueRange, text };
     });
+
+    if (moduleId !== null) {
+        setModuleParam(moduleId, '$signal', { source: written });
+    }
+    return written;
 }

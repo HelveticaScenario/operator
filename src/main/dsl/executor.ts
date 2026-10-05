@@ -39,8 +39,7 @@ import {
 } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
-import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
-import { parseSliderValue } from '../../shared/dsl/sliderUnits';
+import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
 
 // Augment Array.prototype with pipe() for TypeScript
@@ -617,151 +616,11 @@ export function executePatchScript(
         return $track(frames, { playhead, interpolationType }) as Collection;
     };
 
-    // Control collectors — populated by $slider()/$btn()/$toggleBtn() calls
-    // during execution
-    const sliders: SliderDefinition[] = [];
-    const buttons: ButtonDefinition[] = [];
-
-    /**
-     * Create a slider control: a signal module with a UI slider bound to it.
-     * Value/min/max must share one unit: all numbers (volts), all hz strings,
-     * or all note strings. For hz/note the stored values are V/Oct volts.
-     * @param label - Display label (must be a string literal)
-     * @param value - Initial value (must be a numeric or string literal)
-     * @param min - Minimum value
-     * @param max - Maximum value
-     * @returns A CollectionWithRange carrying the slider value (range [min, max])
-     */
-    const $slider = (
-        label: string,
-        value: number | string,
-        min: number | string,
-        max: number | string,
-    ) => {
-        if (typeof label !== 'string') {
-            throw new Error('$slider() label must be a string literal');
-        }
-        if (sliders.find((s) => s.label === label)) {
-            throw new Error(`$slider() label "${label}" must be unique`);
-        }
-        if (buttons.find((b) => b.label === label)) {
-            throw new Error(
-                `$slider() label "${label}" is already used by a button`,
-            );
-        }
-        // Name the slider and the offending argument so an error among many
-        // sliders points at the right literal.
-        const parseArg = (arg: 'value' | 'min' | 'max', v: number | string) => {
-            try {
-                return parseSliderValue(v);
-            } catch (err) {
-                throw new Error(
-                    `$slider("${label}") ${arg}: ${err instanceof Error ? err.message : String(err)}`,
-                    { cause: err },
-                );
-            }
-        };
-        const parsedValue = parseArg('value', value);
-        const parsedMin = parseArg('min', min);
-        const parsedMax = parseArg('max', max);
-        if (
-            parsedValue.unit !== parsedMin.unit ||
-            parsedValue.unit !== parsedMax.unit
-        ) {
-            throw new Error(
-                '$slider() value, min, and max must all be numbers, all hz strings, or all note strings',
-            );
-        }
-        if (parsedMin.volts >= parsedMax.volts) {
-            throw new Error(
-                `$slider() min (${min}) must be less than max (${max})`,
-            );
-        }
-
-        // The raw label keeps the id injective: distinct labels (which are
-        // validated unique) can never collide on one module id.
-        const moduleId = `__slider_${label}`;
-
-        // Create backing signal module via the existing signal factory
-        const result = signal(parsedValue.volts, { id: moduleId });
-
-        sliders.push({
-            label,
-            max: parsedMax.volts,
-            min: parsedMin.volts,
-            moduleId,
-            unit: parsedValue.unit,
-            value: parsedValue.volts,
-        });
-
-        return builder.$c(result).withRange(parsedMin.volts, parsedMax.volts);
-    };
-
-    /** Shared label/uniqueness validation for both button factories. */
-    const validateButtonLabel = (fn: string, label: string) => {
-        if (typeof label !== 'string') {
-            throw new Error(`${fn} label must be a string literal`);
-        }
-        if (buttons.find((b) => b.label === label)) {
-            throw new Error(`${fn} label "${label}" must be unique`);
-        }
-        if (sliders.find((s) => s.label === label)) {
-            throw new Error(
-                `${fn} label "${label}" is already used by a $slider()`,
-            );
-        }
-    };
-
-    /**
-     * Create a momentary gate button: a signal module the UI drives to 5V
-     * while the button is held and 0V on release. Chain through .$.hold for
-     * fixed-length triggers.
-     * @param label - Display label (must be a string literal)
-     * @returns A CollectionWithRange carrying the button output (range [0, 5])
-     */
-    const $btn = (label: string, ...rest: unknown[]) => {
-        validateButtonLabel('$btn()', label);
-        if (rest.length > 0) {
-            throw new Error('$btn() takes only a label argument');
-        }
-        // The raw label keeps the id injective: distinct labels (which are
-        // validated unique) can never collide on one module id.
-        const moduleId = `__button_${label}`;
-        const result = signal(0, { id: moduleId });
-        buttons.push({ label, mode: 'gate', moduleId, value: false });
-        return builder.$c(result).withRange(0, GATE_HIGH_VOLTAGE);
-    };
-
-    /**
-     * Create a latched toggle button: clicking flips between 0V and 5V and
-     * rewrites the initial-state literal in the source.
-     * @param label - Display label (must be a string literal)
-     * @param initial - Initial state (must be a true/false literal)
-     * @returns A CollectionWithRange carrying the button output (range [0, 5])
-     */
-    const $toggleBtn = (
-        label: string,
-        initial: boolean,
-        ...rest: unknown[]
-    ) => {
-        validateButtonLabel('$toggleBtn()', label);
-        if (typeof initial !== 'boolean') {
-            throw new Error(
-                '$toggleBtn() initial state must be a true or false literal',
-            );
-        }
-        if (rest.length > 0) {
-            throw new Error(
-                '$toggleBtn() takes only label and initial-state arguments',
-            );
-        }
-        const moduleId = `__button_${label}`;
-        const result = signal(initial ? GATE_HIGH_VOLTAGE : 0, {
-            id: moduleId,
-        });
-        buttons.push({ label, mode: 'toggle', moduleId, value: initial });
-        return builder.$c(result).withRange(0, GATE_HIGH_VOLTAGE);
-    };
+    // Control factories; their collectors fill as the patch calls them.
+    const controls = createControls({
+        rangedSignal: (value, id, min, max) =>
+            builder.$c(signal(value, { id })).withRange(min, max),
+    });
 
     /**
      * Load WAV samples from the wavs/ folder.
@@ -1034,11 +893,11 @@ export function executePatchScript(
         $g3,
         // Deferred signal helper
         $deferred,
-        // Slider control
-        $slider,
-        // Button controls
-        $btn,
-        $toggleBtn,
+        // Panel controls
+        $slider: controls.$slider,
+        $btn: controls.$btn,
+        $toggleBtn: controls.$toggleBtn,
+        $cGroup: controls.$cGroup,
         // Bus
         $bus,
         // Global settings
@@ -1130,6 +989,10 @@ export function executePatchScript(
             { filename: 'dsl-pipe-installer.js' },
         );
         script.runInContext(sandbox, { timeout: executionTimeoutMs });
+        assertControlsPlaced(source, [
+            ...controls.sliders,
+            ...controls.buttons,
+        ]);
 
         // Build and return the patch with source locations
         const resultBuilder = context.getBuilder();
@@ -1137,11 +1000,11 @@ export function executePatchScript(
         const sourceLocationMap = resultBuilder.getSourceLocationMap();
 
         return {
-            buttons,
+            buttons: controls.buttons,
             callSiteSpans,
             interpolationResolutions,
             patch,
-            sliders,
+            sliders: controls.sliders,
             sourceLocationMap,
         };
     } catch (error) {

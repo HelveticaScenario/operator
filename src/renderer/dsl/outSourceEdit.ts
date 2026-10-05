@@ -4,14 +4,78 @@
  *
  * The VU meter panel's M/S buttons anchor each out call with a Monaco tracked
  * decoration; this module turns that anchor (a character offset at the method
- * name) plus the desired property change into a single text edit. It uses the
- * same lightweight, string/comment-aware scanning as `sliderSourceEdit` — no
- * ts-morph, so it can run in the renderer process.
+ * name) plus the desired property change into a single text edit. It uses
+ * lightweight, string/comment-aware scanning rather than a full parse.
  */
 
-import { findIgnoredRanges } from './sliderSourceEdit';
-
 export type OutOptionProp = 'mute' | 'solo';
+
+/**
+ * Scan the source for the character ranges occupied by line comments, block
+ * comments, and string/template literals. An `.out(...)` occurrence starting
+ * inside any of these is not a live call and must be skipped.
+ *
+ * The scan is string-aware so a `//` or `/*` inside a string literal (e.g. a
+ * URL) does not start a spurious comment, and quote characters inside comments
+ * do not start a spurious string.
+ *
+ * @returns Sorted, non-overlapping `[start, end)` ranges to ignore.
+ */
+function findIgnoredRanges(source: string): Array<[number, number]> {
+    const ranges: Array<[number, number]> = [];
+    const n = source.length;
+    let i = 0;
+    while (i < n) {
+        const c = source[i];
+        const next = source[i + 1];
+
+        // String / template literal — consumed whole so its contents can't
+        // start a comment, and so an `.out(` spelled inside it is ignored.
+        if (c === '"' || c === "'" || c === '`') {
+            const start = i;
+            i++;
+            while (i < n) {
+                if (source[i] === '\\') {
+                    i += 2;
+                    continue;
+                }
+                if (source[i] === c) {
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            ranges.push([start, i]);
+            continue;
+        }
+
+        // Line comment — to end of line.
+        if (c === '/' && next === '/') {
+            const start = i;
+            i += 2;
+            while (i < n && source[i] !== '\n') {
+                i++;
+            }
+            ranges.push([start, i]);
+            continue;
+        }
+
+        // Block comment — to closing `*/` (or end of source if unterminated).
+        if (c === '/' && next === '*') {
+            const start = i;
+            i += 2;
+            while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
+                i++;
+            }
+            i = Math.min(n, i + 2);
+            ranges.push([start, i]);
+            continue;
+        }
+
+        i++;
+    }
+    return ranges;
+}
 
 export interface OutOptionEdit {
     /** Inclusive start character offset */

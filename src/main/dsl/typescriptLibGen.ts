@@ -1467,8 +1467,8 @@ function $deferred(channels?: number): DeferredCollection;
  *
  * @param label Display label for the slider (must be a string literal)
  * @param value Initial value (must be a numeric or string literal)
- * @param min Minimum slider value
- * @param max Maximum slider value
+ * @param min Minimum slider value (must be a numeric or string literal)
+ * @param max Maximum slider value (must be a numeric or string literal)
  * @returns A CollectionWithRange carrying the slider's current value (range [min, max])
  *
  * @example
@@ -1511,6 +1511,53 @@ function $btn(label: string): CollectionWithRange;
  * $saw('c2').amplitude($toggleBtn("drone", false)).out();
  */
 function $toggleBtn(label: string, initial: boolean): CollectionWithRange;
+
+/**
+ * A group of controls in the Control panel, created by {@link $cGroup}. Its
+ * methods create controls inside the group; labels need only be unique
+ * within a group.
+ */
+interface ControlGroup {
+    /** {@link $slider}, inside this group. */
+    slider(label: string, value: number, min: number, max: number): CollectionWithRange;
+    slider(label: string, value: HZ, min: HZ, max: HZ): CollectionWithRange;
+    slider(label: string, value: Note, min: Note, max: Note): CollectionWithRange;
+    /** {@link $btn}, inside this group. */
+    btn(label: string): CollectionWithRange;
+    /** {@link $toggleBtn}, inside this group. */
+    toggleBtn(label: string, initial: boolean): CollectionWithRange;
+    /** {@link $cGroup}, nested inside this group. */
+    cGroup(label: string, collapsed?: boolean): ControlGroup;
+}
+
+/**
+ * Create a group of controls: the controls made through its \`slider\`,
+ * \`btn\`, and \`toggleBtn\` methods appear together in the Control panel under a
+ * collapsible header, and its \`cGroup\` method nests a group inside it.
+ * Clicking the header rewrites the collapsed-state literal in the source, so
+ * the state survives re-execution.
+ *
+ * Call the methods on the \`$cGroup(...)\` call itself or on a const bound to
+ * it, so the Control panel can place the controls before evaluation.
+ *
+ * @param label Display label for the group (must be a string literal, unique among its siblings)
+ * @param collapsed Whether the group starts collapsed (must be a true/false literal)
+ * @returns A ControlGroup whose methods create controls inside the group
+ *
+ * @example
+ * const voice = $cGroup("Voice");
+ * $sine(voice.slider("Pitch", "c4", "c2", "c6"))
+ *     .amplitude($adsr(voice.btn("Play")))
+ *     .out();
+ * @example
+ * // nested, with the inner group collapsed
+ * const synth = $cGroup("Synth");
+ * const amp = synth.cGroup("Amp", true);
+ * $saw(synth.slider("Root", "c3", "c2", "c5"))
+ *     .amplitude(amp.slider("Level", 0.5, 0, 1))
+ *     .out();
+ */
+function $cGroup(label: string, collapsed?: boolean): ControlGroup;
 
 /**
  * A send-return bus. Create one with {@link $bus}, then call \`.send(bus, gain)\` on
