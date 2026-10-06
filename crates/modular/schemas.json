@@ -12510,7 +12510,7 @@
   },
   {
     "name": "$hold",
-    "documentation": "Stretches a trigger into a fixed-length gate.\n\nA rising edge on the input opens the output at 5V for `time` seconds,\nregardless of when the input falls; the output closes after `time` even if\nthe input is still high. A new rising edge restarts the timer.\n\n## Example\n\n```js\n// stretch short clock pulses into 100 ms gates\nconst env = $adsr($hold($pPulse($clock[0]), 0.1))\n$sine('c4').amplitude(env).out()\n```",
+    "documentation": "Stretches a trigger into a fixed-length gate.\n\nA rising edge on the input opens the output at 5V for `time` seconds,\nregardless of when the input falls; the output closes after `time` even if\nthe input is still high. A rising edge while the output is still open\nretriggers it: the output drops low for a brief retrigger gap, so\ndownstream envelopes see a new rising edge, and the gate closes `time`\nafter the new edge.\n\n## Example\n\n```js\n// stretch short clock pulses into 100 ms gates\nconst env = $adsr($hold($pPulse($clock[0]), 0.1))\n$sine('c4').amplitude(env).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "HoldParams",
@@ -12521,7 +12521,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "time": {
-          "description": "hold time in seconds; a rising edge mid-hold restarts the timer (default 0.05)",
+          "description": "hold time in seconds; a rising edge mid-hold retriggers the gate (default 0.05)",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -12617,7 +12617,7 @@
       },
       {
         "name": "time",
-        "description": "hold time in seconds; a rising edge mid-hold restarts the timer (default 0.05)",
+        "description": "hold time in seconds; a rising edge mid-hold retriggers the gate (default 0.05)",
         "signalType": "control",
         "defaultValue": 0.05,
         "minValue": 0.0,
