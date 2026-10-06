@@ -34,13 +34,7 @@
     font-size: calc(var(--font-size) - 1px);
 }
 
-.control-panel-sliders {
-    display: flex;
-    flex-direction: column;
-    gap: var(--sp-1);
-}
-
-.control-panel-buttons {
+.control-panel-controls {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);

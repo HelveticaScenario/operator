@@ -84,7 +84,7 @@ interface ControlListProps {
     handlers: ListHandlers;
 }
 
-/** One group's contents: its buttons, then its sliders, then its subgroups. */
+/** One group's contents: its controls in source order, then its subgroups. */
 function ControlList({
     path,
     sliders,
@@ -92,33 +92,36 @@ function ControlList({
     groups,
     handlers,
 }: ControlListProps) {
-    const ownButtons = buttons.filter((b) => inGroup(b, path));
-    const ownSliders = sliders.filter((s) => inGroup(s, path));
+    const controls = [
+        ...sliders
+            .filter((s) => inGroup(s, path))
+            .map((slider) => ({ callStart: slider.callStart, slider })),
+        ...buttons
+            .filter((b) => inGroup(b, path))
+            .map((button) => ({ button, callStart: button.callStart })),
+    ].sort((a, b) => a.callStart - b.callStart);
     const ownGroups = groups.filter((g) => inGroup(g, path));
     return (
         <>
-            {ownButtons.length > 0 && (
-                <div className="control-panel-buttons">
-                    {ownButtons.map((b) => (
-                        <ButtonControl
-                            key={b.label}
-                            button={b}
-                            onChange={handlers.onButtonChange}
-                            onJump={handlers.onJump}
-                        />
-                    ))}
-                </div>
-            )}
-            {ownSliders.length > 0 && (
-                <div className="control-panel-sliders">
-                    {ownSliders.map((s) => (
-                        <SliderControl
-                            key={s.label}
-                            slider={s}
-                            onChange={handlers.onSliderChange}
-                            onJump={handlers.onJump}
-                        />
-                    ))}
+            {controls.length > 0 && (
+                <div className="control-panel-controls">
+                    {controls.map((c) =>
+                        'slider' in c ? (
+                            <SliderControl
+                                key={`slider:${c.slider.label}`}
+                                slider={c.slider}
+                                onChange={handlers.onSliderChange}
+                                onJump={handlers.onJump}
+                            />
+                        ) : (
+                            <ButtonControl
+                                key={`button:${c.button.label}`}
+                                button={c.button}
+                                onChange={handlers.onButtonChange}
+                                onJump={handlers.onJump}
+                            />
+                        ),
+                    )}
                 </div>
             )}
             {ownGroups.map((g) => (
