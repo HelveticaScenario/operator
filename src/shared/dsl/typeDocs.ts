@@ -680,6 +680,51 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     },
     {
         description:
+            'Create a momentary gate button in the Control panel: 5V while held, 0V otherwise. Chain through .$.hold for a fixed-length trigger per press.',
+        examples: [
+            '$sine("c4").amplitude($adsr($btn("play"))).out();',
+            '// fixed 100 ms trigger per press, however long the button is held\n$sine("c4").amplitude($adsr($btn("hit").$.hold(0.1))).out();',
+        ],
+        group: 'Controls',
+        name: '$btn',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description:
+                    'Display label (must be a string literal, unique within its group)',
+            },
+        ],
+        returns:
+            'CollectionWithRange carrying the button output (range [0, 5])',
+        signature: '$btn(label: string): CollectionWithRange',
+    },
+    {
+        description:
+            'Create a latched toggle button in the Control panel: clicking flips between 0V and 5V and rewrites the initial-state literal in the source, so the state survives re-execution.',
+        examples: ['$saw("c2").amplitude($toggleBtn("drone", false)).out();'],
+        group: 'Controls',
+        name: '$toggleBtn',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description:
+                    'Display label (must be a string literal, unique within its group)',
+            },
+            {
+                name: 'initial',
+                type: 'boolean',
+                description: 'Initial state (must be a true/false literal)',
+            },
+        ],
+        returns:
+            'CollectionWithRange carrying the button output (range [0, 5])',
+        signature:
+            '$toggleBtn(label: string, initial: boolean): CollectionWithRange',
+    },
+    {
+        description:
             'Create a group of controls. Controls made through the returned group appear together in the Control panel under a collapsible header; groups nest. Clicking the header rewrites the collapsed-state literal in the source. Control labels need only be unique within their group.',
         examples: [
             'const voice = $cGroup("Voice");\n$sine(voice.slider("Pitch", "c4", "c2", "c6")).amplitude($adsr(voice.btn("Play"))).out();',

@@ -257,18 +257,34 @@ function App() {
         vuDecorations: editor.IEditorDecorationsCollection | null;
         /** Anchors on the pending patch's control calls, committed with it. */
         controlAnchors: ControlAnchors | null;
+        /** Stable id of the buffer the pending patch was evaluated from. */
+        controlsSource: string | null;
         /** The running buffer before this submit, restored if the queued
          *  update is cancelled. */
         previousRunning: { bufferId: string | null; sourceId: string | null };
     } | null>(null);
+
+    // Stable per-buffer identity (the tab's id) used as the patch source id.
+    // Unlike activeBufferId — a file's mutable path — this survives rename and
+    // save, so reconciliation/clock-reset key on the buffer, not its path.
+    const activeSourceId = useMemo(
+        () =>
+            buffers.find((b) => getBufferId(b) === activeBufferId)?.id ??
+            activeBufferId,
+        [buffers, activeBufferId],
+    );
+    const activeSourceIdRef = useRef(activeSourceId);
+    useEffect(() => {
+        activeSourceIdRef.current = activeSourceId;
+    }, [activeSourceId]);
 
     // The control panel shows the visible buffer's controls, parsed from its
     // code, bound to the running patch's controls (sliderDefs/buttonDefs)
     // when the visible buffer is the running one. Parsing is synchronous so
     // parsed call offsets always address the live editor document.
     const visibleCode = useMemo(
-        () => ({ bufferId: activeBufferId, code: patchCode }),
-        [activeBufferId, patchCode],
+        () => ({ bufferId: activeSourceId, code: patchCode }),
+        [activeSourceId, patchCode],
     );
     // Last resolved controls per buffer, so a control whose arguments are
     // mid-edit keeps showing its last valid state instead of vanishing.
@@ -308,6 +324,13 @@ function App() {
         null,
     );
     const controlAnchorsRef = useRef<ControlAnchors | null>(null);
+    // Stable id of the buffer whose patch produced sliderDefs, buttonDefs,
+    // and the anchors. It changes only when those do — at commit, not at
+    // submit — so a queued update for another buffer never binds that
+    // buffer's controls to the still-running patch.
+    const [runningControlsSource, setRunningControlsSource] = useState<
+        string | null
+    >(null);
     const commitControlAnchors = useCallback((next: ControlAnchors | null) => {
         controlAnchorsRef.current?.dispose();
         controlAnchorsRef.current = next;
@@ -321,7 +344,7 @@ function App() {
                 sliderDefs,
                 buttonDefs,
                 visibleCode.bufferId !== undefined &&
-                    visibleCode.bufferId === runningBufferId,
+                    visibleCode.bufferId === runningControlsSource,
                 (moduleId) => controlAnchors?.offsetOf(moduleId) ?? null,
             ),
         [
@@ -329,7 +352,7 @@ function App() {
             sliderDefs,
             buttonDefs,
             visibleCode.bufferId,
-            runningBufferId,
+            runningControlsSource,
             controlAnchors,
         ],
     );
@@ -1341,20 +1364,6 @@ function App() {
         patchCodeRef.current = patchCode;
     }, [patchCode]);
 
-    // Stable per-buffer identity (the tab's id) used as the patch source id.
-    // Unlike activeBufferId — a file's mutable path — this survives rename and
-    // save, so reconciliation/clock-reset key on the buffer, not its path.
-    const activeSourceId = useMemo(
-        () =>
-            buffers.find((b) => getBufferId(b) === activeBufferId)?.id ??
-            activeBufferId,
-        [buffers, activeBufferId],
-    );
-    const activeSourceIdRef = useRef(activeSourceId);
-    useEffect(() => {
-        activeSourceIdRef.current = activeSourceId;
-    }, [activeSourceId]);
-
     // Keep runningBufferId pointing at the running buffer's current path
     // identity: saving an untitled buffer or renaming a file changes
     // getBufferId, and comparisons against activeBufferId (slider source
@@ -1575,6 +1584,7 @@ function App() {
                         vuDecorationsRef.current?.clear();
                         vuDecorationsRef.current = pending.vuDecorations;
                         commitControlAnchors(pending.controlAnchors);
+                        setRunningControlsSource(pending.controlsSource);
                         setScopeViews(pending.scopeViews);
                         setSliderDefs(pending.sliderDefs);
                         setButtonDefs(pending.buttonDefs);
@@ -1675,13 +1685,14 @@ function App() {
             }
             try {
                 const patchCodeValue = patchCodeRef.current;
+                const submittedSourceId = activeSourceIdRef.current ?? null;
 
                 // Execute DSL in main process (has direct N-API access).
                 // Use the stable buffer id (not activeBufferId, a file's mutable
                 // path) so reconciliation/clock-reset key on the buffer itself.
                 const result = await electronAPI.executeDSL(
                     patchCodeValue,
-                    activeSourceIdRef.current,
+                    submittedSourceId ?? undefined,
                     trigger,
                 );
                 lastPatchResultRef.current = result;
@@ -1891,6 +1902,7 @@ function App() {
                     pendingUIStateRef.current = {
                         buttonDefs: newButtonDefs,
                         controlAnchors: newControlAnchors,
+                        controlsSource: submittedSourceId,
                         interpolationResolutions: interpolationMap,
                         previousRunning,
                         scopeDecorations: newScopeDecorations,
@@ -1908,6 +1920,7 @@ function App() {
                     pendingUIStateRef.current?.controlAnchors?.dispose();
                     pendingUIStateRef.current = null;
                     commitControlAnchors(newControlAnchors);
+                    setRunningControlsSource(submittedSourceId);
                     scopeDecorationsRef.current?.clear();
                     scopeDecorationsRef.current = newScopeDecorations;
                     vuDecorationsRef.current?.clear();
@@ -1966,6 +1979,7 @@ function App() {
             setIsClockRunning(false);
             setRunningBufferId(null);
             runningSourceIdRef.current = null;
+            setRunningControlsSource(null);
         };
     }, []);
     const handleStop = useCallback(() => handleStopRef.current(), []);

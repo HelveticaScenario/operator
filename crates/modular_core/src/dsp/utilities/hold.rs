@@ -30,13 +30,16 @@ struct HoldChannelState {
     active: bool,
     /// Samples left in a retrigger gap, during which the output is held low.
     gap_remaining: u32,
+    /// Whether the previous sample's output was high: a rising edge then needs
+    /// a gap for downstream gate inputs to see a new edge.
+    output_high: bool,
 }
 
 /// Stretches a trigger into a fixed-length gate.
 ///
 /// A rising edge on the input opens the output at 5V for `time` seconds,
 /// regardless of when the input falls; the output closes after `time` even if
-/// the input is still high. A rising edge while the output is still open
+/// the input is still high. A rising edge while the output is high
 /// retriggers it: the output drops low for a brief retrigger gap, so
 /// downstream envelopes see a new rising edge, and the gate closes `time`
 /// after the new edge.
@@ -45,7 +48,7 @@ struct HoldChannelState {
 ///
 /// ```js
 /// // stretch short clock pulses into 100 ms gates
-/// const env = $adsr($hold($pPulse($clock[0]), 0.1))
+/// const env = $adsr($hold($clock.beatTrigger, 0.1))
 /// $sine('c4').amplitude(env).out()
 /// ```
 #[module(name = "$hold", args(input, time))]
@@ -66,7 +69,7 @@ impl Hold {
                 .schmitt
                 .process_with_edge(self.params.input.get_value(ch));
             if edge.is_rising() {
-                if state.active && state.elapsed < time {
+                if state.output_high {
                     state.gap_remaining = retrigger_gap;
                 }
                 state.elapsed = 0.0;
@@ -74,16 +77,22 @@ impl Hold {
             }
             if state.active && state.elapsed < time {
                 state.elapsed += sample_period;
+                state.output_high = state.gap_remaining == 0;
                 if state.gap_remaining > 0 {
                     state.gap_remaining -= 1;
-                    self.outputs.sample.set(ch, 0.0);
-                } else {
-                    self.outputs.sample.set(ch, GATE_HIGH_VOLTAGE);
                 }
             } else {
                 state.active = false;
-                self.outputs.sample.set(ch, 0.0);
+                state.output_high = false;
             }
+            self.outputs.sample.set(
+                ch,
+                if state.output_high {
+                    GATE_HIGH_VOLTAGE
+                } else {
+                    0.0
+                },
+            );
         }
     }
 }
@@ -180,6 +189,30 @@ mod tests {
             .filter(|&&v| v >= GATE_HIGH_VOLTAGE - 0.01)
             .count();
         assert_close(high, 480 - gap);
+    }
+
+    /// A 1-sample trigger followed by `low` samples of low input.
+    fn pulse_then_low(low: usize) -> (Hold, Vec<f32>) {
+        let mut hold = make(0.0, Some(0.01));
+        set_input(&mut hold, 5.0);
+        let mut out = outputs(&mut hold, 1);
+        set_input(&mut hold, 0.0);
+        out.extend(outputs(&mut hold, low));
+        (hold, out)
+    }
+
+    #[test]
+    fn a_trigger_on_the_sample_a_hold_would_close_still_gets_a_gap() {
+        let (_, out) = pulse_then_low(1000);
+        let gate_len = out.iter().take_while(|&&v| v == GATE_HIGH_VOLTAGE).count();
+
+        // Retrigger on sample `gate_len`: the first one the gate would be low.
+        let (mut hold, _) = pulse_then_low(gate_len - 1);
+        set_input(&mut hold, 5.0);
+        let gap = min_gate_samples(SR) as usize;
+        let after = outputs(&mut hold, gap + 1);
+        assert!(after[..gap].iter().all(|&v| v == 0.0), "{after:?}");
+        assert_eq!(after[gap], GATE_HIGH_VOLTAGE);
     }
 
     #[test]
