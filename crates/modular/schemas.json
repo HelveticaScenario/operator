@@ -12509,6 +12509,131 @@
     ]
   },
   {
+    "name": "$hold",
+    "documentation": "Stretches a trigger into a fixed-length gate.\n\nA rising edge on the input opens the output at 5V for `time` seconds,\nregardless of when the input falls; the output closes after `time` even if\nthe input is still high. A rising edge while the output is high\nretriggers it: the output drops low for a brief retrigger gap, so\ndownstream envelopes see a new rising edge, and the gate closes `time`\nafter the new edge.\n\n## Example\n\n```js\n// stretch short clock pulses into 100 ms gates\nconst env = $adsr($hold($clock.beatTrigger, 0.1))\n$sine('c4').amplitude(env).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "HoldParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "gate/trigger input — a rising edge opens the output",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "time": {
+          "description": "hold time in seconds; a rising edge mid-hold retriggers the gate (default 0.05)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "held gate",
+        "polyphonic": true,
+        "default": true,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "gate/trigger input — a rising edge opens the output",
+        "signalType": "gate",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "time",
+        "description": "hold time in seconds; a rising edge mid-hold retriggers the gate (default 0.05)",
+        "signalType": "control",
+        "defaultValue": 0.05,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "time"
+      }
+    ]
+  },
+  {
     "name": "$slew",
     "documentation": "Slew limiter that smooths abrupt voltage changes.\n\nSeparate **rise** and **fall** times control how quickly the output can\nincrease or decrease. Times are specified in **seconds per volt** — the\ntime the output takes to slew by 1 V. For example, a rise time of `0.1`\nmeans the output climbs 1 V in 0.1 s; a 5 V gate signal would therefore\ntake 0.5 s to reach full height.\n\nUse `$slew` to add portamento to pitch signals, smooth noisy control\nvoltages, or create envelope-like shapes from gate signals.\n\n```js\n// portamento: glide between notes (0.1 s per volt of pitch change)\n$sine($slew($cycle($p('c3 e3 g3')), { rise: 0.1, fall: 0.1 }))\n```",
     "paramsSchema": {

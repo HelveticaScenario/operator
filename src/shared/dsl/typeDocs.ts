@@ -641,7 +641,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     // ---- Controls -----
     {
         description:
-            'Create a UI slider bound to a signal module. The slider appears in the Control panel. Dragging it updates the audio engine and the source code value in real time.',
+            'Create a UI slider bound to a signal module. The slider appears in the Control panel as soon as it is written. Dragging it rewrites the source value, and drives the audio engine in real time once the patch is evaluated.',
         examples: [
             'const vol = $slider("Volume", 0.5, 0, 1);\n$sine(440).amplitude(vol).out();',
             'const cutoff = $slider("Cutoff", 1000, 100, 8000);\n$saw(440).pipe(s => $lpf(s, cutoff)).out();',
@@ -656,16 +656,99 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             },
             {
                 name: 'value',
-                type: 'number',
-                description: 'Initial value (must be a numeric literal)',
+                type: 'number | string',
+                description:
+                    'Initial value: a number, an hz string like "440hz", or a note like "c4" (must be a literal)',
             },
-            { name: 'min', type: 'number', description: 'Minimum value' },
-            { name: 'max', type: 'number', description: 'Maximum value' },
+            {
+                name: 'min',
+                type: 'number | string',
+                description:
+                    'Minimum value, in the same unit (must be a literal)',
+            },
+            {
+                name: 'max',
+                type: 'number | string',
+                description:
+                    'Maximum value, in the same unit (must be a literal)',
+            },
         ],
         returns:
             'CollectionWithRange carrying the current slider value (range [min, max])',
         signature:
-            '$slider(label: string, value: number, min: number, max: number): CollectionWithRange',
+            '$slider(label: string, value: number | string, min: number | string, max: number | string): CollectionWithRange',
+    },
+    {
+        description:
+            'Create a momentary gate button in the Control panel: 5V while held, 0V otherwise. Chain through .$.hold for a fixed-length trigger per press.',
+        examples: [
+            '$sine("c4").amplitude($adsr($btn("play"))).out();',
+            '// fixed 100 ms trigger per press, however long the button is held\n$sine("c4").amplitude($adsr($btn("hit").$.hold(0.1))).out();',
+        ],
+        group: 'Controls',
+        name: '$btn',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description:
+                    'Display label (must be a string literal, unique within its group)',
+            },
+        ],
+        returns:
+            'CollectionWithRange carrying the button output (range [0, 5])',
+        signature: '$btn(label: string): CollectionWithRange',
+    },
+    {
+        description:
+            'Create a latched toggle button in the Control panel: clicking flips between 0V and 5V and rewrites the initial-state literal in the source, so the state survives re-execution.',
+        examples: ['$saw("c2").amplitude($toggleBtn("drone", false)).out();'],
+        group: 'Controls',
+        name: '$toggleBtn',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description:
+                    'Display label (must be a string literal, unique within its group)',
+            },
+            {
+                name: 'initial',
+                type: 'boolean',
+                description: 'Initial state (must be a true/false literal)',
+            },
+        ],
+        returns:
+            'CollectionWithRange carrying the button output (range [0, 5])',
+        signature:
+            '$toggleBtn(label: string, initial: boolean): CollectionWithRange',
+    },
+    {
+        description:
+            'Create a group of controls. Controls made through the returned group appear together in the Control panel under a collapsible header; groups nest. Clicking the header rewrites the collapsed-state literal in the source. Control labels need only be unique within their group.',
+        examples: [
+            'const voice = $cGroup("Voice");\n$sine(voice.slider("Pitch", "c4", "c2", "c6")).amplitude($adsr(voice.btn("Play"))).out();',
+            'const synth = $cGroup("Synth");\nconst amp = synth.cGroup("Amp", true);\n$saw(synth.slider("Root", "c3", "c2", "c5")).amplitude(amp.slider("Level", 0.5, 0, 1)).out();',
+        ],
+        group: 'Controls',
+        name: '$cGroup',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description:
+                    'Display label (must be a string literal, unique among its siblings)',
+            },
+            {
+                name: 'collapsed',
+                type: 'boolean',
+                description:
+                    'Whether the group starts collapsed (must be a true/false literal; optional)',
+            },
+        ],
+        returns:
+            'A group with slider, btn, toggleBtn, and cGroup methods that create controls inside it. Call them on the $cGroup(...) call or a const bound to it.',
+        signature: '$cGroup(label: string, collapsed?: boolean): ControlGroup',
     },
     // ---- Advanced ----
     {

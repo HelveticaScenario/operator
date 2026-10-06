@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   Control Panel - slider controls for DSL parameters
+   Control Panel - slider and button controls for DSL parameters
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .control-panel {
@@ -34,10 +34,212 @@
     font-size: calc(var(--font-size) - 1px);
 }
 
-.control-panel-sliders {
+.control-panel-controls {
     display: flex;
     flex-direction: column;
     gap: var(--sp-1);
+}
+
+/* Label plus the unsynced marker; shrinks so long labels ellipsize */
+.control-title {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-half);
+    min-width: 0;
+}
+
+/* Marks a control the running patch does not match */
+.control-unsynced {
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--color-warning);
+}
+
+/* Ctrl/Cmd held: the hovered control is a "go to code" target */
+.control-panel.jump-armed .slider-control:hover,
+.control-panel.jump-armed .button-control:hover .button-input {
+    outline: 1px solid var(--accent-primary);
+    outline-offset: -1px;
+}
+
+.control-panel.jump-armed .slider-control:hover,
+.control-panel.jump-armed .slider-control:hover *,
+.control-panel.jump-armed .button-control:hover .button-input {
+    cursor: pointer;
+}
+
+.control-panel.jump-armed .slider-control:hover .slider-label,
+.control-panel.jump-armed .button-control:hover .button-label {
+    text-decoration: underline;
+}
+
+/* Control group: a collapsible header over an indented body */
+.control-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+}
+
+.control-group-header-wrap {
+    display: flex;
+}
+
+.control-group-header {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-half);
+    padding: 2px 0;
+    font-family: var(--font-mono);
+    font-size: calc(var(--font-size) - 1px);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-subtle);
+    cursor: pointer;
+    text-align: left;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.control-group-header:hover {
+    color: var(--text-primary);
+}
+
+.control-group-header[aria-disabled='true'] {
+    cursor: default;
+}
+
+.control-group-header:focus-visible {
+    outline: 1px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+/* A CSS triangle: points down when open, right when collapsed */
+.control-group-chevron {
+    flex-shrink: 0;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid currentColor;
+    transition: transform 0.1s ease;
+}
+
+.control-group.collapsed .control-group-chevron {
+    transform: rotate(-90deg);
+}
+
+.control-group-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.control-group-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+    padding-left: var(--sp-1);
+    border-left: 1px solid var(--border-subtle);
+}
+
+.control-panel.jump-armed
+    .control-group-header-wrap:hover
+    .control-group-header {
+    color: var(--accent-primary);
+    cursor: pointer;
+}
+
+.control-panel.jump-armed
+    .control-group-header-wrap:hover
+    .control-group-label {
+    text-decoration: underline;
+}
+
+/* Individual button control */
+.button-control {
+    display: flex;
+}
+
+.button-input {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-1);
+    font-family: var(--font-mono);
+    font-size: var(--font-size);
+    font-weight: 500;
+    color: var(--text-primary);
+    border: 1px solid var(--border-default);
+    padding: var(--sp-half) var(--sp-1);
+    cursor: pointer;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.button-input:hover {
+    border-color: var(--text-secondary);
+}
+
+.button-input[aria-disabled='true'] {
+    cursor: default;
+    opacity: 0.5;
+}
+
+.button-input[aria-disabled='true']:hover {
+    border-color: var(--border-default);
+}
+
+.button-input:focus-visible {
+    outline: 1px solid var(--text-primary);
+    outline-offset: 2px;
+}
+
+.button-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.button-led {
+    width: 8px;
+    height: 8px;
+    flex-shrink: 0;
+    border: 1px solid var(--text-muted);
+}
+
+.button-input.active .button-led {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 4px var(--accent-primary);
+}
+
+/* Momentary gate: a solid pad that brightens while held */
+.button-gate {
+    background: var(--bg-hover);
+}
+
+.button-gate.active {
+    background: var(--bg-active);
+}
+
+/* Latched toggle: a dashed outline that goes solid while latched on */
+.button-toggle {
+    background: var(--bg-tertiary);
+    border-style: dashed;
+}
+
+.button-toggle.active {
+    background: var(--accent-muted);
+    border-style: solid;
+    border-color: var(--accent-primary);
 }
 
 /* Individual slider control */
@@ -48,6 +250,15 @@
     padding: var(--sp-half);
     background: var(--bg-tertiary);
     border: 1px solid var(--border-subtle);
+}
+
+/* Arguments mid-edit: shows the last valid state, not usable */
+.slider-control.incomplete {
+    opacity: 0.5;
+}
+
+.slider-control.incomplete .slider-input {
+    cursor: default;
 }
 
 .slider-header {

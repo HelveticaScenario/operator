@@ -27,6 +27,7 @@ import type { ValidationError } from '@modular/core';
 import type { QueuedTrigger } from '@modular/core';
 import type { FileTreeEntry, UpdateAvailableInfo } from '../shared/ipcTypes';
 import type { SliderDefinition } from '../shared/dsl/sliderTypes';
+import type { ButtonDefinition } from '../shared/dsl/buttonTypes';
 import type { VuMeterDef, VuMeterGhost } from '../shared/dsl/vuMeterTypes';
 import {
     DEFAULT_OUTPUT_GAIN,
@@ -36,6 +37,11 @@ import {
 } from '../shared/dsl/vuMeterTypes';
 import type { EditorBuffer } from './types/editor';
 import { applySliderChange } from './app/sliderChange';
+import { applyButtonChange, applyGroupCollapse } from './app/buttonChange';
+import { bindControls } from './app/controlBinding';
+import { ControlAnchors, createControlAnchors } from './app/controlAnchors';
+import { extractControls, resolveControls } from './dsl/extractControls';
+import type { ResolvedControls } from './dsl/extractControls';
 import { resolveScopeCallRange } from './app/scopeCallRange';
 import { transformErrorsWithSourceLocations } from './app/validationErrorLocations';
 import {
@@ -168,6 +174,7 @@ function App() {
     const [runningBufferId, setRunningBufferId] = useState<string | null>(null);
     const runningSourceIdRef = useRef<string | null>(null);
     const [sliderDefs, setSliderDefs] = useState<SliderDefinition[]>([]);
+    const [buttonDefs, setButtonDefs] = useState<ButtonDefinition[]>([]);
     const [vuOutputs, setVuOutputs] = useState<VuMeterDef[]>([]);
     const [isVuPanelVisible, setIsVuPanelVisible] = useState(false);
     const [vuPanelHeight, setVuPanelHeight] = useState(150);
@@ -240,6 +247,7 @@ function App() {
         updateId: number;
         scopeViews: ScopeView[];
         sliderDefs: SliderDefinition[];
+        buttonDefs: ButtonDefinition[];
         vuOutputs: VuMeterDef[];
         interpolationResolutions?: Map<string, any[]>;
         /** Tracked decorations created at submit time, swapped into
@@ -247,43 +255,200 @@ function App() {
         scopeDecorations: editor.IEditorDecorationsCollection | null;
         /** Same contract as scopeDecorations, for vuDecorationsRef. */
         vuDecorations: editor.IEditorDecorationsCollection | null;
+        /** Anchors on the pending patch's control calls, committed with it. */
+        controlAnchors: ControlAnchors | null;
+        /** Stable id of the buffer the pending patch was evaluated from. */
+        controlsSource: string | null;
         /** The running buffer before this submit, restored if the queued
          *  update is cancelled. */
         previousRunning: { bufferId: string | null; sourceId: string | null };
     } | null>(null);
 
+    // Stable per-buffer identity (the tab's id) used as the patch source id.
+    // Unlike activeBufferId — a file's mutable path — this survives rename and
+    // save, so reconciliation/clock-reset key on the buffer, not its path.
+    const activeSourceId = useMemo(
+        () =>
+            buffers.find((b) => getBufferId(b) === activeBufferId)?.id ??
+            activeBufferId,
+        [buffers, activeBufferId],
+    );
+    const activeSourceIdRef = useRef(activeSourceId);
+    useEffect(() => {
+        activeSourceIdRef.current = activeSourceId;
+    }, [activeSourceId]);
+
+    // The control panel shows the visible buffer's controls, parsed from its
+    // code, bound to the running patch's controls (sliderDefs/buttonDefs)
+    // when the visible buffer is the running one. Parsing is synchronous so
+    // parsed call offsets always address the live editor document.
+    const visibleCode = useMemo(
+        () => ({ bufferId: activeSourceId, code: patchCode }),
+        [activeSourceId, patchCode],
+    );
+    // Last resolved controls per buffer, so a control whose arguments are
+    // mid-edit keeps showing its last valid state instead of vanishing.
+    // Re-resolved during render whenever the visible code changes.
+    const [controlState, setControlState] = useState<{
+        source: typeof visibleCode | null;
+        controls: ResolvedControls;
+        byBuffer: Map<string, ResolvedControls>;
+    }>({
+        byBuffer: new Map(),
+        controls: { buttons: [], groups: [], sliders: [] },
+        source: null,
+    });
+    let codeControls = controlState.controls;
+    if (controlState.source !== visibleCode) {
+        const { bufferId, code } = visibleCode;
+        codeControls = resolveControls(
+            extractControls(code),
+            bufferId === undefined
+                ? undefined
+                : controlState.byBuffer.get(bufferId),
+        );
+        const byBuffer = new Map(controlState.byBuffer);
+        if (bufferId !== undefined) {
+            byBuffer.set(bufferId, codeControls);
+        }
+        setControlState({
+            byBuffer,
+            controls: codeControls,
+            source: visibleCode,
+        });
+    }
+
+    // Anchors on the running patch's control calls. The ref owns disposal
+    // (from the commit paths); the state drives binding during render.
+    const [controlAnchors, setControlAnchors] = useState<ControlAnchors | null>(
+        null,
+    );
+    const controlAnchorsRef = useRef<ControlAnchors | null>(null);
+    // Stable id of the buffer whose patch produced sliderDefs, buttonDefs,
+    // and the anchors. It changes only when those do — at commit, not at
+    // submit — so a queued update for another buffer never binds that
+    // buffer's controls to the still-running patch.
+    const [runningControlsSource, setRunningControlsSource] = useState<
+        string | null
+    >(null);
+    const commitControlAnchors = useCallback((next: ControlAnchors | null) => {
+        controlAnchorsRef.current?.dispose();
+        controlAnchorsRef.current = next;
+        setControlAnchors(next);
+    }, []);
+
+    const controlViews = useMemo(
+        () =>
+            bindControls(
+                codeControls,
+                sliderDefs,
+                buttonDefs,
+                visibleCode.bufferId !== undefined &&
+                    visibleCode.bufferId === runningControlsSource,
+                (moduleId) => controlAnchors?.offsetOf(moduleId) ?? null,
+            ),
+        [
+            codeControls,
+            sliderDefs,
+            buttonDefs,
+            visibleCode.bufferId,
+            runningControlsSource,
+            controlAnchors,
+        ],
+    );
+
+    const setModuleParam = useCallback(
+        (
+            moduleId: string,
+            moduleType: string,
+            params: Record<string, unknown>,
+        ) => {
+            void electronAPI.synthesizer.setModuleParam(
+                moduleId,
+                moduleType,
+                params,
+            );
+        },
+        [],
+    );
+
     const handleSliderChange = useCallback(
-        (label: string, newValue: number) => {
-            const slider = sliderDefs.find((s) => s.label === label);
+        (callStart: number, newValue: number) => {
+            const slider = controlViews.sliders.find(
+                (s) => s.callStart === callStart,
+            );
             if (!slider) {
                 return;
             }
-
-            // The editor shows the active buffer, which is not necessarily
-            // the buffer the running patch (and its sliders) came from.
-            applySliderChange(
+            const written = applySliderChange(
                 slider,
                 newValue,
+                slider.moduleId,
                 editorRef.current?.getModel() ?? null,
-                activeBufferId !== undefined &&
-                    activeBufferId === runningBufferId,
-                (moduleId, moduleType, params) => {
-                    void electronAPI.synthesizer.setModuleParam(
-                        moduleId,
-                        moduleType,
-                        params,
-                    );
-                },
+                setModuleParam,
             );
+            const { moduleId } = slider;
+            if (moduleId !== null) {
+                setSliderDefs((prev) =>
+                    prev.map((s) =>
+                        s.moduleId === moduleId ? { ...s, value: written } : s,
+                    ),
+                );
+            }
+        },
+        [controlViews, setModuleParam],
+    );
 
-            // Update slider state
-            setSliderDefs((prev) =>
-                prev.map((s) =>
-                    s.label === label ? { ...s, value: newValue } : s,
-                ),
+    const handleGroupToggle = useCallback(
+        (callStart: number, collapsed: boolean) => {
+            applyGroupCollapse(
+                { callStart },
+                collapsed,
+                editorRef.current?.getModel() ?? null,
             );
         },
-        [sliderDefs, activeBufferId, runningBufferId],
+        [],
+    );
+
+    // Control offsets come from parsing the visible buffer, which is the
+    // editor's current model.
+    const handleControlJump = useCallback((offset: number) => {
+        const editorInstance = editorRef.current;
+        const model = editorInstance?.getModel();
+        if (!editorInstance || !model) {
+            return;
+        }
+        const position = model.getPositionAt(offset);
+        editorInstance.setPosition(position);
+        editorInstance.revealPositionInCenterIfOutsideViewport(position);
+        editorInstance.focus();
+    }, []);
+
+    const handleButtonChange = useCallback(
+        (callStart: number, pressed: boolean) => {
+            const button = controlViews.buttons.find(
+                (b) => b.callStart === callStart,
+            );
+            if (!button) {
+                return;
+            }
+            applyButtonChange(
+                button,
+                pressed,
+                button.moduleId,
+                editorRef.current?.getModel() ?? null,
+                setModuleParam,
+            );
+            const { moduleId } = button;
+            if (moduleId !== null) {
+                setButtonDefs((prev) =>
+                    prev.map((b) =>
+                        b.moduleId === moduleId ? { ...b, value: pressed } : b,
+                    ),
+                );
+            }
+        },
+        [controlViews, setModuleParam],
     );
 
     // Mirrors for the RAF loop and the M/S click handler, which must read
@@ -1199,20 +1364,6 @@ function App() {
         patchCodeRef.current = patchCode;
     }, [patchCode]);
 
-    // Stable per-buffer identity (the tab's id) used as the patch source id.
-    // Unlike activeBufferId — a file's mutable path — this survives rename and
-    // save, so reconciliation/clock-reset key on the buffer, not its path.
-    const activeSourceId = useMemo(
-        () =>
-            buffers.find((b) => getBufferId(b) === activeBufferId)?.id ??
-            activeBufferId,
-        [buffers, activeBufferId],
-    );
-    const activeSourceIdRef = useRef(activeSourceId);
-    useEffect(() => {
-        activeSourceIdRef.current = activeSourceId;
-    }, [activeSourceId]);
-
     // Keep runningBufferId pointing at the running buffer's current path
     // identity: saving an untitled buffer or renaming a file changes
     // getBufferId, and comparisons against activeBufferId (slider source
@@ -1432,8 +1583,11 @@ function App() {
                         scopeDecorationsRef.current = pending.scopeDecorations;
                         vuDecorationsRef.current?.clear();
                         vuDecorationsRef.current = pending.vuDecorations;
+                        commitControlAnchors(pending.controlAnchors);
+                        setRunningControlsSource(pending.controlsSource);
                         setScopeViews(pending.scopeViews);
                         setSliderDefs(pending.sliderDefs);
+                        setButtonDefs(pending.buttonDefs);
                         setVuOutputs(pending.vuOutputs);
                         // The applied patch was compiled from the edited
                         // source, so audio and code agree again.
@@ -1452,6 +1606,7 @@ function App() {
                         pendingUIStateRef.current = null;
                         pending.scopeDecorations?.clear();
                         pending.vuDecorations?.clear();
+                        pending.controlAnchors?.dispose();
                         runningSourceIdRef.current =
                             pending.previousRunning.sourceId;
                         setRunningBufferId(pending.previousRunning.bufferId);
@@ -1473,7 +1628,7 @@ function App() {
         return () => {
             cancelled = true;
         };
-    }, [isClockRunning, clearVuGhosts]);
+    }, [isClockRunning, clearVuGhosts, commitControlAnchors]);
 
     // Keep Link phase indicator live while Link is enabled but Operator is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
@@ -1530,13 +1685,14 @@ function App() {
             }
             try {
                 const patchCodeValue = patchCodeRef.current;
+                const submittedSourceId = activeSourceIdRef.current ?? null;
 
                 // Execute DSL in main process (has direct N-API access).
                 // Use the stable buffer id (not activeBufferId, a file's mutable
                 // path) so reconciliation/clock-reset key on the buffer itself.
                 const result = await electronAPI.executeDSL(
                     patchCodeValue,
-                    activeSourceIdRef.current,
+                    submittedSourceId ?? undefined,
                     trigger,
                 );
                 lastPatchResultRef.current = result;
@@ -1714,6 +1870,21 @@ function App() {
                 }
 
                 const newSliderDefs = result.sliders ?? [];
+                const newButtonDefs = result.buttons ?? [];
+                const newControlAnchors = model
+                    ? createControlAnchors(model, [
+                          ...newSliderDefs.map((s) => ({
+                              fnName: '$slider',
+                              moduleId: s.moduleId,
+                              sourceLocation: s.sourceLocation,
+                          })),
+                          ...newButtonDefs.map((b) => ({
+                              fnName: b.mode === 'gate' ? '$btn' : '$toggleBtn',
+                              moduleId: b.moduleId,
+                              sourceLocation: b.sourceLocation,
+                          })),
+                      ])
+                    : null;
 
                 // For queued (non-immediate) triggers, defer UI state until the
                 // Audio thread actually applies the patch update.
@@ -1727,7 +1898,11 @@ function App() {
                     // Are cleaned up before storing the new pending state.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
+                    pendingUIStateRef.current?.controlAnchors?.dispose();
                     pendingUIStateRef.current = {
+                        buttonDefs: newButtonDefs,
+                        controlAnchors: newControlAnchors,
+                        controlsSource: submittedSourceId,
                         interpolationResolutions: interpolationMap,
                         previousRunning,
                         scopeDecorations: newScopeDecorations,
@@ -1742,13 +1917,17 @@ function App() {
                     // And apply UI state right away.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
+                    pendingUIStateRef.current?.controlAnchors?.dispose();
                     pendingUIStateRef.current = null;
+                    commitControlAnchors(newControlAnchors);
+                    setRunningControlsSource(submittedSourceId);
                     scopeDecorationsRef.current?.clear();
                     scopeDecorationsRef.current = newScopeDecorations;
                     vuDecorationsRef.current?.clear();
                     vuDecorationsRef.current = newVuDecorations;
                     setScopeViews(views);
                     setSliderDefs(newSliderDefs);
+                    setButtonDefs(newButtonDefs);
                     setVuOutputs(newVuOutputs);
                     // The applied patch was compiled from the edited source,
                     // so audio and code agree again.
@@ -1762,7 +1941,7 @@ function App() {
                 setValidationErrors(null);
             }
         };
-    }, [activeBufferId, clearVuGhosts]);
+    }, [activeBufferId, clearVuGhosts, commitControlAnchors]);
 
     // Expose test API for E2E tests
     useEffect(() => {
@@ -1800,6 +1979,7 @@ function App() {
             setIsClockRunning(false);
             setRunningBufferId(null);
             runningSourceIdRef.current = null;
+            setRunningControlsSource(null);
         };
     }, []);
     const handleStop = useCallback(() => handleStopRef.current(), []);
@@ -2461,8 +2641,13 @@ function App() {
                             }
                             controlContent={
                                 <ControlPanel
-                                    sliders={sliderDefs}
+                                    sliders={controlViews.sliders}
+                                    buttons={controlViews.buttons}
+                                    groups={codeControls.groups}
+                                    onGroupToggle={handleGroupToggle}
                                     onSliderChange={handleSliderChange}
+                                    onButtonChange={handleButtonChange}
+                                    onJump={handleControlJump}
                                 />
                             }
                         />

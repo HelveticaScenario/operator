@@ -38,6 +38,8 @@ import {
     setActiveInterpolationResolutions,
 } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
+import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
+import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
 
 // Augment Array.prototype with pipe() for TypeScript
@@ -59,6 +61,8 @@ export interface DSLExecutionResult {
     interpolationResolutions: InterpolationResolutionMap;
     /** Slider definitions created by $slider() DSL function calls */
     sliders: SliderDefinition[];
+    /** Button definitions created by $btn()/$toggleBtn() DSL function calls */
+    buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
 }
@@ -612,63 +616,11 @@ export function executePatchScript(
         return $track(frames, { playhead, interpolationType }) as Collection;
     };
 
-    // Slider collector — populated by $slider() calls during execution
-    const sliders: SliderDefinition[] = [];
-
-    /**
-     * Create a slider control: a signal module with a UI slider bound to it.
-     * @param label - Display label (must be a string literal)
-     * @param value - Initial value (must be a numeric literal)
-     * @param min - Minimum value
-     * @param max - Maximum value
-     * @returns A CollectionWithRange carrying the slider value (range [min, max])
-     */
-    const $slider = (
-        label: string,
-        value: number,
-        min: number,
-        max: number,
-    ) => {
-        if (typeof label !== 'string') {
-            throw new Error('$slider() label must be a string literal');
-        }
-        if (sliders.find((s) => s.label === label)) {
-            throw new Error(`$slider() label "${label}" must be unique`);
-        }
-        if (typeof value !== 'number' || !isFinite(value)) {
-            throw new Error('$slider() value must be a finite number literal');
-        }
-        if (typeof min !== 'number' || !isFinite(min)) {
-            throw new Error('$slider() min must be a finite number');
-        }
-        if (typeof max !== 'number' || !isFinite(max)) {
-            throw new Error('$slider() max must be a finite number');
-        }
-        if (min >= max) {
-            throw new Error(
-                `$slider() min (${min}) must be less than max (${max})`,
-            );
-        }
-
-        const moduleId = `__slider_${label.replace(/[^a-zA-Z0-9_]/g, '_')}`;
-
-        // Sanitization collapses punctuation/whitespace to '_', so distinct
-        // labels can map to the same module id; catch that here with an error
-        // naming both labels.
-        const collision = sliders.find((s) => s.moduleId === moduleId);
-        if (collision) {
-            throw new Error(
-                `$slider() labels "${collision.label}" and "${label}" both map to module id "${moduleId}" — labels must differ in letters, digits, or underscores`,
-            );
-        }
-
-        // Create backing signal module via the existing signal factory
-        const result = signal(value, { id: moduleId });
-
-        sliders.push({ label, max, min, moduleId, value });
-
-        return builder.$c(result).withRange(min, max);
-    };
+    // Control factories; their collectors fill as the patch calls them.
+    const controls = createControls({
+        rangedSignal: (value, id, min, max) =>
+            builder.$c(signal(value, { id })).withRange(min, max),
+    });
 
     /**
      * Load WAV samples from the wavs/ folder.
@@ -941,8 +893,11 @@ export function executePatchScript(
         $g3,
         // Deferred signal helper
         $deferred,
-        // Slider control
-        $slider,
+        // Panel controls
+        $slider: controls.$slider,
+        $btn: controls.$btn,
+        $toggleBtn: controls.$toggleBtn,
+        $cGroup: controls.$cGroup,
         // Bus
         $bus,
         // Global settings
@@ -1034,6 +989,10 @@ export function executePatchScript(
             { filename: 'dsl-pipe-installer.js' },
         );
         script.runInContext(sandbox, { timeout: executionTimeoutMs });
+        assertControlsPlaced(source, [
+            ...controls.sliders,
+            ...controls.buttons,
+        ]);
 
         // Build and return the patch with source locations
         const resultBuilder = context.getBuilder();
@@ -1041,10 +1000,11 @@ export function executePatchScript(
         const sourceLocationMap = resultBuilder.getSourceLocationMap();
 
         return {
+            buttons: controls.buttons,
             callSiteSpans,
             interpolationResolutions,
             patch,
-            sliders,
+            sliders: controls.sliders,
             sourceLocationMap,
         };
     } catch (error) {
