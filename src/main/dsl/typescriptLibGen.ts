@@ -1465,10 +1465,11 @@ function $deferred(channels?: number): DeferredCollection;
  * or all note strings. Hz and note sliders travel linearly in V/Oct (evenly
  * spaced octaves); note sliders snap to semitones.
  *
- * @param label Display label for the slider (must be a string literal)
+ * @param label Display label for the slider (must be a string literal, unique within its group)
  * @param value Initial value (must be a numeric or string literal)
  * @param min Minimum slider value (must be a numeric or string literal)
  * @param max Maximum slider value (must be a numeric or string literal)
+ * @param group The {@link ControlGroup} to place the slider in (a $cGroup call or a const bound to one)
  * @returns A CollectionWithRange carrying the slider's current value (range [min, max])
  *
  * @example
@@ -1479,15 +1480,16 @@ function $deferred(channels?: number): DeferredCollection;
  * @example
  * $saw($slider("Root", "c3", "c2", "c5")).out();
  */
-function $slider(label: string, value: number, min: number, max: number): CollectionWithRange;
-function $slider(label: string, value: HZ, min: HZ, max: HZ): CollectionWithRange;
-function $slider(label: string, value: Note, min: Note, max: Note): CollectionWithRange;
+function $slider(label: string, value: number, min: number, max: number, group?: ControlGroup): CollectionWithRange;
+function $slider(label: string, value: HZ, min: HZ, max: HZ, group?: ControlGroup): CollectionWithRange;
+function $slider(label: string, value: Note, min: Note, max: Note, group?: ControlGroup): CollectionWithRange;
 
 /**
  * Create a momentary gate button in the Control panel: 5V while held, 0V
  * otherwise. Chain through .$.hold for a fixed-length trigger per press.
  *
- * @param label Display label for the button (must be a string literal)
+ * @param label Display label for the button (must be a string literal, unique within its group)
+ * @param group The {@link ControlGroup} to place the button in (a $cGroup call or a const bound to one)
  * @returns A CollectionWithRange carrying the button output (range [0, 5])
  *
  * @example
@@ -1496,68 +1498,68 @@ function $slider(label: string, value: Note, min: Note, max: Note): CollectionWi
  * // fixed 100 ms trigger per press, however long the button is held
  * $sine('c4').amplitude($adsr($btn("hit").$.hold(0.1))).out();
  */
-function $btn(label: string): CollectionWithRange;
+function $btn(label: string, group?: ControlGroup): CollectionWithRange;
 
 /**
  * Create a latched toggle button in the Control panel: clicking flips between
  * 0V and 5V and rewrites the initial-state literal in the source, so the
  * state survives re-execution.
  *
- * @param label Display label for the button (must be a string literal)
+ * @param label Display label for the button (must be a string literal, unique within its group)
  * @param initial Initial state (must be a true/false literal)
+ * @param group The {@link ControlGroup} to place the button in (a $cGroup call or a const bound to one)
  * @returns A CollectionWithRange carrying the button output (range [0, 5])
  *
  * @example
  * $saw('c2').amplitude($toggleBtn("drone", false)).out();
  */
-function $toggleBtn(label: string, initial: boolean): CollectionWithRange;
+function $toggleBtn(label: string, initial: boolean, group?: ControlGroup): CollectionWithRange;
 
 /**
- * A group of controls in the Control panel, created by {@link $cGroup}. Its
- * methods create controls inside the group; labels need only be unique
- * within a group.
+ * A reference to a group of controls in the Control panel, created by
+ * {@link $cGroup}. Pass it as a control's \`group\` argument (or another
+ * group's \`group\` param) to place that control inside the group.
  */
 interface ControlGroup {
-    /** {@link $slider}, inside this group. */
-    slider(label: string, value: number, min: number, max: number): CollectionWithRange;
-    slider(label: string, value: HZ, min: HZ, max: HZ): CollectionWithRange;
-    slider(label: string, value: Note, min: Note, max: Note): CollectionWithRange;
-    /** {@link $btn}, inside this group. */
-    btn(label: string): CollectionWithRange;
-    /** {@link $toggleBtn}, inside this group. */
-    toggleBtn(label: string, initial: boolean): CollectionWithRange;
-    /** {@link $cGroup}, nested inside this group. */
-    cGroup(label: string, collapsed?: boolean): ControlGroup;
+    /** The group's display label. */
+    readonly label: string;
+}
+
+/** Options for {@link $cGroup}. */
+interface ControlGroupParams {
+    /** Whether the group starts collapsed (must be a true/false literal). The Control panel rewrites it when the header is clicked. */
+    collapsed?: boolean;
+    /** The {@link ControlGroup} to nest this group in (a $cGroup call or a const bound to one). */
+    group?: ControlGroup;
 }
 
 /**
- * Create a group of controls: the controls made through its \`slider\`,
- * \`btn\`, and \`toggleBtn\` methods appear together in the Control panel under a
- * collapsible header, and its \`cGroup\` method nests a group inside it.
- * Clicking the header rewrites the collapsed-state literal in the source, so
- * the state survives re-execution.
+ * Create a group of controls: controls given the returned group as their
+ * \`group\` argument appear together in the Control panel under a collapsible
+ * header. Clicking the header rewrites the \`collapsed\` literal in the source,
+ * so the state survives re-execution. Groups nest through \`params.group\`.
  *
- * Call the methods on the \`$cGroup(...)\` call itself or on a const bound to
- * it, so the Control panel can place the controls before evaluation.
+ * Pass the \`$cGroup(...)\` call itself or a const bound to it as the group, so
+ * the Control panel can place the controls before evaluation.
  *
  * @param label Display label for the group (must be a string literal, unique among its siblings)
- * @param collapsed Whether the group starts collapsed (must be a true/false literal)
- * @returns A ControlGroup whose methods create controls inside the group
+ * @param params Collapsed state and parent group (must be an object literal)
+ * @returns A ControlGroup reference to pass as a control's group argument
  *
  * @example
  * const voice = $cGroup("Voice");
- * $sine(voice.slider("Pitch", "c4", "c2", "c6"))
- *     .amplitude($adsr(voice.btn("Play")))
+ * $sine($slider("Pitch", "c4", "c2", "c6", voice))
+ *     .amplitude($adsr($btn("Play", voice)))
  *     .out();
  * @example
  * // nested, with the inner group collapsed
  * const synth = $cGroup("Synth");
- * const amp = synth.cGroup("Amp", true);
- * $saw(synth.slider("Root", "c3", "c2", "c5"))
- *     .amplitude(amp.slider("Level", 0.5, 0, 1))
+ * const amp = $cGroup("Amp", { collapsed: true, group: synth });
+ * $saw($slider("Root", "c3", "c2", "c5", synth))
+ *     .amplitude($slider("Level", 0.5, 0, 1, amp))
  *     .out();
  */
-function $cGroup(label: string, collapsed?: boolean): ControlGroup;
+function $cGroup(label: string, params?: ControlGroupParams): ControlGroup;
 
 /**
  * A send-return bus. Create one with {@link $bus}, then call \`.send(bus, gain)\` on

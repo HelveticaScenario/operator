@@ -55,12 +55,12 @@ pub fn parse_signal_attr(attr: &Attribute) -> syn::Result<SignalAttr> {
             let value: Ident = meta.value()?.parse()?;
             let type_str = value.to_string();
             match type_str.as_str() {
-                "pitch" | "gate" | "trig" | "control" => {
+                "pitch" | "frequency" | "gate" | "trig" | "control" => {
                     result.signal_type = type_str;
                 }
                 other => {
                     return Err(meta.error(format!(
-                        "Unknown signal type '{}'. Expected: pitch, gate, trig, control",
+                        "Unknown signal type '{}'. Expected: pitch, frequency, gate, trig, control",
                         other
                     )));
                 }

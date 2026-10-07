@@ -47,9 +47,15 @@ export type ParamKind =
     | 'boolean'
     | 'unknown';
 
-export type SignalType = 'pitch' | 'gate' | 'trig' | 'control';
+export type SignalType = 'pitch' | 'frequency' | 'gate' | 'trig' | 'control';
 
-const SIGNAL_TYPES = new Set<string>(['pitch', 'gate', 'trig', 'control']);
+const SIGNAL_TYPES = new Set<string>([
+    'pitch',
+    'frequency',
+    'gate',
+    'trig',
+    'control',
+]);
 
 function isSignalType(s: string): s is SignalType {
     return SIGNAL_TYPES.has(s);

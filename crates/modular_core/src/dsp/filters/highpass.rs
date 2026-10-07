@@ -14,7 +14,7 @@ struct HighpassFilterParams {
     /// signal input
     input: PolySignal,
     /// cutoff frequency in V/Oct (0V = C4)
-    #[signal(type = pitch)]
+    #[signal(type = frequency)]
     cutoff: PolySignal,
     /// filter resonance (0-5)
     #[signal(range = (0.0, 5.0))]

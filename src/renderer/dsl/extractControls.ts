@@ -13,9 +13,18 @@
 
 import { ts } from 'ts-morph';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
-import { findControlCalls } from '../../shared/dsl/controlCalls';
+import {
+    findControlCalls,
+    GROUP_ARG_INDEX,
+    propertyName,
+} from '../../shared/dsl/controlCalls';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import { parseSliderValue } from '../../shared/dsl/sliderUnits';
+import {
+    appendObjectArgument,
+    insertObjectProperty,
+} from './objectPropertyInsert';
+import type { CodeStyle } from './objectPropertyInsert';
 
 /** A `[start, end)` character range in the parsed source. */
 export interface SourceRange {
@@ -54,11 +63,9 @@ export interface StaticGroup extends CallSite {
     /** Labels of the enclosing groups, outermost first */
     group: string[];
     collapsed: boolean;
-    /** How to rewrite the collapsed state: replace `range` (the literal, or
-     *  an empty range after the label when the argument is absent) with the
-     *  new state, prefixed by `prefix`. Null when the call's arguments are
-     *  invalid, so the state cannot be rewritten. */
-    collapseEdit: { range: SourceRange; prefix: string } | null;
+    /** Whether {@link groupCollapseEdit} can rewrite the collapsed state:
+     *  false when the call's params are not a literal it can edit. */
+    collapsible: boolean;
 }
 
 /** A control call with a literal label whose other arguments are invalid. */
@@ -114,14 +121,20 @@ function booleanLiteral(node: ts.Expression): boolean | null {
     return null;
 }
 
+/** Whether a call's argument count fits its required arguments plus an
+ *  optional trailing group. */
+function arityOk(args: readonly ts.Expression[], groupIndex: number): boolean {
+    return args.length === groupIndex || args.length === groupIndex + 1;
+}
+
 function toSlider(
     args: readonly ts.Expression[],
     sourceFile: ts.SourceFile,
 ): Pick<StaticSlider, 'max' | 'min' | 'unit' | 'value' | 'valueRange'> | null {
-    if (args.length !== 4) {
+    if (!arityOk(args, GROUP_ARG_INDEX.$slider)) {
         return null;
     }
-    const literals = args.slice(1).map(sliderLiteral);
+    const literals = args.slice(1, 4).map(sliderLiteral);
     if (literals.some((l) => l === null)) {
         return null;
     }
@@ -153,11 +166,13 @@ function toButton(
     sourceFile: ts.SourceFile,
 ): Pick<StaticButton, 'mode' | 'value' | 'stateRange'> | null {
     if (kind === '$btn') {
-        return args.length === 1
+        return arityOk(args, GROUP_ARG_INDEX.$btn)
             ? { mode: 'gate', stateRange: null, value: false }
             : null;
     }
-    const state = args.length === 2 ? booleanLiteral(args[1]) : null;
+    const state = arityOk(args, GROUP_ARG_INDEX.$toggleBtn)
+        ? booleanLiteral(args[1])
+        : null;
     return state === null
         ? null
         : {
@@ -167,34 +182,99 @@ function toButton(
           };
 }
 
-function toGroupState(
-    args: readonly ts.Expression[],
-    sourceFile: ts.SourceFile,
-): Pick<StaticGroup, 'collapsed' | 'collapseEdit'> {
+/** Where a `$cGroup` call's collapsed state lives, or null when its params
+ *  are not a literal the panel can edit. */
+type CollapseTarget =
+    /** No params object: one is appended. */
+    | { kind: 'append' }
+    /** A params object without `collapsed`: the property is added. */
+    | { kind: 'insert'; params: ts.ObjectLiteralExpression }
+    /** A `collapsed` boolean literal: it is replaced. */
+    | { kind: 'replace'; literal: ts.Expression; state: boolean };
+
+function collapseTarget(args: readonly ts.Expression[]): CollapseTarget | null {
     if (args.length === 1) {
-        const at = args[0].getEnd();
-        return {
-            collapseEdit: { prefix: ', ', range: { end: at, start: at } },
-            collapsed: false,
-        };
+        return { kind: 'append' };
     }
-    const state = args.length === 2 ? booleanLiteral(args[1]) : null;
+    const params = args[1];
+    if (args.length !== 2 || !ts.isObjectLiteralExpression(params)) {
+        return null;
+    }
+    const prop = params.properties.find(
+        (p) => propertyName(p) === 'collapsed',
+    );
+    if (!prop) {
+        return { kind: 'insert', params };
+    }
+    const state = ts.isPropertyAssignment(prop)
+        ? booleanLiteral(prop.initializer)
+        : null;
     return state === null
-        ? { collapseEdit: null, collapsed: false }
+        ? null
         : {
-              collapseEdit: { prefix: '', range: rangeOf(args[1], sourceFile) },
-              collapsed: state,
+              kind: 'replace',
+              literal: (prop as ts.PropertyAssignment).initializer,
+              state,
           };
 }
 
-export function extractControls(source: string): StaticControls {
-    const sourceFile = ts.createSourceFile(
+function toGroupState(
+    args: readonly ts.Expression[],
+): Pick<StaticGroup, 'collapsed' | 'collapsible'> {
+    const target = collapseTarget(args);
+    return {
+        collapsed: target?.kind === 'replace' ? target.state : false,
+        collapsible: target !== null,
+    };
+}
+
+function parse(source: string): ts.SourceFile {
+    return ts.createSourceFile(
         'patch.js',
         source,
         ts.ScriptTarget.Latest,
         false,
         ts.ScriptKind.JS,
     );
+}
+
+/**
+ * The edit that sets the collapsed state of the `$cGroup` call whose name
+ * starts at `callStart`: the `collapsed` literal is replaced, the property
+ * added to the params object, or a `{ collapsed }` object appended. Null
+ * when no such group exists or its params cannot be edited.
+ */
+export function groupCollapseEdit(
+    source: string,
+    callStart: number,
+    collapsed: boolean,
+    layout: CodeStyle,
+): { span: SourceRange; text: string } | null {
+    const sourceFile = parse(source);
+    const found = findControlCalls(sourceFile).find(
+        (c) =>
+            c.kind === '$cGroup' && c.name.getStart(sourceFile) === callStart,
+    );
+    const target = found && collapseTarget(found.call.arguments);
+    if (!found || !target) {
+        return null;
+    }
+    if (target.kind === 'replace') {
+        return {
+            span: rangeOf(target.literal, sourceFile),
+            text: String(collapsed),
+        };
+    }
+    const prop = `collapsed: ${String(collapsed)}`;
+    const edit =
+        target.kind === 'insert'
+            ? insertObjectProperty(sourceFile, target.params, prop, layout)
+            : appendObjectArgument(sourceFile, found.call, prop, layout);
+    return { span: edit.span, text: edit.newText };
+}
+
+export function extractControls(source: string): StaticControls {
+    const sourceFile = parse(source);
     const sliders: StaticControls['sliders'] = [];
     const buttons: StaticControls['buttons'] = [];
     const groups: StaticGroup[] = [];
@@ -219,7 +299,7 @@ export function extractControls(source: string): StaticControls {
                 groupKeys.add(key);
                 groups.push({
                     ...site,
-                    ...toGroupState(call.arguments, sourceFile),
+                    ...toGroupState(call.arguments),
                     group,
                     label: label.text,
                 });

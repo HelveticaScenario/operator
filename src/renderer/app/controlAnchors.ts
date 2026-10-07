@@ -26,8 +26,7 @@ export interface AnchorModel {
 /** A running control whose call site should be anchored. */
 export interface AnchoredControl {
     moduleId: string;
-    /** The factory's free-function name, e.g. `$slider`. A group method call
-     *  spells it without the `$` (`g.slider(...)`). */
+    /** The factory's name, e.g. `$slider`, as written at the call site. */
     fnName: string;
     sourceLocation?: { line: number; column: number };
 }
@@ -100,17 +99,17 @@ export function createControlAnchors(
         const column =
             loc.line === 1 ? loc.column - FIRST_LINE_COLUMN_OFFSET : loc.column;
         const lineContent = model.getLineContent(loc.line);
-        const name = [fnName, fnName.slice(1)].find(
-            (n) => lineContent.slice(column - 1, column - 1 + n.length) === n,
-        );
-        if (!name) {
+        if (
+            lineContent.slice(column - 1, column - 1 + fnName.length) !==
+            fnName
+        ) {
             continue;
         }
         placed.push({
-            length: name.length,
+            length: fnName.length,
             moduleId,
             range: {
-                endColumn: column + name.length,
+                endColumn: column + fnName.length,
                 endLineNumber: loc.line,
                 startColumn: column,
                 startLineNumber: loc.line,

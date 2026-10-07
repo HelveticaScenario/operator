@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from 'vitest';
 
 import { applyButtonChange, applyGroupCollapse } from '../buttonChange';
 import type { SliderEditModel } from '../sliderChange';
+import type { CodeStyle } from '../../dsl/objectPropertyInsert';
 
 const TOGGLE = { callStart: 0, mode: 'toggle' as const };
 const GATE = { callStart: 0, mode: 'gate' as const };
@@ -70,37 +71,100 @@ describe('applyButtonChange', () => {
     });
 });
 
+const LAYOUT: CodeStyle = {
+    bracketSpacing: true,
+    printWidth: 80,
+    quote: "'",
+    tabWidth: 2,
+    trailingComma: true,
+    useTabs: false,
+};
+
+/** Collapse the last `$cGroup` call in `source` and return the new text. */
+function collapseLast(
+    source: string,
+    collapsed: boolean,
+    layout: CodeStyle = LAYOUT,
+): string | null {
+    const { model, pushEditOperations } = makeModel(source);
+    applyGroupCollapse(
+        { callStart: source.lastIndexOf('$cGroup') },
+        collapsed,
+        model,
+        layout,
+    );
+    if (pushEditOperations.mock.calls.length === 0) {
+        return null;
+    }
+    // makeModel maps an offset to column offset + 1 on a single line.
+    const [edit] = pushEditOperations.mock.calls[0][1];
+    return (
+        source.slice(0, edit.range.startColumn - 1) +
+        edit.text +
+        source.slice(edit.range.endColumn - 1)
+    );
+}
+
 describe('applyGroupCollapse', () => {
-    test('replaces an existing collapsed-state literal', () => {
-        const { model, pushEditOperations } = makeModel(
-            "const g = $cGroup('Filter', false);",
-        );
-        applyGroupCollapse({ callStart: 10 }, true, model);
-        const [edit] = pushEditOperations.mock.calls[0][1];
-        expect(edit.text).toBe('true');
-        expect(edit.range.startColumn).toBe(
-            "const g = $cGroup('Filter', ".length + 1,
+    test('replaces an existing collapsed literal', () => {
+        expect(
+            collapseLast("const g = $cGroup('Filter', { collapsed: false });", true),
+        ).toBe("const g = $cGroup('Filter', { collapsed: true });");
+    });
+
+    test('appends a params object when the call has none', () => {
+        expect(collapseLast("const g = $cGroup('Filter');", true)).toBe(
+            "const g = $cGroup('Filter', { collapsed: true });",
         );
     });
 
-    test('appends the state after the label when the call has none', () => {
-        const source = "const g = $cGroup('Filter');";
-        const { model, pushEditOperations } = makeModel(source);
-        applyGroupCollapse({ callStart: 10 }, true, model);
-        const [edit] = pushEditOperations.mock.calls[0][1];
-        expect(edit.text).toBe(', true');
-        const at = source.indexOf(')') + 1;
-        expect([edit.range.startColumn, edit.range.endColumn]).toEqual([
-            at,
-            at,
-        ]);
+    test('adds the property to a params object without one', () => {
+        expect(
+            collapseLast(
+                "const p = $cGroup('P');\nconst g = $cGroup('Filter', { group: p });",
+                true,
+            ),
+        ).toBe(
+            "const p = $cGroup('P');\nconst g = $cGroup('Filter', { group: p, collapsed: true });",
+        );
     });
 
-    test('leaves a call with invalid arguments alone', () => {
-        const { model, pushEditOperations } = makeModel(
-            "const g = $cGroup('Filter', 1);",
+    test('an added property follows the object layout', () => {
+        expect(
+            collapseLast(
+                "const p = $cGroup('P');\nconst g = $cGroup('Filter', {\n  group: p,\n});",
+                false,
+            ),
+        ).toBe(
+            "const p = $cGroup('P');\nconst g = $cGroup('Filter', {\n  group: p,\n  collapsed: false,\n});",
         );
-        applyGroupCollapse({ callStart: 10 }, true, model);
-        expect(pushEditOperations).not.toHaveBeenCalled();
+        expect(
+            collapseLast("const g = $cGroup('A long group label');", true, {
+                ...LAYOUT,
+                printWidth: 40,
+            }),
+        ).toBe(
+            "const g = $cGroup('A long group label', {\n  collapsed: true,\n});",
+        );
+    });
+
+    test('an added property uses the source line ending', () => {
+        expect(
+            collapseLast(
+                "const p = $cGroup('P');\r\nconst g = $cGroup('Filter', {\r\n  group: p,\r\n});",
+                true,
+            ),
+        ).toBe(
+            "const p = $cGroup('P');\r\nconst g = $cGroup('Filter', {\r\n  group: p,\r\n  collapsed: true,\r\n});",
+        );
+    });
+
+    test('leaves a call whose collapsed state is not a literal alone', () => {
+        expect(collapseLast("$cGroup('Filter', { collapsed: 1 });", true)).toBe(
+            null,
+        );
+        expect(collapseLast("$cGroup('Filter', { collapsed });", true)).toBe(
+            null,
+        );
     });
 });

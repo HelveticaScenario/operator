@@ -63,7 +63,7 @@ describe('extractControls', () => {
             $slider('mixed', '440hz', 0, 5);
             $slider('backwards', 1, 2, 0);
             $slider('garbage', 'h4', 'c2', 'c6');
-            $btn('extra', 1);
+            $btn('extra', $cGroup('G'), 1);
             $toggleBtn('noState');
             $toggleBtn('numeric', 1);
         `);
@@ -172,11 +172,11 @@ describe('extractControls groups', () => {
     test('places controls in their groups, nested, in source order', () => {
         const { sliders, buttons, groups } = extractControls(`
             const synth = $cGroup('Synth');
-            const amp = synth.cGroup('Amp', true);
+            const amp = $cGroup('Amp', { collapsed: true, group: synth });
             $slider('top', 1, 0, 2);
-            synth.slider('root', 'c3', 'c2', 'c5');
-            amp.slider('level', 0.5, 0, 1);
-            $cGroup('Fx').btn('kick');
+            $slider('root', 'c3', 'c2', 'c5', synth);
+            $slider('level', 0.5, 0, 1, amp);
+            $btn('kick', $cGroup('Fx'));
         `);
         expect(groups.map((g) => [g.group, g.label, g.collapsed])).toEqual([
             [[], 'Synth', false],
@@ -193,37 +193,61 @@ describe('extractControls groups', () => {
         ]);
     });
 
+    test('a grouped control reads the same as an ungrouped one', () => {
+        const { sliders, buttons } = extractControls(`
+            const g = $cGroup('G');
+            $slider('s', 2, 0, 5, g);
+            $toggleBtn('t', true, g);
+        `);
+        expect(sliders[0]).toMatchObject({ group: ['G'], value: 2 });
+        expect(buttons[0]).toMatchObject({
+            group: ['G'],
+            mode: 'toggle',
+            value: true,
+        });
+    });
+
     test('labels repeat freely across groups but not within one', () => {
         const { sliders } = extractControls(`
             const a = $cGroup('A');
             const b = $cGroup('B');
-            a.slider('cut', 1, 0, 2);
-            b.slider('cut', 1, 0, 2);
-            a.slider('cut', 2, 0, 2);
+            $slider('cut', 1, 0, 2, a);
+            $slider('cut', 1, 0, 2, b);
+            $slider('cut', 2, 0, 2, a);
         `);
         expect(sliders.map((s) => s.group)).toEqual([['A'], ['B']]);
     });
 
-    test('a call site records the method name, for anchors and jumps', () => {
-        const source = `const g = $cGroup('G');\ng.slider('x', 1, 0, 2);`;
+    test('a call site records the callee name, for anchors and jumps', () => {
+        const source = `const g = $cGroup('G');\n$slider('x', 1, 0, 2, g);`;
         const { sliders, groups } = extractControls(source);
-        expect(sliders[0].callStart).toBe(source.indexOf('g.slider') + 2);
+        expect(sliders[0].callStart).toBe(source.indexOf('$slider'));
         expect(groups[0].callStart).toBe(source.indexOf('$cGroup'));
         expect(groups[0].argsStart).toBe(source.indexOf("'G'"));
     });
 
-    test('a group call with invalid arguments shows but cannot collapse', () => {
-        const { groups } = extractControls(`$cGroup('G', 1);`);
-        expect(groups[0]).toMatchObject({
-            collapseEdit: null,
-            collapsed: false,
-            label: 'G',
-        });
+    test('a group whose collapsed state is not a literal cannot collapse', () => {
+        const { groups } = extractControls(
+            `$cGroup('G', { collapsed: 1 }); $cGroup('H', { collapsed: c });`,
+        );
+        expect(groups.map((g) => [g.label, g.collapsible, g.collapsed])).toEqual(
+            [
+                ['G', false, false],
+                ['H', false, false],
+            ],
+        );
+    });
+
+    test('a group without a collapsed literal can still collapse', () => {
+        const { groups } = extractControls(
+            `$cGroup('G'); $cGroup('H', {}); $cGroup('I', { group: $cGroup('J') });`,
+        );
+        expect(groups.every((g) => g.collapsible && !g.collapsed)).toBe(true);
     });
 
     test('omits controls whose group cannot be resolved', () => {
         const { sliders } = extractControls(
-            `function voice(g) { g.slider('x', 1, 0, 2); }`,
+            `function voice(g) { $slider('x', 1, 0, 2, g); }`,
         );
         expect(sliders).toEqual([]);
     });

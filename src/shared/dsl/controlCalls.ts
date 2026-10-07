@@ -1,13 +1,13 @@
 /**
- * Locate DSL control calls and resolve the control group each is made on,
+ * Locate DSL control calls and resolve the control group each belongs to,
  * from the source alone.
  *
- * A control call is either free — `$slider`, `$btn`, `$toggleBtn`, `$cGroup`
- * (the root group) — or a `slider` / `btn` / `toggleBtn` / `cGroup` method
- * call on a statically known group: a `$cGroup(...)` call, a `.cGroup(...)`
- * call on a group, or a `const` bound to one of those. A method call on any
- * other receiver (a parameter, a `let`, a computed value) is not reported:
- * only evaluation could tell whether it is a group at all.
+ * A control call is a `$slider`, `$btn`, `$toggleBtn`, or `$cGroup` call. Its
+ * optional group argument (`$cGroup`'s is the `group` property of its params
+ * object) must be statically known: a `$cGroup(...)` call or a `const` bound
+ * to one. A call whose group is any other expression (a parameter, a `let`,
+ * a computed value) is not reported: only evaluation could tell which group
+ * it is, if any.
  *
  * Shared by the executor, which rejects controls created at a call site not
  * found here, and the control panel, which builds its group tree from it.
@@ -17,27 +17,22 @@ import { ts } from 'ts-morph';
 
 export type ControlKind = '$slider' | '$btn' | '$toggleBtn' | '$cGroup';
 
-const FREE_KINDS = new Set<string>([
-    '$slider',
-    '$btn',
-    '$toggleBtn',
-    '$cGroup',
-]);
+/** Positional index of each control's optional group argument. `$cGroup`
+ *  takes its group in the params object at index 1 instead. */
+export const GROUP_ARG_INDEX = {
+    $btn: 1,
+    $slider: 4,
+    $toggleBtn: 2,
+} as const;
 
-/** Group method name → the control kind it creates. */
-const METHOD_KINDS = new Map<string, ControlKind>([
-    ['slider', '$slider'],
-    ['btn', '$btn'],
-    ['toggleBtn', '$toggleBtn'],
-    ['cGroup', '$cGroup'],
-]);
+const KINDS = new Set<string>(['$slider', '$btn', '$toggleBtn', '$cGroup']);
 
 export interface ControlCall {
     kind: ControlKind;
     call: ts.CallExpression;
-    /** The callee name node (`$slider`, `slider`, …) */
+    /** The callee name node (`$slider`, …) */
     name: ts.Node;
-    /** Path of the group the call is made on: [] for free calls */
+    /** Path of the group the control belongs to: [] when it has none */
     group: string[];
 }
 
@@ -55,25 +50,75 @@ function lookup(scopes: Scope[], name: string): string[] | null {
     return null;
 }
 
-/** The control kind a call's callee names, and the callee's name node. */
-function calleeOf(
-    call: ts.CallExpression,
-): { kind: ControlKind; name: ts.Node; receiver: ts.Expression | null } | null {
+/** The control kind a call's callee names, or null for any other call. */
+function kindOf(call: ts.CallExpression): ControlKind | null {
     const callee = call.expression;
-    if (ts.isIdentifier(callee) && FREE_KINDS.has(callee.text)) {
-        return {
-            kind: callee.text as ControlKind,
-            name: callee,
-            receiver: null,
-        };
+    return ts.isIdentifier(callee) && KINDS.has(callee.text)
+        ? (callee.text as ControlKind)
+        : null;
+}
+
+/** The `group` property of a `$cGroup` params object literal, if any. */
+function groupProperty(
+    params: ts.ObjectLiteralExpression,
+): ts.ObjectLiteralElementLike | undefined {
+    return params.properties.find(
+        (p) =>
+            (ts.isPropertyAssignment(p) ||
+                ts.isShorthandPropertyAssignment(p)) &&
+            propertyName(p) === 'group',
+    );
+}
+
+/** A property's static key, or null for a computed or spread member. */
+export function propertyName(p: ts.ObjectLiteralElementLike): string | null {
+    if (ts.isSpreadAssignment(p) || !p.name) {
+        return null;
     }
-    const kind = ts.isPropertyAccessExpression(callee)
-        ? METHOD_KINDS.get(callee.name.text)
-        : undefined;
-    if (kind && ts.isPropertyAccessExpression(callee)) {
-        return { kind, name: callee.name, receiver: callee.expression };
+    return ts.isIdentifier(p.name) ||
+        ts.isStringLiteral(p.name) ||
+        ts.isNumericLiteral(p.name)
+        ? p.name.text
+        : null;
+}
+
+/**
+ * Path of the group a control call belongs to: [] without a group argument,
+ * or null when that argument is not a statically known group.
+ */
+function groupOfCall(
+    call: ts.CallExpression,
+    kind: ControlKind,
+    scopes: Scope[],
+): string[] | null {
+    if (kind !== '$cGroup') {
+        const arg = call.arguments[GROUP_ARG_INDEX[kind]];
+        return arg ? groupPathOf(arg, scopes) : [];
     }
-    return null;
+    const params = call.arguments[1];
+    if (!params) {
+        return [];
+    }
+    if (!ts.isObjectLiteralExpression(params)) {
+        return null;
+    }
+    // A spread, computed key, method, or accessor could supply the group out
+    // of sight of the scan.
+    const readable = params.properties.every(
+        (p) =>
+            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            propertyName(p) !== null,
+    );
+    if (!readable) {
+        return null;
+    }
+    const prop = groupProperty(params);
+    if (!prop) {
+        return [];
+    }
+    return ts.isShorthandPropertyAssignment(prop)
+        ? lookup(scopes, prop.name.text)
+        : groupPathOf((prop as ts.PropertyAssignment).initializer, scopes);
 }
 
 /** Path of the group an expression evaluates to, or null if not static. */
@@ -84,15 +129,14 @@ function groupPathOf(expr: ts.Expression, scopes: Scope[]): string[] | null {
     if (ts.isIdentifier(expr)) {
         return lookup(scopes, expr.text);
     }
-    if (!ts.isCallExpression(expr)) {
+    if (!ts.isCallExpression(expr) || kindOf(expr) !== '$cGroup') {
         return null;
     }
-    const callee = calleeOf(expr);
     const label = expr.arguments[0];
-    if (callee?.kind !== '$cGroup' || !label || !ts.isStringLiteral(label)) {
+    if (!label || !ts.isStringLiteral(label)) {
         return null;
     }
-    const parent = callee.receiver ? groupPathOf(callee.receiver, scopes) : [];
+    const parent = groupOfCall(expr, '$cGroup', scopes);
     return parent ? [...parent, label.text] : null;
 }
 
@@ -123,10 +167,33 @@ function declareScope(node: ts.Node, scopes: Scope[]): Scope {
         }
     }
 
+    // Loop-head and catch bindings are never statically known groups.
+    if (
+        (ts.isForStatement(node) ||
+            ts.isForInStatement(node) ||
+            ts.isForOfStatement(node)) &&
+        node.initializer &&
+        ts.isVariableDeclarationList(node.initializer)
+    ) {
+        for (const decl of node.initializer.declarations) {
+            for (const name of boundNames(decl.name)) {
+                scope.set(name, null);
+            }
+        }
+    }
+    if (ts.isCatchClause(node) && node.variableDeclaration) {
+        for (const name of boundNames(node.variableDeclaration.name)) {
+            scope.set(name, null);
+        }
+    }
+
+    // A switch's case clauses share one block scope.
     const statements =
         ts.isSourceFile(node) || ts.isBlock(node) || ts.isModuleBlock(node)
             ? node.statements
-            : [];
+            : ts.isCaseBlock(node)
+              ? node.clauses.flatMap((c) => [...c.statements])
+              : [];
     for (const statement of statements) {
         if (ts.isVariableStatement(statement)) {
             const isConst =
@@ -157,6 +224,11 @@ function opensScope(node: ts.Node): boolean {
         ts.isSourceFile(node) ||
         ts.isBlock(node) ||
         ts.isModuleBlock(node) ||
+        ts.isCaseBlock(node) ||
+        ts.isCatchClause(node) ||
+        ts.isForStatement(node) ||
+        ts.isForInStatement(node) ||
+        ts.isForOfStatement(node) ||
         ts.isFunctionLike(node)
     );
 }
@@ -171,18 +243,12 @@ export function findControlCalls(sourceFile: ts.SourceFile): ControlCall[] {
         if (scoped) {
             declareScope(node, scopes);
         }
-        if (ts.isCallExpression(node)) {
-            const callee = calleeOf(node);
-            const group = callee?.receiver
-                ? groupPathOf(callee.receiver, scopes)
-                : [];
-            if (callee && group) {
-                calls.push({
-                    call: node,
-                    group,
-                    kind: callee.kind,
-                    name: callee.name,
-                });
+        const kind = ts.isCallExpression(node) ? kindOf(node) : null;
+        if (kind) {
+            const call = node as ts.CallExpression;
+            const group = groupOfCall(call, kind, scopes);
+            if (group) {
+                calls.push({ call, group, kind, name: call.expression });
             }
         }
         ts.forEachChild(node, visit);
@@ -191,7 +257,7 @@ export function findControlCalls(sourceFile: ts.SourceFile): ControlCall[] {
         }
     };
     visit(sourceFile);
-    // The walk visits a chain's outermost call first; order by where each
-    // call's name appears instead.
+    // The walk visits an enclosing call before a control call nested in its
+    // arguments; order by where each call's name appears instead.
     return calls.sort((a, b) => a.name.pos - b.name.pos);
 }

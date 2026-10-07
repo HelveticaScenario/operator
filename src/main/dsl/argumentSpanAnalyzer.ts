@@ -17,6 +17,7 @@ import type { CallExpression } from 'ts-morph';
 import {
     Node,
     SyntaxKind,
+    ts,
     VariableDeclarationKind,
     type SourceFile,
 } from 'ts-morph';
@@ -29,7 +30,10 @@ import type {
     SpanRegistry,
 } from './sourceAnalysisTypes';
 import type { ResolvedInterpolation } from '../../shared/dsl/spanTypes';
-import { findControlCalls } from '../../shared/dsl/controlCalls';
+import {
+    findControlCalls,
+    propertyName,
+} from '../../shared/dsl/controlCalls';
 
 /**
  * Build a set of factory function names from module schemas.
@@ -739,24 +743,35 @@ export function analyzeArgumentSpans(
             return; // $btn is not a module factory, skip further processing
         }
 
-        // Validate $cGroup() calls: the label keys the group and the
-        // collapsed state is rewritten in place by the control panel.
+        // Validate $cGroup() calls: the label keys the group and the panel
+        // rewrites the collapsed state in place. The control scan only
+        // reports a call whose params are absent or an object literal.
         if (controlKind === '$cGroup') {
             const args = call.getArguments();
             requireStringLiteralLabel('$cGroup', args, sourceFile);
-            if (args.length >= 2) {
-                const kind = args[1].getKind();
-                if (
-                    kind !== SyntaxKind.TrueKeyword &&
-                    kind !== SyntaxKind.FalseKeyword
-                ) {
-                    const { line, column } = sourceFile.getLineAndColumnAtPos(
-                        args[1].getStart(),
-                    );
-                    throw new Error(
-                        `$cGroup() collapsed state (argument 2) must be a true or false literal at line ${line}, column ${column}`,
-                    );
-                }
+            const params = args[1];
+            // Read keys as the control scan does, so `'collapsed'` counts.
+            const collapsed =
+                params && Node.isObjectLiteralExpression(params)
+                    ? params.compilerNode.properties.find(
+                          (p) => propertyName(p) === 'collapsed',
+                      )
+                    : undefined;
+            const kind =
+                collapsed && ts.isPropertyAssignment(collapsed)
+                    ? collapsed.initializer.kind
+                    : undefined;
+            if (
+                collapsed &&
+                kind !== SyntaxKind.TrueKeyword &&
+                kind !== SyntaxKind.FalseKeyword
+            ) {
+                const { line, column } = sourceFile.getLineAndColumnAtPos(
+                    collapsed.getStart(sourceFile.compilerNode),
+                );
+                throw new Error(
+                    `$cGroup() collapsed must be a true or false literal at line ${line}, column ${column}`,
+                );
             }
             return; // $cGroup is not a module factory, skip further processing
         }

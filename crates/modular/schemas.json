@@ -5200,7 +5200,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -5339,7 +5339,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -5478,7 +5478,7 @@
       {
         "name": "center",
         "description": "center frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -5643,7 +5643,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -5827,7 +5827,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -6011,7 +6011,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -6205,7 +6205,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -6384,7 +6384,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -6525,7 +6525,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -6695,7 +6695,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -6865,7 +6865,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -7035,7 +7035,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -7210,7 +7210,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -7385,7 +7385,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -7545,7 +7545,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -7705,7 +7705,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -7865,7 +7865,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -8025,7 +8025,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -8200,7 +8200,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -8425,7 +8425,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -8600,7 +8600,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -8775,7 +8775,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -8950,7 +8950,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -9125,7 +9125,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -9300,7 +9300,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -9470,7 +9470,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -9640,7 +9640,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -9810,7 +9810,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -9980,7 +9980,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -10150,7 +10150,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -10330,7 +10330,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -10510,7 +10510,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -10651,7 +10651,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0
@@ -10830,7 +10830,7 @@
       {
         "name": "cutoff",
         "description": "cutoff frequency in V/Oct (0V = C4)",
-        "signalType": "pitch",
+        "signalType": "frequency",
         "defaultValue": 0.0,
         "minValue": -5.0,
         "maxValue": 5.0

@@ -105,10 +105,10 @@ describe('applySliderChange', () => {
         // Two groups each hold a 'cutoff'; only the call at the given offset
         // is rewritten.
         const source =
-            "$cGroup('A').slider('cutoff', 1, 0, 2);\n" +
-            "$cGroup('B').slider('cutoff', 1, 0, 2);\n";
+            "$slider('cutoff', 1, 0, 2, $cGroup('A'));\n" +
+            "$slider('cutoff', 1, 0, 2, $cGroup('B'));\n";
         const { model, pushEditOperations } = makeModel(source);
-        const second = source.lastIndexOf('.slider') + 1;
+        const second = source.lastIndexOf('$slider');
 
         applySliderChange(
             { callStart: second, unit: 'number' },

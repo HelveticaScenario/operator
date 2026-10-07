@@ -992,6 +992,7 @@ export function executePatchScript(
         assertControlsPlaced(source, [
             ...controls.sliders,
             ...controls.buttons,
+            ...controls.groups,
         ]);
 
         // Build and return the patch with source locations

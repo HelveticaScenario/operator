@@ -148,22 +148,21 @@ describe('ControlAnchors', () => {
         expect(anchors.offsetOf('S')).toBe(0);
     });
 
-    test('anchors a group method call at its unprefixed name', () => {
+    test('renaming its group keeps a grouped control anchored', () => {
         const model = new FakeModel(
-            "const g = $cGroup('G');\ng.slider('x', 1, 0, 2);",
+            "const g = $cGroup('G');\n$slider('x', 1, 0, 2, g);",
         );
         const anchors = createControlAnchors(model, [
             {
                 fnName: '$slider',
                 moduleId: 'S',
-                sourceLocation: { column: 3, line: 2 },
+                sourceLocation: { column: 1, line: 2 },
             },
         ]);
-        expect(anchors.offsetOf('S')).toBe(model.text.indexOf('slider('));
-        // Renaming the group's label leaves the control anchored.
+        expect(anchors.offsetOf('S')).toBe(model.text.indexOf('$slider('));
         const label = model.text.indexOf("'G'");
         model.edit(label, label + 3, "'Group'");
-        expect(anchors.offsetOf('S')).toBe(model.text.indexOf('slider('));
+        expect(anchors.offsetOf('S')).toBe(model.text.indexOf('$slider('));
     });
 
     test('editing the callee name drops the anchor', () => {

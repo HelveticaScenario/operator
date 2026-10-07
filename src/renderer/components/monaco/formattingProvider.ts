@@ -12,6 +12,11 @@ export const DEFAULT_PRETTIER_OPTIONS = {
     trailingComma: 'all' as const,
 };
 
+/** The editor's effective Prettier options: the user's over the defaults. */
+export function resolvePrettierOptions(userConfig: PrettierConfig = {}) {
+    return { ...DEFAULT_PRETTIER_OPTIONS, ...userConfig };
+}
+
 export function registerDslFormattingProvider(
     monaco: Monaco,
     userConfig: PrettierConfig = {},
@@ -21,8 +26,7 @@ export function registerDslFormattingProvider(
         {
             async provideDocumentFormattingEdits(model) {
                 const formatted = await prettier.format(model.getValue(), {
-                    ...DEFAULT_PRETTIER_OPTIONS,
-                    ...userConfig,
+                    ...resolvePrettierOptions(userConfig),
                     // Parser and plugins must not be overridden
                     parser: 'babel',
                     plugins: [prettierBabel, prettierEstree as any],

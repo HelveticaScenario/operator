@@ -50,8 +50,9 @@ export function ControlPanel({
                     <p className="control-panel-hint">
                         Use <code>$slider(label, value, min, max)</code>,{' '}
                         <code>$btn(label)</code>, or{' '}
-                        <code>$toggleBtn(label, initial)</code> in your patch,
-                        and <code>$cGroup(label)</code> to group them.
+                        <code>$toggleBtn(label, initial)</code> in your patch.
+                        Pass a <code>$cGroup(label)</code> as a control&apos;s
+                        last argument to group it.
                     </p>
                 </div>
             </div>
@@ -158,7 +159,7 @@ function GroupControl({
     groups,
     handlers,
 }: GroupControlProps) {
-    const toggleable = group.collapseEdit !== null;
+    const toggleable = group.collapsible;
     return (
         <div className={`control-group${group.collapsed ? ' collapsed' : ''}`}>
             <div

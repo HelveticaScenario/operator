@@ -10,6 +10,7 @@
 import { describe, expect, test } from 'vitest';
 import type { PatchGraph } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
+import { assertControlsPlaced } from '../controls';
 import { type DSLExecutionResult, executePatchScript } from '../executor';
 import { FIRST_LINE_COLUMN_OFFSET } from '../../../shared/dsl/spanTypes';
 import {
@@ -1270,14 +1271,15 @@ describe('sliders', () => {
 // ─── Control groups ─────────────────────────────────────────────────────────
 
 describe('control groups', () => {
-    test('controls created through a group carry its path', () => {
+    test('controls given a group carry its path', () => {
         const result = exec(`
             const synth = $cGroup("Synth")
-            const amp = synth.cGroup("Amp", true)
-            $saw(synth.slider("Root", "c3", "c2", "c5"))
-                .amplitude(amp.slider("Level", 0.5, 0, 1))
+            const amp = $cGroup("Amp", { collapsed: true, group: synth })
+            $saw($slider("Root", "c3", "c2", "c5", synth))
+                .amplitude($slider("Level", 0.5, 0, 1, amp))
                 .out()
-            $cGroup("Fx").btn("Kick").out()
+            $btn("Kick", $cGroup("Fx")).out()
+            $toggleBtn("Hold", false, amp).out()
         `);
         expect(result.sliders.map((s) => [s.group, s.label])).toEqual([
             [['Synth'], 'Root'],
@@ -1285,21 +1287,45 @@ describe('control groups', () => {
         ]);
         expect(result.buttons.map((b) => [b.group, b.label])).toEqual([
             [['Fx'], 'Kick'],
+            [['Synth', 'Amp'], 'Hold'],
         ]);
+    });
+
+    test('$cGroup returns an opaque reference, not a factory object', () => {
+        expect(() =>
+            execPatch('const g = $cGroup("G")\ng.slider("x", 1, 0, 2)'),
+        ).toThrow();
+        expect(() =>
+            execPatch(
+                'const g = $cGroup("G")\nif (g.label !== "G" || Object.isFrozen(g) !== true) throw new Error("bad ref")',
+            ),
+        ).not.toThrow();
+    });
+
+    test('a group argument must come from $cGroup', () => {
+        expect(() => execPatch('$btn("b", { label: "G" })')).toThrow(
+            'group must be the result of a $cGroup() call',
+        );
+        expect(() => execPatch('$slider("s", 1, 0, 2, 3)')).toThrow(
+            'group must be the result of a $cGroup() call',
+        );
+        expect(() => execPatch('$cGroup("A", { group: "G" })')).toThrow(
+            'group must be the result of a $cGroup() call',
+        );
     });
 
     test('labels are unique within a group, not across groups', () => {
         const result = exec(`
             $slider("cut", 1, 0, 2).out()
-            $cGroup("A").slider("cut", 1, 0, 2).out()
-            $cGroup("B").slider("cut", 1, 0, 2).out()
+            $slider("cut", 1, 0, 2, $cGroup("A")).out()
+            $slider("cut", 1, 0, 2, $cGroup("B")).out()
         `);
         expect(new Set(result.sliders.map((s) => s.moduleId)).size).toBe(3);
         expect(() =>
             execPatch(`
                 const a = $cGroup("A")
-                a.slider("cut", 1, 0, 2)
-                a.btn("cut")
+                $slider("cut", 1, 0, 2, a)
+                $btn("cut", a)
             `),
         ).toThrow('label "cut" is already used by a $slider() in group "A"');
     });
@@ -1309,30 +1335,87 @@ describe('control groups', () => {
             '$cGroup() label "A" must be unique',
         );
         expect(() =>
-            execPatch('$cGroup("A").cGroup("X")\n$cGroup("B").cGroup("X")'),
+            execPatch(
+                '$cGroup("X", { group: $cGroup("A") })\n$cGroup("X", { group: $cGroup("B") })',
+            ),
         ).not.toThrow();
     });
 
-    test('the collapsed state must be a boolean literal', () => {
-        expect(() => execPatch('$cGroup("A", 1)')).toThrow(
-            'collapsed state (argument 2) must be a true or false literal',
+    test('params must be an object literal with a boolean collapsed', () => {
+        expect(() => execPatch('$cGroup("A", true)')).toThrow(
+            'second argument must be a { collapsed, group } object',
         );
-        expect(() => execPatch('$cGroup("A", true, 2)')).toThrow(
-            'takes only label and collapsed-state arguments',
+        // A params object the panel cannot read in place.
+        expect(() =>
+            execPatch('const opts = { collapsed: true }\n$cGroup("A", opts)'),
+        ).toThrow('$cGroup params written as an object literal');
+        expect(() => execPatch('$cGroup("A", { collapsed: 1 })')).toThrow(
+            'collapsed must be a true or false literal',
+        );
+        expect(() => execPatch('$cGroup("A", { colapsed: true })')).toThrow(
+            'accept only collapsed and group, not colapsed',
+        );
+        expect(() => execPatch('$cGroup("A", {}, 2)')).toThrow(
+            'takes a label and an optional { collapsed, group } object',
         );
     });
 
-    test('a control the Control panel cannot place is rejected', () => {
+    test('a control or group the Control panel cannot place is rejected', () => {
         // A group passed as a parameter, and an aliased factory.
         expect(() =>
             execPatch(`
-                function voice(g) { return g.btn("b") }
+                function voice(g) { return $btn("b", g) }
                 voice($cGroup("A")).out()
             `),
         ).toThrow('Control "b" at line 2 must be created by');
         expect(() =>
             execPatch('const s = $slider\ns("x", 1, 0, 2).out()'),
         ).toThrow('Control "x" at line 2 must be created by');
+        expect(() =>
+            execPatch(`
+                let parent = $cGroup("P")
+                $cGroup("C", { group: parent })
+            `),
+        ).toThrow('Control "C" at line 3 must be created by');
+    });
+
+    test('a control the panel would place in a different group is rejected', () => {
+        // The scan cannot see a computed key, so the panel shows B at the
+        // root while evaluation nests it under A.
+        expect(() =>
+            execPatch(
+                'const a = $cGroup("A")\n$cGroup("B", { ["group"]: a })',
+            ),
+        ).toThrow('Control "B" at line 2 must be created by');
+        // A quoted key is read the same way by both.
+        const result = exec(
+            'const a = $cGroup("A")\n$btn("x", $cGroup("B", { "group": a })).out()',
+        );
+        expect(result.buttons[0].group).toEqual(['A', 'B']);
+    });
+
+    test('a scanned group path that differs from evaluation is rejected', () => {
+        // Line 2 avoids the first-line wrapper column offset.
+        const source = 'const a = $cGroup("A")\n$btn("x", a)';
+        const at = { column: 1, line: 2 };
+        expect(() =>
+            assertControlsPlaced(source, [
+                { group: ['A'], label: 'x', sourceLocation: at },
+            ]),
+        ).not.toThrow();
+        expect(() =>
+            assertControlsPlaced(source, [
+                { group: ['Z'], label: 'x', sourceLocation: at },
+            ]),
+        ).toThrow(
+            'Control "x" at line 2 is in group "Z" when evaluated, but the Control panel would place it in "A"',
+        );
+    });
+
+    test('a quoted collapsed key must still be a boolean literal', () => {
+        expect(() => execPatch('$cGroup("A", { "collapsed": 1 })')).toThrow(
+            'collapsed must be a true or false literal',
+        );
     });
 
     test('an unrelated .slider() method is not treated as a control', () => {
@@ -1341,16 +1424,6 @@ describe('control groups', () => {
                 'const ui = { slider: (x) => x }\n$sine(ui.slider(440)).out()',
             ),
         ).not.toThrow();
-    });
-
-    test('a group call records its controls at the method name', () => {
-        const result = exec(
-            'const g = $cGroup("G")\ng.slider("x", 1, 0, 2).out()',
-        );
-        expect(result.sliders[0].sourceLocation).toEqual({
-            column: 3,
-            line: 2,
-        });
     });
 });
 
@@ -1386,9 +1459,9 @@ describe('buttons', () => {
     });
 
     test('$btn with extra arguments throws', () => {
-        expect(() => execPatch('$btn("x", 0.1)')).toThrow(
-            'only a label argument',
-        );
+        expect(() =>
+            execPatch('const g = $cGroup("G")\n$btn("x", g, 0.1)'),
+        ).toThrow('takes a label and an optional group');
     });
 
     test('$toggleBtn requires a boolean initial state', () => {
@@ -1397,9 +1470,9 @@ describe('buttons', () => {
     });
 
     test('$toggleBtn with extra arguments throws', () => {
-        expect(() => execPatch('$toggleBtn("t", false, 0.2)')).toThrow(
-            'takes only label and initial-state arguments',
-        );
+        expect(() =>
+            execPatch('const g = $cGroup("G")\n$toggleBtn("t", false, g, 0.2)'),
+        ).toThrow('takes label, initial state, and an optional group');
     });
 
     test('button labels differing only in punctuation get distinct modules', () => {

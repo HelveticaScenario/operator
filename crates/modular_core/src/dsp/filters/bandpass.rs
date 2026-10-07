@@ -14,7 +14,7 @@ struct BandpassFilterParams {
     /// signal input
     input: PolySignal,
     /// center frequency in V/Oct (0V = C4)
-    #[signal(type = pitch)]
+    #[signal(type = frequency)]
     center: PolySignal,
     /// filter resonance — controls bandwidth (0–5)
     #[signal(default = 1.0, range = (0.0, 5.0))]

@@ -10,6 +10,7 @@ import { setupMonacoJavascript } from './monaco/monacoLanguage';
 import {
     DEFAULT_PRETTIER_OPTIONS,
     registerDslFormattingProvider,
+    resolvePrettierOptions,
 } from './monaco/formattingProvider';
 import { applyMonacoTheme } from './monaco/theme';
 import { registerConfigSchema } from './monaco/jsonSchema';
@@ -19,6 +20,8 @@ import {
 } from './monaco/scopeViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import { registerControlQuickFixProvider } from './monaco/controlQuickFixProvider';
+import { codeStyleFromPrettier } from '../dsl/objectPropertyInsert';
 import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
 import { registerKeybindingsDiagnostics } from './monaco/keybindingsDiagnostics';
 import {
@@ -338,6 +341,23 @@ export function MonacoPatchEditor({
         );
         return () => midiProvider.dispose();
     }, [monaco]);
+
+    // Quick fix: wrap a module param in a control call chosen from its
+    // schema metadata.
+    useEffect(() => {
+        if (!monaco || schemas.length === 0) {
+            return;
+        }
+        const layout = codeStyleFromPrettier(
+            resolvePrettierOptions(prettierConfig),
+        );
+        const provider = registerControlQuickFixProvider(
+            monaco,
+            () => schemas,
+            () => layout,
+        );
+        return () => provider.dispose();
+    }, [monaco, schemas, prettierConfig]);
 
     // Autocomplete command ids and `when` context keys in the keybindings.json
     // buffer, and flag unsupported `when` operators as warnings. Both scope

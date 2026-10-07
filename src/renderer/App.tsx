@@ -38,6 +38,8 @@ import {
 import type { EditorBuffer } from './types/editor';
 import { applySliderChange } from './app/sliderChange';
 import { applyButtonChange, applyGroupCollapse } from './app/buttonChange';
+import { resolvePrettierOptions } from './components/monaco/formattingProvider';
+import { codeStyleFromPrettier } from './dsl/objectPropertyInsert';
 import { bindControls } from './app/controlBinding';
 import { ControlAnchors, createControlAnchors } from './app/controlAnchors';
 import { extractControls, resolveControls } from './dsl/extractControls';
@@ -96,6 +98,7 @@ function App() {
         xyScopePersistence,
         xyScopeUpsample,
         xyScopeLineWidth,
+        prettierConfig,
     } = useTheme();
 
     // Workspace & filesystem
@@ -405,9 +408,12 @@ function App() {
                 { callStart },
                 collapsed,
                 editorRef.current?.getModel() ?? null,
+                codeStyleFromPrettier(
+                    resolvePrettierOptions(prettierConfig),
+                ),
             );
         },
-        [],
+        [prettierConfig],
     );
 
     // Control offsets come from parsing the visible buffer, which is the

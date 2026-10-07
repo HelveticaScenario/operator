@@ -1,6 +1,11 @@
 import type { ButtonMode } from '../../shared/dsl/buttonTypes';
 import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
-import { extractControls, isIncomplete } from '../dsl/extractControls';
+import {
+    extractControls,
+    groupCollapseEdit,
+    isIncomplete,
+} from '../dsl/extractControls';
+import type { CodeStyle } from '../dsl/objectPropertyInsert';
 import { rewriteSource, type SliderEditModel } from './sliderChange';
 
 /**
@@ -43,20 +48,16 @@ export function applyButtonChange(
 
 /**
  * Persist a group's collapsed state into its `$cGroup` call in the visible
- * buffer, found by its call position: the state literal is replaced, or
- * appended after the label when the call has none.
+ * buffer, found by its call position. A `collapsed` property added to the
+ * params object is laid out per `layout`.
  */
 export function applyGroupCollapse(
     group: { callStart: number },
     collapsed: boolean,
     activeModel: SliderEditModel | null,
+    layout: CodeStyle,
 ): void {
-    rewriteSource(activeModel, (source) => {
-        const edit = extractControls(source).groups.find(
-            (g) => g.callStart === group.callStart,
-        )?.collapseEdit;
-        return edit
-            ? { span: edit.range, text: `${edit.prefix}${String(collapsed)}` }
-            : null;
-    });
+    rewriteSource(activeModel, (source) =>
+        groupCollapseEdit(source, group.callStart, collapsed, layout),
+    );
 }

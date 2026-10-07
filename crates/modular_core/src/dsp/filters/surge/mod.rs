@@ -34,7 +34,7 @@ macro_rules! filter_module {
                 /// signal input (bipolar, ±5 V)
                 input: crate::poly::PolySignal,
                 /// cutoff frequency in V/Oct (0V = C4)
-                #[signal(type = pitch, default = 0.0, range = (-5.0, 5.0))]
+                #[signal(type = frequency, default = 0.0, range = (-5.0, 5.0))]
                 cutoff: crate::poly::PolySignal,
                 /// filter resonance (0–5); high values approach self-oscillation
                 #[signal(type = control, default = 0.0, range = (0.0, 5.0))]

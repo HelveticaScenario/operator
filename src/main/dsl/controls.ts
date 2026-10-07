@@ -2,10 +2,11 @@
  * DSL control factories: `$slider`, `$btn`, `$toggleBtn`, and `$cGroup`.
  *
  * Each control is a `$signal` module the control panel drives. `$cGroup`
- * returns a group whose `slider` / `btn` / `toggleBtn` / `cGroup` methods are
- * the same factories bound to a nested group path. Groups are purely visual
- * (the panel reads them from the source), but a control's group path scopes
- * its label — labels are unique within a group, not across the patch.
+ * returns an opaque {@link ControlGroup} reference; passing it as a
+ * control's (or another group's) optional group argument places that
+ * control inside the group. Groups are purely visual (the panel reads them
+ * from the source), but a control's group path scopes its label — labels are
+ * unique within a group, not across the patch.
  */
 
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
@@ -31,33 +32,49 @@ export interface ControlDeps {
     ): CollectionWithRange;
 }
 
-/** The control factories, bound to one group: what `$cGroup` returns. */
-export interface ControlGroupApi {
-    slider: (
+/**
+ * A reference to a control group, as `$cGroup` returns it. Only references
+ * issued by the current patch evaluation are accepted as a group argument.
+ */
+class ControlGroup {
+    constructor(readonly label: string) {
+        Object.freeze(this);
+    }
+}
+
+export interface Controls {
+    $slider: (
         label: string,
         value: number | string,
         min: number | string,
         max: number | string,
+        group?: ControlGroup,
+        ...rest: unknown[]
     ) => CollectionWithRange;
-    btn: (label: string, ...rest: unknown[]) => CollectionWithRange;
-    toggleBtn: (
+    $btn: (
+        label: string,
+        group?: ControlGroup,
+        ...rest: unknown[]
+    ) => CollectionWithRange;
+    $toggleBtn: (
         label: string,
         initial: boolean,
+        group?: ControlGroup,
         ...rest: unknown[]
     ) => CollectionWithRange;
-    cGroup: (
+    $cGroup: (
         label: string,
-        collapsed?: boolean,
+        params?: { collapsed?: boolean; group?: ControlGroup },
         ...rest: unknown[]
-    ) => ControlGroupApi;
+    ) => ControlGroup;
 }
 
-/** The root group's factories, as the patch's free functions. */
-export interface RootControls {
-    $slider: ControlGroupApi['slider'];
-    $btn: ControlGroupApi['btn'];
-    $toggleBtn: ControlGroupApi['toggleBtn'];
-    $cGroup: ControlGroupApi['cGroup'];
+/** Where a `$cGroup` call created a group, for the placement check. */
+export interface GroupDefinition {
+    label: string;
+    /** Labels of the enclosing groups, outermost first */
+    group: string[];
+    sourceLocation?: { line: number; column: number };
 }
 
 /**
@@ -76,13 +93,45 @@ function inGroup(group: string[]): string {
     return group.length > 0 ? ` in group "${group.join(' / ')}"` : '';
 }
 
-export function createControls(deps: ControlDeps): RootControls & {
+/**
+ * True for a plain `{ ... }` literal. Patch scripts evaluate in a vm realm
+ * whose `Object.prototype` differs from the host's, so plainness is judged by
+ * prototype-chain depth rather than identity.
+ */
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+    if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+        return false;
+    }
+    const proto = Object.getPrototypeOf(v);
+    return proto === null || Object.getPrototypeOf(proto) === null;
+}
+
+export function createControls(deps: ControlDeps): Controls & {
     sliders: SliderDefinition[];
     buttons: ButtonDefinition[];
+    groups: GroupDefinition[];
 } {
     const sliders: SliderDefinition[] = [];
     const buttons: ButtonDefinition[] = [];
+    const groups: GroupDefinition[] = [];
     const groupKeys = new Set<string>();
+    // Every group this evaluation issued, with its label path.
+    const groupPaths = new WeakMap<object, string[]>();
+
+    /** The label path of a group argument; [] when it is omitted. */
+    const resolveGroup = (fn: string, group: unknown): string[] => {
+        if (group === undefined) {
+            return [];
+        }
+        const path =
+            typeof group === 'object' && group !== null
+                ? groupPaths.get(group)
+                : undefined;
+        if (!path) {
+            throw new Error(`${fn} group must be the result of a $cGroup() call`);
+        }
+        return path;
+    };
 
     const sameGroup = (a: string[], b: string[]) =>
         a.length === b.length && a.every((segment, i) => segment === b[i]);
@@ -107,14 +156,20 @@ export function createControls(deps: ControlDeps): RootControls & {
         }
     };
 
-    const makeGroup = (group: string[]): ControlGroupApi => ({
+    return {
         /**
          * Create a slider control: a signal module with a UI slider bound to
          * it. Value/min/max must share one unit: all numbers (volts), all hz
          * strings, or all note strings. For hz/note the stored values are
          * V/Oct volts.
          */
-        slider(label, value, min, max) {
+        $slider(label, value, min, max, groupRef, ...rest) {
+            if (rest.length > 0) {
+                throw new Error(
+                    '$slider() takes label, value, min, max, and an optional group',
+                );
+            }
+            const group = resolveGroup('$slider()', groupRef);
             validateLabel('$slider()', group, label);
             // Name the slider and the offending argument so an error among
             // many sliders points at the right literal.
@@ -173,11 +228,12 @@ export function createControls(deps: ControlDeps): RootControls & {
          * while the button is held and 0V on release. Chain through .$.hold
          * for fixed-length triggers.
          */
-        btn(label, ...rest) {
-            validateLabel('$btn()', group, label);
+        $btn(label, groupRef, ...rest) {
             if (rest.length > 0) {
-                throw new Error('$btn() takes only a label argument');
+                throw new Error('$btn() takes a label and an optional group');
             }
+            const group = resolveGroup('$btn()', groupRef);
+            validateLabel('$btn()', group, label);
             const moduleId = controlModuleId('__button_', group, label);
             buttons.push({
                 group,
@@ -194,16 +250,17 @@ export function createControls(deps: ControlDeps): RootControls & {
          * Create a latched toggle button: clicking flips between 0V and 5V
          * and rewrites the initial-state literal in the source.
          */
-        toggleBtn(label, initial, ...rest) {
+        $toggleBtn(label, initial, groupRef, ...rest) {
+            if (rest.length > 0) {
+                throw new Error(
+                    '$toggleBtn() takes label, initial state, and an optional group',
+                );
+            }
+            const group = resolveGroup('$toggleBtn()', groupRef);
             validateLabel('$toggleBtn()', group, label);
             if (typeof initial !== 'boolean') {
                 throw new Error(
                     '$toggleBtn() initial state must be a true or false literal',
-                );
-            }
-            if (rest.length > 0) {
-                throw new Error(
-                    '$toggleBtn() takes only label and initial-state arguments',
                 );
             }
             const moduleId = controlModuleId('__button_', group, label);
@@ -225,24 +282,38 @@ export function createControls(deps: ControlDeps): RootControls & {
         },
 
         /**
-         * Create a control group nested in this one. Its controls appear
-         * together under a collapsible header; `collapsed` is the header's
-         * state, which the panel rewrites in the source.
+         * Create a control group: controls given it as their group argument
+         * appear together under a collapsible header. `params.collapsed` is
+         * the header's state, which the panel rewrites in the source;
+         * `params.group` nests this group inside another.
          */
-        cGroup(label, collapsed, ...rest) {
+        $cGroup(label, params, ...rest) {
             if (typeof label !== 'string') {
                 throw new Error('$cGroup() label must be a string literal');
             }
-            if (collapsed !== undefined && typeof collapsed !== 'boolean') {
-                throw new Error(
-                    '$cGroup() collapsed state must be a true or false literal',
-                );
-            }
             if (rest.length > 0) {
                 throw new Error(
-                    '$cGroup() takes only label and collapsed-state arguments',
+                    '$cGroup() takes a label and an optional { collapsed, group } object',
                 );
             }
+            if (params !== undefined && !isPlainObject(params)) {
+                throw new Error(
+                    '$cGroup() second argument must be a { collapsed, group } object',
+                );
+            }
+            const { collapsed, group: groupRef, ...others } = params ?? {};
+            const extra = Object.keys(others);
+            if (extra.length > 0) {
+                throw new Error(
+                    `$cGroup() params accept only collapsed and group, not ${extra.join(', ')}`,
+                );
+            }
+            if (collapsed !== undefined && typeof collapsed !== 'boolean') {
+                throw new Error(
+                    '$cGroup() collapsed must be a true or false literal',
+                );
+            }
+            const group = resolveGroup('$cGroup()', groupRef);
             const child = [...group, label];
             const key = JSON.stringify(child);
             if (groupKeys.has(key)) {
@@ -251,32 +322,34 @@ export function createControls(deps: ControlDeps): RootControls & {
                 );
             }
             groupKeys.add(key);
-            return makeGroup(child);
+            groups.push({
+                group,
+                label,
+                sourceLocation: captureSourceLocation(),
+            });
+            const ref = new ControlGroup(label);
+            groupPaths.set(ref, child);
+            return ref;
         },
-    });
-
-    const root = makeGroup([]);
-    return {
-        $btn: root.btn,
-        $cGroup: root.cGroup,
-        $slider: root.slider,
-        $toggleBtn: root.toggleBtn,
         buttons,
+        groups,
         sliders,
     };
 }
 
 /**
- * Reject any control created at a call site the static scan cannot place.
- * The control panel builds its controls and groups from the source, so a
- * control made through a group it cannot see — a group passed as a
- * parameter, held in a `let`, or an aliased factory — would be missing from
- * the panel.
+ * Reject any control or group the static scan does not place where
+ * evaluation put it. The control panel builds its controls and groups from
+ * the source, so one whose group argument it cannot resolve — a group
+ * passed as a parameter or held in a `let` — or one made through an aliased
+ * factory would be missing from the panel, and one it resolves differently
+ * would show in the wrong group.
  */
 export function assertControlsPlaced(
     source: string,
     controls: Array<{
         label: string;
+        group: string[];
         sourceLocation?: { line: number; column: number };
     }>,
 ): void {
@@ -288,21 +361,30 @@ export function assertControlsPlaced(
         ts.ScriptKind.JS,
     );
     // Keys in V8 call-site coordinates, matching captured source locations.
-    const placed = new Set(
-        findControlCalls(sourceFile).map(({ name }) => {
+    const placed = new Map(
+        findControlCalls(sourceFile).map(({ name, group }) => {
             const { line, character } =
                 sourceFile.getLineAndCharacterOfPosition(
                     name.getStart(sourceFile),
                 );
             const column =
                 character + 1 + (line === 0 ? FIRST_LINE_COLUMN_OFFSET : 0);
-            return `${line + 1}:${column}`;
+            return [`${line + 1}:${column}`, group] as const;
         }),
     );
-    for (const { label, sourceLocation: loc } of controls) {
-        if (loc && !placed.has(`${loc.line}:${loc.column}`)) {
+    for (const { label, group, sourceLocation: loc } of controls) {
+        if (!loc) {
+            continue;
+        }
+        const scanned = placed.get(`${loc.line}:${loc.column}`);
+        if (!scanned) {
             throw new Error(
-                `Control "${label}" at line ${loc.line} must be created by a $slider/$btn/$toggleBtn call, or by a method call on a $cGroup(...) call or a const bound to one, so the Control panel can place it`,
+                `Control "${label}" at line ${loc.line} must be created by a direct $slider/$btn/$toggleBtn/$cGroup call whose group, if given, is a $cGroup(...) call or a const bound to one ($cGroup params written as an object literal), so the Control panel can place it`,
+            );
+        }
+        if (JSON.stringify(scanned) !== JSON.stringify(group)) {
+            throw new Error(
+                `Control "${label}" at line ${loc.line} is in group "${group.join(' / ')}" when evaluated, but the Control panel would place it in "${scanned.join(' / ')}" — pass the group as a $cGroup(...) call or a const bound to one that no other binding shadows`,
             );
         }
     }

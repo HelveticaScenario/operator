@@ -652,7 +652,8 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             {
                 name: 'label',
                 type: 'string',
-                description: 'Display label (must be a string literal)',
+                description:
+                    'Display label (must be a string literal, unique within its group)',
             },
             {
                 name: 'value',
@@ -672,11 +673,17 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
                 description:
                     'Maximum value, in the same unit (must be a literal)',
             },
+            {
+                name: 'group',
+                type: 'ControlGroup',
+                description:
+                    'Group to place the control in: a $cGroup(...) call or a const bound to one (optional)',
+            },
         ],
         returns:
             'CollectionWithRange carrying the current slider value (range [min, max])',
         signature:
-            '$slider(label: string, value: number | string, min: number | string, max: number | string): CollectionWithRange',
+            '$slider(label: string, value: number | string, min: number | string, max: number | string, group?: ControlGroup): CollectionWithRange',
     },
     {
         description:
@@ -694,10 +701,16 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
                 description:
                     'Display label (must be a string literal, unique within its group)',
             },
+            {
+                name: 'group',
+                type: 'ControlGroup',
+                description:
+                    'Group to place the control in: a $cGroup(...) call or a const bound to one (optional)',
+            },
         ],
         returns:
             'CollectionWithRange carrying the button output (range [0, 5])',
-        signature: '$btn(label: string): CollectionWithRange',
+        signature: '$btn(label: string, group?: ControlGroup): CollectionWithRange',
     },
     {
         description:
@@ -717,18 +730,24 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
                 type: 'boolean',
                 description: 'Initial state (must be a true/false literal)',
             },
+            {
+                name: 'group',
+                type: 'ControlGroup',
+                description:
+                    'Group to place the control in: a $cGroup(...) call or a const bound to one (optional)',
+            },
         ],
         returns:
             'CollectionWithRange carrying the button output (range [0, 5])',
         signature:
-            '$toggleBtn(label: string, initial: boolean): CollectionWithRange',
+            '$toggleBtn(label: string, initial: boolean, group?: ControlGroup): CollectionWithRange',
     },
     {
         description:
-            'Create a group of controls. Controls made through the returned group appear together in the Control panel under a collapsible header; groups nest. Clicking the header rewrites the collapsed-state literal in the source. Control labels need only be unique within their group.',
+            'Create a group of controls. Controls given the returned group as their last argument appear together in the Control panel under a collapsible header; groups nest through params.group. Clicking the header rewrites the collapsed literal in the source. Control labels need only be unique within their group.',
         examples: [
-            'const voice = $cGroup("Voice");\n$sine(voice.slider("Pitch", "c4", "c2", "c6")).amplitude($adsr(voice.btn("Play"))).out();',
-            'const synth = $cGroup("Synth");\nconst amp = synth.cGroup("Amp", true);\n$saw(synth.slider("Root", "c3", "c2", "c5")).amplitude(amp.slider("Level", 0.5, 0, 1)).out();',
+            'const voice = $cGroup("Voice");\n$sine($slider("Pitch", "c4", "c2", "c6", voice)).amplitude($adsr($btn("Play", voice))).out();',
+            'const synth = $cGroup("Synth");\nconst amp = $cGroup("Amp", { collapsed: true, group: synth });\n$saw($slider("Root", "c3", "c2", "c5", synth)).amplitude($slider("Level", 0.5, 0, 1, amp)).out();',
         ],
         group: 'Controls',
         name: '$cGroup',
@@ -740,15 +759,16 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
                     'Display label (must be a string literal, unique among its siblings)',
             },
             {
-                name: 'collapsed',
-                type: 'boolean',
+                name: 'params',
+                type: '{ collapsed?: boolean, group?: ControlGroup }',
                 description:
-                    'Whether the group starts collapsed (must be a true/false literal; optional)',
+                    'collapsed: whether the group starts collapsed (a true/false literal); group: a parent group to nest in. Must be an object literal; optional',
             },
         ],
         returns:
-            'A group with slider, btn, toggleBtn, and cGroup methods that create controls inside it. Call them on the $cGroup(...) call or a const bound to it.',
-        signature: '$cGroup(label: string, collapsed?: boolean): ControlGroup',
+            'A ControlGroup reference. Pass the $cGroup(...) call or a const bound to it as a control\'s group argument.',
+        signature:
+            '$cGroup(label: string, params?: { collapsed?: boolean, group?: ControlGroup }): ControlGroup',
     },
     // ---- Advanced ----
     {
