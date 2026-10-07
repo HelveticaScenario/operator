@@ -400,6 +400,17 @@ if (electronSquirrelStartup) {
     app.quit();
 }
 
+// The single-instance lock and Chromium's profile storage are both keyed on the
+// userData directory, so each dev checkout gets its own to run alongside the
+// packaged app and dev builds from other worktrees. Must run before anything
+// reads userData. The macOS menu bar and Dock name come from the dev
+// Electron.app bundle, which scripts/patch-electron-plist.mjs renames to match.
+if (!app.isPackaged) {
+    const devName = `${app.name} Dev (${path.basename(app.getAppPath())})`;
+    app.setPath('userData', path.join(app.getPath('appData'), devName));
+    app.setName(devName);
+}
+
 // Enforce single instance
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -1621,7 +1632,7 @@ const createHelpWindow = () => {
 
     helpWindow = new BrowserWindow({
         height: 1000,
-        title: 'Operator Help',
+        title: `${app.name} Help`,
         webPreferences: {
             preload: path.join(__dirname, 'preload.js'),
         },
@@ -1818,8 +1829,12 @@ const createWindow = (): void => {
             // is idle.
             preload: path.join(__dirname, 'preload.js'),
         },
+        title: app.name,
         width: 1500,
     });
+
+    // Keep the app name as the title rather than index.html's static <title>.
+    mainWindow.on('page-title-updated', (event) => event.preventDefault());
 
     // Quit app when window is closed (on all platforms, including macOS)
     mainWindow.on('close', () => {

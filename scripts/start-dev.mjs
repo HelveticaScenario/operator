@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const FORGE_BIN = join(ROOT, 'node_modules', '.bin', 'electron-forge');
+
+// Name the dev Electron.app after this checkout before launching it.
+execFileSync(
+    process.execPath,
+    [join(ROOT, 'scripts', 'patch-electron-plist.mjs')],
+    {
+        stdio: 'inherit',
+    },
+);
 
 // Pass wrapper PID so Electron can signal us to restart
 process.env.DEV_WRAPPER_PID = String(process.pid);
