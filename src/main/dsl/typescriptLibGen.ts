@@ -341,6 +341,8 @@ type BufferOutputRef = {
   readonly frameCount: number;
 };
 
+type DropFirst<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;
+
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
  * \`$cycle\` as its pattern argument. Opaque to user code; construct with
@@ -397,6 +399,16 @@ type ParsedPattern = {
    * \`\`\`
    */
   beat(t: number | string, div: number | string): BeatPattern;
+  /**
+   * Shorthand for \`$cycle(pattern, ...rest)\`: plays this pattern with a
+   * \`$cycle\` sequencer. Accepts the same arguments as \`$cycle\` after its
+   * \`pattern\`.
+   *
+   * \`\`\`js
+   * $p("c4 e4 g4").cycle().out()
+   * \`\`\`
+   */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -627,6 +639,8 @@ type SpPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -644,6 +658,8 @@ type ArrangePattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this arrangement at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -661,6 +677,8 @@ type FastPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -676,6 +694,8 @@ type SlowPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -698,6 +718,8 @@ type StructPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -720,6 +742,8 @@ type BeatPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at other beats. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**

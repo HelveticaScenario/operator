@@ -436,6 +436,42 @@ describe('sequencing', () => {
         expect(findModules(patch, '$cycle').length).toBe(1);
     });
 
+    test('.cycle() on every pattern kind builds a $cycle', () => {
+        const patch = execPatch(`
+            $p("c4 e4").cycle().out();
+            $p.s("0 2 4", "C(major)").cycle().out();
+            $p.arrange([2, $p("c4")], [1, $p("e4")]).cycle().out();
+            $p("c4 e4").fast(2).slow(3).struct("x ~").beat("0", 4).cycle().out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(4);
+    });
+
+    test('.cycle(config) forwards $cycle config', () => {
+        const patch = execPatch('$p("c4 e4").cycle({ ribbon: [0, 2] }).out()');
+        const [mod] = findModules(patch, '$cycle');
+        expect((mod.params as { ribbon: unknown }).ribbon).toEqual([0, 2]);
+    });
+
+    test('.cycle() matches $cycle(pattern) and keeps highlight spans', () => {
+        const stripSpans = (params: unknown) =>
+            JSON.parse(
+                JSON.stringify(params, (k, v) =>
+                    k === 'argument_span' || k === '__argument_spans'
+                        ? undefined
+                        : v,
+                ),
+            );
+        const viaMethod = execPatch('$p("c4 e4").cycle().out()');
+        const viaFactory = execPatch('$cycle($p("c4 e4")).out()');
+        const [a] = findModules(viaMethod, '$cycle');
+        const [b] = findModules(viaFactory, '$cycle');
+        expect(stripSpans(a.params)).toEqual(stripSpans(b.params));
+        expect(
+            (a.params as { pattern: { argument_span?: unknown } }).pattern
+                .argument_span,
+        ).toEqual({ start: 3, end: 10 });
+    });
+
     test('$track with keyframes', () => {
         const patch = execPatch('$track([[$hz(440), 0], [$hz(880), 1]]).out()');
         expect(findModules(patch, '$track').length).toBe(1);
@@ -1208,21 +1244,21 @@ describe('sliders', () => {
         expect(() => execPatch('$slider("x", "440hz", 0, 5)')).toThrow(
             'must all be numbers, all hz strings, or all note strings',
         );
-        expect(() =>
-            execPatch('$slider("x", "c4", "20hz", "2000hz")'),
-        ).toThrow('must all be numbers, all hz strings, or all note strings');
+        expect(() => execPatch('$slider("x", "c4", "20hz", "2000hz")')).toThrow(
+            'must all be numbers, all hz strings, or all note strings',
+        );
     });
 
     test('$slider invalid strings throw', () => {
-        expect(() =>
-            execPatch('$slider("x", "0hz", "1hz", "2hz")'),
-        ).toThrow('positive');
-        expect(() =>
-            execPatch('$slider("x", "-5hz", "1hz", "2hz")'),
-        ).toThrow('positive');
-        expect(() =>
-            execPatch('$slider("x", "h4", "c2", "c6")'),
-        ).toThrow('invalid slider value');
+        expect(() => execPatch('$slider("x", "0hz", "1hz", "2hz")')).toThrow(
+            'positive',
+        );
+        expect(() => execPatch('$slider("x", "-5hz", "1hz", "2hz")')).toThrow(
+            'positive',
+        );
+        expect(() => execPatch('$slider("x", "h4", "c2", "c6")')).toThrow(
+            'invalid slider value',
+        );
         expect(() =>
             execPatch('$slider("x", "440 hz", "55hz", "880hz")'),
         ).toThrow('invalid slider value');
@@ -1253,9 +1289,9 @@ describe('sliders', () => {
         expect(() => execPatch('$slider("cutoff", 500, "h4", 1000)')).toThrow(
             '$slider("cutoff") min:',
         );
-        expect(() =>
-            execPatch('$slider("lfo", "0hz", "1hz", "2hz")'),
-        ).toThrow('$slider("lfo") value:');
+        expect(() => execPatch('$slider("lfo", "0hz", "1hz", "2hz")')).toThrow(
+            '$slider("lfo") value:',
+        );
     });
 
     test('$slider labels differing only in punctuation get distinct modules', () => {
@@ -1383,9 +1419,7 @@ describe('control groups', () => {
         // The scan cannot see a computed key, so the panel shows B at the
         // root while evaluation nests it under A.
         expect(() =>
-            execPatch(
-                'const a = $cGroup("A")\n$cGroup("B", { ["group"]: a })',
-            ),
+            execPatch('const a = $cGroup("A")\n$cGroup("B", { ["group"]: a })'),
         ).toThrow('Control "B" at line 2 must be created by');
         // A quoted key is read the same way by both.
         const result = exec(
@@ -1500,12 +1534,12 @@ describe('buttons', () => {
     });
 
     test('duplicate labels throw across sliders and buttons', () => {
-        expect(() =>
-            execPatch('$slider("a", 0, -1, 1)\n$btn("a")'),
-        ).toThrow('already used by a $slider()');
-        expect(() =>
-            execPatch('$btn("a")\n$toggleBtn("a", false)'),
-        ).toThrow('unique');
+        expect(() => execPatch('$slider("a", 0, -1, 1)\n$btn("a")')).toThrow(
+            'already used by a $slider()',
+        );
+        expect(() => execPatch('$btn("a")\n$toggleBtn("a", false)')).toThrow(
+            'unique',
+        );
         expect(() =>
             execPatch('$toggleBtn("a", false)\n$slider("a", 0, -1, 1)'),
         ).toThrow('already used by a button');
@@ -1517,9 +1551,7 @@ describe('buttons', () => {
         );
         const holds = findModules(result.patch, '$hold');
         expect(holds.length).toBe(1);
-        expect(JSON.stringify(holds[0].params.input)).toContain(
-            '__button_hit',
-        );
+        expect(JSON.stringify(holds[0].params.input)).toContain('__button_hit');
         expect(holds[0].params.time).toBe(0.2);
     });
 

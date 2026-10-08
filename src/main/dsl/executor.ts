@@ -40,7 +40,7 @@ import {
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
-import { $p } from './miniNotation';
+import { $p, setActiveCycleFactory, type CycleFactory } from './miniNotation';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -945,6 +945,14 @@ export function executePatchScript(
     );
     setActiveSpanRegistry(spanRegistry);
     setActiveInterpolationResolutions(interpolationResolutions);
+    const $cycle = userNamespaceTree['$cycle'];
+    if (typeof $cycle !== 'function') {
+        throw new Error(
+            'DSL execution error: "$cycle" module not found in schemas',
+        );
+    }
+    const cycleFactory: CycleFactory = $cycle;
+    setActiveCycleFactory(cycleFactory);
 
     // The user source runs as a function body (an IIFE), not at the script's
     // top level, so top-level `return` is legal in a patch script.
@@ -1045,6 +1053,7 @@ export function executePatchScript(
         // Clear the span registry after execution — spans are already baked into
         // Module state via ARGUMENT_SPANS_KEY so the registry isn't needed anymore.
         setActiveSpanRegistry(null);
+        setActiveCycleFactory(null);
         // NOTE: Do NOT clear interpolation resolutions here. They are read
         // Asynchronously by moduleStateTracking during decoration polling and
         // Must persist until the next execution replaces them.
