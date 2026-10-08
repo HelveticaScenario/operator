@@ -266,13 +266,14 @@ type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
  * - An array of {@link Signal}s (creates multiple voices)
  * - An iterable of {@link ModuleOutput}s
  * - A {@link SignalGroup} from \`$g1\`/\`$g2\`/\`$g3\` (cartesian voice expansion)
+ * - A pattern from \`$p(...)\`, \`$p.s(...)\` or \`$p.arrange(...)\`, played through a \`$cycle\`
  *
  * @example $saw(["C3", "E3", "G3"]).out()                    // 3-voice chord
  * @example $saw([...$sine("1hz"), ...$sine("2hz")]).out()   // Spread outputs into voices
  * @see {@link Signal} - for single-channel signals
  * @see {@link Collection} - for grouping outputs
  */
-type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup;
+type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup | PatternSource;
 
 /**
  * A param value tagged into a cartesian signal group by {@link $g1}, {@link $g2},
@@ -299,7 +300,7 @@ interface SignalGroup {
  * @see {@link Poly} - for polyphonic signals that preserve per-voice data
  * @see {@link Signal} - for single-channel signals
  */
-type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
+type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | PatternSource;
 
 /**
  * A phase-warp table descriptor produced by the \`$table.*\` helpers.
@@ -340,6 +341,13 @@ type BufferOutputRef = {
   readonly channels: number;
   readonly frameCount: number;
 };
+
+/**
+ * Any pattern value: \`$p(...)\`, \`$p.s(...)\`, \`$p.arrange(...)\`, or a
+ * \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\` chain. Signal params accept one and
+ * play it through a \`$cycle\`.
+ */
+type PatternSource = ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern;
 
 type DropFirst<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;
 

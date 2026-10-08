@@ -1,7 +1,12 @@
 import type { ModuleSchema } from '@modular/core';
 import { deriveChannelCount, getReservedOutputNames } from '@modular/core';
 import type { ModuleOutput } from './GraphBuilder';
-import { GraphBuilder, Collection, CollectionWithRange } from './GraphBuilder';
+import {
+    BaseCollection,
+    GraphBuilder,
+    Collection,
+    CollectionWithRange,
+} from './GraphBuilder';
 import type { SourceSpan } from '../../shared/dsl/spanTypes';
 import type { CallSiteKey, SpanRegistry } from './analyzeSource';
 import { processModuleSchema } from './paramsSchema';
@@ -105,6 +110,16 @@ function isPatternWrapperLike(
         value.__kind === 'SlowPattern' ||
         value.__kind === 'StructPattern' ||
         value.__kind === 'BeatPattern'
+    );
+}
+
+/** Structural check for any pattern value `$cycle` accepts as its pattern. */
+function isPatternValueLike(value: unknown): boolean {
+    return (
+        isParsedPatternLike(value) ||
+        isSpPatternLike(value) ||
+        isArrangePatternLike(value) ||
+        isPatternWrapperLike(value)
     );
 }
 
@@ -225,6 +240,15 @@ type ModuleReturn = SingleOutput | PolyOutput | MultiOutput;
 
 type FactoryFunction = (...args: any[]) => ModuleReturn;
 
+type SourceLocation = { line: number; column: number };
+
+/** Builds one module from call args at an explicit source location. */
+type Instantiator = (
+    args: any[],
+    sourceLocation: SourceLocation | undefined,
+    argumentSpans: ArgumentSpans | undefined,
+) => ModuleReturn;
+
 interface NamespaceTree {
     [key: string]: NamespaceTree | FactoryFunction;
 }
@@ -325,6 +349,7 @@ export class DSLContext {
     factories: Record<string, FactoryFunction> = {};
     namespaceTree: NamespaceTree = {};
     private builder: GraphBuilder;
+    private instantiators = new Map<string, Instantiator>();
 
     constructor(schemas: ModuleSchema[]) {
         this.builder = new GraphBuilder(schemas);
@@ -353,12 +378,9 @@ export class DSLContext {
     /**
      * Create a module factory function that returns outputs directly
      */
-    private createFactory(schema: ModuleSchema) {
-        const outputs = schema.outputs || [];
-        const scaleParamNames = processModuleSchema(schema)
-            .params.filter((p) => p.isScaleSignalInput)
-            .map((p) => p.name);
-
+    private createFactory(schema: ModuleSchema): FactoryFunction {
+        const instantiate = this.createInstantiator(schema);
+        this.instantiators.set(schema.name, instantiate);
         return (...args: any[]): ModuleReturn => {
             // Capture source location from stack trace
             const sourceLocation = captureSourceLocation();
@@ -366,6 +388,49 @@ export class DSLContext {
             // Capture argument spans from the pre-analyzed registry
             const argumentSpans = captureArgumentSpans(sourceLocation);
 
+            return instantiate(args, sourceLocation, argumentSpans);
+        };
+    }
+
+    /**
+     * Wrap a pattern value (`$p(...)`, `$p.s(...)`, `$p.arrange(...)` or a
+     * `.fast`/`.slow`/`.struct`/`.beat` chain) in a `$cycle` module at the
+     * caller's source location; any other value passes through. The `$cycle`
+     * carries no argument spans of its own — the pattern embeds its
+     * highlight spans — so the caller's spans are not reused for it.
+     */
+    private wrapPattern(
+        value: unknown,
+        sourceLocation: SourceLocation | undefined,
+    ): unknown {
+        if (!isPatternValueLike(value)) {
+            return value;
+        }
+        const cycle = this.instantiators.get('$cycle');
+        if (!cycle) {
+            throw new Error('$cycle module not found in schemas');
+        }
+        return cycle([value], sourceLocation, undefined);
+    }
+
+    private createInstantiator(schema: ModuleSchema): Instantiator {
+        const outputs = schema.outputs || [];
+        const processed = processModuleSchema(schema);
+        const scaleParamNames = processed.params
+            .filter((p) => p.isScaleSignalInput)
+            .map((p) => p.name);
+        const patternSignalParamNames = processed.params
+            .filter(
+                (p) =>
+                    !p.isScaleSignalInput &&
+                    (p.kind === 'signal' ||
+                        p.kind === 'polySignal' ||
+                        p.isPolySignalInput ||
+                        p.isMonoSignalInput),
+            )
+            .map((p) => p.name);
+
+        return (args, sourceLocation, argumentSpans): ModuleReturn => {
             const positionalArgs = schema.positionalArgs || [];
             const params: Record<string, any> = {};
             let config: any = {};
@@ -389,6 +454,21 @@ export class DSLContext {
                 // Merge other config params
                 for (const key of Object.keys(restConfig)) {
                     params[key] = restConfig[key];
+                }
+            }
+
+            // A pattern in a signal param plays through its own `$cycle`.
+            for (const name of patternSignalParamNames) {
+                const value = params[name];
+                if (Array.isArray(value)) {
+                    params[name] = value.flatMap((v) => {
+                        const wrapped = this.wrapPattern(v, sourceLocation);
+                        return wrapped instanceof BaseCollection
+                            ? [...wrapped]
+                            : [wrapped];
+                    });
+                } else {
+                    params[name] = this.wrapPattern(value, sourceLocation);
                 }
             }
 

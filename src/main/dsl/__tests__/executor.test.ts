@@ -472,6 +472,36 @@ describe('sequencing', () => {
         ).toEqual({ start: 3, end: 10 });
     });
 
+    test('a pattern in a poly signal param is wrapped in $cycle', () => {
+        const patch = execPatch('$sine($p("c4 e4")).out()');
+        const [cycle] = findModules(patch, '$cycle');
+        const [sine] = findModules(patch, '$sine');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+        expect(sine.params.freq).toMatchObject([
+            { module: cycle.id, port: 'cv', type: 'cable' },
+        ]);
+    });
+
+    test('every pattern kind is accepted by poly and mono signal params', () => {
+        const patch = execPatch(`
+            $sine($p.s("0 2 4", "C(major)")).out();
+            $sine($p.arrange([2, $p("c4")], [1, $p("e4")])).out();
+            $sine($p("c4").fast(2).struct("x ~")).out();
+            $sine([$p("c4"), "e4", $p("g4")]).out();
+            $stereoMix($saw("c3"), { width: $p("0 5") }).out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(6);
+    });
+
+    test('wrapped patterns keep their editor highlight spans', () => {
+        const patch = execPatch('$sine($p("c4 e4")).out()');
+        const [cycle] = findModules(patch, '$cycle');
+        expect(
+            (cycle.params as { pattern: { argument_span?: unknown } }).pattern
+                .argument_span,
+        ).toEqual({ start: 9, end: 16 });
+    });
+
     test('$track with keyframes', () => {
         const patch = execPatch('$track([[$hz(440), 0], [$hz(880), 1]]).out()');
         expect(findModules(patch, '$track').length).toBe(1);
