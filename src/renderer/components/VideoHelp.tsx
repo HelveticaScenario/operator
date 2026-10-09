@@ -1,5 +1,8 @@
 import React from 'react';
 import {
+    VIDEO_CHAIN,
+    VIDEO_CHAIN_EXAMPLES,
+    VIDEO_CHAIN_INTRO,
     VIDEO_DOCS,
     VIDEO_GROUPS,
     VIDEO_INTRO,
@@ -31,6 +34,20 @@ export const VideoHelp: React.FC = () => (
         <div className="types-intro">
             <Prose text={VIDEO_INTRO.description} />
             <pre>{VIDEO_INTRO.examples.join('\n\n')}</pre>
+        </div>
+        <h3>Chaining</h3>
+        <div className="module-card">
+            <Prose text={VIDEO_CHAIN_INTRO} />
+            <pre>{VIDEO_CHAIN_EXAMPLES.join('\n\n')}</pre>
+            <h5>Methods</h5>
+            <ul>
+                {VIDEO_CHAIN.map((method) => (
+                    <li key={method.name}>
+                        <strong>{method.name}</strong> &mdash;{' '}
+                        {method.description}
+                    </li>
+                ))}
+            </ul>
         </div>
         {VIDEO_GROUPS.map((group) => (
             <div key={group}>

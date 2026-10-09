@@ -17,14 +17,7 @@ import {
     type CollectionWithRange,
     ModuleOutput,
 } from '../GraphBuilder';
-
-/** A video signal: a node's output, a constant, or the time field. */
-export class VideoOutput {
-    constructor(
-        readonly value: VideoValue,
-        readonly type: VideoValueType,
-    ) {}
-}
+import { VideoOutput } from './VideoOutput';
 
 /**
  * A constant, a video signal of either type, or an audio signal (a slider,
@@ -137,7 +130,7 @@ export class VideoGraphBuilder {
 
     constructor(private readonly host: VideoGraphHost) {}
 
-    readonly time = new VideoOutput({ kind: 'time' }, 'field');
+    readonly time = new VideoOutput({ kind: 'time' }, 'field', this);
 
     /**
      * Binds an audio signal to a uniform slot: a slider or button by its
@@ -240,7 +233,7 @@ export class VideoGraphBuilder {
     ): VideoOutput {
         const id = `${kind}_${this.nodes.length}`;
         this.nodes.push({ id, kind, inputs, params, buffer, history });
-        return new VideoOutput({ kind: 'node', id }, type);
+        return new VideoOutput({ kind: 'node', id }, type, this);
     }
 
     /**

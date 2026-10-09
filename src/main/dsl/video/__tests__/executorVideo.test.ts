@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import schemas from '@modular/core/schemas.json';
 import { executePatchScript } from '../../executor';
 import { buildLibSource } from '../../typescriptLibGen';
-import { VIDEO_DOCS } from '../../../../shared/dsl/videoDocs';
+import { VIDEO_CHAIN, VIDEO_DOCS } from '../../../../shared/dsl/videoDocs';
+import { VIDEO_CHAIN_METHODS } from '../VideoOutput';
 
 const exec = (source: string) =>
     executePatchScript(source, schemas as never, {
@@ -675,6 +676,63 @@ describe('$v in the DSL executor', () => {
                     `$v.out($v.colorize($v.channel($v.hsv(0), 'alpha'), 0, 0));`,
                 ),
             ).toThrow(/param "channel" must be one of r, g, b, luma/);
+        });
+    });
+
+    it('documents exactly the chain methods a video signal has', () => {
+        expect([...VIDEO_CHAIN_METHODS].sort()).toEqual(
+            VIDEO_CHAIN.map((m) => m.name).sort(),
+        );
+    });
+
+    describe('chaining', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('compiles a chain to the same shader as nested calls', () => {
+            const chained = wgslOf(`
+                $v.osc($v.ramp(), 8).kaleid(6).hsv(0.9).out();
+            `);
+            const nested = wgslOf(`
+                $v.out($v.hsv($v.kaleid($v.osc($v.ramp(), 8), 6), 0.9));
+            `);
+            expect(chained).toBe(nested);
+        });
+
+        it('treats rotate, scale and scroll as shorthand for warp', () => {
+            const shorthand = wgslOf(`
+                $v.ramp().rotate(0.1).scale(2).scroll(0.2, 0.3).hsv().out();
+            `);
+            const long = wgslOf(`
+                $v.out($v.hsv($v.warp($v.warp($v.warp($v.ramp(), { rotate: 0.1 }), { zoom: 2 }), { shiftX: 0.2, shiftY: 0.3 })));
+            `);
+            expect(shorthand).toBe(long);
+        });
+
+        it('chains colors and fields with the right variants', () => {
+            const wgsl = wgslOf(`
+                $v.noise($v.ramp(), $v.ramp('v')).hsv().mult($v.ramp('v')).invert().out();
+            `);
+            expect(wgsl).toMatch(/let v\d: vec3f = v\d \* v\d;/);
+            expect(wgsl).toMatch(/vec3f\(1\.0\) - /);
+        });
+
+        it('previews and measures partway through a chain', () => {
+            const { video, videoPreviews } = exec(`
+                const wave = $v.osc($v.ramp(), 4).preview({ view: 'waveform' });
+                wave.toCV({ size: 0.1 });
+                wave.hsv().out();
+            `);
+            expect(videoPreviews.map((p) => p.view)).toEqual(['waveform']);
+            expect(video!.cvSamples).toHaveLength(1);
+        });
+
+        it('reports errors with the $v function that failed', () => {
+            expect(() => exec(`$v.ramp().kaleid('six');`)).toThrow(
+                /\$v\.kaleid: sides must be a number or a video field/,
+            );
+            expect(() => exec(`$v.ramp().out();`)).toThrow(
+                /\$v\.out: input must be a video color/,
+            );
         });
     });
 });

@@ -1,4 +1,6 @@
 import {
+    VIDEO_CHAIN,
+    VIDEO_CHAIN_EXAMPLES,
     VIDEO_DOCS,
     VIDEO_INTRO,
     type VideoDocParam,
@@ -61,9 +63,36 @@ export function generateVideoNamespace(): string {
         return `${jsdoc('    ', doc.description, doc.params, doc.examples)}\n${declarations}`;
     });
     return [
-        jsdoc('', VIDEO_INTRO.description, [], VIDEO_INTRO.examples),
+        jsdoc(
+            '',
+            VIDEO_INTRO.description,
+            [],
+            [...VIDEO_INTRO.examples, ...VIDEO_CHAIN_EXAMPLES],
+        ),
         'declare const $v: {',
         ...members,
         '};',
     ].join('\n');
+}
+
+/**
+ * The chain methods of a video signal, as interface members with JSDoc,
+ * generated from {@link VIDEO_CHAIN}.
+ */
+export function generateVideoChainMembers(kind: 'field' | 'color'): string {
+    const self = kind === 'field' ? 'VideoField' : 'VideoColor';
+    return VIDEO_CHAIN.flatMap((doc) => {
+        const declarations =
+            doc[kind] ??
+            ((doc.on ?? ['field', 'color']).includes(kind)
+                ? doc.declarations
+                : undefined);
+        if (!declarations) return [];
+        return [
+            jsdoc('    ', doc.description, [], []),
+            ...declarations.map(
+                (declaration) => `    ${declaration.replace('{self}', self)}`,
+            ),
+        ];
+    }).join('\n');
 }

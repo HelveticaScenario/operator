@@ -38,6 +38,7 @@ export const VIDEO_INTRO = {
     description:
         'Video synthesis. Patches build a graph of fields that is drawn per pixel in the performance window, which opens when a patch calls `$v.out`. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`. Pass one channel; a polyphonic signal is rejected.',
     examples: [
+        '$v.osc($v.ramp(), 10).kaleid(6).hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
         "$v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.1, 0.4))))",
     ],
@@ -672,5 +673,219 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [],
         examples: ['$v.out($v.colorize(1, 0, 0))'],
         declarations: ['out(input: VideoColor): void;'],
+    },
+];
+
+/** One method a video signal can be chained with. */
+export interface VideoChainDoc {
+    name: string;
+    description: string;
+    /** Declarations for every signal the method applies to; `{self}` is the signal's own type. */
+    declarations?: string[];
+    /** Declarations that replace the shared ones for a field or a color. */
+    field?: string[];
+    color?: string[];
+    /** The kinds of signal the method applies to (default both). */
+    on?: ('field' | 'color')[];
+}
+
+export const VIDEO_CHAIN_INTRO =
+    'Every video signal can be chained from, which reads in signal-flow order: each method is the `$v` function of the same name with the signal as its first argument. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
+
+export const VIDEO_CHAIN_EXAMPLES: string[] = [
+    "$v.osc($v.ramp(), 10).modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3).kaleid(6).hsv().out()",
+    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).rotate(0.1).pixelate(32, 18).hsv(0.8).preview().out()",
+];
+
+export const VIDEO_CHAIN: VideoChainDoc[] = [
+    {
+        name: 'add',
+        description: 'Sum with `b`, clipped to 0..1.',
+        field: [
+            'add(b: VideoValue): VideoField;',
+            'add(b: VideoSignal): VideoColor;',
+        ],
+        color: ['add(b: VideoSignal): VideoColor;'],
+    },
+    {
+        name: 'mult',
+        description: 'Product with `b`.',
+        field: [
+            'mult(b: VideoValue): VideoField;',
+            'mult(b: VideoSignal): VideoColor;',
+        ],
+        color: ['mult(b: VideoSignal): VideoColor;'],
+    },
+    {
+        name: 'diff',
+        description: 'Absolute difference from `b`.',
+        field: [
+            'diff(b: VideoValue): VideoField;',
+            'diff(b: VideoSignal): VideoColor;',
+        ],
+        color: ['diff(b: VideoSignal): VideoColor;'],
+    },
+    {
+        name: 'max',
+        description: 'The larger of this and `b`.',
+        field: [
+            'max(b: VideoValue): VideoField;',
+            'max(b: VideoSignal): VideoColor;',
+        ],
+        color: ['max(b: VideoSignal): VideoColor;'],
+    },
+    {
+        name: 'min',
+        description: 'The smaller of this and `b`.',
+        field: [
+            'min(b: VideoValue): VideoField;',
+            'min(b: VideoSignal): VideoColor;',
+        ],
+        color: ['min(b: VideoSignal): VideoColor;'],
+    },
+    {
+        name: 'mix',
+        description: 'Crossfade from this to `b`.',
+        field: [
+            'mix(b: VideoValue, amount?: VideoValue): VideoField;',
+            'mix(b: VideoSignal, amount?: VideoValue): VideoColor;',
+        ],
+        color: ['mix(b: VideoSignal, amount?: VideoValue): VideoColor;'],
+    },
+    {
+        name: 'invert',
+        description: 'The complement, 1 minus this.',
+        declarations: ['invert(): {self};'],
+    },
+    {
+        name: 'posterize',
+        description: 'Quantizes to `levels` steps.',
+        declarations: ['posterize(levels?: VideoValue): VideoField;'],
+        on: ['field'],
+    },
+    {
+        name: 'wrap',
+        description: 'Multiplies by `gain`, then keeps the fractional part.',
+        declarations: ['wrap(gain?: VideoValue): VideoField;'],
+        on: ['field'],
+    },
+    {
+        name: 'fold',
+        description:
+            'Multiplies by `gain`, then reflects what passes 1 back down.',
+        declarations: ['fold(gain?: VideoValue): VideoField;'],
+        on: ['field'],
+    },
+    {
+        name: 'comparator',
+        description: 'Threshold with a soft edge.',
+        declarations: [
+            'comparator(threshold?: VideoValue, softness?: VideoValue): VideoField;',
+        ],
+        on: ['field'],
+    },
+    {
+        name: 'hsv',
+        description: 'Uses this field as the hue of a color.',
+        declarations: [
+            'hsv(saturation?: VideoValue, value?: VideoValue): VideoColor;',
+        ],
+        on: ['field'],
+    },
+    {
+        name: 'procAmp',
+        description: 'Saturation, then gain and bias.',
+        declarations: [
+            'procAmp(gain?: VideoValue, bias?: VideoValue, saturation?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'channel',
+        description: 'One channel of this color as a field.',
+        declarations: [
+            "channel(which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
+        ],
+        on: ['color'],
+    },
+    {
+        name: 'key',
+        description:
+            'Shows this where `mask` is 1 and `background` where it is 0.',
+        declarations: [
+            'key(background: VideoSignal, mask: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'warp',
+        description: 'Zooms, turns and shifts everything this draws.',
+        declarations: [
+            'warp(config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): {self};',
+        ],
+    },
+    {
+        name: 'rotate',
+        description:
+            'Turns everything this draws by `turns`; positive is clockwise.',
+        declarations: ['rotate(turns: VideoValue): {self};'],
+    },
+    {
+        name: 'scale',
+        description: 'Zooms everything this draws by `zoom` about the center.',
+        declarations: ['scale(zoom: VideoValue): {self};'],
+    },
+    {
+        name: 'scroll',
+        description:
+            'Shifts everything this draws right by `x` and up by `y`, as fractions of the frame.',
+        declarations: ['scroll(x?: VideoValue, y?: VideoValue): {self};'],
+    },
+    {
+        name: 'displace',
+        description: 'Reads this at positions pushed by `dx` and `dy`.',
+        declarations: [
+            'displace(dx: VideoValue, dy?: VideoValue, amount?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulate',
+        description: 'Pushes this around by another signal.',
+        declarations: [
+            'modulate(modulator: VideoField | VideoColor, amount?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'kaleid',
+        description: 'Mirrors this around the center into `sides` wedges.',
+        declarations: ['kaleid(sides?: VideoValue): {self};'],
+    },
+    {
+        name: 'pixelate',
+        description: 'Holds this constant across a grid of `x` by `y` cells.',
+        declarations: ['pixelate(x?: VideoValue, y?: VideoValue): {self};'],
+    },
+    {
+        name: 'repeat',
+        description: 'Tiles this `x` by `y` times.',
+        declarations: ['repeat(x?: VideoValue, y?: VideoValue): {self};'],
+    },
+    {
+        name: 'preview',
+        description: 'Shows this in the editor and returns it.',
+        declarations: [
+            "preview(config?: { view?: 'image' | 'waveform' | 'vectorscope' }): {self};",
+        ],
+    },
+    {
+        name: 'toCV',
+        description: 'Averages a region of this into an audio control signal.',
+        declarations: [
+            'toCV(config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
+        ],
+    },
+    {
+        name: 'out',
+        description: 'Shows this color in the performance window.',
+        declarations: ['out(): void;'],
+        on: ['color'],
     },
 ];

@@ -15,7 +15,10 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
-import { generateVideoNamespace } from './videoLibGen';
+import {
+    generateVideoChainMembers,
+    generateVideoNamespace,
+} from './videoLibGen';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -1780,11 +1783,13 @@ declare const $table: {
  */
 interface VideoField {
     readonly __videoField: true;
+${generateVideoChainMembers('field')}
 }
 
 /** An RGB video signal built by \`$v.colorize\`; display it with \`$v.out\`. */
 interface VideoColor {
     readonly __videoColor: true;
+${generateVideoChainMembers('color')}
 }
 
 /**
