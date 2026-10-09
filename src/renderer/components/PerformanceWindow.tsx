@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import electronAPI from '../electronAPI';
 import { VideoRenderer } from '../video/VideoRenderer';
 
-/** Fullscreen-capable canvas that displays the patch's `$v.out`. */
-export function VideoWindow() {
+/** The audience-facing window; currently shows the patch's `$v.out`. */
+export function PerformanceWindow() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [error, setError] = useState<string | null>(null);
 

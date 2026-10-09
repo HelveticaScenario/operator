@@ -232,7 +232,10 @@ export interface ElectronAPI {
         }) => void,
     ) => () => void;
 
-    // Video output window
+    // Performance window
+    performanceWindow: {
+        toggle: () => Promise<void>;
+    };
     video: {
         getShader: () => Promise<CompiledVideoShader | null>;
         onShader: (
@@ -507,7 +510,10 @@ const electronAPI: ElectronAPI = {
     showUnsavedChangesDialog: (fileName) =>
         invokeIPC('SHOW_UNSAVED_CHANGES_DIALOG', fileName),
 
-    // Video output window
+    // Performance window
+    performanceWindow: {
+        toggle: () => invokeIPC('PERFORMANCE_WINDOW_TOGGLE'),
+    },
     video: {
         getShader: () => invokeIPC('VIDEO_GET_SHADER'),
         onShader: menuEventHandler<[CompiledVideoShader | null]>(

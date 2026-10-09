@@ -23,7 +23,7 @@ A video signal is a scalar field `f(x, y, t)`. A video patch is a graph of field
 - `src/main/dsl/video/wgslCompiler.ts` — IR → WGSL (pure function, unit-tested).
 - `src/main/dsl/video/modules/*.ts` — one file per module: params, WGSL snippet.
 - `src/renderer/video/VideoRenderer.ts` — WebGPU device, pipeline, uniform buffer, frame loop.
-- `src/main/videoWindow.ts` — output `BrowserWindow` lifecycle.
+- `src/main/performanceWindow.ts` — performance `BrowserWindow` lifecycle.
 
 ## Tasks
 

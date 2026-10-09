@@ -2182,8 +2182,16 @@ function App() {
             },
             { label: 'Toggle VU Meters', category: 'View' },
         );
+        registerCommand(
+            'operator.togglePerformanceWindow',
+            () => {
+                void electronAPI.performanceWindow.toggle();
+            },
+            { label: 'Toggle Performance Window', category: 'View' },
+        );
 
         return () => {
+            unregisterCommand('operator.togglePerformanceWindow');
             unregisterCommand('operator.toggleVuMeters');
             unregisterCommand('operator.updatePatch');
             unregisterCommand('operator.updatePatchNextBeat');

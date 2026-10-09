@@ -49,7 +49,7 @@ The compiler is a pure function `VideoGraph → { wgsl, uniformLayout, passes }`
 - `src/main/dsl/video/VideoGraphBuilder.ts` — `$v.*` factories and graph construction.
 - `src/main/dsl/video/wgslCompiler.ts` — IR → WGSL.
 - `src/main/dsl/video/modules/*.ts` — one file per module: params, WGSL snippet, doc examples.
-- `src/main/videoWindow.ts` — output window lifecycle.
+- `src/main/performanceWindow.ts` — performance window lifecycle (the general-purpose audience-facing window; video is its first content).
 - `src/renderer/video/VideoRenderer.ts` — WebGPU device, pipelines, uniform buffer, frame loop.
 - `src/renderer/video/monitors/` — waveform and vector monitors (phase 4).
 
@@ -96,6 +96,8 @@ Target set, grouped as in an LZX system. Names are provisional.
 **Done when:** a feedback patch is stable across window resizes, graph swaps preserve or deliberately reset feedback state (decided and documented), and the pass partitioner is unit-tested.
 
 ### Phase 4 — Display and monitoring
+
+**Direction:** the output window is the **performance window**: the general-purpose, audience-facing surface that replaces showing the audience the editor. Video is its first content; the code view and other visuals are meant to share it. It opens from View → Toggle Performance Window (`operator.togglePerformanceWindow`, default Ctrl+Shift+V) and when a patch first calls `$v.out`.
 
 **Delivers:**
 - Output window options: fullscreen on a chosen display, aspect (4:3, 16:9, free), resolution scale.

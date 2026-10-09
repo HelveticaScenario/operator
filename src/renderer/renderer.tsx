@@ -78,7 +78,7 @@ class ErrorBoundary extends Component<
     }
 }
 import { HelpWindow } from './components/HelpWindow';
-import { VideoWindow } from './components/VideoWindow';
+import { PerformanceWindow } from './components/PerformanceWindow';
 import { ThemeProvider } from './themes/ThemeContext';
 
 // Configure Monaco Editor workers for Vite (replaces MonacoWebpackPlugin)
@@ -188,7 +188,7 @@ if (!root) {
 }
 
 const isHelpWindow = window.location.hash === '#help';
-const isVideoWindow = window.location.hash === '#video';
+const isPerformanceWindow = window.location.hash === '#performance';
 
 createRoot(root).render(
     <StrictMode>
@@ -196,8 +196,8 @@ createRoot(root).render(
             <ThemeProvider>
                 {isHelpWindow ? (
                     <HelpWindow />
-                ) : isVideoWindow ? (
-                    <VideoWindow />
+                ) : isPerformanceWindow ? (
+                    <PerformanceWindow />
                 ) : (
                     <App />
                 )}

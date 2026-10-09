@@ -37,7 +37,11 @@ import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
-import { getVideoShader, updateVideoShader } from './videoWindow';
+import {
+    getVideoShader,
+    togglePerformanceWindow,
+    updateVideoShader,
+} from './performanceWindow';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
@@ -972,6 +976,10 @@ registerIPCHandler(
 );
 
 registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
+
+registerIPCHandler('PERFORMANCE_WINDOW_TOGGLE', () =>
+    togglePerformanceWindow(),
+);
 
 registerIPCHandler('SYNTH_GET_SAMPLE_RATE', () => synth.sampleRate());
 
@@ -2107,6 +2115,16 @@ const createMenu = (): void => {
                         }
                     },
                     label: 'Module Profile...',
+                },
+                {
+                    ...menuShortcut(
+                        'operator.togglePerformanceWindow',
+                        'Ctrl+Shift+V',
+                    ),
+                    click: () => {
+                        togglePerformanceWindow();
+                    },
+                    label: 'Toggle Performance Window',
                 },
                 {
                     click: () => {
