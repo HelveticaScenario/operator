@@ -561,6 +561,60 @@ export class VideoGraphBuilder {
             z: this.asField('$v.noise', 'z', z),
         });
 
+    /** Cellular noise: the distance to the nearest of a scatter of points; `z` moves them. */
+    voronoi = (
+        x: VideoSource,
+        y: VideoSource,
+        z: VideoSource = 0,
+    ): VideoOutput =>
+        this.addNode('voronoi', 'field', {
+            x: this.asField('$v.voronoi', 'x', x),
+            y: this.asField('$v.voronoi', 'y', y),
+            z: this.asField('$v.voronoi', 'z', z),
+        });
+
+    /** 1 inside a regular polygon centered on (x, y), 0 outside. */
+    polygon = (
+        x: VideoSource,
+        y: VideoSource,
+        sides: VideoSource = 3,
+        size: VideoSource = 0.25,
+        softness: VideoSource = 0.01,
+    ): VideoOutput =>
+        this.addNode('polygon', 'field', {
+            sides: this.asField('$v.polygon', 'sides', sides),
+            size: this.asField('$v.polygon', 'size', size),
+            softness: this.asField('$v.polygon', 'softness', softness),
+            x: this.asField('$v.polygon', 'x', x),
+            y: this.asField('$v.polygon', 'y', y),
+        });
+
+    /** Turns every hue of `input` by `amount` of a full circle. */
+    hueShift = (input: VideoOutput, amount: VideoSource = 0.5): VideoOutput => {
+        if (!(input instanceof VideoOutput) || input.type !== 'color') {
+            throw new Error(
+                `$v.hueShift: input must be a video color, got ${describe(input)}`,
+            );
+        }
+        return this.addNode('hueShift', 'color', {
+            amount: this.asField('$v.hueShift', 'amount', amount),
+            input: input.value,
+        });
+    };
+
+    /** Scales each channel's distance from mid-gray by `amount`. */
+    contrast = (input: VideoOutput, amount: VideoSource = 1.6): VideoOutput => {
+        if (!(input instanceof VideoOutput) || input.type !== 'color') {
+            throw new Error(
+                `$v.contrast: input must be a video color, got ${describe(input)}`,
+            );
+        }
+        return this.addNode('contrast', 'color', {
+            amount: this.asField('$v.contrast', 'amount', amount),
+            input: input.value,
+        });
+    };
+
     /** Combines three fields into a color. */
     colorize = (r: VideoSource, g: VideoSource, b: VideoSource): VideoOutput =>
         this.addNode('colorize', 'color', {

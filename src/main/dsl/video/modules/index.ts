@@ -1,7 +1,7 @@
 import { audioHistory } from './audioHistory';
 import { colorize } from './colorize';
 import { feedbackRead, feedbackWrite } from './feedback';
-import { hsv, posterize, procAmp } from './color';
+import { contrast, hsv, hueShift, posterize, procAmp } from './color';
 import { comparator } from './comparator';
 import { key } from './key';
 import {
@@ -20,11 +20,11 @@ import {
     mult,
     multColor,
 } from './math';
-import { noise } from './noise';
+import { noise, voronoi } from './noise';
 import { osc } from './osc';
 import { out } from './out';
 import { ramp } from './ramp';
-import { shape } from './shape';
+import { polygon, shape } from './shape';
 import type { VideoModuleDef } from './types';
 import { channel, displace, kaleid, pixelate, repeat, warp } from './warp';
 import { fold, wrap } from './waveshape';
@@ -36,6 +36,7 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     channel,
     colorize,
     comparator,
+    contrast,
     diff,
     diffColor,
     displace: displace.field,
@@ -44,6 +45,7 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     feedbackWrite,
     fold,
     hsv,
+    hueShift,
     invert,
     invertColor,
     kaleid: kaleid.field,
@@ -62,12 +64,14 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     out,
     pixelate: pixelate.field,
     pixelateColor: pixelate.color,
+    polygon,
     posterize,
     procAmp,
     ramp,
     repeat: repeat.field,
     repeatColor: repeat.color,
     shape,
+    voronoi,
     warp: warp.field,
     warpColor: warp.color,
     wrap,

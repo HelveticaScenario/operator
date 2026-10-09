@@ -815,4 +815,48 @@ describe('$v in the DSL executor', () => {
             expect(() => exec(many)).toThrow(/at most 7 feedback loops/);
         });
     });
+
+    describe('voronoi, polygon and color ops', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('shares the point hash between noise and voronoi', () => {
+            const wgsl = wgslOf(`
+                $v.out($v.hsv($v.add($v.noise($v.ramp(), $v.ramp('v')), $v.voronoi($v.ramp(), $v.ramp('v'), $v.time))));
+            `);
+            expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
+            expect(wgsl).toContain('fn voronoi_distance(');
+            expect(wgsl).toMatch(
+                /voronoi_distance\(vec2f\(v\d, v\d\), u\.time\)/,
+            );
+        });
+
+        it('shares the edge function between shape and polygon', () => {
+            const wgsl = wgslOf(`
+                const a = $v.shape($v.ramp(), $v.ramp('v'), 0.2);
+                const b = $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.2);
+                $v.out($v.hsv($v.max(a, b)));
+            `);
+            expect(wgsl.match(/fn shape_edge\(/g)).toHaveLength(1);
+            expect(wgsl).toContain('polygon_distance(');
+        });
+
+        it('turns hue with the shared hsv helper', () => {
+            const wgsl = wgslOf(`
+                $v.hsv($v.ramp()).hueShift(0.25).contrast(2).out();
+            `);
+            expect(wgsl.match(/fn hsv_to_rgb\(/g)).toHaveLength(1);
+            expect(wgsl).toContain('fn rgb_to_hsv(');
+            expect(wgsl).toContain('hue_shift(');
+            expect(wgsl).toMatch(/\* 2\.0 \+ vec3f\(0\.5\)/);
+        });
+
+        it('rejects a field where a color is required', () => {
+            expect(() => exec(`$v.hueShift($v.ramp());`)).toThrow(
+                /\$v\.hueShift: input must be a video color/,
+            );
+            expect(() => exec(`$v.contrast(0.5);`)).toThrow(
+                /\$v\.contrast: input must be a video color/,
+            );
+        });
+    });
 });

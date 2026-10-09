@@ -180,6 +180,64 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'voronoi',
+        group: 'Generators',
+        description:
+            'Cellular noise: the distance to the nearest of a scatter of points, one per unit cell of the coordinates, between 0 (on a point) and about 1. Scale the coordinates to set the cell size; `z` moves the points, which animates the cells when fed `$v.time`.',
+        params: [
+            { name: 'x', description: 'Horizontal coordinate' },
+            { name: 'y', description: 'Vertical coordinate' },
+            {
+                name: 'z',
+                description: 'Moves the points, such as time (default 0)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv(0.55, 0.8, $v.voronoi($v.mult($v.ramp(), 8), $v.mult($v.ramp('v'), 5), $v.mult($v.time, 2))))",
+            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).invert().hsv(0.1).out()",
+        ],
+        declarations: [
+            'voronoi(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
+        ],
+    },
+    {
+        name: 'polygon',
+        group: 'Generators',
+        description:
+            '1 inside a regular polygon centered on (x, y) with one point up, 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame.',
+        params: [
+            {
+                name: 'x',
+                description: 'Horizontal position field; 0.5 is the center',
+            },
+            {
+                name: 'y',
+                description: 'Vertical position field; 0.5 is the center',
+            },
+            {
+                name: 'sides',
+                description: 'Number of sides, at least 3 (default 3)',
+            },
+            {
+                name: 'size',
+                description:
+                    'Distance from the center to the middle of a side, as a fraction of the frame height (default 0.25)',
+            },
+            {
+                name: 'softness',
+                description:
+                    'Width of the edge in the same units (default 0.01)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv(0.12, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.3, 0.02)))",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).rotate($v.mult($v.time, 0.1)).hsv(0.6).out()",
+        ],
+        declarations: [
+            'polygon(x: VideoValue, y: VideoValue, sides?: VideoValue, size?: VideoValue, softness?: VideoValue): VideoField;',
+        ],
+    },
+    {
         name: 'shape',
         group: 'Generators',
         description:
@@ -654,6 +712,40 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'hueShift',
+        group: 'Color',
+        description:
+            'Turns every hue of a color by `amount` of a full circle, keeping its saturation and brightness.',
+        params: [
+            {
+                name: 'amount',
+                description:
+                    'Fraction of the hue circle to turn by; 0.5 is the opposite hue (default 0.5)',
+            },
+        ],
+        examples: [
+            '$v.out($v.hueShift($v.hsv($v.ramp()), $v.osc($v.time, 0.1)))',
+        ],
+        declarations: [
+            'hueShift(input: VideoColor, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'contrast',
+        group: 'Color',
+        description:
+            "Scales each channel's distance from mid-gray by `amount`: above 1 pushes colors apart, below 1 pulls them toward gray.",
+        params: [
+            { name: 'amount', description: 'Contrast factor (default 1.6)' },
+        ],
+        examples: [
+            "$v.out($v.contrast($v.hsv($v.ramp(), 0.6, $v.ramp('v')), 3))",
+        ],
+        declarations: [
+            'contrast(input: VideoColor, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
         name: 'channel',
         group: 'Color',
         description:
@@ -817,6 +909,19 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         declarations: [
             'procAmp(gain?: VideoValue, bias?: VideoValue, saturation?: VideoValue): VideoColor;',
         ],
+    },
+    {
+        name: 'hueShift',
+        description:
+            'Turns every hue of this color by `amount` of a full circle.',
+        declarations: ['hueShift(amount?: VideoValue): VideoColor;'],
+        on: ['color'],
+    },
+    {
+        name: 'contrast',
+        description: "Scales this color's distance from mid-gray by `amount`.",
+        declarations: ['contrast(amount?: VideoValue): VideoColor;'],
+        on: ['color'],
     },
     {
         name: 'channel',
