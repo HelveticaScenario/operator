@@ -4,6 +4,12 @@
  */
 export type VideoValueType = 'field' | 'color';
 
+/**
+ * Most feedback buffers a graph can use: the screen takes one of the eight
+ * color attachments WebGPU guarantees.
+ */
+export const MAX_FEEDBACK_BUFFERS = 7;
+
 /** Where a module input reads its value from. */
 export type VideoValue =
     | { kind: 'node'; id: string }
@@ -19,6 +25,11 @@ export interface VideoNode {
     inputs: Record<string, VideoValue>;
     /** Enumerated module options; omitted entries take the module default. */
     params?: Record<string, string>;
+    /**
+     * Feedback buffer a `feedbackRead` or `feedbackWrite` node uses. A buffer
+     * holds what its write node saw on the previous frame.
+     */
+    buffer?: number;
 }
 
 /** A control (slider or button) whose value feeds one uniform slot. */
@@ -46,4 +57,6 @@ export interface CompiledVideoShader {
     /** Total uniform buffer size in floats, a multiple of 4. */
     uniformFloatCount: number;
     uniforms: VideoUniform[];
+    /** Feedback buffers the shader reads (bindings 2..) and writes (locations 1..). */
+    feedbackBufferCount: number;
 }

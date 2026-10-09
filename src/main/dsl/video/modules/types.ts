@@ -7,6 +7,11 @@ export interface VideoParamSpec {
 
 export interface VideoModuleDef {
     inputs: Record<string, VideoValueType>;
+    /**
+     * Marks a node that reads (`feedbackRead`) or writes (`feedbackWrite`)
+     * the feedback buffer named by its `buffer` field.
+     */
+    buffer?: 'read' | 'write';
     output: VideoValueType;
     params: Record<string, VideoParamSpec>;
     /**
@@ -16,7 +21,12 @@ export interface VideoModuleDef {
     helpers?: string;
     /**
      * WGSL expression for the module's value. `args` holds one WGSL
-     * expression per input, `params` the resolved option per param.
+     * expression per input, `params` the resolved option per param, and
+     * `buffer` the node's feedback buffer (0 for modules without one).
      */
-    emit(args: Record<string, string>, params: Record<string, string>): string;
+    emit(
+        args: Record<string, string>,
+        params: Record<string, string>,
+        buffer: number,
+    ): string;
 }

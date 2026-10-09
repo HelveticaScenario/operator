@@ -1,8 +1,9 @@
-import type {
-    CompiledVideoShader,
-    VideoGraph,
-    VideoValue,
-    VideoValueType,
+import {
+    MAX_FEEDBACK_BUFFERS,
+    type CompiledVideoShader,
+    type VideoGraph,
+    type VideoValue,
+    type VideoValueType,
 } from '../../../shared/video/videoGraph';
 import { UNIFORM_SLOTS_OFFSET } from '../../../shared/video/uniformLayout';
 import { VIDEO_MODULES } from './modules';
@@ -24,6 +25,9 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const names = new Map<string, string>();
     const lines: string[] = [];
     const helpers = new Map<string, string>();
+    /** Local variable holding what each feedback buffer stores this frame. */
+    const bufferWrites = new Map<number, string>();
+    let bufferCount = 0;
 
     const resolve = (value: VideoValue, expected: VideoValueType): string => {
         switch (value.kind) {
@@ -96,12 +100,37 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 if (!(name in def.params))
                     throw new Error(`unknown param "${name}"`);
             }
+            if (def.buffer === undefined) {
+                if (node.buffer !== undefined) {
+                    throw new Error('module has no feedback buffer');
+                }
+            } else if (
+                node.buffer === undefined ||
+                !Number.isInteger(node.buffer) ||
+                node.buffer < 0 ||
+                node.buffer >= MAX_FEEDBACK_BUFFERS
+            ) {
+                throw new Error(
+                    `feedback buffer must be an integer from 0 to ${MAX_FEEDBACK_BUFFERS - 1}`,
+                );
+            }
             if (def.helpers !== undefined) helpers.set(node.kind, def.helpers);
             const local = `v${index}`;
             const wgslType = def.output === 'field' ? 'f32' : 'vec3f';
             lines.push(
-                `    let ${local}: ${wgslType} = ${def.emit(args, params)};`,
+                `    let ${local}: ${wgslType} = ${def.emit(args, params, node.buffer ?? 0)};`,
             );
+            if (node.buffer !== undefined) {
+                bufferCount = Math.max(bufferCount, node.buffer + 1);
+                if (def.buffer === 'write') {
+                    if (bufferWrites.has(node.buffer)) {
+                        throw new Error(
+                            `feedback buffer ${node.buffer} is written twice`,
+                        );
+                    }
+                    bufferWrites.set(node.buffer, local);
+                }
+            }
             types.set(node.id, def.output);
             names.set(node.id, local);
         } catch (error) {
@@ -119,7 +148,32 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         throw new Error(`video output "${graph.output}" must be a color node`);
     }
 
+    for (let buffer = 0; buffer < bufferCount; buffer++) {
+        if (!bufferWrites.has(buffer)) {
+            throw new Error(`feedback buffer ${buffer} is never written`);
+        }
+    }
+
     const slotVecs = Math.max(1, Math.ceil(graph.uniforms.length / 4));
+    const bufferBindings = Array.from(
+        { length: bufferCount },
+        (_, k) => `@group(0) @binding(${k + 2}) var fb_${k}: texture_2d<f32>;`,
+    );
+    const bufferDeclarations =
+        bufferCount === 0
+            ? ''
+            : `@group(0) @binding(1) var fb_sampler: sampler;
+${bufferBindings.join('\n')}
+
+struct FragOut {
+    @location(0) screen: vec4f,
+${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}: vec4f,`).join('\n')}
+}
+`;
+    const result =
+        bufferCount === 0
+            ? `vec4f(${names.get(graph.output)}, 1.0)`
+            : `FragOut(vec4f(${names.get(graph.output)}, 1.0), ${Array.from({ length: bufferCount }, (_, k) => `vec4f(${bufferWrites.get(k)}, 1.0)`).join(', ')})`;
     const wgsl = `struct Uniforms {
     time: f32,
     resolution: vec2f,
@@ -127,7 +181,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-${[...helpers.values()].map((h) => `\n${h}\n`).join('')}
+${bufferDeclarations}${[...helpers.values()].map((h) => `\n${h}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
@@ -135,15 +189,16 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
 }
 
 @fragment
-fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+fn fs(@builtin(position) frag: vec4f) -> ${bufferCount === 0 ? '@location(0) vec4f' : 'FragOut'} {
     let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
 ${lines.join('\n')}
-    return vec4f(${names.get(graph.output)}, 1.0);
+    return ${result};
 }
 `;
     return {
         wgsl,
         uniformFloatCount: UNIFORM_SLOTS_OFFSET + slotVecs * 4,
         uniforms: graph.uniforms,
+        feedbackBufferCount: bufferCount,
     };
 }

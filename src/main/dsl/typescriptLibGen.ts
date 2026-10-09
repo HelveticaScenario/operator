@@ -1936,7 +1936,32 @@ declare const $v: {
      */
     posterize(input: VideoValue, levels?: VideoValue): VideoField;
     /**
-     * Shows a color in the video output window. Last call wins.
+     * Feeds a frame back into itself. \`update\` receives the previous frame's
+     * result as \`prev\`, resampled through the transform in \`config\`, and
+     * returns this frame's color; \`feedback\` returns that color. The first
+     * frame's \`prev\` is black. Re-running a patch keeps the loops' pictures,
+     * so edits take effect without wiping the trails.
+     * @param update Builds this frame from \`prev\`
+     * @param config.zoom Magnification of the previous frame about the center per frame; above 1 zooms in (default 1)
+     * @param config.rotate Turns per frame; positive turns the picture clockwise (default 0)
+     * @param config.shiftX Horizontal move per frame as a fraction of the width; positive moves right (default 0)
+     * @param config.shiftY Vertical move per frame as a fraction of the height; positive moves up (default 0)
+     * @param config.edge What lies beyond the frame border: \`'clamp'\` (default), \`'repeat'\` or \`'mirror'\`
+     * @example $v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.1)), prev, 0.9), { zoom: 1.02, rotate: 0.004 }))
+     * @example $v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 0.2), 1, $v.shape($v.add($v.ramp(), -0.2), $v.ramp('v'), 0.05)), $v.mult(prev, 0.96)), { rotate: 0.01 }))
+     */
+    feedback(
+        update: (prev: VideoColor) => VideoColor,
+        config?: {
+            zoom?: VideoValue;
+            rotate?: VideoValue;
+            shiftX?: VideoValue;
+            shiftY?: VideoValue;
+            edge?: 'clamp' | 'repeat' | 'mirror';
+        },
+    ): VideoColor;
+    /**
+     * Shows a color in the performance window. Last call wins.
      * @example $v.out($v.colorize(1, 0, 0))
      */
     out(input: VideoColor): void;

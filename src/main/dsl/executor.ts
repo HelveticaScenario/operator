@@ -927,6 +927,7 @@ export function executePatchScript(
             colorize: videoBuilder.colorize,
             comparator: videoBuilder.comparator,
             diff: videoBuilder.diff,
+            feedback: videoBuilder.feedback,
             hsv: videoBuilder.hsv,
             invert: videoBuilder.invert,
             key: videoBuilder.key,

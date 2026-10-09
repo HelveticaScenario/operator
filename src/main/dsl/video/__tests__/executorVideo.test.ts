@@ -133,4 +133,69 @@ describe('$v in the DSL executor', () => {
             ).toThrow(/\$v\.colorize: r is an audio signal/);
         });
     });
+
+    describe('feedback', () => {
+        it('compiles an update function into a read and a write of one buffer', () => {
+            const { video } = exec(`
+                const seed = $v.shape($v.ramp(), $v.ramp('v'), 0.1);
+                const trail = $v.feedback(
+                    (prev) => $v.mix($v.hsv($v.time, 1, seed), prev, 0.9),
+                    { zoom: 1.02, rotate: 0.005, edge: 'mirror' },
+                );
+                $v.out(trail);
+            `);
+            expect(video!.feedbackBufferCount).toBe(1);
+            expect(video!.wgsl).toContain('fb_0');
+            expect(video!.wgsl).toContain('feedback_mirror');
+        });
+
+        it('numbers independent loops separately', () => {
+            const { video } = exec(`
+                const a = $v.feedback((prev) => $v.mix($v.hsv(0.1), prev, 0.5));
+                const b = $v.feedback((prev) => $v.mix($v.hsv(0.6), prev, 0.5));
+                $v.out($v.mix(a, b));
+            `);
+            expect(video!.feedbackBufferCount).toBe(2);
+        });
+
+        it('lets a slider drive the transform', () => {
+            const { video } = exec(`
+                $v.out($v.feedback(
+                    (prev) => $v.mix($v.hsv(0.3), prev, 0.9),
+                    { zoom: $slider('Zoom', 1, 0.9, 1.1) },
+                ));
+            `);
+            expect(video!.uniforms.map((u) => u.moduleId)).toEqual([
+                '__slider_Zoom',
+            ]);
+        });
+
+        it('keeps a loop whose result is never read from the output', () => {
+            const { video } = exec(`
+                $v.feedback((prev) => $v.mix($v.hsv(0.3), prev, 0.9));
+                $v.out($v.hsv(0.5));
+            `);
+            expect(video!.feedbackBufferCount).toBe(1);
+        });
+
+        it('rejects an update that returns a field', () => {
+            expect(() => exec(`$v.feedback((prev) => $v.ramp());`)).toThrow(
+                /\$v\.feedback: update must return a video color/,
+            );
+        });
+
+        it('rejects a non-function update', () => {
+            expect(() => exec(`$v.feedback($v.hsv(0));`)).toThrow(
+                /\$v\.feedback: update must be a function/,
+            );
+        });
+
+        it('rejects more loops than there are render targets', () => {
+            const loops = Array.from(
+                { length: 8 },
+                () => `$v.feedback((p) => $v.mix($v.hsv(0), p, 0.5));`,
+            ).join('\n');
+            expect(() => exec(loops)).toThrow(/at most 7 feedback loops/);
+        });
+    });
 });

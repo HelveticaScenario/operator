@@ -1,4 +1,5 @@
 import { colorize } from './colorize';
+import { feedbackRead, feedbackWrite } from './feedback';
 import { hsv, posterize, procAmp } from './color';
 import { comparator } from './comparator';
 import { key } from './key';
@@ -27,6 +28,8 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     comparator,
     diff,
     diffColor,
+    feedbackRead,
+    feedbackWrite,
     hsv,
     invert,
     invertColor,

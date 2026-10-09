@@ -1,9 +1,10 @@
-import type {
-    VideoGraph,
-    VideoNode,
-    VideoUniform,
-    VideoValue,
-    VideoValueType,
+import {
+    MAX_FEEDBACK_BUFFERS,
+    type VideoGraph,
+    type VideoNode,
+    type VideoUniform,
+    type VideoValue,
+    type VideoValueType,
 } from '../../../shared/video/videoGraph';
 import { BaseCollection, ModuleOutput } from '../GraphBuilder';
 
@@ -29,6 +30,19 @@ export interface VideoOscConfig {
     shape?: 'sine' | 'triangle' | 'saw' | 'square';
 }
 
+export interface VideoFeedbackConfig {
+    /** Magnification of the previous frame about the center (default 1). */
+    zoom?: VideoSource;
+    /** Turns per frame (default 0). */
+    rotate?: VideoSource;
+    /** Horizontal move, as a fraction of frame width per frame (default 0). */
+    shiftX?: VideoSource;
+    /** Vertical move, as a fraction of frame height per frame (default 0). */
+    shiftY?: VideoSource;
+    /** What lies beyond the frame border (default 'clamp'). */
+    edge?: 'clamp' | 'repeat' | 'mirror';
+}
+
 export interface VideoShapeConfig {
     shape?: 'circle' | 'box' | 'diamond';
 }
@@ -49,6 +63,7 @@ export class VideoGraphBuilder {
     private nodes: VideoNode[] = [];
     private outputId: string | null = null;
     private uniforms: VideoUniform[] = [];
+    private bufferCount = 0;
 
     /**
      * @param controlValue Current value of a slider or button's backing
@@ -116,9 +131,10 @@ export class VideoGraphBuilder {
         type: VideoValueType,
         inputs: Record<string, VideoValue>,
         params?: Record<string, string>,
+        buffer?: number,
     ): VideoOutput {
         const id = `${kind}_${this.nodes.length}`;
-        this.nodes.push({ id, kind, inputs, params });
+        this.nodes.push({ id, kind, inputs, params, buffer });
         return new VideoOutput({ kind: 'node', id }, type);
     }
 
@@ -275,6 +291,66 @@ export class VideoGraphBuilder {
             saturation: this.asField('$v.procAmp', 'saturation', saturation),
         });
 
+    /**
+     * Feeds a frame back into itself. `update` receives the previous frame's
+     * result, resampled through the transform in `config`, and returns this
+     * frame's color; `feedback` returns that color.
+     */
+    feedback = (
+        update: (prev: VideoOutput) => VideoOutput,
+        config?: VideoFeedbackConfig,
+    ): VideoOutput => {
+        if (typeof update !== 'function') {
+            throw new Error(
+                `$v.feedback: update must be a function, got ${describe(update)}`,
+            );
+        }
+        if (this.bufferCount >= MAX_FEEDBACK_BUFFERS) {
+            throw new Error(
+                `$v.feedback: a patch can use at most ${MAX_FEEDBACK_BUFFERS} feedback loops`,
+            );
+        }
+        const buffer = this.bufferCount++;
+        const prev = this.addNode(
+            'feedbackRead',
+            'color',
+            {
+                zoom: this.asField('$v.feedback', 'zoom', config?.zoom ?? 1),
+                rotate: this.asField(
+                    '$v.feedback',
+                    'rotate',
+                    config?.rotate ?? 0,
+                ),
+                shiftX: this.asField(
+                    '$v.feedback',
+                    'shiftX',
+                    config?.shiftX ?? 0,
+                ),
+                shiftY: this.asField(
+                    '$v.feedback',
+                    'shiftY',
+                    config?.shiftY ?? 0,
+                ),
+            },
+            config?.edge === undefined ? undefined : { edge: config.edge },
+            buffer,
+        );
+        const next = update(prev);
+        if (!(next instanceof VideoOutput) || next.type !== 'color') {
+            throw new Error(
+                `$v.feedback: update must return a video color, got ${describe(next)}`,
+            );
+        }
+        this.addNode(
+            'feedbackWrite',
+            'color',
+            { input: next.value },
+            undefined,
+            buffer,
+        );
+        return next;
+    };
+
     /** Shows `input` in the performance window. The last call wins. */
     out = (input: VideoOutput): void => {
         if (!(input instanceof VideoOutput) || input.type !== 'color') {
@@ -289,7 +365,13 @@ export class VideoGraphBuilder {
     /** The graph reachable from the output, or null if `$v.out` was never called. */
     build(): VideoGraph | null {
         if (this.outputId === null) return null;
-        const live = new Set<string>([this.outputId]);
+        const live = new Set<string>(
+            this.nodes
+                .filter(
+                    (n) => n.id === this.outputId || n.kind === 'feedbackWrite',
+                )
+                .map((n) => n.id),
+        );
         for (let i = this.nodes.length - 1; i >= 0; i--) {
             const node = this.nodes[i];
             if (!live.has(node.id)) continue;
