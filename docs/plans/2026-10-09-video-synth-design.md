@@ -43,15 +43,18 @@ The compiler is a pure function `VideoGraph → { wgsl, uniformLayout, passes }`
 3. Main keeps the latest shader and pushes it to the output window over IPC (`VIDEO_ON_SHADER`; the window fetches the current one with `VIDEO_GET_SHADER` on load).
 4. The output window's `VideoRenderer` rebuilds the pipeline on shader change and writes uniforms every frame.
 
-### Planned file layout
+### File layout
 
-- `src/shared/video/videoGraph.ts` — IR types.
-- `src/main/dsl/video/VideoGraphBuilder.ts` — `$v.*` factories and graph construction.
-- `src/main/dsl/video/wgslCompiler.ts` — IR → WGSL.
-- `src/main/dsl/video/modules/*.ts` — one file per module: params, WGSL snippet, doc examples.
-- `src/main/performanceWindow.ts` — performance window lifecycle (the general-purpose audience-facing window; video is its first content).
-- `src/renderer/video/VideoRenderer.ts` — WebGPU device, pipelines, uniform buffer, frame loop.
-- `src/renderer/video/monitors/` — waveform and vector monitors (phase 4).
+- `src/shared/video/` — IR types (`videoGraph.ts`), uniform buffer layout (`uniformLayout.ts`).
+- `src/shared/dsl/videoDocs.ts` — the `$v` documentation table.
+- `src/main/dsl/video/VideoGraphBuilder.ts` — `$v.*` calls to graph.
+- `src/main/dsl/video/wgslCompiler.ts` — graph to WGSL.
+- `src/main/dsl/video/modules/*.ts` — one WGSL definition per module (shared helpers in `transform.ts`).
+- `src/main/dsl/videoLibGen.ts` — typings from the docs table.
+- `src/main/performanceWindow.ts` — window lifecycle, uniform and tap polling.
+- `src/renderer/video/` — `VideoRenderer` (frame loop), `ShaderProgram`, `FeedbackBuffers`, `PreviewCapture`, `previewViews` (monitors).
+- `src/renderer/components/PerformanceWindow.tsx`, `VideoHelp.tsx`, `monaco/videoPreviewViewZones.ts`, `app/videoPreviewAnchors.ts`.
+- `crates/modular_core/src/dsp/utilities/video_tap.rs` — the `_videoTap` module and its atomics.
 
 Files stay under ~400 lines; split by domain.
 
@@ -75,52 +78,47 @@ Target set, grouped as in an LZX system. Names are provisional.
 
 ## 4. Phases
 
-### Phase 1 — Vertical slice
+Status as built. Phases 1–4 are implemented; the remaining work is listed under each phase and in section 7.
 
-**Delivers:** `$v.ramp`, `$v.osc`, `$v.colorize`, `$v.out`; the IR, the WGSL compiler, `VideoGraphBuilder`, the output window with a WebGPU renderer, uniform updates from literals and `$slider`, and Monaco typings for `$v.*`.
+### Phase 1 — Vertical slice (done)
 
-**Done when:** a patch containing those modules renders in the output window, editing a slider updates the picture without recompiling the pipeline, and the compiler has snapshot tests.
+The IR, the WGSL compiler, `VideoGraphBuilder`, the performance window with a WebGPU renderer, uniform updates and Monaco typings. `$v.ramp`, `$v.osc`, `$v.colorize` and `$v.out` were the first modules.
 
-### Phase 2 — Mixing, keying and control from the audio engine
+### Phase 2 — Mixing, keying and control from the audio engine (done)
 
-**Delivers:** `$v.mix`, `$v.mult`, `$v.diff`, `$v.invert`, `$v.comparator`, `$v.keyer`, `$v.wipe`, `$v.shape`, `$v.procAmp`, `$v.posterize`, `$v.warp`; audio-engine signals as uniforms.
+**Modules:** `add`, `mult`, `diff`, `min`, `max`, `invert`, `mix` (fields, or colors when either operand is a color), `comparator`, `key`, `shape`, `procAmp`, `posterize`, `hsv`, `wrap`, `fold`, and ramps that can be zoomed, rotated and shifted and that have radial (`r`) and angular (`a`) axes. Coordinate warping the LZX way, by modulating ramps before the oscillators, works with these. Warping an arbitrary field would need its inputs re-evaluated at shifted coordinates and is not implemented.
 
-**Audio-to-uniform path:** a tap in the engine publishes selected control values (the same polling pattern as `get_scopes()`), the renderer fetches them once per frame, and they populate uniform slots. No always-on JS polling beyond what a video graph with audio-derived inputs needs; with no such inputs the poll does not run.
+**Control:** sliders and buttons bind to uniform slots by their backing module id, and main pushes new values on `SYNTH_SET_MODULE_PARAM`. Any other audio signal binds to an engine tap: the DSL inserts a hidden `_videoTap` module whose input is the signal, the module stores the value in a static array of atomics on the audio thread, and main polls the array at 60 Hz while the performance window is open and the shader reads a tap. Taps carry volts as the audio graph produces them. A patch can read 64 audio signals, one channel each.
 
-**Done when:** an LFO or envelope in the audio graph drives a video parameter, and module behavior (clipping, wrap, polarity) has tests.
+### Phase 3 — Feedback and memory (done)
 
-### Phase 3 — Feedback and memory
+`$v.feedback(update, config)` compiles to a read of the previous frame, resampled through a zoom, rotation, shift and edge mode, and a write of the new frame. The fused shader writes each loop into an extra render target; ping-pong half-float textures carry it to the next frame, up to seven loops. Buffers survive patch re-runs so edits do not wipe the picture, and a window resize clears them. `$v.frameDelay` is not implemented.
 
-**Delivers:** `$v.feedback` and `$v.frameDelay` using ping-pong textures; pass partitioning in the compiler; resolution-independent feedback transforms.
-
-**Done when:** a feedback patch is stable across window resizes, graph swaps preserve or deliberately reset feedback state (decided and documented), and the pass partitioner is unit-tested.
-
-### Phase 4 — Display and monitoring
+### Phase 4 — Display and monitoring (previews done)
 
 **Direction:** the output window is the **performance window**: the general-purpose, audience-facing surface that replaces showing the audience the editor. Video is its first content; the code view and other visuals are meant to share it. It opens from View → Toggle Performance Window (`operator.togglePerformanceWindow`, default Ctrl+Shift+V) and when a patch first calls `$v.out`.
 
-**Delivers:**
-- Output window options: fullscreen on a chosen display, aspect (4:3, 16:9, free), resolution scale.
-- Inline thumbnails of any video signal in the editor, reusing the scope view-zone machinery (`scopeViewZones.ts`, `trackedViewZones.ts`).
-- Waveform monitor (luma against horizontal position) and vectorscope.
-- Optional analog-look post-processing: scanlines, noise, soft bloom (the glow work from `2026-03-05-glow-effect-plan.md` is the reference).
-- Syphon publishing of the output window through the existing `SyphonBridge`.
+**Previews:** `$v.preview(signal, { view })` returns its signal and shows it in a panel under the call in the editor, as an image, a waveform monitor or a vectorscope.
+- The compiler adds a fragment entry point `preview_k` per preview that evaluates only that signal's dependencies and reads the feedback textures without writing them, so a preview shows the same frame the audience sees.
+- The performance window draws previews into small targets (144 pixels tall at the output's aspect ratio) every other frame, reads them back and sends them to main, which relays them to the editor.
+- The editor anchors each panel to its call with a tracked range, so panels follow edits.
+- Monitors are computed in the editor from the preview's pixels.
+- The performance window must be open for previews to update.
 
-**Done when:** a thumbnail follows its call site as the code is edited, monitors can be toggled per signal, and Syphon publishing works from the video window.
+**Resolved question:** thumbnails read an intermediate texture back through staging buffers rather than running a second renderer in the editor, which would have drifted from the real output wherever feedback is involved. With three previews on a feedback patch, frame pacing on a 120 Hz display was unchanged: mean 8.33 ms, p95 9.2 ms, max 9.4 ms, no frame over 20 ms in 570. That is rAF pacing, not an isolated GPU measurement.
 
-**Open question:** thumbnails need a read of an intermediate texture. Decide between a small-resolution copy rendered by the output window and shipped to the editor, or a second lightweight renderer in the editor process. Measure both before choosing.
+**Not built:**
+- Fullscreen on a chosen display, aspect and resolution scale options for the performance window.
+- Syphon publishing of the performance window. `SyphonBridge.start` takes the window to capture, but the occlusion and throttling handling that keeps a captured window painting is written for the main window and needs checking against a real Syphon client.
+- Analog-look post-processing (scanlines, noise, bloom).
 
-### Phase 5 — Audio and video bridges
+### Phase 5 — Audio and video bridges (partly done)
 
-**Delivers:**
-- `$v.fromAudio`: writes audio-rate samples along scanlines so audio-rate signals become horizontal structure.
-- `$v.toCV`: samples a pixel or region average per frame and returns a control signal to the audio graph (a GPU readback, once per frame).
+Audio-to-video is covered by taps for control-rate signals. Not built: `$v.fromAudio`, which writes audio-rate samples along scanlines, and `$v.toCV`, which samples a pixel or region per frame and returns a control signal to the audio graph.
 
-**Done when:** an audio oscillator visibly shapes the picture, and a pixel region controls an audio parameter, with the readback latency characterized.
+### Phase 6 — Polish and documentation (done for the module set)
 
-### Phase 6 — Polish and documentation
-
-**Delivers:** doc examples for every `$v.*` module (validated by the example-validity harness), help-window pages, example patches, performance profile, and decisions on any deferred items below.
+One table, `src/shared/dsl/videoDocs.ts`, generates both the Monaco typings (JSDoc and declarations) and the Help window's Video page, and a test fails if `$v` gains a member without an entry. Every example in the table is run by the example-validity harness.
 
 ---
 
@@ -139,9 +137,20 @@ Target set, grouped as in an LZX system. Names are provisional.
 - **Uniform plumbing correctness** — hidden allowlists in the DSL layer fail silently or late (see the pattern-wrapper checklist); add tests for every new wrapper method.
 - **Thumbnail cost** (phase 4) and **readback latency** (phase 5).
 
-## 7. Deferred
+## 7. Remaining and deferred
+
+Not built yet, in rough order of value:
+
+- Performance window options: fullscreen on a chosen display, aspect, resolution scale.
+- Syphon publishing of the performance window.
+- `$v.frameDelay`, `$v.fromAudio` and `$v.toCV`.
+- Arbitrary-field warping (needs re-evaluating a field's inputs at shifted coordinates).
+- Analog-look post-processing: scanlines, noise, bloom.
+- Generators and filters that need more than the current pixel: noise, blur.
+
+Deferred indefinitely:
 
 - A native `wgpu` sink (HDR, 10-bit, NDI, genlock-grade pacing). Revisit only if Syphon and the Electron window prove insufficient.
-- Compute-shader modules (histogram, convolution) beyond what phases 4–5 need.
+- Compute-shader modules (histogram, convolution) beyond what the above needs.
 - Image or live camera inputs as source fields.
 - Deterministic offline rendering to video files.
