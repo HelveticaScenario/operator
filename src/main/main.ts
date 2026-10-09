@@ -39,6 +39,7 @@ import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
 import {
     getVideoShader,
+    setVideoControl,
     togglePerformanceWindow,
     updateVideoShader,
 } from './performanceWindow';
@@ -1105,6 +1106,10 @@ registerIPCHandler('SYNTH_IS_STOPPED', () => synth.isStopped());
 
 registerIPCHandler('SYNTH_SET_MODULE_PARAM', (moduleId, moduleType, params) => {
     synth.setModuleParam(moduleId, moduleType, params);
+    const { source } = params as { source?: unknown };
+    if (typeof source === 'number') {
+        setVideoControl(moduleId, source);
+    }
 });
 
 registerIPCHandler('SYNTH_GET_TRANSPORT_STATE', () =>

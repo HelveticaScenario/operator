@@ -26,7 +26,14 @@ export function PerformanceWindow() {
         VideoRenderer.create(canvas, abort.signal).then(
             (created) => {
                 renderer = created;
-                unsubscribe = electronAPI.video.onShader(show);
+                const stopShader = electronAPI.video.onShader(show);
+                const stopUniform = electronAPI.video.onUniform((slot, value) =>
+                    created.setUniform(slot, value),
+                );
+                unsubscribe = () => {
+                    stopShader();
+                    stopUniform();
+                };
                 void electronAPI.video.getShader().then(show);
             },
             (e: unknown) => {

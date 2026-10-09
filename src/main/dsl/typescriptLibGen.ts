@@ -1786,20 +1786,28 @@ interface VideoColor {
     readonly __videoColor: true;
 }
 
-/** A constant or a {@link VideoField}. */
-type VideoValue = number | VideoField;
+/**
+ * A constant, a {@link VideoField}, or a \`$slider\` / \`$btn\` / \`$toggleBtn\`
+ * whose live value drives the input. Audio signals are not accepted.
+ */
+type VideoValue = number | VideoField | CollectionWithRange;
 
 /**
  * A constant, a {@link VideoField} or a {@link VideoColor}. Math modules work
  * on colors when any operand is a color; a field or number operand is then
  * treated as that gray level.
  */
-type VideoSignal = number | VideoField | VideoColor;
+type VideoSignal = VideoValue | VideoColor;
 
 /**
  * Video synthesis. Patches build a graph of fields that is drawn per pixel in
  * the video output window, which opens when a patch calls \`$v.out\`. Video
  * signals cannot be connected to audio inputs.
+ *
+ * Sliders and buttons can be passed anywhere a field is accepted, and moving
+ * one updates the picture live. Their values are used as written, so give
+ * levels and phases a 0..1 range.
+ * @example $v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))
  */
 declare const $v: {
     /**

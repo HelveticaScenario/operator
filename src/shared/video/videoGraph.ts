@@ -21,6 +21,15 @@ export interface VideoNode {
     params?: Record<string, string>;
 }
 
+/** A control (slider or button) whose value feeds one uniform slot. */
+export interface VideoUniform {
+    slot: number;
+    /** Module id of the control's backing `$signal`. */
+    moduleId: string;
+    /** The control's current value. */
+    value: number;
+}
+
 /**
  * A video patch. `nodes` is in dependency order: a node only references
  * nodes that precede it. `output` names the `color` node shown on screen.
@@ -28,11 +37,13 @@ export interface VideoNode {
 export interface VideoGraph {
     nodes: VideoNode[];
     output: string;
-    uniformSlotCount: number;
+    /** Slot `i` is `uniforms[i]`. */
+    uniforms: VideoUniform[];
 }
 
 export interface CompiledVideoShader {
     wgsl: string;
     /** Total uniform buffer size in floats, a multiple of 4. */
     uniformFloatCount: number;
+    uniforms: VideoUniform[];
 }

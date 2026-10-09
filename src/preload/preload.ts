@@ -241,6 +241,9 @@ export interface ElectronAPI {
         onShader: (
             callback: (shader: CompiledVideoShader | null) => void,
         ) => () => void;
+        onUniform: (
+            callback: (slot: number, value: number) => void,
+        ) => () => void;
     };
 
     // Config operations
@@ -518,6 +521,9 @@ const electronAPI: ElectronAPI = {
         getShader: () => invokeIPC('VIDEO_GET_SHADER'),
         onShader: menuEventHandler<[CompiledVideoShader | null]>(
             IPC_CHANNELS.VIDEO_ON_SHADER,
+        ),
+        onUniform: menuEventHandler<[number, number]>(
+            IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
     },
 

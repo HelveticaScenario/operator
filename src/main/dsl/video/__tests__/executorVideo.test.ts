@@ -93,4 +93,44 @@ describe('$v in the DSL executor', () => {
             ).toThrow(/param "shape" must be one of circle, box, diamond/);
         });
     });
+
+    describe('control-bound inputs', () => {
+        it('binds a slider to a uniform slot carrying its current value', () => {
+            const { video } = exec(`
+                const freq = $slider('Freq', 4, 1, 10);
+                $v.out($v.colorize($v.osc($v.ramp(), freq), 0, 0));
+            `);
+            expect(video!.uniforms).toEqual([
+                { slot: 0, moduleId: '__slider_Freq', value: 4 },
+            ]);
+            expect(video!.wgsl).toContain('u.slots[0][0]');
+        });
+
+        it('shares one slot between every use of a control', () => {
+            const { video } = exec(`
+                const amt = $slider('Amt', 0.5, 0, 1);
+                const a = $v.osc($v.ramp(), 3, amt);
+                $v.out($v.colorize(a, amt, $slider('Other', 1, 0, 2)));
+            `);
+            expect(video!.uniforms.map((u) => u.moduleId)).toEqual([
+                '__slider_Amt',
+                '__slider_Other',
+            ]);
+        });
+
+        it('binds a button as 0 until pressed', () => {
+            const { video } = exec(`
+                $v.out($v.colorize($btn('Flash'), 0, 0));
+            `);
+            expect(video!.uniforms).toEqual([
+                { slot: 0, moduleId: '__button_Flash', value: 0 },
+            ]);
+        });
+
+        it('rejects an audio signal', () => {
+            expect(() =>
+                exec(`$v.out($v.colorize($sine('c4'), 0, 0));`),
+            ).toThrow(/\$v\.colorize: r is an audio signal/);
+        });
+    });
 });

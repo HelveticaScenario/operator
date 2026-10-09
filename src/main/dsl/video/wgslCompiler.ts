@@ -4,10 +4,8 @@ import type {
     VideoValue,
     VideoValueType,
 } from '../../../shared/video/videoGraph';
+import { UNIFORM_SLOTS_OFFSET } from '../../../shared/video/uniformLayout';
 import { VIDEO_MODULES } from './modules';
-
-/** Floats before the slot array in the uniform buffer: time, pad, resolution. */
-export const UNIFORM_HEADER_FLOATS = 4;
 
 function wgslFloat(value: number): string {
     if (!Number.isFinite(value)) {
@@ -42,7 +40,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 if (
                     !Number.isInteger(value.slot) ||
                     value.slot < 0 ||
-                    value.slot >= graph.uniformSlotCount
+                    value.slot >= graph.uniforms.length
                 ) {
                     throw new Error(
                         `uniform slot ${value.slot} is out of range`,
@@ -121,7 +119,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         throw new Error(`video output "${graph.output}" must be a color node`);
     }
 
-    const slotVecs = Math.max(1, Math.ceil(graph.uniformSlotCount / 4));
+    const slotVecs = Math.max(1, Math.ceil(graph.uniforms.length / 4));
     const wgsl = `struct Uniforms {
     time: f32,
     resolution: vec2f,
@@ -143,5 +141,9 @@ ${lines.join('\n')}
     return vec4f(${names.get(graph.output)}, 1.0);
 }
 `;
-    return { wgsl, uniformFloatCount: UNIFORM_HEADER_FLOATS + slotVecs * 4 };
+    return {
+        wgsl,
+        uniformFloatCount: UNIFORM_SLOTS_OFFSET + slotVecs * 4,
+        uniforms: graph.uniforms,
+    };
 }

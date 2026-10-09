@@ -1,5 +1,10 @@
 /// <reference types="@webgpu/types" />
 import type { CompiledVideoShader } from '../../shared/video/videoGraph';
+import {
+    UNIFORM_RESOLUTION_OFFSET,
+    UNIFORM_SLOTS_OFFSET,
+    UNIFORM_TIME_OFFSET,
+} from '../../shared/video/uniformLayout';
 
 interface ShaderState {
     pipeline: GPURenderPipeline;
@@ -8,9 +13,6 @@ interface ShaderState {
     uniforms: Float32Array<ArrayBuffer>;
 }
 
-/** Index of the resolution vec2 in the uniform buffer; time is at 0. */
-const RESOLUTION_OFFSET = 2;
-
 /**
  * Draws a compiled video shader to a canvas every animation frame. With no
  * shader the canvas is cleared to black.
@@ -18,6 +20,8 @@ const RESOLUTION_OFFSET = 2;
 export class VideoRenderer {
     private shader: ShaderState | null = null;
     private shaderToken = 0;
+    /** Control values received while a shader is still being built. */
+    private pendingSlots = new Map<number, number>();
     private frameHandle = 0;
     private readonly startMs = performance.now();
 
@@ -62,6 +66,7 @@ export class VideoRenderer {
      */
     async setShader(compiled: CompiledVideoShader | null): Promise<void> {
         const token = ++this.shaderToken;
+        this.pendingSlots = new Map();
         if (compiled === null) {
             this.release();
             return;
@@ -101,12 +106,28 @@ export class VideoRenderer {
             return;
         }
         this.release();
-        this.shader = {
-            bindGroup,
-            pipeline,
-            uniformBuffer,
-            uniforms: new Float32Array(compiled.uniformFloatCount),
-        };
+        const uniforms = new Float32Array(compiled.uniformFloatCount);
+        for (const { slot, value } of compiled.uniforms) {
+            uniforms[UNIFORM_SLOTS_OFFSET + slot] = value;
+        }
+        this.shader = { bindGroup, pipeline, uniformBuffer, uniforms };
+        for (const [slot, value] of this.pendingSlots) {
+            this.setUniform(slot, value);
+        }
+        this.pendingSlots.clear();
+    }
+
+    /**
+     * Sets a control-bound input of the shader being displayed, or of the one
+     * being built when a replacement is in flight.
+     */
+    setUniform(slot: number, value: number): void {
+        this.pendingSlots.set(slot, value);
+        if (this.shader === null) return;
+        const index = UNIFORM_SLOTS_OFFSET + slot;
+        if (index < this.shader.uniforms.length) {
+            this.shader.uniforms[index] = value;
+        }
     }
 
     dispose(): void {
@@ -150,9 +171,10 @@ export class VideoRenderer {
         if (this.shader !== null) {
             const { bindGroup, pipeline, uniformBuffer, uniforms } =
                 this.shader;
-            uniforms[0] = (performance.now() - this.startMs) / 1000;
-            uniforms[RESOLUTION_OFFSET] = this.canvas.width;
-            uniforms[RESOLUTION_OFFSET + 1] = this.canvas.height;
+            uniforms[UNIFORM_TIME_OFFSET] =
+                (performance.now() - this.startMs) / 1000;
+            uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
+            uniforms[UNIFORM_RESOLUTION_OFFSET + 1] = this.canvas.height;
             this.device.queue.writeBuffer(uniformBuffer, 0, uniforms);
             pass.setPipeline(pipeline);
             pass.setBindGroup(0, bindGroup);

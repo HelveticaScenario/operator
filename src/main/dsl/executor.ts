@@ -39,6 +39,7 @@ import {
 } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
+import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
 import { VideoGraphBuilder } from './video/VideoGraphBuilder';
@@ -267,7 +268,6 @@ export function executePatchScript(
         }
         builder.setScopeXY(pairs, xRange, yRange, captureSourceLocation());
     };
-    const videoBuilder = new VideoGraphBuilder();
     const $setTimeSignature = (numerator: number, denominator: number) => {
         if (!Number.isInteger(numerator) || numerator < 1) {
             throw new Error(
@@ -626,6 +626,14 @@ export function executePatchScript(
     const controls = createControls({
         rangedSignal: (value, id, min, max) =>
             builder.$c(signal(value, { id })).withRange(min, max),
+    });
+
+    const videoBuilder = new VideoGraphBuilder((moduleId) => {
+        const slider = controls.sliders.find((s) => s.moduleId === moduleId);
+        if (slider) return slider.value;
+        const button = controls.buttons.find((b) => b.moduleId === moduleId);
+        if (button) return button.value ? GATE_HIGH_VOLTAGE : 0;
+        return undefined;
     });
 
     /**

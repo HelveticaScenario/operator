@@ -55,6 +55,21 @@ export function updateVideoShader(shader: CompiledVideoShader | null): void {
     performanceWindow?.webContents.send(IPC_CHANNELS.VIDEO_ON_SHADER, shader);
 }
 
+/**
+ * Applies a control's new value to the shader input bound to it; a no-op for
+ * controls the video graph does not read.
+ */
+export function setVideoControl(moduleId: string, value: number): void {
+    const binding = latestShader?.uniforms.find((u) => u.moduleId === moduleId);
+    if (binding === undefined) return;
+    binding.value = value;
+    performanceWindow?.webContents.send(
+        IPC_CHANNELS.VIDEO_ON_UNIFORM,
+        binding.slot,
+        value,
+    );
+}
+
 export function getVideoShader(): CompiledVideoShader | null {
     return latestShader;
 }

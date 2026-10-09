@@ -1,9 +1,11 @@
 import type {
     VideoGraph,
     VideoNode,
+    VideoUniform,
     VideoValue,
     VideoValueType,
 } from '../../../shared/video/videoGraph';
+import { BaseCollection, ModuleOutput } from '../GraphBuilder';
 
 /** A video signal: a node's output, a constant, or the time field. */
 export class VideoOutput {
@@ -13,8 +15,15 @@ export class VideoOutput {
     ) {}
 }
 
-/** A constant or a video signal of either type. */
-export type VideoSource = number | VideoOutput;
+/**
+ * A constant, a video signal of either type, or a slider or button, whose
+ * live value drives a field input.
+ */
+export type VideoSource =
+    | number
+    | VideoOutput
+    | ModuleOutput
+    | BaseCollection<ModuleOutput>;
 
 export interface VideoOscConfig {
     shape?: 'sine' | 'triangle' | 'saw' | 'square';
@@ -25,7 +34,11 @@ export interface VideoShapeConfig {
 }
 
 function describe(value: unknown): string {
-    return value instanceof VideoOutput ? `a ${value.type}` : String(value);
+    if (value instanceof VideoOutput) return `a ${value.type}`;
+    if (value instanceof ModuleOutput || value instanceof BaseCollection) {
+        return 'an audio signal';
+    }
+    return String(value);
 }
 
 const isColor = (value: unknown): boolean =>
@@ -35,12 +48,46 @@ const isColor = (value: unknown): boolean =>
 export class VideoGraphBuilder {
     private nodes: VideoNode[] = [];
     private outputId: string | null = null;
+    private uniforms: VideoUniform[] = [];
+
+    /**
+     * @param controlValue Current value of a slider or button's backing
+     *   module, or undefined if `moduleId` is not a control.
+     */
+    constructor(
+        private readonly controlValue: (moduleId: string) => number | undefined,
+    ) {}
 
     readonly time = new VideoOutput({ kind: 'time' }, 'field');
+
+    /** Binds a slider or button to a uniform slot, one slot per control. */
+    private bindControl(
+        fn: string,
+        name: string,
+        output: ModuleOutput,
+    ): VideoValue {
+        const existing = this.uniforms.find(
+            (u) => u.moduleId === output.moduleId,
+        );
+        if (existing) return { kind: 'uniform', slot: existing.slot };
+        const value = this.controlValue(output.moduleId);
+        if (value === undefined) {
+            throw new Error(
+                `${fn}: ${name} is ${describe(output)}; video inputs take numbers, video signals, sliders and buttons`,
+            );
+        }
+        const slot = this.uniforms.length;
+        this.uniforms.push({ slot, moduleId: output.moduleId, value });
+        return { kind: 'uniform', slot };
+    }
 
     private asField(fn: string, name: string, v: unknown): VideoValue {
         if (typeof v === 'number') return { kind: 'const', value: v };
         if (v instanceof VideoOutput && v.type === 'field') return v.value;
+        if (v instanceof ModuleOutput) return this.bindControl(fn, name, v);
+        if (v instanceof BaseCollection && v.length === 1) {
+            return this.bindControl(fn, name, v[0]);
+        }
         throw new Error(
             `${fn}: ${name} must be a number or a video field, got ${describe(v)}`,
         );
@@ -253,7 +300,7 @@ export class VideoGraphBuilder {
         return {
             nodes: this.nodes.filter((n) => live.has(n.id)),
             output: this.outputId,
-            uniformSlotCount: 0,
+            uniforms: this.uniforms,
         };
     }
 }

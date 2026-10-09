@@ -400,6 +400,7 @@ export const IPC_CHANNELS = {
     PERFORMANCE_WINDOW_TOGGLE: 'modular:window:toggle-performance',
     VIDEO_GET_SHADER: 'modular:video:get-shader',
     VIDEO_ON_SHADER: 'modular:video:on-shader',
+    VIDEO_ON_UNIFORM: 'modular:video:on-uniform',
 
     // Syphon window output (macOS)
     SYPHON_TOGGLE: 'modular:syphon:toggle',
@@ -594,6 +595,7 @@ export interface IPCHandlers {
     // Performance window
     [IPC_CHANNELS.PERFORMANCE_WINDOW_TOGGLE]: () => void;
     [IPC_CHANNELS.VIDEO_GET_SHADER]: () => CompiledVideoShader | null;
+    [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (slot: number, value: number) => void;
     [IPC_CHANNELS.VIDEO_ON_SHADER]: (
         shader: CompiledVideoShader | null,
     ) => void;

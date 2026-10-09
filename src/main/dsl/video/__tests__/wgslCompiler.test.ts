@@ -31,8 +31,15 @@ const stripes: VideoGraph = {
         },
     ],
     output: 'out',
-    uniformSlotCount: 1,
+    uniforms: [{ slot: 0, moduleId: 'knob', value: 3 }],
 };
+
+const slots = (n: number) =>
+    Array.from({ length: n }, (_, slot) => ({
+        slot,
+        moduleId: `knob${slot}`,
+        value: 0,
+    }));
 
 describe('compileVideoGraph', () => {
     it('emits one fused fragment shader for the whole graph', () => {
@@ -67,7 +74,7 @@ describe('compileVideoGraph', () => {
     it('sizes the uniform buffer to header plus whole vec4 slots', () => {
         expect(compileVideoGraph(stripes).uniformFloatCount).toBe(8);
         expect(
-            compileVideoGraph({ ...stripes, uniformSlotCount: 5 })
+            compileVideoGraph({ ...stripes, uniforms: slots(5) })
                 .uniformFloatCount,
         ).toBe(12);
     });
@@ -86,7 +93,7 @@ describe('compileVideoGraph', () => {
                       }
                     : n,
             ),
-            uniformSlotCount: 7,
+            uniforms: slots(7),
         };
         expect(compileVideoGraph(graph).wgsl).toContain('u.slots[1][2]');
     });
@@ -198,7 +205,7 @@ describe('compileVideoGraph', () => {
         ],
     ] as const)('rejects %s', (_name, partial, message) => {
         const graph = {
-            uniformSlotCount: 0,
+            uniforms: [],
             ...partial,
         } as unknown as VideoGraph;
         expect(() => compileVideoGraph(graph)).toThrow(message);
