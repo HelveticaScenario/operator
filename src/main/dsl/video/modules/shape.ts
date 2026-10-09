@@ -19,13 +19,13 @@ export const shape: VideoModuleDef = {
 fn shape_offset(x: f32, y: f32) -> vec2f {
     return vec2f((x - 0.5) * u.resolution.x / u.resolution.y, y - 0.5);
 }`,
-    emit: ({ x, y, size, softness }, { shape }) => {
+    emit: ({ x, y, size, softness }, { shape: kind }) => {
         const p = `shape_offset(${x}, ${y})`;
         const distance = {
             circle: `length(${p})`,
             box: `max(abs(${p}.x), abs(${p}.y))`,
             diamond: `(abs(${p}.x) + abs(${p}.y))`,
-        }[shape]!;
+        }[kind]!;
         return `shape_edge(${distance}, ${size}, ${softness})`;
     },
 };
