@@ -10,6 +10,11 @@ export interface VideoModuleDef {
     output: VideoValueType;
     params: Record<string, VideoParamSpec>;
     /**
+     * WGSL function declarations the expression calls. Emitted once per
+     * module kind, so every function name must be unique to this module.
+     */
+    helpers?: string;
+    /**
      * WGSL expression for the module's value. `args` holds one WGSL
      * expression per input, `params` the resolved option per param.
      */

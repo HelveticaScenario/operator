@@ -1790,6 +1790,13 @@ interface VideoColor {
 type VideoValue = number | VideoField;
 
 /**
+ * A constant, a {@link VideoField} or a {@link VideoColor}. Math modules work
+ * on colors when any operand is a color; a field or number operand is then
+ * treated as that gray level.
+ */
+type VideoSignal = number | VideoField | VideoColor;
+
+/**
  * Video synthesis. Patches build a graph of fields that is drawn per pixel in
  * the video output window, which opens when a patch calls \`$v.out\`. Video
  * signals cannot be connected to audio inputs.
@@ -1828,6 +1835,98 @@ declare const $v: {
      * @example $v.out($v.colorize($v.ramp(), $v.ramp('v'), 1))
      */
     colorize(r: VideoValue, g: VideoValue, b: VideoValue): VideoColor;
+    /**
+     * Color from hue, saturation and value. Hue wraps every 1.0; saturation
+     * and value are clipped to 0..1.
+     * @example $v.out($v.hsv($v.ramp(), 1, 1))
+     * @example $v.out($v.hsv($v.osc($v.ramp(), 2, $v.time), 0.8, $v.ramp('v')))
+     */
+    hsv(h: VideoValue, s?: VideoValue, v?: VideoValue): VideoColor;
+    /**
+     * Saturation, then gain and bias, clipped to the displayable range.
+     * @param input Color (a field is treated as gray)
+     * @param gain Multiplier (default 1)
+     * @param bias Offset added after gain (default 0)
+     * @param saturation 0 is gray, 1 is unchanged (default 1)
+     * @example $v.out($v.procAmp($v.hsv($v.ramp()), 1.5, -0.2, 0.5))
+     */
+    procAmp(
+        input: VideoSignal,
+        gain?: VideoValue,
+        bias?: VideoValue,
+        saturation?: VideoValue,
+    ): VideoColor;
+    /**
+     * 1 inside a shape and 0 outside, with a soft edge. Pass ramps for x and y
+     * to center it on the frame; offset them to move it. Circles stay round at
+     * any window aspect.
+     * @param x Horizontal position field; 0.5 is the center
+     * @param y Vertical position field; 0.5 is the center
+     * @param size Half-extent as a fraction of frame height (default 0.25)
+     * @param softness Width of the edge in the same units (default 0.01)
+     * @param config.shape \`'circle'\` (default), \`'box'\` or \`'diamond'\`
+     * @example $v.out($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3, 0.05)))
+     * @example $v.out($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2, 0, { shape: 'diamond' })))
+     */
+    shape(
+        x: VideoValue,
+        y: VideoValue,
+        size?: VideoValue,
+        softness?: VideoValue,
+        config?: { shape?: 'circle' | 'box' | 'diamond' },
+    ): VideoField;
+    /**
+     * Sum, clipped to 0..1. Colors add per channel.
+     * @example $v.out($v.hsv($v.add($v.ramp(), $v.osc($v.ramp('v'), 3))))
+     */
+    add(a: VideoValue, b: VideoValue): VideoField;
+    add(a: VideoSignal, b: VideoSignal): VideoColor;
+    /**
+     * Product. Multiplying by a field darkens; colors multiply per channel.
+     * @example $v.out($v.mult($v.hsv($v.ramp()), $v.ramp('v')))
+     */
+    mult(a: VideoValue, b: VideoValue): VideoField;
+    mult(a: VideoSignal, b: VideoSignal): VideoColor;
+    /**
+     * Absolute difference. Colors differ per channel.
+     * @example $v.out($v.hsv($v.diff($v.ramp(), $v.ramp('v'))))
+     */
+    diff(a: VideoValue, b: VideoValue): VideoField;
+    diff(a: VideoSignal, b: VideoSignal): VideoColor;
+    /**
+     * Complement, 1 minus the input.
+     * @example $v.out($v.invert($v.hsv($v.ramp())))
+     */
+    invert(input: VideoValue): VideoField;
+    invert(input: VideoSignal): VideoColor;
+    /**
+     * Crossfade from \`a\` (amount 0) to \`b\` (amount 1).
+     * @param amount Mix position, clipped to 0..1 (default 0.5)
+     * @example $v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('v')), $v.osc($v.time, 0.25)))
+     */
+    mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoField;
+    mix(a: VideoSignal, b: VideoSignal, amount?: VideoValue): VideoColor;
+    /**
+     * Threshold: 0 below \`threshold\`, 1 above, with a linear ramp
+     * \`softness\` wide centered on it (a hard edge when 0).
+     * @example $v.out($v.hsv(0.1, 1, $v.comparator($v.osc($v.ramp(), 4), 0.5, 0.1)))
+     */
+    comparator(
+        input: VideoValue,
+        threshold?: VideoValue,
+        softness?: VideoValue,
+    ): VideoField;
+    /**
+     * Shows \`fg\` where \`mask\` is 1 and \`bg\` where it is 0.
+     * @example $v.out($v.key($v.hsv(0.9), $v.hsv($v.ramp(), 1, 0.5), $v.shape($v.ramp(), $v.ramp('v'), 0.3)))
+     */
+    key(fg: VideoSignal, bg: VideoSignal, mask: VideoValue): VideoColor;
+    /**
+     * Quantizes to \`levels\` evenly spaced values between 0 and 1.
+     * @param levels Number of steps, at least 2 (default 4)
+     * @example $v.out($v.hsv($v.posterize($v.ramp(), 5)))
+     */
+    posterize(input: VideoValue, levels?: VideoValue): VideoField;
     /**
      * Shows a color in the video output window. Last call wins.
      * @example $v.out($v.colorize(1, 0, 0))

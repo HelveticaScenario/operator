@@ -25,6 +25,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const types = new Map<string, VideoValueType>();
     const names = new Map<string, string>();
     const lines: string[] = [];
+    const helpers = new Map<string, string>();
 
     const resolve = (value: VideoValue, expected: VideoValueType): string => {
         switch (value.kind) {
@@ -97,6 +98,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 if (!(name in def.params))
                     throw new Error(`unknown param "${name}"`);
             }
+            if (def.helpers !== undefined) helpers.set(node.kind, def.helpers);
             const local = `v${index}`;
             const wgslType = def.output === 'field' ? 'f32' : 'vec3f';
             lines.push(
@@ -127,7 +129,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-
+${[...helpers.values()].map((h) => `\n${h}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
