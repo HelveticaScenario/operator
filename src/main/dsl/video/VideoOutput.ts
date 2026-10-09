@@ -58,6 +58,8 @@ const CHAIN: Record<string, ChainCall> = {
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),
     toCV: (o, s, config) => o.toCV(s, config),
     warp: (o, s, config) => o.warp(s, config),
+    write: (_o, s, buffer) =>
+        (buffer as { write(color: VideoOutput): unknown }).write(s),
     wrap: (o, s, gain) => o.wrap(s, gain),
 };
 

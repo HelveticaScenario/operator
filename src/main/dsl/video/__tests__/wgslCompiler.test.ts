@@ -317,7 +317,7 @@ describe('compileVideoGraph feedback', () => {
             nodes: loop.nodes.filter((n) => n.id !== 'store'),
         };
         expect(() => compileVideoGraph(graph)).toThrow(
-            /feedback buffer 0 is never written/,
+            /feedback buffer 0 is read but never written/,
         );
     });
 

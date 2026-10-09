@@ -17,6 +17,7 @@ import {
     type CollectionWithRange,
     ModuleOutput,
 } from '../GraphBuilder';
+import { VideoBuffer } from './VideoBuffer';
 import { VideoOutput } from './VideoOutput';
 
 /**
@@ -119,6 +120,7 @@ export class VideoGraphBuilder {
     private outputId: string | null = null;
     private uniforms: VideoUniform[] = [];
     private bufferCount = 0;
+    private writtenBuffers = new Set<number>();
     private previews: VideoPreview[] = [];
     private previewSites: VideoPreviewSite[] = [];
     private cvCount = 0;
@@ -607,50 +609,74 @@ export class VideoGraphBuilder {
                 `$v.feedback: update must be a function, got ${describe(update)}`,
             );
         }
-        if (this.bufferCount >= MAX_FEEDBACK_BUFFERS) {
-            throw new Error(
-                `$v.feedback: a patch can use at most ${MAX_FEEDBACK_BUFFERS} feedback loops`,
-            );
-        }
-        const buffer = this.bufferCount++;
-        const prev = this.addNode(
-            'feedbackRead',
-            'color',
-            {
-                zoom: this.asField('$v.feedback', 'zoom', config?.zoom ?? 1),
-                rotate: this.asField(
-                    '$v.feedback',
-                    'rotate',
-                    config?.rotate ?? 0,
-                ),
-                shiftX: this.asField(
-                    '$v.feedback',
-                    'shiftX',
-                    config?.shiftX ?? 0,
-                ),
-                shiftY: this.asField(
-                    '$v.feedback',
-                    'shiftY',
-                    config?.shiftY ?? 0,
-                ),
-            },
-            config?.edge === undefined ? undefined : { edge: config.edge },
-            buffer,
-        );
-        const next = update(prev);
+        const index = this.allocateBuffer('$v.feedback');
+        const next = update(this.readBuffer(index, config, '$v.feedback'));
         if (!(next instanceof VideoOutput) || next.type !== 'color') {
             throw new Error(
                 `$v.feedback: update must return a video color, got ${describe(next)}`,
             );
         }
+        return this.writeBuffer(index, next, '$v.feedback');
+    };
+
+    /**
+     * A frame store: signals write it, and any signal can read what it held on
+     * the previous frame, so buffers can feed themselves or each other.
+     */
+    buffer = (): VideoBuffer =>
+        new VideoBuffer(this.allocateBuffer('$v.buffer'), this);
+
+    private allocateBuffer(fn: string): number {
+        if (this.bufferCount >= MAX_FEEDBACK_BUFFERS) {
+            throw new Error(
+                `${fn}: a patch can use at most ${MAX_FEEDBACK_BUFFERS} feedback loops`,
+            );
+        }
+        return this.bufferCount++;
+    }
+
+    /** The previous frame of buffer `index`, resampled through the transform in `config`. */
+    readBuffer = (
+        index: number,
+        config?: VideoFeedbackConfig,
+        fn = '$v.buffer',
+    ): VideoOutput =>
+        this.addNode(
+            'feedbackRead',
+            'color',
+            {
+                zoom: this.asField(fn, 'zoom', config?.zoom ?? 1),
+                rotate: this.asField(fn, 'rotate', config?.rotate ?? 0),
+                shiftX: this.asField(fn, 'shiftX', config?.shiftX ?? 0),
+                shiftY: this.asField(fn, 'shiftY', config?.shiftY ?? 0),
+            },
+            config?.edge === undefined ? undefined : { edge: config.edge },
+            index,
+        );
+
+    /** Stores `input` in buffer `index` for the next frame, and returns it. */
+    writeBuffer = (
+        index: number,
+        input: VideoOutput,
+        fn = '$v.buffer',
+    ): VideoOutput => {
+        if (!(input instanceof VideoOutput) || input.type !== 'color') {
+            throw new Error(
+                `${fn}: write takes a video color, got ${describe(input)}`,
+            );
+        }
+        if (this.writtenBuffers.has(index)) {
+            throw new Error(`${fn}: a buffer can be written only once`);
+        }
+        this.writtenBuffers.add(index);
         this.addNode(
             'feedbackWrite',
             'color',
-            { input: next.value },
+            { input: input.value },
             undefined,
-            buffer,
+            index,
         );
-        return next;
+        return input;
     };
 
     /**
@@ -771,8 +797,22 @@ export class VideoGraphBuilder {
                 if (input.kind === 'node') live.add(input.id);
             }
         }
+        const liveNodes = this.nodes.filter((n) => live.has(n.id));
+        // Buffers a patch allocated but never used, or whose reads were all
+        // pruned, must not leave gaps in the numbering the shader binds.
+        const used = [
+            ...new Set(
+                liveNodes.flatMap((n) =>
+                    n.buffer === undefined ? [] : [n.buffer],
+                ),
+            ),
+        ].sort((a, b) => a - b);
         return {
-            nodes: this.nodes.filter((n) => live.has(n.id)),
+            nodes: liveNodes.map((n) =>
+                n.buffer === undefined
+                    ? n
+                    : { ...n, buffer: used.indexOf(n.buffer) },
+            ),
             output: this.outputId,
             histories: this.histories,
             previews: this.previews,

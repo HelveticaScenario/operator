@@ -261,7 +261,9 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
 
     for (let buffer = 0; buffer < bufferCount; buffer++) {
         if (!bufferWrites.has(buffer)) {
-            throw new Error(`feedback buffer ${buffer} is never written`);
+            throw new Error(
+                `feedback buffer ${buffer} is read but never written`,
+            );
         }
     }
 

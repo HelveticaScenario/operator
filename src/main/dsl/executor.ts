@@ -945,6 +945,7 @@ export function executePatchScript(
         // Video synthesis
         $v: {
             add: videoBuilder.add,
+            buffer: videoBuilder.buffer,
             channel: videoBuilder.channel,
             colorize: videoBuilder.colorize,
             comparator: videoBuilder.comparator,

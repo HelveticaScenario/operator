@@ -735,4 +735,84 @@ describe('$v in the DSL executor', () => {
             );
         });
     });
+
+    describe('buffers', () => {
+        it('lets several signals read one buffer', () => {
+            const { video } = exec(`
+                const b = $v.buffer();
+                const edge = b.read({ rotate: 0.1 });
+                const slow = b.read({ zoom: 1.1 });
+                $v.out(b.write($v.hsv(0.5).add(edge.mult(0.5)).add(slow.mult(0.4))));
+            `);
+            expect(video!.feedbackBufferCount).toBe(1);
+            expect(video!.wgsl.match(/textureSampleLevel\(fb_0/g)).toHaveLength(
+                2,
+            );
+        });
+
+        it('lets two buffers feed each other', () => {
+            const { video } = exec(`
+                const a = $v.buffer();
+                const b = $v.buffer();
+                a.write($v.hsv($v.time).add(b.read({ rotate: 0.01 }).mult(0.9)));
+                b.write(a.read({ zoom: 1.02 }).mult(0.9));
+                $v.out(a.read());
+            `);
+            expect(video!.feedbackBufferCount).toBe(2);
+            expect(video!.wgsl).toContain('fb_0');
+            expect(video!.wgsl).toContain('fb_1');
+        });
+
+        it('chains write like any other method', () => {
+            const { video } = exec(`
+                const b = $v.buffer();
+                $v.hsv(0.2).add(b.read().mult(0.9)).write(b).out();
+            `);
+            expect(video!.feedbackBufferCount).toBe(1);
+        });
+
+        it('numbers the buffers a patch uses without gaps', () => {
+            const { video } = exec(`
+                const unused = $v.buffer();
+                const used = $v.buffer();
+                $v.out(used.write($v.hsv(0.3).add(used.read().mult(0.9))));
+            `);
+            expect(video!.feedbackBufferCount).toBe(1);
+            expect(video!.wgsl).toContain('fb_0');
+            expect(video!.wgsl).not.toContain('fb_1');
+        });
+
+        it('keeps feedback loops and buffers in one numbering', () => {
+            const { video } = exec(`
+                const b = $v.buffer();
+                const loop = $v.feedback((prev) => $v.mix($v.hsv(0.1), prev, 0.9));
+                $v.out(b.write($v.mix(loop, b.read(), 0.5)));
+            `);
+            expect(video!.feedbackBufferCount).toBe(2);
+        });
+
+        it('rejects a buffer that is read but never written', () => {
+            expect(() =>
+                exec(`const b = $v.buffer(); $v.out(b.read());`),
+            ).toThrow(/feedback buffer 0 is read but never written/);
+        });
+
+        it('rejects writing a buffer twice or writing a field', () => {
+            expect(() =>
+                exec(
+                    `const b = $v.buffer(); b.write($v.hsv(0)); b.write($v.hsv(1));`,
+                ),
+            ).toThrow(/\$v\.buffer: a buffer can be written only once/);
+            expect(() => exec(`$v.buffer().write($v.ramp());`)).toThrow(
+                /\$v\.buffer: write takes a video color/,
+            );
+        });
+
+        it('rejects more buffers than there are render targets', () => {
+            const many = Array.from({ length: 8 }, () => '$v.buffer();').join(
+                '\n',
+            );
+            expect(() => exec(many)).toThrow(/at most 7 feedback loops/);
+        });
+    });
 });

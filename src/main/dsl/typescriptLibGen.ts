@@ -1800,6 +1800,26 @@ ${generateVideoChainMembers('color')}
 type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange;
 
 /**
+ * A frame store from \`$v.buffer\`: \`write\` a color into it, and \`read\` what
+ * it held on the previous frame.
+ */
+interface VideoBuffer {
+    /**
+     * The previous frame of the buffer, resampled through a zoom, rotation,
+     * shift and edge mode, as for \`$v.feedback\`.
+     */
+    read(config?: {
+        zoom?: VideoValue;
+        rotate?: VideoValue;
+        shiftX?: VideoValue;
+        shiftY?: VideoValue;
+        edge?: 'clamp' | 'repeat' | 'mirror';
+    }): VideoColor;
+    /** Stores a color for the next frame to read, and returns it. */
+    write(color: VideoColor): VideoColor;
+}
+
+/**
  * A constant, a {@link VideoField} or a {@link VideoColor}. Math modules work
  * on colors when any operand is a color; a field or number operand is then
  * treated as that gray level.

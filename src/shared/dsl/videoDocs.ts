@@ -667,6 +667,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'buffer',
+        group: 'Memory',
+        description:
+            "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
+        params: [],
+        examples: [
+            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).hsv().mult(0.2).add(trail.read({ zoom: 1.01, rotate: 0.002 }).mult(0.96)).write(trail).out()',
+            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.08)).add(b.read({ rotate: 0.01 }).mult(0.95))); b.write(a.read({ zoom: 1.03 }).mult(0.9)); $v.out(a.read())",
+        ],
+        declarations: ['buffer(): VideoBuffer;'],
+    },
+    {
         name: 'out',
         group: 'Output',
         description: 'Shows a color in the performance window. Last call wins.',
@@ -762,6 +774,13 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description: 'Quantizes to `levels` steps.',
         declarations: ['posterize(levels?: VideoValue): VideoField;'],
         on: ['field'],
+    },
+    {
+        name: 'write',
+        description:
+            'Stores this color in a buffer for the next frame to read, and returns it.',
+        declarations: ['write(buffer: VideoBuffer): VideoColor;'],
+        on: ['color'],
     },
     {
         name: 'wrap',
