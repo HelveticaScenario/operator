@@ -121,6 +121,41 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'fromAudio',
+        group: 'Generators',
+        description:
+            'The recent audio-rate samples of an audio signal, laid along `position`: 0 is the oldest sample in the window and 1 the newest. Values are in volts, as the audio graph produces them, interpolated between samples. With the default horizontal ramp for `position` this is a scope: compare it with the vertical ramp to draw the wave. Unlike an audio signal used directly as an input, which is read once per frame, this shows every sample.',
+        params: [
+            {
+                name: 'signal',
+                description:
+                    'A single-channel audio signal, such as an oscillator or an envelope',
+            },
+            {
+                name: 'position',
+                description:
+                    'Where along the window to read, 0 to 1 (default the horizontal ramp)',
+            },
+            {
+                name: 'config.samples',
+                description:
+                    'Samples the window spans, 2 to 4096 (default 512; at 48 kHz, 48 samples are 1 ms)',
+            },
+            {
+                name: 'config.trigger',
+                description:
+                    'Start the window at a rising zero crossing so a periodic wave holds still (default true)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv(0.35, 1, $v.invert($v.comparator($v.diff($v.ramp('v'), $v.add(0.5, $v.mult($v.fromAudio($sine('110hz')), 0.08))), 0.01, 0.01))))",
+            "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('r'), { samples: 1024 }), 1, 1))",
+        ],
+        declarations: [
+            'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoField;',
+        ],
+    },
+    {
         name: 'noise',
         group: 'Generators',
         description:

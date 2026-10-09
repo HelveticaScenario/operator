@@ -2,6 +2,8 @@ import {
     MAX_FEEDBACK_BUFFERS,
     MAX_VIDEO_TAPS,
     type VideoGraph,
+    type VideoHistory,
+    VIDEO_HISTORY_LEN,
     type VideoNode,
     type VideoPreview,
     type VideoPreviewSite,
@@ -50,6 +52,13 @@ export interface VideoGraphHost {
     cvSignal(id: string): CollectionWithRange;
     /** Where the patch script is calling from, as V8 reports it. */
     sourceLocation(): { line: number; column: number } | undefined;
+}
+
+export interface VideoAudioConfig {
+    /** Samples the window spans, 2 to 4096 (default 512; 48 000 per second). */
+    samples?: number;
+    /** Start the window at a rising zero crossing so a periodic wave holds still (default true). */
+    trigger?: boolean;
 }
 
 export interface VideoCvConfig {
@@ -122,6 +131,8 @@ export class VideoGraphBuilder {
     private cvCount = 0;
     /** Uniform slot of each audio signal already published, by signal identity. */
     private tapSlots = new Map<string, number>();
+    private tapIndexes = new Map<string, number>();
+    private histories: VideoHistory[] = [];
     private tapCount = 0;
 
     constructor(private readonly host: VideoGraphHost) {}
@@ -154,9 +165,25 @@ export class VideoGraphBuilder {
             return { kind: 'uniform', slot };
         }
 
-        const key = `${output.moduleId}\0${output.portName}\0${output.channel}`;
+        const key = this.signalKey(output);
         const known = this.tapSlots.get(key);
         if (known !== undefined) return { kind: 'uniform', slot: known };
+        const tap = this.tapFor(fn, name, output);
+        const slot = this.uniforms.length;
+        this.uniforms.push({ kind: 'tap', slot, tap, value: 0 });
+        this.tapSlots.set(key, slot);
+        return { kind: 'uniform', slot };
+    }
+
+    private signalKey(output: ModuleOutput): string {
+        return `${output.moduleId}\0${output.portName}\0${output.channel}`;
+    }
+
+    /** The engine tap carrying `output`, publishing it on first use. */
+    private tapFor(fn: string, name: string, output: ModuleOutput): number {
+        const key = this.signalKey(output);
+        const known = this.tapIndexes.get(key);
+        if (known !== undefined) return known;
         if (this.tapCount >= MAX_VIDEO_TAPS) {
             throw new Error(
                 `${fn}: ${name} would be signal ${MAX_VIDEO_TAPS + 1}; a patch can read at most ${MAX_VIDEO_TAPS} audio signals into video`,
@@ -164,10 +191,8 @@ export class VideoGraphBuilder {
         }
         const tap = this.tapCount++;
         this.host.publishTap(output, tap);
-        const slot = this.uniforms.length;
-        this.uniforms.push({ kind: 'tap', slot, tap, value: 0 });
-        this.tapSlots.set(key, slot);
-        return { kind: 'uniform', slot };
+        this.tapIndexes.set(key, tap);
+        return tap;
     }
 
     private asField(fn: string, name: string, v: unknown): VideoValue {
@@ -211,9 +236,10 @@ export class VideoGraphBuilder {
         inputs: Record<string, VideoValue>,
         params?: Record<string, string>,
         buffer?: number,
+        history?: number,
     ): VideoOutput {
         const id = `${kind}_${this.nodes.length}`;
-        this.nodes.push({ id, kind, inputs, params, buffer });
+        this.nodes.push({ id, kind, inputs, params, buffer, history });
         return new VideoOutput({ kind: 'node', id }, type);
     }
 
@@ -374,6 +400,57 @@ export class VideoGraphBuilder {
             input: this.asField('$v.posterize', 'input', input),
             levels: this.asField('$v.posterize', 'levels', levels),
         });
+
+    /**
+     * The recent audio-rate samples of an audio signal laid along `position`,
+     * oldest at 0 and newest at 1, in volts.
+     */
+    fromAudio = (
+        signal: ModuleOutput | BaseCollection<ModuleOutput>,
+        position: VideoSource = this.ramp('h'),
+        config?: VideoAudioConfig,
+    ): VideoOutput => {
+        const output =
+            signal instanceof BaseCollection && signal.length === 1
+                ? signal[0]
+                : signal;
+        if (!(output instanceof ModuleOutput)) {
+            throw new Error(
+                `$v.fromAudio: signal must be a single-channel audio signal, got ${describe(signal)}`,
+            );
+        }
+        const samples = config?.samples ?? 512;
+        if (
+            !Number.isInteger(samples) ||
+            samples < 2 ||
+            samples > VIDEO_HISTORY_LEN
+        ) {
+            throw new Error(
+                `$v.fromAudio: samples must be an integer from 2 to ${VIDEO_HISTORY_LEN}, got ${samples}`,
+            );
+        }
+        const trigger = config?.trigger ?? true;
+        const tap = this.tapFor('$v.fromAudio', 'signal', output);
+        let row = this.histories.findIndex(
+            (h) =>
+                h.tap === tap && h.samples === samples && h.trigger === trigger,
+        );
+        if (row < 0) {
+            row = this.histories.length;
+            this.histories.push({ samples, tap, trigger });
+        }
+        return this.addNode(
+            'audioHistory',
+            'field',
+            {
+                position: this.asField('$v.fromAudio', 'position', position),
+                samples: { kind: 'const', value: samples },
+            },
+            undefined,
+            undefined,
+            row,
+        );
+    };
 
     /** Smooth value noise between 0 and 1; `z` moves through it. */
     noise = (x: VideoSource, y: VideoSource, z: VideoSource = 0): VideoOutput =>
@@ -598,6 +675,7 @@ export class VideoGraphBuilder {
         return {
             nodes: this.nodes.filter((n) => live.has(n.id)),
             output: this.outputId,
+            histories: this.histories,
             previews: this.previews,
             uniforms: this.uniforms,
         };

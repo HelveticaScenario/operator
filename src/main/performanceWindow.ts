@@ -3,23 +3,32 @@ import path from 'node:path';
 import { IPC_CHANNELS } from '../shared/ipcTypes';
 import type {
     CompiledVideoShader,
+    VideoTapSamples,
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
-/** ~60 Hz: fast enough for control-rate modulation, slow enough to stay idle. */
+/** ~60 Hz: often enough that a tap's ring never wraps, rare enough to stay idle. */
 const TAP_POLL_MS = 16;
 
 let performanceWindow: BrowserWindow | null = null;
 let latestShader: CompiledVideoShader | null = null;
-let readTaps: ((count: number) => number[]) | null = null;
 let tapTimer: NodeJS.Timeout | null = null;
+let tapSource: TapSource | null = null;
+/** How many samples of each tap earlier polls have already taken. */
+const tapHeads = new Map<number, number>();
 
-/** Supplies the engine's latest audio-signal tap values, volts by tap index. */
-export function setVideoTapReader(read: (count: number) => number[]): void {
-    readTaps = read;
+/** Where the engine's audio-signal taps are read from. */
+export interface TapSource {
+    /** The samples tap `tap` has written since `since`, or its latest few without it. */
+    read(tap: number, since?: number): { head: number; samples: number[] };
+    sampleRate(): number;
+}
+
+export function setVideoTapSource(source: TapSource): void {
+    tapSource = source;
 }
 
 function sendUniforms(updates: VideoUniformUpdate[]): void {
@@ -27,19 +36,42 @@ function sendUniforms(updates: VideoUniformUpdate[]): void {
     performanceWindow?.webContents.send(IPC_CHANNELS.VIDEO_ON_UNIFORM, updates);
 }
 
-function pollTaps(): void {
-    if (latestShader === null || readTaps === null) return;
-    const bound = latestShader.uniforms.filter((u) => u.kind === 'tap');
-    if (bound.length === 0) return;
-    const values = readTaps(Math.max(...bound.map((u) => u.tap)) + 1);
-    const updates: VideoUniformUpdate[] = [];
-    for (const u of bound) {
-        const value = values[u.tap] ?? 0;
-        if (value === u.value) continue;
-        u.value = value;
-        updates.push({ slot: u.slot, value });
+/** The engine taps the shader reads, as uniforms or audio history. */
+function neededTaps(shader: CompiledVideoShader | null): Set<number> {
+    const taps = new Set<number>();
+    for (const u of shader?.uniforms ?? []) {
+        if (u.kind === 'tap') taps.add(u.tap);
     }
-    sendUniforms(updates);
+    for (const h of shader?.histories ?? []) taps.add(h.tap);
+    return taps;
+}
+
+/**
+ * Sends the window every audio sample its taps have produced since the last
+ * poll. The renderer plays them back against its own clock, so the signals it
+ * reads are as smooth as the audio, however the engine's callbacks fall.
+ */
+function pollTaps(): void {
+    if (tapSource === null || performanceWindow === null) return;
+    const chunks: VideoTapSamples[] = [];
+    const sampleRate = tapSource.sampleRate();
+    for (const tap of neededTaps(latestShader)) {
+        const { head, samples } = tapSource.read(tap, tapHeads.get(tap));
+        tapHeads.set(tap, head);
+        if (samples.length > 0) {
+            chunks.push({
+                sampleRate,
+                samples: Float32Array.from(samples),
+                tap,
+            });
+        }
+    }
+    if (chunks.length > 0) {
+        performanceWindow.webContents.send(
+            IPC_CHANNELS.VIDEO_ON_TAP_SAMPLES,
+            chunks,
+        );
+    }
 }
 
 /**
@@ -48,8 +80,7 @@ function pollTaps(): void {
  */
 function syncTapPolling(): void {
     const needed =
-        performanceWindow !== null &&
-        (latestShader?.uniforms.some((u) => u.kind === 'tap') ?? false);
+        performanceWindow !== null && neededTaps(latestShader).size > 0;
     if (needed && tapTimer === null) {
         tapTimer = setInterval(pollTaps, TAP_POLL_MS);
         pollTaps();

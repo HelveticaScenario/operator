@@ -950,6 +950,7 @@ export function executePatchScript(
             diff: videoBuilder.diff,
             feedback: videoBuilder.feedback,
             fold: videoBuilder.fold,
+            fromAudio: videoBuilder.fromAudio,
             hsv: videoBuilder.hsv,
             invert: videoBuilder.invert,
             key: videoBuilder.key,

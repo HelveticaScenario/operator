@@ -33,6 +33,9 @@ export function PerformanceWindow() {
                     void electronAPI.video.sendPreviewFrame(frame);
                 });
                 const stopShader = electronAPI.video.onShader(show);
+                const stopSamples = electronAPI.video.onTapSamples((chunks) =>
+                    created.pushTapSamples(chunks),
+                );
                 const stopUniform = electronAPI.video.onUniform((updates) => {
                     for (const { slot, value } of updates) {
                         created.setUniform(slot, value);
@@ -41,6 +44,7 @@ export function PerformanceWindow() {
                 unsubscribe = () => {
                     stopShader();
                     stopUniform();
+                    stopSamples();
                 };
                 void electronAPI.video.getShader().then(show);
             },

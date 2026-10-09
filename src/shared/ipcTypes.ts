@@ -28,6 +28,7 @@ import type {
     VideoCvValue,
     VideoPreviewFrame,
     VideoPreviewSite,
+    VideoTapSamples,
     VideoUniformUpdate,
 } from './video/videoGraph';
 
@@ -409,6 +410,7 @@ export const IPC_CHANNELS = {
     VIDEO_GET_SHADER: 'modular:video:get-shader',
     VIDEO_ON_SHADER: 'modular:video:on-shader',
     VIDEO_ON_UNIFORM: 'modular:video:on-uniform',
+    VIDEO_ON_TAP_SAMPLES: 'modular:video:on-tap-samples',
     VIDEO_PREVIEW_FRAME: 'modular:video:preview-frame',
     VIDEO_CV_VALUES: 'modular:video:cv-values',
     VIDEO_ON_PREVIEW_FRAME: 'modular:video:on-preview-frame',
@@ -609,6 +611,7 @@ export interface IPCHandlers {
     [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
     [IPC_CHANNELS.VIDEO_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
+    [IPC_CHANNELS.VIDEO_ON_TAP_SAMPLES]: (chunks: VideoTapSamples[]) => void;
     [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (updates: VideoUniformUpdate[]) => void;
     [IPC_CHANNELS.VIDEO_ON_SHADER]: (
         shader: CompiledVideoShader | null,

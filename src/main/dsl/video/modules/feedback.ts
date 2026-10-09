@@ -34,7 +34,7 @@ export const feedbackRead: VideoModuleDef = {
     return vec2f(q.x, 1.0 - q.y);
 }`,
     ],
-    emit: ({ zoom, rotate, shiftX, shiftY }, { edge }, buffer) =>
+    emit: ({ zoom, rotate, shiftX, shiftY }, { edge }, { buffer }) =>
         `textureSampleLevel(fb_${buffer}, fb_sampler, feedback_texcoord(feedback_${edge}(video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY})))), 0.0).rgb`,
 };
 

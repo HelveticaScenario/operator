@@ -38,6 +38,7 @@ const stripes: VideoGraph = {
             inputs: { input: { kind: 'node', id: 'rgb' } },
         },
     ],
+    histories: [],
     output: 'out',
     previews: [],
     uniforms: [{ kind: 'control', slot: 0, moduleId: 'knob', value: 3 }],
@@ -236,6 +237,7 @@ describe('compileVideoGraph', () => {
         ],
     ] as const)('rejects %s', (_name, partial, message) => {
         const graph = {
+            histories: [],
             previews: [],
             uniforms: [],
             ...partial,
@@ -281,6 +283,7 @@ describe('compileVideoGraph feedback', () => {
                 inputs: { input: { kind: 'node', id: 'frame' } },
             },
         ],
+        histories: [],
         output: 'out',
         previews: [],
         uniforms: [],
@@ -401,5 +404,105 @@ describe('compileVideoGraph previews', () => {
                 ]),
             ),
         ).toThrow(/node "x" is a field, expected a color/);
+    });
+});
+
+describe('compileVideoGraph audio history', () => {
+    const history: VideoGraph = {
+        ...stripes,
+        histories: [{ samples: 512, tap: 3, trigger: true }],
+        nodes: [
+            { id: 'x', kind: 'ramp', inputs: rampInputs },
+            {
+                id: 'wave',
+                kind: 'audioHistory',
+                history: 0,
+                inputs: {
+                    position: { kind: 'node', id: 'x' },
+                    samples: { kind: 'const', value: 512 },
+                },
+            },
+            {
+                id: 'rgb',
+                kind: 'colorize',
+                inputs: {
+                    r: { kind: 'node', id: 'wave' },
+                    g: { kind: 'const', value: 0 },
+                    b: { kind: 'const', value: 0 },
+                },
+            },
+            {
+                id: 'out',
+                kind: 'out',
+                inputs: { input: { kind: 'node', id: 'rgb' } },
+            },
+        ],
+    };
+
+    it('reads a row of the history texture', () => {
+        const shader = compileVideoGraph(history);
+        expect(shader.wgsl).toContain(
+            '@group(0) @binding(2) var history_tex: texture_2d<f32>;',
+        );
+        expect(shader.wgsl).toContain('history_sample(0, v0, 512.0)');
+        expect(shader.histories).toEqual(history.histories);
+    });
+
+    it('binds the history texture after the feedback textures', () => {
+        const withFeedback: VideoGraph = {
+            ...history,
+            nodes: [
+                ...history.nodes.slice(0, 3),
+                {
+                    id: 'prev',
+                    kind: 'feedbackRead',
+                    buffer: 0,
+                    inputs: {
+                        zoom: { kind: 'const', value: 1 },
+                        rotate: { kind: 'const', value: 0 },
+                        shiftX: { kind: 'const', value: 0 },
+                        shiftY: { kind: 'const', value: 0 },
+                    },
+                },
+                {
+                    id: 'store',
+                    kind: 'feedbackWrite',
+                    buffer: 0,
+                    inputs: { input: { kind: 'node', id: 'prev' } },
+                },
+                history.nodes[3],
+            ],
+        };
+        expect(compileVideoGraph(withFeedback).wgsl).toContain(
+            '@group(0) @binding(3) var history_tex',
+        );
+    });
+
+    it('declares no history texture for a graph without audio history', () => {
+        expect(compileVideoGraph(stripes).wgsl).not.toContain('history_tex');
+    });
+
+    it('rejects a row beyond the declared histories', () => {
+        const bad = {
+            ...history,
+            nodes: history.nodes.map((n) =>
+                n.id === 'wave' ? { ...n, history: 1 } : n,
+            ),
+        };
+        expect(() => compileVideoGraph(bad)).toThrow(
+            /audio history row must be an integer from 0 to 0/,
+        );
+    });
+
+    it('rejects a history row on a module that does not read one', () => {
+        const bad = {
+            ...stripes,
+            nodes: stripes.nodes.map((n) =>
+                n.id === 'x' ? { ...n, history: 0 } : n,
+            ),
+        };
+        expect(() => compileVideoGraph(bad)).toThrow(
+            /module has no audio history/,
+        );
     });
 });

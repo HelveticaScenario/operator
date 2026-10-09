@@ -25,12 +25,17 @@ export interface VideoNode {
     inputs: Record<string, VideoValue>;
     /** Enumerated module options; omitted entries take the module default. */
     params?: Record<string, string>;
+    /** Row of the audio history texture an `audioHistory` node reads. */
+    history?: number;
     /**
      * Feedback buffer a `feedbackRead` or `feedbackWrite` node uses. A buffer
      * holds what its write node saw on the previous frame.
      */
     buffer?: number;
 }
+
+/** Samples per row of the audio history texture; matches `VIDEO_HISTORY_LEN` in Rust. */
+export const VIDEO_HISTORY_LEN = 4096;
 
 /** Number of audio-signal taps the engine publishes; matches `MAX_VIDEO_TAPS` in Rust. */
 export const MAX_VIDEO_TAPS = 64;
@@ -47,7 +52,7 @@ export type VideoUniform = {
           moduleId: string;
       }
     | {
-          /** An audio signal, published by a `_videoTap` module. */
+          /** An audio signal, played back from its engine tap each frame. */
           kind: 'tap';
           /** Index of the tap slot the engine publishes the signal to. */
           tap: number;
@@ -81,6 +86,23 @@ export interface VideoPreviewFrame {
     data: Uint8Array;
 }
 
+/** A tap's recent audio-rate samples that the shader reads along a scanline. */
+export interface VideoHistory {
+    /** The engine tap that carries the signal. */
+    tap: number;
+    /** Samples the shader spans; at most {@link VIDEO_HISTORY_LEN}. */
+    samples: number;
+    /** Start the window at a rising zero crossing, so a periodic wave holds still. */
+    trigger: boolean;
+}
+
+/** New audio-rate samples of one engine tap, oldest first, in volts. */
+export interface VideoTapSamples {
+    tap: number;
+    samples: Float32Array;
+    sampleRate: number;
+}
+
 /** A new value for one uniform slot. */
 export interface VideoUniformUpdate {
     slot: number;
@@ -98,6 +120,8 @@ export interface VideoGraph {
     uniforms: VideoUniform[];
     /** Signals drawn as small previews for the editor, in call order. */
     previews: VideoPreview[];
+    /** Row `i` of the audio history texture is `histories[i]`. */
+    histories: VideoHistory[];
 }
 
 /** A region of the frame whose average becomes an audio control signal. */
@@ -133,4 +157,6 @@ export interface CompiledVideoShader {
     previewCount: number;
     /** The previews that feed audio control signals, by preview index. */
     cvSamples: ({ index: number } & VideoCvSample)[];
+    /** Audio history rows the shader reads, as texture binding `2 + feedbackBufferCount`. */
+    histories: VideoHistory[];
 }

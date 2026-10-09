@@ -1,3 +1,4 @@
+import { audioHistory } from './audioHistory';
 import { colorize } from './colorize';
 import { feedbackRead, feedbackWrite } from './feedback';
 import { hsv, posterize, procAmp } from './color';
@@ -30,6 +31,7 @@ import { fold, wrap } from './waveshape';
 export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     add,
     addColor,
+    audioHistory,
     colorize,
     comparator,
     diff,

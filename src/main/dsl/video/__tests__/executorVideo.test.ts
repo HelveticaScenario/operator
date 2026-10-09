@@ -510,4 +510,72 @@ describe('$v in the DSL executor', () => {
             );
         });
     });
+
+    describe('fromAudio', () => {
+        it('reads a window of an audio signal along the horizontal ramp', () => {
+            const { video, patch } = exec(`
+                $v.out($v.colorize($v.fromAudio($sine('110hz'), $v.ramp(), { samples: 256 }), 0, 0));
+            `);
+            expect(video!.histories).toEqual([
+                { samples: 256, tap: 0, trigger: true },
+            ]);
+            expect(video!.wgsl).toContain('history_sample(0, ');
+            expect(
+                patch.modules.filter((m) => m.moduleType === '_videoTap'),
+            ).toHaveLength(1);
+        });
+
+        it('defaults to the horizontal ramp and 512 samples', () => {
+            const { video } = exec(
+                `$v.out($v.colorize($v.fromAudio($saw('55hz')), 0, 0));`,
+            );
+            expect(video!.histories[0]).toMatchObject({
+                samples: 512,
+                trigger: true,
+            });
+            expect(video!.wgsl).toContain('let v0: f32 = uv.x;');
+        });
+
+        it('shares a row between identical reads and a tap with value reads', () => {
+            const { video, patch } = exec(`
+                const lfo = $sine('2hz');
+                const a = $v.fromAudio(lfo);
+                const b = $v.fromAudio(lfo, $v.ramp('v'));
+                $v.out($v.colorize(a, b, lfo));
+            `);
+            expect(video!.histories).toHaveLength(1);
+            expect(
+                patch.modules.filter((m) => m.moduleType === '_videoTap'),
+            ).toHaveLength(1);
+            expect(video!.uniforms.map((u) => u.kind)).toEqual(['tap']);
+        });
+
+        it('gives a different window length its own row', () => {
+            const { video } = exec(`
+                const lfo = $sine('2hz');
+                $v.out($v.colorize($v.fromAudio(lfo, 0.5, { samples: 64 }), $v.fromAudio(lfo, 0.5, { samples: 128 }), 0));
+            `);
+            expect(video!.histories.map((h) => h.samples)).toEqual([64, 128]);
+        });
+
+        it('rejects a window outside the ring', () => {
+            expect(() =>
+                exec(`$v.fromAudio($sine('1hz'), 0.5, { samples: 5000 });`),
+            ).toThrow(
+                /\$v\.fromAudio: samples must be an integer from 2 to 4096/,
+            );
+            expect(() =>
+                exec(`$v.fromAudio($sine('1hz'), 0.5, { samples: 1.5 });`),
+            ).toThrow(/samples must be an integer/);
+        });
+
+        it('rejects a video signal or a polyphonic signal', () => {
+            expect(() => exec(`$v.fromAudio($v.ramp());`)).toThrow(
+                /\$v\.fromAudio: signal must be a single-channel audio signal/,
+            );
+            expect(() =>
+                exec(`$v.fromAudio($c($sine('1hz'), $sine('2hz')));`),
+            ).toThrow(/single-channel audio signal/);
+        });
+    });
 });

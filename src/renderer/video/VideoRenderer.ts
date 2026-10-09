@@ -1,12 +1,16 @@
 /// <reference types="@webgpu/types" />
 import { FeedbackBuffers } from './FeedbackBuffers';
+import { HistoryTexture } from './HistoryTexture';
 import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
+import { TapStream } from './TapStream';
+import { alignWindow } from './alignWindow';
 import type {
     CompiledVideoShader,
     VideoCvValue,
     VideoPreviewFrame,
+    VideoTapSamples,
 } from '../../shared/video/videoGraph';
 import {
     UNIFORM_RESOLUTION_OFFSET,
@@ -37,6 +41,11 @@ export class VideoRenderer {
     private readonly startMs = performance.now();
     private readonly buffers: FeedbackBuffers;
     private readonly previews: PreviewCapture;
+    private readonly history: HistoryTexture;
+    /** Each audio signal the shader reads, played back against this clock. */
+    private readonly streams = new Map<number, TapStream>();
+    /** Scratch the audio history windows are copied into, per history row. */
+    private historyScratch: Float32Array[] = [];
     private readonly sampler: GPUSampler;
 
     private constructor(
@@ -46,6 +55,7 @@ export class VideoRenderer {
         private readonly format: GPUTextureFormat,
     ) {
         this.buffers = new FeedbackBuffers(device);
+        this.history = new HistoryTexture(device);
         this.previews = new PreviewCapture(device, (frame) =>
             this.routeFrame(frame),
         );
@@ -113,6 +123,13 @@ export class VideoRenderer {
             this.canvas.width,
             this.canvas.height,
         );
+        this.history.resize(program.histories.length);
+        this.historyScratch = program.histories.map(
+            ({ samples, trigger }) =>
+                new Float32Array(
+                    trigger ? Math.min(2 * samples, 4096) : samples,
+                ),
+        );
         for (const [slot, value] of this.pendingSlots) {
             program.setSlot(slot, value);
         }
@@ -125,6 +142,18 @@ export class VideoRenderer {
     setUniform(slot: number, value: number): void {
         this.pendingSlots.set(slot, value);
         this.program?.setSlot(slot, value);
+    }
+
+    /** Adds audio samples the engine produced since the last call. */
+    pushTapSamples(chunks: VideoTapSamples[]): void {
+        for (const { tap, samples, sampleRate } of chunks) {
+            let stream = this.streams.get(tap);
+            if (stream === undefined) {
+                stream = new TapStream();
+                this.streams.set(tap, stream);
+            }
+            stream.push(samples, sampleRate);
+        }
     }
 
     /** Receives every editor preview frame; with no sinks, previews are not drawn. */
@@ -155,12 +184,14 @@ export class VideoRenderer {
         this.release();
         this.previews.destroy();
         this.buffers.destroy();
+        this.history.destroy();
         this.device.destroy();
     }
 
     private release(): void {
         this.program?.destroy();
         this.program = null;
+        this.history.resize(0);
         this.previews.resize(0, 0, 0);
     }
 
@@ -173,6 +204,24 @@ export class VideoRenderer {
         );
         if (this.canvas.width !== width) this.canvas.width = width;
         if (this.canvas.height !== height) this.canvas.height = height;
+    }
+
+    /**
+     * Reads each audio signal at `nowMs`: its value into the uniform slots it
+     * feeds, and its recent samples into the history rows that show them.
+     */
+    private updateAudioInputs(program: ShaderProgram, nowMs: number): void {
+        for (const stream of this.streams.values()) stream.advance(nowMs);
+        for (const { slot, tap } of program.tapSlots) {
+            program.setSlot(slot, this.streams.get(tap)?.value() ?? 0);
+        }
+        program.histories.forEach(({ tap, samples, trigger }, row) => {
+            const stream = this.streams.get(tap);
+            if (stream === undefined) return;
+            const recent = this.historyScratch[row];
+            stream.recent(recent);
+            this.history.write(row, alignWindow(recent, samples, trigger));
+        });
     }
 
     /** Draws and copies every preview; returns the targets whose pixels to read. */
@@ -254,14 +303,16 @@ export class VideoRenderer {
         let groups: ReturnType<ShaderProgram['bindGroups']> | null = null;
         if (program !== null) {
             const { uniformBuffer, uniforms } = program;
-            uniforms[UNIFORM_TIME_OFFSET] =
-                (performance.now() - this.startMs) / 1000;
+            const now = performance.now();
+            this.updateAudioInputs(program, now);
+            uniforms[UNIFORM_TIME_OFFSET] = (now - this.startMs) / 1000;
             uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
             uniforms[UNIFORM_RESOLUTION_OFFSET + 1] = this.canvas.height;
             this.device.queue.writeBuffer(uniformBuffer, 0, uniforms);
             groups = program.bindGroups(
                 this.device,
                 this.buffers,
+                this.history,
                 this.sampler,
             );
             pass.setPipeline(program.pipeline);

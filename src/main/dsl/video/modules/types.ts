@@ -12,6 +12,8 @@ export interface VideoModuleDef {
      * the feedback buffer named by its `buffer` field.
      */
     buffer?: 'read' | 'write';
+    /** Marks a node that reads the audio history row named by its `history` field. */
+    history?: boolean;
     output: VideoValueType;
     params: Record<string, VideoParamSpec>;
     /**
@@ -23,11 +25,12 @@ export interface VideoModuleDef {
     /**
      * WGSL expression for the module's value. `args` holds one WGSL
      * expression per input, `params` the resolved option per param, and
-     * `buffer` the node's feedback buffer (0 for modules without one).
+     * `indices` the node's feedback buffer and audio history row (0 for
+     * modules without one).
      */
     emit(
         args: Record<string, string>,
         params: Record<string, string>,
-        buffer: number,
+        indices: { buffer: number; history: number },
     ): string;
 }

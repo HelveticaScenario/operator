@@ -2,9 +2,11 @@
 import type {
     CompiledVideoShader,
     VideoCvSample,
+    VideoHistory,
 } from '../../shared/video/videoGraph';
 import { UNIFORM_SLOTS_OFFSET } from '../../shared/video/uniformLayout';
 import { FEEDBACK_FORMAT, type FeedbackBuffers } from './FeedbackBuffers';
+import type { HistoryTexture } from './HistoryTexture';
 import { PREVIEW_FORMAT } from './PreviewCapture';
 
 type ParityGroups = [GPUBindGroup, GPUBindGroup];
@@ -20,10 +22,14 @@ export class ShaderProgram {
     readonly previewCount: number;
     /** Regions to average into audio control signals, by preview index. */
     readonly cvSamples: ReadonlyMap<number, VideoCvSample>;
+    /** Uniform slots fed by an audio signal, with the engine tap that carries it. */
+    readonly tapSlots: { slot: number; tap: number }[];
+    /** Rows of audio history the shader reads. */
+    readonly histories: VideoHistory[];
     readonly uniforms: Float32Array<ArrayBuffer>;
     readonly previewUniforms: Float32Array<ArrayBuffer>;
     private groups: { main: ParityGroups; preview: ParityGroups } | null = null;
-    private groupsGeneration = -1;
+    private groupsGeneration = '';
 
     private constructor(
         compiled: CompiledVideoShader,
@@ -35,6 +41,10 @@ export class ShaderProgram {
     ) {
         this.bufferCount = compiled.feedbackBufferCount;
         this.previewCount = compiled.previewCount;
+        this.histories = compiled.histories;
+        this.tapSlots = compiled.uniforms.flatMap((u) =>
+            u.kind === 'tap' ? [{ slot: u.slot, tap: u.tap }] : [],
+        );
         this.cvSamples = new Map(
             compiled.cvSamples.map(({ index, ...sample }) => [index, sample]),
         );
@@ -87,6 +97,17 @@ export class ShaderProgram {
                     texture: { sampleType: 'float' as const },
                     visibility: GPUShaderStage.FRAGMENT,
                 })),
+                ...(compiled.histories.length === 0
+                    ? []
+                    : [
+                          {
+                              binding: 2 + bufferCount,
+                              texture: {
+                                  sampleType: 'unfilterable-float' as const,
+                              },
+                              visibility: GPUShaderStage.FRAGMENT,
+                          },
+                      ]),
             ],
         });
         const pipelineLayout = device.createPipelineLayout({
@@ -150,12 +171,11 @@ export class ShaderProgram {
     bindGroups(
         device: GPUDevice,
         buffers: FeedbackBuffers,
+        history: HistoryTexture,
         sampler: GPUSampler,
     ): { main: ParityGroups; preview: ParityGroups } {
-        if (
-            this.groups === null ||
-            this.groupsGeneration !== buffers.generation
-        ) {
+        const generation = `${buffers.generation}:${history.generation}`;
+        if (this.groups === null || this.groupsGeneration !== generation) {
             const build = (uniform: GPUBuffer, parity: number) =>
                 device.createBindGroup({
                     entries: [
@@ -167,6 +187,14 @@ export class ShaderProgram {
                             binding: 2 + k,
                             resource: buffers.readView(k, parity),
                         })),
+                        ...(this.histories.length === 0
+                            ? []
+                            : [
+                                  {
+                                      binding: 2 + this.bufferCount,
+                                      resource: history.view,
+                                  },
+                              ]),
                     ],
                     layout: this.layout,
                 });
@@ -180,7 +208,7 @@ export class ShaderProgram {
                     build(this.previewUniformBuffer, 1),
                 ],
             };
-            this.groupsGeneration = buffers.generation;
+            this.groupsGeneration = generation;
         }
         return this.groups;
     }

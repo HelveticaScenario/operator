@@ -40,7 +40,7 @@ import { sendNavigateToSymbol } from './helpNavigation';
 import {
     getVideoShader,
     setVideoControl,
-    setVideoTapReader,
+    setVideoTapSource,
     togglePerformanceWindow,
     updateVideoShader,
 } from './performanceWindow';
@@ -981,7 +981,10 @@ registerIPCHandler(
 );
 
 registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
-setVideoTapReader((count) => synth.getVideoTaps(count));
+setVideoTapSource({
+    read: (tap, since) => synth.getVideoTapChunk(tap, since),
+    sampleRate: () => synth.sampleRate(),
+});
 
 // Region averages computed by the performance window drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {

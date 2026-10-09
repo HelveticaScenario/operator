@@ -102,6 +102,20 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 if (!(name in def.params))
                     throw new Error(`unknown param "${name}"`);
             }
+            if (def.history === undefined) {
+                if (node.history !== undefined) {
+                    throw new Error('module has no audio history');
+                }
+            } else if (
+                node.history === undefined ||
+                !Number.isInteger(node.history) ||
+                node.history < 0 ||
+                node.history >= graph.histories.length
+            ) {
+                throw new Error(
+                    `audio history row must be an integer from 0 to ${graph.histories.length - 1}`,
+                );
+            }
             if (def.buffer === undefined) {
                 if (node.buffer !== undefined) {
                     throw new Error('module has no feedback buffer');
@@ -119,7 +133,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             for (const helper of def.helpers ?? []) helpers.add(helper);
             const local = `v${index}`;
             const wgslType = def.output === 'field' ? 'f32' : 'vec3f';
-            const text = `    let ${local}: ${wgslType} = ${def.emit(args, params, node.buffer ?? 0)};`;
+            const text = `    let ${local}: ${wgslType} = ${def.emit(args, params, { buffer: node.buffer ?? 0, history: node.history ?? 0 })};`;
             lines.push(text);
             statements.push({
                 id: node.id,
@@ -193,6 +207,10 @@ ${body}
         { length: bufferCount },
         (_, k) => `@group(0) @binding(${k + 2}) var fb_${k}: texture_2d<f32>;`,
     );
+    const historyDeclaration =
+        graph.histories.length === 0
+            ? ''
+            : `@group(0) @binding(${bufferCount + 2}) var history_tex: texture_2d<f32>;\n`;
     const bufferDeclarations =
         bufferCount === 0
             ? ''
@@ -215,7 +233,7 @@ ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}:
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-${bufferDeclarations}${[...helpers].map((h) => `\n${h}\n`).join('')}
+${bufferDeclarations}${historyDeclaration}${[...helpers].map((h) => `\n${h}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
@@ -234,6 +252,7 @@ ${previewEntries.join('')}`;
         uniformFloatCount: UNIFORM_SLOTS_OFFSET + slotVecs * 4,
         uniforms: graph.uniforms,
         feedbackBufferCount: bufferCount,
+        histories: graph.histories,
         previewCount: graph.previews.length,
         cvSamples: graph.previews.flatMap((preview, index) =>
             preview.cv ? [{ index, ...preview.cv }] : [],
