@@ -39,9 +39,9 @@ The compiler is a pure function `VideoGraph → { wgsl, uniformLayout, passes }`
 ### Data flow
 
 1. DSL runs in `executePatchScript`; `$v.*` calls populate a `VideoGraphBuilder`.
-2. The resulting `VideoGraph` is returned on `DSLExecutionResult` / `DSLExecuteResult` beside `sliders` and `buttons`.
-3. Main forwards graph updates and uniform changes to the output window over IPC (channels in `src/shared/ipcTypes.ts`).
-4. The output window's `VideoRenderer` rebuilds pipelines on graph change and writes uniforms every frame.
+2. `executePatchScript` compiles the graph and returns the `CompiledVideoShader` on `DSLExecutionResult`; compile errors surface as patch errors.
+3. Main keeps the latest shader and pushes it to the output window over IPC (`VIDEO_ON_SHADER`; the window fetches the current one with `VIDEO_GET_SHADER` on load).
+4. The output window's `VideoRenderer` rebuilds the pipeline on shader change and writes uniforms every frame.
 
 ### Planned file layout
 

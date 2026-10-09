@@ -1771,6 +1771,69 @@ declare const $table: {
     /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
     pwm(width: Poly<Signal>, next?: Table): Table;
 };
+
+/**
+ * A video signal that varies across the frame, in the range 0..1. Fields come
+ * from \`$v.ramp\`, \`$v.osc\` and \`$v.time\`; \`$v.colorize\` combines three
+ * into a {@link VideoColor}.
+ */
+interface VideoField {
+    readonly __videoField: true;
+}
+
+/** An RGB video signal built by \`$v.colorize\`; display it with \`$v.out\`. */
+interface VideoColor {
+    readonly __videoColor: true;
+}
+
+/** A constant or a {@link VideoField}. */
+type VideoValue = number | VideoField;
+
+/**
+ * Video synthesis. Patches build a graph of fields that is drawn per pixel in
+ * the video output window, which opens when a patch calls \`$v.out\`. Video
+ * signals cannot be connected to audio inputs.
+ */
+declare const $v: {
+    /**
+     * Seconds since the video output window started rendering. Use it as a
+     * phase to animate an oscillator.
+     * @example $v.out($v.colorize($v.osc($v.ramp(), 4, $v.time), 0, 0))
+     */
+    readonly time: VideoField;
+    /**
+     * Scan ramp from 0 to 1 across the frame.
+     * @param axis \`'h'\` horizontal (default), \`'v'\` vertical, \`'d'\` diagonal
+     * @example $v.out($v.colorize($v.ramp(), $v.ramp('v'), 0.5))
+     */
+    ramp(axis?: 'h' | 'v' | 'd'): VideoField;
+    /**
+     * Periodic shaper: \`freq\` cycles per unit of \`input\`, offset by \`phase\`
+     * cycles.
+     * @param input Field to shape, usually a ramp
+     * @param freq Cycles across the full range of \`input\`
+     * @param phase Offset in cycles (default 0)
+     * @param config.shape \`'sine'\` (default), \`'triangle'\`, \`'saw'\` or \`'square'\`
+     * @example $v.out($v.colorize($v.osc($v.ramp(), 8), 0, 0))
+     * @example $v.out($v.colorize($v.osc($v.ramp(), 3, $v.time, { shape: 'saw' }), $v.osc($v.ramp('v'), 5), 0.3))
+     */
+    osc(
+        input: VideoValue,
+        freq: VideoValue,
+        phase?: VideoValue,
+        config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square' },
+    ): VideoField;
+    /**
+     * Combines three fields into a color. Each channel is clipped to 0..1.
+     * @example $v.out($v.colorize($v.ramp(), $v.ramp('v'), 1))
+     */
+    colorize(r: VideoValue, g: VideoValue, b: VideoValue): VideoColor;
+    /**
+     * Shows a color in the video output window. Last call wins.
+     * @example $v.out($v.colorize(1, 0, 0))
+     */
+    out(input: VideoColor): void;
+};
 `;
 
 function generateWavsTypeDeclaration(tree: WavsFolderNode | null): string {

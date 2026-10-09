@@ -13,8 +13,8 @@ A video signal is a scalar field `f(x, y, t)`. A video patch is a graph of field
 - **GPU, not the Rust engine.** Per-pixel evaluation at video rates does not fit the audio-thread model. Rust never sees the video graph.
 - **Compile in TypeScript to WGSL.** The same WGSL runs under Chromium WebGPU now and under `wgpu`/naga if a native sink is ever needed.
 - **Separate signal domain.** `$v.*` factories return `VideoOutput` handles. They cannot be wired into audio inputs.
-- **Control inputs are uniforms.** Numeric literals and `$slider` values become per-frame uniforms. Audio-engine signals arrive in phase 2.
-- **Transport.** The compiled video graph rides on `DSLExecuteResult` beside `sliders`/`buttons`; the output window receives it from main.
+- **Control inputs.** Phase 1 patches use numeric literals and `$v.time`; the compiler's uniform slots are reserved for phase 2, when `$slider` values and audio-engine signals become per-frame uniforms.
+- **Transport.** `executePatchScript` compiles the graph and returns the shader; main keeps the latest shader and pushes it to the output window, which opens the first time a patch calls `$v.out`. The shader does not travel on `DSLExecuteResult`.
 
 ## Layout
 
