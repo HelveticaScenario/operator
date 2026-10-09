@@ -38,7 +38,7 @@ export const VIDEO_INTRO = {
     description:
         'Video synthesis. Patches build a graph of fields that is drawn per pixel in the performance window, which opens when a patch calls `$v.out`. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`. Pass one channel; a polyphonic signal is rejected.',
     examples: [
-        '$v.osc($v.ramp(), 10).kaleid(6).hsv().out()',
+        '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
         "$v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.1, 0.4))))",
     ],
@@ -194,7 +194,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.hsv(0.55, 0.8, $v.voronoi($v.mult($v.ramp(), 8), $v.mult($v.ramp('v'), 5), $v.mult($v.time, 2))))",
-            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).invert().hsv(0.1).out()",
+            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).$.invert().$.hsv(0.1).out()",
         ],
         declarations: [
             'voronoi(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
@@ -231,7 +231,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.hsv(0.12, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.3, 0.02)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).rotate($v.mult($v.time, 0.1)).hsv(0.6).out()",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.hsv(0.6).out()",
         ],
         declarations: [
             'polygon(x: VideoValue, y: VideoValue, sides?: VideoValue, size?: VideoValue, softness?: VideoValue): VideoField;',
@@ -765,8 +765,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
-            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).hsv().mult(0.2).add(trail.read({ zoom: 1.01, rotate: 0.002 }).mult(0.96)).write(trail).out()',
-            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.08)).add(b.read({ rotate: 0.01 }).mult(0.95))); b.write(a.read({ zoom: 1.03 }).mult(0.9)); $v.out(a.read())",
+            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',
+            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.08)).$.add(b.read({ rotate: 0.01 }).$.mult(0.95))); b.write(a.read({ zoom: 1.03 }).$.mult(0.9)); $v.out(a.read())",
         ],
         declarations: ['buffer(): VideoBuffer;'],
     },
@@ -791,14 +791,19 @@ export interface VideoChainDoc {
     color?: string[];
     /** The kinds of signal the method applies to (default both). */
     on?: ('field' | 'color')[];
+    /** A method of the signal itself that ends or taps a chain, not a member of `.$`. */
+    direct?: boolean;
 }
 
 export const VIDEO_CHAIN_INTRO =
-    'Every video signal can be chained from, which reads in signal-flow order: each method is the `$v` function of the same name with the signal as its first argument. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
+    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 1 for the result: `x.$m.kaleid(0.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way by default. `out`, `preview`, `toCV` and `write` end or tap a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
 
 export const VIDEO_CHAIN_EXAMPLES: string[] = [
-    "$v.osc($v.ramp(), 10).modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3).kaleid(6).hsv().out()",
-    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).rotate(0.1).pixelate(32, 18).hsv(0.8).preview().out()",
+    "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3).$.kaleid(6).$.hsv().out()",
+    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(0.8).preview().out()",
+    '$v.osc($v.ramp(), 8).$.hsv().$m.kaleid(0.5, 5).out()',
+    '$v.osc($v.ramp(), 8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out()',
+    '$v.osc($v.ramp(), 8).$.hsv().pipeMix((c) => c.$.invert(), $v.osc($v.time, 0.2)).out()',
 ];
 
 export const VIDEO_CHAIN: VideoChainDoc[] = [
@@ -869,6 +874,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'write',
+        direct: true,
         description:
             'Stores this color in a buffer for the next frame to read, and returns it.',
         declarations: ['write(buffer: VideoBuffer): VideoColor;'],
@@ -994,6 +1000,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'preview',
+        direct: true,
         description: 'Shows this in the editor and returns it.',
         declarations: [
             "preview(config?: { view?: 'image' | 'waveform' | 'vectorscope' }): {self};",
@@ -1001,6 +1008,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'toCV',
+        direct: true,
         description: 'Averages a region of this into an audio control signal.',
         declarations: [
             'toCV(config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
@@ -1008,6 +1016,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'out',
+        direct: true,
         description: 'Shows this color in the performance window.',
         declarations: ['out(): void;'],
         on: ['color'],

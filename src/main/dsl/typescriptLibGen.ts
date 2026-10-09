@@ -16,6 +16,7 @@ import {
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
 import {
+    generateVideoChainInterfaces,
     generateVideoChainMembers,
     generateVideoNamespace,
 } from './videoLibGen';
@@ -1798,6 +1799,8 @@ ${generateVideoChainMembers('color')}
  * module output such as an LFO or envelope.
  */
 type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange;
+
+${generateVideoChainInterfaces()}
 
 /**
  * A frame store from \`$v.buffer\`: \`write\` a color into it, and \`read\` what

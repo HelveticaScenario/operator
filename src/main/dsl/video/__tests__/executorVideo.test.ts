@@ -3,7 +3,7 @@ import schemas from '@modular/core/schemas.json';
 import { executePatchScript } from '../../executor';
 import { buildLibSource } from '../../typescriptLibGen';
 import { VIDEO_CHAIN, VIDEO_DOCS } from '../../../../shared/dsl/videoDocs';
-import { VIDEO_CHAIN_METHODS } from '../VideoOutput';
+import { VIDEO_CHAIN_METHODS, VIDEO_DIRECT_METHODS } from '../VideoOutput';
 
 const exec = (source: string) =>
     executePatchScript(source, schemas as never, {
@@ -679,18 +679,23 @@ describe('$v in the DSL executor', () => {
         });
     });
 
-    it('documents exactly the chain methods a video signal has', () => {
-        expect([...VIDEO_CHAIN_METHODS].sort()).toEqual(
-            VIDEO_CHAIN.map((m) => m.name).sort(),
-        );
+    it('documents exactly the methods a video signal chains with', () => {
+        expect(
+            [...VIDEO_CHAIN_METHODS, ...VIDEO_DIRECT_METHODS].sort(),
+        ).toEqual(VIDEO_CHAIN.map((m) => m.name).sort());
+        expect(
+            VIDEO_CHAIN.filter((m) => m.direct)
+                .map((m) => m.name)
+                .sort(),
+        ).toEqual([...VIDEO_DIRECT_METHODS].sort());
     });
 
     describe('chaining', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
 
-        it('compiles a chain to the same shader as nested calls', () => {
+        it('compiles a .$ chain to the same shader as nested calls', () => {
             const chained = wgslOf(`
-                $v.osc($v.ramp(), 8).kaleid(6).hsv(0.9).out();
+                $v.osc($v.ramp(), 8).$.kaleid(6).$.hsv(0.9).out();
             `);
             const nested = wgslOf(`
                 $v.out($v.hsv($v.kaleid($v.osc($v.ramp(), 8), 6), 0.9));
@@ -700,7 +705,7 @@ describe('$v in the DSL executor', () => {
 
         it('treats rotate, scale and scroll as shorthand for warp', () => {
             const shorthand = wgslOf(`
-                $v.ramp().rotate(0.1).scale(2).scroll(0.2, 0.3).hsv().out();
+                $v.ramp().$.rotate(0.1).$.scale(2).$.scroll(0.2, 0.3).$.hsv().out();
             `);
             const long = wgslOf(`
                 $v.out($v.hsv($v.warp($v.warp($v.warp($v.ramp(), { rotate: 0.1 }), { zoom: 2 }), { shiftX: 0.2, shiftY: 0.3 })));
@@ -710,109 +715,138 @@ describe('$v in the DSL executor', () => {
 
         it('chains colors and fields with the right variants', () => {
             const wgsl = wgslOf(`
-                $v.noise($v.ramp(), $v.ramp('v')).hsv().mult($v.ramp('v')).invert().out();
+                $v.noise($v.ramp(), $v.ramp('v')).$.hsv().$.mult($v.ramp('v')).$.invert().out();
             `);
             expect(wgsl).toMatch(/let v\d: vec3f = v\d \* v\d;/);
             expect(wgsl).toMatch(/vec3f\(1\.0\) - /);
+        });
+
+        it('keeps the chain methods off the signal itself', () => {
+            const { patch } = exec(`
+                const signal = $v.ramp();
+                $sine(signal.rotate === undefined ? 100 : 200).out();
+            `);
+            const sine = patch.modules.find((m) => m.moduleType === '$sine');
+            expect(JSON.stringify(sine?.params)).toContain('100');
+        });
+
+        it('returns nothing for a name that is not a chain function', () => {
+            const { patch } = exec(`
+                $sine($v.ramp().$.nope === undefined ? 100 : 200).out();
+            `);
+            const sine = patch.modules.find((m) => m.moduleType === '$sine');
+            expect(JSON.stringify(sine?.params)).toContain('100');
         });
 
         it('previews and measures partway through a chain', () => {
             const { video, videoPreviews } = exec(`
                 const wave = $v.osc($v.ramp(), 4).preview({ view: 'waveform' });
                 wave.toCV({ size: 0.1 });
-                wave.hsv().out();
+                wave.$.hsv().out();
             `);
             expect(videoPreviews.map((p) => p.view)).toEqual(['waveform']);
             expect(video!.cvSamples).toHaveLength(1);
         });
 
         it('reports errors with the $v function that failed', () => {
-            expect(() => exec(`$v.ramp().kaleid('six');`)).toThrow(
+            expect(() => exec(`$v.ramp().$.kaleid('six');`)).toThrow(
                 /\$v\.kaleid: sides must be a number or a video field/,
             );
             expect(() => exec(`$v.ramp().out();`)).toThrow(
                 /\$v\.out: input must be a video color/,
             );
         });
-    });
 
-    describe('buffers', () => {
-        it('lets several signals read one buffer', () => {
-            const { video } = exec(`
-                const b = $v.buffer();
-                const edge = b.read({ rotate: 0.1 });
-                const slow = b.read({ zoom: 1.1 });
-                $v.out(b.write($v.hsv(0.5).add(edge.mult(0.5)).add(slow.mult(0.4))));
-            `);
-            expect(video!.feedbackBufferCount).toBe(1);
-            expect(video!.wgsl.match(/textureSampleLevel\(fb_0/g)).toHaveLength(
-                2,
-            );
+        describe('.$m', () => {
+            it('crossfades the signal against the result with a leading mix', () => {
+                const mixed = wgslOf(`
+                    $v.hsv($v.ramp()).$m.hueShift(0.3, 0.25).out();
+                `);
+                const long = wgslOf(`
+                    const c = $v.hsv($v.ramp());
+                    $v.out($v.mix(c, $v.hueShift(c, 0.25), 0.3));
+                `);
+                expect(mixed).toBe(long);
+            });
+
+            it('takes only the mix for a function with no other arguments', () => {
+                const mixed = wgslOf(`$v.hsv($v.ramp()).$m.invert(0.5).out();`);
+                expect(mixed).toMatch(/mix\(v\d, v\d, clamp\(0\.5/);
+            });
+
+            it('mixes a field result with a field signal', () => {
+                const wgsl = wgslOf(`
+                    $v.osc($v.ramp(), 4).$m.fold(0.5, 2).$.hsv().out();
+                `);
+                expect(wgsl).toMatch(/let v\d: f32 = mix\(v\d, /);
+            });
+
+            it('accepts a signal as the mix', () => {
+                const { video } = exec(`
+                    $v.hsv($v.ramp()).$m.invert($slider('Amount', 0.5, 0, 1)).out();
+                `);
+                expect(video!.uniforms).toHaveLength(1);
+            });
         });
 
-        it('lets two buffers feed each other', () => {
-            const { video } = exec(`
-                const a = $v.buffer();
-                const b = $v.buffer();
-                a.write($v.hsv($v.time).add(b.read({ rotate: 0.01 }).mult(0.9)));
-                b.write(a.read({ zoom: 1.02 }).mult(0.9));
-                $v.out(a.read());
-            `);
-            expect(video!.feedbackBufferCount).toBe(2);
-            expect(video!.wgsl).toContain('fb_0');
-            expect(video!.wgsl).toContain('fb_1');
+        describe('.pipe', () => {
+            it('calls a function with the signal', () => {
+                const piped = wgslOf(`
+                    $v.hsv($v.ramp()).pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out();
+                `);
+                const long = wgslOf(`
+                    $v.out($v.hueShift($v.kaleid($v.hsv($v.ramp()), 5), 0.3));
+                `);
+                expect(piped).toBe(long);
+            });
+
+            it('calls a function once per array element and returns the results', () => {
+                const { video } = exec(`
+                    const layers = $v.hsv($v.ramp()).pipe(
+                        (c, sides) => c.$.kaleid(sides),
+                        [3, 5, 7],
+                    );
+                    $v.out(layers.reduce((sum, layer) => sum.$.add(layer.$.mult(0.3))));
+                `);
+                expect(
+                    video!.wgsl.match(/video_kaleid\(uv, [357]\.0\)/g),
+                ).toHaveLength(3);
+            });
+
+            it('rejects something that is not a function or an array', () => {
+                expect(() => exec(`$v.ramp().pipe(3);`)).toThrow(
+                    /pipe: expects a function/,
+                );
+                expect(() => exec(`$v.ramp().pipe((s) => s, 3);`)).toThrow(
+                    /pipe: the second argument must be an array/,
+                );
+            });
         });
 
-        it('chains write like any other method', () => {
-            const { video } = exec(`
-                const b = $v.buffer();
-                $v.hsv(0.2).add(b.read().mult(0.9)).write(b).out();
-            `);
-            expect(video!.feedbackBufferCount).toBe(1);
-        });
+        describe('.pipeMix', () => {
+            it('crossfades the signal against the function result, half way by default', () => {
+                const mixed = wgslOf(`
+                    $v.hsv($v.ramp()).pipeMix((c) => c.$.invert()).out();
+                `);
+                const long = wgslOf(`
+                    const c = $v.hsv($v.ramp());
+                    $v.out($v.mix(c, $v.invert(c), 0.5));
+                `);
+                expect(mixed).toBe(long);
+            });
 
-        it('numbers the buffers a patch uses without gaps', () => {
-            const { video } = exec(`
-                const unused = $v.buffer();
-                const used = $v.buffer();
-                $v.out(used.write($v.hsv(0.3).add(used.read().mult(0.9))));
-            `);
-            expect(video!.feedbackBufferCount).toBe(1);
-            expect(video!.wgsl).toContain('fb_0');
-            expect(video!.wgsl).not.toContain('fb_1');
-        });
+            it('takes the mix as a signal', () => {
+                const { video } = exec(`
+                    $v.hsv($v.ramp()).pipeMix((c) => c.$.invert(), $v.osc($v.time, 0.2)).out();
+                `);
+                expect(video!.wgsl).toContain('mix(');
+            });
 
-        it('keeps feedback loops and buffers in one numbering', () => {
-            const { video } = exec(`
-                const b = $v.buffer();
-                const loop = $v.feedback((prev) => $v.mix($v.hsv(0.1), prev, 0.9));
-                $v.out(b.write($v.mix(loop, b.read(), 0.5)));
-            `);
-            expect(video!.feedbackBufferCount).toBe(2);
-        });
-
-        it('rejects a buffer that is read but never written', () => {
-            expect(() =>
-                exec(`const b = $v.buffer(); $v.out(b.read());`),
-            ).toThrow(/feedback buffer 0 is read but never written/);
-        });
-
-        it('rejects writing a buffer twice or writing a field', () => {
-            expect(() =>
-                exec(
-                    `const b = $v.buffer(); b.write($v.hsv(0)); b.write($v.hsv(1));`,
-                ),
-            ).toThrow(/\$v\.buffer: a buffer can be written only once/);
-            expect(() => exec(`$v.buffer().write($v.ramp());`)).toThrow(
-                /\$v\.buffer: write takes a video color/,
-            );
-        });
-
-        it('rejects more buffers than there are render targets', () => {
-            const many = Array.from({ length: 8 }, () => '$v.buffer();').join(
-                '\n',
-            );
-            expect(() => exec(many)).toThrow(/at most 7 feedback loops/);
+            it('rejects something that is not a function', () => {
+                expect(() => exec(`$v.ramp().pipeMix(3);`)).toThrow(
+                    /pipeMix: expects a function/,
+                );
+            });
         });
     });
 
@@ -842,7 +876,7 @@ describe('$v in the DSL executor', () => {
 
         it('turns hue with the shared hsv helper', () => {
             const wgsl = wgslOf(`
-                $v.hsv($v.ramp()).hueShift(0.25).contrast(2).out();
+                $v.hsv($v.ramp()).$.hueShift(0.25).$.contrast(2).out();
             `);
             expect(wgsl.match(/fn hsv_to_rgb\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn rgb_to_hsv(');

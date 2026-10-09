@@ -43,8 +43,11 @@ export const VideoHelp: React.FC = () => (
             <ul>
                 {VIDEO_CHAIN.map((method) => (
                     <li key={method.name}>
-                        <strong>{method.name}</strong> &mdash;{' '}
-                        {method.description}
+                        <strong>
+                            {method.direct ? '.' : '.$.'}
+                            {method.name}
+                        </strong>{' '}
+                        &mdash; {method.description}
                     </li>
                 ))}
             </ul>
