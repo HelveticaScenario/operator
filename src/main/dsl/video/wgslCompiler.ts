@@ -7,6 +7,7 @@ import {
 } from '../../../shared/video/videoGraph';
 import { UNIFORM_SLOTS_OFFSET } from '../../../shared/video/uniformLayout';
 import { VIDEO_MODULES } from './modules';
+import type { VideoModuleDef } from './modules/types';
 
 function wgslFloat(value: number): string {
     if (!Number.isFinite(value)) {
@@ -30,6 +31,26 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     /** Local variable holding what each feedback buffer stores this frame. */
     const bufferWrites = new Map<number, string>();
     let bufferCount = 0;
+
+    /**
+     * Each node as a function of the coordinate, `fn f<index>(uv) -> T`, for
+     * modules that re-evaluate an input at other coordinates. Written on
+     * demand; the statement per node above is the same node at the pixel's own
+     * coordinate, computed once and shared.
+     */
+    interface NodeRecord {
+        index: number;
+        node: VideoGraph['nodes'][number];
+        def: VideoModuleDef;
+        params: Record<string, string>;
+        indices: { buffer: number; history: number };
+    }
+    const records = new Map<string, NodeRecord>();
+    const functions: string[] = [];
+    const functionsDone = new Set<string>();
+    const constantFunctions = new Map<string, string>();
+    const wgslType = (type: VideoValueType) =>
+        type === 'field' ? 'f32' : 'vec3f';
 
     const resolve = (value: VideoValue, expected: VideoValueType): string => {
         switch (value.kind) {
@@ -68,6 +89,68 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         }
     };
 
+    const checkNodeType = (id: string, expected: VideoValueType) => {
+        const actual = types.get(id);
+        if (actual === undefined) {
+            throw new Error(`unknown or forward node "${id}"`);
+        }
+        if (actual !== expected) {
+            throw new Error(
+                `node "${id}" is a ${actual}, expected a ${expected}`,
+            );
+        }
+    };
+
+    /** An input read at the coordinate `uv` of the function it appears in. */
+    const resolveInFunction = (
+        value: VideoValue,
+        expected: VideoValueType,
+    ): string => {
+        if (value.kind !== 'node') return resolve(value, expected);
+        checkNodeType(value.id, expected);
+        defineFunction(value.id);
+        return `f${records.get(value.id)!.index}(uv)`;
+    };
+
+    /** An input handed to a module as a function of coordinates. */
+    const resolveAsFunction = (
+        value: VideoValue,
+        expected: VideoValueType,
+    ): string => {
+        if (value.kind === 'node') {
+            checkNodeType(value.id, expected);
+            defineFunction(value.id);
+            return `f${records.get(value.id)!.index}`;
+        }
+        const expression = resolve(value, expected);
+        const key = `${expected}:${expression}`;
+        let name = constantFunctions.get(key);
+        if (name === undefined) {
+            name = `k${constantFunctions.size}`;
+            constantFunctions.set(key, name);
+            functions.push(
+                `fn ${name}(uv: vec2f) -> ${wgslType(expected)} {\n    return ${expression};\n}`,
+            );
+        }
+        return name;
+    };
+
+    function defineFunction(id: string): void {
+        if (functionsDone.has(id)) return;
+        functionsDone.add(id);
+        const { index, node, def, params, indices } = records.get(id)!;
+        const args: Record<string, string> = {};
+        for (const [name, type] of Object.entries(def.inputs)) {
+            const value = node.inputs[name];
+            args[name] = def.warped?.includes(name)
+                ? resolveAsFunction(value, type)
+                : resolveInFunction(value, type);
+        }
+        functions.push(
+            `fn f${index}(uv: vec2f) -> ${wgslType(def.output)} {\n    return ${def.emit(args, params, indices)};\n}`,
+        );
+    }
+
     graph.nodes.forEach((node, index) => {
         const def = VIDEO_MODULES[node.kind];
         if (def === undefined) {
@@ -82,7 +165,9 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 const value = node.inputs[name];
                 if (value === undefined)
                     throw new Error(`missing input "${name}"`);
-                args[name] = resolve(value, type);
+                args[name] = def.warped?.includes(name)
+                    ? resolveAsFunction(value, type)
+                    : resolve(value, type);
             }
             for (const name of Object.keys(node.inputs)) {
                 if (!(name in def.inputs))
@@ -132,8 +217,12 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             }
             for (const helper of def.helpers ?? []) helpers.add(helper);
             const local = `v${index}`;
-            const wgslType = def.output === 'field' ? 'f32' : 'vec3f';
-            const text = `    let ${local}: ${wgslType} = ${def.emit(args, params, { buffer: node.buffer ?? 0, history: node.history ?? 0 })};`;
+            const indices = {
+                buffer: node.buffer ?? 0,
+                history: node.history ?? 0,
+            };
+            records.set(node.id, { def, index, indices, node, params });
+            const text = `    let ${local}: ${wgslType(def.output)} = ${def.emit(args, params, indices)};`;
             lines.push(text);
             statements.push({
                 id: node.id,
@@ -233,7 +322,7 @@ ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}:
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-${bufferDeclarations}${historyDeclaration}${[...helpers].map((h) => `\n${h}\n`).join('')}
+${bufferDeclarations}${historyDeclaration}${[...helpers].map((h) => `\n${h}\n`).join('')}${functions.map((f) => `\n${f}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));

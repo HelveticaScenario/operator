@@ -25,6 +25,7 @@ export interface VideoDoc {
 /** Section order on the Video help page. */
 export const VIDEO_GROUPS = [
     'Generators',
+    'Warping',
     'Color',
     'Math',
     'Shaping',
@@ -510,6 +511,158 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         declarations: [
             'toCV(signal: VideoField | VideoColor, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
+        ],
+    },
+    {
+        name: 'warp',
+        group: 'Warping',
+        description:
+            'Zooms about the center, turns and shifts everything `input` draws: not just its output but the whole sub-patch behind it, which is evaluated again at the moved coordinates. A field or color in gives the same type out.',
+        params: [
+            {
+                name: 'config.zoom',
+                description:
+                    'Magnification about the center; above 1 enlarges (default 1)',
+            },
+            {
+                name: 'config.rotate',
+                description: 'Turns; positive turns clockwise (default 0)',
+            },
+            {
+                name: 'config.shiftX',
+                description:
+                    'Horizontal move as a fraction of the width; positive moves right (default 0)',
+            },
+            {
+                name: 'config.shiftY',
+                description:
+                    'Vertical move as a fraction of the height; positive moves up (default 0)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.warp($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4)), { rotate: $v.mult($v.time, 0.05), zoom: 2 })))",
+            "$v.out($v.warp($v.hsv($v.shape($v.ramp(), $v.ramp('v'), 0.15)), { shiftX: $v.osc($v.time, 0.25), rotate: 0.1 }))",
+        ],
+        declarations: [
+            'warp(input: VideoField, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoField;',
+            'warp(input: VideoColor, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoColor;',
+        ],
+    },
+    {
+        name: 'displace',
+        group: 'Warping',
+        description:
+            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 0.5 means no push in that direction.',
+        params: [
+            {
+                name: 'dx',
+                description:
+                    'Horizontal push; below 0.5 pulls left, above pushes right',
+            },
+            {
+                name: 'dy',
+                description: 'Vertical push, the same way (default 0.5)',
+            },
+            {
+                name: 'amount',
+                description:
+                    'Largest push as a fraction of the frame (default 0.1)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.displace($v.osc($v.ramp(), 8), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.5, 0.2)))",
+        ],
+        declarations: [
+            'displace(input: VideoField, dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoField;',
+            'displace(input: VideoColor, dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulate',
+        group: 'Warping',
+        description:
+            "Pushes `input` around by another signal, as Hydra's `modulate` does. A color moves it by its red and green channels, a field by its value in both directions. It is `displace` with the push taken from a signal.",
+        params: [
+            {
+                name: 'modulator',
+                description: 'The signal that pushes `input`',
+            },
+            {
+                name: 'amount',
+                description:
+                    'Largest push as a fraction of the frame (default 0.1)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.modulate($v.osc($v.ramp(), 10), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3)))",
+            "$v.out($v.modulate($v.hsv($v.ramp('r')), $v.hsv($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), 0)), 0.2))",
+        ],
+        declarations: [
+            'modulate(input: VideoField, modulator: VideoField | VideoColor, amount?: VideoValue): VideoField;',
+            'modulate(input: VideoColor, modulator: VideoField | VideoColor, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'kaleid',
+        group: 'Warping',
+        description:
+            'Mirrors `input` around the center into `sides` wedges, like a kaleidoscope.',
+        params: [
+            { name: 'sides', description: 'Number of wedges (default 4)' },
+        ],
+        examples: [
+            '$v.out($v.kaleid($v.hsv($v.osc($v.ramp(), 3, $v.time)), 6))',
+            "$v.out($v.hsv($v.kaleid($v.noise($v.mult($v.ramp(), 5), $v.mult($v.ramp('v'), 5), $v.time), 8)))",
+        ],
+        declarations: [
+            'kaleid(input: VideoField, sides?: VideoValue): VideoField;',
+            'kaleid(input: VideoColor, sides?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'pixelate',
+        group: 'Warping',
+        description:
+            'Holds `input` constant across a grid of `x` by `y` cells, giving it large square pixels.',
+        params: [
+            { name: 'x', description: 'Cells across (default 20)' },
+            { name: 'y', description: 'Cells up (default the same as x)' },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.pixelate($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time), 24, 14)))",
+        ],
+        declarations: [
+            'pixelate(input: VideoField, x?: VideoValue, y?: VideoValue): VideoField;',
+            'pixelate(input: VideoColor, x?: VideoValue, y?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'repeat',
+        group: 'Warping',
+        description: 'Tiles `input` `x` by `y` times across the frame.',
+        params: [
+            { name: 'x', description: 'Tiles across (default 3)' },
+            { name: 'y', description: 'Tiles up (default the same as x)' },
+        ],
+        examples: [
+            "$v.out($v.repeat($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3)), 4, 3))",
+        ],
+        declarations: [
+            'repeat(input: VideoField, x?: VideoValue, y?: VideoValue): VideoField;',
+            'repeat(input: VideoColor, x?: VideoValue, y?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'channel',
+        group: 'Color',
+        description:
+            "One channel of a color as a field: `'r'`, `'g'`, `'b'`, or `'luma'` for brightness (the default).",
+        params: [{ name: 'which', description: 'Which channel to take' }],
+        examples: [
+            "$v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'r'), 0, 0))",
+        ],
+        declarations: [
+            "channel(input: VideoColor, which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
         ],
     },
     {

@@ -26,22 +26,28 @@ import { out } from './out';
 import { ramp } from './ramp';
 import { shape } from './shape';
 import type { VideoModuleDef } from './types';
+import { channel, displace, kaleid, pixelate, repeat, warp } from './warp';
 import { fold, wrap } from './waveshape';
 
 export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     add,
     addColor,
     audioHistory,
+    channel,
     colorize,
     comparator,
     diff,
     diffColor,
+    displace: displace.field,
+    displaceColor: displace.color,
     feedbackRead,
     feedbackWrite,
     fold,
     hsv,
     invert,
     invertColor,
+    kaleid: kaleid.field,
+    kaleidColor: kaleid.color,
     key,
     max,
     maxColor,
@@ -54,9 +60,15 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     noise,
     osc,
     out,
+    pixelate: pixelate.field,
+    pixelateColor: pixelate.color,
     posterize,
     procAmp,
     ramp,
+    repeat: repeat.field,
+    repeatColor: repeat.color,
     shape,
+    warp: warp.field,
+    warpColor: warp.color,
     wrap,
 };

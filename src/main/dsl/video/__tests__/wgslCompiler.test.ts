@@ -506,3 +506,53 @@ describe('compileVideoGraph audio history', () => {
         );
     });
 });
+
+describe('compileVideoGraph warped inputs', () => {
+    const warpGraph = (inputType: 'field' | 'color'): VideoGraph => ({
+        ...stripes,
+        nodes: [
+            { id: 'x', kind: 'ramp', inputs: rampInputs },
+            {
+                id: 'shifted',
+                kind: inputType === 'color' ? 'pixelateColor' : 'pixelate',
+                inputs: {
+                    input: { kind: 'node', id: 'x' },
+                    x: { kind: 'const', value: 8 },
+                    y: { kind: 'const', value: 8 },
+                },
+            },
+            {
+                id: 'rgb',
+                kind: 'colorize',
+                inputs: {
+                    r: { kind: 'node', id: 'shifted' },
+                    g: { kind: 'const', value: 0 },
+                    b: { kind: 'const', value: 0 },
+                },
+            },
+            {
+                id: 'out',
+                kind: 'out',
+                inputs: { input: { kind: 'node', id: 'rgb' } },
+            },
+        ],
+    });
+
+    it('hands a warped input to the module as a function name', () => {
+        const wgsl = compileVideoGraph(warpGraph('field')).wgsl;
+        expect(wgsl).toContain('fn f0(uv: vec2f) -> f32 {\n    return uv.x;');
+        expect(wgsl).toContain(
+            'let v1: f32 = f0(video_pixelate(uv, vec2f(8.0, 8.0)));',
+        );
+    });
+
+    it('checks a warped input against the type its module declares', () => {
+        expect(() => compileVideoGraph(warpGraph('color'))).toThrow(
+            /node "x" is a field, expected a color/,
+        );
+    });
+
+    it('writes no functions for a graph without warps', () => {
+        expect(compileVideoGraph(stripes).wgsl).not.toMatch(/fn f\d+\(/);
+    });
+});

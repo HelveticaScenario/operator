@@ -12,6 +12,13 @@ export interface VideoModuleDef {
      * the feedback buffer named by its `buffer` field.
      */
     buffer?: 'read' | 'write';
+    /**
+     * Inputs evaluated at coordinates the module chooses rather than at the
+     * pixel being drawn. `emit` receives such an input as the name of a
+     * function from coordinates to the input's value, and calls it with the
+     * coordinates to sample: `${args.input}(uv + offset)`.
+     */
+    warped?: readonly string[];
     /** Marks a node that reads the audio history row named by its `history` field. */
     history?: boolean;
     output: VideoValueType;
