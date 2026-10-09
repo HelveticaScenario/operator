@@ -42,6 +42,12 @@ export declare class Synthesizer {
    */
   getVuMeters(): Array<VuMeterFrame>
   /**
+   * Latest values, in volts, of video taps `0..count`. Each tap is a
+   * `_videoTap` module the DSL inserts for an audio signal a `$v` input
+   * reads.
+   */
+  getVideoTaps(count: number): Array<number>
+  /**
    * Drain the per-module profiler snapshot accumulated since the last
    * call. Returns one entry per module instance that did work in that
    * window. No-op (returns empty) when profiling is disabled.

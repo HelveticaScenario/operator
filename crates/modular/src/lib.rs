@@ -1123,6 +1123,14 @@ impl Synthesizer {
         self.state.get_vu_meter_frames()
     }
 
+    /// Latest values, in volts, of video taps `0..count`. Each tap is a
+    /// `_videoTap` module the DSL inserts for an audio signal a `$v` input
+    /// reads.
+    #[napi]
+    pub fn get_video_taps(&self, count: u32) -> Vec<f64> {
+        modular_core::dsp::utilities::video_tap::read_video_taps(count as usize)
+    }
+
     /// Drain the per-module profiler snapshot accumulated since the last
     /// call. Returns one entry per module instance that did work in that
     /// window. No-op (returns empty) when profiling is disabled.
