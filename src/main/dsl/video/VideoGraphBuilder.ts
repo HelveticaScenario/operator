@@ -7,7 +7,6 @@ import {
     type VideoNode,
     type VideoPreview,
     type VideoPreviewSite,
-    type VideoPreviewView,
     type VideoUniform,
     type VideoValue,
     type VideoValueType,
@@ -19,103 +18,39 @@ import {
 } from '../GraphBuilder';
 import { VideoBuffer } from './VideoBuffer';
 import { VideoOutput } from './VideoOutput';
-
-/**
- * A constant, a video signal of either type, or an audio signal (a slider,
- * button or any module output), whose live value drives a field input.
- */
-export type VideoSource =
-    | number
-    | VideoOutput
-    | ModuleOutput
-    | BaseCollection<ModuleOutput>;
-
-/** What the builder needs from the patch it is building inside. */
-export interface VideoGraphHost {
-    /**
-     * Current value of a slider or button's backing module, or undefined if
-     * `moduleId` is not a control.
-     */
-    controlValue(moduleId: string): number | undefined;
-    /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
-    publishTap(output: ModuleOutput, slot: number): void;
-    /**
-     * A `$signal` module with id `id` carrying 0..1, which the renderer
-     * overwrites with a region average of a video signal.
-     */
-    cvSignal(id: string): CollectionWithRange;
-    /** Where the patch script is calling from, as V8 reports it. */
-    sourceLocation(): { line: number; column: number } | undefined;
-}
-
-export interface VideoAudioConfig {
-    /** Samples the window spans, 2 to 4096 (default 512; 48 000 per second). */
-    samples?: number;
-    /** Start the window at a rising zero crossing so a periodic wave holds still (default true). */
-    trigger?: boolean;
-}
-
-export interface VideoCvConfig {
-    /** Center of the region as a fraction of the frame width (default 0.5). */
-    x?: number;
-    /** Center of the region as a fraction of the frame height; 0 is the bottom (default 0.5). */
-    y?: number;
-    /** Half-extent of the region as a fraction of the frame (default 0.5, the whole frame). */
-    size?: number;
-}
-
-export interface VideoPreviewConfig {
-    /** How the editor draws the signal (default 'image'). */
-    view?: VideoPreviewView;
-}
+import { colorMethods } from './videoColor';
+import { generatorMethods } from './videoGenerators';
+import { mathMethods } from './videoMath';
+import { warpMethods } from './videoWarps';
+import {
+    describe,
+    isColor,
+    type VideoAudioConfig,
+    type VideoCore,
+    type VideoCvConfig,
+    type VideoFeedbackConfig,
+    type VideoGraphHost,
+    type VideoPreviewConfig,
+    type VideoSource,
+} from './videoBuilderTypes';
 
 const PREVIEW_VIEWS: readonly string[] = ['image', 'waveform', 'vectorscope'];
 
-export interface VideoOscConfig {
-    shape?: 'sine' | 'triangle' | 'saw' | 'square';
-}
+/**
+ * Collects `$v.*` calls into a {@link VideoGraph}. The functions that only
+ * build nodes live in the `video*.ts` files beside it and are mixed in; this
+ * class holds the graph state and the functions that touch it.
+ */
+// The mixed-in groups are typed by merging their return types into the class.
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface VideoGraphBuilder
+    extends
+        ReturnType<typeof generatorMethods>,
+        ReturnType<typeof mathMethods>,
+        ReturnType<typeof colorMethods>,
+        ReturnType<typeof warpMethods> {}
 
-export interface VideoRampConfig {
-    /** Magnification about the center (default 1). */
-    zoom?: VideoSource;
-    /** Turns; positive turns the pattern clockwise (default 0). */
-    rotate?: VideoSource;
-    /** Horizontal move, as a fraction of frame width (default 0). */
-    shiftX?: VideoSource;
-    /** Vertical move, as a fraction of frame height (default 0). */
-    shiftY?: VideoSource;
-}
-
-export interface VideoFeedbackConfig {
-    /** Magnification of the previous frame about the center (default 1). */
-    zoom?: VideoSource;
-    /** Turns per frame (default 0). */
-    rotate?: VideoSource;
-    /** Horizontal move, as a fraction of frame width per frame (default 0). */
-    shiftX?: VideoSource;
-    /** Vertical move, as a fraction of frame height per frame (default 0). */
-    shiftY?: VideoSource;
-    /** What lies beyond the frame border (default 'clamp'). */
-    edge?: 'clamp' | 'repeat' | 'mirror';
-}
-
-export interface VideoShapeConfig {
-    shape?: 'circle' | 'box' | 'diamond';
-}
-
-function describe(value: unknown): string {
-    if (value instanceof VideoOutput) return `a ${value.type}`;
-    if (value instanceof ModuleOutput || value instanceof BaseCollection) {
-        return 'an audio signal';
-    }
-    return String(value);
-}
-
-const isColor = (value: unknown): boolean =>
-    value instanceof VideoOutput && value.type === 'color';
-
-/** Collects `$v.*` calls into a {@link VideoGraph}. */
-export class VideoGraphBuilder {
+export class VideoGraphBuilder implements VideoCore {
     private nodes: VideoNode[] = [];
     private outputId: string | null = null;
     private uniforms: VideoUniform[] = [];
@@ -130,7 +65,15 @@ export class VideoGraphBuilder {
     private histories: VideoHistory[] = [];
     private tapCount = 0;
 
-    constructor(private readonly host: VideoGraphHost) {}
+    constructor(private readonly host: VideoGraphHost) {
+        Object.assign(
+            this,
+            generatorMethods(this),
+            mathMethods(this),
+            colorMethods(this),
+            warpMethods(this),
+        );
+    }
 
     readonly time = new VideoOutput({ kind: 'time' }, 'field', this);
 
@@ -190,7 +133,7 @@ export class VideoGraphBuilder {
         return tap;
     }
 
-    private asField(fn: string, name: string, v: unknown): VideoValue {
+    asField(fn: string, name: string, v: unknown): VideoValue {
         if (typeof v === 'number') return { kind: 'const', value: v };
         if (v instanceof VideoOutput && v.type === 'field') return v.value;
         if (v instanceof ModuleOutput) return this.bindSignal(fn, name, v);
@@ -207,7 +150,7 @@ export class VideoGraphBuilder {
         );
     }
 
-    private asColor(fn: string, name: string, v: unknown): VideoValue {
+    asColor(fn: string, name: string, v: unknown): VideoValue {
         if (v instanceof VideoOutput && v.type === 'color') return v.value;
         throw new Error(
             `${fn}: ${name} must be a video color, got ${describe(v)}`,
@@ -215,7 +158,7 @@ export class VideoGraphBuilder {
     }
 
     /** A color operand; a field or number becomes the gray of that level. */
-    private asColorOrGray(fn: string, name: string, v: unknown): VideoValue {
+    asColorOrGray(fn: string, name: string, v: unknown): VideoValue {
         if (isColor(v)) return this.asColor(fn, name, v);
         const level = this.asField(fn, name, v);
         return this.addNode('colorize', 'color', {
@@ -225,7 +168,7 @@ export class VideoGraphBuilder {
         }).value;
     }
 
-    private addNode(
+    addNode(
         kind: string,
         type: VideoValueType,
         inputs: Record<string, VideoValue>,
@@ -242,7 +185,7 @@ export class VideoGraphBuilder {
      * Builds a math node whose operands are fields, or colors when any operand
      * is a color (`<kind>Color`). `fieldInputs` are fields in both variants.
      */
-    private arith(
+    arith(
         fn: string,
         kind: string,
         operands: Record<string, unknown>,
@@ -264,243 +207,6 @@ export class VideoGraphBuilder {
             inputs,
         );
     }
-
-    /**
-     * Scan ramp over the frame, optionally zoomed, rotated and shifted. `h` and
-     * `v` run 0 to 1 across and up, `d` along the diagonal, `r` is the distance
-     * from the center and `a` the angle around it.
-     */
-    ramp = (
-        axis: 'h' | 'v' | 'd' | 'r' | 'a' = 'h',
-        config?: VideoRampConfig,
-    ): VideoOutput =>
-        this.addNode(
-            'ramp',
-            'field',
-            {
-                zoom: this.asField('$v.ramp', 'zoom', config?.zoom ?? 1),
-                rotate: this.asField('$v.ramp', 'rotate', config?.rotate ?? 0),
-                shiftX: this.asField('$v.ramp', 'shiftX', config?.shiftX ?? 0),
-                shiftY: this.asField('$v.ramp', 'shiftY', config?.shiftY ?? 0),
-            },
-            { axis },
-        );
-
-    /** Periodic shaper: `freq` cycles per unit of `input`, offset by `phase` cycles. */
-    osc = (
-        input: VideoSource,
-        freq: VideoSource,
-        phase: VideoSource = 0,
-        config?: VideoOscConfig,
-    ): VideoOutput =>
-        this.addNode(
-            'osc',
-            'field',
-            {
-                input: this.asField('$v.osc', 'input', input),
-                freq: this.asField('$v.osc', 'freq', freq),
-                phase: this.asField('$v.osc', 'phase', phase),
-            },
-            config?.shape === undefined ? undefined : { shape: config.shape },
-        );
-
-    /** 1 inside a shape centered on (x, y), 0 outside. */
-    shape = (
-        x: VideoSource,
-        y: VideoSource,
-        size: VideoSource = 0.25,
-        softness: VideoSource = 0.01,
-        config?: VideoShapeConfig,
-    ): VideoOutput =>
-        this.addNode(
-            'shape',
-            'field',
-            {
-                x: this.asField('$v.shape', 'x', x),
-                y: this.asField('$v.shape', 'y', y),
-                size: this.asField('$v.shape', 'size', size),
-                softness: this.asField('$v.shape', 'softness', softness),
-            },
-            config?.shape === undefined ? undefined : { shape: config.shape },
-        );
-
-    /** Sum, clipped to 0..1. Colors add per channel. */
-    add = (a: VideoSource, b: VideoSource): VideoOutput =>
-        this.arith('$v.add', 'add', { a, b });
-
-    /** Product. Colors multiply per channel. */
-    mult = (a: VideoSource, b: VideoSource): VideoOutput =>
-        this.arith('$v.mult', 'mult', { a, b });
-
-    /** Absolute difference. Colors differ per channel. */
-    diff = (a: VideoSource, b: VideoSource): VideoOutput =>
-        this.arith('$v.diff', 'diff', { a, b });
-
-    /** The larger of two values; colors take it per channel. */
-    max = (a: VideoSource, b: VideoSource): VideoOutput =>
-        this.arith('$v.max', 'max', { a, b });
-
-    /** The smaller of two values; colors take it per channel. */
-    min = (a: VideoSource, b: VideoSource): VideoOutput =>
-        this.arith('$v.min', 'min', { a, b });
-
-    /**
-     * A transform of `input`: its field or color variant is chosen by the
-     * input's type, and `fields` are the extra inputs, always fields.
-     */
-    private transform(
-        fn: string,
-        kind: string,
-        input: unknown,
-        fields: Record<string, unknown>,
-    ): VideoOutput {
-        if (!(input instanceof VideoOutput)) {
-            throw new Error(
-                `${fn}: input must be a video field or color, got ${describe(input)}`,
-            );
-        }
-        const inputs: Record<string, VideoValue> = { input: input.value };
-        for (const [name, value] of Object.entries(fields)) {
-            inputs[name] = this.asField(fn, name, value);
-        }
-        return this.addNode(
-            input.type === 'color' ? `${kind}Color` : kind,
-            input.type,
-            inputs,
-        );
-    }
-
-    /** Zooms, turns and shifts everything `input` draws. */
-    warp = (input: VideoOutput, config?: VideoRampConfig): VideoOutput =>
-        this.transform('$v.warp', 'warp', input, {
-            rotate: config?.rotate ?? 0,
-            shiftX: config?.shiftX ?? 0,
-            shiftY: config?.shiftY ?? 0,
-            zoom: config?.zoom ?? 1,
-        });
-
-    /** Reads `input` at positions pushed by `dx` and `dy`; 0.5 is no push. */
-    displace = (
-        input: VideoOutput,
-        dx: VideoSource,
-        dy: VideoSource = 0.5,
-        amount: VideoSource = 0.1,
-    ): VideoOutput =>
-        this.transform('$v.displace', 'displace', input, { amount, dx, dy });
-
-    /**
-     * Pushes `input` around by another signal: a color moves it by its red and
-     * green channels, a field by its value in both directions.
-     */
-    modulate = (
-        input: VideoOutput,
-        modulator: VideoOutput,
-        amount: VideoSource = 0.1,
-    ): VideoOutput => {
-        if (!(modulator instanceof VideoOutput)) {
-            throw new Error(
-                `$v.modulate: modulator must be a video field or color, got ${describe(modulator)}`,
-            );
-        }
-        if (modulator.type === 'field') {
-            return this.displace(input, modulator, modulator, amount);
-        }
-        return this.displace(
-            input,
-            this.channel(modulator, 'r'),
-            this.channel(modulator, 'g'),
-            amount,
-        );
-    };
-
-    /** Mirrors `input` around the center into `sides` wedges. */
-    kaleid = (input: VideoOutput, sides: VideoSource = 4): VideoOutput =>
-        this.transform('$v.kaleid', 'kaleid', input, { sides });
-
-    /** Holds `input` constant across a grid of `x` by `y` cells. */
-    pixelate = (
-        input: VideoOutput,
-        x: VideoSource = 20,
-        y: VideoSource = x,
-    ): VideoOutput =>
-        this.transform('$v.pixelate', 'pixelate', input, { x, y });
-
-    /** Tiles `input` `x` by `y` times across the frame. */
-    repeat = (
-        input: VideoOutput,
-        x: VideoSource = 3,
-        y: VideoSource = x,
-    ): VideoOutput => this.transform('$v.repeat', 'repeat', input, { x, y });
-
-    /** One channel of a color as a field. */
-    channel = (
-        input: VideoOutput,
-        which: 'r' | 'g' | 'b' | 'luma' = 'luma',
-    ): VideoOutput => {
-        if (!(input instanceof VideoOutput) || input.type !== 'color') {
-            throw new Error(
-                `$v.channel: input must be a video color, got ${describe(input)}`,
-            );
-        }
-        return this.addNode(
-            'channel',
-            'field',
-            { input: input.value },
-            { channel: which },
-        );
-    };
-
-    /** Multiplies by `gain`, then keeps the fractional part. */
-    wrap = (input: VideoSource, gain: VideoSource = 1): VideoOutput =>
-        this.addNode('wrap', 'field', {
-            input: this.asField('$v.wrap', 'input', input),
-            gain: this.asField('$v.wrap', 'gain', gain),
-        });
-
-    /** Multiplies by `gain`, then reflects whatever passes 1 back down. */
-    fold = (input: VideoSource, gain: VideoSource = 1): VideoOutput =>
-        this.addNode('fold', 'field', {
-            input: this.asField('$v.fold', 'input', input),
-            gain: this.asField('$v.fold', 'gain', gain),
-        });
-
-    /** Complement: 1 - input. */
-    invert = (input: VideoSource): VideoOutput =>
-        this.arith('$v.invert', 'invert', { input });
-
-    /** Crossfade from `a` (amount 0) to `b` (amount 1). */
-    mix = (
-        a: VideoSource,
-        b: VideoSource,
-        amount: VideoSource = 0.5,
-    ): VideoOutput => this.arith('$v.mix', 'mix', { a, b }, { amount });
-
-    /** Threshold: 0 below `threshold`, 1 above, with a ramp `softness` wide. */
-    comparator = (
-        input: VideoSource,
-        threshold: VideoSource = 0.5,
-        softness: VideoSource = 0,
-    ): VideoOutput =>
-        this.addNode('comparator', 'field', {
-            input: this.asField('$v.comparator', 'input', input),
-            threshold: this.asField('$v.comparator', 'threshold', threshold),
-            softness: this.asField('$v.comparator', 'softness', softness),
-        });
-
-    /** Shows `fg` where `mask` is 1 and `bg` where it is 0. */
-    key = (fg: VideoSource, bg: VideoSource, mask: VideoSource): VideoOutput =>
-        this.addNode('key', 'color', {
-            fg: this.asColorOrGray('$v.key', 'fg', fg),
-            bg: this.asColorOrGray('$v.key', 'bg', bg),
-            mask: this.asField('$v.key', 'mask', mask),
-        });
-
-    /** Quantizes to `levels` values between 0 and 1. */
-    posterize = (input: VideoSource, levels: VideoSource = 4): VideoOutput =>
-        this.addNode('posterize', 'field', {
-            input: this.asField('$v.posterize', 'input', input),
-            levels: this.asField('$v.posterize', 'levels', levels),
-        });
 
     /**
      * The recent audio-rate samples of an audio signal laid along `position`,
@@ -552,102 +258,23 @@ export class VideoGraphBuilder {
             row,
         );
     };
-
-    /** Smooth value noise between 0 and 1; `z` moves through it. */
-    noise = (x: VideoSource, y: VideoSource, z: VideoSource = 0): VideoOutput =>
-        this.addNode('noise', 'field', {
-            x: this.asField('$v.noise', 'x', x),
-            y: this.asField('$v.noise', 'y', y),
-            z: this.asField('$v.noise', 'z', z),
-        });
-
-    /** Cellular noise: the distance to the nearest of a scatter of points; `z` moves them. */
-    voronoi = (
-        x: VideoSource,
-        y: VideoSource,
-        z: VideoSource = 0,
-    ): VideoOutput =>
-        this.addNode('voronoi', 'field', {
-            x: this.asField('$v.voronoi', 'x', x),
-            y: this.asField('$v.voronoi', 'y', y),
-            z: this.asField('$v.voronoi', 'z', z),
-        });
-
-    /** 1 inside a regular polygon centered on (x, y), 0 outside. */
-    polygon = (
-        x: VideoSource,
-        y: VideoSource,
-        sides: VideoSource = 3,
-        size: VideoSource = 0.25,
-        softness: VideoSource = 0.01,
-    ): VideoOutput =>
-        this.addNode('polygon', 'field', {
-            sides: this.asField('$v.polygon', 'sides', sides),
-            size: this.asField('$v.polygon', 'size', size),
-            softness: this.asField('$v.polygon', 'softness', softness),
-            x: this.asField('$v.polygon', 'x', x),
-            y: this.asField('$v.polygon', 'y', y),
-        });
-
-    /** Turns every hue of `input` by `amount` of a full circle. */
-    hueShift = (input: VideoOutput, amount: VideoSource = 0.5): VideoOutput => {
+    /** One channel of a color as a field. */
+    channel = (
+        input: VideoOutput,
+        which: 'r' | 'g' | 'b' | 'luma' = 'luma',
+    ): VideoOutput => {
         if (!(input instanceof VideoOutput) || input.type !== 'color') {
             throw new Error(
-                `$v.hueShift: input must be a video color, got ${describe(input)}`,
+                `$v.channel: input must be a video color, got ${describe(input)}`,
             );
         }
-        return this.addNode('hueShift', 'color', {
-            amount: this.asField('$v.hueShift', 'amount', amount),
-            input: input.value,
-        });
+        return this.addNode(
+            'channel',
+            'field',
+            { input: input.value },
+            { channel: which },
+        );
     };
-
-    /** Scales each channel's distance from mid-gray by `amount`. */
-    contrast = (input: VideoOutput, amount: VideoSource = 1.6): VideoOutput => {
-        if (!(input instanceof VideoOutput) || input.type !== 'color') {
-            throw new Error(
-                `$v.contrast: input must be a video color, got ${describe(input)}`,
-            );
-        }
-        return this.addNode('contrast', 'color', {
-            amount: this.asField('$v.contrast', 'amount', amount),
-            input: input.value,
-        });
-    };
-
-    /** Combines three fields into a color. */
-    colorize = (r: VideoSource, g: VideoSource, b: VideoSource): VideoOutput =>
-        this.addNode('colorize', 'color', {
-            r: this.asField('$v.colorize', 'r', r),
-            g: this.asField('$v.colorize', 'g', g),
-            b: this.asField('$v.colorize', 'b', b),
-        });
-
-    /** Color from hue (wraps every 1.0), saturation and value. */
-    hsv = (
-        h: VideoSource,
-        s: VideoSource = 1,
-        v: VideoSource = 1,
-    ): VideoOutput =>
-        this.addNode('hsv', 'color', {
-            h: this.asField('$v.hsv', 'h', h),
-            s: this.asField('$v.hsv', 's', s),
-            v: this.asField('$v.hsv', 'v', v),
-        });
-
-    /** Saturation, then gain and bias, clipped to the displayable range. */
-    procAmp = (
-        input: VideoSource,
-        gain: VideoSource = 1,
-        bias: VideoSource = 0,
-        saturation: VideoSource = 1,
-    ): VideoOutput =>
-        this.addNode('procAmp', 'color', {
-            input: this.asColorOrGray('$v.procAmp', 'input', input),
-            gain: this.asField('$v.procAmp', 'gain', gain),
-            bias: this.asField('$v.procAmp', 'bias', bias),
-            saturation: this.asField('$v.procAmp', 'saturation', saturation),
-        });
 
     /**
      * Feeds a frame back into itself. `update` receives the previous frame's

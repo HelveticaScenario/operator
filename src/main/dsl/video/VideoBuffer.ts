@@ -1,5 +1,5 @@
 import type { VideoOutput } from './VideoOutput';
-import type { VideoFeedbackConfig } from './VideoGraphBuilder';
+import type { VideoFeedbackConfig } from './videoBuilderTypes';
 
 /** The builder functions a buffer forwards to. */
 interface BufferOps {
