@@ -14,15 +14,15 @@ The digital equivalent: **a video signal is a scalar field `f(x, y, t)`**, and a
 
 ## 2. Architecture decisions
 
-| Decision | Choice | Reason |
-|---|---|---|
-| Where video is evaluated | GPU fragment (later compute) shaders | Per-pixel evaluation at video rates does not fit the real-time audio-thread rules. |
-| Shader language | WGSL | Runs under Chromium WebGPU now and under `wgpu`/naga if a native sink is ever needed. |
-| Where the graph is compiled | TypeScript, in the main process DSL layer | Rust never sees the video graph; the audio contract is unchanged. |
-| Display | Dedicated Electron `BrowserWindow` using WebGPU | Same shader throughput as a native window (both are GPU-bound); the existing Syphon bridge can publish the window. |
-| Signal domain | Separate `$v.*` namespace; video handles cannot connect to audio inputs | Prevents mixing signals of different rates by accident. |
-| Signal convention | Normalized "volts" in `[0, 1]`, clipping where the analog module clips | Overdrive, clipping and wrap behavior are much of the aesthetic. |
-| Control inputs | Per-frame uniforms (numeric literals, `$slider` values, later audio-derived CV) | Cheap, and covers most control use. |
+| Decision                    | Choice                                                                          | Reason                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Where video is evaluated    | GPU fragment (later compute) shaders                                            | Per-pixel evaluation at video rates does not fit the real-time audio-thread rules.                                 |
+| Shader language             | WGSL                                                                            | Runs under Chromium WebGPU now and under `wgpu`/naga if a native sink is ever needed.                              |
+| Where the graph is compiled | TypeScript, in the main process DSL layer                                       | Rust never sees the video graph; the audio contract is unchanged.                                                  |
+| Display                     | Dedicated Electron `BrowserWindow` using WebGPU                                 | Same shader throughput as a native window (both are GPU-bound); the existing Syphon bridge can publish the window. |
+| Signal domain               | Separate `$v.*` namespace; video handles cannot connect to audio inputs         | Prevents mixing signals of different rates by accident.                                                            |
+| Signal convention           | Normalized "volts" in `[0, 1]`, clipping where the analog module clips          | Overdrive, clipping and wrap behavior are much of the aesthetic.                                                   |
+| Control inputs              | Per-frame uniforms (numeric literals, `$slider` values, later audio-derived CV) | Cheap, and covers most control use.                                                                                |
 
 Departure from the repo convention "patch graphs are the contract — update Rust types": the video graph is a second, TypeScript-owned contract that travels beside the audio `PatchGraph` and is validated in TypeScript.
 
@@ -64,15 +64,15 @@ Files stay under ~400 lines; split by domain.
 
 Target set, grouped as in an LZX system. Names are provisional.
 
-| Group | Modules |
-|---|---|
-| Scan / sync | `$v.ramp` (H, V, diagonal; rotate and offset), `$v.out` |
-| Generators | `$v.osc` (H/V frequency, phase, shape, sync), `$v.shape` (circle, box, line with soft edge) |
-| Math | `$v.mix`, `$v.mult`, `$v.diff`, `$v.invert`, `$v.warp` (coordinate modulation) |
-| Logic / keying | `$v.comparator`, `$v.keyer`, `$v.wipe` |
-| Color | `$v.colorize` (RGB or HSV from three fields), `$v.procAmp`, `$v.posterize` |
-| Memory | `$v.feedback` (zoom, rotate, shift, gain), `$v.frameDelay` |
-| Bridges | `$v.fromAudio`, `$v.toCV` |
+| Group          | Modules                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| Scan / sync    | `$v.ramp` (H, V, diagonal; rotate and offset), `$v.out`                                     |
+| Generators     | `$v.osc` (H/V frequency, phase, shape, sync), `$v.shape` (circle, box, line with soft edge) |
+| Math           | `$v.mix`, `$v.mult`, `$v.diff`, `$v.invert`, `$v.warp` (coordinate modulation)              |
+| Logic / keying | `$v.comparator`, `$v.keyer`, `$v.wipe`                                                      |
+| Color          | `$v.colorize` (RGB or HSV from three fields), `$v.procAmp`, `$v.posterize`                  |
+| Memory         | `$v.feedback` (zoom, rotate, shift, gain), `$v.frameDelay`                                  |
+| Bridges        | `$v.fromAudio`, `$v.toCV`                                                                   |
 
 ---
 
@@ -99,6 +99,7 @@ The IR, the WGSL compiler, `VideoGraphBuilder`, the performance window with a We
 **Direction:** the output window is the **performance window**: the general-purpose, audience-facing surface that replaces showing the audience the editor. Video is its first content; the code view and other visuals are meant to share it. It opens from View → Toggle Performance Window (`operator.togglePerformanceWindow`, default Ctrl+Shift+V) and when a patch first calls `$v.out`.
 
 **Previews:** `$v.preview(signal, { view })` returns its signal and shows it in a panel under the call in the editor, as an image, a waveform monitor or a vectorscope.
+
 - The compiler adds a fragment entry point `preview_k` per preview that evaluates only that signal's dependencies and reads the feedback textures without writing them, so a preview shows the same frame the audience sees.
 - The performance window draws previews into small targets (144 pixels tall at the output's aspect ratio) every other frame, reads them back and sends them to main, which relays them to the editor.
 - The editor anchors each panel to its call with a tracked range, so panels follow edits.
@@ -108,6 +109,7 @@ The IR, the WGSL compiler, `VideoGraphBuilder`, the performance window with a We
 **Resolved question:** thumbnails read an intermediate texture back through staging buffers rather than running a second renderer in the editor, which would have drifted from the real output wherever feedback is involved. With three previews on a feedback patch, frame pacing on a 120 Hz display was unchanged: mean 8.33 ms, p95 9.2 ms, max 9.4 ms, no frame over 20 ms in 570. That is rAF pacing, not an isolated GPU measurement.
 
 **Not built:**
+
 - Fullscreen on a chosen display, aspect and resolution scale options for the performance window.
 - Syphon publishing of the performance window. `SyphonBridge.start` takes the window to capture, but the occlusion and throttling handling that keeps a captured window painting is written for the main window and needs checking against a real Syphon client.
 - Analog-look post-processing (scanlines, noise, bloom).
