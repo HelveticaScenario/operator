@@ -39,6 +39,7 @@ const stripes: VideoGraph = {
         },
     ],
     output: 'out',
+    previews: [],
     uniforms: [{ kind: 'control', slot: 0, moduleId: 'knob', value: 3 }],
 };
 
@@ -235,6 +236,7 @@ describe('compileVideoGraph', () => {
         ],
     ] as const)('rejects %s', (_name, partial, message) => {
         const graph = {
+            previews: [],
             uniforms: [],
             ...partial,
         } as unknown as VideoGraph;
@@ -280,6 +282,7 @@ describe('compileVideoGraph feedback', () => {
             },
         ],
         output: 'out',
+        previews: [],
         uniforms: [],
     };
 
@@ -340,5 +343,63 @@ describe('compileVideoGraph feedback', () => {
                 ),
             }),
         ).toThrow(/module has no feedback buffer/);
+    });
+});
+
+describe('compileVideoGraph previews', () => {
+    const withPreviews = (previews: VideoGraph['previews']): VideoGraph => ({
+        ...stripes,
+        previews,
+    });
+
+    it('adds one fragment entry point per preview', () => {
+        const shader = compileVideoGraph(
+            withPreviews([
+                { type: 'field', value: { kind: 'node', id: 'wave' } },
+                { type: 'color', value: { kind: 'node', id: 'rgb' } },
+            ]),
+        );
+        expect(shader.previewCount).toBe(2);
+        expect(shader.wgsl).toContain('fn preview_0(');
+        expect(shader.wgsl).toContain('fn preview_1(');
+        expect(shader.wgsl).toContain('return vec4f(vec3f(v1), 1.0);');
+        expect(shader.wgsl).toContain('return vec4f(v2, 1.0);');
+    });
+
+    it('evaluates only the nodes a preview depends on', () => {
+        const shader = compileVideoGraph(
+            withPreviews([{ type: 'field', value: { kind: 'node', id: 'x' } }]),
+        );
+        const entry = shader.wgsl.slice(shader.wgsl.indexOf('fn preview_0('));
+        expect(entry).toContain('let v0: f32 = uv.x;');
+        expect(entry).not.toContain('let v1');
+        expect(entry).not.toContain('let v2');
+    });
+
+    it('previews a constant or a time input directly', () => {
+        const shader = compileVideoGraph(
+            withPreviews([
+                { type: 'field', value: { kind: 'time' } },
+                { type: 'field', value: { kind: 'const', value: 0.25 } },
+            ]),
+        );
+        expect(shader.wgsl).toContain('vec3f(u.time)');
+        expect(shader.wgsl).toContain('vec3f(0.25)');
+    });
+
+    it('declares no previews by default', () => {
+        const shader = compileVideoGraph(stripes);
+        expect(shader.previewCount).toBe(0);
+        expect(shader.wgsl).not.toContain('preview_');
+    });
+
+    it('rejects a preview whose type does not match its value', () => {
+        expect(() =>
+            compileVideoGraph(
+                withPreviews([
+                    { type: 'color', value: { kind: 'node', id: 'x' } },
+                ]),
+            ),
+        ).toThrow(/node "x" is a field, expected a color/);
     });
 });

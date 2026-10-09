@@ -69,6 +69,14 @@ export interface VideoGraph {
     output: string;
     /** Slot `i` is `uniforms[i]`. */
     uniforms: VideoUniform[];
+    /** Signals drawn as small previews for the editor, in call order. */
+    previews: VideoPreview[];
+}
+
+/** A signal the editor shows beside the code. */
+export interface VideoPreview {
+    value: VideoValue;
+    type: VideoValueType;
 }
 
 export interface CompiledVideoShader {
@@ -78,4 +86,6 @@ export interface CompiledVideoShader {
     uniforms: VideoUniform[];
     /** Feedback buffers the shader reads (bindings 2..) and writes (locations 1..). */
     feedbackBufferCount: number;
+    /** Fragment entry points `preview_0`.. that each draw one preview. */
+    previewCount: number;
 }

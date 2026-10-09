@@ -405,6 +405,28 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'preview',
+        group: 'Output',
+        description:
+            'Shows a signal in the editor, in a panel under this call, and returns it unchanged so a preview can sit inside an expression. The panel is drawn from the same frame the performance window shows, feedback included, so the performance window must be open.',
+        params: [
+            {
+                name: 'config.view',
+                description:
+                    "How the panel draws the signal: `'image'` (default) shows it as a picture, `'waveform'` plots brightness against horizontal position like a waveform monitor, `'vectorscope'` plots every pixel's color by hue and saturation",
+            },
+        ],
+        examples: [
+            '$v.out($v.hsv($v.preview($v.osc($v.ramp(), 4))))',
+            "$v.out($v.preview($v.hsv($v.ramp('r')), { view: 'waveform' }))",
+            "$v.out($v.preview($v.hsv($v.ramp('a')), { view: 'vectorscope' }))",
+        ],
+        declarations: [
+            "preview(signal: VideoField, config?: { view?: 'image' | 'waveform' | 'vectorscope' }): VideoField;",
+            "preview(signal: VideoColor, config?: { view?: 'image' | 'waveform' | 'vectorscope' }): VideoColor;",
+        ],
+    },
+    {
         name: 'out',
         group: 'Output',
         description: 'Shows a color in the performance window. Last call wins.',

@@ -361,4 +361,67 @@ describe('$v in the DSL executor', () => {
         }
         expect(members.sort()).toEqual(VIDEO_DOCS.map((d) => d.name).sort());
     });
+
+    describe('previews', () => {
+        it('records each preview call with its view and source line', () => {
+            const result = exec(`
+                const wave = $v.preview($v.osc($v.ramp(), 4));
+                $v.out($v.preview($v.hsv(wave), { view: 'waveform' }));
+            `);
+            expect(
+                result.videoPreviews.map((p) => [
+                    p.view,
+                    p.sourceLocation?.line,
+                ]),
+            ).toEqual([
+                ['image', expect.any(Number)],
+                ['waveform', expect.any(Number)],
+            ]);
+            const [first, second] = result.videoPreviews;
+            expect(second.sourceLocation!.line).toBe(
+                first.sourceLocation!.line + 1,
+            );
+            expect(result.video!.previewCount).toBe(2);
+        });
+
+        it('returns the signal it previews', () => {
+            const { video } = exec(`
+                $v.out($v.colorize($v.preview($v.ramp()), 0, 0));
+            `);
+            expect(video!.previewCount).toBe(1);
+        });
+
+        it('shows black for a patch that only previews', () => {
+            const { video } = exec(`$v.preview($v.hsv($v.ramp()));`);
+            expect(video).not.toBeNull();
+            expect(video!.previewCount).toBe(1);
+        });
+
+        it('keeps the nodes a preview reads even when the output ignores them', () => {
+            const { video } = exec(`
+                $v.preview($v.osc($v.ramp(), 9));
+                $v.out($v.hsv(0.5));
+            `);
+            expect(video!.wgsl).toContain('fn preview_0(');
+            expect(video!.wgsl).toContain('fract(');
+        });
+
+        it('rejects an unknown view', () => {
+            expect(() =>
+                exec(`$v.preview($v.ramp(), { view: 'histogram' });`),
+            ).toThrow(
+                /\$v\.preview: view must be one of image, waveform, vectorscope/,
+            );
+        });
+
+        it('rejects something that is not a video signal', () => {
+            expect(() => exec(`$v.preview(0.5);`)).toThrow(
+                /\$v\.preview: signal must be a video field or color/,
+            );
+        });
+
+        it('reports no previews for a patch without any', () => {
+            expect(exec(`$v.out($v.hsv(0));`).videoPreviews).toEqual([]);
+        });
+    });
 });

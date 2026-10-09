@@ -42,7 +42,10 @@ import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
-import { VideoGraphBuilder } from './video/VideoGraphBuilder';
+import {
+    VideoGraphBuilder,
+    type VideoPreviewSite,
+} from './video/VideoGraphBuilder';
 import type { CompiledVideoShader } from '../../shared/video/videoGraph';
 import { compileVideoGraph } from './video/wgslCompiler';
 
@@ -69,8 +72,10 @@ export interface DSLExecutionResult {
     buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
-    /** Shader for the video output window; null when the patch has no `$v.out` */
+    /** Shader for the performance window; null when the patch has no `$v.out` or `$v.preview` */
     video: CompiledVideoShader | null;
+    /** One entry per `$v.preview` call, in the order the shader draws them */
+    videoPreviews: VideoPreviewSite[];
 }
 
 export interface WavsFolderNode {
@@ -648,6 +653,7 @@ export function executePatchScript(
         publishTap: (output, slot) => {
             _videoTap(output, slot);
         },
+        sourceLocation: captureSourceLocation,
     });
 
     /**
@@ -952,6 +958,7 @@ export function executePatchScript(
             mult: videoBuilder.mult,
             osc: videoBuilder.osc,
             out: videoBuilder.out,
+            preview: videoBuilder.preview,
             posterize: videoBuilder.posterize,
             procAmp: videoBuilder.procAmp,
             ramp: videoBuilder.ramp,
@@ -1061,6 +1068,7 @@ export function executePatchScript(
             sliders: controls.sliders,
             sourceLocationMap,
             video: videoGraph === null ? null : compileVideoGraph(videoGraph),
+            videoPreviews: videoBuilder.getPreviewSites(),
         };
     } catch (error) {
         if (

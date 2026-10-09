@@ -25,6 +25,8 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const names = new Map<string, string>();
     const lines: string[] = [];
     const helpers = new Set<string>();
+    /** Each node's WGSL statement, with the nodes it reads, in graph order. */
+    const statements: { id: string; text: string; reads: string[] }[] = [];
     /** Local variable holding what each feedback buffer stores this frame. */
     const bufferWrites = new Map<number, string>();
     let bufferCount = 0;
@@ -117,9 +119,15 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             for (const helper of def.helpers ?? []) helpers.add(helper);
             const local = `v${index}`;
             const wgslType = def.output === 'field' ? 'f32' : 'vec3f';
-            lines.push(
-                `    let ${local}: ${wgslType} = ${def.emit(args, params, node.buffer ?? 0)};`,
-            );
+            const text = `    let ${local}: ${wgslType} = ${def.emit(args, params, node.buffer ?? 0)};`;
+            lines.push(text);
+            statements.push({
+                id: node.id,
+                reads: Object.values(node.inputs).flatMap((v) =>
+                    v.kind === 'node' ? [v.id] : [],
+                ),
+                text,
+            });
             if (node.buffer !== undefined) {
                 bufferCount = Math.max(bufferCount, node.buffer + 1);
                 if (def.buffer === 'write') {
@@ -153,6 +161,32 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             throw new Error(`feedback buffer ${buffer} is never written`);
         }
     }
+
+    const previewEntries = graph.previews.map((preview, k) => {
+        const expression = resolve(preview.value, preview.type);
+        const needed = new Set<string>(
+            preview.value.kind === 'node' ? [preview.value.id] : [],
+        );
+        for (let i = statements.length - 1; i >= 0; i--) {
+            if (needed.has(statements[i].id)) {
+                statements[i].reads.forEach((id) => needed.add(id));
+            }
+        }
+        const body = statements
+            .filter((s) => needed.has(s.id))
+            .map((s) => s.text)
+            .join('\n');
+        const color =
+            preview.type === 'color' ? expression : `vec3f(${expression})`;
+        return `
+@fragment
+fn preview_${k}(@builtin(position) frag: vec4f) -> @location(0) vec4f {
+    let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
+${body}
+    return vec4f(${color}, 1.0);
+}
+`;
+    });
 
     const slotVecs = Math.max(1, Math.ceil(graph.uniforms.length / 4));
     const bufferBindings = Array.from(
@@ -194,11 +228,12 @@ fn fs(@builtin(position) frag: vec4f) -> ${bufferCount === 0 ? '@location(0) vec
 ${lines.join('\n')}
     return ${result};
 }
-`;
+${previewEntries.join('')}`;
     return {
         wgsl,
         uniformFloatCount: UNIFORM_SLOTS_OFFSET + slotVecs * 4,
         uniforms: graph.uniforms,
         feedbackBufferCount: bufferCount,
+        previewCount: graph.previews.length,
     };
 }

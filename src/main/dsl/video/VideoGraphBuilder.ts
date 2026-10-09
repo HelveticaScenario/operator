@@ -3,6 +3,7 @@ import {
     MAX_VIDEO_TAPS,
     type VideoGraph,
     type VideoNode,
+    type VideoPreview,
     type VideoUniform,
     type VideoValue,
     type VideoValueType,
@@ -36,7 +37,24 @@ export interface VideoGraphHost {
     controlValue(moduleId: string): number | undefined;
     /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
     publishTap(output: ModuleOutput, slot: number): void;
+    /** Where the patch script is calling from, as V8 reports it. */
+    sourceLocation(): { line: number; column: number } | undefined;
 }
+
+export type VideoPreviewView = 'image' | 'waveform' | 'vectorscope';
+
+export interface VideoPreviewConfig {
+    /** How the editor draws the signal (default 'image'). */
+    view?: VideoPreviewView;
+}
+
+/** Editor-side description of one `$v.preview` call. */
+export interface VideoPreviewSite {
+    view: VideoPreviewView;
+    sourceLocation?: { line: number; column: number };
+}
+
+const PREVIEW_VIEWS: readonly string[] = ['image', 'waveform', 'vectorscope'];
 
 export interface VideoOscConfig {
     shape?: 'sine' | 'triangle' | 'saw' | 'square';
@@ -87,6 +105,8 @@ export class VideoGraphBuilder {
     private outputId: string | null = null;
     private uniforms: VideoUniform[] = [];
     private bufferCount = 0;
+    private previews: VideoPreview[] = [];
+    private previewSites: VideoPreviewSite[] = [];
     /** Uniform slot of each audio signal already published, by signal identity. */
     private tapSlots = new Map<string, number>();
     private tapCount = 0;
@@ -436,6 +456,38 @@ export class VideoGraphBuilder {
         return next;
     };
 
+    /**
+     * Shows `signal` in the editor beside this call and returns it unchanged,
+     * so a preview can sit inside an expression.
+     */
+    preview = (
+        signal: VideoOutput,
+        config?: VideoPreviewConfig,
+    ): VideoOutput => {
+        if (!(signal instanceof VideoOutput)) {
+            throw new Error(
+                `$v.preview: signal must be a video field or color, got ${describe(signal)}`,
+            );
+        }
+        const view = config?.view ?? 'image';
+        if (!PREVIEW_VIEWS.includes(view)) {
+            throw new Error(
+                `$v.preview: view must be one of ${PREVIEW_VIEWS.join(', ')}, got "${view}"`,
+            );
+        }
+        this.previews.push({ type: signal.type, value: signal.value });
+        this.previewSites.push({
+            sourceLocation: this.host.sourceLocation(),
+            view,
+        });
+        return signal;
+    };
+
+    /** One entry per `$v.preview` call, in the order the shader draws them. */
+    getPreviewSites(): VideoPreviewSite[] {
+        return this.previewSites;
+    }
+
     /** Shows `input` in the performance window. The last call wins. */
     out = (input: VideoOutput): void => {
         if (!(input instanceof VideoOutput) || input.type !== 'color') {
@@ -447,8 +499,21 @@ export class VideoGraphBuilder {
         this.outputId = this.nodes[this.nodes.length - 1].id;
     };
 
-    /** The graph reachable from the output, or null if `$v.out` was never called. */
+    /**
+     * The graph reachable from the output and the previews, or null when the
+     * patch has neither. A patch with previews but no `$v.out` shows black.
+     */
     build(): VideoGraph | null {
+        if (this.outputId === null && this.previews.length > 0) {
+            const black = { kind: 'const', value: 0 } as const;
+            const color = this.addNode('colorize', 'color', {
+                b: black,
+                g: black,
+                r: black,
+            });
+            this.addNode('out', 'color', { input: color.value });
+            this.outputId = this.nodes[this.nodes.length - 1].id;
+        }
         if (this.outputId === null) return null;
         const live = new Set<string>(
             this.nodes
@@ -457,6 +522,9 @@ export class VideoGraphBuilder {
                 )
                 .map((n) => n.id),
         );
+        for (const preview of this.previews) {
+            if (preview.value.kind === 'node') live.add(preview.value.id);
+        }
         for (let i = this.nodes.length - 1; i >= 0; i--) {
             const node = this.nodes[i];
             if (!live.has(node.id)) continue;
@@ -467,6 +535,7 @@ export class VideoGraphBuilder {
         return {
             nodes: this.nodes.filter((n) => live.has(n.id)),
             output: this.outputId,
+            previews: this.previews,
             uniforms: this.uniforms,
         };
     }
