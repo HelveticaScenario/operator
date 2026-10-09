@@ -14577,7 +14577,7 @@
   },
   {
     "name": "_videoTap",
-    "documentation": "Publishes its input to the video renderer, which polls the latest value\nof each tap slot. The DSL inserts one per audio signal a `$v` input reads.",
+    "documentation": "Publishes its input to the video renderer, which polls the latest value\nand the recent samples of each tap slot. The DSL inserts one per audio\nsignal a `$v` input reads.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "VideoTapParams",

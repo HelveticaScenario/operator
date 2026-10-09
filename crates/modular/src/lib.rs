@@ -490,6 +490,13 @@ pub struct MidiInputInfo {
     pub index: u32,
 }
 
+/// New samples of a video tap, with the count to pass back as `since`.
+#[napi(object)]
+pub struct VideoTapChunk {
+    pub head: u32,
+    pub samples: Vec<f64>,
+}
+
 /// A finished recording. `dropped_samples > 0` means the disk writer could
 /// not keep up with the stream and the file is shorter than the live take.
 #[napi(object)]
@@ -1123,12 +1130,15 @@ impl Synthesizer {
         self.state.get_vu_meter_frames()
     }
 
-    /// Latest values, in volts, of video taps `0..count`. Each tap is a
-    /// `_videoTap` module the DSL inserts for an audio signal a `$v` input
-    /// reads.
+    /// The samples video tap `tap` has written since `since` (a `head` from an
+    /// earlier call), or its latest few when `since` is omitted.
     #[napi]
-    pub fn get_video_taps(&self, count: u32) -> Vec<f64> {
-        modular_core::dsp::utilities::video_tap::read_video_taps(count as usize)
+    pub fn get_video_tap_chunk(&self, tap: u32, since: Option<u32>) -> VideoTapChunk {
+        let chunk = modular_core::dsp::utilities::video_tap::read_video_since(tap as usize, since);
+        VideoTapChunk {
+            head: chunk.head,
+            samples: chunk.samples.into_iter().map(f64::from).collect(),
+        }
     }
 
     /// Drain the per-module profiler snapshot accumulated since the last

@@ -42,11 +42,10 @@ export declare class Synthesizer {
    */
   getVuMeters(): Array<VuMeterFrame>
   /**
-   * Latest values, in volts, of video taps `0..count`. Each tap is a
-   * `_videoTap` module the DSL inserts for an audio signal a `$v` input
-   * reads.
+   * The samples video tap `tap` has written since `since` (a `head` from an
+   * earlier call), or its latest few when `since` is omitted.
    */
-  getVideoTaps(count: number): Array<number>
+  getVideoTapChunk(tap: number, since?: number | undefined | null): VideoTapChunk
   /**
    * Drain the per-module profiler snapshot accumulated since the last
    * call. Returns one entry per module instance that did work in that
@@ -393,6 +392,12 @@ export interface ValidationError {
   expectedType?: string
   /** JSON snippet of the actual value that failed */
   actualValue?: string
+}
+
+/** New samples of a video tap, with the count to pass back as `since`. */
+export interface VideoTapChunk {
+  head: number
+  samples: Array<number>
 }
 
 export interface WavCuePointInfo {
