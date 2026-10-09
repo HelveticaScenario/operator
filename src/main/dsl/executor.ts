@@ -653,6 +653,7 @@ export function executePatchScript(
         publishTap: (output, slot) => {
             _videoTap(output, slot);
         },
+        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 1),
         sourceLocation: captureSourceLocation,
     });
 
@@ -964,6 +965,7 @@ export function executePatchScript(
             ramp: videoBuilder.ramp,
             shape: videoBuilder.shape,
             time: videoBuilder.time,
+            toCV: videoBuilder.toCV,
             wrap: videoBuilder.wrap,
         },
         $buffer,

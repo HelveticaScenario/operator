@@ -235,5 +235,8 @@ ${previewEntries.join('')}`;
         uniforms: graph.uniforms,
         feedbackBufferCount: bufferCount,
         previewCount: graph.previews.length,
+        cvSamples: graph.previews.flatMap((preview, index) =>
+            preview.cv ? [{ index, ...preview.cv }] : [],
+        ),
     };
 }

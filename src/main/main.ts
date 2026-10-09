@@ -983,6 +983,13 @@ registerIPCHandler(
 registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
 setVideoTapReader((count) => synth.getVideoTaps(count));
 
+// Region averages computed by the performance window drive audio signals.
+registerIPCHandler('VIDEO_CV_VALUES', (values) => {
+    for (const { id, value } of values) {
+        synth.setModuleParam(id, '$signal', { source: value });
+    }
+});
+
 // Preview frames drawn by the performance window go to the editor.
 registerIPCHandler('VIDEO_PREVIEW_FRAME', (frame) => {
     if (mainWindow && !mainWindow.isDestroyed()) {

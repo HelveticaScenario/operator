@@ -1,5 +1,8 @@
 /// <reference types="@webgpu/types" />
-import type { CompiledVideoShader } from '../../shared/video/videoGraph';
+import type {
+    CompiledVideoShader,
+    VideoCvSample,
+} from '../../shared/video/videoGraph';
 import { UNIFORM_SLOTS_OFFSET } from '../../shared/video/uniformLayout';
 import { FEEDBACK_FORMAT, type FeedbackBuffers } from './FeedbackBuffers';
 import { PREVIEW_FORMAT } from './PreviewCapture';
@@ -15,6 +18,8 @@ type ParityGroups = [GPUBindGroup, GPUBindGroup];
 export class ShaderProgram {
     readonly bufferCount: number;
     readonly previewCount: number;
+    /** Regions to average into audio control signals, by preview index. */
+    readonly cvSamples: ReadonlyMap<number, VideoCvSample>;
     readonly uniforms: Float32Array<ArrayBuffer>;
     readonly previewUniforms: Float32Array<ArrayBuffer>;
     private groups: { main: ParityGroups; preview: ParityGroups } | null = null;
@@ -30,6 +35,9 @@ export class ShaderProgram {
     ) {
         this.bufferCount = compiled.feedbackBufferCount;
         this.previewCount = compiled.previewCount;
+        this.cvSamples = new Map(
+            compiled.cvSamples.map(({ index, ...sample }) => [index, sample]),
+        );
         this.uniforms = new Float32Array(compiled.uniformFloatCount);
         this.previewUniforms = new Float32Array(compiled.uniformFloatCount);
         for (const { slot, value } of compiled.uniforms) {

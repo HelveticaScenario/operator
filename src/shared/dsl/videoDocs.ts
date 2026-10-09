@@ -427,6 +427,35 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'toCV',
+        group: 'Output',
+        description:
+            'Averages a region of a signal each frame into an audio control signal between 0 and 1, so the picture can modulate the sound. A color contributes its brightness. The value is read from the performance window, about 30 times a second, so the performance window must be open. Scale the result with `.range(min, max)` like any ranged signal.',
+        params: [
+            {
+                name: 'config.x',
+                description:
+                    'Center of the region as a fraction of the frame width (default 0.5)',
+            },
+            {
+                name: 'config.y',
+                description:
+                    'Center of the region as a fraction of the frame height, 0 at the bottom (default 0.5)',
+            },
+            {
+                name: 'config.size',
+                description:
+                    "Half the region's width and height as a fraction of the frame; 0.5, the default, is the whole frame",
+            },
+        ],
+        examples: [
+            "$sine($v.toCV($v.shape($v.ramp(), $v.ramp('v'), 0.3), { size: 0.1 }).range(110, 440)).out()",
+        ],
+        declarations: [
+            'toCV(signal: VideoField | VideoColor, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
+        ],
+    },
+    {
         name: 'out',
         group: 'Output',
         description: 'Shows a color in the performance window. Last call wins.',

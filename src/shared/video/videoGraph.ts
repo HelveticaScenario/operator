@@ -59,9 +59,17 @@ export type VideoPreviewView = 'image' | 'waveform' | 'vectorscope';
 
 /** Editor-side description of one `$v.preview` call. */
 export interface VideoPreviewSite {
+    /** Position among the shader's previews; frames carry the same index. */
+    index: number;
     view: VideoPreviewView;
     /** The call site, as V8 reports it: 1-based, with line-1 columns shifted. */
     sourceLocation?: { line: number; column: number };
+}
+
+/** The averages of every CV region in one frame, to write to the audio graph. */
+export interface VideoCvValue {
+    id: string;
+    value: number;
 }
 
 /** One drawn preview, as tightly packed RGBA8 rows from the top. */
@@ -92,10 +100,26 @@ export interface VideoGraph {
     previews: VideoPreview[];
 }
 
-/** A signal the editor shows beside the code. */
+/** A region of the frame whose average becomes an audio control signal. */
+export interface VideoCvSample {
+    /** Module id of the `$signal` the average is written to. */
+    id: string;
+    /** Center of the region, as fractions of the frame (0, 0 is bottom left). */
+    x: number;
+    y: number;
+    /** Half-width and half-height of the region, as fractions of the frame. */
+    size: number;
+}
+
+/**
+ * A signal drawn into a small target each frame. The editor shows it beside
+ * the code, or, when `cv` is set, the renderer averages a region of it into an
+ * audio control signal.
+ */
 export interface VideoPreview {
     value: VideoValue;
     type: VideoValueType;
+    cv?: VideoCvSample;
 }
 
 export interface CompiledVideoShader {
@@ -107,4 +131,6 @@ export interface CompiledVideoShader {
     feedbackBufferCount: number;
     /** Fragment entry points `preview_0`.. that each draw one preview. */
     previewCount: number;
+    /** The previews that feed audio control signals, by preview index. */
+    cvSamples: ({ index: number } & VideoCvSample)[];
 }

@@ -26,6 +26,9 @@ export function PerformanceWindow() {
         VideoRenderer.create(canvas, abort.signal).then(
             (created) => {
                 renderer = created;
+                created.setCvSink((values) => {
+                    void electronAPI.video.sendCvValues(values);
+                });
                 created.setPreviewSink((frame) => {
                     void electronAPI.video.sendPreviewFrame(frame);
                 });

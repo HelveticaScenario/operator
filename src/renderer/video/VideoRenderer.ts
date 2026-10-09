@@ -1,9 +1,11 @@
 /// <reference types="@webgpu/types" />
 import { FeedbackBuffers } from './FeedbackBuffers';
 import { PreviewCapture } from './PreviewCapture';
+import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
 import type {
     CompiledVideoShader,
+    VideoCvValue,
     VideoPreviewFrame,
 } from '../../shared/video/videoGraph';
 import {
@@ -31,6 +33,7 @@ export class VideoRenderer {
     private frameHandle = 0;
     private frameIndex = 0;
     private previewSink: ((frame: VideoPreviewFrame) => void) | null = null;
+    private cvSink: ((values: VideoCvValue[]) => void) | null = null;
     private readonly startMs = performance.now();
     private readonly buffers: FeedbackBuffers;
     private readonly previews: PreviewCapture;
@@ -44,7 +47,7 @@ export class VideoRenderer {
     ) {
         this.buffers = new FeedbackBuffers(device);
         this.previews = new PreviewCapture(device, (frame) =>
-            this.previewSink?.(frame),
+            this.routeFrame(frame),
         );
         this.sampler = device.createSampler({
             addressModeU: 'clamp-to-edge',
@@ -124,9 +127,26 @@ export class VideoRenderer {
         this.program?.setSlot(slot, value);
     }
 
-    /** Receives every preview frame; with no sink, previews are not drawn. */
+    /** Receives every editor preview frame; with no sinks, previews are not drawn. */
     setPreviewSink(sink: ((frame: VideoPreviewFrame) => void) | null): void {
         this.previewSink = sink;
+    }
+
+    /** Receives the region averages that feed audio control signals. */
+    setCvSink(sink: ((values: VideoCvValue[]) => void) | null): void {
+        this.cvSink = sink;
+    }
+
+    /** Sends a delivered frame to the CV sink or, for an editor preview, the preview sink. */
+    private routeFrame(frame: VideoPreviewFrame): void {
+        const sample = this.program?.cvSamples.get(frame.index);
+        if (sample === undefined) {
+            this.previewSink?.(frame);
+        } else {
+            this.cvSink?.([
+                { id: sample.id, value: regionAverage(frame, sample) },
+            ]);
+        }
     }
 
     dispose(): void {
@@ -255,7 +275,7 @@ export class VideoRenderer {
             program !== null &&
             groups !== null &&
             program.previewCount > 0 &&
-            this.previewSink !== null &&
+            (this.previewSink !== null || this.cvSink !== null) &&
             this.frameIndex % PREVIEW_FRAME_INTERVAL === 0
         ) {
             copied = this.drawPreviews(

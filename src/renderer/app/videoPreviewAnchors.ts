@@ -26,7 +26,7 @@ export function createVideoPreviewAnchors(
 ): VideoPreviewAnchors {
     const model = editorInstance.getModel();
     const descriptions: editor.IModelDeltaDecoration[] = [];
-    const zones = sites.map((site, index): VideoPreviewZone => {
+    const zones = sites.map((site): VideoPreviewZone => {
         const loc = site.sourceLocation;
         const range =
             model && loc
@@ -55,7 +55,7 @@ export function createVideoPreviewAnchors(
         return {
             decorationIndex: range ? descriptions.length - 1 : null,
             file,
-            index,
+            index: site.index,
             view: site.view,
         };
     });

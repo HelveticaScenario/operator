@@ -424,4 +424,66 @@ describe('$v in the DSL executor', () => {
             expect(exec(`$v.out($v.hsv(0));`).videoPreviews).toEqual([]);
         });
     });
+
+    describe('toCV', () => {
+        it('returns a 0..1 audio signal fed by a region of the video', () => {
+            const result = exec(`
+                const level = $v.toCV($v.ramp(), { x: 0.25, y: 0.75, size: 0.1 });
+                $sine(level.range(100, 200)).out();
+                $v.out($v.hsv(0.5));
+            `);
+            expect(result.video!.cvSamples).toEqual([
+                { id: '__videoCV_0', index: 0, size: 0.1, x: 0.25, y: 0.75 },
+            ]);
+            const cv = result.patch.modules.find((m) => m.id === '__videoCV_0');
+            expect(cv?.moduleType).toBe('$signal');
+        });
+
+        it('defaults to the whole frame', () => {
+            const { video } = exec(`
+                $v.toCV($v.ramp());
+                $v.out($v.hsv(0.5));
+            `);
+            expect(video!.cvSamples[0]).toMatchObject({
+                size: 0.5,
+                x: 0.5,
+                y: 0.5,
+            });
+        });
+
+        it('numbers its preview slots among the editor previews', () => {
+            const { video, videoPreviews } = exec(`
+                $v.preview($v.ramp());
+                $v.toCV($v.ramp('v'));
+                $v.out($v.preview($v.hsv(0.5), { view: 'vectorscope' }));
+            `);
+            expect(videoPreviews.map((p) => p.index)).toEqual([0, 2]);
+            expect(video!.cvSamples.map((c) => c.index)).toEqual([1]);
+            expect(video!.previewCount).toBe(3);
+        });
+
+        it('closes the loop: video drives audio drives video', () => {
+            const { video } = exec(`
+                const level = $v.toCV($v.ramp(), { x: 0.9, size: 0.02 });
+                $v.out($v.colorize(level, level, level));
+            `);
+            expect(video!.uniforms.map((u) => u.kind)).toEqual(['tap']);
+            expect(video!.cvSamples).toHaveLength(1);
+        });
+
+        it('rejects a region that is empty or not finite', () => {
+            expect(() => exec(`$v.toCV($v.ramp(), { size: 0 });`)).toThrow(
+                /\$v\.toCV: size must be greater than 0/,
+            );
+            expect(() => exec(`$v.toCV($v.ramp(), { x: 'left' });`)).toThrow(
+                /\$v\.toCV: x must be a finite number/,
+            );
+        });
+
+        it('rejects something that is not a video signal', () => {
+            expect(() => exec(`$v.toCV(0.5);`)).toThrow(
+                /\$v\.toCV: signal must be a video field or color/,
+            );
+        });
+    });
 });

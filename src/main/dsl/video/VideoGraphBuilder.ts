@@ -10,7 +10,11 @@ import {
     type VideoValue,
     type VideoValueType,
 } from '../../../shared/video/videoGraph';
-import { BaseCollection, ModuleOutput } from '../GraphBuilder';
+import {
+    BaseCollection,
+    type CollectionWithRange,
+    ModuleOutput,
+} from '../GraphBuilder';
 
 /** A video signal: a node's output, a constant, or the time field. */
 export class VideoOutput {
@@ -39,8 +43,22 @@ export interface VideoGraphHost {
     controlValue(moduleId: string): number | undefined;
     /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
     publishTap(output: ModuleOutput, slot: number): void;
+    /**
+     * A `$signal` module with id `id` carrying 0..1, which the renderer
+     * overwrites with a region average of a video signal.
+     */
+    cvSignal(id: string): CollectionWithRange;
     /** Where the patch script is calling from, as V8 reports it. */
     sourceLocation(): { line: number; column: number } | undefined;
+}
+
+export interface VideoCvConfig {
+    /** Center of the region as a fraction of the frame width (default 0.5). */
+    x?: number;
+    /** Center of the region as a fraction of the frame height; 0 is the bottom (default 0.5). */
+    y?: number;
+    /** Half-extent of the region as a fraction of the frame (default 0.5, the whole frame). */
+    size?: number;
 }
 
 export interface VideoPreviewConfig {
@@ -101,6 +119,7 @@ export class VideoGraphBuilder {
     private bufferCount = 0;
     private previews: VideoPreview[] = [];
     private previewSites: VideoPreviewSite[] = [];
+    private cvCount = 0;
     /** Uniform slot of each audio signal already published, by signal identity. */
     private tapSlots = new Map<string, number>();
     private tapCount = 0;
@@ -469,12 +488,54 @@ export class VideoGraphBuilder {
                 `$v.preview: view must be one of ${PREVIEW_VIEWS.join(', ')}, got "${view}"`,
             );
         }
-        this.previews.push({ type: signal.type, value: signal.value });
         this.previewSites.push({
+            index: this.previews.length,
             sourceLocation: this.host.sourceLocation(),
             view,
         });
+        this.previews.push({ type: signal.type, value: signal.value });
         return signal;
+    };
+
+    /**
+     * Averages a region of `signal` each frame into an audio control signal
+     * between 0 and 1. A color contributes its brightness.
+     */
+    toCV = (
+        signal: VideoOutput,
+        config?: VideoCvConfig,
+    ): CollectionWithRange => {
+        if (!(signal instanceof VideoOutput)) {
+            throw new Error(
+                `$v.toCV: signal must be a video field or color, got ${describe(signal)}`,
+            );
+        }
+        const x = config?.x ?? 0.5;
+        const y = config?.y ?? 0.5;
+        const size = config?.size ?? 0.5;
+        for (const [name, value] of [
+            ['x', x],
+            ['y', y],
+            ['size', size],
+        ] as const) {
+            if (typeof value !== 'number' || !Number.isFinite(value)) {
+                throw new Error(
+                    `$v.toCV: ${name} must be a finite number, got ${value}`,
+                );
+            }
+        }
+        if (size <= 0) {
+            throw new Error(
+                `$v.toCV: size must be greater than 0, got ${size}`,
+            );
+        }
+        const id = `__videoCV_${this.cvCount++}`;
+        this.previews.push({
+            cv: { id, size, x, y },
+            type: signal.type,
+            value: signal.value,
+        });
+        return this.host.cvSignal(id);
     };
 
     /** One entry per `$v.preview` call, in the order the shader draws them. */

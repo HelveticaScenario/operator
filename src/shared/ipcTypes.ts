@@ -25,6 +25,7 @@ import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
 import type {
     CompiledVideoShader,
+    VideoCvValue,
     VideoPreviewFrame,
     VideoPreviewSite,
     VideoUniformUpdate,
@@ -409,6 +410,7 @@ export const IPC_CHANNELS = {
     VIDEO_ON_SHADER: 'modular:video:on-shader',
     VIDEO_ON_UNIFORM: 'modular:video:on-uniform',
     VIDEO_PREVIEW_FRAME: 'modular:video:preview-frame',
+    VIDEO_CV_VALUES: 'modular:video:cv-values',
     VIDEO_ON_PREVIEW_FRAME: 'modular:video:on-preview-frame',
 
     // Syphon window output (macOS)
@@ -604,6 +606,7 @@ export interface IPCHandlers {
     // Performance window
     [IPC_CHANNELS.PERFORMANCE_WINDOW_TOGGLE]: () => void;
     [IPC_CHANNELS.VIDEO_GET_SHADER]: () => CompiledVideoShader | null;
+    [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
     [IPC_CHANNELS.VIDEO_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (updates: VideoUniformUpdate[]) => void;
