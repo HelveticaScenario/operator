@@ -42,10 +42,8 @@ import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
 import { VideoGraphBuilder } from './video/VideoGraphBuilder';
-import {
-    compileVideoGraph,
-    type CompiledVideoShader,
-} from './video/wgslCompiler';
+import type { CompiledVideoShader } from '../../shared/video/videoGraph';
+import { compileVideoGraph } from './video/wgslCompiler';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {

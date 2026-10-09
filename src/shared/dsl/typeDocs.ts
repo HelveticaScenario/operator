@@ -710,7 +710,8 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
         ],
         returns:
             'CollectionWithRange carrying the button output (range [0, 5])',
-        signature: '$btn(label: string, group?: ControlGroup): CollectionWithRange',
+        signature:
+            '$btn(label: string, group?: ControlGroup): CollectionWithRange',
     },
     {
         description:
@@ -766,7 +767,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
             },
         ],
         returns:
-            'A ControlGroup reference. Pass the $cGroup(...) call or a const bound to it as a control\'s group argument.',
+            "A ControlGroup reference. Pass the $cGroup(...) call or a const bound to it as a control's group argument.",
         signature:
             '$cGroup(label: string, params?: { collapsed?: boolean, group?: ControlGroup }): ControlGroup',
     },

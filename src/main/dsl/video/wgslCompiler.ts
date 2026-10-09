@@ -1,4 +1,5 @@
 import type {
+    CompiledVideoShader,
     VideoGraph,
     VideoValue,
     VideoValueType,
@@ -7,12 +8,6 @@ import { VIDEO_MODULES } from './modules';
 
 /** Floats before the slot array in the uniform buffer: time, pad, resolution. */
 export const UNIFORM_HEADER_FLOATS = 4;
-
-export interface CompiledVideoShader {
-    wgsl: string;
-    /** Total uniform buffer size in floats, a multiple of 4. */
-    uniformFloatCount: number;
-}
 
 function wgslFloat(value: number): string {
     if (!Number.isFinite(value)) {

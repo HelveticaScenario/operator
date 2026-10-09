@@ -18,6 +18,7 @@ import {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { QueuedTrigger } from '../shared/ipcTypes';
+import type { CompiledVideoShader } from '../shared/video/videoGraph';
 
 /**
  * Type-safe wrapper for IPC invoke calls
@@ -230,6 +231,14 @@ export interface ElectronAPI {
             symbolName: string;
         }) => void,
     ) => () => void;
+
+    // Video output window
+    video: {
+        getShader: () => Promise<CompiledVideoShader | null>;
+        onShader: (
+            callback: (shader: CompiledVideoShader | null) => void,
+        ) => () => void;
+    };
 
     // Config operations
     config: {
@@ -497,6 +506,14 @@ const electronAPI: ElectronAPI = {
     ),
     showUnsavedChangesDialog: (fileName) =>
         invokeIPC('SHOW_UNSAVED_CHANGES_DIALOG', fileName),
+
+    // Video output window
+    video: {
+        getShader: () => invokeIPC('VIDEO_GET_SHADER'),
+        onShader: menuEventHandler<[CompiledVideoShader | null]>(
+            IPC_CHANNELS.VIDEO_ON_SHADER,
+        ),
+    },
 
     // Config operations
     config: {

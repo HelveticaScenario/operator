@@ -2034,6 +2034,7 @@ __metadata:
     "@types/electron-squirrel-startup": "npm:^1.0.2"
     "@types/react": "npm:^19.2.14"
     "@types/react-dom": "npm:^19.2.3"
+    "@webgpu/types": "npm:^0.1.74"
     cmdk: "npm:^1.1.1"
     concurrently: "npm:^9.2.1"
     electron: "npm:39.2.7"
@@ -4845,6 +4846,13 @@ __metadata:
     "@webassemblyjs/ast": "npm:1.14.1"
     "@xtuc/long": "npm:4.2.2"
   checksum: 10c0/8d7768608996a052545251e896eac079c98e0401842af8dd4de78fba8d90bd505efb6c537e909cd6dae96e09db3fa2e765a6f26492553a675da56e2db51f9d24
+  languageName: node
+  linkType: hard
+
+"@webgpu/types@npm:^0.1.74":
+  version: 0.1.74
+  resolution: "@webgpu/types@npm:0.1.74"
+  checksum: 10c0/590d475d81f8468e207d1cc8230aa6444d5b2d96dff81279e2a864f3b9197b94bf9572043f9726ca7108ad305e3f5c6b3c86e8ee9b2b652bc83e050dc6bf69fe
   languageName: node
   linkType: hard
 

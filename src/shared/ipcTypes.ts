@@ -23,6 +23,7 @@ import type {
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
+import type { CompiledVideoShader } from './video/videoGraph';
 
 export type {
     PatchGraph,
@@ -395,6 +396,10 @@ export const IPC_CHANNELS = {
     KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
     KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
+    // Video output window
+    VIDEO_GET_SHADER: 'modular:video:get-shader',
+    VIDEO_ON_SHADER: 'modular:video:on-shader',
+
     // Syphon window output (macOS)
     SYPHON_TOGGLE: 'modular:syphon:toggle',
     SYPHON_IS_SUPPORTED: 'modular:syphon:is-supported',
@@ -584,6 +589,12 @@ export interface IPCHandlers {
     [IPC_CHANNELS.KEYBINDINGS_GET_PATH]: () => string;
     [IPC_CHANNELS.KEYBINDINGS_READ_USER]: () => KeybindingOverride[];
     [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
+
+    // Video output window
+    [IPC_CHANNELS.VIDEO_GET_SHADER]: () => CompiledVideoShader | null;
+    [IPC_CHANNELS.VIDEO_ON_SHADER]: (
+        shader: CompiledVideoShader | null,
+    ) => void;
 
     // Syphon window output (macOS)
     [IPC_CHANNELS.SYPHON_TOGGLE]: () => SyphonToggleResult;

@@ -37,6 +37,7 @@ import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
+import { getVideoShader, updateVideoShader } from './videoWindow';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
@@ -818,6 +819,7 @@ registerIPCHandler(
                 sliders,
                 buttons,
                 callSiteSpans,
+                video,
             } = executePatchScript(source, schemas, {
                 inputChannels: synth.inputChannels(),
                 sampleRate: synth.sampleRate(),
@@ -928,6 +930,7 @@ registerIPCHandler(
 
             if (errors.length === 0) {
                 appliedPatch.record(patch, sourceId ?? null, updateId);
+                updateVideoShader(video);
             }
 
             if (errors.length > 0) {
@@ -967,6 +970,8 @@ registerIPCHandler(
         }
     },
 );
+
+registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
 
 registerIPCHandler('SYNTH_GET_SAMPLE_RATE', () => synth.sampleRate());
 

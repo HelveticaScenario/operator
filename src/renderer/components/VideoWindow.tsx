@@ -1,0 +1,68 @@
+import { useEffect, useRef, useState } from 'react';
+import electronAPI from '../electronAPI';
+import { VideoRenderer } from '../video/VideoRenderer';
+
+/** Fullscreen-capable canvas that displays the patch's `$v.out`. */
+export function VideoWindow() {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (canvas === null) return;
+
+        const abort = new AbortController();
+        let renderer: VideoRenderer | null = null;
+        let unsubscribe: (() => void) | null = null;
+
+        const show = (shader: Parameters<VideoRenderer['setShader']>[0]) => {
+            renderer?.setShader(shader).then(
+                () => setError(null),
+                (e: unknown) =>
+                    setError(e instanceof Error ? e.message : String(e)),
+            );
+        };
+
+        VideoRenderer.create(canvas, abort.signal).then(
+            (created) => {
+                renderer = created;
+                unsubscribe = electronAPI.video.onShader(show);
+                void electronAPI.video.getShader().then(show);
+            },
+            (e: unknown) => {
+                if (!abort.signal.aborted) {
+                    setError(e instanceof Error ? e.message : String(e));
+                }
+            },
+        );
+
+        return () => {
+            abort.abort();
+            unsubscribe?.();
+            renderer?.dispose();
+        };
+    }, []);
+
+    return (
+        <div style={{ background: '#000', height: '100vh', width: '100vw' }}>
+            <canvas
+                ref={canvasRef}
+                style={{ display: 'block', height: '100%', width: '100%' }}
+            />
+            {error !== null && (
+                <pre
+                    style={{
+                        color: '#ff6b6b',
+                        left: 12,
+                        margin: 0,
+                        position: 'fixed',
+                        top: 12,
+                        whiteSpace: 'pre-wrap',
+                    }}
+                >
+                    {error}
+                </pre>
+            )}
+        </div>
+    );
+}

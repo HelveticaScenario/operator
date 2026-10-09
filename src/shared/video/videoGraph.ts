@@ -30,3 +30,9 @@ export interface VideoGraph {
     output: string;
     uniformSlotCount: number;
 }
+
+export interface CompiledVideoShader {
+    wgsl: string;
+    /** Total uniform buffer size in floats, a multiple of 4. */
+    uniformFloatCount: number;
+}

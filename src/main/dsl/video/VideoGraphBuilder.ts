@@ -87,7 +87,7 @@ export class VideoGraphBuilder {
             );
         }
         this.add('out', 'color', { input: input.value });
-        this.outputId = this.nodes[this.nodes.length - 1]!.id;
+        this.outputId = this.nodes[this.nodes.length - 1].id;
     };
 
     /** The graph reachable from the output, or null if `$v.out` was never called. */
@@ -95,7 +95,7 @@ export class VideoGraphBuilder {
         if (this.outputId === null) return null;
         const live = new Set<string>([this.outputId]);
         for (let i = this.nodes.length - 1; i >= 0; i--) {
-            const node = this.nodes[i]!;
+            const node = this.nodes[i];
             if (!live.has(node.id)) continue;
             for (const input of Object.values(node.inputs)) {
                 if (input.kind === 'node') live.add(input.id);
