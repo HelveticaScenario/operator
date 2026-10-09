@@ -88,7 +88,16 @@ The IR, the WGSL compiler, `VideoGraphBuilder`, the performance window with a We
 
 **Modules:** `add`, `mult`, `diff`, `min`, `max`, `invert`, `mix` (fields, or colors when either operand is a color), `comparator`, `key`, `shape`, `procAmp`, `posterize`, `hsv`, `wrap`, `fold`, and ramps that can be zoomed, rotated and shifted and that have radial (`r`) and angular (`a`) axes. Coordinate warping the LZX way, by modulating ramps before the oscillators, works with these. Warping an arbitrary field would need its inputs re-evaluated at shifted coordinates and is not implemented.
 
-**Control:** sliders and buttons bind to uniform slots by their backing module id, and main pushes new values on `SYNTH_SET_MODULE_PARAM`. Any other audio signal binds to an engine tap: the DSL inserts a hidden `_videoTap` module whose input is the signal, the module stores the value in a static array of atomics on the audio thread, and main polls the array at 60 Hz while the performance window is open and the shader reads a tap. Taps carry volts as the audio graph produces them. A patch can read 64 audio signals, one channel each.
+**Control:** sliders and buttons bind to uniform slots by their backing module id, and main pushes new values on `SYNTH_SET_MODULE_PARAM`. Any other audio signal binds to an engine tap: the DSL inserts a hidden `_videoTap` module whose input is the signal, and the module writes every sample into a 4096-sample ring on the audio thread. Main polls at 60 Hz, only while the performance window is open and the shader reads a tap, and sends the samples produced since the last poll. The renderer plays them back against the display clock through a small jitter buffer (`TapStream`), so each frame reads the signal exactly where it is at that moment.
+
+The engine produces samples a callback at a time, so the newest sample only moves every ~11.6 ms; reading "the latest value" made a 1 Hz LFO step visibly. With the stream, a 1 Hz LFO feeding a feedback patch at 120 Hz delivered 1189 frames with no repeated value and a largest frame-to-frame step of 0.0130 against 0.0105 for the ideal sine. A patch can read 64 audio signals, one channel each, in volts as the audio graph produces them.
+
+**Hydra-inspired additions** (from reading Hydra's function library: sources, coordinate transforms, color ops, blends and "modulate" warps):
+
+- **Warps that move a whole sub-patch.** Every node can be compiled as a function of the coordinate, `fn f<i>(uv) -> T`, alongside the memoized statement at the pixel's own coordinate. `warp`, `displace`, `modulate`, `kaleid`, `pixelate` and `repeat` call their input as a function at coordinates they compute, so they move, bend or fold everything behind it, not just its output. Graphs without warps compile as before.
+- **Chaining.** Every video signal has the `$v` functions as methods with itself as the first argument (`$v.osc(...).modulate(...).kaleid(6).hsv().out()`), plus `rotate`, `scale` and `scroll` as shorthand for `warp`.
+- **Named buffers.** `$v.buffer()` gives a frame store any signal can write and any number of signals can read the previous frame of, so buffers can feed themselves and each other. `$v.feedback` is the same mechanism with one read and one write.
+- **Library gaps filled:** `voronoi`, `polygon`, `hueShift`, `contrast`, `channel`. Hydra's `thresh`, `luma`, `brightness` and `saturate` are `comparator`, `key` and `procAmp`.
 
 ### Phase 3 — Feedback and memory (done)
 
@@ -114,9 +123,11 @@ The IR, the WGSL compiler, `VideoGraphBuilder`, the performance window with a We
 - Syphon publishing of the performance window. `SyphonBridge.start` takes the window to capture, but the occlusion and throttling handling that keeps a captured window painting is written for the main window and needs checking against a real Syphon client.
 - Analog-look post-processing (scanlines, noise, bloom).
 
-### Phase 5 — Audio and video bridges (partly done)
+### Phase 5 — Audio and video bridges (done)
 
-Audio-to-video is covered by taps for control-rate signals. Not built: `$v.fromAudio`, which writes audio-rate samples along scanlines, and `$v.toCV`, which samples a pixel or region per frame and returns a control signal to the audio graph.
+- **Audio to video, per frame:** taps, as above.
+- **Audio to video, at audio rate:** `$v.fromAudio(signal, position, { samples, trigger })` lays the last `samples` samples (up to 4096) of an audio signal along `position`, oldest at 0 and newest at 1. The window can start at a rising zero crossing so a periodic wave holds still. Compare it with the vertical ramp to draw an oscilloscope, or feed it a radial ramp for rings.
+- **Video to audio:** `$v.toCV(signal, { x, y, size })` averages a region of the picture each frame into a 0..1 audio control signal. A closed loop (a ramp sampled at x = 0.25 and x = 0.9, sent through the audio graph and back in as a gray level) read back 64 and 229 of 255.
 
 ### Phase 6 — Polish and documentation (done for the module set)
 
@@ -143,16 +154,17 @@ One table, `src/shared/dsl/videoDocs.ts`, generates both the Monaco typings (JSD
 
 Not built yet, in rough order of value:
 
+- **External sources as fields:** camera, video, image and screen capture, as Hydra offers, so live input can go through the same feedback and warps. An image from the workspace folder would parallel `$wavs()`.
 - Performance window options: fullscreen on a chosen display, aspect, resolution scale.
 - Syphon publishing of the performance window.
-- `$v.frameDelay`, `$v.fromAudio` and `$v.toCV`.
-- Arbitrary-field warping (needs re-evaluating a field's inputs at shifted coordinates).
-- Analog-look post-processing: scanlines, noise, bloom.
-- Generators and filters that need more than the current pixel: noise, blur.
+- Sequences as parameters, as Hydra's arrays: a `$p` pattern through an audio tap already steps values with exact edges, but there is no video-side shorthand.
+- `$v.frameDelay` (a buffer read does most of this).
+- Analog-look post-processing: scanlines, bloom.
+- Filters that need neighbouring pixels, such as blur.
+- `VideoGraphBuilder.ts` has grown past the file-size guideline and should be split by domain.
 
 Deferred indefinitely:
 
 - A native `wgpu` sink (HDR, 10-bit, NDI, genlock-grade pacing). Revisit only if Syphon and the Electron window prove insufficient.
 - Compute-shader modules (histogram, convolution) beyond what the above needs.
-- Image or live camera inputs as source fields.
 - Deterministic offline rendering to video files.
