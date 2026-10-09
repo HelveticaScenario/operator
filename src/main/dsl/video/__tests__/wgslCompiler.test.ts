@@ -31,11 +31,12 @@ const stripes: VideoGraph = {
         },
     ],
     output: 'out',
-    uniforms: [{ slot: 0, moduleId: 'knob', value: 3 }],
+    uniforms: [{ kind: 'control', slot: 0, moduleId: 'knob', value: 3 }],
 };
 
 const slots = (n: number) =>
     Array.from({ length: n }, (_, slot) => ({
+        kind: 'control' as const,
         slot,
         moduleId: `knob${slot}`,
         value: 0,

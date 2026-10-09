@@ -32,12 +32,31 @@ export interface VideoNode {
     buffer?: number;
 }
 
-/** A control (slider or button) whose value feeds one uniform slot. */
-export interface VideoUniform {
+/** Number of audio-signal taps the engine publishes; matches `MAX_VIDEO_TAPS` in Rust. */
+export const MAX_VIDEO_TAPS = 64;
+
+/** An input source that feeds one uniform slot, with that source's current value. */
+export type VideoUniform = {
     slot: number;
-    /** Module id of the control's backing `$signal`. */
-    moduleId: string;
-    /** The control's current value. */
+    value: number;
+} & (
+    | {
+          /** A slider or button. */
+          kind: 'control';
+          /** Module id of the control's backing `$signal`. */
+          moduleId: string;
+      }
+    | {
+          /** An audio signal, published by a `_videoTap` module. */
+          kind: 'tap';
+          /** Index of the tap slot the engine publishes the signal to. */
+          tap: number;
+      }
+);
+
+/** A new value for one uniform slot. */
+export interface VideoUniformUpdate {
+    slot: number;
     value: number;
 }
 

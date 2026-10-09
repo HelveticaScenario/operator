@@ -1,5 +1,6 @@
 import {
     MAX_FEEDBACK_BUFFERS,
+    MAX_VIDEO_TAPS,
     type VideoGraph,
     type VideoNode,
     type VideoUniform,
@@ -17,14 +18,25 @@ export class VideoOutput {
 }
 
 /**
- * A constant, a video signal of either type, or a slider or button, whose
- * live value drives a field input.
+ * A constant, a video signal of either type, or an audio signal (a slider,
+ * button or any module output), whose live value drives a field input.
  */
 export type VideoSource =
     | number
     | VideoOutput
     | ModuleOutput
     | BaseCollection<ModuleOutput>;
+
+/** What the builder needs from the patch it is building inside. */
+export interface VideoGraphHost {
+    /**
+     * Current value of a slider or button's backing module, or undefined if
+     * `moduleId` is not a control.
+     */
+    controlValue(moduleId: string): number | undefined;
+    /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
+    publishTap(output: ModuleOutput, slot: number): void;
+}
 
 export interface VideoOscConfig {
     shape?: 'sine' | 'triangle' | 'saw' | 'square';
@@ -64,44 +76,67 @@ export class VideoGraphBuilder {
     private outputId: string | null = null;
     private uniforms: VideoUniform[] = [];
     private bufferCount = 0;
+    /** Uniform slot of each audio signal already published, by signal identity. */
+    private tapSlots = new Map<string, number>();
+    private tapCount = 0;
 
-    /**
-     * @param controlValue Current value of a slider or button's backing
-     *   module, or undefined if `moduleId` is not a control.
-     */
-    constructor(
-        private readonly controlValue: (moduleId: string) => number | undefined,
-    ) {}
+    constructor(private readonly host: VideoGraphHost) {}
 
     readonly time = new VideoOutput({ kind: 'time' }, 'field');
 
-    /** Binds a slider or button to a uniform slot, one slot per control. */
-    private bindControl(
+    /**
+     * Binds an audio signal to a uniform slot: a slider or button by its
+     * backing module, anything else through an engine tap. Each source gets
+     * one slot however often it is used.
+     */
+    private bindSignal(
         fn: string,
         name: string,
         output: ModuleOutput,
     ): VideoValue {
-        const existing = this.uniforms.find(
-            (u) => u.moduleId === output.moduleId,
-        );
-        if (existing) return { kind: 'uniform', slot: existing.slot };
-        const value = this.controlValue(output.moduleId);
-        if (value === undefined) {
+        const control = this.host.controlValue(output.moduleId);
+        if (control !== undefined) {
+            const existing = this.uniforms.find(
+                (u) => u.kind === 'control' && u.moduleId === output.moduleId,
+            );
+            if (existing) return { kind: 'uniform', slot: existing.slot };
+            const slot = this.uniforms.length;
+            this.uniforms.push({
+                kind: 'control',
+                moduleId: output.moduleId,
+                slot,
+                value: control,
+            });
+            return { kind: 'uniform', slot };
+        }
+
+        const key = `${output.moduleId}\0${output.portName}\0${output.channel}`;
+        const known = this.tapSlots.get(key);
+        if (known !== undefined) return { kind: 'uniform', slot: known };
+        if (this.tapCount >= MAX_VIDEO_TAPS) {
             throw new Error(
-                `${fn}: ${name} is ${describe(output)}; video inputs take numbers, video signals, sliders and buttons`,
+                `${fn}: ${name} would be signal ${MAX_VIDEO_TAPS + 1}; a patch can read at most ${MAX_VIDEO_TAPS} audio signals into video`,
             );
         }
+        const tap = this.tapCount++;
+        this.host.publishTap(output, tap);
         const slot = this.uniforms.length;
-        this.uniforms.push({ slot, moduleId: output.moduleId, value });
+        this.uniforms.push({ kind: 'tap', slot, tap, value: 0 });
+        this.tapSlots.set(key, slot);
         return { kind: 'uniform', slot };
     }
 
     private asField(fn: string, name: string, v: unknown): VideoValue {
         if (typeof v === 'number') return { kind: 'const', value: v };
         if (v instanceof VideoOutput && v.type === 'field') return v.value;
-        if (v instanceof ModuleOutput) return this.bindControl(fn, name, v);
+        if (v instanceof ModuleOutput) return this.bindSignal(fn, name, v);
         if (v instanceof BaseCollection && v.length === 1) {
-            return this.bindControl(fn, name, v[0]);
+            return this.bindSignal(fn, name, v[0]);
+        }
+        if (v instanceof BaseCollection) {
+            throw new Error(
+                `${fn}: ${name} has ${v.length} channels; video inputs take one, so pick a channel such as signal[0]`,
+            );
         }
         throw new Error(
             `${fn}: ${name} must be a number or a video field, got ${describe(v)}`,

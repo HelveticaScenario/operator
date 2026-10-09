@@ -27,9 +27,11 @@ export function PerformanceWindow() {
             (created) => {
                 renderer = created;
                 const stopShader = electronAPI.video.onShader(show);
-                const stopUniform = electronAPI.video.onUniform((slot, value) =>
-                    created.setUniform(slot, value),
-                );
+                const stopUniform = electronAPI.video.onUniform((updates) => {
+                    for (const { slot, value } of updates) {
+                        created.setUniform(slot, value);
+                    }
+                });
                 unsubscribe = () => {
                     stopShader();
                     stopUniform();

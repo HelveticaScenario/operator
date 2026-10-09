@@ -18,7 +18,10 @@ import {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { QueuedTrigger } from '../shared/ipcTypes';
-import type { CompiledVideoShader } from '../shared/video/videoGraph';
+import type {
+    CompiledVideoShader,
+    VideoUniformUpdate,
+} from '../shared/video/videoGraph';
 
 /**
  * Type-safe wrapper for IPC invoke calls
@@ -242,7 +245,7 @@ export interface ElectronAPI {
             callback: (shader: CompiledVideoShader | null) => void,
         ) => () => void;
         onUniform: (
-            callback: (slot: number, value: number) => void,
+            callback: (updates: VideoUniformUpdate[]) => void,
         ) => () => void;
     };
 
@@ -522,7 +525,7 @@ const electronAPI: ElectronAPI = {
         onShader: menuEventHandler<[CompiledVideoShader | null]>(
             IPC_CHANNELS.VIDEO_ON_SHADER,
         ),
-        onUniform: menuEventHandler<[number, number]>(
+        onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
     },

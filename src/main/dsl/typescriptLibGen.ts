@@ -1787,10 +1787,11 @@ interface VideoColor {
 }
 
 /**
- * A constant, a {@link VideoField}, or a \`$slider\` / \`$btn\` / \`$toggleBtn\`
- * whose live value drives the input. Audio signals are not accepted.
+ * A constant, a {@link VideoField}, or an audio signal whose live value drives
+ * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any single-channel
+ * module output such as an LFO or envelope.
  */
-type VideoValue = number | VideoField | CollectionWithRange;
+type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange;
 
 /**
  * A constant, a {@link VideoField} or a {@link VideoColor}. Math modules work
@@ -1804,10 +1805,13 @@ type VideoSignal = VideoValue | VideoColor;
  * the video output window, which opens when a patch calls \`$v.out\`. Video
  * signals cannot be connected to audio inputs.
  *
- * Sliders and buttons can be passed anywhere a field is accepted, and moving
- * one updates the picture live. Their values are used as written, so give
- * levels and phases a 0..1 range.
+ * Sliders, buttons and audio signals can be passed anywhere a field is
+ * accepted, and the picture follows them live. Audio signals are sampled
+ * about 60 times a second and used in volts as the audio graph produces them,
+ * so scale them to the range an input expects, for example
+ * \`.range(0, 1)\`. Pass one channel; a polyphonic signal is rejected.
  * @example $v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))
+ * @example $v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.1, 0.4))))
  */
 declare const $v: {
     /**
@@ -2511,7 +2515,10 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 export function generateDSL(schemas: Schemas): string {
     // Filter out _clock (internal only) and $buffer (has a custom declaration below)
     const userFacingSchemas = schemas.filter(
-        (s) => s.name !== '_clock' && s.name !== '$buffer',
+        (s) =>
+            s.name !== '_clock' &&
+            s.name !== '_videoTap' &&
+            s.name !== '$buffer',
     );
     const tree = buildTreeFromSchemas(userFacingSchemas);
     const lines = renderTree(tree, 0);

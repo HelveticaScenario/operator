@@ -140,7 +140,7 @@ export function executePatchScript(
 
     // Create the execution environment with all DSL functions
     // Remove _clock from user-facing namespace (it's internal, used only for ROOT_CLOCK)
-    const { _clock, ...userNamespaceTree } = context.namespaceTree;
+    const { _clock, _videoTap, ...userNamespaceTree } = context.namespaceTree;
 
     if (typeof _clock !== 'function') {
         throw new Error(
@@ -628,12 +628,26 @@ export function executePatchScript(
             builder.$c(signal(value, { id })).withRange(min, max),
     });
 
-    const videoBuilder = new VideoGraphBuilder((moduleId) => {
-        const slider = controls.sliders.find((s) => s.moduleId === moduleId);
-        if (slider) return slider.value;
-        const button = controls.buttons.find((b) => b.moduleId === moduleId);
-        if (button) return button.value ? GATE_HIGH_VOLTAGE : 0;
-        return undefined;
+    if (typeof _videoTap !== 'function') {
+        throw new Error(
+            'DSL execution error: "_videoTap" module not found in schemas',
+        );
+    }
+    const videoBuilder = new VideoGraphBuilder({
+        controlValue: (moduleId) => {
+            const slider = controls.sliders.find(
+                (s) => s.moduleId === moduleId,
+            );
+            if (slider) return slider.value;
+            const button = controls.buttons.find(
+                (b) => b.moduleId === moduleId,
+            );
+            if (button) return button.value ? GATE_HIGH_VOLTAGE : 0;
+            return undefined;
+        },
+        publishTap: (output, slot) => {
+            _videoTap(output, slot);
+        },
     });
 
     /**

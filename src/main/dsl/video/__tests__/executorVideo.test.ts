@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import schemas from '@modular/core/schemas.json';
 import { executePatchScript } from '../../executor';
+import { buildLibSource } from '../../typescriptLibGen';
 
 const exec = (source: string) =>
     executePatchScript(source, schemas as never, {
@@ -101,7 +102,12 @@ describe('$v in the DSL executor', () => {
                 $v.out($v.colorize($v.osc($v.ramp(), freq), 0, 0));
             `);
             expect(video!.uniforms).toEqual([
-                { slot: 0, moduleId: '__slider_Freq', value: 4 },
+                {
+                    kind: 'control',
+                    slot: 0,
+                    moduleId: '__slider_Freq',
+                    value: 4,
+                },
             ]);
             expect(video!.wgsl).toContain('u.slots[0][0]');
         });
@@ -112,10 +118,11 @@ describe('$v in the DSL executor', () => {
                 const a = $v.osc($v.ramp(), 3, amt);
                 $v.out($v.colorize(a, amt, $slider('Other', 1, 0, 2)));
             `);
-            expect(video!.uniforms.map((u) => u.moduleId)).toEqual([
-                '__slider_Amt',
-                '__slider_Other',
-            ]);
+            expect(
+                video!.uniforms.map((u) =>
+                    u.kind === 'control' ? u.moduleId : u.kind,
+                ),
+            ).toEqual(['__slider_Amt', '__slider_Other']);
         });
 
         it('binds a button as 0 until pressed', () => {
@@ -123,14 +130,13 @@ describe('$v in the DSL executor', () => {
                 $v.out($v.colorize($btn('Flash'), 0, 0));
             `);
             expect(video!.uniforms).toEqual([
-                { slot: 0, moduleId: '__button_Flash', value: 0 },
+                {
+                    kind: 'control',
+                    slot: 0,
+                    moduleId: '__button_Flash',
+                    value: 0,
+                },
             ]);
-        });
-
-        it('rejects an audio signal', () => {
-            expect(() =>
-                exec(`$v.out($v.colorize($sine('c4'), 0, 0));`),
-            ).toThrow(/\$v\.colorize: r is an audio signal/);
         });
     });
 
@@ -165,9 +171,11 @@ describe('$v in the DSL executor', () => {
                     { zoom: $slider('Zoom', 1, 0.9, 1.1) },
                 ));
             `);
-            expect(video!.uniforms.map((u) => u.moduleId)).toEqual([
-                '__slider_Zoom',
-            ]);
+            expect(
+                video!.uniforms.map((u) =>
+                    u.kind === 'control' ? u.moduleId : u.kind,
+                ),
+            ).toEqual(['__slider_Zoom']);
         });
 
         it('keeps a loop whose result is never read from the output', () => {
@@ -197,5 +205,79 @@ describe('$v in the DSL executor', () => {
             ).join('\n');
             expect(() => exec(loops)).toThrow(/at most 7 feedback loops/);
         });
+    });
+
+    describe('audio-signal inputs', () => {
+        const taps = (source: string) =>
+            exec(source).patch.modules.filter(
+                (m) => m.moduleType === '_videoTap',
+            );
+
+        it('publishes an audio signal through a tap bound to a uniform slot', () => {
+            const result = exec(`
+                $v.out($v.colorize($sine('1hz').range(0, 1), 0, 0));
+            `);
+            expect(result.video!.uniforms).toEqual([
+                { kind: 'tap', slot: 0, tap: 0, value: 0 },
+            ]);
+            expect(result.video!.wgsl).toContain('u.slots[0][0]');
+            const [tap] = result.patch.modules.filter(
+                (m) => m.moduleType === '_videoTap',
+            );
+            expect(tap.params).toMatchObject({ slot: 0 });
+        });
+
+        it('shares one tap between every use of a signal', () => {
+            const found = taps(`
+                const lfo = $sine('1hz').range(0, 1);
+                $v.out($v.colorize(lfo, $v.osc($v.ramp(), lfo), 0));
+            `);
+            expect(found).toHaveLength(1);
+        });
+
+        it('gives different signals different taps', () => {
+            const { video } = exec(`
+                const a = $sine('1hz').range(0, 1);
+                const b = $saw('2hz').range(0, 1);
+                $v.out($v.colorize(a, b, 0));
+            `);
+            expect(
+                video!.uniforms.map((u) => u.kind === 'tap' && u.tap),
+            ).toEqual([0, 1]);
+        });
+
+        it('uses a control directly rather than through a tap', () => {
+            expect(
+                taps(`$v.out($v.colorize($slider('Level', 1, 0, 1), 0, 0));`),
+            ).toHaveLength(0);
+        });
+
+        it('rejects a polyphonic signal', () => {
+            expect(() =>
+                exec(
+                    `$v.out($v.colorize($c($sine('1hz'), $sine('2hz')), 0, 0));`,
+                ),
+            ).toThrow(/\$v\.colorize: r has 2 channels/);
+        });
+
+        it('rejects more signals than the engine has taps', () => {
+            const reads = Array.from(
+                { length: 65 },
+                (_, i) => `$v.osc($v.ramp(), $sine(${i + 1}))`,
+            ).join(', ');
+            expect(() =>
+                exec(`const f = [${reads}]; $v.out($v.colorize(f[0], 0, 0));`),
+            ).toThrow(/at most 64 audio signals/);
+        });
+
+        it('keeps the internal tap module out of the user namespace', () => {
+            expect(() => exec(`_videoTap($sine('1hz'), 0);`)).toThrow();
+        });
+    });
+
+    it('does not declare the internal tap module in the DSL typings', () => {
+        expect(buildLibSource(schemas as never, null)).not.toContain(
+            '_videoTap',
+        );
     });
 });

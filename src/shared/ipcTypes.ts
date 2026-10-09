@@ -23,7 +23,10 @@ import type {
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
-import type { CompiledVideoShader } from './video/videoGraph';
+import type {
+    CompiledVideoShader,
+    VideoUniformUpdate,
+} from './video/videoGraph';
 
 export type {
     PatchGraph,
@@ -595,7 +598,7 @@ export interface IPCHandlers {
     // Performance window
     [IPC_CHANNELS.PERFORMANCE_WINDOW_TOGGLE]: () => void;
     [IPC_CHANNELS.VIDEO_GET_SHADER]: () => CompiledVideoShader | null;
-    [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (slot: number, value: number) => void;
+    [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (updates: VideoUniformUpdate[]) => void;
     [IPC_CHANNELS.VIDEO_ON_SHADER]: (
         shader: CompiledVideoShader | null,
     ) => void;

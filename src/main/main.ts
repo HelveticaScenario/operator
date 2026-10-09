@@ -40,6 +40,7 @@ import { sendNavigateToSymbol } from './helpNavigation';
 import {
     getVideoShader,
     setVideoControl,
+    setVideoTapReader,
     togglePerformanceWindow,
     updateVideoShader,
 } from './performanceWindow';
@@ -977,6 +978,7 @@ registerIPCHandler(
 );
 
 registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
+setVideoTapReader((count) => synth.getVideoTaps(count));
 
 registerIPCHandler('PERFORMANCE_WINDOW_TOGGLE', () =>
     togglePerformanceWindow(),
