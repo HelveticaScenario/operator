@@ -10,12 +10,8 @@ import type {
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
 declare const MAIN_WINDOW_VITE_NAME: string;
 
-/** ~60 Hz: often enough that a tap's ring never wraps, rare enough to stay idle. */
-const TAP_POLL_MS = 16;
-
 let performanceWindow: BrowserWindow | null = null;
 let latestShader: CompiledVideoShader | null = null;
-let tapTimer: NodeJS.Timeout | null = null;
 let tapSource: TapSource | null = null;
 /** How many samples of each tap earlier polls have already taken. */
 const tapHeads = new Map<number, number>();
@@ -47,12 +43,13 @@ function neededTaps(shader: CompiledVideoShader | null): Set<number> {
 }
 
 /**
- * Sends the window every audio sample its taps have produced since the last
- * poll. The renderer plays them back against its own clock, so the signals it
- * reads are as smooth as the audio, however the engine's callbacks fall.
+ * Every audio sample the shader's taps have produced since the last pull. The
+ * renderer asks once per display frame and plays the samples back against its
+ * own clock, so the signals it reads are as smooth as the audio however the
+ * engine's callbacks fall.
  */
-function pollTaps(): void {
-    if (tapSource === null || performanceWindow === null) return;
+export function pullTapSamples(): VideoTapSamples[] {
+    if (tapSource === null) return [];
     const chunks: VideoTapSamples[] = [];
     const sampleRate = tapSource.sampleRate();
     for (const tap of neededTaps(latestShader)) {
@@ -66,28 +63,7 @@ function pollTaps(): void {
             });
         }
     }
-    if (chunks.length > 0) {
-        performanceWindow.webContents.send(
-            IPC_CHANNELS.VIDEO_ON_TAP_SAMPLES,
-            chunks,
-        );
-    }
-}
-
-/**
- * Polls the engine only while the window is open and the shader reads audio
- * signals, so a patch without them costs no timer.
- */
-function syncTapPolling(): void {
-    const needed =
-        performanceWindow !== null && neededTaps(latestShader).size > 0;
-    if (needed && tapTimer === null) {
-        tapTimer = setInterval(pollTaps, TAP_POLL_MS);
-        pollTaps();
-    } else if (!needed && tapTimer !== null) {
-        clearInterval(tapTimer);
-        tapTimer = null;
-    }
+    return chunks;
 }
 
 function createPerformanceWindow(): BrowserWindow {
@@ -120,7 +96,6 @@ function createPerformanceWindow(): BrowserWindow {
     window.once('ready-to-show', () => window.showInactive());
     window.on('closed', () => {
         performanceWindow = null;
-        syncTapPolling();
     });
     return window;
 }
@@ -135,7 +110,6 @@ export function updateVideoShader(shader: CompiledVideoShader | null): void {
         performanceWindow = createPerformanceWindow();
     }
     performanceWindow?.webContents.send(IPC_CHANNELS.VIDEO_ON_SHADER, shader);
-    syncTapPolling();
 }
 
 /**

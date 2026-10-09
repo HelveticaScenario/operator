@@ -39,6 +39,7 @@ import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
 import {
     getVideoShader,
+    pullTapSamples,
     setVideoControl,
     setVideoTapSource,
     togglePerformanceWindow,
@@ -985,6 +986,8 @@ setVideoTapSource({
     read: (tap, since) => synth.getVideoTapChunk(tap, since),
     sampleRate: () => synth.sampleRate(),
 });
+
+registerIPCHandler('VIDEO_PULL_TAP_SAMPLES', () => pullTapSamples());
 
 // Region averages computed by the performance window drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {

@@ -250,9 +250,7 @@ export interface ElectronAPI {
         onUniform: (
             callback: (updates: VideoUniformUpdate[]) => void,
         ) => () => void;
-        onTapSamples: (
-            callback: (chunks: VideoTapSamples[]) => void,
-        ) => () => void;
+        pullTapSamples: () => Promise<VideoTapSamples[]>;
         sendPreviewFrame: (frame: VideoPreviewFrame) => Promise<void>;
         sendCvValues: (values: VideoCvValue[]) => Promise<void>;
         onPreviewFrame: (
@@ -539,9 +537,7 @@ const electronAPI: ElectronAPI = {
         onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
-        onTapSamples: menuEventHandler<[VideoTapSamples[]]>(
-            IPC_CHANNELS.VIDEO_ON_TAP_SAMPLES,
-        ),
+        pullTapSamples: () => invokeIPC('VIDEO_PULL_TAP_SAMPLES'),
         sendPreviewFrame: (frame) => invokeIPC('VIDEO_PREVIEW_FRAME', frame),
         sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
         onPreviewFrame: menuEventHandler<[VideoPreviewFrame]>(

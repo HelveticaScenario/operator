@@ -36,6 +36,9 @@ export class VideoRenderer {
     private pendingSlots = new Map<number, number>();
     private frameHandle = 0;
     private frameIndex = 0;
+    private tapSource: (() => Promise<VideoTapSamples[]>) | null = null;
+    /** True while a request for audio samples is waiting on the engine. */
+    private pulling = false;
     private previewSink: ((frame: VideoPreviewFrame) => void) | null = null;
     private cvSink: ((values: VideoCvValue[]) => void) | null = null;
     private readonly startMs = performance.now();
@@ -144,15 +147,24 @@ export class VideoRenderer {
         this.program?.setSlot(slot, value);
     }
 
-    /** Adds audio samples the engine produced since the last call. */
-    pushTapSamples(chunks: VideoTapSamples[]): void {
+    /**
+     * Where audio samples come from: asked once per frame, and only while the
+     * shader reads an audio signal, for whatever the engine has produced since.
+     */
+    setTapSource(source: (() => Promise<VideoTapSamples[]>) | null): void {
+        this.tapSource = source;
+    }
+
+    /** Adds audio samples that have just arrived. */
+    private pushTapSamples(chunks: VideoTapSamples[]): void {
+        const now = performance.now();
         for (const { tap, samples, sampleRate } of chunks) {
             let stream = this.streams.get(tap);
             if (stream === undefined) {
                 stream = new TapStream();
                 this.streams.set(tap, stream);
             }
-            stream.push(samples, sampleRate);
+            stream.push(samples, sampleRate, now);
         }
     }
 
@@ -270,6 +282,20 @@ export class VideoRenderer {
         this.fitCanvas();
 
         const program = this.program;
+        if (
+            program !== null &&
+            this.tapSource !== null &&
+            !this.pulling &&
+            (program.tapSlots.length > 0 || program.histories.length > 0)
+        ) {
+            this.pulling = true;
+            this.tapSource()
+                .then((chunks) => this.pushTapSamples(chunks))
+                .catch(() => undefined)
+                .finally(() => {
+                    this.pulling = false;
+                });
+        }
         if (program !== null) {
             this.buffers.resize(
                 program.bufferCount,
