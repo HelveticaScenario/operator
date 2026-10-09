@@ -20,6 +20,7 @@ import {
 import type { QueuedTrigger } from '../shared/ipcTypes';
 import type {
     CompiledVideoShader,
+    VideoPreviewFrame,
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
 
@@ -246,6 +247,10 @@ export interface ElectronAPI {
         ) => () => void;
         onUniform: (
             callback: (updates: VideoUniformUpdate[]) => void,
+        ) => () => void;
+        sendPreviewFrame: (frame: VideoPreviewFrame) => Promise<void>;
+        onPreviewFrame: (
+            callback: (frame: VideoPreviewFrame) => void,
         ) => () => void;
     };
 
@@ -527,6 +532,10 @@ const electronAPI: ElectronAPI = {
         ),
         onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
+        ),
+        sendPreviewFrame: (frame) => invokeIPC('VIDEO_PREVIEW_FRAME', frame),
+        onPreviewFrame: menuEventHandler<[VideoPreviewFrame]>(
+            IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME,
         ),
     },
 

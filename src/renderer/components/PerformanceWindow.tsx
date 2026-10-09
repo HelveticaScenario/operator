@@ -26,6 +26,9 @@ export function PerformanceWindow() {
         VideoRenderer.create(canvas, abort.signal).then(
             (created) => {
                 renderer = created;
+                created.setPreviewSink((frame) => {
+                    void electronAPI.video.sendPreviewFrame(frame);
+                });
                 const stopShader = electronAPI.video.onShader(show);
                 const stopUniform = electronAPI.video.onUniform((updates) => {
                     for (const { slot, value } of updates) {

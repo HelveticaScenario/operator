@@ -826,6 +826,7 @@ registerIPCHandler(
                 buttons,
                 callSiteSpans,
                 video,
+                videoPreviews,
             } = executePatchScript(source, schemas, {
                 inputChannels: synth.inputChannels(),
                 sampleRate: synth.sampleRate(),
@@ -951,6 +952,7 @@ registerIPCHandler(
                     sourceLocationMap: sourceLocationRecord,
                     success: false,
                     updateId,
+                    videoPreviews,
                 };
             }
 
@@ -965,6 +967,7 @@ registerIPCHandler(
                 sourceLocationMap: sourceLocationRecord,
                 success: true,
                 updateId,
+                videoPreviews,
             };
         } catch (error) {
             const errorMessage =
@@ -979,6 +982,13 @@ registerIPCHandler(
 
 registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
 setVideoTapReader((count) => synth.getVideoTaps(count));
+
+// Preview frames drawn by the performance window go to the editor.
+registerIPCHandler('VIDEO_PREVIEW_FRAME', (frame) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME, frame);
+    }
+});
 
 registerIPCHandler('PERFORMANCE_WINDOW_TOGGLE', () =>
     togglePerformanceWindow(),

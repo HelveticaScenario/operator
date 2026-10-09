@@ -54,6 +54,25 @@ export type VideoUniform = {
       }
 );
 
+/** How the editor draws a preview. */
+export type VideoPreviewView = 'image' | 'waveform' | 'vectorscope';
+
+/** Editor-side description of one `$v.preview` call. */
+export interface VideoPreviewSite {
+    view: VideoPreviewView;
+    /** The call site, as V8 reports it: 1-based, with line-1 columns shifted. */
+    sourceLocation?: { line: number; column: number };
+}
+
+/** One drawn preview, as tightly packed RGBA8 rows from the top. */
+export interface VideoPreviewFrame {
+    /** Position among the shader's previews. */
+    index: number;
+    width: number;
+    height: number;
+    data: Uint8Array;
+}
+
 /** A new value for one uniform slot. */
 export interface VideoUniformUpdate {
     slot: number;

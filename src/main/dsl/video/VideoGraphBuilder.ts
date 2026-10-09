@@ -4,6 +4,8 @@ import {
     type VideoGraph,
     type VideoNode,
     type VideoPreview,
+    type VideoPreviewSite,
+    type VideoPreviewView,
     type VideoUniform,
     type VideoValue,
     type VideoValueType,
@@ -41,17 +43,9 @@ export interface VideoGraphHost {
     sourceLocation(): { line: number; column: number } | undefined;
 }
 
-export type VideoPreviewView = 'image' | 'waveform' | 'vectorscope';
-
 export interface VideoPreviewConfig {
     /** How the editor draws the signal (default 'image'). */
     view?: VideoPreviewView;
-}
-
-/** Editor-side description of one `$v.preview` call. */
-export interface VideoPreviewSite {
-    view: VideoPreviewView;
-    sourceLocation?: { line: number; column: number };
 }
 
 const PREVIEW_VIEWS: readonly string[] = ['image', 'waveform', 'vectorscope'];

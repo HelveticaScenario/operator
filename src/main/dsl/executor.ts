@@ -42,11 +42,11 @@ import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
-import {
-    VideoGraphBuilder,
-    type VideoPreviewSite,
-} from './video/VideoGraphBuilder';
-import type { CompiledVideoShader } from '../../shared/video/videoGraph';
+import { VideoGraphBuilder } from './video/VideoGraphBuilder';
+import type {
+    CompiledVideoShader,
+    VideoPreviewSite,
+} from '../../shared/video/videoGraph';
 import { compileVideoGraph } from './video/wgslCompiler';
 
 // Augment Array.prototype with pipe() for TypeScript
