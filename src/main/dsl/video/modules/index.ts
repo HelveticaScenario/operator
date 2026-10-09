@@ -19,6 +19,7 @@ import {
     mult,
     multColor,
 } from './math';
+import { noise } from './noise';
 import { osc } from './osc';
 import { out } from './out';
 import { ramp } from './ramp';
@@ -48,6 +49,7 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     mixColor,
     mult,
     multColor,
+    noise,
     osc,
     out,
     posterize,

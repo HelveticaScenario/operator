@@ -486,4 +486,28 @@ describe('$v in the DSL executor', () => {
             );
         });
     });
+
+    describe('noise', () => {
+        it('compiles to value noise of its three coordinates', () => {
+            const { video } = exec(`
+                $v.out($v.hsv($v.noise($v.mult($v.ramp(), 4), $v.ramp('v'), $v.time)));
+            `);
+            expect(video!.wgsl).toContain('fn noise_hash(');
+            expect(video!.wgsl).toContain('fn noise_value(');
+            expect(video!.wgsl).toMatch(
+                /noise_value\(vec3f\(v\d, v\d, u\.time\)\)/,
+            );
+        });
+
+        it('takes a constant z by default', () => {
+            const { video } = exec(`$v.out($v.hsv($v.noise(0.5, 0.5)));`);
+            expect(video!.wgsl).toContain('noise_value(vec3f(0.5, 0.5, 0.0))');
+        });
+
+        it('rejects a color coordinate', () => {
+            expect(() => exec(`$v.noise($v.hsv(0), 0);`)).toThrow(
+                /\$v\.noise: x must be a number or a video field/,
+            );
+        });
+    });
 });

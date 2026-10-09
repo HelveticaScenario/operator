@@ -121,6 +121,28 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'noise',
+        group: 'Generators',
+        description:
+            'Smooth value noise between 0 and 1. One unit of any coordinate is one cell of the noise, so scaling the coordinates sets the grain; `z` moves through the noise, which animates it when fed `$v.time`.',
+        params: [
+            { name: 'x', description: 'Horizontal coordinate' },
+            { name: 'y', description: 'Vertical coordinate' },
+            {
+                name: 'z',
+                description:
+                    'Position through the noise, such as time (default 0)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.mult($v.time, 0.5))))",
+            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise($v.mult($v.ramp('r'), 10), $v.mult($v.ramp('a'), 6), $v.time), 0.5, 0.05)))",
+        ],
+        declarations: [
+            'noise(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
+        ],
+    },
+    {
         name: 'shape',
         group: 'Generators',
         description:

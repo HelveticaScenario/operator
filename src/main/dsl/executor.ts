@@ -957,6 +957,7 @@ export function executePatchScript(
             min: videoBuilder.min,
             mix: videoBuilder.mix,
             mult: videoBuilder.mult,
+            noise: videoBuilder.noise,
             osc: videoBuilder.osc,
             out: videoBuilder.out,
             preview: videoBuilder.preview,

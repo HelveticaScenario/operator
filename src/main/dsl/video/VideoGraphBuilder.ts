@@ -375,6 +375,14 @@ export class VideoGraphBuilder {
             levels: this.asField('$v.posterize', 'levels', levels),
         });
 
+    /** Smooth value noise between 0 and 1; `z` moves through it. */
+    noise = (x: VideoSource, y: VideoSource, z: VideoSource = 0): VideoOutput =>
+        this.addNode('noise', 'field', {
+            x: this.asField('$v.noise', 'x', x),
+            y: this.asField('$v.noise', 'y', y),
+            z: this.asField('$v.noise', 'z', z),
+        });
+
     /** Combines three fields into a color. */
     colorize = (r: VideoSource, g: VideoSource, b: VideoSource): VideoOutput =>
         this.addNode('colorize', 'color', {
