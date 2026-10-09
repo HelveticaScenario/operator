@@ -41,6 +41,11 @@ import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p } from './miniNotation';
+import { VideoGraphBuilder } from './video/VideoGraphBuilder';
+import {
+    compileVideoGraph,
+    type CompiledVideoShader,
+} from './video/wgslCompiler';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -65,6 +70,8 @@ export interface DSLExecutionResult {
     buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
+    /** Shader for the video output window; null when the patch has no `$v.out` */
+    video: CompiledVideoShader | null;
 }
 
 export interface WavsFolderNode {
@@ -262,6 +269,7 @@ export function executePatchScript(
         }
         builder.setScopeXY(pairs, xRange, yRange, captureSourceLocation());
     };
+    const videoBuilder = new VideoGraphBuilder();
     const $setTimeSignature = (numerator: number, denominator: number) => {
         if (!Number.isInteger(numerator) || numerator < 1) {
             throw new Error(
@@ -907,6 +915,14 @@ export function executePatchScript(
         $setEndOfChainCb,
         // XY background oscilloscope
         $scopeXY,
+        // Video synthesis
+        $v: {
+            colorize: videoBuilder.colorize,
+            osc: videoBuilder.osc,
+            out: videoBuilder.out,
+            ramp: videoBuilder.ramp,
+            time: videoBuilder.time,
+        },
         $buffer,
         $delay,
         $ott,
@@ -999,6 +1015,7 @@ export function executePatchScript(
         const resultBuilder = context.getBuilder();
         const patch = resultBuilder.toPatch();
         const sourceLocationMap = resultBuilder.getSourceLocationMap();
+        const videoGraph = videoBuilder.build();
 
         return {
             buttons: controls.buttons,
@@ -1007,6 +1024,7 @@ export function executePatchScript(
             patch,
             sliders: controls.sliders,
             sourceLocationMap,
+            video: videoGraph === null ? null : compileVideoGraph(videoGraph),
         };
     } catch (error) {
         if (
