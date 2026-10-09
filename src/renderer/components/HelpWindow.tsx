@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import Markdown from 'react-markdown';
+import { VideoHelp } from './VideoHelp';
 import electronAPI from '../electronAPI';
 import type {
     DslTypeName,
@@ -24,7 +25,13 @@ import {
 } from '../../shared/dsl/schemaTypeResolver';
 import './HelpWindow.css';
 
-type Page = 'getting-started' | 'hotkeys' | 'globals' | 'types' | 'reference';
+type Page =
+    | 'getting-started'
+    | 'hotkeys'
+    | 'globals'
+    | 'types'
+    | 'reference'
+    | 'video';
 
 /**
  * Regex pattern matching all DSL type names for linkification.
@@ -381,6 +388,8 @@ export const HelpWindow: React.FC = () => {
                     </div>
                 );
             }
+            case 'video':
+                return <VideoHelp />;
             case 'hotkeys':
                 return (
                     <div>
@@ -640,6 +649,12 @@ export const HelpWindow: React.FC = () => {
                     onClick={() => setActivePage('reference')}
                 >
                     Reference
+                </button>
+                <button
+                    className={activePage === 'video' ? 'active' : ''}
+                    onClick={() => setActivePage('video')}
+                >
+                    Video
                 </button>
             </div>
             <div className="content">{renderContent()}</div>

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import schemas from '@modular/core/schemas.json';
 import { executePatchScript } from '../../executor';
 import { buildLibSource } from '../../typescriptLibGen';
+import { VIDEO_DOCS } from '../../../../shared/dsl/videoDocs';
 
 const exec = (source: string) =>
     executePatchScript(source, schemas as never, {
@@ -349,5 +350,15 @@ describe('$v in the DSL executor', () => {
                 exec(`$v.out($v.colorize($v.ramp('q'), 0, 0));`),
             ).toThrow(/param "axis" must be one of h, v, d, r, a/);
         });
+    });
+
+    it('documents exactly the members of $v', () => {
+        let members: string[] = [];
+        try {
+            exec(`throw new Error('members:' + Object.keys($v).join(','));`);
+        } catch (error) {
+            members = (error as Error).message.split('members:')[1].split(',');
+        }
+        expect(members.sort()).toEqual(VIDEO_DOCS.map((d) => d.name).sort());
     });
 });
