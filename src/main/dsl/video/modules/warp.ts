@@ -82,8 +82,8 @@ export const channel: VideoModuleDef = {
     params: {
         channel: { values: ['r', 'g', 'b', 'luma'], default: 'luma' },
     },
-    emit: ({ input }, { channel }) =>
-        channel === 'luma'
+    emit: ({ input }, { channel: which }) =>
+        which === 'luma'
             ? `dot(${input}, vec3f(0.299, 0.587, 0.114))`
-            : `${input}.${channel}`,
+            : `${input}.${which}`,
 };
