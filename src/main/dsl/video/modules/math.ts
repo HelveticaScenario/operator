@@ -77,3 +77,33 @@ export const mixColor: VideoModuleDef = {
     params: {},
     emit: ({ a, b, amount }) => `mix(${a}, ${b}, ${unit(amount)})`,
 };
+
+/** The larger of two values; with 0..1 fields this is a union of shapes. */
+export const max: VideoModuleDef = {
+    inputs: { a: 'field', b: 'field' },
+    output: 'field',
+    params: {},
+    emit: ({ a, b }) => `max(${a}, ${b})`,
+};
+
+export const maxColor: VideoModuleDef = {
+    inputs: { a: 'color', b: 'color' },
+    output: 'color',
+    params: {},
+    emit: ({ a, b }) => `max(${a}, ${b})`,
+};
+
+/** The smaller of two values; with 0..1 fields this is an intersection of shapes. */
+export const min: VideoModuleDef = {
+    inputs: { a: 'field', b: 'field' },
+    output: 'field',
+    params: {},
+    emit: ({ a, b }) => `min(${a}, ${b})`,
+};
+
+export const minColor: VideoModuleDef = {
+    inputs: { a: 'color', b: 'color' },
+    output: 'color',
+    params: {},
+    emit: ({ a, b }) => `min(${a}, ${b})`,
+};

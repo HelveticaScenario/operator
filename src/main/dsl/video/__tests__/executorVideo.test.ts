@@ -280,4 +280,74 @@ describe('$v in the DSL executor', () => {
             '_videoTap',
         );
     });
+
+    describe('coordinate ramps and waveshaping', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('compiles an untransformed ramp to the bare frame coordinate', () => {
+            const wgsl = wgslOf(`$v.out($v.colorize($v.ramp(), 0, 0));`);
+            expect(wgsl).toContain('let v0: f32 = uv.x;');
+        });
+
+        it('routes a transformed ramp through video_transform', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.colorize($v.ramp('v', { rotate: 0.1, zoom: 2 }), 0, 0));`,
+            );
+            expect(wgsl).toContain(
+                'video_transform(uv, 2.0, 0.1, vec2f(0.0, 0.0)).y',
+            );
+        });
+
+        it('offers radial and angular ramps', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.colorize($v.ramp('r'), $v.ramp('a'), 0));`,
+            );
+            expect(wgsl).toContain('ramp_radius(uv)');
+            expect(wgsl).toContain('ramp_angle(uv)');
+        });
+
+        it('declares the shared transform once when ramps and feedback both use it', () => {
+            const wgsl = wgslOf(`
+                const r = $v.ramp('h', { rotate: 0.1 });
+                $v.out($v.feedback((prev) => $v.mix($v.hsv(r), prev, 0.9), { rotate: 0.01 }));
+            `);
+            expect(wgsl.match(/fn video_transform/g)).toHaveLength(1);
+        });
+
+        it('lets a slider drive a ramp transform', () => {
+            const { video } = exec(`
+                const spin = $slider('Spin', 0, -0.5, 0.5);
+                $v.out($v.hsv($v.ramp('a', { rotate: spin })));
+            `);
+            expect(video!.uniforms).toHaveLength(1);
+        });
+
+        it('compiles min, max, wrap and fold', () => {
+            const wgsl = wgslOf(`
+                const x = $v.ramp();
+                const y = $v.ramp('v');
+                $v.out($v.colorize(
+                    $v.max($v.wrap(x, 3), $v.fold(y, 4)),
+                    $v.min(x, y),
+                    0,
+                ));
+            `);
+            expect(wgsl).toContain('fract(');
+            expect(wgsl).toMatch(/max\(v\d, v\d\)/);
+            expect(wgsl).toMatch(/min\(v\d, v\d\)/);
+        });
+
+        it('applies min and max per channel to colors', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.max($v.hsv($v.ramp()), $v.hsv($v.ramp('v'))));`,
+            );
+            expect(wgsl).toMatch(/let v\d: vec3f = max\(v\d, v\d\);/);
+        });
+
+        it('rejects an unknown ramp axis', () => {
+            expect(() =>
+                exec(`$v.out($v.colorize($v.ramp('q'), 0, 0));`),
+            ).toThrow(/param "axis" must be one of h, v, d, r, a/);
+        });
+    });
 });

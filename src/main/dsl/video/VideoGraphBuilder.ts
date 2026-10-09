@@ -42,6 +42,17 @@ export interface VideoOscConfig {
     shape?: 'sine' | 'triangle' | 'saw' | 'square';
 }
 
+export interface VideoRampConfig {
+    /** Magnification about the center (default 1). */
+    zoom?: VideoSource;
+    /** Turns; positive turns the pattern clockwise (default 0). */
+    rotate?: VideoSource;
+    /** Horizontal move, as a fraction of frame width (default 0). */
+    shiftX?: VideoSource;
+    /** Vertical move, as a fraction of frame height (default 0). */
+    shiftY?: VideoSource;
+}
+
 export interface VideoFeedbackConfig {
     /** Magnification of the previous frame about the center (default 1). */
     zoom?: VideoSource;
@@ -200,9 +211,26 @@ export class VideoGraphBuilder {
         );
     }
 
-    /** Scan ramp from 0 to 1 along the horizontal, vertical or diagonal axis. */
-    ramp = (axis: 'h' | 'v' | 'd' = 'h'): VideoOutput =>
-        this.addNode('ramp', 'field', {}, { axis });
+    /**
+     * Scan ramp over the frame, optionally zoomed, rotated and shifted. `h` and
+     * `v` run 0 to 1 across and up, `d` along the diagonal, `r` is the distance
+     * from the center and `a` the angle around it.
+     */
+    ramp = (
+        axis: 'h' | 'v' | 'd' | 'r' | 'a' = 'h',
+        config?: VideoRampConfig,
+    ): VideoOutput =>
+        this.addNode(
+            'ramp',
+            'field',
+            {
+                zoom: this.asField('$v.ramp', 'zoom', config?.zoom ?? 1),
+                rotate: this.asField('$v.ramp', 'rotate', config?.rotate ?? 0),
+                shiftX: this.asField('$v.ramp', 'shiftX', config?.shiftX ?? 0),
+                shiftY: this.asField('$v.ramp', 'shiftY', config?.shiftY ?? 0),
+            },
+            { axis },
+        );
 
     /** Periodic shaper: `freq` cycles per unit of `input`, offset by `phase` cycles. */
     osc = (
@@ -253,6 +281,28 @@ export class VideoGraphBuilder {
     /** Absolute difference. Colors differ per channel. */
     diff = (a: VideoSource, b: VideoSource): VideoOutput =>
         this.arith('$v.diff', 'diff', { a, b });
+
+    /** The larger of two values; colors take it per channel. */
+    max = (a: VideoSource, b: VideoSource): VideoOutput =>
+        this.arith('$v.max', 'max', { a, b });
+
+    /** The smaller of two values; colors take it per channel. */
+    min = (a: VideoSource, b: VideoSource): VideoOutput =>
+        this.arith('$v.min', 'min', { a, b });
+
+    /** Multiplies by `gain`, then keeps the fractional part. */
+    wrap = (input: VideoSource, gain: VideoSource = 1): VideoOutput =>
+        this.addNode('wrap', 'field', {
+            input: this.asField('$v.wrap', 'input', input),
+            gain: this.asField('$v.wrap', 'gain', gain),
+        });
+
+    /** Multiplies by `gain`, then reflects whatever passes 1 back down. */
+    fold = (input: VideoSource, gain: VideoSource = 1): VideoOutput =>
+        this.addNode('fold', 'field', {
+            input: this.asField('$v.fold', 'input', input),
+            gain: this.asField('$v.fold', 'gain', gain),
+        });
 
     /** Complement: 1 - input. */
     invert = (input: VideoSource): VideoOutput =>

@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { VideoGraph } from '../../../../shared/video/videoGraph';
 import { compileVideoGraph } from '../wgslCompiler';
 
+/** Identity transform: the ramp compiles to the bare frame coordinate. */
+const rampInputs = {
+    zoom: { kind: 'const', value: 1 },
+    rotate: { kind: 'const', value: 0 },
+    shiftX: { kind: 'const', value: 0 },
+    shiftY: { kind: 'const', value: 0 },
+} as const;
+
 const stripes: VideoGraph = {
     nodes: [
-        { id: 'x', kind: 'ramp', inputs: {} },
+        { id: 'x', kind: 'ramp', inputs: rampInputs },
         {
             id: 'wave',
             kind: 'osc',
@@ -52,6 +60,24 @@ describe('compileVideoGraph', () => {
           }
 
           @group(0) @binding(0) var<uniform> u: Uniforms;
+
+          fn video_transform(uv: vec2f, zoom: f32, rotate: f32, shift: vec2f) -> vec2f {
+              let aspect = vec2f(u.resolution.x / u.resolution.y, 1.0);
+              let p = (uv - vec2f(0.5) - shift) * aspect / max(zoom, 0.00001);
+              let a = rotate * 6.28318530718;
+              let c = cos(a);
+              let s = sin(a);
+              return vec2f(c * p.x - s * p.y, s * p.x + c * p.y) / aspect + vec2f(0.5);
+          }
+
+          fn ramp_radius(q: vec2f) -> f32 {
+              return length((q - vec2f(0.5)) * vec2f(u.resolution.x / u.resolution.y, 1.0));
+          }
+
+          fn ramp_angle(q: vec2f) -> f32 {
+              let p = (q - vec2f(0.5)) * vec2f(u.resolution.x / u.resolution.y, 1.0);
+              return atan2(p.y, p.x) / 6.28318530718 + 0.5;
+          }
 
           @vertex
           fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -125,7 +151,7 @@ describe('compileVideoGraph', () => {
                         kind: 'out',
                         inputs: { input: { kind: 'node', id: 'later' } },
                     },
-                    { id: 'later', kind: 'ramp', inputs: {} },
+                    { id: 'later', kind: 'ramp', inputs: rampInputs },
                 ],
                 output: 'o',
             },
@@ -135,7 +161,7 @@ describe('compileVideoGraph', () => {
             'type mismatch',
             {
                 nodes: [
-                    { id: 'x', kind: 'ramp', inputs: {} },
+                    { id: 'x', kind: 'ramp', inputs: rampInputs },
                     {
                         id: 'o',
                         kind: 'out',
@@ -153,7 +179,7 @@ describe('compileVideoGraph', () => {
                     {
                         id: 'x',
                         kind: 'ramp',
-                        inputs: {},
+                        inputs: rampInputs,
                         params: { axis: 'z' },
                     },
                 ],
@@ -163,14 +189,17 @@ describe('compileVideoGraph', () => {
         ],
         [
             'field output',
-            { nodes: [{ id: 'x', kind: 'ramp', inputs: {} }], output: 'x' },
+            {
+                nodes: [{ id: 'x', kind: 'ramp', inputs: rampInputs }],
+                output: 'x',
+            },
             /must be a color node/,
         ],
         [
             'slot out of range',
             {
                 nodes: [
-                    { id: 'x', kind: 'ramp', inputs: {} },
+                    { id: 'x', kind: 'ramp', inputs: rampInputs },
                     {
                         id: 'w',
                         kind: 'osc',
@@ -189,7 +218,7 @@ describe('compileVideoGraph', () => {
             'non-finite constant',
             {
                 nodes: [
-                    { id: 'x', kind: 'ramp', inputs: {} },
+                    { id: 'x', kind: 'ramp', inputs: rampInputs },
                     {
                         id: 'w',
                         kind: 'osc',
@@ -263,7 +292,7 @@ describe('compileVideoGraph feedback', () => {
         );
         expect(shader.wgsl).toContain('@location(1) fb0: vec4f');
         expect(shader.wgsl).toContain(
-            'feedback_mirror(feedback_coord(uv, 1.01',
+            'feedback_mirror(video_transform(uv, 1.01',
         );
         expect(shader.wgsl).toMatch(
             /return FragOut\(vec4f\(v3, 1.0\), vec4f\(v2, 1.0\)\);/,

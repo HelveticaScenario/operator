@@ -1,3 +1,4 @@
+import { TRANSFORM_HELPER } from './transform';
 import type { VideoModuleDef } from './types';
 
 /**
@@ -18,32 +19,23 @@ export const feedbackRead: VideoModuleDef = {
     params: {
         edge: { values: ['clamp', 'repeat', 'mirror'], default: 'clamp' },
     },
-    helpers: `fn feedback_coord(uv: vec2f, zoom: f32, rotate: f32, shift: vec2f) -> vec2f {
-    let aspect = vec2f(u.resolution.x / u.resolution.y, 1.0);
-    let p = (uv - vec2f(0.5) - shift) * aspect / max(zoom, 0.00001);
-    let a = rotate * 6.28318530718;
-    let c = cos(a);
-    let s = sin(a);
-    return vec2f(c * p.x - s * p.y, s * p.x + c * p.y) / aspect + vec2f(0.5);
-}
-
-fn feedback_clamp(q: vec2f) -> vec2f {
+    helpers: [
+        TRANSFORM_HELPER,
+        `fn feedback_clamp(q: vec2f) -> vec2f {
     return clamp(q, vec2f(0.0), vec2f(1.0));
-}
-
-fn feedback_repeat(q: vec2f) -> vec2f {
+}`,
+        `fn feedback_repeat(q: vec2f) -> vec2f {
     return fract(q);
-}
-
-fn feedback_mirror(q: vec2f) -> vec2f {
+}`,
+        `fn feedback_mirror(q: vec2f) -> vec2f {
     return vec2f(1.0) - abs(vec2f(1.0) - 2.0 * fract(q * 0.5));
-}
-
-fn feedback_texcoord(q: vec2f) -> vec2f {
+}`,
+        `fn feedback_texcoord(q: vec2f) -> vec2f {
     return vec2f(q.x, 1.0 - q.y);
 }`,
+    ],
     emit: ({ zoom, rotate, shiftX, shiftY }, { edge }, buffer) =>
-        `textureSampleLevel(fb_${buffer}, fb_sampler, feedback_texcoord(feedback_${edge}(feedback_coord(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY})))), 0.0).rgb`,
+        `textureSampleLevel(fb_${buffer}, fb_sampler, feedback_texcoord(feedback_${edge}(video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY})))), 0.0).rgb`,
 };
 
 /** Stores its input in the feedback buffer for the next frame to read. */

@@ -10,6 +10,10 @@ import {
     diffColor,
     invert,
     invertColor,
+    max,
+    maxColor,
+    min,
+    minColor,
     mix,
     mixColor,
     mult,
@@ -20,6 +24,7 @@ import { out } from './out';
 import { ramp } from './ramp';
 import { shape } from './shape';
 import type { VideoModuleDef } from './types';
+import { fold, wrap } from './waveshape';
 
 export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     add,
@@ -30,10 +35,15 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     diffColor,
     feedbackRead,
     feedbackWrite,
+    fold,
     hsv,
     invert,
     invertColor,
     key,
+    max,
+    maxColor,
+    min,
+    minColor,
     mix,
     mixColor,
     mult,
@@ -44,4 +54,5 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     procAmp,
     ramp,
     shape,
+    wrap,
 };

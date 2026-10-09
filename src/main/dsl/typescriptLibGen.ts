@@ -1821,11 +1821,30 @@ declare const $v: {
      */
     readonly time: VideoField;
     /**
-     * Scan ramp from 0 to 1 across the frame.
-     * @param axis \`'h'\` horizontal (default), \`'v'\` vertical, \`'d'\` diagonal
+     * Scan ramp over the frame. Oscillators, shapes and the other modules
+     * turn ramps into patterns, so moving or turning a ramp moves or turns
+     * everything built from it.
+     * @param axis \`'h'\` horizontal 0..1 (default), \`'v'\` vertical 0..1, \`'d'\`
+     *   diagonal, \`'r'\` distance from the center (0.5 at the top and bottom
+     *   edges), \`'a'\` angle around the center, 0..1 once around
+     * @param config.zoom Magnification about the center; above 1 enlarges the pattern (default 1)
+     * @param config.rotate Turns; positive turns the pattern clockwise (default 0)
+     * @param config.shiftX Horizontal move as a fraction of the width; positive moves right (default 0)
+     * @param config.shiftY Vertical move as a fraction of the height; positive moves up (default 0)
      * @example $v.out($v.colorize($v.ramp(), $v.ramp('v'), 0.5))
+     * @example $v.out($v.hsv($v.osc($v.ramp('r'), 6, $v.time)))
+     * @example $v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 0.1) })))
+     * @example $v.out($v.colorize($v.osc($v.ramp('h', { rotate: 0.125, zoom: 2 }), 8), 0.2, 0.5))
      */
-    ramp(axis?: 'h' | 'v' | 'd'): VideoField;
+    ramp(
+        axis?: 'h' | 'v' | 'd' | 'r' | 'a',
+        config?: {
+            zoom?: VideoValue;
+            rotate?: VideoValue;
+            shiftX?: VideoValue;
+            shiftY?: VideoValue;
+        },
+    ): VideoField;
     /**
      * Periodic shaper: \`freq\` cycles per unit of \`input\`, offset by \`phase\`
      * cycles.
@@ -1905,6 +1924,32 @@ declare const $v: {
      */
     diff(a: VideoValue, b: VideoValue): VideoField;
     diff(a: VideoSignal, b: VideoSignal): VideoColor;
+    /**
+     * The larger of two values. With shapes this is their union; colors take
+     * the larger channel.
+     * @example $v.out($v.hsv(0.1, 1, $v.max($v.shape($v.ramp(), $v.ramp('v'), 0.2), $v.shape($v.add($v.ramp(), 0.2), $v.ramp('v'), 0.2))))
+     */
+    max(a: VideoValue, b: VideoValue): VideoField;
+    max(a: VideoSignal, b: VideoSignal): VideoColor;
+    /**
+     * The smaller of two values. With shapes this is their intersection;
+     * colors take the smaller channel.
+     * @example $v.out($v.hsv(0.5, 1, $v.min($v.shape($v.ramp(), $v.ramp('v'), 0.3), $v.shape($v.add($v.ramp(), 0.2), $v.ramp('v'), 0.3))))
+     */
+    min(a: VideoValue, b: VideoValue): VideoField;
+    min(a: VideoSignal, b: VideoSignal): VideoColor;
+    /**
+     * Multiplies by \`gain\`, then keeps the fractional part: a sawtooth of the
+     * input that repeats \`gain\` times as the input goes from 0 to 1.
+     * @example $v.out($v.hsv($v.wrap($v.ramp(), 4)))
+     */
+    wrap(input: VideoValue, gain?: VideoValue): VideoField;
+    /**
+     * Multiplies by \`gain\`, then reflects whatever passes 1 back down: a
+     * triangle of the input that matches it where it stays under 1 / gain.
+     * @example $v.out($v.hsv($v.fold($v.ramp(), 3)))
+     */
+    fold(input: VideoValue, gain?: VideoValue): VideoField;
     /**
      * Complement, 1 minus the input.
      * @example $v.out($v.invert($v.hsv($v.ramp())))

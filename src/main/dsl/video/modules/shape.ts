@@ -12,13 +12,14 @@ export const shape: VideoModuleDef = {
     params: {
         shape: { values: ['circle', 'box', 'diamond'], default: 'circle' },
     },
-    helpers: `fn shape_edge(d: f32, size: f32, softness: f32) -> f32 {
+    helpers: [
+        `fn shape_edge(d: f32, size: f32, softness: f32) -> f32 {
     return 1.0 - clamp((d - size) / max(softness, 0.00001) + 0.5, 0.0, 1.0);
-}
-
-fn shape_offset(x: f32, y: f32) -> vec2f {
+}`,
+        `fn shape_offset(x: f32, y: f32) -> vec2f {
     return vec2f((x - 0.5) * u.resolution.x / u.resolution.y, y - 0.5);
 }`,
+    ],
     emit: ({ x, y, size, softness }, { shape: kind }) => {
         const p = `shape_offset(${x}, ${y})`;
         const distance = {

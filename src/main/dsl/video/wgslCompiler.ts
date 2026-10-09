@@ -24,7 +24,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const types = new Map<string, VideoValueType>();
     const names = new Map<string, string>();
     const lines: string[] = [];
-    const helpers = new Map<string, string>();
+    const helpers = new Set<string>();
     /** Local variable holding what each feedback buffer stores this frame. */
     const bufferWrites = new Map<number, string>();
     let bufferCount = 0;
@@ -114,7 +114,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                     `feedback buffer must be an integer from 0 to ${MAX_FEEDBACK_BUFFERS - 1}`,
                 );
             }
-            if (def.helpers !== undefined) helpers.set(node.kind, def.helpers);
+            for (const helper of def.helpers ?? []) helpers.add(helper);
             const local = `v${index}`;
             const wgslType = def.output === 'field' ? 'f32' : 'vec3f';
             lines.push(
@@ -181,7 +181,7 @@ ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}:
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-${bufferDeclarations}${[...helpers.values()].map((h) => `\n${h}\n`).join('')}
+${bufferDeclarations}${[...helpers].map((h) => `\n${h}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
