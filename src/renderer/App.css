@@ -95,9 +95,20 @@
     box-shadow: 8px 0 0 0 var(--code-backing);
 }
 
-.editor-panel.has-video-backdrop .monaco-editor .line-numbers {
+/* Only the digits are backed, not the empty space to their left, and the
+ * backing carries on to the code. */
+.editor-panel.has-video-backdrop .monaco-editor .line-numbers::first-line {
     background: var(--code-backing);
-    box-shadow: 15px 0 0 0 var(--code-backing);
+}
+
+.editor-panel.has-video-backdrop .monaco-editor .line-numbers::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 100%;
+    width: 15px;
+    background: var(--code-backing);
 }
 
 /* Lissajous background canvas — sits behind Monaco, never receives events. */
