@@ -751,6 +751,13 @@ describe('$v in the DSL executor', () => {
             });
         });
 
+        it('keeps the audio on what out returns', () => {
+            const modules = audioModule(
+                `$v.video('clips/loop.mp4', { loop: [1], fit: 'contain' }).out().audio.out();`,
+            );
+            expect(modules).toHaveLength(1);
+        });
+
         it('makes one player however often the audio is read', () => {
             const modules = audioModule(`
                 const clip = $v.video('clips/loop.mp4');

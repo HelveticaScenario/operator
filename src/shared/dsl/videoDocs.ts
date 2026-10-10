@@ -369,7 +369,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "const clip = $v.video('clips/loop.mp4');\nclip.out();\nclip.audio.out();",
         ],
         declarations: [
-            "video(\n    path: string,\n    config?: {\n        fit?: 'cover' | 'contain' | 'stretch';\n        speed?: number;\n        loop?: [start: number, end?: number];\n    },\n): VideoColor & { readonly audio: Collection };",
+            "video(\n    path: string,\n    config?: {\n        fit?: 'cover' | 'contain' | 'stretch';\n        speed?: number;\n        loop?: [start: number, end?: number];\n    },\n): VideoFile;",
         ],
     },
     {
@@ -1389,10 +1389,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'Shows a color behind the code, and in the performance window when it is open. A field is shown as a gray picture. Last call wins. It returns its input unchanged, so it can sit in the middle of a chain.',
         params: [],
         examples: ['$v.out($v.colorize(5, 0, 0))'],
-        declarations: [
-            'out(input: VideoField): VideoField;',
-            'out(input: VideoColor): VideoColor;',
-        ],
+        declarations: ['out<T extends VideoField | VideoColor>(input: T): T;'],
     },
 ];
 
@@ -1772,7 +1769,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         direct: true,
         description: 'Shows this in the editor and returns it.',
         declarations: [
-            "preview(config?: { view?: 'image' | 'waveform' | 'vectorscope' }): {self};",
+            "preview(config?: { view?: 'image' | 'waveform' | 'vectorscope' }): this;",
         ],
     },
     {
@@ -1788,6 +1785,6 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         direct: true,
         description:
             'Shows this behind the code, and in the performance window when it is open; a field is shown as a gray picture. Returns this unchanged, so the chain can go on.',
-        declarations: ['out(): {self};'],
+        declarations: ['out(): this;'],
     },
 ];

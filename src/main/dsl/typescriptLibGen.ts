@@ -1825,6 +1825,17 @@ ${generateVideoChainMembers('color')}
 }
 
 /**
+ * A video file's picture from \`$v.video\`: a {@link VideoColor} that also has
+ * the file's sound as \`audio\`, an audio signal. Chaining from it, such as
+ * \`.$.hsv()\`, gives a plain {@link VideoColor}; \`out\` and \`preview\` return
+ * the file itself.
+ */
+interface VideoFile extends VideoColor {
+    /** The sound of the file, playing at its speed between its loop points. */
+    readonly audio: Collection;
+}
+
+/**
  * A constant, a {@link VideoField}, or an audio signal whose live value drives
  * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any single-channel
  * module output such as an LFO or envelope. A pattern from \`$p(...)\`,
