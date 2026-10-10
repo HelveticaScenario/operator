@@ -1362,10 +1362,13 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'out',
         group: 'Output',
         description:
-            'Shows a color behind the code, and in the performance window when it is open. A field is shown as a gray picture. Last call wins.',
+            'Shows a color behind the code, and in the performance window when it is open. A field is shown as a gray picture. Last call wins. It returns its input unchanged, so it can sit in the middle of a chain.',
         params: [],
         examples: ['$v.out($v.colorize(5, 0, 0))'],
-        declarations: ['out(input: VideoSignal): void;'],
+        declarations: [
+            'out(input: VideoField): VideoField;',
+            'out(input: VideoColor): VideoColor;',
+        ],
     },
 ];
 
@@ -1391,6 +1394,7 @@ export const VIDEO_CHAIN_EXAMPLES: string[] = [
     "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 1.5).$.kaleid(6).$.hsv().out()",
     "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.5).$.pixelate(32, 18).$.hsv(4).preview().out()",
     '$v.osc($v.ramp(), 8).$.hsv().$m.kaleid(2.5, 5).out()',
+    "$v.ramp().$.osc(8).$.mult($v.ramp('v').$.osc(4)).$.hsv().out()",
     '$v.osc($v.ramp(), 8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(1.5)).out()',
     '$v.osc($v.ramp(), 8).$.hsv().pipeMix((c) => c.$.invert(), $v.osc($v.time, 1)).out()',
 ];
@@ -1489,6 +1493,15 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Multiplies by `gain`, then reflects what passes 1 back down.',
         declarations: ['fold(gain?: VideoValue): VideoField;'],
+        on: ['field'],
+    },
+    {
+        name: 'osc',
+        description:
+            'Shapes this field into a repeating wave: `freq` cycles per unit of this field, offset by `phase`.',
+        declarations: [
+            "osc(\n    freq: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square' },\n): VideoField;",
+        ],
         on: ['field'],
     },
     {
@@ -1750,7 +1763,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'out',
         direct: true,
         description:
-            'Shows this behind the code, and in the performance window when it is open; a field is shown as a gray picture.',
-        declarations: ['out(): void;'],
+            'Shows this behind the code, and in the performance window when it is open; a field is shown as a gray picture. Returns this unchanged, so the chain can go on.',
+        declarations: ['out(): {self};'],
     },
 ];

@@ -704,6 +704,39 @@ describe('$v in the DSL executor', () => {
         ).toEqual([...VIDEO_DIRECT_METHODS].sort());
     });
 
+    describe('osc and out in a chain', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('chains osc to the same shader as the nested call', () => {
+            expect(
+                wgslOf(`$v.ramp().$.osc(8, 0.5, { shape: 'saw' }).out();`),
+            ).toBe(
+                wgslOf(`$v.out($v.osc($v.ramp(), 8, 0.5, { shape: 'saw' }));`),
+            );
+        });
+
+        it('mixes an osc into the signal with $m', () => {
+            expect(() => exec(`$v.ramp().$m.osc(2.5, 8).out();`)).not.toThrow();
+        });
+
+        it('returns the signal from out, so the chain can go on', () => {
+            const once = wgslOf(`$v.ramp().$.hsv().out();`);
+            const twice = wgslOf(`
+                const c = $v.ramp().$.hsv().out();
+                c.$.invert();
+            `);
+            expect(twice).toBe(once);
+        });
+
+        it('returns the input from $v.out and keeps the last call as the picture', () => {
+            const { video } = exec(`
+                const a = $v.out($v.colorize(5, 0, 0));
+                $v.out(a.$.invert());
+            `);
+            expect(video!.wgsl).toContain('1.0 - ');
+        });
+    });
+
     describe('chaining', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
 

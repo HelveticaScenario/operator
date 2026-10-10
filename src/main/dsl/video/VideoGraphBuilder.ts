@@ -404,12 +404,13 @@ export class VideoGraphBuilder implements VideoCore {
         return this.previewSites;
     }
 
-    /** Shows `input` as the patch's picture. The last call wins. */
-    out = (input: VideoOutput): void => {
+    /** Shows `input` as the patch's picture and returns it. The last call wins. */
+    out = (input: VideoOutput): VideoOutput => {
         this.addNode('out', 'color', {
             input: this.asColorOrGray('$v.out', 'input', input),
         });
         this.outputId = this.nodes[this.nodes.length - 1].id;
+        return input;
     };
 
     /**

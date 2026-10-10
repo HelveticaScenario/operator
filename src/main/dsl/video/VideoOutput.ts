@@ -144,6 +144,7 @@ const PROCESSING: Record<string, ChainCall> = {
         o.modulateScrollX(s, modulator, scroll, speed),
     modulateScrollY: (o, s, modulator, scroll, speed) =>
         o.modulateScrollY(s, modulator, scroll, speed),
+    osc: (o, s, freq, phase, config) => o.osc(s, freq, phase, config),
     pixelate: (o, s, x, y) => o.pixelate(s, x, y),
     posterize: (o, s, levels) => o.posterize(s, levels),
     procAmp: (o, s, gain, bias, saturation) =>
