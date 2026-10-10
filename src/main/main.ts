@@ -2489,6 +2489,18 @@ const createMenu = (): void => {
                     },
                     label: 'Migrate $cheby to preserve pre-DC-blocker output...',
                 },
+                {
+                    click: (_item, focusedWindow) => {
+                        if (focusedWindow) {
+                            BrowserWindow.fromId(
+                                focusedWindow.id,
+                            )?.webContents.send(
+                                MENU_CHANNELS.MIGRATE_PHASE_SCALE,
+                            );
+                        }
+                    },
+                    label: 'Migrate phase signals to 0 to 5V...',
+                },
                 ...(!isMac
                     ? ([
                           { type: 'separator' },
