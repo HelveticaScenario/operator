@@ -314,11 +314,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'image',
         group: 'Generators',
         description:
-            'A picture from the workspace folder (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp` or `.avif`) as a color. It is read at the coordinate being drawn, so warps, kaleidoscopes and feedback move it like any other pattern. Paths are relative to the workspace folder and cannot leave it.',
+            'A picture from the workspace folder (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp` or `.avif`) as a color. It is read at the coordinate being drawn, so warps, kaleidoscopes and feedback move it like any other pattern. Paths are relative to the workspace folder and cannot leave it. An `http://` or `https://` URL works too: the app fetches it itself, so the server needs no special headers.',
         params: [
             {
                 name: 'path',
-                description: 'File to draw, relative to the workspace folder',
+                description:
+                    'File to draw, relative to the workspace folder, or an http(s) URL',
             },
             {
                 name: 'config.fit',
@@ -328,6 +329,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.image('pictures/photo.png'))",
+            "$v.out($v.image('https://example.com/photo.jpg'))",
             "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.25)).out()",
         ],
         declarations: [
@@ -338,11 +340,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'video',
         group: 'Generators',
         description:
-            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop with its sound off. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
+            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`), or a video or stream at an `http://` or `https://` URL, as a color, played in a loop with its sound off. A URL can be a video file, or an HLS stream when it ends in `.m3u8`; RTSP, RTMP and other protocols browsers cannot play are refused. The app fetches the URL itself, so the server needs no special headers. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
         params: [
             {
                 name: 'path',
-                description: 'File to play, relative to the workspace folder',
+                description:
+                    'File to play, relative to the workspace folder, or an http(s) URL of a video or an .m3u8 HLS stream',
             },
             {
                 name: 'config.fit',
@@ -364,6 +367,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.video('clips/loop.mp4'))",
             "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 2.5, 5)).$.warp({ rotate: 0.1 }).out()",
             "$v.video('clips/loop.mp4', { speed: 0.5, loop: [1, 2.5] }).out()",
+            "$v.video('https://example.com/live/stream.m3u8', { fit: 'contain' }).$.hueShift($v.osc($v.time, 0.25)).out()",
         ],
         declarations: [
             "video(\n    path: string,\n    config?: {\n        fit?: 'cover' | 'contain' | 'stretch';\n        speed?: number;\n        loop?: [start: number, end?: number];\n    },\n): VideoColor;",

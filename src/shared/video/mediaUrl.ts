@@ -1,9 +1,31 @@
 /** Scheme the app serves workspace media over; the host part is a fixed label. */
 export const MEDIA_SCHEME = 'operator-media';
 const MEDIA_HOST = 'workspace';
+const REMOTE_HOST = 'remote';
 
-/** The URL the renderer loads the workspace file `path` from. */
+/** Whether a media path is an http or https URL on the network, not a workspace file. */
+export function isRemoteMedia(path: string): boolean {
+    return /^https?:\/\//i.test(path);
+}
+
+/** Whether a network URL is an HLS playlist, which the browser engine cannot play itself. */
+export function isHlsUrl(url: string): boolean {
+    try {
+        return new URL(url).pathname.toLowerCase().endsWith('.m3u8');
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The URL the renderer loads the workspace file or network URL `path` from.
+ * Network media goes through the app, which adds the CORS headers a shader
+ * needs to read a video's pixels.
+ */
 export function mediaUrl(path: string): string {
+    if (isRemoteMedia(path)) {
+        return `${MEDIA_SCHEME}://${REMOTE_HOST}/${encodeURIComponent(path)}`;
+    }
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return `${MEDIA_SCHEME}://${MEDIA_HOST}/${encoded}`;
 }
@@ -29,6 +51,25 @@ export function parseMediaUrl(url: string): string | null {
             .split('/')
             .map(decodeURIComponent)
             .join('/');
+    } catch {
+        return null;
+    }
+}
+
+/** The network URL a media URL stands for, or null when it is not one. */
+export function parseRemoteMediaUrl(url: string): string | null {
+    let parsed: URL;
+    try {
+        parsed = new URL(url);
+    } catch {
+        return null;
+    }
+    if (parsed.protocol !== `${MEDIA_SCHEME}:` || parsed.host !== REMOTE_HOST) {
+        return null;
+    }
+    try {
+        const remote = decodeURIComponent(parsed.pathname.slice(1));
+        return isRemoteMedia(remote) ? remote : null;
     } catch {
         return null;
     }

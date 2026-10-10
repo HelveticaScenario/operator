@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SourceTextures } from './SourceTextures';
 
+const hls = vi.hoisted(() => ({ attach: vi.fn() }));
+vi.mock('./hls', () => ({ attachHls: hls.attach }));
+
 /** A GPU device that records nothing but lets textures be made and destroyed. */
 function fakeDevice() {
     const texture = () => ({
@@ -312,6 +315,88 @@ describe('SourceTextures', () => {
             sources.restart();
             expect(play).toHaveBeenCalled();
             expect(seek).not.toHaveBeenCalled();
+        });
+    });
+
+    describe('network media', () => {
+        const mp4 = 'https://cdn.example.com/clip.mp4';
+        const playlist = 'https://cdn.example.com/live/index.m3u8';
+        const settle = async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+        };
+
+        beforeEach(() => {
+            hls.attach.mockReset();
+            hls.attach.mockResolvedValue(vi.fn());
+        });
+
+        it('plays a video address through the app', () => {
+            const sources = new SourceTextures(fakeDevice(), vi.fn());
+            sources.sync([video(mp4)]);
+            expect(videos[0].getAttribute('src')).toBe(
+                `operator-media://remote/${encodeURIComponent(mp4)}`,
+            );
+            expect(hls.attach).not.toHaveBeenCalled();
+        });
+
+        it('hands an HLS playlist to the stream player instead of the element', () => {
+            const sources = new SourceTextures(fakeDevice(), vi.fn());
+            sources.sync([video(playlist)]);
+            expect(hls.attach).toHaveBeenCalledWith(
+                videos[0],
+                playlist,
+                expect.any(Function),
+            );
+            expect(videos[0].getAttribute('src')).toBeNull();
+        });
+
+        it('stops the stream player when the video is dropped', async () => {
+            const release = vi.fn();
+            hls.attach.mockResolvedValue(release);
+            const sources = new SourceTextures(fakeDevice(), vi.fn());
+            sources.sync([video(playlist)]);
+            await settle();
+            sources.sync([]);
+            expect(release).toHaveBeenCalled();
+        });
+
+        it('stops a stream player that finishes starting after the video was dropped', async () => {
+            const release = vi.fn();
+            let finish: (stop: () => void) => void = () => undefined;
+            hls.attach.mockReturnValue(
+                new Promise<() => void>((resolve) => (finish = resolve)),
+            );
+            const sources = new SourceTextures(fakeDevice(), vi.fn());
+            sources.sync([video(playlist)]);
+            sources.sync([]);
+            finish(release);
+            await settle();
+            expect(release).toHaveBeenCalled();
+        });
+
+        it('reports a stream that cannot start, naming the address', async () => {
+            const onError = vi.fn();
+            hls.attach.mockRejectedValue(new Error('the stream failed'));
+            const sources = new SourceTextures(fakeDevice(), onError);
+            sources.sync([video(playlist)]);
+            await settle();
+            expect(onError).toHaveBeenCalledWith(
+                expect.stringContaining(
+                    `video "${playlist}": the stream failed`,
+                ),
+            );
+        });
+
+        it('says what an address must give when its video will not play', async () => {
+            const onError = vi.fn();
+            play.mockRejectedValueOnce(new Error('no supported source'));
+            const sources = new SourceTextures(fakeDevice(), onError);
+            sources.sync([video(mp4)]);
+            await settle();
+            expect(onError).toHaveBeenCalledWith(
+                expect.stringContaining('the address must give'),
+            );
         });
     });
 });

@@ -1,12 +1,14 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 const protocolMock = vi.hoisted(() => ({
+    fetch: vi.fn(),
     handler: null as ((request: Request) => Promise<Response>) | null,
 }));
 vi.mock('electron', () => ({
+    net: { fetch: protocolMock.fetch },
     protocol: {
         handle: (
             _scheme: string,
@@ -169,5 +171,86 @@ describe('serving media', () => {
 
     it('does not find a file that is missing', async () => {
         expect((await get('clips/none.mp4')).status).toBe(404);
+    });
+});
+
+describe('serving network media', () => {
+    let handler: (request: Request) => Promise<Response>;
+    beforeAll(() => {
+        handleMediaProtocol(() => null);
+        handler = protocolMock.handler!;
+    });
+    const remote = 'https://cdn.example.com/live/clip.mp4?token=a b';
+    const get = (url: string, range?: string) =>
+        handler(
+            new Request(mediaUrl(url), {
+                headers: range === undefined ? {} : { Range: range },
+            }),
+        );
+
+    it('fetches the address and answers with the CORS header a shader needs', async () => {
+        protocolMock.fetch.mockResolvedValueOnce(
+            new Response('video-bytes', {
+                headers: { 'Content-Type': 'video/mp4' },
+            }),
+        );
+        const response = await get(remote);
+        expect(protocolMock.fetch.mock.calls.at(-1)![0]).toBe(remote);
+        expect(response.status).toBe(200);
+        expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
+        expect(response.headers.get('Content-Type')).toBe('video/mp4');
+        expect(await response.text()).toBe('video-bytes');
+    });
+
+    it('passes a byte range on and answers with the partial content', async () => {
+        protocolMock.fetch.mockResolvedValueOnce(
+            new Response('ytes', {
+                headers: { 'Content-Range': 'bytes 1-4/11' },
+                status: 206,
+            }),
+        );
+        const response = await get(remote, 'bytes=1-4');
+        const sent = protocolMock.fetch.mock.calls.at(-1)![1] as {
+            headers: Headers;
+        };
+        expect(sent.headers.get('Range')).toBe('bytes=1-4');
+        expect(response.status).toBe(206);
+        expect(response.headers.get('Content-Range')).toBe('bytes 1-4/11');
+    });
+
+    it('drops the length and encoding of a body that has already been decoded', async () => {
+        protocolMock.fetch.mockResolvedValueOnce(
+            new Response('decoded', {
+                headers: { 'Content-Encoding': 'gzip', 'Content-Length': '3' },
+            }),
+        );
+        const response = await get(remote);
+        expect(response.headers.get('Content-Encoding')).toBeNull();
+        expect(response.headers.get('Content-Length')).toBeNull();
+    });
+
+    it('passes on the status of a missing file', async () => {
+        protocolMock.fetch.mockResolvedValueOnce(
+            new Response('no', { status: 404 }),
+        );
+        expect((await get(remote)).status).toBe(404);
+    });
+
+    it('answers 502 when the address cannot be reached', async () => {
+        protocolMock.fetch.mockRejectedValueOnce(new Error('ECONNREFUSED'));
+        const response = await get(remote);
+        expect(response.status).toBe(502);
+        expect(await response.text()).toBe('ECONNREFUSED');
+    });
+
+    it('does not fetch anything that is not an http or https address', async () => {
+        protocolMock.fetch.mockClear();
+        const response = await handler(
+            new Request(
+                `operator-media://remote/${encodeURIComponent('file:///etc/passwd')}`,
+            ),
+        );
+        expect(response.status).toBe(404);
+        expect(protocolMock.fetch).not.toHaveBeenCalled();
     });
 });

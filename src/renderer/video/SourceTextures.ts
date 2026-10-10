@@ -1,6 +1,7 @@
 /// <reference types="@webgpu/types" />
 import type { VideoSourceDef } from '../../shared/video/videoGraph';
-import { mediaUrl } from '../../shared/video/mediaUrl';
+import { isHlsUrl, isRemoteMedia, mediaUrl } from '../../shared/video/mediaUrl';
+import { attachHls } from './hls';
 
 const FORMAT: GPUTextureFormat = 'rgba8unorm';
 
@@ -14,6 +15,8 @@ interface Entry {
     video: HTMLVideoElement | null;
     /** What a camera or screen is showing; stopped when the entry is dropped. */
     stream: MediaStream | null;
+    /** Stops an HLS stream's player. */
+    releaseHls: (() => void) | null;
     /** True when the video has a frame the texture has not been given yet. */
     fresh: boolean;
     disposed: boolean;
@@ -158,6 +161,7 @@ export class SourceTextures {
             def,
             disposed: false,
             fresh: false,
+            releaseHls: null,
             stream: null,
             texture: null,
             video: null,
@@ -225,7 +229,18 @@ export class SourceTextures {
             }
             this.applyPlayback(entry);
         });
-        video.src = mediaUrl(entry.def.path);
+        const { path } = entry.def;
+        if (isRemoteMedia(path) && isHlsUrl(path)) {
+            attachHls(video, path, (error) => this.fail(entry, error)).then(
+                (release) => {
+                    if (entry.disposed) release();
+                    else entry.releaseHls = release;
+                },
+                (error: unknown) => this.fail(entry, error),
+            );
+        } else {
+            video.src = mediaUrl(path);
+        }
         video.requestVideoFrameCallback(onFrame);
         this.applyPlayback(entry);
     }
@@ -323,9 +338,11 @@ export class SourceTextures {
         if (entry.disposed) return;
         const detail = error instanceof Error ? error.message : String(error);
         const hint =
-            entry.def.kind === 'video'
-                ? ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes, Motion JPEG and other codecs need converting)'
-                : '';
+            entry.def.kind !== 'video'
+                ? ''
+                : isRemoteMedia(entry.def.path)
+                  ? ' (the address must give an H.264, HEVC, VP8/VP9 or AV1 video, as mp4 or webm, or an .m3u8 HLS playlist)'
+                  : ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes, Motion JPEG and other codecs need converting)';
         const label = isLive(entry.def)
             ? entry.def.kind
             : `${entry.def.kind} "${entry.def.path}"`;
@@ -334,6 +351,7 @@ export class SourceTextures {
 
     private dispose(entry: Entry): void {
         entry.disposed = true;
+        entry.releaseHls?.();
         if (entry.stream !== null) stopStream(entry.stream);
         if (entry.video !== null) {
             entry.video.pause();

@@ -2040,6 +2040,7 @@ __metadata:
     electron: "npm:39.2.7"
     electron-squirrel-startup: "npm:^1.0.1"
     eslint-plugin-react-hooks: "npm:^7.0.1"
+    hls.js: "npm:^1.7.3"
     husky: "npm:^9.1.7"
     jsdom: "npm:^29.1.1"
     jsonc-parser: "npm:^3.3.1"
@@ -7095,6 +7096,13 @@ __metadata:
   dependencies:
     hermes-estree: "npm:0.25.1"
   checksum: 10c0/3abaa4c6f1bcc25273f267297a89a4904963ea29af19b8e4f6eabe04f1c2c7e9abd7bfc4730ddb1d58f2ea04b6fee74053d8bddb5656ec6ebf6c79cc8d14202c
+  languageName: node
+  linkType: hard
+
+"hls.js@npm:^1.7.3":
+  version: 1.7.3
+  resolution: "hls.js@npm:1.7.3"
+  checksum: 10c0/c44c0098b9f4b53cb0c2cc2301d4cad907a77c60f470fa344b8cfc5077da4ccab9590d47e5cf81100a958d4aa43d7dc7bcb6566197fd9ae170ec10cea8af3e8c
   languageName: node
   linkType: hard
 

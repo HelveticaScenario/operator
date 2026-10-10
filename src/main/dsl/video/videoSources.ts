@@ -1,3 +1,4 @@
+import { isRemoteMedia } from '../../../shared/video/mediaUrl';
 import type { VideoSourceDef } from '../../../shared/video/videoGraph';
 import {
     describe,
@@ -15,8 +16,20 @@ const FITS = ['cover', 'contain', 'stretch'];
 /** The fastest playback rate the browser engine's media element supports. */
 const MAX_SPEED = 16;
 
-/** A path inside the workspace folder, with `/` separators, or an error naming `fn`. */
-function workspacePath(
+/** A network URL, normalized, or an error naming `fn` if it cannot be one. */
+function networkUrl(fn: string, url: string): string {
+    try {
+        return new URL(url).href;
+    } catch {
+        throw new Error(`${fn}: "${url}" is not a valid URL`);
+    }
+}
+
+/**
+ * A path inside the workspace folder, with `/` separators, or an http(s) URL
+ * as given, or an error naming `fn`.
+ */
+function mediaPath(
     core: VideoCore,
     fn: string,
     path: unknown,
@@ -24,7 +37,14 @@ function workspacePath(
 ): string {
     if (typeof path !== 'string' || path === '') {
         throw new Error(
-            `${fn}: path must be a string naming a file in the workspace folder, got ${describe(path)}`,
+            `${fn}: path must be a string naming a file in the workspace folder or an http(s) URL, got ${describe(path)}`,
+        );
+    }
+    if (isRemoteMedia(path)) return networkUrl(fn, path);
+    const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(path);
+    if (scheme !== null) {
+        throw new Error(
+            `${fn}: ${scheme[1]}:// streams cannot be played; use an http or https URL, such as an .m3u8 HLS stream or an .mp4 file`,
         );
     }
     const normalized = path.replaceAll('\\', '/');
@@ -119,7 +139,7 @@ export function sourceMethods(core: VideoCore) {
             ) {
                 throw new Error(`${fn}: speed and loop apply only to video`);
             }
-            const normalized = workspacePath(core, fn, path, extensions);
+            const normalized = mediaPath(core, fn, path, extensions);
             return core.addNode(
                 'source',
                 'color',

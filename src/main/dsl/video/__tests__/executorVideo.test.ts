@@ -1601,4 +1601,74 @@ describe('$v in the DSL executor', () => {
             }
         });
     });
+
+    describe('network URLs', () => {
+        it('plays a video from an address, with no file or extension to check', () => {
+            const { video } = exec(
+                `$v.video('https://cdn.example.com/live/stream?id=7').out();`,
+            );
+            expect(video!.sources).toEqual([
+                {
+                    kind: 'video',
+                    path: 'https://cdn.example.com/live/stream?id=7',
+                },
+            ]);
+        });
+
+        it('draws an image from an address', () => {
+            const { video } = exec(
+                `$v.image('http://example.com/pictures/photo').out();`,
+            );
+            expect(video!.sources).toEqual([
+                { kind: 'image', path: 'http://example.com/pictures/photo' },
+            ]);
+        });
+
+        it('keeps the speed and loop options for a network video', () => {
+            const { video } = exec(
+                `$v.video('https://a.example/b.mp4', { speed: 2, loop: [1, 3] }).out();`,
+            );
+            expect(video!.sources).toEqual([
+                {
+                    kind: 'video',
+                    loopEnd: 3,
+                    loopStart: 1,
+                    path: 'https://a.example/b.mp4',
+                    speed: 2,
+                },
+            ]);
+        });
+
+        it('uses one source for an address written two ways', () => {
+            const { video } = exec(`
+                $v.mix($v.video('HTTPS://CDN.example.com/a.mp4'), $v.video('https://cdn.example.com/a.mp4'), 2.5).out();
+            `);
+            expect(video!.sources).toHaveLength(1);
+        });
+
+        it('refuses protocols a browser cannot play, and says what works', () => {
+            for (const url of [
+                'rtsp://camera.local/stream',
+                'rtmp://live.example/app',
+                'ftp://files.example/a.mp4',
+                'file:///etc/a.mp4',
+            ]) {
+                expect(() => exec(`$v.video('${url}');`)).toThrow(
+                    /\$v\.video: [a-z]+:\/\/ streams cannot be played; use an http or https URL/,
+                );
+            }
+        });
+
+        it('rejects an address that is not a URL', () => {
+            expect(() => exec(`$v.video('http://');`)).toThrow(
+                /\$v\.video: "http:\/\/" is not a valid URL/,
+            );
+        });
+
+        it('still keeps files inside the workspace', () => {
+            expect(() => exec(`$v.video('../a.mp4');`)).toThrow(
+                /must stay inside the workspace folder/,
+            );
+        });
+    });
 });
