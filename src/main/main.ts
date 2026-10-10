@@ -60,6 +60,7 @@ import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
 import { syphonAction, type SyphonTarget } from './syphon/syphonTarget';
+import { requestCameraAccess, screenSource } from './liveSources';
 import {
     getPerformanceWindow,
     performanceFullscreenMenu,
@@ -1109,6 +1110,8 @@ setVideoTarget(() =>
 );
 
 registerIPCHandler('VIDEO_PULL', (fresh) => pullVideo(fresh));
+registerIPCHandler('VIDEO_REQUEST_CAMERA', () => requestCameraAccess());
+registerIPCHandler('VIDEO_SCREEN_SOURCE', (display) => screenSource(display));
 
 // Region averages computed by the video renderer drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {

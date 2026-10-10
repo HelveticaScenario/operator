@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { VideoShaderUpdate } from '../../../shared/video/videoGraph';
 import electronAPI from '../../electronAPI';
 import { performanceOutput } from '../../video/PerformanceOutput';
+import { openLiveSource } from '../../video/liveSources';
 import { VideoRenderer } from '../../video/VideoRenderer';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -56,7 +57,7 @@ export function VideoBackdrop({
             }
             if (update.shader === null || creating) return;
             creating = true;
-            VideoRenderer.create(canvas, abort.signal).then(
+            VideoRenderer.create(canvas, abort.signal, openLiveSource).then(
                 (made) => {
                     creating = false;
                     created = made;

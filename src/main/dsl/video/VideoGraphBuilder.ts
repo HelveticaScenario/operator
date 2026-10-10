@@ -276,6 +276,8 @@ export class VideoGraphBuilder implements VideoCore {
             (s) =>
                 s.kind === def.kind &&
                 s.path === def.path &&
+                s.device === def.device &&
+                s.display === def.display &&
                 s.speed === def.speed &&
                 s.loopStart === def.loopStart &&
                 s.loopEnd === def.loopEnd,

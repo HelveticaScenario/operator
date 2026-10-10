@@ -370,6 +370,55 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'camera',
+        group: 'Generators',
+        description:
+            'The live picture of a camera as a color. It is read at the coordinate being drawn, so warps, kaleidoscopes and feedback move it like any other pattern. The first time a patch uses it the system asks whether Operator may use the camera; if that is refused, allow it under System Settings, Privacy & Security, Camera, and restart Operator.',
+        params: [
+            {
+                name: 'config.device',
+                description:
+                    "Part of the camera's name, matched without regard to case, such as `'FaceTime'`; the first camera by default",
+            },
+            {
+                name: 'config.fit',
+                description:
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+            },
+        ],
+        examples: [
+            '$v.out($v.camera())',
+            "$v.camera({ fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.25)).out()",
+        ],
+        declarations: [
+            "camera(config?: { device?: string; fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+        ],
+    },
+    {
+        name: 'screen',
+        group: 'Generators',
+        description:
+            'The live picture of a display as a color, read at the coordinate being drawn like `$v.camera`. The first time a patch uses it the system must allow Operator to record the screen, under System Settings, Privacy & Security, Screen Recording; after allowing it, restart Operator. Showing the display Operator itself is on draws the picture into itself, which makes a tunnel.',
+        params: [
+            {
+                name: 'config.display',
+                description: 'Which display, counting from 1 (default 1)',
+            },
+            {
+                name: 'config.fit',
+                description:
+                    "How a picture of another shape fills the frame: `'cover'` (default), `'contain'` or `'stretch'`, as for `$v.camera`",
+            },
+        ],
+        examples: [
+            '$v.out($v.screen())',
+            "$v.screen({ display: 2, fit: 'contain' }).$.hueShift($v.osc($v.time, 0.25)).out()",
+        ],
+        declarations: [
+            "screen(config?: { display?: number; fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+        ],
+    },
+    {
         name: 'shape',
         group: 'Generators',
         description:

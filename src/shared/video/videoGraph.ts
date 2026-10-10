@@ -152,11 +152,15 @@ export interface VideoGraph {
     hasOutput: boolean;
 }
 
-/** A picture or recording from the workspace folder that a patch draws from. */
+/** A picture, recording, camera or screen that a patch draws from. */
 export interface VideoSourceDef {
-    kind: 'image' | 'video';
-    /** Path relative to the workspace folder. */
+    kind: 'image' | 'video' | 'camera' | 'screen';
+    /** Path relative to the workspace folder; empty for a camera or a screen. */
     path: string;
+    /** For a camera, part of its name, matched without regard to case; the first camera when absent. */
+    device?: string;
+    /** For a screen, which display, counting from 1; the first when absent. */
+    display?: number;
     /** Playback rate of a video, 1 being normal speed and 0 paused. */
     speed?: number;
     /** Seconds into a video where playback loops back to; 0 when absent. */

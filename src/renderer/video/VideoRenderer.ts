@@ -4,7 +4,7 @@ import { HistoryTexture } from './HistoryTexture';
 import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
-import { SourceTextures } from './SourceTextures';
+import { SourceTextures, type OpenStream } from './SourceTextures';
 import { gateVerdict } from './shaderGate';
 import { TapStream } from './TapStream';
 import { alignWindow } from './alignWindow';
@@ -91,11 +91,14 @@ export class VideoRenderer {
         private readonly device: GPUDevice,
         private readonly context: GPUCanvasContext,
         private readonly format: GPUTextureFormat,
+        openStream: OpenStream | undefined,
     ) {
         this.buffers = new FeedbackBuffers(device);
         this.history = new HistoryTexture(device);
-        this.sources = new SourceTextures(device, (message) =>
-            this.errorSink?.(message),
+        this.sources = new SourceTextures(
+            device,
+            (message) => this.errorSink?.(message),
+            openStream,
         );
         this.previews = new PreviewCapture(device, (frame) =>
             this.routeFrame(frame),
@@ -117,6 +120,7 @@ export class VideoRenderer {
     static async create(
         canvas: HTMLCanvasElement,
         signal: AbortSignal,
+        openStream?: OpenStream,
     ): Promise<VideoRenderer> {
         if (!navigator.gpu) throw new Error('WebGPU is not available');
         const adapter = await navigator.gpu.requestAdapter();
@@ -139,7 +143,7 @@ export class VideoRenderer {
         }
         const format = navigator.gpu.getPreferredCanvasFormat();
         context.configure({ alphaMode: 'opaque', device, format });
-        return new VideoRenderer(canvas, device, context, format);
+        return new VideoRenderer(canvas, device, context, format, openStream);
     }
 
     /**

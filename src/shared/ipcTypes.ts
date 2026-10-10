@@ -428,6 +428,8 @@ export const IPC_CHANNELS = {
     VIDEO_ON_SHADER: 'modular:video:on-shader',
     VIDEO_ON_UNIFORM: 'modular:video:on-uniform',
     VIDEO_PULL: 'modular:video:pull',
+    VIDEO_REQUEST_CAMERA: 'modular:video:request-camera',
+    VIDEO_SCREEN_SOURCE: 'modular:video:screen-source',
     VIDEO_PREVIEW_FRAME: 'modular:video:preview-frame',
     VIDEO_CV_VALUES: 'modular:video:cv-values',
     VIDEO_ON_PREVIEW_FRAME: 'modular:video:on-preview-frame',
@@ -637,6 +639,10 @@ export interface IPCHandlers {
     [IPC_CHANNELS.VIDEO_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_PULL]: (fresh: boolean) => VideoPull;
+    [IPC_CHANNELS.VIDEO_REQUEST_CAMERA]: () => Promise<boolean>;
+    [IPC_CHANNELS.VIDEO_SCREEN_SOURCE]: (
+        display: number,
+    ) => Promise<{ id: string } | { error: string }>;
     [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (updates: VideoUniformUpdate[]) => void;
     [IPC_CHANNELS.VIDEO_ON_SHADER]: (update: VideoShaderUpdate) => void;
 

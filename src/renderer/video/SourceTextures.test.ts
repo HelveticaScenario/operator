@@ -196,4 +196,122 @@ describe('SourceTextures', () => {
         await Promise.resolve();
         expect(onError).not.toHaveBeenCalled();
     });
+
+    describe('cameras and screens', () => {
+        const camera = (device?: string) => ({
+            kind: 'camera' as const,
+            path: '',
+            ...(device === undefined ? {} : { device }),
+        });
+        const screen = { kind: 'screen' as const, path: '' };
+
+        function fakeStream() {
+            const track = { addEventListener: vi.fn(), stop: vi.fn() };
+            const stream = {
+                getTracks: () => [track],
+                getVideoTracks: () => [track],
+            } as unknown as MediaStream;
+            return { stream, track };
+        }
+
+        const settle = async () => {
+            await Promise.resolve();
+            await Promise.resolve();
+        };
+
+        it('shows the stream the opener gives in a video element and plays it', async () => {
+            const { stream } = fakeStream();
+            const open = vi.fn(() => Promise.resolve(stream));
+            const sources = new SourceTextures(fakeDevice(), vi.fn(), open);
+            sources.sync([camera('FaceTime')]);
+            await settle();
+            expect(open).toHaveBeenCalledWith(camera('FaceTime'));
+            expect((videos[0] as { srcObject?: unknown }).srcObject).toBe(
+                stream,
+            );
+            expect(play).toHaveBeenCalled();
+        });
+
+        it('stops the stream when the source is dropped', async () => {
+            const { stream, track } = fakeStream();
+            const sources = new SourceTextures(fakeDevice(), vi.fn(), () =>
+                Promise.resolve(stream),
+            );
+            sources.sync([screen]);
+            await settle();
+            sources.sync([]);
+            expect(track.stop).toHaveBeenCalled();
+        });
+
+        it('stops a stream that arrives after its source was dropped', async () => {
+            const { stream, track } = fakeStream();
+            let deliver: (s: MediaStream) => void = () => undefined;
+            const sources = new SourceTextures(
+                fakeDevice(),
+                vi.fn(),
+                () => new Promise<MediaStream>((r) => (deliver = r)),
+            );
+            sources.sync([camera()]);
+            sources.sync([]);
+            deliver(stream);
+            await settle();
+            expect(track.stop).toHaveBeenCalled();
+            expect((videos[0] as { srcObject?: unknown }).srcObject).toBeNull();
+        });
+
+        it('names a camera in the error when it cannot be opened', async () => {
+            const onError = vi.fn();
+            const sources = new SourceTextures(fakeDevice(), onError, () =>
+                Promise.reject(new Error('camera access is not allowed')),
+            );
+            sources.sync([camera()]);
+            await settle();
+            expect(onError).toHaveBeenCalledWith(
+                'camera: camera access is not allowed',
+            );
+        });
+
+        it('reports a screen when live sources are not available', () => {
+            const onError = vi.fn();
+            const sources = new SourceTextures(fakeDevice(), onError);
+            sources.sync([screen]);
+            expect(onError).toHaveBeenCalledWith(
+                'screen: live sources are not available here',
+            );
+        });
+
+        it('opens a new stream when the camera changes, rather than reuse the element', async () => {
+            const open = vi.fn(() => Promise.resolve(fakeStream().stream));
+            const sources = new SourceTextures(fakeDevice(), vi.fn(), open);
+            sources.sync([camera('a')]);
+            sources.sync([camera('b')]);
+            await settle();
+            expect(open).toHaveBeenCalledTimes(2);
+            expect(videos).toHaveLength(2);
+        });
+
+        it('keeps a camera that is still wanted when the set is synced again', async () => {
+            const open = vi.fn(() => Promise.resolve(fakeStream().stream));
+            const sources = new SourceTextures(fakeDevice(), vi.fn(), open);
+            sources.sync([camera('a')]);
+            sources.sync([camera('a')]);
+            await settle();
+            expect(open).toHaveBeenCalledTimes(1);
+        });
+
+        it('pauses and resumes a camera with the engine without seeking it', async () => {
+            const sources = new SourceTextures(fakeDevice(), vi.fn(), () =>
+                Promise.resolve(fakeStream().stream),
+            );
+            sources.sync([camera()]);
+            await settle();
+            const seek = vi.spyOn(videos[0], 'currentTime', 'set');
+            sources.pause();
+            expect(pause).toHaveBeenCalled();
+            play.mockClear();
+            sources.restart();
+            expect(play).toHaveBeenCalled();
+            expect(seek).not.toHaveBeenCalled();
+        });
+    });
 });

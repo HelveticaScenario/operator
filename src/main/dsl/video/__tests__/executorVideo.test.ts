@@ -1547,4 +1547,58 @@ describe('$v in the DSL executor', () => {
             }
         });
     });
+
+    describe('camera and screen', () => {
+        it('draws a camera as a color source with no file', () => {
+            const { video } = exec(`$v.camera().out();`);
+            expect(video!.sources).toEqual([{ kind: 'camera', path: '' }]);
+            expect(video!.wgsl).toContain('video_source(src_0, uv, 1)');
+        });
+
+        it('chooses a camera by name and a display by number', () => {
+            expect(
+                exec(`$v.camera({ device: 'FaceTime' }).out();`).video!.sources,
+            ).toEqual([{ device: 'FaceTime', kind: 'camera', path: '' }]);
+            expect(
+                exec(`$v.screen({ display: 2 }).out();`).video!.sources,
+            ).toEqual([{ display: 2, kind: 'screen', path: '' }]);
+            expect(exec(`$v.screen().out();`).video!.sources).toEqual([
+                { kind: 'screen', path: '' },
+            ]);
+        });
+
+        it('shares a source between uses of one camera and splits different ones', () => {
+            const same = exec(`
+                $v.mix($v.camera(), $v.camera({ fit: 'contain' }), 2.5).out();
+            `);
+            expect(same.video!.sources).toHaveLength(1);
+            const different = exec(`
+                $v.mix($v.camera({ device: 'a' }), $v.camera({ device: 'b' }), 2.5).out();
+            `);
+            expect(different.video!.sources).toHaveLength(2);
+        });
+
+        it('takes the fit option as images do', () => {
+            expect(
+                exec(`$v.camera({ fit: 'stretch' }).out();`).video!.wgsl,
+            ).toContain('video_source(src_0, uv, 0)');
+            expect(() => exec(`$v.screen({ fit: 'zoom' });`)).toThrow(
+                /\$v\.screen: fit must be one of cover, contain, stretch/,
+            );
+        });
+
+        it('rejects a camera name or display that cannot be right', () => {
+            expect(() => exec(`$v.camera({ device: '' });`)).toThrow(
+                /\$v\.camera: device must be part of a camera's name/,
+            );
+            expect(() => exec(`$v.camera({ device: 3 });`)).toThrow(
+                /\$v\.camera: device must be part of a camera's name/,
+            );
+            for (const display of ['0', '1.5', "'two'"]) {
+                expect(() =>
+                    exec(`$v.screen({ display: ${display} });`),
+                ).toThrow(/\$v\.screen: display must be a whole number from 1/);
+            }
+        });
+    });
 });

@@ -4,30 +4,45 @@ import { mediaUrl } from '../../shared/video/mediaUrl';
 
 const FORMAT: GPUTextureFormat = 'rgba8unorm';
 
+/** Opens the stream of a camera or a screen. */
+export type OpenStream = (def: VideoSourceDef) => Promise<MediaStream>;
+
 interface Entry {
     def: VideoSourceDef;
     texture: GPUTexture | null;
     view: GPUTextureView;
     video: HTMLVideoElement | null;
+    /** What a camera or screen is showing; stopped when the entry is dropped. */
+    stream: MediaStream | null;
     /** True when the video has a frame the texture has not been given yet. */
     fresh: boolean;
     disposed: boolean;
 }
 
+const isLive = (def: VideoSourceDef) =>
+    def.kind === 'camera' || def.kind === 'screen';
+
 const sameSource = (a: VideoSourceDef, b: VideoSourceDef) =>
     a.kind === b.kind &&
     a.path === b.path &&
+    a.device === b.device &&
+    a.display === b.display &&
     a.speed === b.speed &&
     a.loopStart === b.loopStart &&
     a.loopEnd === b.loopEnd;
 
+/** The same file, whatever its playback settings; a camera or screen has none. */
 const sameFile = (a: VideoSourceDef, b: VideoSourceDef) =>
-    a.kind === b.kind && a.path === b.path;
+    !isLive(a) && a.kind === b.kind && a.path === b.path;
+
+const stopStream = (stream: MediaStream) => {
+    for (const track of stream.getTracks()) track.stop();
+};
 
 /**
- * The pictures and recordings a shader samples, as GPU textures. Each is a
- * black texel until it has loaded; a video's texture is refreshed whenever the
- * video has a new frame.
+ * The pictures, recordings, cameras and screens a shader samples, as GPU
+ * textures. Each is a black texel until it has loaded; a video's texture is
+ * refreshed whenever the video has a new frame.
  */
 export class SourceTextures {
     /** Changes whenever a texture is created, replaced or destroyed. */
@@ -41,6 +56,7 @@ export class SourceTextures {
     constructor(
         private readonly device: GPUDevice,
         private readonly onError: (message: string) => void,
+        private readonly openStream?: OpenStream,
     ) {
         this.placeholderTexture = device.createTexture({
             format: FORMAT,
@@ -93,7 +109,7 @@ export class SourceTextures {
     restart(): void {
         this.playing = true;
         for (const entry of this.order) {
-            if (entry.video !== null) {
+            if (entry.video !== null && !isLive(entry.def)) {
                 entry.video.currentTime = entry.def.loopStart ?? 0;
             }
             this.syncPlayback(entry);
@@ -142,12 +158,14 @@ export class SourceTextures {
             def,
             disposed: false,
             fresh: false,
+            stream: null,
             texture: null,
             video: null,
             view: this.placeholder,
         };
         if (def.kind === 'image') void this.loadImage(entry);
-        else this.loadVideo(entry);
+        else if (def.kind === 'video') this.loadVideo(entry);
+        else this.loadLive(entry);
         return entry;
     }
 
@@ -212,6 +230,50 @@ export class SourceTextures {
         this.applyPlayback(entry);
     }
 
+    /** Shows a camera or a screen: a video element with a stream for a source. */
+    private loadLive(entry: Entry): void {
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        entry.video = video;
+        const onFrame = () => {
+            if (entry.disposed) return;
+            entry.fresh = true;
+            video.requestVideoFrameCallback(onFrame);
+        };
+        video.requestVideoFrameCallback(onFrame);
+        video.addEventListener('error', () =>
+            this.fail(
+                entry,
+                video.error?.message || 'the picture could not be shown',
+            ),
+        );
+        if (this.openStream === undefined) {
+            this.fail(entry, 'live sources are not available here');
+            return;
+        }
+        this.openStream(entry.def).then(
+            (stream) => {
+                if (entry.disposed) {
+                    stopStream(stream);
+                    return;
+                }
+                entry.stream = stream;
+                stream
+                    .getVideoTracks()[0]
+                    ?.addEventListener('ended', () =>
+                        this.fail(
+                            entry,
+                            'the source stopped sending a picture',
+                        ),
+                    );
+                video.srcObject = stream;
+                this.syncPlayback(entry);
+            },
+            (error: unknown) => this.fail(entry, error),
+        );
+    }
+
     /** Gives a video its speed and loop points, moving it into the loop if it is outside. */
     private applyPlayback(entry: Entry): void {
         const { video } = entry;
@@ -264,13 +326,18 @@ export class SourceTextures {
             entry.def.kind === 'video'
                 ? ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes, Motion JPEG and other codecs need converting)'
                 : '';
-        this.onError(`${entry.def.kind} "${entry.def.path}": ${detail}${hint}`);
+        const label = isLive(entry.def)
+            ? entry.def.kind
+            : `${entry.def.kind} "${entry.def.path}"`;
+        this.onError(`${label}: ${detail}${hint}`);
     }
 
     private dispose(entry: Entry): void {
         entry.disposed = true;
+        if (entry.stream !== null) stopStream(entry.stream);
         if (entry.video !== null) {
             entry.video.pause();
+            entry.video.srcObject = null;
             entry.video.removeAttribute('src');
             entry.video.load();
         }

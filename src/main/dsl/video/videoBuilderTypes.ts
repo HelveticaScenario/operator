@@ -153,6 +153,16 @@ export interface VideoMediaConfig {
     fit?: 'cover' | 'contain' | 'stretch';
 }
 
+export interface VideoCameraConfig extends VideoMediaConfig {
+    /** Part of the camera's name, matched without regard to case; the first camera by default. */
+    device?: string;
+}
+
+export interface VideoScreenConfig extends VideoMediaConfig {
+    /** Which display to show, counting from 1 (default 1). */
+    display?: number;
+}
+
 export interface VideoVideoConfig extends VideoMediaConfig {
     /** Playback rate: 1 is normal speed, 0 holds the current frame (default 1). */
     speed?: number;

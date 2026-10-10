@@ -1,7 +1,10 @@
 import type { VideoSourceDef } from '../../../shared/video/videoGraph';
 import {
     describe,
+    type VideoCameraConfig,
     type VideoCore,
+    type VideoMediaConfig,
+    type VideoScreenConfig,
     type VideoVideoConfig,
 } from './videoBuilderTypes';
 import type { VideoOutput } from './VideoOutput';
@@ -83,17 +86,33 @@ function playback(
     return out;
 }
 
-/** The `$v` functions that read pictures and recordings from the workspace folder. */
+/** How a source that does not match the frame is fitted, or an error naming `fn`. */
+function fitOf(fn: string, config: VideoMediaConfig | undefined): string {
+    const fit = config?.fit ?? 'cover';
+    if (!FITS.includes(fit)) {
+        throw new Error(
+            `${fn}: fit must be one of ${FITS.join(', ')}, got "${fit}"`,
+        );
+    }
+    return fit;
+}
+
+/** The `$v` functions that read pictures, recordings, cameras and screens. */
 export function sourceMethods(core: VideoCore) {
+    const live = (def: VideoSourceDef, fit: string): VideoOutput =>
+        core.addNode(
+            'source',
+            'color',
+            {},
+            { fit },
+            undefined,
+            undefined,
+            core.sourceIndex(def),
+        );
     const make =
         (fn: string, kind: 'image' | 'video', extensions: string[]) =>
         (path: string, config?: VideoVideoConfig): VideoOutput => {
-            const fit = config?.fit ?? 'cover';
-            if (!FITS.includes(fit)) {
-                throw new Error(
-                    `${fn}: fit must be one of ${FITS.join(', ')}, got "${fit}"`,
-                );
-            }
+            const fit = fitOf(fn, config);
             if (
                 kind === 'image' &&
                 (config?.speed !== undefined || config?.loop !== undefined)
@@ -127,5 +146,47 @@ export function sourceMethods(core: VideoCore) {
          * `speed` and between the `loop` points.
          */
         video: make('$v.video', 'video', VIDEO_EXTENSIONS),
+
+        /** The live picture of a camera, as a color. */
+        camera: (config?: VideoCameraConfig): VideoOutput => {
+            const fit = fitOf('$v.camera', config);
+            const { device } = config ?? {};
+            if (
+                device !== undefined &&
+                (typeof device !== 'string' || device.trim() === '')
+            ) {
+                throw new Error(
+                    `$v.camera: device must be part of a camera's name, got ${describe(device)}`,
+                );
+            }
+            return live(
+                { kind: 'camera', path: '', ...(device ? { device } : {}) },
+                fit,
+            );
+        },
+
+        /** The live picture of a display, as a color. */
+        screen: (config?: VideoScreenConfig): VideoOutput => {
+            const fit = fitOf('$v.screen', config);
+            const { display } = config ?? {};
+            if (
+                display !== undefined &&
+                (!Number.isInteger(display) || display < 1)
+            ) {
+                throw new Error(
+                    `$v.screen: display must be a whole number from 1, got ${describe(display)}`,
+                );
+            }
+            return live(
+                {
+                    kind: 'screen',
+                    path: '',
+                    ...(display !== undefined && display !== 1
+                        ? { display }
+                        : {}),
+                },
+                fit,
+            );
+        },
     };
 }

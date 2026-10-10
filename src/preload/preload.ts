@@ -256,6 +256,12 @@ export interface ElectronAPI {
         ) => () => void;
         /** `fresh` restarts every tap from the engine's newest samples. */
         pull: (fresh: boolean) => Promise<VideoPull>;
+        /** Asks the system for camera access when it has not been asked; whether it is allowed. */
+        requestCameraAccess: () => Promise<boolean>;
+        /** The capture source of display number `display`, counting from 1, or why there is none. */
+        getScreenSource: (
+            display: number,
+        ) => Promise<{ id: string } | { error: string }>;
         sendPreviewFrame: (frame: VideoPreviewFrame) => Promise<void>;
         sendCvValues: (values: VideoCvValue[]) => Promise<void>;
         onPreviewFrame: (
@@ -550,6 +556,8 @@ const electronAPI: ElectronAPI = {
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
         pull: (fresh) => invokeIPC('VIDEO_PULL', fresh),
+        requestCameraAccess: () => invokeIPC('VIDEO_REQUEST_CAMERA'),
+        getScreenSource: (display) => invokeIPC('VIDEO_SCREEN_SOURCE', display),
         sendPreviewFrame: (frame) => invokeIPC('VIDEO_PREVIEW_FRAME', frame),
         sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
         onPreviewFrame: menuEventHandler<[VideoPreviewFrame]>(
