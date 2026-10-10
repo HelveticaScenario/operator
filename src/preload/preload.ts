@@ -223,7 +223,6 @@ export interface ElectronAPI {
     onMenuMigrateBuffer: (callback: () => void) => () => void;
     onMenuMigrateWavetable: (callback: () => void) => () => void;
     onMenuMigrateChebyBlockDC: (callback: () => void) => () => void;
-    onMenuMigratePhaseScale: (callback: () => void) => () => void;
     // UI operations
     showContextMenu: (options: ContextMenuOptions) => Promise<void>;
     onContextMenuCommand: (
@@ -534,9 +533,6 @@ const electronAPI: ElectronAPI = {
     onMenuMigrateWavetable: menuEventHandler(MENU_CHANNELS.MIGRATE_WAVETABLE),
     onMenuMigrateChebyBlockDC: menuEventHandler(
         MENU_CHANNELS.MIGRATE_CHEBY_BLOCK_DC,
-    ),
-    onMenuMigratePhaseScale: menuEventHandler(
-        MENU_CHANNELS.MIGRATE_PHASE_SCALE,
     ),
 
     // UI operations

@@ -17,7 +17,6 @@ import {
 import type { MigrationModalSummary } from './components/MigrationDiffModal';
 import { migrateChebyBlockDC } from './dsl/migrateChebyBlockDC';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
-import { migratePhaseScale } from './dsl/migratePhaseScale';
 import { migrateWavetableArgs } from './dsl/migrateWavetableArgs';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
@@ -2468,48 +2467,6 @@ function App() {
                 });
             });
 
-        const cleanupMigratePhaseScale = electronAPI.onMenuMigratePhaseScale(
-            () => {
-                const ed = editorRef.current;
-                // Read the live id from the ref: this listener is registered
-                // once (deps below), so closing over the `activeBufferId` state
-                // would migrate a stale buffer after the user switches buffers.
-                const activeId = activeBufferIdRef.current;
-                const phaseTitle = 'Migrate phase signals to 0 to 5V';
-                if (!ed || !activeId) {
-                    console.warn('Migrate phase signals: no editor available');
-                    setMigrationState({
-                        bufferId: activeId ?? '',
-                        original: '',
-                        migrated: '',
-                        title: phaseTitle,
-                        summary: {
-                            callsChanged: 0,
-                            commentsChanged: 0,
-                            skippedVariables: [],
-                            error: 'No editor available',
-                        },
-                    });
-                    return;
-                }
-                const original = ed.getValue();
-                const result = migratePhaseScale(original);
-                setMigrationState({
-                    bufferId: activeId,
-                    original,
-                    migrated: result.migrated,
-                    title: phaseTitle,
-                    skippedLabel: 'Needs manual review:',
-                    summary: {
-                        callsChanged: result.callsChanged,
-                        commentsChanged: 0,
-                        skippedVariables: result.skipped,
-                        error: result.error,
-                    },
-                });
-            },
-        );
-
         return () => {
             cleanupNewFile();
             cleanupSave();
@@ -2526,7 +2483,6 @@ function App() {
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
             cleanupMigrateBuffer();
-            cleanupMigratePhaseScale();
             cleanupMigrateWavetable();
             cleanupMigrateChebyBlockDC();
         };
