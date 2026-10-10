@@ -8,6 +8,10 @@ import { AudioPanicDialog } from './components/AudioPanicDialog';
 import { EngineHealth } from './components/EngineHealth';
 import { ModuleProfile } from './components/ModuleProfile';
 import { MigrationDiffModal } from './components/MigrationDiffModal';
+import {
+    SaveConflictDiff,
+    SaveConflictNotification,
+} from './components/SaveConflict';
 import type { MigrationModalSummary } from './components/MigrationDiffModal';
 import { migrateChebyBlockDC } from './dsl/migrateChebyBlockDC';
 import { migrateCycleCalls } from './dsl/migrateCycleCalls';
@@ -142,6 +146,10 @@ function App() {
         setRenamingPath,
         handleRenameCommit,
         formatFileLabel,
+        saveConflict,
+        dismissSaveConflict,
+        overwriteOnConflict,
+        revertToDiskContent,
     } = useEditorBuffers({
         refreshFileTree,
         workspaceRoot,
@@ -227,10 +235,7 @@ function App() {
     /** Last drawn channel levels per meter, for redraws outside the RAF
      *  loop (canvas resizes and fader drags while the clock is stopped). */
     const vuLastChannelsRef = useRef(
-        new Map<
-            string,
-            { rmsDb: number; fastDb: number; peakDb: number }[]
-        >(),
+        new Map<string, { rmsDb: number; fastDb: number; peakDb: number }[]>(),
     );
     const lastPatchResultRef = useRef<any>(null);
 
@@ -242,8 +247,9 @@ function App() {
 
     /** Tracked decorations spanning each out()/outMono() call, index-aligned
      *  with vuOutputs; the VU meter M/S buttons edit the source through them. */
-    const vuDecorationsRef =
-        useRef<editor.IEditorDecorationsCollection | null>(null);
+    const vuDecorationsRef = useRef<editor.IEditorDecorationsCollection | null>(
+        null,
+    );
 
     /** Pending UI state waiting for the audio thread to apply a queued update */
     const pendingUIStateRef = useRef<{
@@ -276,6 +282,7 @@ function App() {
             activeBufferId,
         [buffers, activeBufferId],
     );
+    const openBufferIds = useMemo(() => buffers.map(getBufferId), [buffers]);
     const activeSourceIdRef = useRef(activeSourceId);
     useEffect(() => {
         activeSourceIdRef.current = activeSourceId;
@@ -408,9 +415,7 @@ function App() {
                 { callStart },
                 collapsed,
                 editorRef.current?.getModel() ?? null,
-                codeStyleFromPrettier(
-                    resolvePrettierOptions(prettierConfig),
-                ),
+                codeStyleFromPrettier(resolvePrettierOptions(prettierConfig)),
             );
         },
         [prettierConfig],
@@ -758,9 +763,7 @@ function App() {
                 { source: pan },
             );
 
-            const next = outputs.map((o, i) =>
-                i === idx ? { ...o, pan } : o,
-            );
+            const next = outputs.map((o, i) => (i === idx ? { ...o, pan } : o));
             vuOutputsRef.current = next;
             setVuOutputs(next);
             setVuGhostProp(key, 'pan', undefined);
@@ -774,10 +777,7 @@ function App() {
         (key: string, pan: number, codeOnly: boolean) => {
             const outputs = vuOutputsRef.current;
             const idx = outputs.findIndex((o) => o.key === key);
-            if (
-                idx === -1 ||
-                (codeOnly && !outputs[idx].sourceLocation)
-            ) {
+            if (idx === -1 || (codeOnly && !outputs[idx].sourceLocation)) {
                 return;
             }
             cancelVuEdit(`${key}:pan`);
@@ -807,10 +807,7 @@ function App() {
                     setVuPanelHeight(
                         Math.min(
                             VU_PANEL_MAX_HEIGHT,
-                            Math.max(
-                                VU_PANEL_MIN_HEIGHT,
-                                config.vuPanelHeight,
-                            ),
+                            Math.max(VU_PANEL_MIN_HEIGHT, config.vuPanelHeight),
                         ),
                     );
                 }
@@ -862,23 +859,20 @@ function App() {
                 // Cancel / Escape: abort the open workspace operation
                 return;
             } else if (response === 0) {
-                // Save all dirty file buffers
+                // Save all dirty file buffers. A file that fails to save or
+                // hits a save conflict keeps the current workspace open.
                 for (const buffer of dirtyFileBuffers) {
-                    if (buffer.kind === 'file') {
-                        await electronAPI.filesystem.writeFile(
-                            buffer.filePath,
-                            buffer.content,
-                        );
+                    try {
+                        if (
+                            (await saveFile(getBufferId(buffer))) === undefined
+                        ) {
+                            return;
+                        }
+                    } catch (err) {
+                        setError(getErrorMessage(err, 'Failed to save file'));
+                        return;
                     }
                 }
-                // Mark them clean
-                setBuffers((prev) =>
-                    prev.map((b) =>
-                        b.kind === 'file' && b.dirty
-                            ? { ...b, dirty: false }
-                            : b,
-                    ),
-                );
             } else {
                 // Don't Save: discard dirty file buffers
                 setBuffers((prev) =>
@@ -892,7 +886,7 @@ function App() {
             setWorkspaceRoot(workspace.path);
             await refreshFileTree();
         }
-    }, [buffers, refreshFileTree, setBuffers]);
+    }, [buffers, refreshFileTree, saveFile, setBuffers]);
 
     const handleOpenFile = useCallback(
         async (relPath: string, options?: { preview?: boolean }) => {
@@ -1179,9 +1173,7 @@ function App() {
                     gain === outputs[idx].gain ? undefined : gain,
                 );
                 redrawVuMeter(key);
-                scheduleVuEdit(`${key}:gain`, () =>
-                    writeVuGainEdit(key, gain),
-                );
+                scheduleVuEdit(`${key}:gain`, () => writeVuGainEdit(key, gain));
                 return;
             }
 
@@ -1281,9 +1273,7 @@ function App() {
                 return;
             }
             const isMain = outputs[idx].main === true;
-            const resetGain = isMain
-                ? DEFAULT_OUTPUT_GAIN
-                : UNITY_OUT_GAIN;
+            const resetGain = isMain ? DEFAULT_OUTPUT_GAIN : UNITY_OUT_GAIN;
 
             if (isMain) {
                 const model = editorRef.current?.getModel();
@@ -1330,12 +1320,9 @@ function App() {
         ],
     );
 
-    const registerVuReadout = useCallback(
-        (key: string, el: HTMLElement) => {
-            vuReadoutMapRef.current.set(key, el);
-        },
-        [],
-    );
+    const registerVuReadout = useCallback((key: string, el: HTMLElement) => {
+        vuReadoutMapRef.current.set(key, el);
+    }, []);
 
     const unregisterVuReadout = useCallback((key: string) => {
         vuReadoutMapRef.current.delete(key);
@@ -1563,13 +1550,10 @@ function App() {
                                     `rotate(${(Math.max(-5, Math.min(5, frame.pan)) / 5) * 135} 13 17)`,
                                 );
                             }
-                            const readout =
-                                vuReadoutMapRef.current.get(key);
+                            const readout = vuReadoutMapRef.current.get(key);
                             if (readout) {
                                 readout.textContent = formatDb(
-                                    Math.max(
-                                        ...channels.map((c) => c.peakDb),
-                                    ),
+                                    Math.max(...channels.map((c) => c.peakDb)),
                                 );
                             }
                         }
@@ -1668,6 +1652,44 @@ function App() {
         },
         [saveFile],
     );
+
+    const [conflictDiff, setConflictDiff] = useState<{
+        bufferId: string;
+        filePath: string;
+        diskContent: string;
+    } | null>(null);
+    const conflictDiffBuffer = conflictDiff
+        ? buffers.find((b) => getBufferId(b) === conflictDiff.bufferId)
+        : undefined;
+
+    const handleCompareConflict = useCallback(async () => {
+        if (!saveConflict) {
+            return;
+        }
+        try {
+            const diskContent = await electronAPI.filesystem.readFile(
+                saveConflict.filePath,
+            );
+            setConflictDiff({ ...saveConflict, diskContent });
+            dismissSaveConflict();
+        } catch (err) {
+            setError(getErrorMessage(err, 'Failed to read file'));
+        }
+    }, [saveConflict, dismissSaveConflict]);
+
+    const handleOverwriteConflict = useCallback(
+        async (bufferId: string) => {
+            setConflictDiff(null);
+            try {
+                await overwriteOnConflict(bufferId);
+            } catch (err) {
+                setError(getErrorMessage(err, 'Failed to save file'));
+            }
+        },
+        [overwriteOnConflict],
+    );
+
+    const closeConflictDiff = useCallback(() => setConflictDiff(null), []);
 
     const handleSaveFileRef = useRef(() => {});
     useEffect(() => {
@@ -2610,6 +2632,7 @@ function App() {
                                 value={patchCode}
                                 runningBufferId={runningBufferId}
                                 currentFile={activeBufferId}
+                                openFiles={openBufferIds}
                                 onChange={handlePatchChange}
                                 editorRef={editorRef}
                                 onEditorChange={setPaletteEditor}
@@ -2683,6 +2706,34 @@ function App() {
                     unregisterReadout={unregisterVuReadout}
                     registerPanPointer={registerVuPanPointer}
                     unregisterPanPointer={unregisterVuPanPointer}
+                />
+            )}
+            {saveConflict && (
+                <SaveConflictNotification
+                    filePath={saveConflict.filePath}
+                    onCompare={handleCompareConflict}
+                    onOverwrite={() =>
+                        handleOverwriteConflict(saveConflict.bufferId)
+                    }
+                    onDismiss={dismissSaveConflict}
+                />
+            )}
+            {conflictDiff && conflictDiffBuffer && (
+                <SaveConflictDiff
+                    filePath={conflictDiff.filePath}
+                    diskContent={conflictDiff.diskContent}
+                    bufferContent={conflictDiffBuffer.content}
+                    onAcceptLocal={() =>
+                        handleOverwriteConflict(conflictDiff.bufferId)
+                    }
+                    onRevertLocal={() => {
+                        revertToDiskContent(
+                            conflictDiff.bufferId,
+                            conflictDiff.diskContent,
+                        );
+                        setConflictDiff(null);
+                    }}
+                    onClose={closeConflictDiff}
                 />
             )}
             <UpdateNotification

@@ -4,6 +4,12 @@ export type EditorBuffer =
           id: string;
           filePath: string;
           content: string;
+          /**
+           * Content last known to be on disk, or null until it has been read
+           * (a buffer restored from storage). `dirty` is true exactly when
+           * this is null or differs from `content`.
+           */
+          savedContent: string | null;
           dirty: boolean;
           isPreview?: boolean;
       }
@@ -21,6 +27,8 @@ export type UnsavedBufferSnapshot =
           id: string;
           filePath: string;
           content: string;
+          /** The buffer's `savedContent`; absent when it was unknown. */
+          savedContent?: string;
       }
     | {
           kind: 'untitled';

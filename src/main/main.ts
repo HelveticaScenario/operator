@@ -46,6 +46,7 @@ import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import * as path from 'path';
+import { createOpenFileWatcher } from './openFileWatcher';
 import electronSquirrelStartup from 'electron-squirrel-startup';
 import { z } from 'zod';
 
@@ -405,7 +406,8 @@ if (electronSquirrelStartup) {
 // packaged app and dev builds from other worktrees. Must run before anything
 // reads userData. The macOS menu bar and Dock name come from the dev
 // Electron.app bundle, which scripts/patch-electron-plist.mjs renames to match.
-if (!app.isPackaged) {
+// An explicit --user-data-dir (the E2E fixtures' isolated profile) wins.
+if (!app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
     const devName = `${app.name} Dev (${path.basename(app.getAppPath())})`;
     app.setPath('userData', path.join(app.getPath('appData'), devName));
     app.setName(devName);
@@ -1373,6 +1375,54 @@ registerIPCHandler('FS_LIST_FILES', () => {
     return buildFileTree(currentWorkspaceRoot);
 });
 
+// Patch files carry an invisible version-stamp block at the top; strip it so
+// the editor only ever sees the user's own source.
+function readEditorContent(absolutePath: string): string {
+    const content = fs.readFileSync(absolutePath, 'utf-8');
+    return isStampablePath(absolutePath)
+        ? stripPatchVersionStamp(content)
+        : content;
+}
+
+// Files open in editor buffers. Main sends their content on every change and
+// the renderer decides, by comparing content, whether it was an external edit.
+// Change events carry the path exactly as the renderer sent it, since the
+// renderer matches buffers by string equality.
+const watchedPathSpellings = new Map<string, string>();
+const openFileWatcher = createOpenFileWatcher((absolutePath) => {
+    const filePath = watchedPathSpellings.get(absolutePath);
+    if (filePath === undefined) {
+        return;
+    }
+    let content: string;
+    try {
+        content = readEditorContent(absolutePath);
+    } catch {
+        // Deleted or unreadable: the buffer keeps its content.
+        return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.FS_ON_FILE_CHANGED, {
+            content,
+            filePath,
+        });
+    }
+});
+
+registerIPCHandler('FS_WATCH_OPEN_FILES', (filePaths) => {
+    watchedPathSpellings.clear();
+    for (const filePath of filePaths) {
+        const absolutePath = validatePathInWorkspace(filePath);
+        if (absolutePath) {
+            watchedPathSpellings.set(absolutePath, filePath);
+        }
+    }
+    openFileWatcher.setFiles([...watchedPathSpellings.keys()]);
+});
+
+/** Content this process last wrote to each file, as the editor sees it. */
+const lastWrittenContent = new Map<string, string>();
+
 registerIPCHandler('FS_READ_FILE', (relativePath) => {
     const absolutePath = validatePathInWorkspace(relativePath);
     if (!absolutePath) {
@@ -1380,12 +1430,7 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 
     try {
-        const content = fs.readFileSync(absolutePath, 'utf-8');
-        // Patch files carry an invisible version-stamp block at the top; strip
-        // it so the editor only ever sees the user's own source.
-        return isStampablePath(absolutePath)
-            ? stripPatchVersionStamp(content)
-            : content;
+        return readEditorContent(absolutePath);
     } catch (error) {
         console.error('Error reading file:', error);
         throw new Error(`Failed to read file: ${relativePath}`, {
@@ -1394,38 +1439,66 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 });
 
-registerIPCHandler('FS_WRITE_FILE', (relativePath, content) => {
-    const absolutePath = validatePathInWorkspace(relativePath);
-    if (!absolutePath) {
-        return {
-            error: 'Invalid file path or no workspace selected',
-            success: false,
-        };
-    }
-
-    try {
-        // Ensure directory exists
-        const dir = path.dirname(absolutePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+registerIPCHandler(
+    'FS_WRITE_FILE',
+    (relativePath, content, expectedDiskContent) => {
+        const absolutePath = validatePathInWorkspace(relativePath);
+        if (!absolutePath) {
+            return {
+                error: 'Invalid file path or no workspace selected',
+                success: false,
+            };
         }
 
-        // Record the app version that last wrote this patch as an invisible
-        // block at the top of the file (stripped again on read).
-        const toWrite = isStampablePath(absolutePath)
-            ? stampPatchVersionSource(content, app.getVersion())
-            : content;
+        // The check and the write run synchronously together, so no other write
+        // from this process can land between them. A missing file is not a
+        // conflict: saving recreates it. The file still holding this app's own
+        // last write is not a conflict either: a save sent while an earlier
+        // save of the same buffer was in flight expects the older content.
+        if (expectedDiskContent !== undefined && fs.existsSync(absolutePath)) {
+            try {
+                const onDisk = readEditorContent(absolutePath);
+                if (
+                    onDisk !== expectedDiskContent &&
+                    onDisk !== content &&
+                    onDisk !== lastWrittenContent.get(absolutePath)
+                ) {
+                    return { conflict: true, success: false };
+                }
+            } catch (error) {
+                console.error('Error reading file before write:', error);
+                return {
+                    error: `Failed to read file: ${relativePath}`,
+                    success: false,
+                };
+            }
+        }
 
-        fs.writeFileSync(absolutePath, toWrite, 'utf-8');
-        return { success: true };
-    } catch (error) {
-        console.error('Error writing file:', error);
-        return {
-            error: `Failed to write file: ${relativePath}`,
-            success: false,
-        };
-    }
-});
+        try {
+            // Ensure directory exists
+            const dir = path.dirname(absolutePath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+
+            // Record the app version that last wrote this patch as an invisible
+            // block at the top of the file (stripped again on read).
+            const toWrite = isStampablePath(absolutePath)
+                ? stampPatchVersionSource(content, app.getVersion())
+                : content;
+
+            fs.writeFileSync(absolutePath, toWrite, 'utf-8');
+            lastWrittenContent.set(absolutePath, content);
+            return { success: true };
+        } catch (error) {
+            console.error('Error writing file:', error);
+            return {
+                error: `Failed to write file: ${relativePath}`,
+                success: false,
+            };
+        }
+    },
+);
 
 registerIPCHandler('FS_RENAME_FILE', (oldPath, newPath) => {
     const oldAbsolutePath = validatePathInWorkspace(oldPath);
@@ -2325,6 +2398,7 @@ app.on('ready', () => {
 
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    openFileWatcher.close();
     syphonBridge?.dispose();
 });
 
