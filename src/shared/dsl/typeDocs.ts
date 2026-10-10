@@ -32,8 +32,6 @@ export const DSL_TYPE_NAMES = [
     'CollectionWithRange',
     'Note',
     'HZ',
-    'MidiNote',
-    'Scale',
     'StereoOutOptions',
 ] as const;
 
@@ -200,20 +198,6 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             '"1000hz"  // 1 kHz',
         ],
         name: 'HZ',
-        seeAlso: ['Signal', 'Note'],
-    },
-
-    MidiNote: {
-        definition: '`${number}m`',
-        description:
-            'A MIDI note number string. MIDI note 60 is middle C (C4). ' +
-            'Converted to 1V/oct voltage internally.',
-        examples: [
-            '"60m"  // Middle C (C4)',
-            '"69m"  // A4 (440 Hz)',
-            '"36m"  // C2',
-        ],
-        name: 'MidiNote',
         seeAlso: ['Signal', 'Note'],
     },
 
@@ -396,7 +380,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             '"c#"    // C#4 (octave 4 is default)',
         ],
         name: 'Note',
-        seeAlso: ['Signal', 'HZ', 'MidiNote'],
+        seeAlso: ['Signal', 'HZ'],
     },
 
     'Poly<Signal>': {
@@ -413,24 +397,8 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
         seeAlso: ['Signal', 'Mono<Signal>', 'ModuleOutput', 'Collection'],
     },
 
-    Scale: {
-        definition: '`${number}s(${Note}:${Mode})`',
-        description:
-            'A scale pattern string for generating multiple pitches. ' +
-            'Format: "{count}s({root}:{mode})" where count is the number of notes, ' +
-            'root is the root note, and mode is the scale type.',
-        examples: [
-            '"4s(C:major)"     // 4 notes of C major scale',
-            '"8s(A:minor)"     // 8 notes of A minor scale',
-            '"3s(G:dorian)"    // 3 notes of G dorian mode',
-            '"5s(E:pentatonic minor)"  // E minor pentatonic',
-        ],
-        name: 'Scale',
-        seeAlso: ['Signal', 'Note'],
-    },
-
     Signal: {
-        definition: 'number | Note | HZ | MidiNote | Scale | ModuleOutput',
+        definition: 'number | Note | HZ | ModuleOutput',
         description:
             'A single-channel audio signal value. This is the fundamental type for all audio connections in the modular system. ' +
             'Signals follow the 1V/octave convention where 0V corresponds to C4 (~261.63 Hz).',
@@ -438,20 +406,10 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             'sine("C4")           // Note string - converted to 1V/oct',
             'sine(440)            // Number - constant voltage',
             'sine("440hz")        // Hz string - converted to voltage',
-            'sine("60m")          // MIDI note 60 (middle C)',
             'sine(lfo.out)        // ModuleOutput from another module',
-            'sine("4s(C:major)")  // Scale pattern',
         ],
         name: 'Signal',
-        seeAlso: [
-            'Poly<Signal>',
-            'Mono<Signal>',
-            'ModuleOutput',
-            'Note',
-            'HZ',
-            'MidiNote',
-            'Scale',
-        ],
+        seeAlso: ['Poly<Signal>', 'Mono<Signal>', 'ModuleOutput', 'Note', 'HZ'],
     },
 
     StereoOutOptions: {

@@ -108,12 +108,6 @@ describe('basic oscillators', () => {
         expect(sines.length).toBe(1);
     });
 
-    test('$sine with MIDI note string "60m"', () => {
-        const patch = execPatch('$sine("60m").out()');
-        const sines = findModules(patch, '$sine');
-        expect(sines.length).toBe(1);
-    });
-
     test('$sine with raw number', () => {
         const patch = execPatch('$sine(0).out()');
         const sines = findModules(patch, '$sine');
@@ -169,11 +163,6 @@ describe('signal input variants', () => {
     test('$setTempo() accepts plain BPM number', () => {
         const _patch = execPatch('$setTempo(140)');
         // Should not throw — $setTempo(140) sets tempo as plain BPM
-    });
-
-    test('scale pattern string produces polyphonic module', () => {
-        const patch = execPatch('$sine("4s(C4:major)").out()');
-        expect(findModules(patch, '$sine').length).toBe(1);
     });
 });
 
@@ -434,6 +423,140 @@ describe('sequencing', () => {
     test('$cycle with $p() pattern', () => {
         const patch = execPatch('$cycle($p("c4 e4 g4 b4")).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
+    });
+
+    test('.cycle() on every pattern kind builds a $cycle', () => {
+        const patch = execPatch(`
+            $p("c4 e4").cycle().out();
+            $p.s("0 2 4", "C(major)").cycle().out();
+            $p.arrange([2, $p("c4")], [1, $p("e4")]).cycle().out();
+            $p("c4 e4").fast(2).slow(3).struct("x ~").beat("0", 4).cycle().out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(4);
+    });
+
+    test('.cycle(config) forwards $cycle config', () => {
+        const patch = execPatch('$p("c4 e4").cycle({ ribbon: [0, 2] }).out()');
+        const [mod] = findModules(patch, '$cycle');
+        expect((mod.params as { ribbon: unknown }).ribbon).toEqual([0, 2]);
+    });
+
+    test('.cycle() matches $cycle(pattern) and keeps highlight spans', () => {
+        const stripSpans = (params: unknown) =>
+            JSON.parse(
+                JSON.stringify(params, (k, v) =>
+                    k === 'argument_span' || k === '__argument_spans'
+                        ? undefined
+                        : v,
+                ),
+            );
+        const viaMethod = execPatch('$p("c4 e4").cycle().out()');
+        const viaFactory = execPatch('$cycle($p("c4 e4")).out()');
+        const [a] = findModules(viaMethod, '$cycle');
+        const [b] = findModules(viaFactory, '$cycle');
+        expect(stripSpans(a.params)).toEqual(stripSpans(b.params));
+        expect(
+            (a.params as { pattern: { argument_span?: unknown } }).pattern
+                .argument_span,
+        ).toEqual({ start: 3, end: 10 });
+    });
+
+    test('a pattern in a poly signal param is wrapped in $cycle', () => {
+        const patch = execPatch('$sine($p("c4 e4")).out()');
+        const [cycle] = findModules(patch, '$cycle');
+        const [sine] = findModules(patch, '$sine');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+        expect(sine.params.freq).toMatchObject([
+            { module: cycle.id, port: 'cv', type: 'cable' },
+        ]);
+    });
+
+    test('every pattern kind is accepted by poly and mono signal params', () => {
+        const patch = execPatch(`
+            $sine($p.s("0 2 4", "C(major)")).out();
+            $sine($p.arrange([2, $p("c4")], [1, $p("e4")])).out();
+            $sine($p("c4").fast(2).struct("x ~")).out();
+            $sine([$p("c4"), "e4", $p("g4")]).out();
+            $stereoMix($saw("c3"), { width: $p("0 5") }).out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(6);
+    });
+
+    test('wrapped patterns keep their editor highlight spans', () => {
+        const patch = execPatch('$sine($p("c4 e4")).out()');
+        const [cycle] = findModules(patch, '$cycle');
+        expect(
+            (cycle.params as { pattern: { argument_span?: unknown } }).pattern
+                .argument_span,
+        ).toEqual({ start: 9, end: 16 });
+    });
+
+    test('MIDI-number and scale-interval signal strings are rejected', () => {
+        expect(() => execPatch('$sine("60m").out()')).toThrow();
+        expect(() => execPatch('$sine("4s(C:major)").out()')).toThrow();
+    });
+
+    test('$c plays pattern objects directly and lifts single values to $signal', () => {
+        const patch = execPatch('$c($p("c4 e4"), "c4", 440).out()');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+        const lifted = findModules(patch, '$signal').filter(
+            (m) => m.params.source === 'c4' || m.params.source === 440,
+        );
+        expect(lifted.length).toBe(2);
+    });
+
+    test('a pattern inside a $gN group plays through a $cycle', () => {
+        const patch = execPatch('$sine($g1($p("c4 e4"))).out()');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+    });
+
+    test('patterns inside nested signal params play through a $cycle', () => {
+        const patch = execPatch(`
+            $mix([$p("c4 e4"), "g4"]).out();
+            $step([$p("c4 e4"), "g4"], $p("1 0")).out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(3);
+    });
+
+    test('patterns work through methods and .out config', () => {
+        const patch = execPatch(
+            '$sine("c3").amplitude($p("1 2")).out({ gain: $p("3 4") })',
+        );
+        expect(findModules(patch, '$cycle').length).toBe(2);
+    });
+
+    test('.range accepts patterns for its bounds', () => {
+        const patch = execPatch(`
+            $signal(1).range($p("0 1"), 5, -5, 5).out();
+            $c($sine("c3")).range($p("0 1"), $p("2 3"), 0, 5).out();
+            $sine("c3").range($p("0 1"), 5).out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(4);
+    });
+
+    test('.outMono(channel, pattern) plays the pattern as the gain', () => {
+        const patch = execPatch('$sine("c3").outMono(1, $p("0.5 1"))');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+    });
+
+    test('.outMono rejects a pattern in the channel position', () => {
+        expect(() => execPatch('$sine("c3").outMono($p("0.5 1"))')).toThrow(
+            /first argument is a channel number/,
+        );
+    });
+
+    test('$table helpers play patterns as their signals', () => {
+        const patch = execPatch(`
+            $table.mirror($p("0 1"), $table.pwm($p("1 2")));
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(2);
+    });
+
+    test('$c rejects values that are not signals', () => {
+        expect(() => execPatch('$c({}).out()')).toThrow(/\$c: cannot make/);
+        expect(() => execPatch('$c(undefined).out()')).toThrow(
+            /\$c: cannot make/,
+        );
     });
 
     test('$track with keyframes', () => {
@@ -1208,21 +1331,21 @@ describe('sliders', () => {
         expect(() => execPatch('$slider("x", "440hz", 0, 5)')).toThrow(
             'must all be numbers, all hz strings, or all note strings',
         );
-        expect(() =>
-            execPatch('$slider("x", "c4", "20hz", "2000hz")'),
-        ).toThrow('must all be numbers, all hz strings, or all note strings');
+        expect(() => execPatch('$slider("x", "c4", "20hz", "2000hz")')).toThrow(
+            'must all be numbers, all hz strings, or all note strings',
+        );
     });
 
     test('$slider invalid strings throw', () => {
-        expect(() =>
-            execPatch('$slider("x", "0hz", "1hz", "2hz")'),
-        ).toThrow('positive');
-        expect(() =>
-            execPatch('$slider("x", "-5hz", "1hz", "2hz")'),
-        ).toThrow('positive');
-        expect(() =>
-            execPatch('$slider("x", "h4", "c2", "c6")'),
-        ).toThrow('invalid slider value');
+        expect(() => execPatch('$slider("x", "0hz", "1hz", "2hz")')).toThrow(
+            'positive',
+        );
+        expect(() => execPatch('$slider("x", "-5hz", "1hz", "2hz")')).toThrow(
+            'positive',
+        );
+        expect(() => execPatch('$slider("x", "h4", "c2", "c6")')).toThrow(
+            'invalid slider value',
+        );
         expect(() =>
             execPatch('$slider("x", "440 hz", "55hz", "880hz")'),
         ).toThrow('invalid slider value');
@@ -1253,9 +1376,9 @@ describe('sliders', () => {
         expect(() => execPatch('$slider("cutoff", 500, "h4", 1000)')).toThrow(
             '$slider("cutoff") min:',
         );
-        expect(() =>
-            execPatch('$slider("lfo", "0hz", "1hz", "2hz")'),
-        ).toThrow('$slider("lfo") value:');
+        expect(() => execPatch('$slider("lfo", "0hz", "1hz", "2hz")')).toThrow(
+            '$slider("lfo") value:',
+        );
     });
 
     test('$slider labels differing only in punctuation get distinct modules', () => {
@@ -1383,9 +1506,7 @@ describe('control groups', () => {
         // The scan cannot see a computed key, so the panel shows B at the
         // root while evaluation nests it under A.
         expect(() =>
-            execPatch(
-                'const a = $cGroup("A")\n$cGroup("B", { ["group"]: a })',
-            ),
+            execPatch('const a = $cGroup("A")\n$cGroup("B", { ["group"]: a })'),
         ).toThrow('Control "B" at line 2 must be created by');
         // A quoted key is read the same way by both.
         const result = exec(
@@ -1500,12 +1621,12 @@ describe('buttons', () => {
     });
 
     test('duplicate labels throw across sliders and buttons', () => {
-        expect(() =>
-            execPatch('$slider("a", 0, -1, 1)\n$btn("a")'),
-        ).toThrow('already used by a $slider()');
-        expect(() =>
-            execPatch('$btn("a")\n$toggleBtn("a", false)'),
-        ).toThrow('unique');
+        expect(() => execPatch('$slider("a", 0, -1, 1)\n$btn("a")')).toThrow(
+            'already used by a $slider()',
+        );
+        expect(() => execPatch('$btn("a")\n$toggleBtn("a", false)')).toThrow(
+            'unique',
+        );
         expect(() =>
             execPatch('$toggleBtn("a", false)\n$slider("a", 0, -1, 1)'),
         ).toThrow('already used by a button');
@@ -1517,9 +1638,7 @@ describe('buttons', () => {
         );
         const holds = findModules(result.patch, '$hold');
         expect(holds.length).toBe(1);
-        expect(JSON.stringify(holds[0].params.input)).toContain(
-            '__button_hit',
-        );
+        expect(JSON.stringify(holds[0].params.input)).toContain('__button_hit');
         expect(holds[0].params.time).toBe(0.2);
     });
 

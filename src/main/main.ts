@@ -9,7 +9,11 @@ import {
     ipcMain,
     shell,
 } from 'electron';
-import type { AudioConfigOptions } from '@modular/core';
+import type {
+    AudioConfigOptions,
+    PatchGraph,
+    QueuedTrigger,
+} from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
@@ -60,6 +64,7 @@ import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import * as path from 'path';
+import { createOpenFileWatcher } from './openFileWatcher';
 import electronSquirrelStartup from 'electron-squirrel-startup';
 import { z } from 'zod';
 
@@ -425,7 +430,8 @@ if (electronSquirrelStartup) {
 // packaged app and dev builds from other worktrees. Must run before anything
 // reads userData. The macOS menu bar and Dock name come from the dev
 // Electron.app bundle, which scripts/patch-electron-plist.mjs renames to match.
-if (!app.isPackaged) {
+// An explicit --user-data-dir (the E2E fixtures' isolated profile) wins.
+if (!app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
     const devName = `${app.name} Dev (${path.basename(app.getAppPath())})`;
     app.setPath('userData', path.join(app.getPath('appData'), devName));
     app.setName(devName);
@@ -826,6 +832,112 @@ registerIPCHandler('GET_DSL_LIB_SOURCE', () => {
     return cachedLibSource;
 });
 
+/** Rebuilds of a patch update whose baseline went stale while it was prepared. */
+const MAX_BASELINE_RETRIES = 2;
+
+/**
+ * Reconcile `patch` against the patch the engine is playing and submit it. An
+ * update the engine applies while this one is prepared or in flight changes
+ * what is playing, so the reconciliation is redone against it.
+ */
+function submitPatchUpdate(
+    patch: PatchGraph,
+    sourceId: string | undefined,
+    trigger: QueuedTrigger | undefined,
+) {
+    for (let attempt = 0; ; attempt++) {
+        const transport = synth.getTransportState();
+        appliedPatch.resolve(transport.lastCancelledUpdateId);
+        const baseline = appliedPatch.baseline(transport.lastAppliedUpdateId);
+        const lastAppliedSourceId = baseline.sourceId;
+
+        // Requirement: assume a full change when a different file/buffer is evaluated.
+        const shouldReconcile =
+            Boolean(sourceId) && lastAppliedSourceId === sourceId;
+
+        // Switching playback to a different buffer (song) restarts the
+        // transport from the top, applied atomically with the patch swap.
+        const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
+
+        if (DEBUG_LOG) {
+            if (!sourceId) {
+                console.log(
+                    '[patch-remap] no sourceId; reconciliation disabled',
+                );
+            } else if (!shouldReconcile) {
+                console.log(
+                    `[patch-remap] source changed (${lastAppliedSourceId ?? 'none'} -> ${sourceId}); reconciliation disabled`,
+                );
+            } else {
+                console.log(
+                    `[patch-remap] reconciling for sourceId=${sourceId}`,
+                );
+            }
+        }
+
+        const { moduleIdRemap } = reconcilePatchBySimilarity(
+            patch,
+            shouldReconcile ? baseline.patchGraph : null,
+            {
+                ambiguityMargin: PATCH_REMAP_MARGIN,
+                debugLog: DEBUG_LOG
+                    ? (message) => console.log(message)
+                    : undefined,
+                matchThreshold: PATCH_REMAP_THRESHOLD,
+            },
+        );
+
+        if (DEBUG_LOG) {
+            const remapCount = Object.keys(moduleIdRemap).length;
+            const thresholdInfo =
+                PATCH_REMAP_THRESHOLD !== undefined
+                    ? PATCH_REMAP_THRESHOLD.toFixed(4)
+                    : 'default';
+            const marginInfo =
+                PATCH_REMAP_MARGIN !== undefined
+                    ? PATCH_REMAP_MARGIN.toFixed(4)
+                    : 'default';
+            console.log(
+                `[patch-remap] summary shouldReconcile=${shouldReconcile} remaps=${remapCount} threshold=${thresholdInfo} margin=${marginInfo}`,
+            );
+        }
+
+        // Send remap hints along with the desired patch; Rust will use them
+        // to preserve module instances while keeping the desired ids.
+        patch.moduleIdRemaps = Object.entries(moduleIdRemap).map(
+            ([from, to]) => ({ from, to }),
+        );
+
+        const staleBeforeSend =
+            synth.getTransportState().lastAppliedUpdateId !==
+            transport.lastAppliedUpdateId;
+        if (staleBeforeSend && attempt < MAX_BASELINE_RETRIES) {
+            continue;
+        }
+
+        const { errors, updateId } = synth.updatePatch(
+            patch,
+            trigger,
+            resetClock,
+        );
+        if (errors.length > 0) {
+            return { errors, moduleIdRemap, updateId };
+        }
+        appliedPatch.record(patch, sourceId ?? null, updateId);
+
+        // Another update applied while this one was sent: it, not the
+        // baseline used above, is what this update replaces. This update's
+        // own application does not count.
+        const applied = synth.getTransportState().lastAppliedUpdateId;
+        const staleAfterSend =
+            applied !== transport.lastAppliedUpdateId && applied !== updateId;
+        if (staleAfterSend && attempt < MAX_BASELINE_RETRIES) {
+            continue;
+        }
+        return { errors, moduleIdRemap, updateId };
+    }
+}
+
 // DSL execution in main process with direct N-API access
 registerIPCHandler(
     'DSL_EXECUTE',
@@ -880,78 +992,13 @@ registerIPCHandler(
                 callSiteSpansRecord[key] = span;
             }
 
-            appliedPatch.resolve(
-                synth.getTransportState().lastCancelledUpdateId,
-            );
-            const lastAppliedSourceId = appliedPatch.sourceId;
-
-            // Requirement: assume a full change when a different file/buffer is evaluated.
-            const shouldReconcile =
-                Boolean(sourceId) && lastAppliedSourceId === sourceId;
-
-            // Switching playback to a different buffer (song) restarts the
-            // transport from the top, applied atomically with the patch swap.
-            const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
-
-            if (DEBUG_LOG) {
-                if (!sourceId) {
-                    console.log(
-                        '[patch-remap] no sourceId; reconciliation disabled',
-                    );
-                } else if (!shouldReconcile) {
-                    console.log(
-                        `[patch-remap] source changed (${lastAppliedSourceId ?? 'none'} -> ${sourceId}); reconciliation disabled`,
-                    );
-                } else {
-                    console.log(
-                        `[patch-remap] reconciling for sourceId=${sourceId}`,
-                    );
-                }
-            }
-
-            const { moduleIdRemap } = reconcilePatchBySimilarity(
+            const { errors, moduleIdRemap, updateId } = submitPatchUpdate(
                 patch,
-                shouldReconcile ? appliedPatch.patchGraph : null,
-                {
-                    ambiguityMargin: PATCH_REMAP_MARGIN,
-                    debugLog: DEBUG_LOG
-                        ? (message) => console.log(message)
-                        : undefined,
-                    matchThreshold: PATCH_REMAP_THRESHOLD,
-                },
-            );
-
-            if (DEBUG_LOG) {
-                const remapCount = Object.keys(moduleIdRemap).length;
-                const thresholdInfo =
-                    PATCH_REMAP_THRESHOLD !== undefined
-                        ? PATCH_REMAP_THRESHOLD.toFixed(4)
-                        : 'default';
-                const marginInfo =
-                    PATCH_REMAP_MARGIN !== undefined
-                        ? PATCH_REMAP_MARGIN.toFixed(4)
-                        : 'default';
-                console.log(
-                    `[patch-remap] summary shouldReconcile=${shouldReconcile} remaps=${remapCount} threshold=${thresholdInfo} margin=${marginInfo}`,
-                );
-            }
-
-            // Send remap hints along with the desired patch
-            patch.moduleIdRemaps = Object.entries(moduleIdRemap).map(
-                ([from, to]) => ({
-                    from,
-                    to,
-                }),
-            );
-
-            const { errors, updateId } = synth.updatePatch(
-                patch,
+                sourceId,
                 trigger,
-                resetClock,
             );
 
             if (errors.length === 0) {
-                appliedPatch.record(patch, sourceId ?? null, updateId);
                 updateVideoShader(video, updateId);
             }
 
@@ -1048,67 +1095,11 @@ registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
-    appliedPatch.resolve(synth.getTransportState().lastCancelledUpdateId);
-    const lastAppliedSourceId = appliedPatch.sourceId;
-
-    // Requirement: assume a full change when a different file/buffer is evaluated.
-    const shouldReconcile =
-        Boolean(sourceId) && lastAppliedSourceId === sourceId;
-
-    // Switching playback to a different buffer (song) restarts the transport
-    // from the top, applied atomically with the patch swap.
-    const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
-
-    if (DEBUG_LOG) {
-        if (!sourceId) {
-            console.log('[patch-remap] no sourceId; reconciliation disabled');
-        } else if (!shouldReconcile) {
-            console.log(
-                `[patch-remap] source changed (${lastAppliedSourceId ?? 'none'} -> ${sourceId}); reconciliation disabled`,
-            );
-        } else {
-            console.log(`[patch-remap] reconciling for sourceId=${sourceId}`);
-        }
-    }
-
-    const { moduleIdRemap } = reconcilePatchBySimilarity(
+    const { errors, moduleIdRemap, updateId } = submitPatchUpdate(
         patch,
-        shouldReconcile ? appliedPatch.patchGraph : null,
-        {
-            ambiguityMargin: PATCH_REMAP_MARGIN,
-            debugLog: DEBUG_LOG ? (message) => console.log(message) : undefined,
-            matchThreshold: PATCH_REMAP_THRESHOLD,
-        },
+        sourceId,
+        trigger,
     );
-
-    if (DEBUG_LOG) {
-        const remapCount = Object.keys(moduleIdRemap).length;
-        const thresholdInfo =
-            PATCH_REMAP_THRESHOLD !== undefined
-                ? PATCH_REMAP_THRESHOLD.toFixed(4)
-                : 'default';
-        const marginInfo =
-            PATCH_REMAP_MARGIN !== undefined
-                ? PATCH_REMAP_MARGIN.toFixed(4)
-                : 'default';
-        console.log(
-            `[patch-remap] summary shouldReconcile=${shouldReconcile} remaps=${remapCount} threshold=${thresholdInfo} margin=${marginInfo}`,
-        );
-    }
-
-    // Send remap hints along with the desired patch; Rust will use them to
-    // Preserve module instances while keeping the desired ids.
-    patch.moduleIdRemaps = Object.entries(moduleIdRemap).map(([from, to]) => ({
-        from,
-        to,
-    }));
-
-    const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
-
-    if (errors.length === 0) {
-        appliedPatch.record(patch, sourceId ?? null, updateId);
-    }
-
     return { appliedPatch: patch, errors, moduleIdRemap, updateId };
 });
 
@@ -1149,6 +1140,7 @@ registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
 
 registerIPCHandler('SYNTH_STOP', () => {
     synth.stop();
+    appliedPatch.clear();
 });
 
 registerIPCHandler('SYNTH_CANCEL_QUEUED_UPDATE', () => {
@@ -1444,6 +1436,54 @@ registerIPCHandler('FS_LIST_FILES', () => {
     return buildFileTree(currentWorkspaceRoot);
 });
 
+// Patch files carry an invisible version-stamp block at the top; strip it so
+// the editor only ever sees the user's own source.
+function readEditorContent(absolutePath: string): string {
+    const content = fs.readFileSync(absolutePath, 'utf-8');
+    return isStampablePath(absolutePath)
+        ? stripPatchVersionStamp(content)
+        : content;
+}
+
+// Files open in editor buffers. Main sends their content on every change and
+// the renderer decides, by comparing content, whether it was an external edit.
+// Change events carry the path exactly as the renderer sent it, since the
+// renderer matches buffers by string equality.
+const watchedPathSpellings = new Map<string, string>();
+const openFileWatcher = createOpenFileWatcher((absolutePath) => {
+    const filePath = watchedPathSpellings.get(absolutePath);
+    if (filePath === undefined) {
+        return;
+    }
+    let content: string;
+    try {
+        content = readEditorContent(absolutePath);
+    } catch {
+        // Deleted or unreadable: the buffer keeps its content.
+        return;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC_CHANNELS.FS_ON_FILE_CHANGED, {
+            content,
+            filePath,
+        });
+    }
+});
+
+registerIPCHandler('FS_WATCH_OPEN_FILES', (filePaths) => {
+    watchedPathSpellings.clear();
+    for (const filePath of filePaths) {
+        const absolutePath = validatePathInWorkspace(filePath);
+        if (absolutePath) {
+            watchedPathSpellings.set(absolutePath, filePath);
+        }
+    }
+    openFileWatcher.setFiles([...watchedPathSpellings.keys()]);
+});
+
+/** Content this process last wrote to each file, as the editor sees it. */
+const lastWrittenContent = new Map<string, string>();
+
 registerIPCHandler('FS_READ_FILE', (relativePath) => {
     const absolutePath = validatePathInWorkspace(relativePath);
     if (!absolutePath) {
@@ -1451,12 +1491,7 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 
     try {
-        const content = fs.readFileSync(absolutePath, 'utf-8');
-        // Patch files carry an invisible version-stamp block at the top; strip
-        // it so the editor only ever sees the user's own source.
-        return isStampablePath(absolutePath)
-            ? stripPatchVersionStamp(content)
-            : content;
+        return readEditorContent(absolutePath);
     } catch (error) {
         console.error('Error reading file:', error);
         throw new Error(`Failed to read file: ${relativePath}`, {
@@ -1465,38 +1500,66 @@ registerIPCHandler('FS_READ_FILE', (relativePath) => {
     }
 });
 
-registerIPCHandler('FS_WRITE_FILE', (relativePath, content) => {
-    const absolutePath = validatePathInWorkspace(relativePath);
-    if (!absolutePath) {
-        return {
-            error: 'Invalid file path or no workspace selected',
-            success: false,
-        };
-    }
-
-    try {
-        // Ensure directory exists
-        const dir = path.dirname(absolutePath);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
+registerIPCHandler(
+    'FS_WRITE_FILE',
+    (relativePath, content, expectedDiskContent) => {
+        const absolutePath = validatePathInWorkspace(relativePath);
+        if (!absolutePath) {
+            return {
+                error: 'Invalid file path or no workspace selected',
+                success: false,
+            };
         }
 
-        // Record the app version that last wrote this patch as an invisible
-        // block at the top of the file (stripped again on read).
-        const toWrite = isStampablePath(absolutePath)
-            ? stampPatchVersionSource(content, app.getVersion())
-            : content;
+        // The check and the write run synchronously together, so no other write
+        // from this process can land between them. A missing file is not a
+        // conflict: saving recreates it. The file still holding this app's own
+        // last write is not a conflict either: a save sent while an earlier
+        // save of the same buffer was in flight expects the older content.
+        if (expectedDiskContent !== undefined && fs.existsSync(absolutePath)) {
+            try {
+                const onDisk = readEditorContent(absolutePath);
+                if (
+                    onDisk !== expectedDiskContent &&
+                    onDisk !== content &&
+                    onDisk !== lastWrittenContent.get(absolutePath)
+                ) {
+                    return { conflict: true, success: false };
+                }
+            } catch (error) {
+                console.error('Error reading file before write:', error);
+                return {
+                    error: `Failed to read file: ${relativePath}`,
+                    success: false,
+                };
+            }
+        }
 
-        fs.writeFileSync(absolutePath, toWrite, 'utf-8');
-        return { success: true };
-    } catch (error) {
-        console.error('Error writing file:', error);
-        return {
-            error: `Failed to write file: ${relativePath}`,
-            success: false,
-        };
-    }
-});
+        try {
+            // Ensure directory exists
+            const dir = path.dirname(absolutePath);
+            if (!fs.existsSync(dir)) {
+                fs.mkdirSync(dir, { recursive: true });
+            }
+
+            // Record the app version that last wrote this patch as an invisible
+            // block at the top of the file (stripped again on read).
+            const toWrite = isStampablePath(absolutePath)
+                ? stampPatchVersionSource(content, app.getVersion())
+                : content;
+
+            fs.writeFileSync(absolutePath, toWrite, 'utf-8');
+            lastWrittenContent.set(absolutePath, content);
+            return { success: true };
+        } catch (error) {
+            console.error('Error writing file:', error);
+            return {
+                error: `Failed to write file: ${relativePath}`,
+                success: false,
+            };
+        }
+    },
+);
 
 registerIPCHandler('FS_RENAME_FILE', (oldPath, newPath) => {
     const oldAbsolutePath = validatePathInWorkspace(oldPath);
@@ -2431,6 +2494,7 @@ app.on('ready', () => {
 
 app.on('will-quit', () => {
     globalShortcut.unregisterAll();
+    openFileWatcher.close();
     syphonBridge?.dispose();
 });
 

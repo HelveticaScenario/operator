@@ -41,6 +41,8 @@ import { dispatchCommand, setActiveEditor } from '../keybindings/dispatch';
 export interface PatchEditorProps {
     value: string;
     currentFile?: string;
+    /** Ids of every open buffer; models of buffers not listed are disposed. */
+    openFiles: string[];
     onChange: (value: string) => void;
     editorRef: React.RefObject<editor.IStandaloneCodeEditor | null>;
     /**
@@ -71,6 +73,7 @@ const renderLineNumber = (lineNumber: number): string =>
 export function MonacoPatchEditor({
     value,
     currentFile,
+    openFiles,
     onChange,
     editorRef,
     onEditorChange,
@@ -264,6 +267,26 @@ export function MonacoPatchEditor({
             disposeCommandSub();
         };
     }, [editor]);
+
+    // Each buffer keeps its own model (keepCurrentModel) so undo history
+    // survives switching. A closed buffer's model must be disposed: buffer ids
+    // are reused (a new untitled takes the lowest free number, a deleted file
+    // can be recreated), and the Editor adopts any existing model at a path
+    // over the buffer's content. Runs after the Editor's own effects, so the
+    // editor has already moved off a disposed model.
+    const openModelPathsRef = useRef(new Set<string>());
+    useEffect(() => {
+        if (!monaco) {
+            return;
+        }
+        const paths = new Set(openFiles.map(formatPath));
+        for (const path of openModelPathsRef.current) {
+            if (!paths.has(path)) {
+                monaco.editor.getModel(monaco.Uri.parse(path))?.dispose();
+            }
+        }
+        openModelPathsRef.current = paths;
+    }, [monaco, openFiles]);
 
     const handleMount: OnMount = (ed) => {
         setEditor(ed);
