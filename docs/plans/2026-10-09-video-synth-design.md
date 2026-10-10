@@ -106,7 +106,7 @@ The engine produces samples a callback at a time, so the newest sample only move
 
 ### Phase 3 — Feedback and memory (done)
 
-`$v.feedback(update, config)` compiles to a read of the previous frame, resampled through a zoom, rotation, shift and edge mode, and a write of the new frame. The fused shader writes each loop into an extra render target; ping-pong half-float textures carry it to the next frame, up to seven loops. Buffers survive patch re-runs so edits do not wipe the picture, and a window resize clears them. `$v.frameDelay` is not implemented.
+`$v.feedback(update, config)` compiles to a read of the previous frame, resampled through a zoom, rotation, shift and edge mode, and a write of the new frame. The fused shader writes each loop into an extra render target; ping-pong half-float textures carry it to the next frame, up to seven loops. Buffers survive patch re-runs so edits do not wipe the picture, and a window resize clears them. `$v.frameDelay(input, frames)` is a chain of buffers, each written with the previous one's read, so it costs a buffer per frame held back. The renderer asks the adapter for enough color-attachment bytes per pixel to draw all seven buffers; the default limit allows three.
 
 ### Phase 4 — Display and monitoring (previews done)
 
