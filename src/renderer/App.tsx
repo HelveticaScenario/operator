@@ -109,6 +109,7 @@ function App() {
         xyScopeUpsample,
         xyScopeLineWidth,
         codeBackdropOpacity,
+        performanceScale,
         prettierConfig,
     } = useTheme();
 
@@ -2668,7 +2669,10 @@ function App() {
                                 upsample={xyScopeUpsample}
                                 lineWidth={xyScopeLineWidth}
                             />
-                            <VideoBackdrop codeBackdropOpacity={codeBackdropOpacity} />
+                            <VideoBackdrop
+                                codeBackdropOpacity={codeBackdropOpacity}
+                                performanceScale={performanceScale}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}

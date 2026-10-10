@@ -16,18 +16,31 @@ export class PerformanceOutput {
     private canvas: HTMLCanvasElement | null = null;
     private context: CanvasRenderingContext2D | null = null;
     private readonly listeners = new Set<() => void>();
+    private scale = 1;
 
     get isOpen(): boolean {
         return this.child !== null && !this.child.closed;
     }
 
-    /** The window's content size in device pixels, or null while it is closed. */
+    /**
+     * The size the picture is drawn at: the window's content size in device
+     * pixels times the resolution scale, or null while it is closed. The
+     * window shows the picture stretched to fit.
+     */
     get size(): OutputSize | null {
         const { child } = this;
         if (child === null || child.closed) return null;
-        const width = Math.round(child.innerWidth * child.devicePixelRatio);
-        const height = Math.round(child.innerHeight * child.devicePixelRatio);
+        const scale = child.devicePixelRatio * this.scale;
+        const width = Math.round(child.innerWidth * scale);
+        const height = Math.round(child.innerHeight * scale);
         return width > 0 && height > 0 ? { height, width } : null;
+    }
+
+    /** Draws the picture at `scale` of the window's pixels, from 0.1 to 1. */
+    setScale(scale: number): void {
+        if (scale === this.scale) return;
+        this.scale = scale;
+        this.notify();
     }
 
     /** Calls `listener` when the window opens, closes or resizes. */

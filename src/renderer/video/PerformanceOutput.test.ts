@@ -73,6 +73,23 @@ describe('PerformanceOutput', () => {
         expect(output.size).toEqual({ height: 800, width: 1400 });
     });
 
+    it('draws at a fraction of the window pixels when scaled down', () => {
+        const output = new PerformanceOutput();
+        output.open();
+        output.setScale(0.5);
+        expect(output.size).toEqual({ height: 400, width: 700 });
+    });
+
+    it('notifies when the scale changes, and not when it stays the same', () => {
+        const output = new PerformanceOutput();
+        output.open();
+        const listener = vi.fn();
+        output.subscribe(listener);
+        output.setScale(0.5);
+        output.setScale(0.5);
+        expect(listener).toHaveBeenCalledTimes(1);
+    });
+
     it('has no size while the window has no area', () => {
         const output = new PerformanceOutput();
         output.open();

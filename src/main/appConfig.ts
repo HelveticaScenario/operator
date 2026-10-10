@@ -66,6 +66,10 @@ const AppConfigSchema = z.object({
     xyScopeUpsample: z.boolean().optional(),
     xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
     codeBackdropOpacity: z.number().min(0).max(1).optional(),
+    performanceAspect: z
+        .enum(['free', '16:9', '4:3', '1:1', '9:16'])
+        .optional(),
+    performanceScale: z.number().min(0.1).max(1).optional(),
     vuPanelVisible: z.boolean().optional(),
     vuPanelHeight: z.number().min(84).max(480).optional(),
 });

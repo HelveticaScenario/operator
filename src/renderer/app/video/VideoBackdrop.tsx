@@ -13,12 +13,16 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * inside the area, and each frame is copied into that window, so the
  * performer sees exactly what the audience sees. While a picture shows, each
  * line of code gets a backing of `codeBackdropOpacity` (0 to 1) so the code
- * stays readable, and the rest of the picture is left as drawn.
+ * stays readable, and the rest of the picture is left as drawn. With the
+ * performance window open the picture is drawn at `performanceScale` of its
+ * pixels, from 0.1 to 1.
  */
 export function VideoBackdrop({
     codeBackdropOpacity,
+    performanceScale,
 }: {
     codeBackdropOpacity: number;
+    performanceScale: number;
 }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [renderer, setRenderer] = useState<VideoRenderer | null>(null);
@@ -111,6 +115,10 @@ export function VideoBackdrop({
     useEffect(() => {
         void electronAPI.performanceWindow.setOpen(open);
     }, [open]);
+
+    useEffect(() => {
+        performanceOutput.setScale(performanceScale);
+    }, [performanceScale]);
 
     // The panel backs each line of code while a picture shows.
     useEffect(() => {

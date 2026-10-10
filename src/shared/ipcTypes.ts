@@ -136,6 +136,10 @@ export interface AppConfig {
     xyScopeLineWidth?: number;
     /** Opacity (0..1) of the dark backing behind each line of code while video shows behind the code. Default 0.6. */
     codeBackdropOpacity?: number;
+    /** Shape of the performance window: a fixed aspect ratio, or free. Default 'free'. */
+    performanceAspect?: 'free' | '16:9' | '4:3' | '1:1' | '9:16';
+    /** Fraction of the performance window's pixels the picture is drawn at (0.1..1). Default 1. */
+    performanceScale?: number;
     /** VU meter panel visibility. Default false. */
     vuPanelVisible?: boolean;
     /** VU meter panel height in px (84–480). Default 150. */

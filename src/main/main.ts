@@ -7,6 +7,7 @@ import {
     dialog,
     globalShortcut,
     ipcMain,
+    screen,
     shell,
 } from 'electron';
 import type {
@@ -58,6 +59,13 @@ import { PERFORMANCE_WINDOW_NAME } from '../shared/video/performanceWindowName';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
+import { syphonAction, type SyphonTarget } from './syphon/syphonTarget';
+import {
+    getPerformanceWindow,
+    performanceFullscreenMenu,
+    setPerformanceAspect,
+    trackPerformanceWindow,
+} from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
@@ -98,6 +106,9 @@ let mainWindow: BrowserWindow | null = null;
 // Headless ScreenCaptureKit -> Syphon companion (macOS only); created on ready.
 let syphonBridge: SyphonBridge | null = null;
 const SYPHON_MENU_ITEM_ID = 'syphon-toggle';
+const SYPHON_PERFORMANCE_MENU_ITEM_ID = 'syphon-toggle-performance';
+/** The window Syphon publishes while it is on. */
+let syphonTarget: SyphonTarget = 'editor';
 
 /**
  * Reflect publishing state in the View-menu checkbox. Driven by the bridge's
@@ -106,10 +117,14 @@ const SYPHON_MENU_ITEM_ID = 'syphon-toggle';
  * make `isActive` misreport the box. Intent stays steady across both.
  */
 function syncSyphonMenuItem(): void {
-    const item =
-        Menu.getApplicationMenu()?.getMenuItemById(SYPHON_MENU_ITEM_ID);
-    if (!item) return;
-    item.checked = syphonBridge?.isEnabled ?? false;
+    const enabled = syphonBridge?.isEnabled ?? false;
+    const menu = Menu.getApplicationMenu();
+    const editor = menu?.getMenuItemById(SYPHON_MENU_ITEM_ID);
+    if (editor) editor.checked = enabled && syphonTarget === 'editor';
+    const performance = menu?.getMenuItemById(SYPHON_PERFORMANCE_MENU_ITEM_ID);
+    if (performance) {
+        performance.checked = enabled && syphonTarget === 'performance';
+    }
 }
 
 /** Whether the performance window is open; it shows frames this window draws. */
@@ -185,16 +200,47 @@ function promptScreenRecordingPermission(): void {
  * the `operator.toggleSyphon` command (dispatched from the palette/keymap via
  * IPC), so both surfaces behave identically — including the failure dialog.
  */
-function toggleSyphonPublish(): SyphonToggleResult {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-        return { ok: false, reason: 'No window is available to publish.' };
+function toggleSyphonPublish(
+    requested: SyphonTarget = 'editor',
+): SyphonToggleResult {
+    const window =
+        requested === 'performance' ? getPerformanceWindow() : mainWindow;
+    if (!window || window.isDestroyed()) {
+        const reason =
+            requested === 'performance'
+                ? 'Open the performance window first.'
+                : 'No window is available to publish.';
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            void dialog.showMessageBox(mainWindow, {
+                buttons: ['OK'],
+                detail: reason,
+                message: 'Could not start Syphon output',
+                type: 'warning',
+            });
+        }
+        syncSyphonMenuItem();
+        return { ok: false, reason };
     }
-    const result = syphonBridge?.toggle(mainWindow) ?? {
+    let result: SyphonToggleResult = {
         ok: false,
         reason: SyphonBridge.unsupportedReason,
     };
+    if (syphonBridge) {
+        const action = syphonAction(
+            syphonBridge.isEnabled,
+            syphonTarget,
+            requested,
+        );
+        if (action === 'stop' || action === 'switch') syphonBridge.stop();
+        if (action === 'stop') {
+            result = { ok: true };
+        } else {
+            syphonTarget = requested;
+            result = syphonBridge.start(window);
+        }
+    }
     syncSyphonMenuItem();
-    if (!result.ok && result.reason) {
+    if (!result.ok && result.reason && mainWindow) {
         void dialog.showMessageBox(mainWindow, {
             buttons: ['OK'],
             detail: result.reason,
@@ -581,6 +627,7 @@ function startConfigWatcher() {
 
     // Watch for config file changes
     configWatcher = configStore.watch((config) => {
+        setPerformanceAspect(config.performanceAspect ?? 'free');
         // Send updated config to renderer
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send(IPC_CHANNELS.CONFIG_ON_CHANGE, config);
@@ -1969,6 +2016,13 @@ const createWindow = (): void => {
 
     // The editor window opens the performance window itself, so it can draw
     // into that window's canvas.
+    trackPerformanceWindow(mainWindow, () => {
+        if (syphonTarget === 'performance' && syphonBridge?.isEnabled) {
+            syphonBridge.stop();
+            syncSyphonMenuItem();
+        }
+    });
+    setPerformanceAspect(configStore.load().performanceAspect ?? 'free');
     mainWindow.webContents.setWindowOpenHandler(({ frameName }) =>
         frameName === PERFORMANCE_WINDOW_NAME
             ? {
@@ -2268,6 +2322,16 @@ const createMenu = (): void => {
                     label: 'Toggle Performance Window',
                 },
                 {
+                    label: 'Performance Window Fullscreen',
+                    submenu: performanceFullscreenMenu(() => {
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW,
+                            );
+                        }
+                    }),
+                },
+                {
                     click: () => {
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send(
@@ -2295,6 +2359,15 @@ const createMenu = (): void => {
                               },
                               id: SYPHON_MENU_ITEM_ID,
                               label: 'Toggle Syphon Output',
+                              type: 'checkbox',
+                          },
+                          {
+                              checked: false,
+                              click: () => {
+                                  toggleSyphonPublish('performance');
+                              },
+                              id: SYPHON_PERFORMANCE_MENU_ITEM_ID,
+                              label: 'Toggle Syphon Output (Performance Window)',
                               type: 'checkbox',
                           },
                       ] as Electron.MenuItemConstructorOptions[])
@@ -2473,6 +2546,14 @@ app.on('ready', () => {
 
     createWindow();
     createMenu();
+    // The fullscreen entries list the displays, so the menu follows them.
+    const rebuildMenu = () => {
+        createMenu();
+        syncSyphonMenuItem();
+    };
+    screen.on('display-added', rebuildMenu);
+    screen.on('display-removed', rebuildMenu);
+    screen.on('display-metrics-changed', rebuildMenu);
     setupSyphonBridge();
 
     if (app.isPackaged) {

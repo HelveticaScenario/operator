@@ -26,6 +26,7 @@ interface ThemeContextValue {
     xyScopeUpsample: boolean;
     xyScopeLineWidth: number;
     codeBackdropOpacity: number;
+    performanceScale: number;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -89,6 +90,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
     const [xyScopeLineWidth, setXyScopeLineWidth] = useState(0.012);
     const [codeBackdropOpacity, setCodeBackdropOpacity] = useState(0.6);
+    const [performanceScale, setPerformanceScale] = useState(1);
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -127,6 +129,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.codeBackdropOpacity != null) {
                 setCodeBackdropOpacity(config.codeBackdropOpacity);
             }
+            if (config.performanceScale != null) {
+                setPerformanceScale(config.performanceScale);
+            }
             if (config.xyScopeLineWidth != null) {
                 setXyScopeLineWidth(config.xyScopeLineWidth);
             }
@@ -163,6 +168,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 if (newConfig.codeBackdropOpacity != null) {
                     setCodeBackdropOpacity(newConfig.codeBackdropOpacity);
                 }
+                setPerformanceScale(newConfig.performanceScale ?? 1);
                 if (newConfig.xyScopeLineWidth != null) {
                     setXyScopeLineWidth(newConfig.xyScopeLineWidth);
                 }
@@ -198,6 +204,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 xyScopeUpsample,
                 xyScopeLineWidth,
                 codeBackdropOpacity,
+                performanceScale,
             }}
         >
             {children}

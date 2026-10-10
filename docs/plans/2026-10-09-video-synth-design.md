@@ -128,11 +128,13 @@ The engine produces samples a callback at a time, so the newest sample only move
 
 **Resolved question:** thumbnails read an intermediate texture back through staging buffers rather than running a second renderer in the editor, which would have drifted from the real output wherever feedback is involved. With three previews on a feedback patch, frame pacing on a 120 Hz display was unchanged: mean 8.33 ms, p95 9.2 ms, max 9.4 ms, no frame over 20 ms in 570. That is rAF pacing, not an isolated GPU measurement.
 
+**Performance window options.** The editor window's settings give the performance window a shape (free, 16:9, 4:3, 1:1 or 9:16) and a resolution scale (100%, 75%, 50% or 25% of the window's pixels, which the window shows stretched to fit). View → Performance Window Fullscreen lists each display and puts the window fullscreen on it, opening the window first if needed; on macOS it uses simple fullscreen, which takes no Spaces transition, and Exit Fullscreen returns the window to its earlier size, shape and place. The menu follows displays as they come and go. The window logic is in `src/main/performanceWindow.ts`.
+
+**Syphon.** View has two Syphon items, one publishing the editor window and one the performance window; choosing the other while one is on moves publishing over, and closing the performance window stops its feed. The helper is a screen-capture of the chosen window, so each item needs Screen Recording permission, and the performance-window path has not been tried against a real Syphon client. Both windows keep painting while they are captured because the editor window does not throttle while the performance window is open or Syphon is on.
+
 **Not built:**
 
-- Fullscreen on a chosen display, aspect and resolution scale options for the performance window.
-- Syphon publishing of the performance window. `SyphonBridge.start` takes the window to capture, but the occlusion and throttling handling that keeps a captured window painting is written for the main window and needs checking against a real Syphon client.
-- Analog-look post-processing (scanlines, noise, bloom).
+- Analog-look post-processing (scanlines, noise, bloom) as a single chain; the pieces exist as `scanlines`, `vignette`, `grain` and `bloom`.
 
 ### Phase 5 — Audio and video bridges (done)
 
@@ -178,8 +180,6 @@ The shader still computes with 5 volts as 1. The compiler converts as it resolve
 Not built yet, in rough order of value:
 
 - **Camera and screen capture as sources.** Needs a camera entitlement and usage string in the packaging and an OS permission prompt, so it was left for a step that can be tested with a real camera. Everything else about it (a texture refreshed from a video element, bound like `$v.video`) already exists.
-- Performance window options: fullscreen on a chosen display, aspect, resolution scale. The window currently has the size and aspect the user gives it.
-- Syphon publishing of the performance window.
 - Sequences as parameters, as Hydra's arrays: a `$p` pattern through an audio tap already steps values with exact edges, but there is no video-side shorthand.
 
 Deferred indefinitely:
