@@ -481,7 +481,7 @@ export class VideoGraphBuilder implements VideoCore {
         return this.previewSites;
     }
 
-    /** Shows `input` in the performance window. The last call wins. */
+    /** Shows `input` as the patch's picture. The last call wins. */
     out = (input: VideoOutput): void => {
         this.addNode('out', 'color', {
             input: this.asColorOrGray('$v.out', 'input', input),
@@ -494,6 +494,7 @@ export class VideoGraphBuilder implements VideoCore {
      * patch has neither. A patch with previews but no `$v.out` shows black.
      */
     build(): VideoGraph | null {
+        const hasOutput = this.outputId !== null;
         if (this.outputId === null && this.previews.length > 0) {
             const black = { kind: 'const', value: 0 } as const;
             const color = this.addNode('colorize', 'color', {
@@ -539,6 +540,7 @@ export class VideoGraphBuilder implements VideoCore {
                     : { ...n, buffer: used.indexOf(n.buffer) },
             ),
             output: this.outputId,
+            hasOutput,
             histories: this.histories,
             sources: this.sources,
             previews: this.previews,

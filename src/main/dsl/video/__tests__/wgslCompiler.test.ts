@@ -11,6 +11,7 @@ const rampInputs = {
 } as const;
 
 const stripes: VideoGraph = {
+    hasOutput: true,
     nodes: [
         { id: 'x', kind: 'ramp', inputs: rampInputs },
         {
@@ -251,6 +252,7 @@ describe('compileVideoGraph', () => {
 describe('compileVideoGraph feedback', () => {
     const constant = (value: number) => ({ kind: 'const', value }) as const;
     const loop: VideoGraph = {
+        hasOutput: true,
         nodes: [
             {
                 id: 'prev',

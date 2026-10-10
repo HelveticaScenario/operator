@@ -58,6 +58,27 @@
     position: relative;
 }
 
+/* The patch's $v.out, drawn behind the code. */
+.video-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.video-backdrop-error {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    margin: 0;
+    z-index: 0;
+    pointer-events: none;
+    color: #ff6b6b;
+    white-space: pre-wrap;
+}
+
 /* Lissajous background canvas — sits behind Monaco, never receives events. */
 .scope-xy-background {
     position: absolute;

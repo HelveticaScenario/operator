@@ -34,7 +34,7 @@ function resolveLine(
 
 /**
  * Shows each `$v.preview` as a panel under its call. Frames arrive from the
- * performance window and are drawn into the panel with the matching index.
+ * video renderer and are drawn into the panel with the matching index.
  */
 export function createVideoPreviewViewZones({
     editor,

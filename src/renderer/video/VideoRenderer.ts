@@ -46,6 +46,11 @@ export class VideoRenderer {
     private stoppedMs = 0;
     /** True while a request for audio samples is waiting on the engine. */
     private pulling = false;
+    /** A canvas size to hold instead of following the element's size. */
+    private fixedSize: { height: number; width: number } | null = null;
+    private frameSink: ((canvas: HTMLCanvasElement) => void) | null = null;
+    /** True once an empty frame has been drawn, after which nothing is drawn until a shader arrives. */
+    private cleared = false;
     private previewSink: ((frame: VideoPreviewFrame) => void) | null = null;
     private cvSink: ((values: VideoCvValue[]) => void) | null = null;
     private readonly startMs = performance.now();
@@ -246,13 +251,27 @@ export class VideoRenderer {
         this.previews.resize(0, 0, 0);
     }
 
+    /**
+     * Holds the canvas at `size` pixels, whatever the element's size, so the
+     * picture has another window's resolution; null follows the element again.
+     */
+    setFixedSize(size: { height: number; width: number } | null): void {
+        this.fixedSize = size;
+    }
+
+    /** Receives the canvas right after each frame is drawn, to copy it elsewhere. */
+    setFrameSink(sink: ((canvas: HTMLCanvasElement) => void) | null): void {
+        this.frameSink = sink;
+    }
+
     private fitCanvas(): void {
         const scale = window.devicePixelRatio;
-        const width = Math.max(1, Math.round(this.canvas.clientWidth * scale));
-        const height = Math.max(
-            1,
-            Math.round(this.canvas.clientHeight * scale),
-        );
+        const width =
+            this.fixedSize?.width ??
+            Math.max(1, Math.round(this.canvas.clientWidth * scale));
+        const height =
+            this.fixedSize?.height ??
+            Math.max(1, Math.round(this.canvas.clientHeight * scale));
         if (this.canvas.width !== width) this.canvas.width = width;
         if (this.canvas.height !== height) this.canvas.height = height;
     }
@@ -318,6 +337,7 @@ export class VideoRenderer {
 
     private frame = (): void => {
         this.frameHandle = requestAnimationFrame(this.frame);
+        if (this.program === null && this.cleared) return;
 
         if (this.pullSource !== null && !this.pulling) {
             this.pulling = true;
@@ -331,7 +351,7 @@ export class VideoRenderer {
                     this.pulling = false;
                 });
         }
-        if (!this.running) return;
+        if (!this.running && this.program !== null) return;
         this.fitCanvas();
 
         const program = this.program;
@@ -405,6 +425,8 @@ export class VideoRenderer {
         }
 
         this.device.queue.submit([encoder.finish()]);
+        this.cleared = program === null;
+        this.frameSink?.(this.canvas);
         this.previews.deliver(copied);
         this.buffers.flip();
         this.frameIndex++;

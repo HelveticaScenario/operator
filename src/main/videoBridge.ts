@@ -1,5 +1,4 @@
-import { BrowserWindow } from 'electron';
-import path from 'node:path';
+import type { WebContents } from 'electron';
 import { IPC_CHANNELS } from '../shared/ipcTypes';
 import type {
     CompiledVideoShader,
@@ -8,10 +7,8 @@ import type {
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
 
-declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string;
-declare const MAIN_WINDOW_VITE_NAME: string;
-
-let performanceWindow: BrowserWindow | null = null;
+/** The editor window, which draws the picture. */
+let target: (() => WebContents | null) | null = null;
 let latestShader: CompiledVideoShader | null = null;
 let tapSource: TapSource | null = null;
 /** How many samples of each tap earlier polls have already taken. */
@@ -29,9 +26,21 @@ export function setVideoTapSource(source: TapSource): void {
     tapSource = source;
 }
 
+/** Names the window that draws the picture. */
+export function setVideoTarget(get: () => WebContents | null): void {
+    target = get;
+}
+
+function send(channel: string, payload: unknown): void {
+    const contents = target?.() ?? null;
+    if (contents !== null && !contents.isDestroyed()) {
+        contents.send(channel, payload);
+    }
+}
+
 function sendUniforms(updates: VideoUniformUpdate[]): void {
     if (updates.length === 0) return;
-    performanceWindow?.webContents.send(IPC_CHANNELS.VIDEO_ON_UNIFORM, updates);
+    send(IPC_CHANNELS.VIDEO_ON_UNIFORM, updates);
 }
 
 /** The engine taps the shader reads, as uniforms or audio history. */
@@ -70,50 +79,10 @@ export function pullVideo(): VideoPull {
     return { running: true, taps: chunks };
 }
 
-function createPerformanceWindow(): BrowserWindow {
-    const window = new BrowserWindow({
-        backgroundColor: '#000000',
-        height: 720,
-        show: false,
-        title: 'Operator Performance',
-        webPreferences: {
-            // Output keeps rendering while the editor has focus.
-            backgroundThrottling: false,
-            preload: path.join(__dirname, 'preload.js'),
-        },
-        width: 1280,
-    });
-
-    if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-        void window.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL + '#performance');
-    } else {
-        void window.loadFile(
-            path.join(
-                __dirname,
-                `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`,
-            ),
-            { hash: 'performance' },
-        );
-    }
-
-    // Shown without focus so the editor keeps the keyboard.
-    window.once('ready-to-show', () => window.showInactive());
-    window.on('closed', () => {
-        performanceWindow = null;
-    });
-    return window;
-}
-
-/**
- * Records the patch's video shader and delivers it to the performance window,
- * opening the window when a patch first has video output.
- */
+/** Records the patch's video shader and delivers it to the editor window, which draws it. */
 export function updateVideoShader(shader: CompiledVideoShader | null): void {
     latestShader = shader;
-    if (shader !== null && performanceWindow === null) {
-        performanceWindow = createPerformanceWindow();
-    }
-    performanceWindow?.webContents.send(IPC_CHANNELS.VIDEO_ON_SHADER, shader);
+    send(IPC_CHANNELS.VIDEO_ON_SHADER, shader);
 }
 
 /**
@@ -131,13 +100,4 @@ export function setVideoControl(moduleId: string, value: number): void {
 
 export function getVideoShader(): CompiledVideoShader | null {
     return latestShader;
-}
-
-/** Opens the performance window, or closes it when it is already open. */
-export function togglePerformanceWindow(): void {
-    if (performanceWindow === null) {
-        performanceWindow = createPerformanceWindow();
-    } else {
-        performanceWindow.close();
-    }
 }

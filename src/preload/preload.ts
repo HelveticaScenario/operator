@@ -203,6 +203,7 @@ export interface ElectronAPI {
     onMenuNewFile: (callback: () => void) => () => void;
     onMenuSave: (callback: () => void) => () => void;
     onMenuStop: (callback: () => void) => () => void;
+    onMenuTogglePerformanceWindow: (callback: () => void) => () => void;
     onMenuCancelQueuedUpdate: (callback: () => void) => () => void;
     onMenuUpdatePatch: (
         callback: (trigger?: QueuedTrigger) => void,
@@ -240,7 +241,8 @@ export interface ElectronAPI {
 
     // Performance window
     performanceWindow: {
-        toggle: () => Promise<void>;
+        /** Tells the main process whether the performance window is open, so it keeps this window painting. */
+        setOpen: (open: boolean) => Promise<void>;
     };
     video: {
         getShader: () => Promise<CompiledVideoShader | null>;
@@ -506,6 +508,9 @@ const electronAPI: ElectronAPI = {
     onMenuCloseBuffer: menuEventHandler(MENU_CHANNELS.CLOSE_BUFFER),
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
     onMenuToggleVuMeters: menuEventHandler(MENU_CHANNELS.TOGGLE_VU_METERS),
+    onMenuTogglePerformanceWindow: menuEventHandler(
+        MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW,
+    ),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
     onMenuOpenModuleProfile: menuEventHandler(
@@ -527,7 +532,7 @@ const electronAPI: ElectronAPI = {
 
     // Performance window
     performanceWindow: {
-        toggle: () => invokeIPC('PERFORMANCE_WINDOW_TOGGLE'),
+        setOpen: (open) => invokeIPC('VIDEO_SET_OUTPUT_OPEN', open),
     },
     video: {
         getShader: () => invokeIPC('VIDEO_GET_SHADER'),

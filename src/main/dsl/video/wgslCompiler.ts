@@ -373,6 +373,7 @@ ${previewEntries.join('')}`;
         feedbackBufferCount: bufferCount,
         histories: graph.histories,
         sources: graph.sources,
+        hasOutput: graph.hasOutput,
         previewCount: graph.previews.length,
         cvSamples: graph.previews.flatMap((preview, index) =>
             preview.cv ? [{ index, ...preview.cv }] : [],

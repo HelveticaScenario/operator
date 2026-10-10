@@ -406,7 +406,7 @@ export const IPC_CHANNELS = {
     KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
     // Performance window
-    PERFORMANCE_WINDOW_TOGGLE: 'modular:window:toggle-performance',
+    VIDEO_SET_OUTPUT_OPEN: 'modular:video:set-output-open',
     VIDEO_GET_SHADER: 'modular:video:get-shader',
     VIDEO_ON_SHADER: 'modular:video:on-shader',
     VIDEO_ON_UNIFORM: 'modular:video:on-uniform',
@@ -451,6 +451,7 @@ export const MENU_CHANNELS = {
     CANCEL_QUEUED_UPDATE: 'modular:menu:cancel-queued-update',
     TOGGLE_RECORDING: 'modular:menu:toggle-recording',
     TOGGLE_VU_METERS: 'modular:menu:toggle-vu-meters',
+    TOGGLE_PERFORMANCE_WINDOW: 'modular:menu:toggle-performance-window',
     UPDATE_PATCH: 'modular:menu:update-patch',
     UPDATE_PATCH_NEXT_BEAT: 'modular:menu:update-patch-next-beat',
 } as const;
@@ -606,7 +607,7 @@ export interface IPCHandlers {
     [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
 
     // Performance window
-    [IPC_CHANNELS.PERFORMANCE_WINDOW_TOGGLE]: () => void;
+    [IPC_CHANNELS.VIDEO_SET_OUTPUT_OPEN]: (open: boolean) => void;
     [IPC_CHANNELS.VIDEO_GET_SHADER]: () => CompiledVideoShader | null;
     [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
     [IPC_CHANNELS.VIDEO_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;

@@ -109,15 +109,20 @@ The engine produces samples a callback at a time, so the newest sample only move
 
 ### Phase 4 — Display and monitoring (previews done)
 
-**Direction:** the output window is the **performance window**: the general-purpose, audience-facing surface that replaces showing the audience the editor. Video is its first content; the code view and other visuals are meant to share it. It opens from View → Toggle Performance Window (`operator.togglePerformanceWindow`, default Ctrl+Shift+V) and when a patch first calls `$v.out`.
+**Direction:** the picture is drawn once, by the editor window's renderer, and shown in two places. Behind the code it fills the editor area. The **performance window**, the audience-facing surface that replaces showing the audience the editor, opens from View → Toggle Performance Window (`operator.togglePerformanceWindow`, default Ctrl+Shift+V) and never opens by itself.
+
+- The editor opens the performance window with `window.open`, so it can reach the new window's document. The window holds a plain canvas, and after each frame the renderer copies its canvas into it. One renderer means one clock, one set of audio taps and one set of videos and feedback buffers, so the two views are the same frame and nothing needs syncing.
+- While the performance window is open, the renderer's canvas takes its pixel size and the picture behind the code is fitted inside the editor area at that aspect ratio, so the performer sees exactly what the audience sees. Otherwise the canvas follows the editor area.
+- The window is a sibling of the editor, not the editor's own content. While it is open the editor window keeps painting when backgrounded, because the performance window is only as live as the editor's frames.
+- The video canvas sits above the `$scopeXY` background canvas and below the code, so a patch with video hides the XY scope.
 
 **Previews:** `$v.preview(signal, { view })` returns its signal and shows it in a panel under the call in the editor, as an image, a waveform monitor or a vectorscope.
 
 - The compiler adds a fragment entry point `preview_k` per preview that evaluates only that signal's dependencies and reads the feedback textures without writing them, so a preview shows the same frame the audience sees.
-- The performance window draws previews into small targets (144 pixels tall at the output's aspect ratio) every other frame, reads them back and sends them to main, which relays them to the editor.
+- The renderer draws previews into small targets (144 pixels tall at the output's aspect ratio) every other frame, reads them back and sends them to main, which relays them to the editor.
 - The editor anchors each panel to its call with a tracked range, so panels follow edits.
 - Monitors are computed in the editor from the preview's pixels.
-- The performance window must be open for previews to update.
+- Previews update whether or not the performance window is open.
 
 **Resolved question:** thumbnails read an intermediate texture back through staging buffers rather than running a second renderer in the editor, which would have drifted from the real output wherever feedback is involved. With three previews on a feedback patch, frame pacing on a 120 Hz display was unchanged: mean 8.33 ms, p95 9.2 ms, max 9.4 ms, no frame over 20 ms in 570. That is rAF pacing, not an isolated GPU measurement.
 
@@ -159,7 +164,7 @@ One table, `src/shared/dsl/videoDocs.ts`, generates both the Monaco typings (JSD
 Not built yet, in rough order of value:
 
 - **Camera and screen capture as sources.** Needs a camera entitlement and usage string in the packaging and an OS permission prompt, so it was left for a step that can be tested with a real camera. Everything else about it (a texture refreshed from a video element, bound like `$v.video`) already exists.
-- Performance window options: fullscreen on a chosen display, aspect, resolution scale.
+- Performance window options: fullscreen on a chosen display, aspect, resolution scale. The window currently has the size and aspect the user gives it.
 - Syphon publishing of the performance window.
 - Sequences as parameters, as Hydra's arrays: a `$p` pattern through an audio tap already steps values with exact edges, but there is no video-side shorthand.
 - `$v.frameDelay` (a buffer read does most of this).

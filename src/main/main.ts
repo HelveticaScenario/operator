@@ -47,9 +47,10 @@ import {
     pullVideo,
     setVideoControl,
     setVideoTapSource,
-    togglePerformanceWindow,
+    setVideoTarget,
     updateVideoShader,
-} from './performanceWindow';
+} from './videoBridge';
+import { PERFORMANCE_WINDOW_NAME } from '../shared/video/performanceWindowName';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
@@ -106,17 +107,23 @@ function syncSyphonMenuItem(): void {
     item.checked = syphonBridge?.isEnabled ?? false;
 }
 
+/** Whether the performance window is open; it shows frames this window draws. */
+let performanceOutputOpen = false;
+
 /**
- * While Syphon is publishing, keep the renderer painting at full rate even when
- * the window is backgrounded or minimized, so the captured feed never throttles.
- * Restored to the power-saving default once publishing stops. (The companion
- * occlusion switch is global and can't be gated this way — see the top of this
- * file.)
+ * While Syphon is publishing or the performance window is open, keep the
+ * renderer painting at full rate even when the window is backgrounded or
+ * minimized, so the captured feed and the performance window never throttle.
+ * Restored to the power-saving default once neither is the case. (The
+ * companion occlusion switch is global and can't be gated this way — see the
+ * top of this file.)
  */
 function applySyphonRenderTuning(): void {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const publishing = syphonBridge?.isEnabled ?? false;
-    mainWindow.webContents.setBackgroundThrottling(!publishing);
+    mainWindow.webContents.setBackgroundThrottling(
+        !(publishing || performanceOutputOpen),
+    );
 }
 
 /** Construct the Syphon bridge (macOS only) and route status changes to the UI. */
@@ -995,25 +1002,30 @@ setVideoTapSource({
     isStopped: () => synth.isStopped(),
 });
 
+setVideoTarget(() =>
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+);
+
 registerIPCHandler('VIDEO_PULL', () => pullVideo());
 
-// Region averages computed by the performance window drive audio signals.
+// Region averages computed by the video renderer drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {
     for (const { id, value } of values) {
         synth.setModuleParam(id, '$signal', { source: value });
     }
 });
 
-// Preview frames drawn by the performance window go to the editor.
+// Preview frames drawn by the video renderer go to the editor.
 registerIPCHandler('VIDEO_PREVIEW_FRAME', (frame) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME, frame);
     }
 });
 
-registerIPCHandler('PERFORMANCE_WINDOW_TOGGLE', () =>
-    togglePerformanceWindow(),
-);
+registerIPCHandler('VIDEO_SET_OUTPUT_OPEN', (open) => {
+    performanceOutputOpen = open;
+    applySyphonRenderTuning();
+});
 
 registerIPCHandler('SYNTH_GET_SAMPLE_RATE', () => synth.sampleRate());
 
@@ -1884,6 +1896,22 @@ const createWindow = (): void => {
         width: 1500,
     });
 
+    // The editor window opens the performance window itself, so it can draw
+    // into that window's canvas.
+    mainWindow.webContents.setWindowOpenHandler(({ frameName }) =>
+        frameName === PERFORMANCE_WINDOW_NAME
+            ? {
+                  action: 'allow',
+                  overrideBrowserWindowOptions: {
+                      backgroundColor: '#000000',
+                      height: 720,
+                      title: 'Operator Performance',
+                      width: 1280,
+                  },
+              }
+            : { action: 'allow' },
+    );
+
     // Keep the app name as the title rather than index.html's static <title>.
     mainWindow.on('page-title-updated', (event) => event.preventDefault());
 
@@ -2160,7 +2188,11 @@ const createMenu = (): void => {
                         'Ctrl+Shift+V',
                     ),
                     click: () => {
-                        togglePerformanceWindow();
+                        if (mainWindow && !mainWindow.isDestroyed()) {
+                            mainWindow.webContents.send(
+                                MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW,
+                            );
+                        }
                     },
                     label: 'Toggle Performance Window',
                 },

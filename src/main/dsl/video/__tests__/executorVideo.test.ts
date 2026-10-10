@@ -1280,4 +1280,16 @@ describe('$v in the DSL executor', () => {
             }
         });
     });
+
+    describe('output', () => {
+        it('has an output when the patch calls $v.out', () => {
+            expect(exec(`$v.ramp().out();`).video!.hasOutput).toBe(true);
+        });
+
+        it('has no output when a patch only previews', () => {
+            const { video } = exec(`$v.ramp().preview();`);
+            expect(video).not.toBeNull();
+            expect(video!.hasOutput).toBe(false);
+        });
+    });
 });

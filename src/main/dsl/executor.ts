@@ -72,7 +72,7 @@ export interface DSLExecutionResult {
     buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
-    /** Shader for the performance window; null when the patch has no `$v.out` or `$v.preview` */
+    /** Shader for the video renderer; null when the patch has no `$v.out` or `$v.preview` */
     video: CompiledVideoShader | null;
     /** One entry per `$v.preview` call, in the order the shader draws them */
     videoPreviews: VideoPreviewSite[];

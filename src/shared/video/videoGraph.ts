@@ -105,7 +105,7 @@ export interface VideoTapSamples {
     sampleRate: number;
 }
 
-/** What the performance window asks the main process for once per frame. */
+/** What the video renderer asks the main process for once per frame. */
 export interface VideoPull {
     /** False while the engine is stopped; the picture holds still until it runs again. */
     running: boolean;
@@ -134,6 +134,8 @@ export interface VideoGraph {
     histories: VideoHistory[];
     /** Media the picture samples; `sources[i]` is what `source` nodes with `source: i` read. */
     sources: VideoSourceDef[];
+    /** True when the patch calls `$v.out`; without it the picture is black and only previews draw. */
+    hasOutput: boolean;
 }
 
 /** A picture or recording from the workspace folder that a patch draws from. */
@@ -186,4 +188,6 @@ export interface CompiledVideoShader {
     histories: VideoHistory[];
     /** Media the shader samples, one texture each; see `bindingSlots`. */
     sources: VideoSourceDef[];
+    /** True when the patch calls `$v.out`, so the picture is worth showing. */
+    hasOutput: boolean;
 }

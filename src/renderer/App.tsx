@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
+import { VideoBackdrop } from './app/video/VideoBackdrop';
+import { performanceOutput } from './video/PerformanceOutput';
 import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
 import { ErrorDisplay } from './components/ErrorDisplay';
@@ -1764,7 +1766,7 @@ function App() {
                 const editorInstance = editorRef.current;
                 const model = editorInstance?.getModel();
 
-                // Previews follow the performance window, which swaps its
+                // Previews follow the video renderer, which swaps its
                 // shader at once rather than at a queued update's beat.
                 const previewAnchors = editorInstance
                     ? createVideoPreviewAnchors(
@@ -2209,7 +2211,7 @@ function App() {
         registerCommand(
             'operator.togglePerformanceWindow',
             () => {
-                void electronAPI.performanceWindow.toggle();
+                performanceOutput.toggle();
             },
             { label: 'Toggle Performance Window', category: 'View' },
         );
@@ -2299,6 +2301,10 @@ function App() {
         const cleanupToggleVuMeters = electronAPI.onMenuToggleVuMeters(() => {
             executeCommand('operator.toggleVuMeters');
         });
+        const cleanupTogglePerformanceWindow =
+            electronAPI.onMenuTogglePerformanceWindow(() => {
+                executeCommand('operator.togglePerformanceWindow');
+            });
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
@@ -2448,6 +2454,7 @@ function App() {
             cleanupCloseBuffer();
             cleanupToggleRecording();
             cleanupToggleVuMeters();
+            cleanupTogglePerformanceWindow();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
@@ -2638,6 +2645,7 @@ function App() {
                                 upsample={xyScopeUpsample}
                                 lineWidth={xyScopeLineWidth}
                             />
+                            <VideoBackdrop />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}

@@ -38,7 +38,7 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel in the performance window, which opens when a patch calls `$v.out`. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`. Pass one channel; a polyphonic signal is rejected.',
+        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`. Pass one channel; a polyphonic signal is rejected.',
     examples: [
         '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
@@ -51,7 +51,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'time',
         group: 'Generators',
         description:
-            'Seconds since the performance window started rendering. Use it as a phase to animate an oscillator.',
+            'Seconds since video started rendering. Use it as a phase to animate an oscillator.',
         params: [],
         examples: ['$v.out($v.colorize($v.osc($v.ramp(), 4, $v.time), 0, 0))'],
         declarations: ['readonly time: VideoField;'],
@@ -652,7 +652,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'preview',
         group: 'Output',
         description:
-            'Shows a signal in the editor, in a panel under this call, and returns it unchanged so a preview can sit inside an expression. The panel is drawn from the same frame the performance window shows, feedback included, so the performance window must be open.',
+            'Shows a signal in the editor, in a panel under this call, and returns it unchanged so a preview can sit inside an expression. The panel is drawn from the same frame the picture shows, feedback included.',
         params: [
             {
                 name: 'config.view',
@@ -674,7 +674,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'toCV',
         group: 'Output',
         description:
-            'Averages a region of a signal each frame into an audio control signal between 0 and 1, so the picture can modulate the sound. A color contributes its brightness. The value is read from the performance window, about 30 times a second, so the performance window must be open. Scale the result with `.range(min, max)` like any ranged signal.',
+            'Averages a region of a signal each frame into an audio control signal between 0 and 1, so the picture can modulate the sound. A color contributes its brightness. The value is read from the picture about 30 times a second. Scale the result with `.range(min, max)` like any ranged signal.',
         params: [
             {
                 name: 'config.x',
@@ -983,7 +983,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'out',
         group: 'Output',
         description:
-            'Shows a color in the performance window. A field is shown as a gray picture. Last call wins.',
+            'Shows a color behind the code, and in the performance window when it is open. A field is shown as a gray picture. Last call wins.',
         params: [],
         examples: ['$v.out($v.colorize(1, 0, 0))'],
         declarations: ['out(input: VideoSignal): void;'],
@@ -1278,7 +1278,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'out',
         direct: true,
         description:
-            'Shows this in the performance window; a field is shown as a gray picture.',
+            'Shows this behind the code, and in the performance window when it is open; a field is shown as a gray picture.',
         declarations: ['out(): void;'],
     },
 ];
