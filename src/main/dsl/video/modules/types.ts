@@ -21,6 +21,8 @@ export interface VideoModuleDef {
     warped?: readonly string[];
     /** Marks a node that reads the audio history row named by its `history` field. */
     history?: boolean;
+    /** Marks a node that samples the media named by its `source` field. */
+    source?: boolean;
     output: VideoValueType;
     params: Record<string, VideoParamSpec>;
     /**
@@ -38,6 +40,6 @@ export interface VideoModuleDef {
     emit(
         args: Record<string, string>,
         params: Record<string, string>,
-        indices: { buffer: number; history: number },
+        indices: { buffer: number; history: number; source: number },
     ): string;
 }

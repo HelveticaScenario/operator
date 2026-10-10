@@ -81,5 +81,36 @@ export function colorMethods(core: VideoCore) {
                     saturation,
                 ),
             }),
+
+        /** Darkens evenly spaced horizontal lines, as a CRT does. */
+        scanlines: (
+            input: VideoOutput,
+            count: VideoSource = 240,
+            strength: VideoSource = 0.4,
+        ): VideoOutput =>
+            core.addNode('scanlines', 'color', {
+                count: core.asField('$v.scanlines', 'count', count),
+                input: core.asColor('$v.scanlines', 'input', input),
+                strength: core.asField('$v.scanlines', 'strength', strength),
+            }),
+
+        /** Darkens toward the corners of the frame. */
+        vignette: (
+            input: VideoOutput,
+            strength: VideoSource = 0.6,
+            radius: VideoSource = 0.3,
+        ): VideoOutput =>
+            core.addNode('vignette', 'color', {
+                input: core.asColor('$v.vignette', 'input', input),
+                radius: core.asField('$v.vignette', 'radius', radius),
+                strength: core.asField('$v.vignette', 'strength', strength),
+            }),
+
+        /** Adds film grain, redrawn every frame. */
+        grain: (input: VideoOutput, amount: VideoSource = 0.1): VideoOutput =>
+            core.addNode('grain', 'color', {
+                amount: core.asField('$v.grain', 'amount', amount),
+                input: core.asColor('$v.grain', 'input', input),
+            }),
     };
 }

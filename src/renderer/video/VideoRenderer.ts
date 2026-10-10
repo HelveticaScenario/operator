@@ -4,6 +4,7 @@ import { HistoryTexture } from './HistoryTexture';
 import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
+import { SourceTextures } from './SourceTextures';
 import { TapStream } from './TapStream';
 import { alignWindow } from './alignWindow';
 import type {
@@ -45,6 +46,8 @@ export class VideoRenderer {
     private readonly buffers: FeedbackBuffers;
     private readonly previews: PreviewCapture;
     private readonly history: HistoryTexture;
+    private readonly sources: SourceTextures;
+    private errorSink: ((message: string) => void) | null = null;
     /** Each audio signal the shader reads, played back against this clock. */
     private readonly streams = new Map<number, TapStream>();
     /** Scratch the audio history windows are copied into, per history row. */
@@ -59,6 +62,9 @@ export class VideoRenderer {
     ) {
         this.buffers = new FeedbackBuffers(device);
         this.history = new HistoryTexture(device);
+        this.sources = new SourceTextures(device, (message) =>
+            this.errorSink?.(message),
+        );
         this.previews = new PreviewCapture(device, (frame) =>
             this.routeFrame(frame),
         );
@@ -127,6 +133,7 @@ export class VideoRenderer {
             this.canvas.height,
         );
         this.history.resize(program.histories.length);
+        this.sources.sync(program.sources);
         this.historyScratch = program.histories.map(
             ({ samples, trigger }) =>
                 new Float32Array(
@@ -153,6 +160,11 @@ export class VideoRenderer {
      */
     setTapSource(source: (() => Promise<VideoTapSamples[]>) | null): void {
         this.tapSource = source;
+    }
+
+    /** Receives problems loading media, such as a file that will not decode. */
+    setErrorSink(sink: ((message: string) => void) | null): void {
+        this.errorSink = sink;
     }
 
     /** Adds audio samples that have just arrived. */
@@ -197,6 +209,7 @@ export class VideoRenderer {
         this.previews.destroy();
         this.buffers.destroy();
         this.history.destroy();
+        this.sources.destroy();
         this.device.destroy();
     }
 
@@ -204,6 +217,7 @@ export class VideoRenderer {
         this.program?.destroy();
         this.program = null;
         this.history.resize(0);
+        this.sources.sync([]);
         this.previews.resize(0, 0, 0);
     }
 
@@ -331,6 +345,7 @@ export class VideoRenderer {
             const { uniformBuffer, uniforms } = program;
             const now = performance.now();
             this.updateAudioInputs(program, now);
+            this.sources.update();
             uniforms[UNIFORM_TIME_OFFSET] = (now - this.startMs) / 1000;
             uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
             uniforms[UNIFORM_RESOLUTION_OFFSET + 1] = this.canvas.height;
@@ -339,6 +354,7 @@ export class VideoRenderer {
                 this.device,
                 this.buffers,
                 this.history,
+                this.sources,
                 this.sampler,
             );
             pass.setPipeline(program.pipeline);

@@ -3,10 +3,15 @@ import type {
     CompiledVideoShader,
     VideoCvSample,
     VideoHistory,
+    VideoSourceDef,
 } from '../../shared/video/videoGraph';
-import { UNIFORM_SLOTS_OFFSET } from '../../shared/video/uniformLayout';
+import {
+    UNIFORM_SLOTS_OFFSET,
+    bindingSlots,
+} from '../../shared/video/uniformLayout';
 import { FEEDBACK_FORMAT, type FeedbackBuffers } from './FeedbackBuffers';
 import type { HistoryTexture } from './HistoryTexture';
+import type { SourceTextures } from './SourceTextures';
 import { PREVIEW_FORMAT } from './PreviewCapture';
 
 type ParityGroups = [GPUBindGroup, GPUBindGroup];
@@ -26,6 +31,8 @@ export class ShaderProgram {
     readonly tapSlots: { slot: number; tap: number }[];
     /** Rows of audio history the shader reads. */
     readonly histories: VideoHistory[];
+    /** Media the shader samples, one texture each. */
+    readonly sources: VideoSourceDef[];
     readonly uniforms: Float32Array<ArrayBuffer>;
     readonly previewUniforms: Float32Array<ArrayBuffer>;
     private groups: { main: ParityGroups; preview: ParityGroups } | null = null;
@@ -42,6 +49,7 @@ export class ShaderProgram {
         this.bufferCount = compiled.feedbackBufferCount;
         this.previewCount = compiled.previewCount;
         this.histories = compiled.histories;
+        this.sources = compiled.sources;
         this.tapSlots = compiled.uniforms.flatMap((u) =>
             u.kind === 'tap' ? [{ slot: u.slot, tap: u.tap }] : [],
         );
@@ -76,6 +84,7 @@ export class ShaderProgram {
         }
 
         const bufferCount = compiled.feedbackBufferCount;
+        const slots = bindingSlots(bufferCount, compiled.histories.length);
         const layout = device.createBindGroupLayout({
             entries: [
                 {
@@ -83,17 +92,17 @@ export class ShaderProgram {
                     buffer: { type: 'uniform' },
                     visibility: GPUShaderStage.FRAGMENT,
                 },
-                ...(bufferCount === 0
+                ...(bufferCount === 0 && compiled.sources.length === 0
                     ? []
                     : [
                           {
-                              binding: 1,
+                              binding: slots.sampler,
                               sampler: { type: 'filtering' as const },
                               visibility: GPUShaderStage.FRAGMENT,
                           },
                       ]),
                 ...Array.from({ length: bufferCount }, (_, k) => ({
-                    binding: 2 + k,
+                    binding: slots.buffer + k,
                     texture: { sampleType: 'float' as const },
                     visibility: GPUShaderStage.FRAGMENT,
                 })),
@@ -101,13 +110,18 @@ export class ShaderProgram {
                     ? []
                     : [
                           {
-                              binding: 2 + bufferCount,
+                              binding: slots.history,
                               texture: {
                                   sampleType: 'unfilterable-float' as const,
                               },
                               visibility: GPUShaderStage.FRAGMENT,
                           },
                       ]),
+                ...compiled.sources.map((_, k) => ({
+                    binding: slots.source + k,
+                    texture: { sampleType: 'float' as const },
+                    visibility: GPUShaderStage.FRAGMENT,
+                })),
             ],
         });
         const pipelineLayout = device.createPipelineLayout({
@@ -172,29 +186,35 @@ export class ShaderProgram {
         device: GPUDevice,
         buffers: FeedbackBuffers,
         history: HistoryTexture,
+        sources: SourceTextures,
         sampler: GPUSampler,
     ): { main: ParityGroups; preview: ParityGroups } {
-        const generation = `${buffers.generation}:${history.generation}`;
+        const generation = `${buffers.generation}:${history.generation}:${sources.generation}`;
         if (this.groups === null || this.groupsGeneration !== generation) {
+            const slots = bindingSlots(this.bufferCount, this.histories.length);
             const build = (uniform: GPUBuffer, parity: number) =>
                 device.createBindGroup({
                     entries: [
                         { binding: 0, resource: { buffer: uniform } },
-                        ...(this.bufferCount === 0
+                        ...(this.bufferCount === 0 && this.sources.length === 0
                             ? []
-                            : [{ binding: 1, resource: sampler }]),
+                            : [{ binding: slots.sampler, resource: sampler }]),
                         ...Array.from({ length: this.bufferCount }, (_, k) => ({
-                            binding: 2 + k,
+                            binding: slots.buffer + k,
                             resource: buffers.readView(k, parity),
                         })),
                         ...(this.histories.length === 0
                             ? []
                             : [
                                   {
-                                      binding: 2 + this.bufferCount,
+                                      binding: slots.history,
                                       resource: history.view,
                                   },
                               ]),
+                        ...this.sources.map((_, k) => ({
+                            binding: slots.source + k,
+                            resource: sources.view(k),
+                        })),
                     ],
                     layout: this.layout,
                 });

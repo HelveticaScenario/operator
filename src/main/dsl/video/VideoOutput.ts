@@ -96,6 +96,7 @@ const PROCESSING: Record<string, ChainCall> = {
     displace: (o, s, dx, dy, amount) => o.displace(s, dx, dy, amount),
     edges: (o, s, amount) => o.edges(s, amount),
     fold: (o, s, gain) => o.fold(s, gain),
+    grain: (o, s, amount) => o.grain(s, amount),
     hsv: (o, s, saturation, value) => o.hsv(s, saturation, value),
     hueShift: (o, s, amount) => o.hueShift(s, amount),
     invert: (o, s) => o.invert(s),
@@ -113,8 +114,10 @@ const PROCESSING: Record<string, ChainCall> = {
     repeat: (o, s, x, y) => o.repeat(s, x, y),
     rotate: (o, s, turns) => o.warp(s, { rotate: turns }),
     scale: (o, s, zoom) => o.warp(s, { zoom }),
+    scanlines: (o, s, count, strength) => o.scanlines(s, count, strength),
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),
     tint: (o, s, hue, saturation) => o.hsv(hue ?? 0, saturation ?? 1, s),
+    vignette: (o, s, strength, radius) => o.vignette(s, strength, radius),
     warp: (o, s, config) => o.warp(s, config),
     wrap: (o, s, gain) => o.wrap(s, gain),
 };

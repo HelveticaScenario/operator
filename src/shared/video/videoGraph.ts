@@ -27,6 +27,8 @@ export interface VideoNode {
     params?: Record<string, string>;
     /** Row of the audio history texture an `audioHistory` node reads. */
     history?: number;
+    /** Index into the graph's `sources` of the media a `source` node samples. */
+    source?: number;
     /**
      * Feedback buffer a `feedbackRead` or `feedbackWrite` node uses. A buffer
      * holds what its write node saw on the previous frame.
@@ -122,6 +124,15 @@ export interface VideoGraph {
     previews: VideoPreview[];
     /** Row `i` of the audio history texture is `histories[i]`. */
     histories: VideoHistory[];
+    /** Media the picture samples; `sources[i]` is what `source` nodes with `source: i` read. */
+    sources: VideoSourceDef[];
+}
+
+/** A picture or recording from the workspace folder that a patch draws from. */
+export interface VideoSourceDef {
+    kind: 'image' | 'video';
+    /** Path relative to the workspace folder. */
+    path: string;
 }
 
 /** A region of the frame whose average becomes an audio control signal. */
@@ -157,6 +168,8 @@ export interface CompiledVideoShader {
     previewCount: number;
     /** The previews that feed audio control signals, by preview index. */
     cvSamples: ({ index: number } & VideoCvSample)[];
-    /** Audio history rows the shader reads, as texture binding `2 + feedbackBufferCount`. */
+    /** Audio history rows the shader reads; see `bindingSlots` for where they bind. */
     histories: VideoHistory[];
+    /** Media the shader samples, one texture each; see `bindingSlots`. */
+    sources: VideoSourceDef[];
 }

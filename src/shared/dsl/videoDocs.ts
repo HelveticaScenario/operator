@@ -28,6 +28,7 @@ export const VIDEO_GROUPS = [
     'Warping',
     'Filters',
     'Color',
+    'Post',
     'Math',
     'Shaping',
     'Compositing',
@@ -276,6 +277,54 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         declarations: [
             'edges(input: VideoField | VideoColor, amount?: VideoValue): VideoField;',
+        ],
+    },
+    {
+        name: 'image',
+        group: 'Generators',
+        description:
+            'A picture from the workspace folder (`.png`, `.jpg`, `.gif`, `.webp`, `.bmp` or `.avif`) as a color. It is read at the coordinate being drawn, so warps, kaleidoscopes and feedback move it like any other pattern. Paths are relative to the workspace folder and cannot leave it.',
+        params: [
+            {
+                name: 'path',
+                description: 'File to draw, relative to the workspace folder',
+            },
+            {
+                name: 'config.fit',
+                description:
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+            },
+        ],
+        examples: [
+            "$v.out($v.image('pictures/photo.png'))",
+            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.05)).out()",
+        ],
+        declarations: [
+            "image(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+        ],
+    },
+    {
+        name: 'video',
+        group: 'Generators',
+        description:
+            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop with its sound off. Like `$v.image`, it is read at the coordinate being drawn. Which formats play depends on the codecs the app's browser engine includes.",
+        params: [
+            {
+                name: 'path',
+                description: 'File to play, relative to the workspace folder',
+            },
+            {
+                name: 'config.fit',
+                description:
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+            },
+        ],
+        examples: [
+            "$v.out($v.video('clips/loop.mp4'))",
+            "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 0.5, 1)).$.warp({ rotate: 0.02 }).out()",
+        ],
+        declarations: [
+            "video(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
         ],
     },
     {
@@ -787,6 +836,68 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'scanlines',
+        group: 'Post',
+        description:
+            "Darkens evenly spaced horizontal lines, as a CRT's raster does.",
+        params: [
+            {
+                name: 'count',
+                description: 'Lines across the frame height (default 240)',
+            },
+            {
+                name: 'strength',
+                description:
+                    'How dark each line gets at its darkest, 0 to 1 (default 0.4)',
+            },
+        ],
+        examples: ['$v.out($v.scanlines($v.hsv($v.ramp()), 120, 0.5))'],
+        declarations: [
+            'scanlines(input: VideoColor, count?: VideoValue, strength?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'vignette',
+        group: 'Post',
+        description:
+            'Darkens toward the corners of the frame: nothing within `radius` of the center, then up to `strength` by the edge.',
+        params: [
+            {
+                name: 'strength',
+                description: 'How dark the corners get, 0 to 1 (default 0.6)',
+            },
+            {
+                name: 'radius',
+                description:
+                    'Distance from the center, as a fraction of the frame height, where the darkening starts (default 0.3)',
+            },
+        ],
+        examples: ['$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2))'],
+        declarations: [
+            'vignette(input: VideoColor, strength?: VideoValue, radius?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'grain',
+        group: 'Post',
+        description:
+            'Adds film grain: a fresh random value for every pixel, redrawn sixty times a second, of up to `amount` in either direction.',
+        params: [
+            {
+                name: 'amount',
+                description:
+                    'Largest change to a channel, 0 to 1 (default 0.1)',
+            },
+        ],
+        examples: [
+            '$v.out($v.grain($v.hsv($v.ramp(), 0.6, 0.6), 0.15))',
+            '$v.hsv($v.ramp()).$.scanlines(180, 0.35).$.vignette(0.7).$.grain(0.08).out()',
+        ],
+        declarations: [
+            'grain(input: VideoColor, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
         name: 'channel',
         group: 'Color',
         description:
@@ -989,6 +1100,28 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'edges',
         description: 'Brightness of the steepest change around each pixel.',
         declarations: ['edges(amount?: VideoValue): VideoField;'],
+    },
+    {
+        name: 'scanlines',
+        description: 'Darkens evenly spaced horizontal lines of this color.',
+        declarations: [
+            'scanlines(count?: VideoValue, strength?: VideoValue): VideoColor;',
+        ],
+        on: ['color'],
+    },
+    {
+        name: 'vignette',
+        description: 'Darkens this color toward the corners of the frame.',
+        declarations: [
+            'vignette(strength?: VideoValue, radius?: VideoValue): VideoColor;',
+        ],
+        on: ['color'],
+    },
+    {
+        name: 'grain',
+        description: 'Adds film grain to this color, redrawn every frame.',
+        declarations: ['grain(amount?: VideoValue): VideoColor;'],
+        on: ['color'],
     },
     {
         name: 'channel',

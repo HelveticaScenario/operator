@@ -93,6 +93,8 @@ export interface DSLExecutionOptions {
      * device is.
      */
     inputChannels?: number;
+    /** Whether a workspace-relative path names an existing file, for media errors. */
+    mediaExists?: (path: string) => boolean;
     workspaceRoot?: string | null;
     wavsFolderTree?: WavsFolderNode | null;
     loadWav?: (path: string) => {
@@ -654,6 +656,7 @@ export function executePatchScript(
             _videoTap(output, slot);
         },
         cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 1),
+        mediaExists: options.mediaExists,
         sourceLocation: captureSourceLocation,
     });
 
@@ -956,8 +959,10 @@ export function executePatchScript(
             edges: videoBuilder.edges,
             feedback: videoBuilder.feedback,
             fold: videoBuilder.fold,
+            grain: videoBuilder.grain,
             fromAudio: videoBuilder.fromAudio,
             hsv: videoBuilder.hsv,
+            image: videoBuilder.image,
             hueShift: videoBuilder.hueShift,
             invert: videoBuilder.invert,
             kaleid: videoBuilder.kaleid,
@@ -977,9 +982,12 @@ export function executePatchScript(
             procAmp: videoBuilder.procAmp,
             ramp: videoBuilder.ramp,
             repeat: videoBuilder.repeat,
+            scanlines: videoBuilder.scanlines,
             shape: videoBuilder.shape,
             time: videoBuilder.time,
             toCV: videoBuilder.toCV,
+            video: videoBuilder.video,
+            vignette: videoBuilder.vignette,
             voronoi: videoBuilder.voronoi,
             warp: videoBuilder.warp,
             wrap: videoBuilder.wrap,

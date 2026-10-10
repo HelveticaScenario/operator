@@ -1,5 +1,6 @@
 import type {
     VideoPreviewView,
+    VideoSourceDef,
     VideoValue,
     VideoValueType,
 } from '../../../shared/video/videoGraph';
@@ -36,6 +37,11 @@ export interface VideoGraphHost {
     cvSignal(id: string): CollectionWithRange;
     /** Where the patch script is calling from, as V8 reports it. */
     sourceLocation(): { line: number; column: number } | undefined;
+    /**
+     * Whether a file exists in the workspace folder, for a friendly error when
+     * a patch names missing media. Leave it out to skip the check.
+     */
+    mediaExists?(path: string): boolean;
 }
 
 export interface VideoAudioConfig {
@@ -119,6 +125,7 @@ export interface VideoCore {
         params?: Record<string, string>,
         buffer?: number,
         history?: number,
+        source?: number,
     ): VideoOutput;
     /** A math node on fields, or on colors when any operand is a color. */
     arith(
@@ -127,6 +134,15 @@ export interface VideoCore {
         operands: Record<string, unknown>,
         fieldInputs?: Record<string, unknown>,
     ): VideoOutput;
+    /** The index of `def` among the media the graph samples, adding it on first use. */
+    sourceIndex(def: VideoSourceDef): number;
+    /** Where the patch script is calling from, if known. */
+    mediaExists(path: string): boolean;
     /** One channel of a color as a field. */
     channel(input: VideoOutput, which?: 'r' | 'g' | 'b' | 'luma'): VideoOutput;
+}
+
+export interface VideoMediaConfig {
+    /** How a picture of another shape fills the frame (default 'cover'). */
+    fit?: 'cover' | 'contain' | 'stretch';
 }

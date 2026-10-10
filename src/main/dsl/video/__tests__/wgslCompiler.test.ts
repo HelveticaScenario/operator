@@ -40,6 +40,7 @@ const stripes: VideoGraph = {
     ],
     histories: [],
     output: 'out',
+    sources: [],
     previews: [],
     uniforms: [{ kind: 'control', slot: 0, moduleId: 'knob', value: 3 }],
 };
@@ -238,6 +239,7 @@ describe('compileVideoGraph', () => {
     ] as const)('rejects %s', (_name, partial, message) => {
         const graph = {
             histories: [],
+            sources: [],
             previews: [],
             uniforms: [],
             ...partial,
@@ -286,6 +288,7 @@ describe('compileVideoGraph feedback', () => {
         histories: [],
         output: 'out',
         previews: [],
+        sources: [],
         uniforms: [],
     };
 

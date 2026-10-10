@@ -38,6 +38,11 @@ import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
 import {
+    handleMediaProtocol,
+    mediaFileExists,
+    registerMediaScheme,
+} from './mediaProtocol';
+import {
     getVideoShader,
     pullTapSamples,
     setVideoControl,
@@ -830,6 +835,8 @@ registerIPCHandler(
                 videoPreviews,
             } = executePatchScript(source, schemas, {
                 inputChannels: synth.inputChannels(),
+                mediaExists: (relative) =>
+                    mediaFileExists(currentWorkspaceRoot, relative),
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
                 wavsFolderTree: currentWavsFolderTree,
@@ -2333,7 +2340,12 @@ registerIPCHandler('MENU_SET_ACCELERATORS', (accelerators) => {
 // This method will be called when Electron has finished
 // Initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+// The scheme that serves workspace media must be declared before the app is ready.
+registerMediaScheme();
+
 app.on('ready', () => {
+    handleMediaProtocol(() => currentWorkspaceRoot);
+
     // In E2E test mode, use the workspace provided via env var
     if (process.env.E2E_WORKSPACE && fs.existsSync(process.env.E2E_WORKSPACE)) {
         currentWorkspaceRoot = process.env.E2E_WORKSPACE;

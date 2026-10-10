@@ -7,6 +7,7 @@ import {
     type VideoNode,
     type VideoPreview,
     type VideoPreviewSite,
+    type VideoSourceDef,
     type VideoUniform,
     type VideoValue,
     type VideoValueType,
@@ -22,6 +23,7 @@ import { colorMethods } from './videoColor';
 import { filterMethods } from './videoFilters';
 import { generatorMethods } from './videoGenerators';
 import { mathMethods } from './videoMath';
+import { sourceMethods } from './videoSources';
 import { warpMethods } from './videoWarps';
 import {
     describe,
@@ -50,6 +52,7 @@ export interface VideoGraphBuilder
         ReturnType<typeof mathMethods>,
         ReturnType<typeof colorMethods>,
         ReturnType<typeof filterMethods>,
+        ReturnType<typeof sourceMethods>,
         ReturnType<typeof warpMethods> {}
 
 export class VideoGraphBuilder implements VideoCore {
@@ -65,6 +68,7 @@ export class VideoGraphBuilder implements VideoCore {
     private tapSlots = new Map<string, number>();
     private tapIndexes = new Map<string, number>();
     private histories: VideoHistory[] = [];
+    private sources: VideoSourceDef[] = [];
     private tapCount = 0;
 
     constructor(private readonly host: VideoGraphHost) {
@@ -74,6 +78,7 @@ export class VideoGraphBuilder implements VideoCore {
             mathMethods(this),
             colorMethods(this),
             filterMethods(this),
+            sourceMethods(this),
             warpMethods(this),
         );
     }
@@ -178,9 +183,10 @@ export class VideoGraphBuilder implements VideoCore {
         params?: Record<string, string>,
         buffer?: number,
         history?: number,
+        source?: number,
     ): VideoOutput {
         const id = `${kind}_${this.nodes.length}`;
-        this.nodes.push({ id, kind, inputs, params, buffer, history });
+        this.nodes.push({ id, kind, inputs, params, buffer, history, source });
         return new VideoOutput({ kind: 'node', id }, type, this);
     }
 
@@ -261,6 +267,19 @@ export class VideoGraphBuilder implements VideoCore {
             row,
         );
     };
+    sourceIndex(def: VideoSourceDef): number {
+        const known = this.sources.findIndex(
+            (s) => s.kind === def.kind && s.path === def.path,
+        );
+        if (known >= 0) return known;
+        this.sources.push(def);
+        return this.sources.length - 1;
+    }
+
+    mediaExists(path: string): boolean {
+        return this.host.mediaExists?.(path) ?? true;
+    }
+
     /** One channel of a color as a field. */
     channel = (
         input: VideoOutput,
@@ -499,6 +518,7 @@ export class VideoGraphBuilder implements VideoCore {
             ),
             output: this.outputId,
             histories: this.histories,
+            sources: this.sources,
             previews: this.previews,
             uniforms: this.uniforms,
         };

@@ -974,4 +974,146 @@ describe('$v in the DSL executor', () => {
             expect(() => exec(`$v.hsv(0.2).$.tint(0.1);`)).toThrow();
         });
     });
+
+    describe('post effects', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('scanlines dims by the frame row', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.scanlines($v.hsv($v.ramp()), 100, 0.5));`,
+            );
+            expect(wgsl).toMatch(/cos\(6\.28318530718 \* uv\.y \* 100\.0\)/);
+        });
+
+        it('vignette darkens by distance from the center', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2));`,
+            );
+            expect(wgsl).toContain('fn vignette_falloff(');
+            expect(wgsl).toContain('vignette_falloff(uv, 0.2)');
+        });
+
+        it('grain is redrawn with the clock and shares the point hash', () => {
+            const wgsl = wgslOf(`
+                $v.out($v.grain($v.hsv($v.noise($v.ramp(), $v.ramp('v'))), 0.2));
+            `);
+            expect(wgsl).toContain('grain_value(uv, u.time)');
+            expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
+        });
+
+        it('chains in any order and keeps the color', () => {
+            const wgsl = wgslOf(`
+                $v.hsv($v.ramp()).$.scanlines(180, 0.35).$.vignette(0.7).$.grain(0.08).out();
+            `);
+            expect(wgsl).toContain('vignette_falloff(');
+            expect(wgsl).toContain('grain_value(');
+        });
+
+        it('rejects a field where a color is required', () => {
+            expect(() => exec(`$v.scanlines($v.ramp());`)).toThrow(
+                /\$v\.scanlines: input must be a video color/,
+            );
+            expect(() => exec(`$v.vignette(0.5);`)).toThrow(
+                /\$v\.vignette: input must be a video color/,
+            );
+            expect(() => exec(`$v.grain($v.ramp());`)).toThrow(
+                /\$v\.grain: input must be a video color/,
+            );
+        });
+    });
+
+    describe('image and video', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('samples a workspace image at the coordinate being drawn', () => {
+            const { video } = exec(`$v.out($v.image('pictures/photo.png'));`);
+            expect(video!.sources).toEqual([
+                { kind: 'image', path: 'pictures/photo.png' },
+            ]);
+            expect(video!.wgsl).toContain(
+                '@group(0) @binding(1) var fb_sampler: sampler;',
+            );
+            expect(video!.wgsl).toContain(
+                '@group(0) @binding(2) var src_0: texture_2d<f32>;',
+            );
+            expect(video!.wgsl).toContain('video_source(src_0, uv, 1)');
+        });
+
+        it('shares a binding between uses of one file and numbers different files', () => {
+            const { video } = exec(`
+                const a = $v.image('a.png');
+                const b = $v.video('b.mp4', { fit: 'contain' });
+                $v.out($v.mix(a, b, 0.5).$.add($v.image('a.png', { fit: 'stretch' })));
+            `);
+            expect(video!.sources).toEqual([
+                { kind: 'image', path: 'a.png' },
+                { kind: 'video', path: 'b.mp4' },
+            ]);
+            expect(video!.wgsl).toContain('video_source(src_1, uv, 2)');
+            expect(video!.wgsl).toContain('video_source(src_0, uv, 0)');
+        });
+
+        it('binds media after the feedback and audio history textures', () => {
+            const { video } = exec(`
+                const trail = $v.buffer();
+                const wave = $v.fromAudio($sine('110hz'));
+                $v.image('a.png').$.add(trail.read().$.mult(0.9)).write(trail).$.mult($v.hsv(wave)).out();
+            `);
+            expect(video!.wgsl).toContain('var fb_0: texture_2d<f32>');
+            expect(video!.wgsl).toContain(
+                '@group(0) @binding(3) var history_tex',
+            );
+            expect(video!.wgsl).toContain('@group(0) @binding(4) var src_0');
+        });
+
+        it('moves with the warps like any other pattern', () => {
+            const wgsl = wgslOf(`$v.image('a.png').$.kaleid(6).out();`);
+            expect(wgsl).toMatch(
+                /fn f0\(uv: vec2f\) -> vec3f \{\n    return video_source\(src_0/,
+            );
+        });
+
+        it('declares no media for a patch without any', () => {
+            const wgsl = wgslOf(`$v.out($v.hsv(0.5));`);
+            expect(wgsl).not.toContain('src_0');
+            expect(wgsl).not.toContain('fb_sampler');
+        });
+
+        it('rejects a bad path, extension or fit', () => {
+            expect(() => exec(`$v.image(3);`)).toThrow(
+                /\$v\.image: path must be a string/,
+            );
+            expect(() => exec(`$v.image('/etc/photo.png');`)).toThrow(
+                /path must stay inside the workspace folder/,
+            );
+            expect(() => exec(`$v.image('../photo.png');`)).toThrow(
+                /path must stay inside the workspace folder/,
+            );
+            expect(() => exec(`$v.image('notes.txt');`)).toThrow(
+                /"notes\.txt" must be one of \.png/,
+            );
+            expect(() => exec(`$v.video('clip.png');`)).toThrow(
+                /\$v\.video: "clip\.png" must be one of \.mp4/,
+            );
+            expect(() => exec(`$v.image('a.png', { fit: 'zoom' });`)).toThrow(
+                /\$v\.image: fit must be one of cover, contain, stretch/,
+            );
+        });
+
+        it('names a file the workspace does not have', () => {
+            expect(() =>
+                executePatchScript(
+                    `$v.image('missing.png');`,
+                    schemas as never,
+                    {
+                        mediaExists: () => false,
+                        sampleRate: 48_000,
+                        workspaceRoot: '/workspace',
+                    },
+                ),
+            ).toThrow(
+                /\$v\.image: no file "missing\.png" in the workspace folder/,
+            );
+        });
+    });
 });

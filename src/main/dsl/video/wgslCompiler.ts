@@ -5,7 +5,10 @@ import {
     type VideoValue,
     type VideoValueType,
 } from '../../../shared/video/videoGraph';
-import { UNIFORM_SLOTS_OFFSET } from '../../../shared/video/uniformLayout';
+import {
+    UNIFORM_SLOTS_OFFSET,
+    bindingSlots,
+} from '../../../shared/video/uniformLayout';
 import { VIDEO_MODULES } from './modules';
 import type { VideoModuleDef } from './modules/types';
 
@@ -43,7 +46,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         node: VideoGraph['nodes'][number];
         def: VideoModuleDef;
         params: Record<string, string>;
-        indices: { buffer: number; history: number };
+        indices: { buffer: number; history: number; source: number };
     }
     const records = new Map<string, NodeRecord>();
     const functions: string[] = [];
@@ -201,6 +204,20 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                     `audio history row must be an integer from 0 to ${graph.histories.length - 1}`,
                 );
             }
+            if (def.source === undefined) {
+                if (node.source !== undefined) {
+                    throw new Error('module has no media source');
+                }
+            } else if (
+                node.source === undefined ||
+                !Number.isInteger(node.source) ||
+                node.source < 0 ||
+                node.source >= graph.sources.length
+            ) {
+                throw new Error(
+                    `media source must be an integer from 0 to ${graph.sources.length - 1}`,
+                );
+            }
             if (def.buffer === undefined) {
                 if (node.buffer !== undefined) {
                     throw new Error('module has no feedback buffer');
@@ -220,6 +237,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             const indices = {
                 buffer: node.buffer ?? 0,
                 history: node.history ?? 0,
+                source: node.source ?? 0,
             };
             records.set(node.id, { def, index, indices, node, params });
             const text = `    let ${local}: ${wgslType(def.output)} = ${def.emit(args, params, indices)};`;
@@ -294,20 +312,30 @@ ${body}
     });
 
     const slotVecs = Math.max(1, Math.ceil(graph.uniforms.length / 4));
-    const bufferBindings = Array.from(
+    const slots = bindingSlots(bufferCount, graph.histories.length);
+    const samplerDeclaration =
+        bufferCount > 0 || graph.sources.length > 0
+            ? `@group(0) @binding(${slots.sampler}) var fb_sampler: sampler;\n`
+            : '';
+    const bufferDeclarations = Array.from(
         { length: bufferCount },
-        (_, k) => `@group(0) @binding(${k + 2}) var fb_${k}: texture_2d<f32>;`,
-    );
+        (_, k) =>
+            `@group(0) @binding(${slots.buffer + k}) var fb_${k}: texture_2d<f32>;\n`,
+    ).join('');
     const historyDeclaration =
         graph.histories.length === 0
             ? ''
-            : `@group(0) @binding(${bufferCount + 2}) var history_tex: texture_2d<f32>;\n`;
-    const bufferDeclarations =
+            : `@group(0) @binding(${slots.history}) var history_tex: texture_2d<f32>;\n`;
+    const sourceDeclarations = graph.sources
+        .map(
+            (_, k) =>
+                `@group(0) @binding(${slots.source + k}) var src_${k}: texture_2d<f32>;\n`,
+        )
+        .join('');
+    const outputStruct =
         bufferCount === 0
             ? ''
-            : `@group(0) @binding(1) var fb_sampler: sampler;
-${bufferBindings.join('\n')}
-
+            : `
 struct FragOut {
     @location(0) screen: vec4f,
 ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}: vec4f,`).join('\n')}
@@ -324,7 +352,7 @@ ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}:
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-${bufferDeclarations}${historyDeclaration}${[...helpers].map((h) => `\n${h}\n`).join('')}${functions.map((f) => `\n${f}\n`).join('')}
+${samplerDeclaration}${bufferDeclarations}${historyDeclaration}${sourceDeclarations}${outputStruct}${[...helpers].map((h) => `\n${h}\n`).join('')}${functions.map((f) => `\n${f}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
@@ -344,6 +372,7 @@ ${previewEntries.join('')}`;
         uniforms: graph.uniforms,
         feedbackBufferCount: bufferCount,
         histories: graph.histories,
+        sources: graph.sources,
         previewCount: graph.previews.length,
         cvSamples: graph.previews.flatMap((preview, index) =>
             preview.cv ? [{ index, ...preview.cv }] : [],
