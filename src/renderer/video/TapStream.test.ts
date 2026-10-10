@@ -291,4 +291,13 @@ describe('TapStream', () => {
         stream.recent(out);
         expect(out[0]).toBe(0);
     });
+
+    it('reports whether any samples have arrived', () => {
+        const stream = new TapStream();
+        expect(stream.hasData).toBe(false);
+        stream.push([], 48000, 0);
+        expect(stream.hasData).toBe(false);
+        stream.push([0.5], 48000, 0);
+        expect(stream.hasData).toBe(true);
+    });
 });

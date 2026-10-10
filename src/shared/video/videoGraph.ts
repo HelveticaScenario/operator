@@ -105,10 +105,24 @@ export interface VideoTapSamples {
     sampleRate: number;
 }
 
+/**
+ * A patch's video shader and the audio engine update it belongs to. The
+ * numbering of the audio taps changes with every patch, so the renderer
+ * switches shader only once the engine reports that update applied.
+ */
+export interface VideoShaderUpdate {
+    shader: CompiledVideoShader | null;
+    updateId: number;
+}
+
 /** What the video renderer asks the main process for once per frame. */
 export interface VideoPull {
     /** False while the engine is stopped; the picture holds still until it runs again. */
     running: boolean;
+    /** Id of the latest patch update the audio engine has applied. */
+    applied: number;
+    /** Id of the latest queued patch update the audio engine discarded. */
+    cancelled: number;
     /** The audio taps' samples since the last pull; empty while stopped. */
     taps: VideoTapSamples[];
 }

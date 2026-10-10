@@ -37,6 +37,11 @@ export class TapStream {
     private lastArrivalMs = -1;
     private gaps: { at: number; gap: number }[] = [];
 
+    /** Whether any samples have arrived. */
+    get hasData(): boolean {
+        return this.written > 0;
+    }
+
     /** Appends samples oldest first, which arrived at `nowMs`. */
     push(samples: ArrayLike<number>, sampleRate: number, nowMs: number): void {
         if (sampleRate !== this.rate) this.reset(sampleRate);

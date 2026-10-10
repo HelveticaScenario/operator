@@ -19,7 +19,12 @@ const window = () => ({ isDestroyed: () => false, send: vi.fn() });
 
 describe('pullVideo', () => {
     it('reports stopped, with no samples, before an engine is attached', () => {
-        expect(pullVideo()).toEqual({ running: false, taps: [] });
+        expect(pullVideo()).toEqual({
+            applied: 0,
+            cancelled: 0,
+            running: false,
+            taps: [],
+        });
     });
 
     it('reports stopped and reads nothing while the engine is stopped', () => {
@@ -28,12 +33,18 @@ describe('pullVideo', () => {
         setVideoTapSource({
             isStopped: () => stopped,
             read,
+            updates: () => ({ applied: 1, cancelled: 0 }),
             sampleRate: () => 48000,
         });
         setVideoTarget(() => null);
-        updateVideoShader(shaderReadingTap(0));
+        updateVideoShader(shaderReadingTap(0), 1);
 
-        expect(pullVideo()).toEqual({ running: false, taps: [] });
+        expect(pullVideo()).toEqual({
+            applied: 1,
+            cancelled: 0,
+            running: false,
+            taps: [],
+        });
         expect(read).not.toHaveBeenCalled();
 
         stopped = false;
@@ -49,10 +60,88 @@ describe('pullVideo', () => {
         setVideoTapSource({
             isStopped: () => false,
             read: () => ({ head: 0, samples: [] }),
+            updates: () => ({ applied: 1, cancelled: 0 }),
             sampleRate: () => 48000,
         });
-        updateVideoShader({ histories: [], uniforms: [] } as never);
-        expect(pullVideo()).toEqual({ running: true, taps: [] });
+        updateVideoShader({ histories: [], uniforms: [] } as never, 1);
+        expect(pullVideo()).toEqual({
+            applied: 1,
+            cancelled: 0,
+            running: true,
+            taps: [],
+        });
+    });
+});
+
+describe('across patch updates', () => {
+    it('serves the taps of the shader before the latest while the renderer may still draw it', () => {
+        const read = vi.fn((_tap: number, _since?: number) => ({
+            head: 1,
+            samples: [0.5],
+        }));
+        setVideoTapSource({
+            isStopped: () => false,
+            read,
+            sampleRate: () => 48000,
+            updates: () => ({ applied: 1, cancelled: 0 }),
+        });
+        setVideoTarget(() => null);
+        updateVideoShader(shaderReadingTap(0), 1);
+        updateVideoShader(shaderReadingTap(3), 2);
+
+        pullVideo(true);
+        const taps = read.mock.calls.map(([tap]) => tap).sort((a, b) => a - b);
+        expect(taps).toEqual([0, 3]);
+    });
+
+    it('reads which update the engine has applied after the samples, not before', () => {
+        const order: string[] = [];
+        setVideoTapSource({
+            isStopped: () => false,
+            read: () => {
+                order.push('read');
+                return { head: 1, samples: [0.5] };
+            },
+            sampleRate: () => 48000,
+            updates: () => {
+                order.push('updates');
+                return { applied: 2, cancelled: 0 };
+            },
+        });
+        setVideoTarget(() => null);
+        updateVideoShader(shaderReadingTap(0), 2);
+        order.length = 0;
+
+        pullVideo(true);
+        expect(order.at(-1)).toBe('updates');
+        expect(order.slice(0, -1).every((step) => step === 'read')).toBe(true);
+    });
+});
+
+describe('a fresh pull', () => {
+    it("restarts each tap from the engine's newest samples instead of where the last pull left off", () => {
+        const read = vi.fn((_tap: number, since?: number) => ({
+            head: (since ?? 100) + 10,
+            samples: [0.1],
+        }));
+        setVideoTapSource({
+            isStopped: () => false,
+            read,
+            updates: () => ({ applied: 1, cancelled: 0 }),
+            sampleRate: () => 48000,
+        });
+        setVideoTarget(() => null);
+        updateVideoShader(shaderReadingTap(0), 1);
+
+        pullVideo(true);
+        expect(read).toHaveBeenLastCalledWith(0, undefined);
+        pullVideo();
+        expect(read).toHaveBeenLastCalledWith(0, 110);
+
+        pullVideo(true);
+        expect(read).toHaveBeenLastCalledWith(0, undefined);
+        pullVideo();
+        expect(read).toHaveBeenLastCalledWith(0, 110);
     });
 });
 
@@ -61,22 +150,30 @@ describe('delivery to the editor window', () => {
         const target = window();
         setVideoTarget(() => target as never);
         const shader = { histories: [], uniforms: [] } as never;
-        updateVideoShader(shader);
-        expect(target.send).toHaveBeenCalledWith(
-            IPC_CHANNELS.VIDEO_ON_SHADER,
+        updateVideoShader(shader, 7);
+        expect(target.send).toHaveBeenCalledWith(IPC_CHANNELS.VIDEO_ON_SHADER, {
             shader,
-        );
+            updateId: 7,
+        });
     });
 
     it('sends a control value to the input bound to it, and ignores other controls', () => {
         const target = window();
         setVideoTarget(() => target as never);
-        updateVideoShader({
-            histories: [],
-            uniforms: [
-                { kind: 'control', moduleId: 'slider-1', slot: 3, value: 0 },
-            ],
-        } as never);
+        updateVideoShader(
+            {
+                histories: [],
+                uniforms: [
+                    {
+                        kind: 'control',
+                        moduleId: 'slider-1',
+                        slot: 3,
+                        value: 0,
+                    },
+                ],
+            } as never,
+            1,
+        );
         target.send.mockClear();
 
         setVideoControl('slider-1', 0.75);
@@ -92,6 +189,6 @@ describe('delivery to the editor window', () => {
 
     it('does nothing while there is no window to draw in', () => {
         setVideoTarget(() => null);
-        expect(() => updateVideoShader(null)).not.toThrow();
+        expect(() => updateVideoShader(null, 1)).not.toThrow();
     });
 });

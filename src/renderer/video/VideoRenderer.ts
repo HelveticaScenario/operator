@@ -5,13 +5,14 @@ import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
 import { SourceTextures } from './SourceTextures';
+import { gateVerdict } from './shaderGate';
 import { TapStream } from './TapStream';
 import { alignWindow } from './alignWindow';
 import type {
-    CompiledVideoShader,
     VideoCvValue,
     VideoPreviewFrame,
     VideoPull,
+    VideoShaderUpdate,
     VideoTapSamples,
 } from '../../shared/video/videoGraph';
 import {
@@ -34,11 +35,25 @@ const PREVIEW_FRAME_INTERVAL = 2;
 export class VideoRenderer {
     private program: ShaderProgram | null = null;
     private shaderToken = 0;
+    /** A built shader waiting for the engine to apply its patch update. */
+    private pending: {
+        program: ShaderProgram | null;
+        updateId: number;
+    } | null = null;
+    /** The update id of the latest shader requested and not yet live. */
+    private awaiting: number | null = null;
+    /** The latest update ids the engine reported applying and discarding. */
+    private applied = 0;
+    private cancelled = 0;
     /** Control values received while a shader is still being built. */
     private pendingSlots = new Map<number, number>();
     private frameHandle = 0;
     private frameIndex = 0;
-    private pullSource: (() => Promise<VideoPull>) | null = null;
+    private pullSource: ((fresh: boolean) => Promise<VideoPull>) | null = null;
+    /** Counts shader changes, so a pull begun before one is not applied after it. */
+    private epoch = 0;
+    /** True until the first pull after a shader change, which restarts every tap. */
+    private freshPull = true;
     /** False while the engine is stopped, when the picture holds still. */
     private running = true;
     private stoppedAt = 0;
@@ -115,25 +130,79 @@ export class VideoRenderer {
     }
 
     /**
-     * Replaces the displayed shader. Rejects with the WGSL compiler's messages
-     * when the shader is invalid, leaving the previous shader on screen.
+     * Builds the shader of a patch update. It goes live once the audio engine
+     * has applied that update, because the audio taps it reads are numbered by
+     * the patch; until then the previous shader keeps drawing, and from the
+     * moment the engine applies the update that shader holds its last frame
+     * rather than read the new patch's signals. Rejects with the WGSL
+     * compiler's messages when the shader is invalid, leaving the previous
+     * shader on screen.
      */
-    async setShader(compiled: CompiledVideoShader | null): Promise<void> {
+    async setShader({ shader, updateId }: VideoShaderUpdate): Promise<void> {
         const token = ++this.shaderToken;
         this.pendingSlots = new Map();
-        if (compiled === null) {
-            this.clear();
-            this.buffers.resize(0, this.canvas.width, this.canvas.height);
+        this.pending?.program?.destroy();
+        this.pending = null;
+        this.awaiting = updateId;
+
+        let program: ShaderProgram | null = null;
+        try {
+            if (shader !== null) {
+                program = await ShaderProgram.build(
+                    this.device,
+                    this.format,
+                    shader,
+                );
+            }
+        } catch (error) {
+            if (token === this.shaderToken) this.awaiting = null;
+            throw error;
+        }
+        if (token !== this.shaderToken) {
+            program?.destroy();
             return;
         }
+        this.pending = { program, updateId };
+        this.settle(false);
+    }
 
-        const program = await ShaderProgram.build(
-            this.device,
-            this.format,
-            compiled,
-        );
-        if (token !== this.shaderToken) {
-            program.destroy();
+    /** True from the moment the engine applies the awaited update until its shader is live. */
+    private get holding(): boolean {
+        return this.awaiting !== null && this.applied >= this.awaiting;
+    }
+
+    /**
+     * Makes the pending shader live if the engine has applied its update, or
+     * drops it if the engine discarded the update. `force` makes it live
+     * regardless, for an engine whose update numbering has started over.
+     * Returns whether a shader went live.
+     */
+    private settle(force: boolean): boolean {
+        const { pending } = this;
+        if (pending === null) return false;
+        const verdict = force
+            ? 'activate'
+            : gateVerdict(pending.updateId, this.applied, this.cancelled);
+        if (verdict === 'wait') return false;
+        this.pending = null;
+        this.awaiting = null;
+        if (verdict === 'drop') {
+            pending.program?.destroy();
+            return false;
+        }
+        this.activate(pending.program);
+        return true;
+    }
+
+    private activate(program: ShaderProgram | null): void {
+        // Taps are numbered afresh by every compile, so what the streams hold
+        // belongs to the previous patch's signals.
+        this.streams.clear();
+        this.freshPull = true;
+        this.epoch++;
+        if (program === null) {
+            this.clear();
+            this.buffers.resize(0, this.canvas.width, this.canvas.height);
             return;
         }
         // Only the old program goes: media, buffers and history are reconciled
@@ -164,7 +233,8 @@ export class VideoRenderer {
      */
     setUniform(slot: number, value: number): void {
         this.pendingSlots.set(slot, value);
-        this.program?.setSlot(slot, value);
+        if (this.awaiting === null) this.program?.setSlot(slot, value);
+        else this.pending?.program?.setSlot(slot, value);
     }
 
     /**
@@ -173,8 +243,18 @@ export class VideoRenderer {
      * stopped nothing is drawn, videos pause and the shader's time stands still;
      * when it runs again, videos start over from their loop start.
      */
-    setPullSource(source: (() => Promise<VideoPull>) | null): void {
+    setPullSource(
+        source: ((fresh: boolean) => Promise<VideoPull>) | null,
+    ): void {
         this.pullSource = source;
+    }
+
+    private tapsReady(program: ShaderProgram): boolean {
+        const taps = [
+            ...program.tapSlots.map(({ tap }) => tap),
+            ...program.histories.map(({ tap }) => tap),
+        ];
+        return taps.every((tap) => this.streams.get(tap)?.hasData === true);
     }
 
     private setRunning(running: boolean): void {
@@ -230,6 +310,8 @@ export class VideoRenderer {
     dispose(): void {
         cancelAnimationFrame(this.frameHandle);
         this.shaderToken++;
+        this.pending?.program?.destroy();
+        this.pending = null;
         this.clear();
         this.previews.destroy();
         this.buffers.destroy();
@@ -337,13 +419,28 @@ export class VideoRenderer {
 
     private frame = (): void => {
         this.frameHandle = requestAnimationFrame(this.frame);
-        if (this.program === null && this.cleared) return;
+        if (this.program === null && this.cleared && this.awaiting === null) {
+            return;
+        }
 
         if (this.pullSource !== null && !this.pulling) {
             this.pulling = true;
-            this.pullSource()
-                .then(({ running, taps }) => {
+            const { epoch } = this;
+            const fresh = this.freshPull;
+            this.freshPull = false;
+            this.pullSource(fresh)
+                .then(({ applied, cancelled, running, taps }) => {
+                    if (epoch !== this.epoch) {
+                        this.freshPull = true;
+                        return;
+                    }
+                    const restarted = applied < this.applied;
+                    this.applied = applied;
+                    this.cancelled = cancelled;
                     this.setRunning(running);
+                    // These samples may span the moment the engine changed
+                    // patch, so they go to neither shader.
+                    if (this.settle(restarted) || this.holding) return;
                     this.pushTapSamples(taps);
                 })
                 .catch(() => undefined)
@@ -351,7 +448,11 @@ export class VideoRenderer {
                     this.pulling = false;
                 });
         }
+        if (this.holding) return;
         if (!this.running && this.program !== null) return;
+        // A frame drawn before an audio input has any samples would read it as
+        // zero; the previous frame stays up until every input has data.
+        if (this.program !== null && !this.tapsReady(this.program)) return;
         this.fitCanvas();
 
         const program = this.program;

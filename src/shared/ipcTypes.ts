@@ -24,11 +24,11 @@ import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
 import type {
-    CompiledVideoShader,
     VideoCvValue,
     VideoPreviewFrame,
     VideoPreviewSite,
     VideoPull,
+    VideoShaderUpdate,
     VideoUniformUpdate,
 } from './video/videoGraph';
 
@@ -610,15 +610,13 @@ export interface IPCHandlers {
 
     // Performance window
     [IPC_CHANNELS.VIDEO_SET_OUTPUT_OPEN]: (open: boolean) => void;
-    [IPC_CHANNELS.VIDEO_GET_SHADER]: () => CompiledVideoShader | null;
+    [IPC_CHANNELS.VIDEO_GET_SHADER]: () => VideoShaderUpdate;
     [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
     [IPC_CHANNELS.VIDEO_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
-    [IPC_CHANNELS.VIDEO_PULL]: () => VideoPull;
+    [IPC_CHANNELS.VIDEO_PULL]: (fresh: boolean) => VideoPull;
     [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (updates: VideoUniformUpdate[]) => void;
-    [IPC_CHANNELS.VIDEO_ON_SHADER]: (
-        shader: CompiledVideoShader | null,
-    ) => void;
+    [IPC_CHANNELS.VIDEO_ON_SHADER]: (update: VideoShaderUpdate) => void;
 
     // Syphon window output (macOS)
     [IPC_CHANNELS.SYPHON_TOGGLE]: () => SyphonToggleResult;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CompiledVideoShader } from '../../../shared/video/videoGraph';
+import type { VideoShaderUpdate } from '../../../shared/video/videoGraph';
 import electronAPI from '../../electronAPI';
 import { performanceOutput } from '../../video/PerformanceOutput';
 import { VideoRenderer } from '../../video/VideoRenderer';
@@ -33,28 +33,32 @@ export function VideoBackdrop({
         const abort = new AbortController();
         let created: VideoRenderer | null = null;
         let creating = false;
-        let latest: CompiledVideoShader | null = null;
+        let latest: VideoShaderUpdate | null = null;
         let pushed = false;
 
         // The renderer is made when the first shader arrives, so a window
         // that never runs video never opens a GPU device.
         const apply = () => {
             if (abort.signal.aborted) return;
-            setShown(latest?.hasOutput ?? false);
+            const update = latest;
+            if (update === null) return;
+            setShown(update.shader?.hasOutput ?? false);
             if (created !== null) {
-                created.setShader(latest).then(
+                created.setShader(update).then(
                     () => setError(null),
                     (e: unknown) => setError(errorText(e)),
                 );
                 return;
             }
-            if (latest === null || creating) return;
+            if (update.shader === null || creating) return;
             creating = true;
             VideoRenderer.create(canvas, abort.signal).then(
                 (made) => {
                     creating = false;
                     created = made;
-                    made.setPullSource(() => electronAPI.video.pull());
+                    made.setPullSource((fresh) =>
+                        electronAPI.video.pull(fresh),
+                    );
                     made.setErrorSink(setError);
                     made.setCvSink((values) => {
                         void electronAPI.video.sendCvValues(values);
@@ -72,9 +76,9 @@ export function VideoBackdrop({
             );
         };
 
-        const stopShader = electronAPI.video.onShader((shader) => {
+        const stopShader = electronAPI.video.onShader((update) => {
             pushed = true;
-            latest = shader;
+            latest = update;
             apply();
         });
         const stopUniform = electronAPI.video.onUniform((updates) => {
@@ -82,9 +86,9 @@ export function VideoBackdrop({
                 created?.setUniform(slot, value);
             }
         });
-        void electronAPI.video.getShader().then((shader) => {
+        void electronAPI.video.getShader().then((update) => {
             if (pushed) return;
-            latest = shader;
+            latest = update;
             apply();
         });
         return () => {

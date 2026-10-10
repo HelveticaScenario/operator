@@ -19,10 +19,10 @@ import {
 } from '../shared/ipcTypes';
 import type { QueuedTrigger } from '../shared/ipcTypes';
 import type {
-    CompiledVideoShader,
     VideoCvValue,
     VideoPreviewFrame,
     VideoPull,
+    VideoShaderUpdate,
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
 
@@ -245,14 +245,13 @@ export interface ElectronAPI {
         setOpen: (open: boolean) => Promise<void>;
     };
     video: {
-        getShader: () => Promise<CompiledVideoShader | null>;
-        onShader: (
-            callback: (shader: CompiledVideoShader | null) => void,
-        ) => () => void;
+        getShader: () => Promise<VideoShaderUpdate>;
+        onShader: (callback: (update: VideoShaderUpdate) => void) => () => void;
         onUniform: (
             callback: (updates: VideoUniformUpdate[]) => void,
         ) => () => void;
-        pull: () => Promise<VideoPull>;
+        /** `fresh` restarts every tap from the engine's newest samples. */
+        pull: (fresh: boolean) => Promise<VideoPull>;
         sendPreviewFrame: (frame: VideoPreviewFrame) => Promise<void>;
         sendCvValues: (values: VideoCvValue[]) => Promise<void>;
         onPreviewFrame: (
@@ -536,13 +535,13 @@ const electronAPI: ElectronAPI = {
     },
     video: {
         getShader: () => invokeIPC('VIDEO_GET_SHADER'),
-        onShader: menuEventHandler<[CompiledVideoShader | null]>(
+        onShader: menuEventHandler<[VideoShaderUpdate]>(
             IPC_CHANNELS.VIDEO_ON_SHADER,
         ),
         onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
-        pull: () => invokeIPC('VIDEO_PULL'),
+        pull: (fresh) => invokeIPC('VIDEO_PULL', fresh),
         sendPreviewFrame: (frame) => invokeIPC('VIDEO_PREVIEW_FRAME', frame),
         sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
         onPreviewFrame: menuEventHandler<[VideoPreviewFrame]>(

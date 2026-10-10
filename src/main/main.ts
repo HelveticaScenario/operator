@@ -952,7 +952,7 @@ registerIPCHandler(
 
             if (errors.length === 0) {
                 appliedPatch.record(patch, sourceId ?? null, updateId);
-                updateVideoShader(video);
+                updateVideoShader(video, updateId);
             }
 
             if (errors.length > 0) {
@@ -1000,13 +1000,21 @@ setVideoTapSource({
     read: (tap, since) => synth.getVideoTapChunk(tap, since),
     sampleRate: () => synth.sampleRate(),
     isStopped: () => synth.isStopped(),
+    updates: () => {
+        const { lastAppliedUpdateId, lastCancelledUpdateId } =
+            synth.getTransportState();
+        return {
+            applied: lastAppliedUpdateId,
+            cancelled: lastCancelledUpdateId,
+        };
+    },
 });
 
 setVideoTarget(() =>
     mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
 );
 
-registerIPCHandler('VIDEO_PULL', () => pullVideo());
+registerIPCHandler('VIDEO_PULL', (fresh) => pullVideo(fresh));
 
 // Region averages computed by the video renderer drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {
