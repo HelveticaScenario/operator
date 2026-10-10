@@ -856,10 +856,12 @@ registerIPCHandler(
                 callSiteSpansRecord[key] = span;
             }
 
-            appliedPatch.resolve(
-                synth.getTransportState().lastCancelledUpdateId,
+            const transport = synth.getTransportState();
+            appliedPatch.resolve(transport.lastCancelledUpdateId);
+            const baseline = appliedPatch.baseline(
+                transport.lastAppliedUpdateId,
             );
-            const lastAppliedSourceId = appliedPatch.sourceId;
+            const lastAppliedSourceId = baseline.sourceId;
 
             // Requirement: assume a full change when a different file/buffer is evaluated.
             const shouldReconcile =
@@ -887,7 +889,7 @@ registerIPCHandler(
 
             const { moduleIdRemap } = reconcilePatchBySimilarity(
                 patch,
-                shouldReconcile ? appliedPatch.patchGraph : null,
+                shouldReconcile ? baseline.patchGraph : null,
                 {
                     ambiguityMargin: PATCH_REMAP_MARGIN,
                     debugLog: DEBUG_LOG
@@ -927,7 +929,12 @@ registerIPCHandler(
             );
 
             if (errors.length === 0) {
-                appliedPatch.record(patch, sourceId ?? null, updateId);
+                appliedPatch.record(
+                    patch,
+                    sourceId ?? null,
+                    updateId,
+                    baseline,
+                );
             }
 
             if (errors.length > 0) {
@@ -981,8 +988,10 @@ registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
-    appliedPatch.resolve(synth.getTransportState().lastCancelledUpdateId);
-    const lastAppliedSourceId = appliedPatch.sourceId;
+    const transport = synth.getTransportState();
+    appliedPatch.resolve(transport.lastCancelledUpdateId);
+    const baseline = appliedPatch.baseline(transport.lastAppliedUpdateId);
+    const lastAppliedSourceId = baseline.sourceId;
 
     // Requirement: assume a full change when a different file/buffer is evaluated.
     const shouldReconcile =
@@ -1006,7 +1015,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
 
     const { moduleIdRemap } = reconcilePatchBySimilarity(
         patch,
-        shouldReconcile ? appliedPatch.patchGraph : null,
+        shouldReconcile ? baseline.patchGraph : null,
         {
             ambiguityMargin: PATCH_REMAP_MARGIN,
             debugLog: DEBUG_LOG ? (message) => console.log(message) : undefined,
@@ -1039,7 +1048,7 @@ registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
     const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
 
     if (errors.length === 0) {
-        appliedPatch.record(patch, sourceId ?? null, updateId);
+        appliedPatch.record(patch, sourceId ?? null, updateId, baseline);
     }
 
     return { appliedPatch: patch, errors, moduleIdRemap, updateId };
