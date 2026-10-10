@@ -102,6 +102,7 @@
     width: max-content;
     height: 100%;
     margin-left: auto;
+    padding-left: 6px;
     background: var(--code-backing);
 }
 
