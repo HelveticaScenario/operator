@@ -1635,10 +1635,10 @@ describe('$v in the DSL executor', () => {
         });
     });
 
-    describe('network URLs', () => {
-        it('plays a video from an address, with no file or extension to check', () => {
+    describe('network addresses', () => {
+        it('streams a video from an address, with no file or extension to check', () => {
             const { video } = exec(
-                `$v.video('https://cdn.example.com/live/stream?id=7').out();`,
+                `$v.stream('https://cdn.example.com/live/stream?id=7').out();`,
             );
             expect(video!.sources).toEqual([
                 {
@@ -1657,26 +1657,30 @@ describe('$v in the DSL executor', () => {
             ]);
         });
 
-        it('keeps the speed and loop options for a network video', () => {
-            const { video } = exec(
-                `$v.video('https://a.example/b.mp4', { speed: 2, loop: [1, 3] }).out();`,
-            );
-            expect(video!.sources).toEqual([
-                {
-                    kind: 'video',
-                    loopEnd: 3,
-                    loopStart: 1,
-                    path: 'https://a.example/b.mp4',
-                    speed: 2,
-                },
-            ]);
-        });
-
         it('uses one source for an address written two ways', () => {
             const { video } = exec(`
-                $v.mix($v.video('HTTPS://CDN.example.com/a.mp4'), $v.video('https://cdn.example.com/a.mp4'), 2.5).out();
+                $v.mix($v.stream('HTTPS://CDN.example.com/a.mp4'), $v.stream('https://cdn.example.com/a.mp4'), 2.5).out();
             `);
             expect(video!.sources).toHaveLength(1);
+        });
+
+        it('fits a stream like any other source', () => {
+            expect(() =>
+                exec(
+                    `$v.stream('https://a.example/b.m3u8', { fit: 'contain' }).out();`,
+                ),
+            ).not.toThrow();
+            expect(() =>
+                exec(
+                    `$v.stream('https://a.example/b.m3u8', { fit: 'tile' }).out();`,
+                ),
+            ).toThrow(/fit must be one of/);
+        });
+
+        it('sends an address given to $v.video to $v.stream', () => {
+            expect(() => exec(`$v.video('https://a.example/b.mp4');`)).toThrow(
+                /\$v\.video: plays files in the workspace folder; use \$v\.stream/,
+            );
         });
 
         it('refuses protocols a browser cannot play, and says what works', () => {
@@ -1686,15 +1690,18 @@ describe('$v in the DSL executor', () => {
                 'ftp://files.example/a.mp4',
                 'file:///etc/a.mp4',
             ]) {
-                expect(() => exec(`$v.video('${url}');`)).toThrow(
-                    /\$v\.video: [a-z]+:\/\/ streams cannot be played; use an http or https URL/,
+                expect(() => exec(`$v.stream('${url}');`)).toThrow(
+                    /\$v\.stream: [a-z]+:\/\/ addresses cannot be played; use an http or https URL/,
                 );
             }
         });
 
-        it('rejects an address that is not a URL', () => {
-            expect(() => exec(`$v.video('http://');`)).toThrow(
-                /\$v\.video: "http:\/\/" is not a valid URL/,
+        it('rejects a stream that is not an address', () => {
+            expect(() => exec(`$v.stream('clip.mp4');`)).toThrow(
+                /\$v\.stream: url must be an http or https address/,
+            );
+            expect(() => exec(`$v.stream('http://');`)).toThrow(
+                /\$v\.stream: "http:\/\/" is not a valid URL/,
             );
         });
 
