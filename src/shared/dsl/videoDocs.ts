@@ -38,10 +38,11 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nFields are in volts, as audio signals are: a field runs from 0 to 5, and 5 is full. A ramp runs from 0 to 5 across the frame, a color channel at 5 is fully on, and a strength or an amount of 5 is all of it. Angles and phases are fractions of 5 too: `rotate: 5` is a full turn and `phase: 2.5` half a cycle. Counts and factors keep their own units: `freq: 10` is ten cycles, `zoom: 2` doubles the size, `kaleid(6)` is six wedges.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so a 0 to 5 volt signal fills a full-scale input as it is; `.range(min, max)`, on an audio signal or on a field, sets any other range, such as `.range(1, 3)` for a zoom of one to three times. Pass one channel; a polyphonic signal is rejected.',
+        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nFields are in volts, as audio signals are: a field runs from 0 to 5, and 5 is full. A ramp runs from 0 to 5 across the frame, a color channel at 5 is fully on, and a strength or an amount of 5 is all of it. Angles and phases are fractions of 5 too: `rotate: 5` is a full turn and `phase: 2.5` half a cycle. Counts and factors keep their own units: `freq: 10` is ten cycles, `zoom: 2` doubles the size, `kaleid(6)` is six wedges.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are volts, so `$p("0 1.25 2.5 3.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so a 0 to 5 volt signal fills a full-scale input as it is; `.range(min, max)`, on an audio signal or on a field, sets any other range, such as `.range(1, 3)` for a zoom of one to three times. Pass one channel; a polyphonic signal is rejected.',
     examples: [
         '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 1.5, 0, 5), 5, $slider('Level', 5, 0, 5)))",
+        "$v.out($v.hsv($p('0 1.25 2.5 3.75'), 5, $p.arrange([2, $p('5 2.5')], [1, $p('5')])))",
         "$v.out($v.hsv($sine('0.2hz').range(0, 5), 5, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.5, 2))))",
     ],
 };
@@ -137,7 +138,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'signal',
                 description:
-                    'A single-channel audio signal, such as an oscillator or an envelope',
+                    'A single-channel audio signal, such as an oscillator or an envelope, or a pattern from `$p(...)`',
             },
             {
                 name: 'position',
@@ -160,7 +161,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('r'), { samples: 1024 }), 5, 5))",
         ],
         declarations: [
-            'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoField;',
+            'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange | PatternSource, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoField;',
         ],
     },
     {

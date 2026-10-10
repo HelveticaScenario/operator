@@ -28,6 +28,11 @@ export interface VideoGraphHost {
      * `moduleId` is not a control.
      */
     controlValue(moduleId: string): number | undefined;
+    /**
+     * Plays a pattern value (`$p(...)`, `$p.s(...)`, `$p.arrange(...)` or a
+     * chain of them) through its own `$cycle`, as a signal parameter does.
+     */
+    playPattern(pattern: unknown): ModuleOutput | BaseCollection<ModuleOutput>;
     /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
     publishTap(output: ModuleOutput, slot: number): void;
     /**

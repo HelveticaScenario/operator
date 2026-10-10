@@ -17,6 +17,7 @@ import {
     type CollectionWithRange,
     ModuleOutput,
 } from '../GraphBuilder';
+import { isPatternValue } from '../patternKinds';
 import { VideoBuffer } from './VideoBuffer';
 import { VideoOutput } from './VideoOutput';
 import { colorMethods } from './videoColor';
@@ -144,7 +145,8 @@ export class VideoGraphBuilder implements VideoCore {
         return tap;
     }
 
-    asField(fn: string, name: string, v: unknown): VideoValue {
+    asField(fn: string, name: string, value: unknown): VideoValue {
+        const v = isPatternValue(value) ? this.host.playPattern(value) : value;
         if (typeof v === 'number') return { kind: 'const', value: v };
         if (v instanceof VideoOutput && v.type === 'field') return v.value;
         if (v instanceof ModuleOutput) return this.bindSignal(fn, name, v);
@@ -227,10 +229,13 @@ export class VideoGraphBuilder implements VideoCore {
         position: VideoSource = this.ramp('h'),
         config?: VideoAudioConfig,
     ): VideoOutput => {
+        const played = isPatternValue(signal)
+            ? this.host.playPattern(signal)
+            : signal;
         const output =
-            signal instanceof BaseCollection && signal.length === 1
-                ? signal[0]
-                : signal;
+            played instanceof BaseCollection && played.length === 1
+                ? played[0]
+                : played;
         if (!(output instanceof ModuleOutput)) {
             throw new Error(
                 `$v.fromAudio: signal must be a single-channel audio signal, got ${describe(signal)}`,

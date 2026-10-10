@@ -660,6 +660,10 @@ export function executePatchScript(
             if (button) return button.value ? GATE_HIGH_VOLTAGE : 0;
             return undefined;
         },
+        playPattern: (pattern) =>
+            cycleFactory(pattern) as
+                | ModuleOutput
+                | BaseCollection<ModuleOutput>,
         publishTap: (output, slot) => {
             _videoTap(output, slot);
         },

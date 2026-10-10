@@ -1831,9 +1831,11 @@ ${generateVideoChainMembers('color')}
 /**
  * A constant, a {@link VideoField}, or an audio signal whose live value drives
  * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any single-channel
- * module output such as an LFO or envelope.
+ * module output such as an LFO or envelope. A pattern from \`$p(...)\`,
+ * \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays through a \`$cycle\`
+ * and its values are volts, so \`$p('0 2.5 5')\` steps a full-scale input.
  */
-type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange;
+type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange | PatternSource;
 
 ${generateVideoChainInterfaces()}
 
