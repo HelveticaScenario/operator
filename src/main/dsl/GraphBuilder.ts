@@ -30,6 +30,29 @@ import z from 'zod';
 
 export const PORT_MAX_CHANNELS = 64;
 
+const PATTERN_KINDS: ReadonlySet<unknown> = new Set([
+    'ParsedPattern',
+    'SpPattern',
+    'ArrangePattern',
+    'FastPattern',
+    'SlowPattern',
+    'StructPattern',
+    'BeatPattern',
+]);
+
+/** A `$p(...)` pattern or a `.fast`/`.slow`/`.struct`/`.beat` chain of one. */
+interface PatternObject {
+    readonly __kind: string;
+}
+
+function isPatternObject(value: unknown): value is PatternObject {
+    return (
+        typeof value === 'object' &&
+        value !== null &&
+        PATTERN_KINDS.has((value as { __kind?: unknown }).__kind)
+    );
+}
+
 
 /**
  * Scope with an optional source location captured at call time.
@@ -1117,11 +1140,17 @@ export class GraphBuilder {
      * an array argument are handled too. Lifting a scalar needs the `$signal`
      * factory, hence a builder method.
      */
-    $c(...args: (Signal | Iterable<Signal>)[]): Collection {
+    $c(
+        ...args: (Signal | PatternObject | Iterable<Signal | PatternObject>)[]
+    ): Collection {
         // Resolved on the first scalar: a Collection of only ModuleOutputs
         // needs no factory.
         let signal: FactoryFunction | undefined;
         const lift = (value: unknown): ModuleOutput[] => {
+            // A pattern plays through its own `$cycle`.
+            if (isPatternObject(value)) {
+                return [...(this.getFactory('$cycle')(value) as Collection)];
+            }
             // Scalar literal checked before the iterable branch so a string is
             // one signal rather than spread into characters.
             if (typeof value === 'number' || typeof value === 'string') {

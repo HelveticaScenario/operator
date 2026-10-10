@@ -10,6 +10,8 @@ import {
 import type { SourceSpan } from '../../shared/dsl/spanTypes';
 import type { CallSiteKey, SpanRegistry } from './analyzeSource';
 import { processModuleSchema } from './paramsSchema';
+import { isSignalGroupLike } from './signalGroups';
+import { buildSignalMapper } from './signalSchemaMapper';
 import {
     captureSourceLocation,
     getDSLWrapperLineOffset,
@@ -413,6 +415,33 @@ export class DSLContext {
         return cycle([value], sourceLocation, undefined);
     }
 
+    /**
+     * Wrap every pattern inside a signal param's value: the value itself, array
+     * elements, and the contents of a `$gN` group.
+     */
+    private wrapSignalParam(
+        value: unknown,
+        sourceLocation: SourceLocation | undefined,
+    ): unknown {
+        if (isSignalGroupLike(value)) {
+            const signals = this.wrapSignalParam(value.signals, sourceLocation);
+            return {
+                ...value,
+                signals:
+                    signals instanceof BaseCollection ? [...signals] : signals,
+            };
+        }
+        if (Array.isArray(value)) {
+            return value.flatMap((v) => {
+                const wrapped = this.wrapPattern(v, sourceLocation);
+                return wrapped instanceof BaseCollection
+                    ? [...wrapped]
+                    : [wrapped];
+            });
+        }
+        return this.wrapPattern(value, sourceLocation);
+    }
+
     private createInstantiator(schema: ModuleSchema): Instantiator {
         const outputs = schema.outputs || [];
         const processed = processModuleSchema(schema);
@@ -429,6 +458,26 @@ export class DSLContext {
                         p.isMonoSignalInput),
             )
             .map((p) => p.name);
+
+        // Params that nest signals inside arrays or tuples, which the flat
+        // signal list above does not cover.
+        const paramsSchema = schema.paramsSchema as {
+            properties?: Record<string, Record<string, unknown>>;
+            $defs?: Record<string, Record<string, unknown>>;
+        };
+        const nestedSignalParams = processed.params
+            .filter(
+                (p) =>
+                    !p.isScaleSignalInput &&
+                    !patternSignalParamNames.includes(p.name),
+            )
+            .flatMap((p) => {
+                const property = paramsSchema.properties?.[p.name];
+                const mapper = property
+                    ? buildSignalMapper(property, paramsSchema.$defs)
+                    : null;
+                return mapper ? [{ mapper, name: p.name }] : [];
+            });
 
         return (args, sourceLocation, argumentSpans): ModuleReturn => {
             const positionalArgs = schema.positionalArgs || [];
@@ -459,16 +508,16 @@ export class DSLContext {
 
             // A pattern in a signal param plays through its own `$cycle`.
             for (const name of patternSignalParamNames) {
-                const value = params[name];
-                if (Array.isArray(value)) {
-                    params[name] = value.flatMap((v) => {
-                        const wrapped = this.wrapPattern(v, sourceLocation);
-                        return wrapped instanceof BaseCollection
-                            ? [...wrapped]
-                            : [wrapped];
-                    });
-                } else {
-                    params[name] = this.wrapPattern(value, sourceLocation);
+                params[name] = this.wrapSignalParam(
+                    params[name],
+                    sourceLocation,
+                );
+            }
+            for (const { mapper, name } of nestedSignalParams) {
+                if (params[name] !== undefined) {
+                    params[name] = mapper(params[name], name, (value) =>
+                        this.wrapSignalParam(value, sourceLocation),
+                    );
                 }
             }
 

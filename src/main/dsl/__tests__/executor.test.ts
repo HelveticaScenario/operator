@@ -496,6 +496,35 @@ describe('sequencing', () => {
         expect(() => execPatch('$sine("4s(C:major)").out()')).toThrow();
     });
 
+    test('$c plays pattern objects directly and lifts single values to $signal', () => {
+        const patch = execPatch('$c($p("c4 e4"), "c4", 440).out()');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+        const lifted = findModules(patch, '$signal').filter(
+            (m) => m.params.source === 'c4' || m.params.source === 440,
+        );
+        expect(lifted.length).toBe(2);
+    });
+
+    test('a pattern inside a $gN group plays through a $cycle', () => {
+        const patch = execPatch('$sine($g1($p("c4 e4"))).out()');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+    });
+
+    test('patterns inside nested signal params play through a $cycle', () => {
+        const patch = execPatch(`
+            $mix([$p("c4 e4"), "g4"]).out();
+            $step([$p("c4 e4"), "g4"], $p("1 0")).out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(3);
+    });
+
+    test('patterns work through methods and .out config', () => {
+        const patch = execPatch(
+            '$sine("c3").amplitude($p("1 2")).out({ gain: $p("3 4") })',
+        );
+        expect(findModules(patch, '$cycle').length).toBe(2);
+    });
+
     test('$track with keyframes', () => {
         const patch = execPatch('$track([[$hz(440), 0], [$hz(880), 1]]).out()');
         expect(findModules(patch, '$track').length).toBe(1);

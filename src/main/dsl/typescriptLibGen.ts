@@ -1388,16 +1388,19 @@ function $note(noteName: string): number;
  *
  * Collections support chainable DSP methods, iteration, indexing, and spreading.
  * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
- * $signal modules, so they can be mixed in alongside module outputs.
+ * $signal modules, so they can be mixed in alongside module outputs. A
+ * pattern (\`$p(...)\`, \`$p.s(...)\`, \`$p.arrange(...)\`) plays through a
+ * \`$cycle\` and contributes its voices.
  * @param args One or more {@link ModuleOutput}s or {@link Signal} literals to group
  * @returns A {@link Collection} of the outputs
  * @example $c($sine('c3'), $sine('e3')).amplitude(0.5).out()
  * @example $c(440, 'c4', $sine('e3'))  // Bare number/string lifted into $signal
+ * @example $c($p('c4 e4'), 'g4')        // Pattern plays through a $cycle
  * @example $c($sine('c3'), $sine('e3'), $sine('g3'))[0]  // Index access
  * @example [...$c($sine('c3'), $sine('e3'))]             // Spread to array
  * @see {@link $r} - for ranged outputs
  */
-function $c(...args: (Signal | Iterable<Signal>)[]): Collection;
+function $c(...args: (Signal | PatternSource | (Signal | PatternSource)[] | Iterable<Signal | PatternSource>)[]): Collection;
 
 /**
  * Create a {@link CollectionWithRange} from {@link ModuleOutputWithRange} instances.
