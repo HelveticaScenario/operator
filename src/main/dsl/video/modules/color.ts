@@ -77,3 +77,16 @@ export const contrast: VideoModuleDef = {
     emit: ({ input, amount }) =>
         `clamp((${input} - vec3f(0.5)) * ${amount} + vec3f(0.5), vec3f(0.0), vec3f(1.0))`,
 };
+
+/** One channel of a color as a field: red, green, blue, or brightness. */
+export const channel: VideoModuleDef = {
+    inputs: { input: 'color' },
+    output: 'field',
+    params: {
+        channel: { values: ['r', 'g', 'b', 'luma'], default: 'luma' },
+    },
+    emit: ({ input }, { channel: which }) =>
+        which === 'luma'
+            ? `dot(${input}, vec3f(0.299, 0.587, 0.114))`
+            : `${input}.${which}`,
+};

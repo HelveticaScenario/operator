@@ -1,10 +1,17 @@
 /// <reference types="@webgpu/types" />
 import type { VideoPreviewFrame } from '../../shared/video/videoGraph';
+import { UNIFORM_RESOLUTION_OFFSET } from '../../shared/video/uniformLayout';
+import type { ShaderProgram } from './ShaderProgram';
 
 export const PREVIEW_FORMAT: GPUTextureFormat = 'rgba8unorm';
 
 /** WebGPU requires each texture row in a buffer copy to start on this boundary. */
 const ROW_ALIGNMENT = 256;
+
+/** Previews are drawn this many pixels tall, at the output's aspect ratio. */
+const PREVIEW_HEIGHT = 144;
+const PREVIEW_MIN_WIDTH = 64;
+const PREVIEW_MAX_WIDTH = 512;
 
 interface Target {
     texture: GPUTexture;
@@ -64,12 +71,53 @@ export class PreviewCapture {
         }
     }
 
-    view(k: number): GPUTextureView {
-        return this.targets[k].view;
+    /**
+     * Draws every preview of `program` at the output's `aspect` ratio and
+     * records copies of the targets not still being read back. Returns the
+     * targets copied, for {@link deliver}.
+     */
+    draw(
+        encoder: GPUCommandEncoder,
+        program: ShaderProgram,
+        group: GPUBindGroup,
+        aspect: number,
+    ): number[] {
+        const width = Math.min(
+            PREVIEW_MAX_WIDTH,
+            Math.max(PREVIEW_MIN_WIDTH, Math.round(PREVIEW_HEIGHT * aspect)),
+        );
+        this.resize(program.previewCount, width, PREVIEW_HEIGHT);
+
+        program.previewUniforms.set(program.uniforms);
+        program.previewUniforms[UNIFORM_RESOLUTION_OFFSET] = width;
+        program.previewUniforms[UNIFORM_RESOLUTION_OFFSET + 1] = PREVIEW_HEIGHT;
+        this.device.queue.writeBuffer(
+            program.previewUniformBuffer,
+            0,
+            program.previewUniforms,
+        );
+
+        for (let k = 0; k < program.previewCount; k++) {
+            const pass = encoder.beginRenderPass({
+                colorAttachments: [
+                    {
+                        clearValue: { a: 1, b: 0, g: 0, r: 0 },
+                        loadOp: 'clear',
+                        storeOp: 'store',
+                        view: this.targets[k].view,
+                    },
+                ],
+            });
+            pass.setPipeline(program.previewPipelines[k]);
+            pass.setBindGroup(0, group);
+            pass.draw(3);
+            pass.end();
+        }
+        return this.encodeReadback(encoder);
     }
 
     /** Records a copy of every target that is not still being read back. */
-    encodeReadback(encoder: GPUCommandEncoder): number[] {
+    private encodeReadback(encoder: GPUCommandEncoder): number[] {
         const copied: number[] = [];
         this.targets.forEach((target, k) => {
             if (target.busy) return;
@@ -84,7 +132,7 @@ export class PreviewCapture {
         return copied;
     }
 
-    /** Reads back the targets `encodeReadback` copied. Call after submitting. */
+    /** Reads back the targets `draw` copied. Call after submitting. */
     deliver(indices: number[]): void {
         const { width, height, bytesPerRow } = this;
         for (const index of indices) {

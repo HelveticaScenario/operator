@@ -168,7 +168,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 if (newConfig.codeBackdropOpacity != null) {
                     setCodeBackdropOpacity(newConfig.codeBackdropOpacity);
                 }
-                setPerformanceScale(newConfig.performanceScale ?? 1);
+                if (newConfig.performanceScale != null) {
+                    setPerformanceScale(newConfig.performanceScale);
+                }
                 if (newConfig.xyScopeLineWidth != null) {
                     setXyScopeLineWidth(newConfig.xyScopeLineWidth);
                 }

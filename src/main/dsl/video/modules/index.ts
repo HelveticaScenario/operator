@@ -1,5 +1,5 @@
 import { audioHistory } from './audioHistory';
-import { contrast, hsv, hueShift, posterize, procAmp } from './color';
+import { channel, contrast, hsv, hueShift, posterize, procAmp } from './color';
 import { feedbackRead, feedbackWrite } from './feedback';
 import { blur, edges } from './filter';
 import {
@@ -25,7 +25,7 @@ import { polygon, shape } from './shape';
 import { source } from './source';
 import { swizzle } from './swizzle';
 import type { VideoModuleDef } from './types';
-import { channel, displace, kaleid, pixelate, repeat, warp } from './warp';
+import { displace, kaleid, pixelate, repeat, warp } from './warp';
 import { fold, wrap } from './waveshape';
 
 type Variants = { field: VideoModuleDef; color: VideoModuleDef };

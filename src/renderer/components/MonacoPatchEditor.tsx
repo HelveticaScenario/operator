@@ -209,8 +209,8 @@ export function MonacoPatchEditor({
     }, [editor, activeVideoPreviewZones, videoPreviewDecorations]);
 
     // On every content change, re-read positions from tracked decorations and
-    // Reposition view zones if any scope or preview call has moved to a
-    // Different line.
+    // reposition view zones if any scope or preview call has moved to a
+    // different line.
     useEffect(() => {
         if (!editor) {
             return;

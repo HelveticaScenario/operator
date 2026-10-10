@@ -1,19 +1,16 @@
 /// <reference types="@webgpu/types" />
 import { FeedbackBuffers } from './FeedbackBuffers';
-import { HistoryTexture } from './HistoryTexture';
+import { AudioInputs } from './AudioInputs';
 import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
 import { SourceTextures, type OpenStream } from './SourceTextures';
-import { gateVerdict } from './shaderGate';
-import { TapStream } from './TapStream';
-import { alignWindow } from './alignWindow';
+import { ShaderGate } from './shaderGate';
 import type {
     VideoCvValue,
     VideoPreviewFrame,
     VideoPull,
     VideoShaderUpdate,
-    VideoTapSamples,
 } from '../../shared/video/videoGraph';
 import { MAX_FEEDBACK_BUFFERS } from '../../shared/video/videoGraph';
 import {
@@ -28,10 +25,6 @@ import {
  */
 const COLOR_BYTES_PER_SAMPLE = 8 + MAX_FEEDBACK_BUFFERS * 8;
 
-/** Previews are drawn this many pixels tall, at the output's aspect ratio. */
-const PREVIEW_HEIGHT = 144;
-const PREVIEW_MIN_WIDTH = 64;
-const PREVIEW_MAX_WIDTH = 512;
 /** Previews are drawn and read back on every Nth frame: 30 fps at 60 Hz. */
 const PREVIEW_FRAME_INTERVAL = 2;
 
@@ -42,17 +35,7 @@ const PREVIEW_FRAME_INTERVAL = 2;
  */
 export class VideoRenderer {
     private program: ShaderProgram | null = null;
-    private shaderToken = 0;
-    /** A built shader waiting for the engine to apply its patch update. */
-    private pending: {
-        program: ShaderProgram | null;
-        updateId: number;
-    } | null = null;
-    /** The update id of the latest shader requested and not yet live. */
-    private awaiting: number | null = null;
-    /** The latest update ids the engine reported applying and discarding. */
-    private applied = 0;
-    private cancelled = 0;
+    private readonly gate = new ShaderGate<ShaderProgram>();
     /** Control values received while a shader is still being built. */
     private pendingSlots = new Map<number, number>();
     private frameHandle = 0;
@@ -77,13 +60,9 @@ export class VideoRenderer {
     private cvSink: ((values: VideoCvValue[]) => void) | null = null;
     private readonly buffers: FeedbackBuffers;
     private readonly previews: PreviewCapture;
-    private readonly history: HistoryTexture;
+    private readonly audio: AudioInputs;
     private readonly sources: SourceTextures;
     private errorSink: ((message: string) => void) | null = null;
-    /** Each audio signal the shader reads, played back against this clock. */
-    private readonly streams = new Map<number, TapStream>();
-    /** Scratch the audio history windows are copied into, per history row. */
-    private historyScratch: Float32Array[] = [];
     private readonly sampler: GPUSampler;
 
     private constructor(
@@ -94,7 +73,7 @@ export class VideoRenderer {
         openStream: OpenStream | undefined,
     ) {
         this.buffers = new FeedbackBuffers(device);
-        this.history = new HistoryTexture(device);
+        this.audio = new AudioInputs(device);
         this.sources = new SourceTextures(
             device,
             (message) => this.errorSink?.(message),
@@ -156,11 +135,8 @@ export class VideoRenderer {
      * shader on screen.
      */
     async setShader({ shader, updateId }: VideoShaderUpdate): Promise<void> {
-        const token = ++this.shaderToken;
+        const token = this.gate.request(updateId);
         this.pendingSlots = new Map();
-        this.pending?.program?.destroy();
-        this.pending = null;
-        this.awaiting = updateId;
 
         let program: ShaderProgram | null = null;
         try {
@@ -172,49 +148,82 @@ export class VideoRenderer {
                 );
             }
         } catch (error) {
-            if (token === this.shaderToken) this.awaiting = null;
+            this.gate.fail(token);
             throw error;
         }
-        if (token !== this.shaderToken) {
-            program?.destroy();
-            return;
-        }
-        this.pending = { program, updateId };
-        this.settle(false);
-    }
-
-    /** True from the moment the engine applies the awaited update until its shader is live. */
-    private get holding(): boolean {
-        return this.awaiting !== null && this.applied >= this.awaiting;
+        if (this.gate.offer(token, program)) this.settle(false);
     }
 
     /**
-     * Makes the pending shader live if the engine has applied its update, or
-     * drops it if the engine discarded the update. `force` makes it live
-     * regardless, for an engine whose update numbering has started over.
-     * Returns whether a shader went live.
+     * Sets a control-bound input of the shader being displayed, or of the one
+     * being built when a replacement is in flight.
      */
+    setUniform(slot: number, value: number): void {
+        this.pendingSlots.set(slot, value);
+        if (this.gate.swapping) this.gate.waiting?.setSlot(slot, value);
+        else this.program?.setSlot(slot, value);
+    }
+
+    /**
+     * Where the engine's state comes from: asked once per frame for whether it
+     * is running and for the audio samples it has produced since. While it is
+     * stopped nothing is drawn and videos pause; when it runs again, the
+     * shader's time starts over from 0 and videos from their loop start.
+     */
+    setPullSource(
+        source: ((fresh: boolean) => Promise<VideoPull>) | null,
+    ): void {
+        this.pullSource = source;
+    }
+
+    /** Receives problems loading media, such as a file that will not decode. */
+    setErrorSink(sink: ((message: string) => void) | null): void {
+        this.errorSink = sink;
+    }
+
+    /** Receives every editor preview frame; with no sinks, previews are not drawn. */
+    setPreviewSink(sink: ((frame: VideoPreviewFrame) => void) | null): void {
+        this.previewSink = sink;
+    }
+
+    /** Receives the region averages that feed audio control signals. */
+    setCvSink(sink: ((values: VideoCvValue[]) => void) | null): void {
+        this.cvSink = sink;
+    }
+
+    /**
+     * Holds the canvas at `size` pixels, whatever the element's size, so the
+     * picture has another window's resolution; null follows the element again.
+     */
+    setFixedSize(size: { height: number; width: number } | null): void {
+        this.fixedSize = size;
+    }
+
+    /** Receives the canvas right after each frame is drawn, to copy it elsewhere. */
+    setFrameSink(sink: ((canvas: HTMLCanvasElement) => void) | null): void {
+        this.frameSink = sink;
+    }
+
+    dispose(): void {
+        cancelAnimationFrame(this.frameHandle);
+        this.gate.dispose();
+        this.clear();
+        this.previews.destroy();
+        this.buffers.destroy();
+        this.audio.destroy();
+        this.sources.destroy();
+        this.device.destroy();
+    }
+
+    /** Makes the gate's shader live if it releases one; returns whether it did. */
     private settle(force: boolean): boolean {
-        const { pending } = this;
-        if (pending === null) return false;
-        const verdict = force
-            ? 'activate'
-            : gateVerdict(pending.updateId, this.applied, this.cancelled);
-        if (verdict === 'wait') return false;
-        this.pending = null;
-        this.awaiting = null;
-        if (verdict === 'drop') {
-            pending.program?.destroy();
-            return false;
-        }
-        this.activate(pending.program);
-        return true;
+        const released = this.gate.settle(force);
+        if (released !== undefined) this.activate(released.program);
+        return released !== undefined;
     }
 
     private activate(program: ShaderProgram | null): void {
-        // Taps are numbered afresh by every compile, so what the streams hold
-        // belongs to the previous patch's signals.
-        this.streams.clear();
+        this.audio.reset(program?.histories ?? []);
         this.freshPull = true;
         this.epoch++;
         if (program === null) {
@@ -231,86 +240,23 @@ export class VideoRenderer {
             this.canvas.width,
             this.canvas.height,
         );
-        this.history.resize(program.histories.length);
         this.sources.sync(program.sources);
-        this.historyScratch = program.histories.map(
-            ({ samples, trigger }) =>
-                new Float32Array(
-                    trigger ? Math.min(2 * samples, 4096) : samples,
-                ),
-        );
         for (const [slot, value] of this.pendingSlots) {
             program.setSlot(slot, value);
         }
     }
 
-    /**
-     * Sets a control-bound input of the shader being displayed, or of the one
-     * being built when a replacement is in flight.
-     */
-    setUniform(slot: number, value: number): void {
-        this.pendingSlots.set(slot, value);
-        if (this.awaiting === null) this.program?.setSlot(slot, value);
-        else this.pending?.program?.setSlot(slot, value);
+    private releaseProgram(): void {
+        this.program?.destroy();
+        this.program = null;
     }
 
-    /**
-     * Where the engine's state comes from: asked once per frame for whether it
-     * is running and for the audio samples it has produced since. While it is
-     * stopped nothing is drawn and videos pause; when it runs again, the
-     * shader's time starts over from 0 and videos from their loop start.
-     */
-    setPullSource(
-        source: ((fresh: boolean) => Promise<VideoPull>) | null,
-    ): void {
-        this.pullSource = source;
-    }
-
-    private tapsReady(program: ShaderProgram): boolean {
-        const taps = [
-            ...program.tapSlots.map(({ tap }) => tap),
-            ...program.histories.map(({ tap }) => tap),
-        ];
-        return taps.every((tap) => this.streams.get(tap)?.hasData === true);
-    }
-
-    private setRunning(running: boolean): void {
-        if (running === this.running) return;
-        this.running = running;
-        if (running) {
-            this.timeOriginMs = performance.now();
-            this.sources.restart();
-        } else {
-            this.sources.pause();
-        }
-    }
-
-    /** Receives problems loading media, such as a file that will not decode. */
-    setErrorSink(sink: ((message: string) => void) | null): void {
-        this.errorSink = sink;
-    }
-
-    /** Adds audio samples that have just arrived. */
-    private pushTapSamples(chunks: VideoTapSamples[]): void {
-        const now = performance.now();
-        for (const { tap, samples, sampleRate } of chunks) {
-            let stream = this.streams.get(tap);
-            if (stream === undefined) {
-                stream = new TapStream();
-                this.streams.set(tap, stream);
-            }
-            stream.push(samples, sampleRate, now);
-        }
-    }
-
-    /** Receives every editor preview frame; with no sinks, previews are not drawn. */
-    setPreviewSink(sink: ((frame: VideoPreviewFrame) => void) | null): void {
-        this.previewSink = sink;
-    }
-
-    /** Receives the region averages that feed audio control signals. */
-    setCvSink(sink: ((values: VideoCvValue[]) => void) | null): void {
-        this.cvSink = sink;
+    /** Drops the shader and everything that only it used. */
+    private clear(): void {
+        this.releaseProgram();
+        this.audio.reset([]);
+        this.sources.sync([]);
+        this.previews.resize(0, 0, 0);
     }
 
     /** Sends a delivered frame to the CV sink or, for an editor preview, the preview sink. */
@@ -325,43 +271,15 @@ export class VideoRenderer {
         }
     }
 
-    dispose(): void {
-        cancelAnimationFrame(this.frameHandle);
-        this.shaderToken++;
-        this.pending?.program?.destroy();
-        this.pending = null;
-        this.clear();
-        this.previews.destroy();
-        this.buffers.destroy();
-        this.history.destroy();
-        this.sources.destroy();
-        this.device.destroy();
-    }
-
-    private releaseProgram(): void {
-        this.program?.destroy();
-        this.program = null;
-    }
-
-    /** Drops the shader and everything that only it used. */
-    private clear(): void {
-        this.releaseProgram();
-        this.history.resize(0);
-        this.sources.sync([]);
-        this.previews.resize(0, 0, 0);
-    }
-
-    /**
-     * Holds the canvas at `size` pixels, whatever the element's size, so the
-     * picture has another window's resolution; null follows the element again.
-     */
-    setFixedSize(size: { height: number; width: number } | null): void {
-        this.fixedSize = size;
-    }
-
-    /** Receives the canvas right after each frame is drawn, to copy it elsewhere. */
-    setFrameSink(sink: ((canvas: HTMLCanvasElement) => void) | null): void {
-        this.frameSink = sink;
+    private setRunning(running: boolean): void {
+        if (running === this.running) return;
+        this.running = running;
+        if (running) {
+            this.timeOriginMs = performance.now();
+            this.sources.restart();
+        } else {
+            this.sources.pause();
+        }
     }
 
     private fitCanvas(): void {
@@ -377,100 +295,46 @@ export class VideoRenderer {
     }
 
     /**
-     * Reads each audio signal at `nowMs`: its value into the uniform slots it
-     * feeds, and its recent samples into the history rows that show them.
+     * Asks the engine for its state and new audio samples, unless a request
+     * is already waiting.
      */
-    private updateAudioInputs(program: ShaderProgram, nowMs: number): void {
-        for (const stream of this.streams.values()) stream.advance(nowMs);
-        for (const { slot, tap } of program.tapSlots) {
-            program.setSlot(slot, this.streams.get(tap)?.value() ?? 0);
-        }
-        program.histories.forEach(({ tap, samples, trigger }, row) => {
-            const stream = this.streams.get(tap);
-            if (stream === undefined) return;
-            const recent = this.historyScratch[row];
-            stream.recent(recent);
-            this.history.write(row, alignWindow(recent, samples, trigger));
-        });
-    }
-
-    /** Draws and copies every preview; returns the targets whose pixels to read. */
-    private drawPreviews(
-        encoder: GPUCommandEncoder,
-        program: ShaderProgram,
-        group: GPUBindGroup,
-    ): number[] {
-        const aspect = this.canvas.width / this.canvas.height;
-        const width = Math.min(
-            PREVIEW_MAX_WIDTH,
-            Math.max(PREVIEW_MIN_WIDTH, Math.round(PREVIEW_HEIGHT * aspect)),
-        );
-        this.previews.resize(program.previewCount, width, PREVIEW_HEIGHT);
-
-        program.previewUniforms.set(program.uniforms);
-        program.previewUniforms[UNIFORM_RESOLUTION_OFFSET] = width;
-        program.previewUniforms[UNIFORM_RESOLUTION_OFFSET + 1] = PREVIEW_HEIGHT;
-        this.device.queue.writeBuffer(
-            program.previewUniformBuffer,
-            0,
-            program.previewUniforms,
-        );
-
-        for (let k = 0; k < program.previewCount; k++) {
-            const pass = encoder.beginRenderPass({
-                colorAttachments: [
-                    {
-                        clearValue: { a: 1, b: 0, g: 0, r: 0 },
-                        loadOp: 'clear',
-                        storeOp: 'store',
-                        view: this.previews.view(k),
-                    },
-                ],
+    private pull(): void {
+        if (this.pullSource === null || this.pulling) return;
+        this.pulling = true;
+        const { epoch } = this;
+        const fresh = this.freshPull;
+        this.freshPull = false;
+        this.pullSource(fresh)
+            .then(({ applied, cancelled, running, taps }) => {
+                if (epoch !== this.epoch) {
+                    this.freshPull = true;
+                    return;
+                }
+                const restarted = this.gate.report(applied, cancelled);
+                this.setRunning(running);
+                // These samples may span the moment the engine changed
+                // patch, so they go to neither shader.
+                if (this.settle(restarted) || this.gate.holding) return;
+                this.audio.push(taps);
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                this.pulling = false;
             });
-            pass.setPipeline(program.previewPipelines[k]);
-            pass.setBindGroup(0, group);
-            pass.draw(3);
-            pass.end();
-        }
-        return this.previews.encodeReadback(encoder);
     }
 
     private frame = (): void => {
         this.frameHandle = requestAnimationFrame(this.frame);
-        if (this.program === null && this.cleared && this.awaiting === null) {
+        if (this.program === null && this.cleared && !this.gate.swapping) {
             return;
         }
 
-        if (this.pullSource !== null && !this.pulling) {
-            this.pulling = true;
-            const { epoch } = this;
-            const fresh = this.freshPull;
-            this.freshPull = false;
-            this.pullSource(fresh)
-                .then(({ applied, cancelled, running, taps }) => {
-                    if (epoch !== this.epoch) {
-                        this.freshPull = true;
-                        return;
-                    }
-                    const restarted = applied < this.applied;
-                    this.applied = applied;
-                    this.cancelled = cancelled;
-                    this.setRunning(running);
-                    // These samples may span the moment the engine changed
-                    // patch, so they go to neither shader.
-                    if (this.settle(restarted) || this.holding) return;
-                    this.pushTapSamples(taps);
-                })
-                .catch(() => undefined)
-                .finally(() => {
-                    this.pulling = false;
-                });
-        }
-        if (this.holding) return;
+        this.pull();
+        if (this.gate.holding) return;
         if (!this.running && this.program !== null) return;
         // A frame drawn before an audio input has any samples would read it as
         // zero; the previous frame stays up until every input has data.
-        if (this.program !== null && !this.tapsReady(this.program)) return;
+        if (this.program !== null && !this.audio.ready(this.program)) return;
         this.fitCanvas();
 
         const program = this.program;
@@ -508,7 +372,7 @@ export class VideoRenderer {
         if (program !== null) {
             const { uniformBuffer, uniforms } = program;
             const now = performance.now();
-            this.updateAudioInputs(program, now);
+            this.audio.update(program, now);
             this.sources.update();
             uniforms[UNIFORM_TIME_OFFSET] = (now - this.timeOriginMs) / 1000;
             uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
@@ -517,7 +381,7 @@ export class VideoRenderer {
             groups = program.bindGroups(
                 this.device,
                 this.buffers,
-                this.history,
+                this.audio.history,
                 this.sources,
                 this.sampler,
             );
@@ -535,10 +399,11 @@ export class VideoRenderer {
             (this.previewSink !== null || this.cvSink !== null) &&
             this.frameIndex % PREVIEW_FRAME_INTERVAL === 0
         ) {
-            copied = this.drawPreviews(
+            copied = this.previews.draw(
                 encoder,
                 program,
                 groups.preview[this.buffers.currentParity],
+                this.canvas.width / this.canvas.height,
             );
         }
 

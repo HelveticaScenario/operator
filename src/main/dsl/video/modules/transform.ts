@@ -1,3 +1,6 @@
+import type { VideoValueType } from '../../../../shared/video/videoGraph';
+import type { VideoModuleDef } from './types';
+
 /**
  * `video_transform`: maps frame coordinates `uv` through a zoom about the
  * center, a rotation in turns (positive is clockwise) and a shift, correcting
@@ -12,3 +15,28 @@ export const TRANSFORM_HELPER = `fn video_transform(uv: vec2f, zoom: f32, rotate
     let s = sin(a);
     return vec2f(c * p.x - s * p.y, s * p.x + c * p.y) / aspect + vec2f(0.5);
 }`;
+
+/**
+ * Builds the field and color variants of a module that evaluates its `input`
+ * at coordinates it computes, so the input's whole sub-patch is moved, turned
+ * or folded rather than just its output.
+ */
+export function coordinateModule(
+    extraInputs: readonly string[],
+    natural: readonly string[],
+    coordinates: (args: Record<string, string>) => string,
+    helpers: readonly string[] = [],
+): { field: VideoModuleDef; color: VideoModuleDef } {
+    const make = (type: VideoValueType): VideoModuleDef => ({
+        inputs: {
+            input: type,
+            ...Object.fromEntries(extraInputs.map((name) => [name, 'field'])),
+        },
+        warped: ['input'],
+        natural,
+        output: type,
+        helpers,
+        emit: (args) => `${args.input}(${coordinates(args)})`,
+    });
+    return { field: make('field'), color: make('color') };
+}

@@ -1,5 +1,5 @@
-import { TRANSFORM_HELPER } from './transform';
-import { coordinateModule, KALEID_HELPER } from './warp';
+import { coordinateModule, TRANSFORM_HELPER } from './transform';
+import { KALEID_HELPER } from './warp';
 
 /*
  * The modulators of Hydra, which read the whole input at coordinates that
