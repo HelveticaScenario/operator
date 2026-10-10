@@ -219,7 +219,11 @@ describe('normalizeOverride', () => {
                 { key: 'ctrl+e', command: '-cursorLineEnd' },
                 'darwin',
             ),
-        ).toEqual({ type: 'remove', key: 'Control+e', command: 'cursorLineEnd' });
+        ).toEqual({
+            type: 'remove',
+            key: 'Control+e',
+            command: 'cursorLineEnd',
+        });
     });
 
     test('a null command becomes a key-wide removal', () => {

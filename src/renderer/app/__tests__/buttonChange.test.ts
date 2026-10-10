@@ -108,7 +108,10 @@ function collapseLast(
 describe('applyGroupCollapse', () => {
     test('replaces an existing collapsed literal', () => {
         expect(
-            collapseLast("const g = $cGroup('Filter', { collapsed: false });", true),
+            collapseLast(
+                "const g = $cGroup('Filter', { collapsed: false });",
+                true,
+            ),
         ).toBe("const g = $cGroup('Filter', { collapsed: true });");
     });
 

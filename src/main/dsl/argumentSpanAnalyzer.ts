@@ -30,10 +30,7 @@ import type {
     SpanRegistry,
 } from './sourceAnalysisTypes';
 import type { ResolvedInterpolation } from '../../shared/dsl/spanTypes';
-import {
-    findControlCalls,
-    propertyName,
-} from '../../shared/dsl/controlCalls';
+import { findControlCalls, propertyName } from '../../shared/dsl/controlCalls';
 
 /**
  * Build a set of factory function names from module schemas.

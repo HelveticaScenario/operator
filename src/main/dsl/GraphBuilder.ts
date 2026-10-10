@@ -1309,8 +1309,7 @@ export class GraphBuilder {
                         group.gain === undefined ||
                         typeof group.gain === 'number';
                     const gainValue = gainControllable
-                        ? ((group.gain as number | undefined) ??
-                          UNITY_OUT_GAIN)
+                        ? ((group.gain as number | undefined) ?? UNITY_OUT_GAIN)
                         : null;
                     const gainSource = gainControllable
                         ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
@@ -1339,10 +1338,7 @@ export class GraphBuilder {
                                   )[0],
                               ];
 
-                    const curvedAmp = curveFactory(
-                        gainSource,
-                        GAIN_CURVE_EXP,
-                    );
+                    const curvedAmp = curveFactory(gainSource, GAIN_CURVE_EXP);
                     let outputSignals: ModuleOutput[] = [
                         ...(scaleAndShiftFactory(
                             mixSignals,
@@ -1464,8 +1460,7 @@ export class GraphBuilder {
             // $setOutputGain. A signal-valued output gain renders as a
             // locked, live-tracking fader.
             this.processingEndOfChain = true;
-            const masterGainControllable =
-                typeof this.outputGain === 'number';
+            const masterGainControllable = typeof this.outputGain === 'number';
             const masterGainValue = masterGainControllable
                 ? (this.outputGain as number)
                 : null;
@@ -1474,9 +1469,8 @@ export class GraphBuilder {
                       id: '__vuGain_main',
                   }) as ModuleOutput)
                 : this.outputGain;
-            const gainedMix = this.endOfChainCb(finalMix).gain(
-                masterGainSignal,
-            );
+            const gainedMix =
+                this.endOfChainCb(finalMix).gain(masterGainSignal);
 
             // Create root signal module with the final mix
             signalFactory(gainedMix, { id: 'ROOT_OUTPUT' });

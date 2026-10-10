@@ -154,7 +154,11 @@ export function createScopeViewZones({
             marginDomNode: undefined,
         };
 
-        return { decorationIndex: view.decorationIndex, delegate, key: view.key };
+        return {
+            decorationIndex: view.decorationIndex,
+            delegate,
+            key: view.key,
+        };
     });
 
     editor.changeViewZones((accessor) => {

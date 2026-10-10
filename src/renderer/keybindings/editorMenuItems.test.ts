@@ -24,7 +24,10 @@ afterEach(() => {
  * with a label derived from the id, unless an override map says otherwise.
  */
 function fakeEditor(
-    overrides: Record<string, { label?: string; supported?: boolean } | null> = {},
+    overrides: Record<
+        string,
+        { label?: string; supported?: boolean } | null
+    > = {},
 ): editor.ICodeEditor {
     return {
         getAction: (id: string) => {
@@ -78,11 +81,17 @@ describe('buildEditorMenuItems', () => {
     test('reflects label and enabled state from the live editor action', () => {
         const items = buildEditorMenuItems(
             fakeEditor({
-                'editor.action.rename': { label: 'Rename Symbol', supported: false },
+                'editor.action.rename': {
+                    label: 'Rename Symbol',
+                    supported: false,
+                },
             }),
         );
         const rename = items.find(
-            (i) => i && i.kind === 'command' && i.commandId === 'editor.action.rename',
+            (i) =>
+                i &&
+                i.kind === 'command' &&
+                i.commandId === 'editor.action.rename',
         ) as { label: string; enabled: boolean };
         expect(rename.label).toBe('Rename Symbol');
         expect(rename.enabled).toBe(false);

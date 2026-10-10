@@ -88,7 +88,8 @@ describe('findControlCalls', () => {
                 $cGroup('N', opts);
             `).filter(
                 ([kind, label]) =>
-                    kind !== '$cGroup' || ['K', 'M', 'N'].includes(String(label)),
+                    kind !== '$cGroup' ||
+                    ['K', 'M', 'N'].includes(String(label)),
             ),
         ).toEqual([]);
     });

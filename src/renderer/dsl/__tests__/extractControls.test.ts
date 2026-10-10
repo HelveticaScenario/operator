@@ -230,12 +230,12 @@ describe('extractControls groups', () => {
         const { groups } = extractControls(
             `$cGroup('G', { collapsed: 1 }); $cGroup('H', { collapsed: c });`,
         );
-        expect(groups.map((g) => [g.label, g.collapsible, g.collapsed])).toEqual(
-            [
-                ['G', false, false],
-                ['H', false, false],
-            ],
-        );
+        expect(
+            groups.map((g) => [g.label, g.collapsible, g.collapsed]),
+        ).toEqual([
+            ['G', false, false],
+            ['H', false, false],
+        ]);
     });
 
     test('a group without a collapsed literal can still collapse', () => {

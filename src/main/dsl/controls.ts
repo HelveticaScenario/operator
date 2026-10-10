@@ -128,7 +128,9 @@ export function createControls(deps: ControlDeps): Controls & {
                 ? groupPaths.get(group)
                 : undefined;
         if (!path) {
-            throw new Error(`${fn} group must be the result of a $cGroup() call`);
+            throw new Error(
+                `${fn} group must be the result of a $cGroup() call`,
+            );
         }
         return path;
     };

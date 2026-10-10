@@ -212,30 +212,30 @@ describe('computeOutOptionEdit — remove', () => {
 describe('computeOutNumericOptionEdit — pan', () => {
     test('bare call gains a pan option', () => {
         const source = `$sine('c4').out()`;
-        expect(
-            applyNumeric(source, anchorOf(source, 'out'), 'pan', -2.5),
-        ).toBe(`$sine('c4').out({ pan: -2.5 })`);
+        expect(applyNumeric(source, anchorOf(source, 'out'), 'pan', -2.5)).toBe(
+            `$sine('c4').out({ pan: -2.5 })`,
+        );
     });
 
     test('existing numeric pan is replaced', () => {
         const source = `$sine('c4').out({ pan: 3, label: 'x' })`;
-        expect(
-            applyNumeric(source, anchorOf(source, 'out'), 'pan', -1.2),
-        ).toBe(`$sine('c4').out({ pan: -1.2, label: 'x' })`);
+        expect(applyNumeric(source, anchorOf(source, 'out'), 'pan', -1.2)).toBe(
+            `$sine('c4').out({ pan: -1.2, label: 'x' })`,
+        );
     });
 
     test('null removes the pan property', () => {
         const source = `$sine('c4').out({ pan: 3, label: 'x' })`;
-        expect(
-            applyNumeric(source, anchorOf(source, 'out'), 'pan', null),
-        ).toBe(`$sine('c4').out({ label: 'x' })`);
+        expect(applyNumeric(source, anchorOf(source, 'out'), 'pan', null)).toBe(
+            `$sine('c4').out({ label: 'x' })`,
+        );
     });
 
     test('sole pan property removal drops the object', () => {
         const source = `$sine('c4').out({ pan: 3 })`;
-        expect(
-            applyNumeric(source, anchorOf(source, 'out'), 'pan', null),
-        ).toBe(`$sine('c4').out()`);
+        expect(applyNumeric(source, anchorOf(source, 'out'), 'pan', null)).toBe(
+            `$sine('c4').out()`,
+        );
     });
 
     test('a signal-valued pan is not edited', () => {
@@ -299,9 +299,7 @@ describe('computeSetOutputGainEdit — master fader', () => {
         if (!edit) {
             return null;
         }
-        return (
-            source.slice(0, edit.start) + edit.text + source.slice(edit.end)
-        );
+        return source.slice(0, edit.start) + edit.text + source.slice(edit.end);
     }
 
     test('updates an existing numeric call', () => {

@@ -100,8 +100,7 @@ export function createControlAnchors(
             loc.line === 1 ? loc.column - FIRST_LINE_COLUMN_OFFSET : loc.column;
         const lineContent = model.getLineContent(loc.line);
         if (
-            lineContent.slice(column - 1, column - 1 + fnName.length) !==
-            fnName
+            lineContent.slice(column - 1, column - 1 + fnName.length) !== fnName
         ) {
             continue;
         }

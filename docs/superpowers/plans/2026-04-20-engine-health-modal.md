@@ -13,6 +13,7 @@
 ### Task 1: Add `OPEN_ENGINE_HEALTH` to `MENU_CHANNELS`
 
 **Files:**
+
 - Modify: `src/shared/ipcTypes.ts:324-334`
 
 - [ ] **Step 1: Add the channel constant**
@@ -39,6 +40,7 @@ export const MENU_CHANNELS = {
 ```bash
 yarn typecheck
 ```
+
 Expected: no new errors.
 
 - [ ] **Step 3: Commit**
@@ -53,6 +55,7 @@ git commit -m "feat: add OPEN_ENGINE_HEALTH menu channel constant"
 ### Task 2: Wire the menu item in the main process
 
 **Files:**
+
 - Modify: `src/main/main.ts:1739-1742`
 
 The View menu is currently `{ role: 'viewMenu' }` (Electron built-in). Replace it with an explicit submenu that includes Electron's default View items plus the Engine Health item.
@@ -102,6 +105,7 @@ with:
 ```bash
 yarn typecheck
 ```
+
 Expected: no new errors.
 
 - [ ] **Step 3: Commit**
@@ -116,6 +120,7 @@ git commit -m "feat: add Engine Health menu item to View menu"
 ### Task 3: Expose the menu event in the preload bridge
 
 **Files:**
+
 - Modify: `src/preload/preload.ts`
 
 Two changes are needed: add the type to the `ElectronAPI` interface, and add the implementation in the `electronAPI` object.
@@ -143,6 +148,7 @@ Find the `onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),` li
 ```bash
 yarn typecheck
 ```
+
 Expected: no new errors.
 
 - [ ] **Step 4: Commit**
@@ -157,6 +163,7 @@ git commit -m "feat: expose onMenuOpenEngineHealth in preload bridge"
 ### Task 4: Create `EngineHealth.css`
 
 **Files:**
+
 - Create: `src/renderer/components/EngineHealth.css`
 
 - [ ] **Step 1: Create the CSS file**
@@ -301,6 +308,7 @@ git commit -m "feat: add EngineHealth modal styles"
 ### Task 5: Create `EngineHealth.tsx`
 
 **Files:**
+
 - Create: `src/renderer/components/EngineHealth.tsx`
 
 - [ ] **Step 1: Create the component**
@@ -393,7 +401,10 @@ export function EngineHealth({ isOpen, onClose }: EngineHealthProps) {
             >
                 <div className="engine-health-header">
                     <h2>Engine Health</h2>
-                    <button className="engine-health-close-btn" onClick={onClose}>
+                    <button
+                        className="engine-health-close-btn"
+                        onClick={onClose}
+                    >
                         ×
                     </button>
                 </div>
@@ -403,9 +414,13 @@ export function EngineHealth({ isOpen, onClose }: EngineHealthProps) {
                         <div className="engine-health-loading">Loading…</div>
                     ) : (
                         <div className="engine-health-section">
-                            <p className="engine-health-section-title">Audio CPU</p>
+                            <p className="engine-health-section-title">
+                                Audio CPU
+                            </p>
                             <div className="engine-health-row">
-                                <span className="engine-health-label">Average</span>
+                                <span className="engine-health-label">
+                                    Average
+                                </span>
                                 <div className="engine-health-values">
                                     <span
                                         className={`engine-health-usage ${usageClass(snapshot.avg_usage)}`}
@@ -418,7 +433,9 @@ export function EngineHealth({ isOpen, onClose }: EngineHealthProps) {
                                 </div>
                             </div>
                             <div className="engine-health-row">
-                                <span className="engine-health-label">Peak</span>
+                                <span className="engine-health-label">
+                                    Peak
+                                </span>
                                 <div className="engine-health-values">
                                     <span
                                         className={`engine-health-usage ${usageClass(snapshot.peak_usage)}`}
@@ -444,6 +461,7 @@ export function EngineHealth({ isOpen, onClose }: EngineHealthProps) {
 ```bash
 yarn typecheck
 ```
+
 Expected: no new errors (the component is not yet mounted so it won't be imported yet).
 
 - [ ] **Step 3: Commit**
@@ -458,6 +476,7 @@ git commit -m "feat: add EngineHealth modal component"
 ### Task 6: Mount `EngineHealth` in `App.tsx`
 
 **Files:**
+
 - Modify: `src/renderer/App.tsx`
 
 Three changes: add import, add state, wire listener, mount component.
@@ -475,7 +494,7 @@ import { EngineHealth } from './components/EngineHealth';
 After line 123 (`const [isSettingsOpen, setIsSettingsOpen] = useState(false);`), add:
 
 ```typescript
-    const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
+const [isEngineHealthOpen, setIsEngineHealthOpen] = useState(false);
 ```
 
 - [ ] **Step 3: Wire the menu listener**
@@ -483,22 +502,29 @@ After line 123 (`const [isSettingsOpen, setIsSettingsOpen] = useState(false);`),
 Inside the menu listener `useEffect` (around line 851), after the `cleanupOpenSettings` declaration:
 
 ```typescript
-    const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
-        setIsSettingsOpen(true);
-    });
-    const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(() => {
-        setIsEngineHealthOpen(true);
-    });
+const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
+    setIsSettingsOpen(true);
+});
+const cleanupOpenEngineHealth = electronAPI.onMenuOpenEngineHealth(() => {
+    setIsEngineHealthOpen(true);
+});
 ```
 
 And add `cleanupOpenEngineHealth()` to the return cleanup:
 
 ```typescript
-    return () => {
-        cleanupNewFile(); cleanupSave(); cleanupStop(); cleanupUpdate();
-        cleanupUpdateNextBeat(); cleanupOpenWorkspace(); cleanupCloseBuffer();
-        cleanupToggleRecording(); cleanupOpenSettings(); cleanupOpenEngineHealth();
-    };
+return () => {
+    cleanupNewFile();
+    cleanupSave();
+    cleanupStop();
+    cleanupUpdate();
+    cleanupUpdateNextBeat();
+    cleanupOpenWorkspace();
+    cleanupCloseBuffer();
+    cleanupToggleRecording();
+    cleanupOpenSettings();
+    cleanupOpenEngineHealth();
+};
 ```
 
 - [ ] **Step 4: Mount the component**
@@ -506,10 +532,10 @@ And add `cleanupOpenEngineHealth()` to the return cleanup:
 After the `<Settings ... />` component (around line 926), add:
 
 ```tsx
-                <EngineHealth
-                    isOpen={isEngineHealthOpen}
-                    onClose={() => setIsEngineHealthOpen(false)}
-                />
+<EngineHealth
+    isOpen={isEngineHealthOpen}
+    onClose={() => setIsEngineHealthOpen(false)}
+/>
 ```
 
 - [ ] **Step 5: Typecheck**
@@ -517,6 +543,7 @@ After the `<Settings ... />` component (around line 926), add:
 ```bash
 yarn typecheck
 ```
+
 Expected: no errors.
 
 - [ ] **Step 6: Run unit tests**
@@ -524,6 +551,7 @@ Expected: no errors.
 ```bash
 yarn test:unit
 ```
+
 Expected: all pass (no unit tests touch this code path).
 
 - [ ] **Step 7: Commit**
@@ -538,6 +566,7 @@ git commit -m "feat: mount EngineHealth modal and wire menu listener in App"
 ### Task 7: E2E smoke test
 
 **Files:**
+
 - Modify or create: `src/renderer/__tests__/e2e/` (check for existing health/modal tests)
 
 - [ ] **Step 1: Check existing E2E test structure**
@@ -553,9 +582,13 @@ Look for an existing file like `settings.spec.ts` to understand the test pattern
 In the most appropriate existing E2E spec file (or a new `engineHealth.spec.ts`), add:
 
 ```typescript
-test('Engine Health modal opens and shows data after audio is running', async ({ page }) => {
+test('Engine Health modal opens and shows data after audio is running', async ({
+    page,
+}) => {
     // Trigger via the test API (same pattern as existing health test in App.tsx)
-    await page.evaluate(() => (window as any).__TEST_API__.openEngineHealth?.());
+    await page.evaluate(() =>
+        (window as any).__TEST_API__.openEngineHealth?.(),
+    );
     await expect(page.getByText('Engine Health')).toBeVisible();
     await expect(page.getByText('Audio CPU')).toBeVisible();
     await expect(page.getByText('Average')).toBeVisible();
@@ -574,6 +607,7 @@ openEngineHealth: () => setIsEngineHealthOpen(true),
 ```bash
 yarn test:e2e
 ```
+
 Expected: new test passes, no regressions.
 
 - [ ] **Step 4: Commit**

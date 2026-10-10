@@ -12,11 +12,7 @@
  */
 import type { editor } from 'monaco-editor';
 
-import {
-    executeCommand,
-    listCommands,
-    type CommandMetadata,
-} from './commands';
+import { executeCommand, listCommands, type CommandMetadata } from './commands';
 import { getCommandBinding } from './keymap';
 
 /**

@@ -106,7 +106,8 @@ function groupOfCall(
     // of sight of the scan.
     const readable = params.properties.every(
         (p) =>
-            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            (ts.isPropertyAssignment(p) ||
+                ts.isShorthandPropertyAssignment(p)) &&
             propertyName(p) !== null,
     );
     if (!readable) {
