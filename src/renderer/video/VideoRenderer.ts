@@ -56,9 +56,8 @@ export class VideoRenderer {
     private freshPull = true;
     /** False while the engine is stopped, when the picture holds still. */
     private running = true;
-    private stoppedAt = 0;
-    /** Milliseconds spent stopped, which the shader's time does not count. */
-    private stoppedMs = 0;
+    /** When the shader's time was 0: the engine's latest start. */
+    private timeOriginMs = performance.now();
     /** True while a request for audio samples is waiting on the engine. */
     private pulling = false;
     /** A canvas size to hold instead of following the element's size. */
@@ -68,7 +67,6 @@ export class VideoRenderer {
     private cleared = false;
     private previewSink: ((frame: VideoPreviewFrame) => void) | null = null;
     private cvSink: ((values: VideoCvValue[]) => void) | null = null;
-    private readonly startMs = performance.now();
     private readonly buffers: FeedbackBuffers;
     private readonly previews: PreviewCapture;
     private readonly history: HistoryTexture;
@@ -240,8 +238,8 @@ export class VideoRenderer {
     /**
      * Where the engine's state comes from: asked once per frame for whether it
      * is running and for the audio samples it has produced since. While it is
-     * stopped nothing is drawn, videos pause and the shader's time stands still;
-     * when it runs again, videos start over from their loop start.
+     * stopped nothing is drawn and videos pause; when it runs again, the
+     * shader's time starts over from 0 and videos from their loop start.
      */
     setPullSource(
         source: ((fresh: boolean) => Promise<VideoPull>) | null,
@@ -259,12 +257,13 @@ export class VideoRenderer {
 
     private setRunning(running: boolean): void {
         if (running === this.running) return;
-        const now = performance.now();
-        if (running) this.stoppedMs += now - this.stoppedAt;
-        else this.stoppedAt = now;
         this.running = running;
-        if (running) this.sources.restart();
-        else this.sources.pause();
+        if (running) {
+            this.timeOriginMs = performance.now();
+            this.sources.restart();
+        } else {
+            this.sources.pause();
+        }
     }
 
     /** Receives problems loading media, such as a file that will not decode. */
@@ -492,8 +491,7 @@ export class VideoRenderer {
             const now = performance.now();
             this.updateAudioInputs(program, now);
             this.sources.update();
-            uniforms[UNIFORM_TIME_OFFSET] =
-                (now - this.startMs - this.stoppedMs) / 1000;
+            uniforms[UNIFORM_TIME_OFFSET] = (now - this.timeOriginMs) / 1000;
             uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
             uniforms[UNIFORM_RESOLUTION_OFFSET + 1] = this.canvas.height;
             this.device.queue.writeBuffer(uniformBuffer, 0, uniforms);

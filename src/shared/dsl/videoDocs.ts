@@ -52,7 +52,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'time',
         group: 'Generators',
         description:
-            'Seconds since video started rendering, as volts: it reaches 5 after five seconds. Use it as a phase to animate an oscillator; an oscillator with a `freq` of 5 fed `$v.time` completes a cycle every second.',
+            'Seconds since the patch started, as volts: it reaches 5 after five seconds. It stands still while the patch is stopped and starts again from 0 when the patch is restarted. Use it as a phase to animate an oscillator; an oscillator with a `freq` of 5 fed `$v.time` completes a cycle every second.',
         params: [],
         examples: ['$v.out($v.colorize($v.osc($v.ramp(), 4, $v.time), 0, 0))'],
         declarations: ['readonly time: VideoField;'],
