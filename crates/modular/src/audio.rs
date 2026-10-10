@@ -2137,10 +2137,7 @@ impl AudioProcessor {
         // Process commands from the main thread
         while let Ok(cmd) = self.command_rx.pop() {
             match cmd {
-                GraphCommand::QueuedPatchUpdate {
-                    mut update,
-                    trigger,
-                } => {
+                GraphCommand::QueuedPatchUpdate { update, trigger } => {
                     // The Link tempo push and meter write are applied in
                     // `apply_patch_update`, atomically with the module swap. Pushing the
                     // tempo while the update is only queued would advance the
@@ -2152,11 +2149,8 @@ impl AudioProcessor {
                     // we treat it as "apply now" rather than re-queuing for the next
                     // bar/beat.
                     if let Some((old_update, _)) = self.queued_update.take() {
-                        // Carry a pending transport reset forward: if the superseded update
-                        // was a buffer switch that never fired, the immediate apply still
-                        // lands on a different song than what's playing, so it must still
-                        // restart the clock.
-                        update.reset_clock |= old_update.reset_clock;
+                        // The superseding update's `reset_clock` is already relative to the
+                        // patch that is playing, so the discarded update's flag is dropped.
                         self.try_push_garbage_item(GarbageItem::PatchUpdate(old_update));
                         self.queued_update = Some((update, QueuedTrigger::Immediate));
                     } else {
@@ -4463,10 +4457,11 @@ mod tests {
     }
 
     #[test]
-    fn superseded_queued_clock_reset_is_inherited() {
+    fn superseding_update_decides_its_own_clock_reset() {
         // A buffer-switch update (reset_clock=true) queued for the next bar, then
-        // superseded by a same-buffer re-eval (reset_clock=false) before it fires,
-        // must still carry the pending transport reset into the immediate apply.
+        // superseded by an update for the playing buffer (reset_clock=false) before
+        // it fires: the immediate apply replaces the playing patch with the same
+        // buffer's, so the discarded update's reset must not carry over.
         let (mut cmd_producer, mut processor) = create_test_processor();
 
         let mut switch_update = PatchUpdate::new(44_100.0);
@@ -4494,8 +4489,8 @@ mod tests {
             .as_ref()
             .expect("an update should remain queued");
         assert!(
-            queued.reset_clock,
-            "pending clock reset must survive being superseded"
+            !queued.reset_clock,
+            "a discarded update's clock reset must not carry over"
         );
         assert!(
             matches!(trigger, QueuedTrigger::Immediate),

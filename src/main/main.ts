@@ -9,7 +9,11 @@ import {
     ipcMain,
     shell,
 } from 'electron';
-import type { AudioConfigOptions } from '@modular/core';
+import type {
+    AudioConfigOptions,
+    PatchGraph,
+    QueuedTrigger,
+} from '@modular/core';
 import { Synthesizer } from '@modular/core';
 import schemas from '@modular/core/schemas.json';
 import { parse as parseJsonc, type ParseError } from 'jsonc-parser';
@@ -808,6 +812,112 @@ registerIPCHandler('GET_DSL_LIB_SOURCE', () => {
     return cachedLibSource;
 });
 
+/** Rebuilds of a patch update whose baseline went stale while it was prepared. */
+const MAX_BASELINE_RETRIES = 2;
+
+/**
+ * Reconcile `patch` against the patch the engine is playing and submit it. An
+ * update the engine applies while this one is prepared or in flight changes
+ * what is playing, so the reconciliation is redone against it.
+ */
+function submitPatchUpdate(
+    patch: PatchGraph,
+    sourceId: string | undefined,
+    trigger: QueuedTrigger | undefined,
+) {
+    for (let attempt = 0; ; attempt++) {
+        const transport = synth.getTransportState();
+        appliedPatch.resolve(transport.lastCancelledUpdateId);
+        const baseline = appliedPatch.baseline(transport.lastAppliedUpdateId);
+        const lastAppliedSourceId = baseline.sourceId;
+
+        // Requirement: assume a full change when a different file/buffer is evaluated.
+        const shouldReconcile =
+            Boolean(sourceId) && lastAppliedSourceId === sourceId;
+
+        // Switching playback to a different buffer (song) restarts the
+        // transport from the top, applied atomically with the patch swap.
+        const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
+
+        if (DEBUG_LOG) {
+            if (!sourceId) {
+                console.log(
+                    '[patch-remap] no sourceId; reconciliation disabled',
+                );
+            } else if (!shouldReconcile) {
+                console.log(
+                    `[patch-remap] source changed (${lastAppliedSourceId ?? 'none'} -> ${sourceId}); reconciliation disabled`,
+                );
+            } else {
+                console.log(
+                    `[patch-remap] reconciling for sourceId=${sourceId}`,
+                );
+            }
+        }
+
+        const { moduleIdRemap } = reconcilePatchBySimilarity(
+            patch,
+            shouldReconcile ? baseline.patchGraph : null,
+            {
+                ambiguityMargin: PATCH_REMAP_MARGIN,
+                debugLog: DEBUG_LOG
+                    ? (message) => console.log(message)
+                    : undefined,
+                matchThreshold: PATCH_REMAP_THRESHOLD,
+            },
+        );
+
+        if (DEBUG_LOG) {
+            const remapCount = Object.keys(moduleIdRemap).length;
+            const thresholdInfo =
+                PATCH_REMAP_THRESHOLD !== undefined
+                    ? PATCH_REMAP_THRESHOLD.toFixed(4)
+                    : 'default';
+            const marginInfo =
+                PATCH_REMAP_MARGIN !== undefined
+                    ? PATCH_REMAP_MARGIN.toFixed(4)
+                    : 'default';
+            console.log(
+                `[patch-remap] summary shouldReconcile=${shouldReconcile} remaps=${remapCount} threshold=${thresholdInfo} margin=${marginInfo}`,
+            );
+        }
+
+        // Send remap hints along with the desired patch; Rust will use them
+        // to preserve module instances while keeping the desired ids.
+        patch.moduleIdRemaps = Object.entries(moduleIdRemap).map(
+            ([from, to]) => ({ from, to }),
+        );
+
+        const staleBeforeSend =
+            synth.getTransportState().lastAppliedUpdateId !==
+            transport.lastAppliedUpdateId;
+        if (staleBeforeSend && attempt < MAX_BASELINE_RETRIES) {
+            continue;
+        }
+
+        const { errors, updateId } = synth.updatePatch(
+            patch,
+            trigger,
+            resetClock,
+        );
+        if (errors.length > 0) {
+            return { errors, moduleIdRemap, updateId };
+        }
+        appliedPatch.record(patch, sourceId ?? null, updateId);
+
+        // Another update applied while this one was sent: it, not the
+        // baseline used above, is what this update replaces. This update's
+        // own application does not count.
+        const applied = synth.getTransportState().lastAppliedUpdateId;
+        const staleAfterSend =
+            applied !== transport.lastAppliedUpdateId && applied !== updateId;
+        if (staleAfterSend && attempt < MAX_BASELINE_RETRIES) {
+            continue;
+        }
+        return { errors, moduleIdRemap, updateId };
+    }
+}
+
 // DSL execution in main process with direct N-API access
 registerIPCHandler(
     'DSL_EXECUTE',
@@ -858,79 +968,11 @@ registerIPCHandler(
                 callSiteSpansRecord[key] = span;
             }
 
-            appliedPatch.resolve(
-                synth.getTransportState().lastCancelledUpdateId,
-            );
-            const lastAppliedSourceId = appliedPatch.sourceId;
-
-            // Requirement: assume a full change when a different file/buffer is evaluated.
-            const shouldReconcile =
-                Boolean(sourceId) && lastAppliedSourceId === sourceId;
-
-            // Switching playback to a different buffer (song) restarts the
-            // transport from the top, applied atomically with the patch swap.
-            const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
-
-            if (DEBUG_LOG) {
-                if (!sourceId) {
-                    console.log(
-                        '[patch-remap] no sourceId; reconciliation disabled',
-                    );
-                } else if (!shouldReconcile) {
-                    console.log(
-                        `[patch-remap] source changed (${lastAppliedSourceId ?? 'none'} -> ${sourceId}); reconciliation disabled`,
-                    );
-                } else {
-                    console.log(
-                        `[patch-remap] reconciling for sourceId=${sourceId}`,
-                    );
-                }
-            }
-
-            const { moduleIdRemap } = reconcilePatchBySimilarity(
+            const { errors, moduleIdRemap, updateId } = submitPatchUpdate(
                 patch,
-                shouldReconcile ? appliedPatch.patchGraph : null,
-                {
-                    ambiguityMargin: PATCH_REMAP_MARGIN,
-                    debugLog: DEBUG_LOG
-                        ? (message) => console.log(message)
-                        : undefined,
-                    matchThreshold: PATCH_REMAP_THRESHOLD,
-                },
-            );
-
-            if (DEBUG_LOG) {
-                const remapCount = Object.keys(moduleIdRemap).length;
-                const thresholdInfo =
-                    PATCH_REMAP_THRESHOLD !== undefined
-                        ? PATCH_REMAP_THRESHOLD.toFixed(4)
-                        : 'default';
-                const marginInfo =
-                    PATCH_REMAP_MARGIN !== undefined
-                        ? PATCH_REMAP_MARGIN.toFixed(4)
-                        : 'default';
-                console.log(
-                    `[patch-remap] summary shouldReconcile=${shouldReconcile} remaps=${remapCount} threshold=${thresholdInfo} margin=${marginInfo}`,
-                );
-            }
-
-            // Send remap hints along with the desired patch
-            patch.moduleIdRemaps = Object.entries(moduleIdRemap).map(
-                ([from, to]) => ({
-                    from,
-                    to,
-                }),
-            );
-
-            const { errors, updateId } = synth.updatePatch(
-                patch,
+                sourceId,
                 trigger,
-                resetClock,
             );
-
-            if (errors.length === 0) {
-                appliedPatch.record(patch, sourceId ?? null, updateId);
-            }
 
             if (errors.length > 0) {
                 return {
@@ -983,67 +1025,11 @@ registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
 registerIPCHandler('SYNTH_GET_MODULE_STATES', () => synth.getModuleStates());
 
 registerIPCHandler('SYNTH_UPDATE_PATCH', (patch, sourceId, trigger) => {
-    appliedPatch.resolve(synth.getTransportState().lastCancelledUpdateId);
-    const lastAppliedSourceId = appliedPatch.sourceId;
-
-    // Requirement: assume a full change when a different file/buffer is evaluated.
-    const shouldReconcile =
-        Boolean(sourceId) && lastAppliedSourceId === sourceId;
-
-    // Switching playback to a different buffer (song) restarts the transport
-    // from the top, applied atomically with the patch swap.
-    const resetClock = isBufferSwitch(lastAppliedSourceId, sourceId);
-
-    if (DEBUG_LOG) {
-        if (!sourceId) {
-            console.log('[patch-remap] no sourceId; reconciliation disabled');
-        } else if (!shouldReconcile) {
-            console.log(
-                `[patch-remap] source changed (${lastAppliedSourceId ?? 'none'} -> ${sourceId}); reconciliation disabled`,
-            );
-        } else {
-            console.log(`[patch-remap] reconciling for sourceId=${sourceId}`);
-        }
-    }
-
-    const { moduleIdRemap } = reconcilePatchBySimilarity(
+    const { errors, moduleIdRemap, updateId } = submitPatchUpdate(
         patch,
-        shouldReconcile ? appliedPatch.patchGraph : null,
-        {
-            ambiguityMargin: PATCH_REMAP_MARGIN,
-            debugLog: DEBUG_LOG ? (message) => console.log(message) : undefined,
-            matchThreshold: PATCH_REMAP_THRESHOLD,
-        },
+        sourceId,
+        trigger,
     );
-
-    if (DEBUG_LOG) {
-        const remapCount = Object.keys(moduleIdRemap).length;
-        const thresholdInfo =
-            PATCH_REMAP_THRESHOLD !== undefined
-                ? PATCH_REMAP_THRESHOLD.toFixed(4)
-                : 'default';
-        const marginInfo =
-            PATCH_REMAP_MARGIN !== undefined
-                ? PATCH_REMAP_MARGIN.toFixed(4)
-                : 'default';
-        console.log(
-            `[patch-remap] summary shouldReconcile=${shouldReconcile} remaps=${remapCount} threshold=${thresholdInfo} margin=${marginInfo}`,
-        );
-    }
-
-    // Send remap hints along with the desired patch; Rust will use them to
-    // Preserve module instances while keeping the desired ids.
-    patch.moduleIdRemaps = Object.entries(moduleIdRemap).map(([from, to]) => ({
-        from,
-        to,
-    }));
-
-    const { errors, updateId } = synth.updatePatch(patch, trigger, resetClock);
-
-    if (errors.length === 0) {
-        appliedPatch.record(patch, sourceId ?? null, updateId);
-    }
-
     return { appliedPatch: patch, errors, moduleIdRemap, updateId };
 });
 
@@ -1084,6 +1070,7 @@ registerIPCHandler('SYNTH_SET_MODULE_PROFILING_SAMPLE_RATE', (rate: number) => {
 
 registerIPCHandler('SYNTH_STOP', () => {
     synth.stop();
+    appliedPatch.clear();
 });
 
 registerIPCHandler('SYNTH_CANCEL_QUEUED_UPDATE', () => {

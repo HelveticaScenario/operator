@@ -442,8 +442,12 @@ const BEAT_KIND = 'BeatPattern' as const;
  * (negative `t`, or fractional `t` within `1` of the cycle end) is silent,
  * matching Strudel. Both arguments accept a constant number or a
  * mini-notation number pattern.
+ *
+ * `.cycle(...rest)`: shorthand for `$cycle(pattern, ...rest)`, forwarding
+ * every argument after the pattern to the `$cycle` factory.
  */
 export interface TimeModifiable {
+    cycle(...rest: unknown[]): unknown;
     fast(factor: number | string): FastPattern & TimeModifiable;
     slow(factor: number | string): SlowPattern & TimeModifiable;
     struct(boolPattern: string): StructPattern & TimeModifiable;
@@ -700,9 +704,30 @@ function factorArgumentSpans(
     return [...innerSpans, factorSpan];
 }
 
+export type CycleFactory = (pattern: unknown, ...rest: unknown[]) => unknown;
+
 /**
- * Attach the `.fast(...)` / `.slow(...)` / `.struct(...)` / `.beat(...)`
- * methods to a pattern object. `Object.assign` types the result; the
+ * The `$cycle` factory of the active DSL execution, which `.cycle(...)`
+ * delegates to. Set by executor.ts before running user code, cleared after.
+ */
+let activeCycleFactory: CycleFactory | null = null;
+
+export function setActiveCycleFactory(factory: CycleFactory | null): void {
+    activeCycleFactory = factory;
+}
+
+function makeCycle(pattern: SectionPattern, rest: unknown[]): unknown {
+    if (!activeCycleFactory) {
+        throw new MiniParseError(
+            '.cycle() is only available while a patch runs',
+        );
+    }
+    return activeCycleFactory(pattern, ...rest);
+}
+
+/**
+ * Attach the `.cycle(...)` / `.fast(...)` / `.slow(...)` / `.struct(...)` /
+ * `.beat(...)` methods to a pattern object. `Object.assign` types the result; the
  * `defineProperty` calls then flip the methods to non-enumerable so
  * `JSON.stringify` (the IPC clone) and `Object.keys`/`entries` skip them and
  * only the wire-shape fields cross the boundary — the same trick `$p.s` uses
@@ -712,12 +737,14 @@ function attachTimeModifiers<T extends SectionPattern>(
     pattern: T,
 ): T & TimeModifiable {
     const modifiable = Object.assign(pattern, {
+        cycle: (...rest: unknown[]) => makeCycle(pattern, rest),
         fast: (factor: number | string) => makeFast(pattern, factor),
         slow: (factor: number | string) => makeSlow(pattern, factor),
         struct: (boolPattern: string) => makeStruct(pattern, boolPattern),
         beat: (t: number | string, div: number | string) =>
             makeBeat(pattern, t, div),
     });
+    Object.defineProperty(modifiable, 'cycle', { enumerable: false });
     Object.defineProperty(modifiable, 'fast', { enumerable: false });
     Object.defineProperty(modifiable, 'slow', { enumerable: false });
     Object.defineProperty(modifiable, 'struct', { enumerable: false });

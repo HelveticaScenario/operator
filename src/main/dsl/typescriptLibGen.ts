@@ -167,8 +167,6 @@ type Note = \`\${NoteNames}\${Accidental}\${number | ''}\`
 
 type HZ = \`\${number}hz\` | \`\${number}Hz\`
 
-type MidiNote = \`\${number}m\`
-
 type CaseVariants<T extends string> = 
   | Lowercase<T>
   | Uppercase<T>
@@ -216,16 +214,6 @@ type ModeString =
  */
 type ScaleSpec = \`\${string}(\${string})\` | \`\${string}[\${string}]\` | "chromatic";
 
-/**
- * A scale pattern string for generating multiple pitches.
- * Format: "{count}s({root}:{mode})"
- * @example $sine("4s(C:major)").out()  // 4 notes of C major scale
- * @example $sine("8s(A:minor)").out()  // 8 notes of A minor scale
- * @see {@link Signal}
- * @see {@link Note}
- */
-type Scale = \`\${number}s(\${Note}:\${ModeString})\`
-
 type OrArray<T> = T | T[];
 
 /**
@@ -245,8 +233,6 @@ type ElementsOf<T extends unknown[][]> = { [K in keyof T]: T[K] extends (infer E
  * - A **number** (constant voltage)
  * - A **{@link Note}** string like \`"C4"\` or \`"A#3"\`
  * - A **{@link HZ}** string like \`"440hz"\`
- * - A **{@link MidiNote}** string like \`"60m"\`
- * - A **{@link Scale}** pattern like \`"4s(C:major)"\`
  * - A **{@link ModuleOutput}** from another module
  * 
  * @example $sine("C4")           // Note string
@@ -256,7 +242,7 @@ type ElementsOf<T extends unknown[][]> = { [K in keyof T]: T[K] extends (infer E
  * @see {@link Poly<Signal>} - for multi-channel signals
  * @see {@link ModuleOutput} - for module connections
  */
-type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
+type Signal = number | Note | HZ | ModuleOutput;
 
 /**
  * A potentially multi-channel signal for polyphonic patches.
@@ -266,13 +252,14 @@ type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
  * - An array of {@link Signal}s (creates multiple voices)
  * - An iterable of {@link ModuleOutput}s
  * - A {@link SignalGroup} from \`$g1\`/\`$g2\`/\`$g3\` (cartesian voice expansion)
+ * - A pattern from \`$p(...)\`, \`$p.s(...)\` or \`$p.arrange(...)\`, played through a \`$cycle\`
  *
  * @example $saw(["C3", "E3", "G3"]).out()                    // 3-voice chord
  * @example $saw([...$sine("1hz"), ...$sine("2hz")]).out()   // Spread outputs into voices
  * @see {@link Signal} - for single-channel signals
  * @see {@link Collection} - for grouping outputs
  */
-type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup;
+type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup | PatternSource;
 
 /**
  * A param value tagged into a cartesian signal group by {@link $g1}, {@link $g2},
@@ -299,7 +286,7 @@ interface SignalGroup {
  * @see {@link Poly} - for polyphonic signals that preserve per-voice data
  * @see {@link Signal} - for single-channel signals
  */
-type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput>;
+type Mono<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | PatternSource;
 
 /**
  * A phase-warp table descriptor produced by the \`$table.*\` helpers.
@@ -340,6 +327,15 @@ type BufferOutputRef = {
   readonly channels: number;
   readonly frameCount: number;
 };
+
+/**
+ * Any pattern value: \`$p(...)\`, \`$p.s(...)\`, \`$p.arrange(...)\`, or a
+ * \`.fast\`/\`.slow\`/\`.struct\`/\`.beat\` chain. Signal params accept one and
+ * play it through a \`$cycle\`.
+ */
+type PatternSource = ParsedPattern | SpPattern | ArrangePattern | FastPattern | SlowPattern | StructPattern | BeatPattern;
+
+type DropFirst<T extends unknown[]> = T extends [unknown, ...infer R] ? R : never;
 
 /**
  * A parsed mini-notation pattern — returned by \`$p(source)\`, passed to
@@ -397,6 +393,16 @@ type ParsedPattern = {
    * \`\`\`
    */
   beat(t: number | string, div: number | string): BeatPattern;
+  /**
+   * Shorthand for \`$cycle(pattern, ...rest)\`: plays this pattern with a
+   * \`$cycle\` sequencer. Accepts the same arguments as \`$cycle\` after its
+   * \`pattern\`.
+   *
+   * \`\`\`js
+   * $p("c4 e4 g4").cycle().out()
+   * \`\`\`
+   */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -627,6 +633,8 @@ type SpPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -644,6 +652,8 @@ type ArrangePattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this arrangement at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -661,6 +671,8 @@ type FastPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -676,6 +688,8 @@ type SlowPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -698,6 +712,8 @@ type StructPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at beats \`t\` of a \`div\`-beat cycle. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -720,6 +736,8 @@ type BeatPattern = {
   struct(boolPattern: string): StructPattern;
   /** Place this pattern at other beats. See \`$p(...).beat\`. */
   beat(t: number | string, div: number | string): BeatPattern;
+  /** Play this pattern with \`$cycle\`. See \`$p(...).cycle\`. */
+  cycle(...rest: DropFirst<Parameters<typeof $cycle>>): ReturnType<typeof $cycle>;
 };
 
 /**
@@ -1370,16 +1388,19 @@ function $note(noteName: string): number;
  *
  * Collections support chainable DSP methods, iteration, indexing, and spreading.
  * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
- * $signal modules, so they can be mixed in alongside module outputs.
+ * $signal modules, so they can be mixed in alongside module outputs. A
+ * pattern (\`$p(...)\`, \`$p.s(...)\`, \`$p.arrange(...)\`) plays through a
+ * \`$cycle\` and contributes its voices.
  * @param args One or more {@link ModuleOutput}s or {@link Signal} literals to group
  * @returns A {@link Collection} of the outputs
  * @example $c($sine('c3'), $sine('e3')).amplitude(0.5).out()
  * @example $c(440, 'c4', $sine('e3'))  // Bare number/string lifted into $signal
+ * @example $c($p('c4 e4'), 'g4')        // Pattern plays through a $cycle
  * @example $c($sine('c3'), $sine('e3'), $sine('g3'))[0]  // Index access
  * @example [...$c($sine('c3'), $sine('e3'))]             // Spread to array
  * @see {@link $r} - for ranged outputs
  */
-function $c(...args: (Signal | Iterable<Signal>)[]): Collection;
+function $c(...args: (Signal | PatternSource | (Signal | PatternSource)[] | Iterable<Signal | PatternSource>)[]): Collection;
 
 /**
  * Create a {@link CollectionWithRange} from {@link ModuleOutputWithRange} instances.

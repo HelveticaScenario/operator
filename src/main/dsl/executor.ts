@@ -40,7 +40,8 @@ import {
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
-import { $p } from './miniNotation';
+import { $p, setActiveCycleFactory, type CycleFactory } from './miniNotation';
+import { isPatternValue } from './patternKinds';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -354,6 +355,13 @@ export function executePatchScript(
         };
     };
 
+    const $cycle = userNamespaceTree['$cycle'];
+    if (typeof $cycle !== 'function') {
+        throw new Error(
+            'DSL execution error: "$cycle" module not found in schemas',
+        );
+    }
+    const cycleFactory: CycleFactory = $cycle;
     const $mix = userNamespaceTree['$mix'];
     const $delayRead = userNamespaceTree['$delayRead'];
     const $clamp = userNamespaceTree['$clamp'];
@@ -827,11 +835,16 @@ export function executePatchScript(
         return t;
     }
 
+    // A pattern argument plays through its own `$cycle` before it becomes a
+    // table signal.
+    const tableSignal = (value: unknown) =>
+        replaceSignals(isPatternValue(value) ? cycleFactory(value) : value);
+
     const $table = {
         mirror: (amount: unknown, next?: unknown) => {
             const t = wrapTable({
                 type: 'mirror',
-                amount: replaceSignals(amount),
+                amount: tableSignal(amount),
             });
             return next !== undefined
                 ? wrapTable({ type: 'pipe', first: t, second: next })
@@ -840,14 +853,14 @@ export function executePatchScript(
         bend: (amount: unknown, next?: unknown) => {
             const t = wrapTable({
                 type: 'bend',
-                amount: replaceSignals(amount),
+                amount: tableSignal(amount),
             });
             return next !== undefined
                 ? wrapTable({ type: 'pipe', first: t, second: next })
                 : t;
         },
         sync: (ratio: unknown, next?: unknown) => {
-            const t = wrapTable({ type: 'sync', ratio: replaceSignals(ratio) });
+            const t = wrapTable({ type: 'sync', ratio: tableSignal(ratio) });
             return next !== undefined
                 ? wrapTable({ type: 'pipe', first: t, second: next })
                 : t;
@@ -855,14 +868,14 @@ export function executePatchScript(
         fold: (amount: unknown, next?: unknown) => {
             const t = wrapTable({
                 type: 'fold',
-                amount: replaceSignals(amount),
+                amount: tableSignal(amount),
             });
             return next !== undefined
                 ? wrapTable({ type: 'pipe', first: t, second: next })
                 : t;
         },
         pwm: (width: unknown, next?: unknown) => {
-            const t = wrapTable({ type: 'pwm', width: replaceSignals(width) });
+            const t = wrapTable({ type: 'pwm', width: tableSignal(width) });
             return next !== undefined
                 ? wrapTable({ type: 'pipe', first: t, second: next })
                 : t;
@@ -945,6 +958,7 @@ export function executePatchScript(
     );
     setActiveSpanRegistry(spanRegistry);
     setActiveInterpolationResolutions(interpolationResolutions);
+    setActiveCycleFactory(cycleFactory);
 
     // The user source runs as a function body (an IIFE), not at the script's
     // top level, so top-level `return` is legal in a patch script.
@@ -1045,6 +1059,7 @@ export function executePatchScript(
         // Clear the span registry after execution — spans are already baked into
         // Module state via ARGUMENT_SPANS_KEY so the registry isn't needed anymore.
         setActiveSpanRegistry(null);
+        setActiveCycleFactory(null);
         // NOTE: Do NOT clear interpolation resolutions here. They are read
         // Asynchronously by moduleStateTracking during decoration polling and
         // Must persist until the next execution replaces them.
