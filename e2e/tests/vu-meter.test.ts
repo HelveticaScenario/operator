@@ -119,9 +119,7 @@ test.describe('vu meter panel', () => {
         const source = await window.evaluate(() =>
             window.__TEST_API__!.getEditorValue(),
         );
-        expect(source).toContain(
-            `outMono(0, { label: 'bass', solo: true })`,
-        );
+        expect(source).toContain(`outMono(0, { label: 'bass', solo: true })`);
 
         await expect(
             window.locator('.vu-meter[data-vu-key="lead"]'),
@@ -179,10 +177,7 @@ test.describe('vu meter panel', () => {
             window.locator('.vu-meter[data-vu-key="lead"]'),
         ).not.toHaveClass(/vu-meter--suppressed/);
         await expect(muteButton).toHaveAttribute('aria-pressed', 'false');
-        await expect(muteButton).toHaveAttribute(
-            'data-code-pressed',
-            'true',
-        );
+        await expect(muteButton).toHaveAttribute('data-code-pressed', 'true');
 
         // A patch update compiles the edited source and re-syncs audio to
         // code, clearing the ghost.
@@ -192,10 +187,7 @@ test.describe('vu meter panel', () => {
             window.locator('.vu-meter[data-vu-key="lead"]'),
         ).toHaveClass(/vu-meter--suppressed/);
         await expect(muteButton).toHaveAttribute('aria-pressed', 'true');
-        await expect(muteButton).toHaveAttribute(
-            'data-code-pressed',
-            'true',
-        );
+        await expect(muteButton).toHaveAttribute('data-code-pressed', 'true');
     });
 
     test('cmd-click toggles the code state from the ghost, not the audio', async ({
@@ -219,10 +211,7 @@ test.describe('vu meter panel', () => {
         );
         expect(source).not.toContain('mute');
         await expect(muteButton).toHaveAttribute('aria-pressed', 'false');
-        await expect(muteButton).toHaveAttribute(
-            'data-code-pressed',
-            'false',
-        );
+        await expect(muteButton).toHaveAttribute('data-code-pressed', 'false');
     });
 
     test('cmd-right-click reverts the code gain to the audio value', async ({
@@ -314,9 +303,7 @@ test.describe('vu meter panel', () => {
         await expect(window.locator('.vu-meter-panel')).not.toBeVisible();
     });
 
-    test('placeholder shows when the patch has no outs', async ({
-        window,
-    }) => {
+    test('placeholder shows when the patch has no outs', async ({ window }) => {
         await window.waitForTimeout(3000);
         const hasTestAPI = await window.evaluate(() => !!window.__TEST_API__);
         test.skip(!hasTestAPI, '__TEST_API__ not available');

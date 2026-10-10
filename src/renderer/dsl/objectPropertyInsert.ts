@@ -62,10 +62,14 @@ export function insertObjectProperty(
                 ? { end: close, start: open + 1 }
                 : { end: close, start: close };
         const pad = layout.bracketSpacing ? ' ' : '';
-        const edit = { newText: `${pad}${prop}${pad}`, propOffset: pad.length, span };
+        const edit = {
+            newText: `${pad}${prop}${pad}`,
+            propOffset: pad.length,
+            span,
+        };
         return fitsOnLine(source, edit, layout)
             ? edit
-            : expandObject(sourceFile, obj, prop, layout) ?? edit;
+            : (expandObject(sourceFile, obj, prop, layout) ?? edit);
     }
 
     const last = props[props.length - 1];
@@ -114,7 +118,7 @@ export function insertObjectProperty(
           };
     return fitsOnLine(source, edit, layout)
         ? edit
-        : expandObject(sourceFile, obj, prop, layout) ?? edit;
+        : (expandObject(sourceFile, obj, prop, layout) ?? edit);
 }
 
 /**
@@ -132,8 +136,7 @@ export function appendObjectArgument(
     const closeParen = call.getEnd() - 1;
     const args = call.arguments;
     // After a trailing comma the separator is already in place.
-    const lead =
-        args.length === 0 ? '' : args.hasTrailingComma ? ' ' : ', ';
+    const lead = args.length === 0 ? '' : args.hasTrailingComma ? ' ' : ', ';
     const pad = layout.bracketSpacing ? ' ' : '';
     const span = { end: closeParen, start: closeParen };
     const inline = {

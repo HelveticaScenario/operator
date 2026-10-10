@@ -328,13 +328,16 @@ function VuMeter({
     ]);
 
     /** Map a pointer event on the canvas to a dB position on the scale. */
-    const eventToDb = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
-        const rect = e.currentTarget.getBoundingClientRect();
-        const norm =
-            (e.clientY - rect.top - METER_PAD_CSS) /
-            Math.max(1, rect.height - METER_PAD_CSS * 2);
-        return meterNormToDb(norm);
-    }, []);
+    const eventToDb = useCallback(
+        (e: React.PointerEvent<HTMLCanvasElement>) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const norm =
+                (e.clientY - rect.top - METER_PAD_CSS) /
+                Math.max(1, rect.height - METER_PAD_CSS * 2);
+            return meterNormToDb(norm);
+        },
+        [],
+    );
 
     const faderEnabled = output.gainModuleId !== null;
 
@@ -397,7 +400,9 @@ function VuMeter({
                 output.main ? ' vu-meter--main' : ''
             }`}
             data-vu-key={output.key}
-            title={output.main ? 'End of chain' : `${output.key} (${channelBadge})`}
+            title={
+                output.main ? 'End of chain' : `${output.key} (${channelBadge})`
+            }
         >
             <div className="vu-meter-header">
                 <span className="vu-meter-label">
@@ -623,9 +628,7 @@ export function VuMeterPanel({
                             output={output}
                             ghost={ghosts.get(output.key)}
                             index={i + 1}
-                            suppressed={
-                                anySolo ? !output.solo : output.mute
-                            }
+                            suppressed={anySolo ? !output.solo : output.mute}
                             {...meterProps}
                         />
                     ))

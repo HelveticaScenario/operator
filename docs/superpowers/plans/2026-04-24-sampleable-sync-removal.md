@@ -13,20 +13,21 @@
 ## File Map
 
 - Modify: `crates/modular_core/src/types.rs`
-  - Change `Sampleable` trait bound from `Send + Sync` to `Send`
-  - Remove runtime-helper `unsafe impl Sync` blocks that were only justified by fake shared module access
+    - Change `Sampleable` trait bound from `Send + Sync` to `Send`
+    - Remove runtime-helper `unsafe impl Sync` blocks that were only justified by fake shared module access
 - Modify: `crates/modular_derive/src/module_attr.rs`
-  - Stop generating `unsafe impl Sync` for wrapper structs
+    - Stop generating `unsafe impl Sync` for wrapper structs
 - Modify: `crates/modular_core/tests/types_tests.rs`
-  - Add or update focused tests for the send-only contract if needed
+    - Add or update focused tests for the send-only contract if needed
 - Modify: `crates/modular_core/src/patch.rs`
-  - Only if compiler fallout requires updating local test helpers or trait-object assumptions
+    - Only if compiler fallout requires updating local test helpers or trait-object assumptions
 - Modify: `crates/modular_core/tests/dsp_fresh_tests.rs`
-  - Only if a runtime regression test is needed for fallout discovered during the change
+    - Only if a runtime regression test is needed for fallout discovered during the change
 
 ### Task 1: Create the RED failure for the send-only contract
 
 **Files:**
+
 - Modify: `crates/modular_core/src/types.rs:155-210`
 - Modify: `crates/modular_derive/src/module_attr.rs:673-676`
 - Test: `cargo test -p modular_core`
@@ -97,6 +98,7 @@ Do not commit in this session. Treat the failing command output as the checkpoin
 ### Task 2: Remove direct runtime `Sync` assumptions
 
 **Files:**
+
 - Modify: `crates/modular_core/src/types.rs:1219-1247`
 - Modify: `crates/modular_core/src/types.rs:1790-1805`
 - Test: `cargo test -p modular_core raw_pointer_buffer_ -- --nocapture`
@@ -159,6 +161,7 @@ Do not commit in this session. Use the passing focused test output as the checkp
 ### Task 3: Fix compile-proven adjacent fallout only
 
 **Files:**
+
 - Modify: `crates/modular_core/src/types.rs`
 - Modify: `crates/modular_core/src/patch.rs` if needed
 - Modify: `crates/modular_core/tests/types_tests.rs` if needed
@@ -214,6 +217,7 @@ Do not commit in this session. Use the passing full suite as the checkpoint.
 ### Task 4: Verify modular runtime integration still works
 
 **Files:**
+
 - Modify: only if verification exposes a real breakage in `crates/modular/src/audio.rs` or `crates/modular/src/commands.rs`
 - Test: `cargo test -p modular test_single_module_update_re_registers_message_listeners -- --nocapture`
 - Test: `cargo test -p modular test_patch_update_remap_re_registers_message_listeners -- --nocapture`
@@ -253,6 +257,7 @@ Do not commit in this session. Use the passing integration outputs as the checkp
 ### Task 5: Final review and evidence capture
 
 **Files:**
+
 - Modify: `docs/superpowers/specs/2026-04-24-sampleable-sync-removal-design.md` only if implementation reveals a real mismatch
 - Test: all commands from Tasks 3-4
 

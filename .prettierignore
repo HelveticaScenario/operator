@@ -22,3 +22,5 @@ target
 # so prettier must not reformat the committed copies.
 src/main/dsl/miniNotation/grammar.generated.ts
 crates/modular_core/src/pattern_system/__fixtures__/peggy_parser_parity.json
+# Tool state written by beads.
+.beads

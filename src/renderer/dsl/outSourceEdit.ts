@@ -93,10 +93,7 @@ interface ArgSpan {
 }
 
 /** True if `offset` falls within any ignored range. */
-function isIgnored(
-    offset: number,
-    ranges: Array<[number, number]>,
-): boolean {
+function isIgnored(offset: number, ranges: Array<[number, number]>): boolean {
     for (const [start, end] of ranges) {
         if (offset >= start && offset < end) {
             return true;
@@ -430,10 +427,7 @@ function computeOptionPropertyEdit(
             // object, or supply the default channel for a bare call. Setting
             // `gain` itself keeps the positional form.
             if (optionsArg !== undefined) {
-                const gainText = source.slice(
-                    optionsArg.start,
-                    optionsArg.end,
-                );
+                const gainText = source.slice(optionsArg.start, optionsArg.end);
                 if (prop === 'gain') {
                     if (!literalRe.test(gainText)) {
                         return null;

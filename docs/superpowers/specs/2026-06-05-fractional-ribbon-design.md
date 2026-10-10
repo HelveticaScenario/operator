@@ -64,7 +64,7 @@ Bake one `SeqCycleStorage` per integer cycle in that range.
 
 - `base = floor(offset) as i64`; `cached_haps[i]` holds cycle `base + i`.
 - `SeqPatternParam::bake(offset, length)` computes `base` and `end =
-  ceil(offset + length) as i64`, baking cycles `base..end`.
+ceil(offset + length) as i64`, baking cycles `base..end`.
 - `get_cycle_storage(cycle, base, cached)` indexes `cached[cycle - base]`
   (signature changes from `offset: u64` to `base: i64`).
 - Bake count = `end - base` ≤ ~8194 with `length ≤ 8192` — bounded, all on the
@@ -100,11 +100,11 @@ owns all bounds. Reject with a `ribbon`-keyed `ModuleParamErrors`:
   rejected to **valid**; `[-1, 4]` still rejected (now by the hook, not
   structurally). Add NaN / ∞ rejection cases.
 - **New:**
-  - Fractional length: `ribbon:[0, 1.5]` loops with period 1.5 cycles (seam at
-    mid-cycle); the value at clock pos 0.25, 1.25, and 2.75 follows the
-    folded window.
-  - Fractional offset: `ribbon:[0.5, 2]` — window starts half a cycle into the
-    pattern and loops.
+    - Fractional length: `ribbon:[0, 1.5]` loops with period 1.5 cycles (seam at
+      mid-cycle); the value at clock pos 0.25, 1.25, and 2.75 follows the
+      folded window.
+    - Fractional offset: `ribbon:[0.5, 2]` — window starts half a cycle into the
+      pattern and loops.
 
 ## Out of scope
 

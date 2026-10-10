@@ -12,12 +12,7 @@ import {
     unregisterCommand,
 } from './commands';
 
-const TEST_IDS = [
-    'test.cmd.a',
-    'test.cmd.b',
-    'test.cmd.c',
-    'test.cmd.async',
-];
+const TEST_IDS = ['test.cmd.a', 'test.cmd.b', 'test.cmd.c', 'test.cmd.async'];
 
 afterEach(() => {
     for (const id of TEST_IDS) {

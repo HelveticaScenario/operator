@@ -67,10 +67,10 @@ Use TDD for the transition:
 1. Remove the bound and wrapper `Sync` impls to produce the real RED compiler/test failures.
 2. Fix only the directly related fallout.
 3. Re-run the send-only verification slice:
-   - `cargo test -p modular_core`
-   - `cargo test -p modular test_single_module_update_re_registers_message_listeners -- --nocapture`
-   - `cargo test -p modular test_patch_update_remap_re_registers_message_listeners -- --nocapture`
-   - `cargo test -p modular --no-run`
+    - `cargo test -p modular_core`
+    - `cargo test -p modular test_single_module_update_re_registers_message_listeners -- --nocapture`
+    - `cargo test -p modular test_patch_update_remap_re_registers_message_listeners -- --nocapture`
+    - `cargo test -p modular --no-run`
 
 Add or adjust focused tests only where needed to prove the new contract or protect a discovered regression.
 

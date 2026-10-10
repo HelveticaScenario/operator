@@ -13,41 +13,42 @@
 ## File Map
 
 - `crates/modular_core/src/types.rs`
-  - Owns `Sampleable` trait, `SampleableMap`, `SampleableConstructor`, `Signal`, `Buffer`, and core trait tests.
+    - Owns `Sampleable` trait, `SampleableMap`, `SampleableConstructor`, `Signal`, `Buffer`, and core trait tests.
 - `crates/modular_core/src/patch.rs`
-  - Owns patch-level module storage and message listener index.
+    - Owns patch-level module storage and message listener index.
 - `crates/modular_core/src/dsp/seq/seq_value.rs`
-  - Owns `SeqSourceConnections` and cached source resolution for pattern values.
+    - Owns `SeqSourceConnections` and cached source resolution for pattern values.
 - `crates/modular_core/src/dsp/seq/seq.rs`
-  - Uses `SeqSourceConnections` during playback.
+    - Uses `SeqSourceConnections` during playback.
 - `crates/modular_core/src/dsp/utilities/math.rs`
-  - Constructs `Signal::Cable` values while parsing math expressions.
+    - Constructs `Signal::Cable` values while parsing math expressions.
 - `crates/modular_core/src/pattern_system/combinators.rs`
-  - Test-only `Signal::Cable` constructors that must follow new field shape.
+    - Test-only `Signal::Cable` constructors that must follow new field shape.
 - `crates/modular_core/src/dsp/utilities/buffer.rs`
-  - Integration tests around `Buffer` and `$buffer` ownership behavior.
+    - Integration tests around `Buffer` and `$buffer` ownership behavior.
 - `crates/modular_core/src/dsp/samplers/sampler.rs`
-  - Test helper returns constructor output type.
+    - Test helper returns constructor output type.
 - `crates/modular_core/src/dsp/fx/plate.rs`
-  - Test helper returns constructor output type.
+    - Test helper returns constructor output type.
 - `crates/modular_core/src/dsp/fx/dattorro.rs`
-  - Test helper returns constructor output type.
+    - Test helper returns constructor output type.
 - `crates/modular_derive/src/module_attr.rs`
-  - Generated wrapper `Send`/`Sync` contract and constructor return type.
+    - Generated wrapper `Send`/`Sync` contract and constructor return type.
 - `crates/modular/src/commands.rs`
-  - Command queue payload types and garbage queue ownership.
+    - Command queue payload types and garbage queue ownership.
 - `crates/modular/src/audio.rs`
-  - Audio-thread apply path, runtime metadata prep, and Rust tests.
+    - Audio-thread apply path, runtime metadata prep, and Rust tests.
 - `crates/modular/src/lib.rs`
-  - Main-thread single-module update path.
+    - Main-thread single-module update path.
 - `crates/modular_core/Cargo.toml`
-  - Add `static_assertions` dev-dependency for compile-time send/not-sync assertions.
+    - Add `static_assertions` dev-dependency for compile-time send/not-sync assertions.
 
 ---
 
 ### Task 1: Replace `Signal` weak refs with raw-pointer caches
 
 **Files:**
+
 - Modify: `crates/modular_core/src/types.rs`
 - Modify: `crates/modular_core/src/dsp/utilities/math.rs`
 - Modify: `crates/modular_core/src/pattern_system/combinators.rs`
@@ -297,6 +298,7 @@ git commit -m "refactor(core): cache signal sources as raw ptrs"
 ### Task 2: Convert `Buffer` and seq caches from shared refs to raw pointers
 
 **Files:**
+
 - Modify: `crates/modular_core/src/types.rs`
 - Modify: `crates/modular_core/src/dsp/seq/seq_value.rs`
 - Modify: `crates/modular_core/src/dsp/seq/seq.rs`
@@ -621,6 +623,7 @@ git commit -m "refactor(core): use raw ptr caches for buffer and seq"
 ### Task 3: Replace patch listener weak refs with listener ids
 
 **Files:**
+
 - Modify: `crates/modular_core/src/patch.rs`
 - Test: `cargo test -p modular_core message_listener_ -- --nocapture`
 
@@ -831,6 +834,7 @@ git commit -m "refactor(core): store message listener ids"
 ### Task 4: Convert module ownership from `Arc<Box<dyn Sampleable>>` to `Box<dyn Sampleable>`
 
 **Files:**
+
 - Modify: `crates/modular_core/src/types.rs`
 - Modify: `crates/modular_core/src/patch.rs`
 - Modify: `crates/modular_derive/src/module_attr.rs`
@@ -1130,6 +1134,7 @@ git commit -m "refactor(runtime): own sampleables with boxes"
 ### Task 5: Drop `Sync` from `Sampleable` and assert send-only trait objects
 
 **Files:**
+
 - Modify: `crates/modular_core/Cargo.toml`
 - Modify: `crates/modular_core/src/types.rs`
 - Modify: `crates/modular_derive/src/module_attr.rs`
@@ -1210,6 +1215,7 @@ git commit -m "refactor(core): make sampleables send-only"
 ### Task 6: Precompute runtime metadata before audio-thread apply
 
 **Files:**
+
 - Modify: `crates/modular/src/audio.rs`
 - Test: `cargo test -p modular pending_runtime_metadata_ -- --nocapture`
 - Test: `cargo test -p modular apply_patch_update_ -- --nocapture`
@@ -1397,6 +1403,7 @@ git commit -m "refactor(audio): precompute runtime metadata"
 ### Task 7: Final verification
 
 **Files:**
+
 - Modify: none
 - Test: `cargo test -p modular_core`
 - Test: `cargo test -p modular`

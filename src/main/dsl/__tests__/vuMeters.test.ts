@@ -111,9 +111,7 @@ describe('vuMeters emission', () => {
         expect(main.gainModuleId).toBeNull();
         expect(main.gainLocked).toBe(true);
         expect(main.gainSource).toBeDefined();
-        expect(
-            patch.modules.some((m) => m.id === '__vuGain_main'),
-        ).toBe(false);
+        expect(patch.modules.some((m) => m.id === '__vuGain_main')).toBe(false);
     });
 
     test('unlabeled outs get positional keys and matching ids', () => {
@@ -153,9 +151,7 @@ describe('vuMeters emission', () => {
     });
 
     test('outs sharing one call site carry no sourceLocation', () => {
-        const patch = execPatch(
-            `for (const n of ['c3', 'g3']) $sine(n).out()`,
-        );
+        const patch = execPatch(`for (const n of ['c3', 'g3']) $sine(n).out()`);
         const meters = vuMeters(patch).filter((m) => !m.main);
         expect(meters).toHaveLength(2);
         expect(meters[0].sourceLocation).toBeUndefined();
@@ -185,7 +181,9 @@ describe('vuMeters emission', () => {
     });
 
     test('collection out produces one group', () => {
-        const patch = execPatch(`$saw(['c3', 'e3', 'g3']).out({ label: 'chord' })`);
+        const patch = execPatch(
+            `$saw(['c3', 'e3', 'g3']).out({ label: 'chord' })`,
+        );
         const meters = vuMeters(patch).filter((m) => !m.main);
         expect(meters).toHaveLength(1);
         expect(meters[0].channels).toBe(2);
@@ -222,9 +220,7 @@ describe('pan lifting', () => {
         const patch = execPatch(
             `$sine('c4').out({ label: 'lead', pan: $sine('1hz') })`,
         );
-        expect(
-            patch.modules.some((m) => m.id === '__vuPan_lead'),
-        ).toBe(false);
+        expect(patch.modules.some((m) => m.id === '__vuPan_lead')).toBe(false);
         const meter = vuMeters(patch)[0];
         expect(meter.pan).toBeNull();
         expect(meter.panModuleId).toBeNull();
@@ -245,9 +241,9 @@ describe('pan lifting', () => {
         const meter = vuMeters(patch)[0];
         expect(meter.pan).toBeNull();
         expect(meter.panModuleId).toBeNull();
-        expect(
-            patch.modules.some((m) => m.id.startsWith('__vuPan_')),
-        ).toBe(false);
+        expect(patch.modules.some((m) => m.id.startsWith('__vuPan_'))).toBe(
+            false,
+        );
     });
 });
 
@@ -289,9 +285,7 @@ describe('gain lifting', () => {
         const patch = execPatch(
             `$sine('c4').out({ label: 'lead', gain: $sine('1hz').range(0, 5) })`,
         );
-        expect(
-            patch.modules.some((m) => m.id === '__vuGain_lead'),
-        ).toBe(false);
+        expect(patch.modules.some((m) => m.id === '__vuGain_lead')).toBe(false);
         const meter = vuMeters(patch)[0];
         expect(meter.gain).toBeNull();
         expect(meter.gainModuleId).toBeNull();
@@ -349,14 +343,16 @@ describe('label validation', () => {
 describe('output channel bounds', () => {
     test('a mono out reaches the engine’s last channel', () => {
         const patch = execPatch(`$sine('c4').outMono(63)`);
-        const source = moduleById(patch, 'ROOT_OUTPUT').params.source as unknown[];
+        const source = moduleById(patch, 'ROOT_OUTPUT').params
+            .source as unknown[];
         expect(source).toHaveLength(64);
         expect(vuMeters(patch)[0].baseChannel).toBe(63);
     });
 
     test('a stereo out reaches the last pair', () => {
         const patch = execPatch(`$sine('c4').out({ baseChannel: 62 })`);
-        const source = moduleById(patch, 'ROOT_OUTPUT').params.source as unknown[];
+        const source = moduleById(patch, 'ROOT_OUTPUT').params
+            .source as unknown[];
         expect(source).toHaveLength(64);
     });
 
@@ -375,9 +371,7 @@ describe('outMono second-argument overload', () => {
     test('a numeric second argument is a gain', () => {
         const patch = execPatch(`$saw('c2').outMono(0, 2.5)`);
         // A gain adds a $curve into the output chain.
-        expect(
-            patch.modules.some((m) => m.moduleType === '$curve'),
-        ).toBe(true);
+        expect(patch.modules.some((m) => m.moduleType === '$curve')).toBe(true);
         // The tap id sits on the gain $scaleAndShift.
         expect(moduleById(patch, '__vuTap_out_1').moduleType).toBe(
             '$scaleAndShift',
@@ -402,9 +396,7 @@ describe('outMono second-argument overload', () => {
         const patch = execPatch(
             `$saw('c2').outMono(0, { gain: 2.5, label: 'bass' })`,
         );
-        expect(
-            patch.modules.some((m) => m.moduleType === '$curve'),
-        ).toBe(true);
+        expect(patch.modules.some((m) => m.moduleType === '$curve')).toBe(true);
         expect(vuMeters(patch)[0].label).toBe('bass');
         expect(moduleById(patch, '__vuTap_bass').moduleType).toBe(
             '$scaleAndShift',
@@ -413,9 +405,7 @@ describe('outMono second-argument overload', () => {
 
     test('a signal second argument is a gain', () => {
         const patch = execPatch(`$saw('c2').outMono(0, $sine('1hz'))`);
-        expect(
-            patch.modules.some((m) => m.moduleType === '$curve'),
-        ).toBe(true);
+        expect(patch.modules.some((m) => m.moduleType === '$curve')).toBe(true);
     });
 });
 
@@ -451,23 +441,17 @@ describe('gate chain compilation', () => {
         const gates = patch.modules.filter(
             (m) =>
                 m.moduleType === '$scaleAndShift' &&
-                JSON.stringify(m.params.scale ?? '').includes(
-                    '__vuSlew_lead',
-                ),
+                JSON.stringify(m.params.scale ?? '').includes('__vuSlew_lead'),
         );
         expect(gates).toHaveLength(1);
-        expect(JSON.stringify(gates[0].params.input)).toContain(
-            '__vuTap_lead',
-        );
+        expect(JSON.stringify(gates[0].params.input)).toContain('__vuTap_lead');
     });
 
     test('mute compiles the gate to 0', () => {
         const patch = execPatch(
             `$sine('c4').out({ label: 'lead', mute: true })`,
         );
-        expect(moduleById(patch, '__vuMute_lead').params.source).toBe(
-            0,
-        );
+        expect(moduleById(patch, '__vuMute_lead').params.source).toBe(0);
         expect(vuMeters(patch)[0].mute).toBe(true);
     });
 
@@ -495,9 +479,7 @@ describe('gate chain compilation', () => {
         expect(moduleById(patch, '__vuTap_lead').moduleType).toBe(
             '$scaleAndShift',
         );
-        expect(moduleById(patch, '__vuMute_lead').params.source).toBe(
-            0,
-        );
+        expect(moduleById(patch, '__vuMute_lead').params.source).toBe(0);
         expect(patch.modules.some((m) => m.moduleType === '$curve')).toBe(true);
     });
 

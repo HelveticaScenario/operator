@@ -92,8 +92,10 @@ export function MigrationDiffModal({
                         {summary.assignmentsChanged !== undefined && (
                             <>
                                 {summary.assignmentsChanged} assignment
-                                {summary.assignmentsChanged === 1 ? '' : 's'} ·
-                                {' '}
+                                {summary.assignmentsChanged === 1
+                                    ? ''
+                                    : 's'}{' '}
+                                ·{' '}
                             </>
                         )}
                         {summary.commentsChanged} comment
