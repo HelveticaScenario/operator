@@ -111,7 +111,7 @@ export class VideoRenderer {
         const token = ++this.shaderToken;
         this.pendingSlots = new Map();
         if (compiled === null) {
-            this.release();
+            this.clear();
             this.buffers.resize(0, this.canvas.width, this.canvas.height);
             return;
         }
@@ -125,7 +125,9 @@ export class VideoRenderer {
             program.destroy();
             return;
         }
-        this.release();
+        // Only the old program goes: media, buffers and history are reconciled
+        // below, so a video that stays in the patch keeps playing.
+        this.releaseProgram();
         this.program = program;
         this.buffers.resize(
             program.bufferCount,
@@ -205,7 +207,7 @@ export class VideoRenderer {
     dispose(): void {
         cancelAnimationFrame(this.frameHandle);
         this.shaderToken++;
-        this.release();
+        this.clear();
         this.previews.destroy();
         this.buffers.destroy();
         this.history.destroy();
@@ -213,9 +215,14 @@ export class VideoRenderer {
         this.device.destroy();
     }
 
-    private release(): void {
+    private releaseProgram(): void {
         this.program?.destroy();
         this.program = null;
+    }
+
+    /** Drops the shader and everything that only it used. */
+    private clear(): void {
+        this.releaseProgram();
         this.history.resize(0);
         this.sources.sync([]);
         this.previews.resize(0, 0, 0);

@@ -261,6 +261,32 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'bloom',
+        group: 'Filters',
+        description:
+            'Adds a blurred copy of `input` back on top of it, so bright areas glow. It costs one blur. A field or color in gives the same type out.',
+        params: [
+            {
+                name: 'radius',
+                description:
+                    'Radius of the blur as a fraction of the frame height (default 0.04)',
+            },
+            {
+                name: 'amount',
+                description:
+                    'How strongly the blurred copy is added back (default 1)',
+            },
+        ],
+        examples: [
+            "$v.out($v.bloom($v.hsv(0.1, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.15, 0.002)), 0.05, 2))",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.15, 0.002).$.tint(0.55).$.bloom(0.06, 2.5).out()",
+        ],
+        declarations: [
+            'bloom(input: VideoField, radius?: VideoValue, amount?: VideoValue): VideoField;',
+            'bloom(input: VideoColor, radius?: VideoValue, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
         name: 'edges',
         group: 'Filters',
         description:
@@ -1095,6 +1121,14 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'blur',
         description: 'Averages this over a disk of `radius`.',
         declarations: ['blur(radius?: VideoValue): {self};'],
+    },
+    {
+        name: 'bloom',
+        description:
+            'Adds a blurred copy of this back on top of it, so bright areas glow.',
+        declarations: [
+            'bloom(radius?: VideoValue, amount?: VideoValue): {self};',
+        ],
     },
     {
         name: 'edges',

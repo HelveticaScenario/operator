@@ -169,7 +169,11 @@ export class SourceTextures {
     private fail(entry: Entry, error: unknown): void {
         if (entry.disposed) return;
         const detail = error instanceof Error ? error.message : String(error);
-        this.onError(`${entry.def.kind} "${entry.def.path}": ${detail}`);
+        const hint =
+            entry.def.kind === 'video'
+                ? ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes and other codecs need converting)'
+                : '';
+        this.onError(`${entry.def.kind} "${entry.def.path}": ${detail}${hint}`);
     }
 
     private dispose(entry: Entry): void {

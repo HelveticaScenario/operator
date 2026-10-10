@@ -949,6 +949,7 @@ export function executePatchScript(
         $v: {
             add: videoBuilder.add,
             buffer: videoBuilder.buffer,
+            bloom: videoBuilder.bloom,
             blur: videoBuilder.blur,
             channel: videoBuilder.channel,
             colorize: videoBuilder.colorize,

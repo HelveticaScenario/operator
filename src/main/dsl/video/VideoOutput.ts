@@ -87,6 +87,7 @@ export class VideoOutput {
 /** Functions of `.$` and `.$m`: each returns a new signal from this one. */
 const PROCESSING: Record<string, ChainCall> = {
     add: (o, s, b) => o.add(s, b),
+    bloom: (o, s, radius, amount) => o.bloom(s, radius, amount),
     blur: (o, s, radius) => o.blur(s, radius),
     channel: (o, s, which) => o.channel(s, which),
     comparator: (o, s, threshold, softness) =>

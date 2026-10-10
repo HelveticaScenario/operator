@@ -17,6 +17,23 @@ export function filterMethods(core: VideoCore) {
         blur: (input: VideoOutput, radius: VideoSource = 0.01): VideoOutput =>
             transform(core, '$v.blur', 'blur', input, { radius }),
 
+        /**
+         * Adds a blurred copy of `input` back on top of it, so bright areas glow.
+         * It costs one blur.
+         */
+        bloom: (
+            input: VideoOutput,
+            radius: VideoSource = 0.04,
+            amount: VideoSource = 1,
+        ): VideoOutput => {
+            const halo = transform(core, '$v.bloom', 'blur', input, { radius });
+            const scaled = core.arith('$v.bloom', 'mult', {
+                a: halo,
+                b: amount,
+            });
+            return core.arith('$v.bloom', 'add', { a: input, b: scaled });
+        },
+
         /** Brightness of the steepest change around each pixel, a Sobel filter. */
         edges: (input: VideoOutput, amount: VideoSource = 1): VideoOutput => {
             if (!(input instanceof VideoOutput)) {

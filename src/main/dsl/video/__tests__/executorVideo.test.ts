@@ -1116,4 +1116,34 @@ describe('$v in the DSL executor', () => {
             );
         });
     });
+
+    describe('bloom', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('adds a blurred copy back on top of the input', () => {
+            const bloomed = wgslOf(`
+                $v.out($v.bloom($v.hsv(0.1, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2)), 0.05, 2));
+            `);
+            const long = wgslOf(`
+                const c = $v.hsv(0.1, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2));
+                $v.out($v.add(c, $v.mult($v.blur(c, 0.05), 2)));
+            `);
+            expect(bloomed).toBe(long);
+        });
+
+        it('keeps a field a field', () => {
+            const wgsl = wgslOf(`
+                $v.ramp().$.bloom(0.02).$.hsv().out();
+            `);
+            expect(wgsl).toMatch(
+                /let v\d+: f32 = clamp\(v\d+ \+ v\d+, 0\.0, 1\.0\)/,
+            );
+        });
+
+        it('rejects a number', () => {
+            expect(() => exec(`$v.bloom(0.5);`)).toThrow(
+                /\$v\.bloom: input must be a video field or color/,
+            );
+        });
+    });
 });
