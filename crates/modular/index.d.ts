@@ -73,6 +73,12 @@ export declare class Synthesizer {
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
+  /**
+   * Decode the audio track of a workspace media file into the cache. `None`
+   * means the file has no audio track. The returned `path` is the key a `Wav`
+   * parameter uses to refer to the decoded audio.
+   */
+  loadMediaAudio(path: string): WavLoadInfo | null
   /** Set the workspace root directory for WAV file loading. */
   setWavWorkspace(workspacePath: string): void
   /** Get the list of currently cached WAV file paths. */

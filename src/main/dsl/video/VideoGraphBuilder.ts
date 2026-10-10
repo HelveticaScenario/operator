@@ -13,6 +13,7 @@ import {
 } from '../../../shared/video/videoGraph';
 import {
     BaseCollection,
+    type Collection,
     type CollectionWithRange,
     ModuleOutput,
 } from '../GraphBuilder';
@@ -30,6 +31,7 @@ import {
     describe,
     isColor,
     type VideoAudioConfig,
+    type VideoAudioPlayback,
     type VideoCore,
     type VideoCvConfig,
     type VideoGraphHost,
@@ -289,6 +291,10 @@ export class VideoGraphBuilder implements VideoCore {
 
     mediaExists(path: string): boolean {
         return this.host.mediaExists?.(path) ?? true;
+    }
+
+    mediaAudio(path: string, playback: VideoAudioPlayback): Collection {
+        return this.host.mediaAudio(path, playback);
     }
 
     /** One channel of a color as a field; every channel of a field is the field itself. */

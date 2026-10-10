@@ -1805,10 +1805,6 @@ declare const $table: {
  */
 interface VideoField {
     readonly __videoField: true;
-    /** A field is gray, so each of its channels is the field itself. */
-    readonly r: VideoField;
-    readonly g: VideoField;
-    readonly b: VideoField;
 ${generateVideoChainMembers('field')}
 }
 
@@ -2415,6 +2411,7 @@ export function generateDSL(schemas: Schemas): string {
         (s) =>
             s.name !== '_clock' &&
             s.name !== '_videoTap' &&
+            s.name !== '_mediaAudio' &&
             s.name !== '$buffer',
     );
     const tree = buildTreeFromSchemas(userFacingSchemas);

@@ -386,6 +386,9 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$grains" => {
             json!({ "pitch": 0.0, "wav": { "type": "wav_ref", "path": "test", "channels": 1 }, "gate": 0.0 })
         }
+        "_mediaAudio" => {
+            json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 } })
+        }
         "$sampler" => {
             json!({ "wav": { "type": "wav_ref", "path": "test", "channels": 1 }, "gate": 0.0 })
         }

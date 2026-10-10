@@ -6,6 +6,7 @@ import type {
 } from '../../../shared/video/videoGraph';
 import {
     BaseCollection,
+    type Collection,
     type CollectionWithRange,
     ModuleOutput,
 } from '../GraphBuilder';
@@ -40,6 +41,11 @@ export interface VideoGraphHost {
      * overwrites with a region average of a video signal.
      */
     cvSignal(id: string): CollectionWithRange;
+    /**
+     * The decoded audio track of a workspace media file, played in a loop at
+     * `playback.speed` between the loop points in seconds, as an audio signal.
+     */
+    mediaAudio(path: string, playback: VideoAudioPlayback): Collection;
     /** Where the patch script is calling from, as V8 reports it. */
     sourceLocation(): { line: number; column: number } | undefined;
     /**
@@ -47,6 +53,14 @@ export interface VideoGraphHost {
      * a patch names missing media. Leave it out to skip the check.
      */
     mediaExists?(path: string): boolean;
+}
+
+/** How a video's audio plays: the video's speed and loop points. */
+export interface VideoAudioPlayback {
+    speed: number;
+    loopStart: number;
+    /** Seconds; the end of the track when absent. */
+    loopEnd?: number;
 }
 
 export interface VideoAudioConfig {
@@ -142,8 +156,10 @@ export interface VideoCore {
     ): VideoOutput;
     /** The index of `def` among the media the graph samples, adding it on first use. */
     sourceIndex(def: VideoSourceDef): number;
-    /** Where the patch script is calling from, if known. */
+    /** Whether a workspace file exists. */
     mediaExists(path: string): boolean;
+    /** The audio of a workspace video, as an audio signal. */
+    mediaAudio(path: string, playback: VideoAudioPlayback): Collection;
     /** One channel of a color as a field. */
     channel(input: VideoOutput, which?: 'r' | 'g' | 'b' | 'luma'): VideoOutput;
 }

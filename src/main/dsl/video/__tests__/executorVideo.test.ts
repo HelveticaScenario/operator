@@ -5,8 +5,29 @@ import { buildLibSource } from '../../typescriptLibGen';
 import { VIDEO_CHAIN, VIDEO_DOCS } from '../../../../shared/dsl/videoDocs';
 import { VIDEO_CHAIN_METHODS, VIDEO_DIRECT_METHODS } from '../VideoOutput';
 
+/** Media audio the tests stand in for: every file has stereo sound but `silent.mp4`. */
+const mediaAudioLoads: string[] = [];
+const loadMediaAudio = (path: string) => {
+    mediaAudioLoads.push(path);
+    return path.endsWith('silent.mp4')
+        ? null
+        : {
+              barCount: null,
+              bitDepth: 32,
+              channels: 2,
+              cuePoints: [],
+              duration: 1,
+              frameCount: 48_000,
+              loops: [],
+              mtime: 1,
+              path: `media:${path}`,
+              sampleRate: 48_000,
+          };
+};
+
 const exec = (source: string) =>
     executePatchScript(source, schemas as never, {
+        loadMediaAudio,
         sampleRate: 48_000,
         workspaceRoot: '/workspace',
     });
@@ -704,6 +725,116 @@ describe('$v in the DSL executor', () => {
         ).toEqual([...VIDEO_DIRECT_METHODS].sort());
     });
 
+    describe('video audio', () => {
+        const audioModule = (source: string) => {
+            const { patch } = exec(source) as unknown as {
+                patch: {
+                    modules: {
+                        id: string;
+                        moduleType: string;
+                        params: Record<string, unknown>;
+                    }[];
+                };
+            };
+            return patch.modules.filter((m) => m.moduleType === '_mediaAudio');
+        };
+
+        it('plays the sound of a video as an audio signal', () => {
+            const modules = audioModule(
+                `$v.video('clips/loop.mp4').audio.out();`,
+            );
+            expect(modules).toHaveLength(1);
+            expect(modules[0].params.wav).toMatchObject({
+                channels: 2,
+                path: 'media:clips/loop.mp4',
+                type: 'wav_ref',
+            });
+        });
+
+        it('makes one player however often the audio is read', () => {
+            const modules = audioModule(`
+                const clip = $v.video('clips/loop.mp4');
+                clip.audio.out();
+                clip.audio.out();
+            `);
+            expect(modules).toHaveLength(1);
+        });
+
+        it('makes no player for a video whose audio is not read', () => {
+            expect(
+                audioModule(`$v.video('clips/loop.mp4').out();`),
+            ).toHaveLength(0);
+        });
+
+        it('plays at the speed and between the loop points of the video', () => {
+            const [player] = audioModule(
+                `$v.video('clips/loop.mp4', { speed: 0.5, loop: [1, 2.5] }).audio.out();`,
+            );
+            expect(player.params).toMatchObject({
+                loopEnd: 2.5,
+                loopStart: 1,
+                speed: 0.5,
+            });
+        });
+
+        it('plays the whole track at normal speed by default', () => {
+            const [player] = audioModule(
+                `$v.video('clips/loop.mp4').audio.out();`,
+            );
+            expect(player.params).toMatchObject({ loopStart: 0, speed: 1 });
+            expect(player.params).not.toHaveProperty('loopEnd');
+        });
+
+        it('says so when a video has no sound', () => {
+            expect(() =>
+                exec(`$v.video('clips/silent.mp4').audio.out();`),
+            ).toThrow(
+                /\$v\.video\(\.\.\.\)\.audio: "clips\/silent\.mp4" has no audio/,
+            );
+        });
+
+        it('leaves a video without sound alone while its audio is unread', () => {
+            expect(() =>
+                exec(`$v.video('clips/silent.mp4').out();`),
+            ).not.toThrow();
+        });
+
+        it('gives only a video file an audio property', () => {
+            const { video } = exec(`
+                const stream = $v.stream('https://a.example/b.mp4');
+                const image = $v.image('pictures/a.png');
+                if (stream.audio !== undefined || image.audio !== undefined) {
+                    throw new Error('has audio');
+                }
+                $v.out(stream);
+            `);
+            expect(video).not.toBeNull();
+        });
+
+        it('keeps the audio after a chain is taken from the video, not on the chain', () => {
+            const { video } = exec(`
+                const clip = $v.video('clips/loop.mp4');
+                if (clip.$.invert().audio !== undefined) throw new Error('chained audio');
+                $v.out(clip);
+            `);
+            expect(video).not.toBeNull();
+        });
+    });
+
+    describe('channel properties', () => {
+        it('gives a color its r, g and b as fields, and a field none', () => {
+            const { video } = exec(`
+                const c = $v.hsv($v.ramp());
+                const f = $v.ramp();
+                if (f.r !== undefined || f.g !== undefined || f.b !== undefined) {
+                    throw new Error('a field has channels');
+                }
+                $v.out($v.colorize(c.b, c.r, c.g));
+            `);
+            expect(video).not.toBeNull();
+        });
+    });
+
     describe('osc and out in a chain', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
 
@@ -1285,10 +1416,12 @@ describe('$v in the DSL executor', () => {
             expect(props).toBe(calls);
         });
 
-        it('gives a field back as each of its own channels', () => {
-            expect(wgslOf(`const f = $v.ramp(); $v.out($v.hsv(f.g));`)).toBe(
-                wgslOf(`const f = $v.ramp(); $v.out($v.hsv(f));`),
-            );
+        it('still takes a field as its own channel through $v.channel', () => {
+            expect(
+                wgslOf(
+                    `const f = $v.ramp(); $v.out($v.hsv($v.channel(f, 'g')));`,
+                ),
+            ).toBe(wgslOf(`const f = $v.ramp(); $v.out($v.hsv(f));`));
         });
 
         it('remaps the channels of a color', () => {

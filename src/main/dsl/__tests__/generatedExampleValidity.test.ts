@@ -50,7 +50,12 @@ const stubLoadWav: NonNullable<DSLExecutionOptions['loadWav']> = (path) => ({
     mtime: 0,
 });
 
+const stubLoadMediaAudio: NonNullable<DSLExecutionOptions['loadMediaAudio']> = (
+    path,
+) => ({ ...stubLoadWav(`media:${path}`), bitDepth: 32 });
+
 const EXECUTION_OPTIONS: DSLExecutionOptions = {
+    loadMediaAudio: stubLoadMediaAudio,
     sampleRate: 48_000,
     workspaceRoot: '/workspace',
     wavsFolderTree: STUB_WAVS_TREE,

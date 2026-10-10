@@ -1007,6 +1007,12 @@ registerIPCHandler(
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
                 wavsFolderTree: currentWavsFolderTree,
+                loadMediaAudio: (mediaPath: string) => {
+                    if (currentWorkspaceRoot) {
+                        synth.setWavWorkspace(currentWorkspaceRoot);
+                    }
+                    return synth.loadMediaAudio(mediaPath);
+                },
                 loadWav: (wavPath: string) => {
                     if (currentWorkspaceRoot) {
                         synth.setWavWorkspace(currentWorkspaceRoot);

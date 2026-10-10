@@ -340,7 +340,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'video',
         group: 'Generators',
         description:
-            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop with its sound off. For a video at a network address, use `$v.stream`. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
+            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop. The picture is muted; the video's sound is its `.audio` property, an audio signal you route like any other, such as `$v.video('clips/loop.mp4').audio.out()`. The sound plays at the same `speed` between the same `loop` points, starting when the patch starts, and has no sound at speed 0. A file without sound has no `.audio`, and reading it is an error. Sound is read from AAC, MP3, Vorbis, FLAC and PCM tracks of up to ten minutes (Opus, common in `.webm`, is not read). For a video at a network address, use `$v.stream`, which has no sound. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
         params: [
             {
                 name: 'path',
@@ -366,9 +366,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.video('clips/loop.mp4'))",
             "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 2.5, 5)).$.warp({ rotate: 0.1 }).out()",
             "$v.video('clips/loop.mp4', { speed: 0.5, loop: [1, 2.5] }).out()",
+            "const clip = $v.video('clips/loop.mp4');\nclip.out();\nclip.audio.out();",
         ],
         declarations: [
-            "video(\n    path: string,\n    config?: {\n        fit?: 'cover' | 'contain' | 'stretch';\n        speed?: number;\n        loop?: [start: number, end?: number];\n    },\n): VideoColor;",
+            "video(\n    path: string,\n    config?: {\n        fit?: 'cover' | 'contain' | 'stretch';\n        speed?: number;\n        loop?: [start: number, end?: number];\n    },\n): VideoColor & { readonly audio: Collection };",
         ],
     },
     {
@@ -1340,7 +1341,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'channel',
         group: 'Color',
         description:
-            "One channel of a color as a field: `'r'`, `'g'`, `'b'`, or `'luma'` for brightness (the default). A field is its own channel. A color's channels are also its `.r`, `.g` and `.b` properties.",
+            "One channel of a color as a field: `'r'`, `'g'`, `'b'`, or `'luma'` for brightness (the default). A field is its own channel. A color's channels are also its `.r`, `.g` and `.b` properties; a field has none.",
         params: [{ name: 'which', description: 'Which channel to take' }],
         examples: [
             "$v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'r'), 0, 0))",

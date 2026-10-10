@@ -34,19 +34,19 @@ export class VideoOutput {
         readonly ops: object,
     ) {}
 
-    /** The red channel as a field; a field is gray, so each channel is itself. */
+    /** The red channel of a color as a field; a field has no channels. */
     get r(): unknown {
-        return (this.ops as VideoOps).channel(this, 'r');
+        return this.channelOf('r');
     }
 
-    /** The green channel as a field. */
+    /** The green channel of a color as a field. */
     get g(): unknown {
-        return (this.ops as VideoOps).channel(this, 'g');
+        return this.channelOf('g');
     }
 
-    /** The blue channel as a field. */
+    /** The blue channel of a color as a field. */
     get b(): unknown {
-        return (this.ops as VideoOps).channel(this, 'b');
+        return this.channelOf('b');
     }
 
     /** The `$v` functions that take a signal first, applied to this signal. */
@@ -80,6 +80,12 @@ export class VideoOutput {
             throw new Error('pipeMix: expects a function');
         }
         return (this.ops as VideoOps).mix(this, fn(this), mix);
+    }
+
+    private channelOf(which: 'r' | 'g' | 'b'): unknown {
+        return this.type === 'color'
+            ? (this.ops as VideoOps).channel(this, which)
+            : undefined;
     }
 
     private chain(withMix: boolean): ChainProxy {

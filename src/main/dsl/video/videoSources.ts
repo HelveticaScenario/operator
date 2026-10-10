@@ -1,3 +1,4 @@
+import type { Collection } from '../GraphBuilder';
 import { isRemoteMedia } from '../../../shared/video/mediaUrl';
 import type { VideoSourceDef } from '../../../shared/video/videoGraph';
 import {
@@ -130,6 +131,32 @@ function fitOf(fn: string, config: VideoMediaConfig | undefined): string {
     return fit;
 }
 
+/**
+ * Gives a video's color an `audio` property: the audio track as an audio
+ * signal, playing at the video's speed between its loop points. One signal is
+ * made however often the property is read.
+ */
+function withAudio(
+    core: VideoCore,
+    output: VideoOutput,
+    path: string,
+    timing: Pick<VideoSourceDef, 'speed' | 'loopStart' | 'loopEnd'>,
+): VideoOutput {
+    let audio: Collection | undefined;
+    Object.defineProperty(output, 'audio', {
+        enumerable: true,
+        get: () =>
+            (audio ??= core.mediaAudio(path, {
+                speed: timing.speed ?? 1,
+                loopStart: timing.loopStart ?? 0,
+                ...(timing.loopEnd !== undefined && {
+                    loopEnd: timing.loopEnd,
+                }),
+            })),
+    });
+    return output;
+}
+
 /** The `$v` functions that read pictures, recordings, cameras and screens. */
 export function sourceMethods(core: VideoCore) {
     const live = (def: VideoSourceDef, fit: string): VideoOutput =>
@@ -159,19 +186,19 @@ export function sourceMethods(core: VideoCore) {
                 extensions,
                 kind === 'image',
             );
-            return core.addNode(
+            const timing = kind === 'video' ? playback(config) : {};
+            const output = core.addNode(
                 'source',
                 'color',
                 {},
                 { fit },
                 undefined,
                 undefined,
-                core.sourceIndex({
-                    kind,
-                    path: normalized,
-                    ...(kind === 'video' ? playback(config) : {}),
-                }),
+                core.sourceIndex({ kind, path: normalized, ...timing }),
             );
+            return kind === 'video'
+                ? withAudio(core, output, normalized, timing)
+                : output;
         };
     return {
         /**

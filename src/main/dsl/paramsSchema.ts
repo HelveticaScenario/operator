@@ -574,10 +574,15 @@ export function processSchemas(
 
 /**
  * Modules that take a (poly)signal first argument but must not appear in the
- * `.$.`/`.$m.` chainable namespaces: `_clock` and `_videoTap` are internal modules, and
+ * `.$.`/`.$m.` chainable namespaces: `_clock`, `_videoTap` and `_mediaAudio` are internal modules, and
  * `$buffer` returns a buffer reference rather than a signal output.
  */
-const DOLLAR_EXCLUDED = new Set(['_clock', '_videoTap', '$buffer']);
+const DOLLAR_EXCLUDED = new Set([
+    '_clock',
+    '_videoTap',
+    '_mediaAudio',
+    '$buffer',
+]);
 
 /**
  * Whether a module qualifies for the `.$.`/`.$m.` chainable namespaces.

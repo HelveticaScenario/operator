@@ -17828,6 +17828,85 @@
     ]
   },
   {
+    "name": "_mediaAudio",
+    "documentation": "Plays the audio track of a media file in a loop, at a fixed speed, from\nthe loop start when the patch starts. The DSL creates one for each\n`$v.video(...).audio`.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MediaAudioParams",
+      "type": "object",
+      "properties": {
+        "loopEnd": {
+          "description": "Loop end in seconds; the end of the file by default.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "loopStart": {
+          "description": "Loop start in seconds (default 0).",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "speed": {
+          "description": "Playback rate: 1 is normal speed, 0 is silent (default 1).",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "wav": {
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "wav"
+      ],
+      "$defs": {
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "audio of the media file",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [],
+    "positionalArgs": [
+      {
+        "name": "wav"
+      }
+    ]
+  },
+  {
     "name": "$sampler",
     "documentation": "One-shot sample player. Each gate rising edge starts playback of the whole\nfile, or of one slice when `slice` is set: the slice signal is sampled at\nthe edge — integer part picks the slice point (wrapping), fraction offsets\nthe start into it. Speed control allows pitch-shifting and reverse\nplayback (a slice plays the same region backwards). A short `fade`\n(milliseconds) declicks onsets, slice ends, and retriggers.\n\n```js\n$sampler($wavs().kick, $pulse('4hz'))\n$sampler($wavs().pad, $clock.beatTrigger, { speed: 0.5 })\n$sampler($wavs().pad, $pulse('2hz'), { slice: [[0, 0.25, 0.5, 0.75], $cycle($p('0 1 2 3')).cv], fade: 2 })\n```",
     "paramsSchema": {
