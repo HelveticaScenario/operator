@@ -38,7 +38,7 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nFields are in volts, as audio signals are: a field runs from 0 to 5, and 5 is full. A ramp runs from 0 to 5 across the frame, a color channel at 5 is fully on, and a strength or an amount of 5 is all of it. Quantities with their own units keep them: `freq: 10` is ten cycles, `rotate: 0.25` a quarter turn, `kaleid(6)` six wedges.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so a 0 to 5 volt signal fills a full-scale input as it is; `.range(min, max)`, on an audio signal or on a field, sets any other range, such as `.range(0, 0.25)` for up to a quarter turn. Pass one channel; a polyphonic signal is rejected.',
+        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nFields are in volts, as audio signals are: a field runs from 0 to 5, and 5 is full. A ramp runs from 0 to 5 across the frame, a color channel at 5 is fully on, and a strength or an amount of 5 is all of it. Angles and phases are fractions of 5 too: `rotate: 5` is a full turn and `phase: 2.5` half a cycle. Counts and factors keep their own units: `freq: 10` is ten cycles, `zoom: 2` doubles the size, `kaleid(6)` is six wedges.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so a 0 to 5 volt signal fills a full-scale input as it is; `.range(min, max)`, on an audio signal or on a field, sets any other range, such as `.range(1, 3)` for a zoom of one to three times. Pass one channel; a polyphonic signal is rejected.',
     examples: [
         '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 1.5, 0, 5), 5, $slider('Level', 5, 0, 5)))",
@@ -75,7 +75,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.rotate',
                 description:
-                    'Turns; positive turns the pattern clockwise (default 0)',
+                    'Rotation, with 5 a full turn; positive turns the pattern clockwise (default 0)',
             },
             {
                 name: 'config.shiftX',
@@ -91,8 +91,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
         examples: [
             "$v.out($v.colorize($v.ramp(), $v.ramp('v'), 2.5))",
             "$v.out($v.hsv($v.osc($v.ramp('r'), 6, $v.time)))",
-            "$v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 0.5).range(0, 1) })))",
-            "$v.out($v.colorize($v.osc($v.ramp('h', { rotate: 0.125, zoom: 2 }), 8), 1, 2.5))",
+            "$v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 0.5) })))",
+            "$v.out($v.colorize($v.osc($v.ramp('h', { rotate: 0.625, zoom: 2 }), 8), 1, 2.5))",
         ],
         declarations: [
             "ramp(\n    axis?: 'h' | 'v' | 'd' | 'r' | 'a',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoField;",
@@ -102,7 +102,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'osc',
         group: 'Generators',
         description:
-            'Periodic shaper from 0 to 5: `freq` cycles across the full 5 volts of `input`, offset by `phase` cycles. A ramp spans 5 volts, so a `freq` of 8 on a ramp draws eight stripes.',
+            'Periodic shaper from 0 to 5: `freq` cycles across the full 5 volts of `input`, offset by `phase`, with 5 a full cycle. A ramp spans 5 volts, so a `freq` of 8 on a ramp draws eight stripes.',
         params: [
             { name: 'input', description: 'Field to shape, usually a ramp' },
             {
@@ -110,7 +110,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     'Cycles across 5 volts of `input`; fed `$v.time`, which counts seconds, 5 is one cycle a second',
             },
-            { name: 'phase', description: 'Offset in cycles (default 0)' },
+            {
+                name: 'phase',
+                description: 'Offset, with 5 a full cycle (default 0)',
+            },
             {
                 name: 'config.shape',
                 description:
@@ -234,7 +237,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.hsv(0.6, 5, $v.polygon($v.ramp(), $v.ramp('v'), 5, 1.5, 0.1)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 1).$.rotate($v.mult($v.time, 0.5)).$.tint(3).out()",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 1).$.rotate($v.mult($v.time, 2.5)).$.tint(3).out()",
         ],
         declarations: [
             'polygon(x: VideoValue, y: VideoValue, sides?: VideoValue, size?: VideoValue, softness?: VideoValue): VideoField;',
@@ -358,7 +361,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.video('clips/loop.mp4'))",
-            "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 2.5, 5)).$.warp({ rotate: 0.02 }).out()",
+            "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 2.5, 5)).$.warp({ rotate: 0.1 }).out()",
             "$v.video('clips/loop.mp4', { speed: 0.5, loop: [1, 2.5] }).out()",
         ],
         declarations: [
@@ -553,13 +556,13 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'range',
         group: 'Shaping',
         description:
-            "Maps a field's 0 to 5 volts onto `min` to `max` volts, as `.range` does for an audio signal. Use it to give an input that has its own units, such as turns or cycles, the span you want. It is also called on the field itself, as `field.range(min, max)`.",
+            "Maps a field's 0 to 5 volts onto `min` to `max` volts, as `.range` does for an audio signal. Use it to give an input that has its own units, such as a zoom factor, a frequency or a count, the span you want. It is also called on the field itself, as `field.range(min, max)`.",
         params: [
             { name: 'min', description: 'The value 0 becomes (default 0)' },
             { name: 'max', description: 'The value 5 becomes (default 5)' },
         ],
         examples: [
-            "$v.out($v.hsv($v.ramp('a', { rotate: $v.range($v.osc($v.time, 0.5), 0, 0.5) })))",
+            "$v.out($v.hsv($v.ramp('a', { zoom: $v.range($v.osc($v.time, 0.5), 1, 3) })))",
             '$v.out($v.hsv($v.ramp().range(0, 2.5)))',
         ],
         declarations: [
@@ -644,7 +647,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.rotate',
                 description:
-                    'Turns per frame; positive turns the picture clockwise (default 0)',
+                    'Rotation per frame, with 5 a full turn; positive turns the picture clockwise (default 0)',
             },
             {
                 name: 'config.shiftX',
@@ -663,8 +666,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 0.5)), prev, 4.5), { zoom: 1.02, rotate: 0.004 }))",
-            "$v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 1), 5, $v.shape($v.add($v.ramp(), -1), $v.ramp('v'), 0.25)), $v.mult(prev, 4.8)), { rotate: 0.01 }))",
+            "$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 0.5)), prev, 4.5), { zoom: 1.02, rotate: 0.02 }))",
+            "$v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 1), 5, $v.shape($v.add($v.ramp(), -1), $v.ramp('v'), 0.25)), $v.mult(prev, 4.8)), { rotate: 0.05 }))",
         ],
         declarations: [
             "feedback(\n    update: (prev: VideoColor) => VideoSignal,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoColor;",
@@ -734,7 +737,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
             {
                 name: 'config.rotate',
-                description: 'Turns; positive turns clockwise (default 0)',
+                description:
+                    'Rotation, with 5 a full turn; positive turns clockwise (default 0)',
             },
             {
                 name: 'config.shiftX',
@@ -748,8 +752,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.warp($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4)), { rotate: $v.mult($v.time, 0.25), zoom: 2 })))",
-            "$v.out($v.warp($v.hsv($v.shape($v.ramp(), $v.ramp('v'), 0.75)), { shiftX: $v.osc($v.time, 1.25), rotate: 0.1 }))",
+            "$v.out($v.hsv($v.warp($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4)), { rotate: $v.mult($v.time, 1.25), zoom: 2 })))",
+            "$v.out($v.warp($v.hsv($v.shape($v.ramp(), $v.ramp('v'), 0.75)), { shiftX: $v.osc($v.time, 1.25), rotate: 0.5 }))",
         ],
         declarations: [
             'warp(input: VideoField, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoField;',
@@ -999,8 +1003,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
-            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).$.hsv().$.mult(1).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(4.8)).write(trail).out()',
-            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 0.4)).$.add(b.read({ rotate: 0.01 }).$.mult(4.75))); b.write(a.read({ zoom: 1.03 }).$.mult(4.5)); $v.out(a.read())",
+            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).$.hsv().$.mult(1).$.add(trail.read({ zoom: 1.01, rotate: 0.01 }).$.mult(4.8)).write(trail).out()',
+            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 0.4)).$.add(b.read({ rotate: 0.05 }).$.mult(4.75))); b.write(a.read({ zoom: 1.03 }).$.mult(4.5)); $v.out(a.read())",
         ],
         declarations: ['buffer(): VideoBuffer;'],
     },
@@ -1031,11 +1035,11 @@ export interface VideoChainDoc {
 }
 
 export const VIDEO_CHAIN_INTRO =
-    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 5 for the result: `x.$m.kaleid(2.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way (2.5) by default. `range(min, max)` is called directly on a field and maps its 0 to 5 volts onto `min` to `max`. `out`, `preview`, `toCV`, `write` and `range` end, tap or rescale a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
+    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.5)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.5 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 5 for the result: `x.$m.kaleid(2.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way (2.5) by default. `range(min, max)` is called directly on a field and maps its 0 to 5 volts onto `min` to `max`. `out`, `preview`, `toCV`, `write` and `range` end, tap or rescale a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
 
 export const VIDEO_CHAIN_EXAMPLES: string[] = [
     "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 1.5).$.kaleid(6).$.hsv().out()",
-    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(4).preview().out()",
+    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.5).$.pixelate(32, 18).$.hsv(4).preview().out()",
     '$v.osc($v.ramp(), 8).$.hsv().$m.kaleid(2.5, 5).out()',
     '$v.osc($v.ramp(), 8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(1.5)).out()',
     '$v.osc($v.ramp(), 8).$.hsv().pipeMix((c) => c.$.invert(), $v.osc($v.time, 1)).out()',
@@ -1105,7 +1109,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'range',
         direct: true,
         description:
-            "Maps this field's 0 to 5 volts onto `min` to `max` volts: `field.range(0, 1)` gives a value from 0 to 1, for an input measured in turns or cycles.",
+            "Maps this field's 0 to 5 volts onto `min` to `max` volts: `field.range(1, 3)` gives a value from 1 to 3, for an input in its own units such as a zoom factor or a count.",
         declarations: [
             'range(min?: VideoValue, max?: VideoValue): VideoField;',
         ],
@@ -1250,8 +1254,8 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'rotate',
         description:
-            'Turns everything this draws by `turns`; positive is clockwise.',
-        declarations: ['rotate(turns: VideoValue): {self};'],
+            'Turns everything this draws by `amount`, with 5 a full turn; positive is clockwise.',
+        declarations: ['rotate(amount: VideoValue): {self};'],
     },
     {
         name: 'scale',

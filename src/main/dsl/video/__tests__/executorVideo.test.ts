@@ -307,7 +307,7 @@ describe('$v in the DSL executor', () => {
 
         it('routes a transformed ramp through video_transform', () => {
             const wgsl = wgslOf(
-                `$v.out($v.colorize($v.ramp('v', { rotate: 0.1, zoom: 2 }), 0, 0));`,
+                `$v.out($v.colorize($v.ramp('v', { rotate: 0.5, zoom: 2 }), 0, 0));`,
             );
             expect(wgsl).toContain(
                 'video_transform(uv, 2.0, 0.1, vec2f(0.0, 0.0)).y',
@@ -600,7 +600,7 @@ describe('$v in the DSL executor', () => {
         it('re-evaluates the whole input at the moved coordinates', () => {
             const wgsl = wgslOf(`
                 const grain = $v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4));
-                $v.out($v.hsv($v.warp(grain, { rotate: 0.1 })));
+                $v.out($v.hsv($v.warp(grain, { rotate: 0.5 })));
             `);
             // The noise and both of its coordinates are functions of the
             // coordinate; the warp calls the noise at the moved one.
@@ -1302,9 +1302,9 @@ describe('$v in the DSL executor', () => {
             );
         });
 
-        it('hands a natural input its constant as it is', () => {
+        it('hands a natural input its constant as it is, and a phase a fraction of 5', () => {
             expect(
-                wgslOf(`$v.out($v.hsv($v.osc($v.ramp(), 10, 0.25)));`),
+                wgslOf(`$v.out($v.hsv($v.osc($v.ramp(), 10, 1.25)));`),
             ).toMatch(/fract\(v\d \* 10\.0 \+ 0\.25\)/);
         });
 
@@ -1312,10 +1312,16 @@ describe('$v in the DSL executor', () => {
             const full = wgslOf(`$v.out($v.hsv($sine('1hz').range(0, 5)));`);
             expect(full).toMatch(/\(u\.slots\[0\]\[0\] \* 0\.2\)/);
             const natural = wgslOf(
-                `$v.ramp('h', { rotate: $sine('1hz').range(0, 1) }).$.hsv().out();`,
+                `$v.ramp('h', { zoom: $sine('1hz').range(1, 3) }).$.hsv().out();`,
             );
             expect(natural).toMatch(
-                /video_transform\(uv, 1\.0, u\.slots\[0\]\[0\]/,
+                /video_transform\(uv, u\.slots\[0\]\[0\], 0\.0,/,
+            );
+            const turn = wgslOf(
+                `$v.ramp('h', { rotate: $ramp('0.1hz') }).$.hsv().out();`,
+            );
+            expect(turn).toMatch(
+                /video_transform\(uv, 1\.0, \(u\.slots\[0\]\[0\] \* 0\.2\),/,
             );
         });
 
@@ -1324,8 +1330,8 @@ describe('$v in the DSL executor', () => {
                 '(u.time * 0.2)',
             );
             expect(
-                wgslOf(`$v.out($v.hsv($v.osc($v.ramp(), 4, $v.time)));`),
-            ).toMatch(/\+ u\.time\)/);
+                wgslOf(`$v.out($v.hsv($v.osc($v.ramp(), $v.time)));`),
+            ).toMatch(/\* u\.time \+/);
         });
 
         it('multiplies a field by 5 where a natural input reads it', () => {

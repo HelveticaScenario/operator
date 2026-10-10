@@ -31,7 +31,7 @@ function coordinateModule(
 /** Zooms about the center, turns and shifts everything `input` draws. */
 export const warp = coordinateModule(
     ['zoom', 'rotate', 'shiftX', 'shiftY'],
-    ['zoom', 'rotate'],
+    ['zoom'],
     ({ zoom, rotate, shiftX, shiftY }) =>
         `video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY}))`,
     [TRANSFORM_HELPER],
