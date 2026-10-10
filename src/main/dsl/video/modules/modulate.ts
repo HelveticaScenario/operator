@@ -26,7 +26,7 @@ export const modulateScale = coordinateModule(
 /** Turns about the center by `offset + multiple * red`, in turns. */
 export const modulateRotate = coordinateModule(
     ['mr', 'multiple', 'offset'],
-    [],
+    ['multiple', 'offset'],
     ({ mr, multiple, offset }) =>
         `video_transform(uv, 1.0, ${offset} + ${mr} * ${multiple}, vec2f(0.0))`,
     [TRANSFORM_HELPER],

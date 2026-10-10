@@ -29,11 +29,10 @@ export interface VideoModuleDef {
     /** Marks a node that samples the media named by its `source` field. */
     source?: boolean;
     /**
-     * Field inputs measured in natural units (a frequency, a zoom factor, a
+     * Field inputs measured in natural units (cycles, turns, a zoom factor, a
      * count) rather than as a fraction of full scale. Every other field input
-     * receives its value as a fraction of 5 volts, so `emit` sees 5 volts as 1,
-     * which is a full turn for a rotation and a full cycle for a phase; a
-     * natural input receives the volts themselves.
+     * receives its value as a fraction of 5 volts, so `emit` sees 5 volts as 1;
+     * a natural input receives the volts themselves.
      */
     natural?: readonly string[];
     output: VideoValueType;

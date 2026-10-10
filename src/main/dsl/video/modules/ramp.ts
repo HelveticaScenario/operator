@@ -16,7 +16,7 @@ export const ramp: VideoModuleDef = {
         shiftX: 'field',
         shiftY: 'field',
     },
-    natural: ['zoom'],
+    natural: ['zoom', 'rotate'],
     output: 'field',
     params: {
         axis: { values: ['h', 'v', 'd', 'r', 'a'], default: 'h' },
