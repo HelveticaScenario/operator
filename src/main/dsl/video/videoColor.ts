@@ -19,8 +19,8 @@ export function colorMethods(core: VideoCore) {
         /** Color from hue (wraps every 1.0), saturation and value. */
         hsv: (
             h: VideoSource,
-            s: VideoSource = 1,
-            v: VideoSource = 1,
+            s: VideoSource = 5,
+            v: VideoSource = 5,
         ): VideoOutput =>
             core.addNode('hsv', 'color', {
                 h: core.asField('$v.hsv', 'h', h),
@@ -31,7 +31,7 @@ export function colorMethods(core: VideoCore) {
         /** Turns every hue of `input` by `amount` of a full circle. */
         hueShift: (
             input: VideoOutput,
-            amount: VideoSource = 0.5,
+            amount: VideoSource = 2.5,
         ): VideoOutput => {
             return core.addNode('hueShift', 'color', {
                 amount: core.asField('$v.hueShift', 'amount', amount),
@@ -42,7 +42,7 @@ export function colorMethods(core: VideoCore) {
         /** Scales each channel's distance from mid-gray by `amount`. */
         contrast: (
             input: VideoOutput,
-            amount: VideoSource = 1.6,
+            amount: VideoSource = 8,
         ): VideoOutput => {
             return core.addNode('contrast', 'color', {
                 amount: core.asField('$v.contrast', 'amount', amount),
@@ -53,9 +53,9 @@ export function colorMethods(core: VideoCore) {
         /** Saturation, then gain and bias, clipped to the displayable range. */
         procAmp: (
             input: VideoSource,
-            gain: VideoSource = 1,
+            gain: VideoSource = 5,
             bias: VideoSource = 0,
-            saturation: VideoSource = 1,
+            saturation: VideoSource = 5,
         ): VideoOutput =>
             core.addNode('procAmp', 'color', {
                 input: core.asColorOrGray('$v.procAmp', 'input', input),
@@ -72,7 +72,7 @@ export function colorMethods(core: VideoCore) {
         scanlines: (
             input: VideoOutput,
             count: VideoSource = 240,
-            strength: VideoSource = 0.4,
+            strength: VideoSource = 2,
         ): VideoOutput =>
             core.addNode('scanlines', 'color', {
                 count: core.asField('$v.scanlines', 'count', count),
@@ -83,8 +83,8 @@ export function colorMethods(core: VideoCore) {
         /** Darkens toward the corners of the frame. */
         vignette: (
             input: VideoOutput,
-            strength: VideoSource = 0.6,
-            radius: VideoSource = 0.3,
+            strength: VideoSource = 3,
+            radius: VideoSource = 1.5,
         ): VideoOutput =>
             core.addNode('vignette', 'color', {
                 input: core.asColorOrGray('$v.vignette', 'input', input),
@@ -93,7 +93,7 @@ export function colorMethods(core: VideoCore) {
             }),
 
         /** Adds film grain, redrawn every frame. */
-        grain: (input: VideoOutput, amount: VideoSource = 0.1): VideoOutput =>
+        grain: (input: VideoOutput, amount: VideoSource = 0.5): VideoOutput =>
             core.addNode('grain', 'color', {
                 amount: core.asField('$v.grain', 'amount', amount),
                 input: core.asColorOrGray('$v.grain', 'input', input),

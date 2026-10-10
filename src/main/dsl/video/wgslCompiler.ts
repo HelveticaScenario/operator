@@ -12,6 +12,11 @@ import {
 import { VIDEO_MODULES } from './modules';
 import type { VideoModuleDef } from './modules/types';
 
+/** A constant in volts as a fraction of 5 volts, without floating-point noise. */
+function fractionOfFullScale(volts: number): number {
+    return Number((volts / 5).toPrecision(9));
+}
+
 function wgslFloat(value: number): string {
     if (!Number.isFinite(value)) {
         throw new Error(`video constant must be finite, got ${value}`);
@@ -55,7 +60,16 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const wgslType = (type: VideoValueType) =>
         type === 'field' ? 'f32' : 'vec3f';
 
-    const resolve = (value: VideoValue, expected: VideoValueType): string => {
+    /**
+     * The WGSL for an input. Modules compute with 5 volts as 1, so a constant,
+     * an audio signal or the clock is divided by 5 on its way in, and a
+     * field's value is the volts of a `natural` input times 5 on its way out.
+     */
+    const resolve = (
+        value: VideoValue,
+        expected: VideoValueType,
+        natural = false,
+    ): string => {
         switch (value.kind) {
             case 'const':
             case 'uniform':
@@ -65,8 +79,16 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                         `expected a ${expected}, got a ${value.kind}`,
                     );
                 }
-                if (value.kind === 'const') return wgslFloat(value.value);
-                if (value.kind === 'time') return 'u.time';
+                if (value.kind === 'const') {
+                    return wgslFloat(
+                        natural
+                            ? value.value
+                            : fractionOfFullScale(value.value),
+                    );
+                }
+                if (value.kind === 'time') {
+                    return natural ? 'u.time' : '(u.time * 0.2)';
+                }
                 if (
                     !Number.isInteger(value.slot) ||
                     value.slot < 0 ||
@@ -76,7 +98,9 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                         `uniform slot ${value.slot} is out of range`,
                     );
                 }
-                return `u.slots[${value.slot >> 2}][${value.slot & 3}]`;
+                return natural
+                    ? `u.slots[${value.slot >> 2}][${value.slot & 3}]`
+                    : `(u.slots[${value.slot >> 2}][${value.slot & 3}] * 0.2)`;
             case 'node': {
                 const actual = types.get(value.id);
                 if (actual === undefined) {
@@ -87,7 +111,9 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                         `node "${value.id}" is a ${actual}, expected a ${expected}`,
                     );
                 }
-                return names.get(value.id)!;
+                return natural
+                    ? `(${names.get(value.id)!} * 5.0)`
+                    : names.get(value.id)!;
             }
         }
     };
@@ -108,11 +134,13 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const resolveInFunction = (
         value: VideoValue,
         expected: VideoValueType,
+        natural = false,
     ): string => {
-        if (value.kind !== 'node') return resolve(value, expected);
+        if (value.kind !== 'node') return resolve(value, expected, natural);
         checkNodeType(value.id, expected);
         defineFunction(value.id);
-        return `f${records.get(value.id)!.index}(uv)`;
+        const call = `f${records.get(value.id)!.index}(uv)`;
+        return natural ? `(${call} * 5.0)` : call;
     };
 
     /** An input handed to a module as a function of coordinates. */
@@ -147,7 +175,11 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             const value = node.inputs[name];
             args[name] = def.warped?.includes(name)
                 ? resolveAsFunction(value, type)
-                : resolveInFunction(value, type);
+                : resolveInFunction(
+                      value,
+                      type,
+                      def.natural?.includes(name) ?? false,
+                  );
         }
         functions.push(
             `fn f${index}(uv: vec2f) -> ${wgslType(def.output)} {\n    return ${def.emit(args, params, indices)};\n}`,
@@ -170,7 +202,11 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                     throw new Error(`missing input "${name}"`);
                 args[name] = def.warped?.includes(name)
                     ? resolveAsFunction(value, type)
-                    : resolve(value, type);
+                    : resolve(
+                          value,
+                          type,
+                          def.natural?.includes(name) ?? false,
+                      );
             }
             for (const name of Object.keys(node.inputs)) {
                 if (!(name in def.inputs))

@@ -4,9 +4,9 @@ import type {
 } from '../../shared/video/videoGraph';
 
 /**
- * Average brightness, 0..1, of the pixels of `frame` inside the region
- * `sample` names. A region is clipped to the frame and always covers at least
- * one pixel.
+ * Average brightness of the pixels of `frame` inside the region
+ * `sample` names, in volts: 0 for black to 5 for white. A region is clipped to
+ * the frame and always covers at least one pixel.
  */
 export function regionAverage(
     frame: VideoPreviewFrame,
@@ -31,5 +31,5 @@ export function regionAverage(
             count++;
         }
     }
-    return sum / count / 255;
+    return (sum / count / 255) * 5;
 }

@@ -48,6 +48,7 @@ export const polygon: VideoModuleDef = {
         size: 'field',
         softness: 'field',
     },
+    natural: ['sides'],
     output: 'field',
     params: {},
     helpers: [

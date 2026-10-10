@@ -14,7 +14,7 @@ export function filterMethods(core: VideoCore) {
          * height. The input's whole sub-patch is read at several nearby
          * coordinates, so its cost is paid that many times.
          */
-        blur: (input: VideoOutput, radius: VideoSource = 0.01): VideoOutput =>
+        blur: (input: VideoOutput, radius: VideoSource = 0.05): VideoOutput =>
             transform(core, '$v.blur', 'blur', input, { radius }),
 
         /**
@@ -23,8 +23,8 @@ export function filterMethods(core: VideoCore) {
          */
         bloom: (
             input: VideoOutput,
-            radius: VideoSource = 0.04,
-            amount: VideoSource = 1,
+            radius: VideoSource = 0.2,
+            amount: VideoSource = 5,
         ): VideoOutput => {
             const halo = transform(core, '$v.bloom', 'blur', input, { radius });
             const scaled = core.arith('$v.bloom', 'mult', {
@@ -35,7 +35,7 @@ export function filterMethods(core: VideoCore) {
         },
 
         /** Brightness of the steepest change around each pixel, a Sobel filter. */
-        edges: (input: VideoOutput, amount: VideoSource = 1): VideoOutput => {
+        edges: (input: VideoOutput, amount: VideoSource = 5): VideoOutput => {
             if (!(input instanceof VideoOutput)) {
                 throw new Error(
                     `$v.edges: input must be a video field or color, got ${describe(input)}`,

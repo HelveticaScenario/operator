@@ -655,7 +655,7 @@ export function executePatchScript(
         publishTap: (output, slot) => {
             _videoTap(output, slot);
         },
-        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 1),
+        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 5),
         mediaExists: options.mediaExists,
         sourceLocation: captureSourceLocation,
     });
@@ -982,6 +982,7 @@ export function executePatchScript(
             posterize: videoBuilder.posterize,
             procAmp: videoBuilder.procAmp,
             ramp: videoBuilder.ramp,
+            range: videoBuilder.range,
             repeat: videoBuilder.repeat,
             scanlines: videoBuilder.scanlines,
             shape: videoBuilder.shape,

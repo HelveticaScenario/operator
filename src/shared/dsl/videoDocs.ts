@@ -38,11 +38,11 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`. Pass one channel; a polyphonic signal is rejected.',
+        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nFields are in volts, as audio signals are: a field runs from 0 to 5, and 5 is full. A ramp runs from 0 to 5 across the frame, a color channel at 5 is fully on, and a strength or an amount of 5 is all of it. Quantities with their own units keep them: `freq: 10` is ten cycles, `rotate: 0.25` a quarter turn, `kaleid(6)` six wedges.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so a 0 to 5 volt signal fills a full-scale input as it is; `.range(min, max)`, on an audio signal or on a field, sets any other range, such as `.range(0, 0.25)` for up to a quarter turn. Pass one channel; a polyphonic signal is rejected.',
     examples: [
         '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
-        "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
-        "$v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.1, 0.4))))",
+        "$v.out($v.hsv($slider('Hue', 1.5, 0, 5), 5, $slider('Level', 5, 0, 5)))",
+        "$v.out($v.hsv($sine('0.2hz').range(0, 5), 5, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.5, 2))))",
     ],
 };
 
@@ -51,7 +51,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'time',
         group: 'Generators',
         description:
-            'Seconds since video started rendering. Use it as a phase to animate an oscillator.',
+            'Seconds since video started rendering, as volts: it reaches 5 after five seconds. Use it as a phase to animate an oscillator; an oscillator with a `freq` of 5 fed `$v.time` completes a cycle every second.',
         params: [],
         examples: ['$v.out($v.colorize($v.osc($v.ramp(), 4, $v.time), 0, 0))'],
         declarations: ['readonly time: VideoField;'],
@@ -65,7 +65,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'axis',
                 description:
-                    "`'h'` horizontal 0..1 (default), `'v'` vertical 0..1, `'d'` diagonal, `'r'` distance from the center (0.5 at the top and bottom edges), `'a'` angle around the center, 0..1 once around",
+                    "`'h'` horizontal, 0 to 5 across the frame (default), `'v'` vertical, 0 to 5 up the frame, `'d'` diagonal, `'r'` distance from the center (2.5 at the top and bottom edges), `'a'` angle around the center, 0 to 5 once around",
             },
             {
                 name: 'config.zoom',
@@ -80,19 +80,19 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.shiftX',
                 description:
-                    'Horizontal move as a fraction of the width; positive moves right (default 0)',
+                    'Horizontal move, with 5 the whole width; positive moves right (default 0)',
             },
             {
                 name: 'config.shiftY',
                 description:
-                    'Vertical move as a fraction of the height; positive moves up (default 0)',
+                    'Vertical move, with 5 the whole height; positive moves up (default 0)',
             },
         ],
         examples: [
-            "$v.out($v.colorize($v.ramp(), $v.ramp('v'), 0.5))",
+            "$v.out($v.colorize($v.ramp(), $v.ramp('v'), 2.5))",
             "$v.out($v.hsv($v.osc($v.ramp('r'), 6, $v.time)))",
-            "$v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 0.1) })))",
-            "$v.out($v.colorize($v.osc($v.ramp('h', { rotate: 0.125, zoom: 2 }), 8), 0.2, 0.5))",
+            "$v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 0.5).range(0, 1) })))",
+            "$v.out($v.colorize($v.osc($v.ramp('h', { rotate: 0.125, zoom: 2 }), 8), 1, 2.5))",
         ],
         declarations: [
             "ramp(\n    axis?: 'h' | 'v' | 'd' | 'r' | 'a',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoField;",
@@ -102,12 +102,13 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'osc',
         group: 'Generators',
         description:
-            'Periodic shaper: `freq` cycles per unit of `input`, offset by `phase` cycles.',
+            'Periodic shaper from 0 to 5: `freq` cycles across the full 5 volts of `input`, offset by `phase` cycles. A ramp spans 5 volts, so a `freq` of 8 on a ramp draws eight stripes.',
         params: [
             { name: 'input', description: 'Field to shape, usually a ramp' },
             {
                 name: 'freq',
-                description: 'Cycles across the full range of `input`',
+                description:
+                    'Cycles across 5 volts of `input`; fed `$v.time`, which counts seconds, 5 is one cycle a second',
             },
             { name: 'phase', description: 'Offset in cycles (default 0)' },
             {
@@ -118,7 +119,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.colorize($v.osc($v.ramp(), 8), 0, 0))',
-            "$v.out($v.colorize($v.osc($v.ramp(), 3, $v.time, { shape: 'saw' }), $v.osc($v.ramp('v'), 5), 0.3))",
+            "$v.out($v.colorize($v.osc($v.ramp(), 3, $v.time, { shape: 'saw' }), $v.osc($v.ramp('v'), 5), 1.5))",
         ],
         declarations: [
             "osc(\n    input: VideoValue,\n    freq: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square' },\n): VideoField;",
@@ -128,7 +129,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'fromAudio',
         group: 'Generators',
         description:
-            'The recent audio-rate samples of an audio signal, laid along `position`: 0 is the oldest sample in the window and 1 the newest. Values are in volts, as the audio graph produces them, interpolated between samples. With the default horizontal ramp for `position` this is a scope: compare it with the vertical ramp to draw the wave. Unlike an audio signal used directly as an input, which is read once per frame, this shows every sample.',
+            'The recent audio-rate samples of an audio signal, laid along `position`: 0 is the oldest sample in the window and 1 the newest. Values are the volts the audio graph produces, interpolated between samples. With the default horizontal ramp for `position` this is a scope: compare it with the vertical ramp to draw the wave. Unlike an audio signal used directly as an input, which is read once per frame, this shows every sample.',
         params: [
             {
                 name: 'signal',
@@ -138,7 +139,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'position',
                 description:
-                    'Where along the window to read, 0 to 1 (default the horizontal ramp)',
+                    'Where along the window to read, 0 to 5 (default the horizontal ramp)',
             },
             {
                 name: 'config.samples',
@@ -152,8 +153,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.35, 1, $v.invert($v.comparator($v.diff($v.ramp('v'), $v.add(0.5, $v.mult($v.fromAudio($sine('110hz')), 0.08))), 0.01, 0.01))))",
-            "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('r'), { samples: 1024 }), 1, 1))",
+            "$v.out($v.hsv(1.75, 5, $v.invert($v.comparator($v.diff($v.ramp('v'), $v.add(2.5, $v.mult($v.fromAudio($sine('110hz')), 2))), 0.05, 0.05))))",
+            "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('r'), { samples: 1024 }), 5, 5))",
         ],
         declarations: [
             'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoField;',
@@ -163,7 +164,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'noise',
         group: 'Generators',
         description:
-            'Smooth value noise between 0 and 1. One unit of any coordinate is one cell of the noise, so scaling the coordinates sets the grain; `z` moves through the noise, which animates it when fed `$v.time`.',
+            'Smooth value noise from 0 to 5. One volt of any coordinate is one cell of the noise, so a ramp, which spans 5 volts, crosses five cells; scaling the coordinates sets the grain, and `z` moves through the noise, which animates it when fed `$v.time`.',
         params: [
             { name: 'x', description: 'Horizontal coordinate' },
             { name: 'y', description: 'Vertical coordinate' },
@@ -174,8 +175,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.mult($v.time, 0.5))))",
-            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise($v.mult($v.ramp('r'), 10), $v.mult($v.ramp('a'), 6), $v.time), 0.5, 0.05)))",
+            "$v.out($v.hsv($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.mult($v.time, 2.5))))",
+            "$v.out($v.hsv(3, 5, $v.comparator($v.noise($v.mult($v.ramp('r'), 10), $v.mult($v.ramp('a'), 6), $v.time), 2.5, 0.25)))",
         ],
         declarations: [
             'noise(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
@@ -185,7 +186,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'voronoi',
         group: 'Generators',
         description:
-            'Cellular noise: the distance to the nearest of a scatter of points, one per unit cell of the coordinates, between 0 (on a point) and about 1. Scale the coordinates to set the cell size; `z` moves the points, which animates the cells when fed `$v.time`.',
+            'Cellular noise: the distance to the nearest of a scatter of points, one per unit cell of the coordinates, between 0 (on a point) and about 5. One volt of any coordinate is one cell, so scale the coordinates to set the cell size; `z` moves the points, which animates the cells when fed `$v.time`.',
         params: [
             { name: 'x', description: 'Horizontal coordinate' },
             { name: 'y', description: 'Vertical coordinate' },
@@ -195,8 +196,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.55, 0.8, $v.voronoi($v.mult($v.ramp(), 8), $v.mult($v.ramp('v'), 5), $v.mult($v.time, 2))))",
-            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).$.invert().$.tint(0.1).out()",
+            "$v.out($v.hsv(2.75, 4, $v.voronoi($v.mult($v.ramp(), 8), $v.mult($v.ramp('v'), 5), $v.mult($v.time, 10))))",
+            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).$.invert().$.tint(0.5).out()",
         ],
         declarations: [
             'voronoi(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
@@ -206,15 +207,15 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'polygon',
         group: 'Generators',
         description:
-            '1 inside a regular polygon centered on (x, y) with one point up, 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame.',
+            '5 inside a regular polygon centered on (x, y) with one point up, 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame.',
         params: [
             {
                 name: 'x',
-                description: 'Horizontal position field; 0.5 is the center',
+                description: 'Horizontal position field; 2.5 is the center',
             },
             {
                 name: 'y',
-                description: 'Vertical position field; 0.5 is the center',
+                description: 'Vertical position field; 2.5 is the center',
             },
             {
                 name: 'sides',
@@ -223,17 +224,17 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'size',
                 description:
-                    'Distance from the center to the middle of a side, as a fraction of the frame height (default 0.25)',
+                    'Distance from the center to the middle of a side, with 5 the whole frame height (default 1.25)',
             },
             {
                 name: 'softness',
                 description:
-                    'Width of the edge in the same units (default 0.01)',
+                    'Width of the edge in the same units (default 0.05)',
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.12, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.3, 0.02)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.tint(0.6).out()",
+            "$v.out($v.hsv(0.6, 5, $v.polygon($v.ramp(), $v.ramp('v'), 5, 1.5, 0.1)))",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 1).$.rotate($v.mult($v.time, 0.5)).$.tint(3).out()",
         ],
         declarations: [
             'polygon(x: VideoValue, y: VideoValue, sides?: VideoValue, size?: VideoValue, softness?: VideoValue): VideoField;',
@@ -248,12 +249,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'radius',
                 description:
-                    'Radius of the disk as a fraction of the frame height (default 0.01)',
+                    'Radius of the disk, with 5 the whole frame height (default 0.05)',
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.blur($v.polygon($v.ramp(), $v.ramp('v'), 5, 0.2, 0.001), 0.04)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.18, 0.002).$.tint(0.12).pipe((c) => c.$.add(c.$.blur(0.04).$.mult(2))).out()",
+            "$v.out($v.hsv($v.blur($v.polygon($v.ramp(), $v.ramp('v'), 5, 1, 0.005), 0.2)))",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.9, 0.01).$.tint(0.6).pipe((c) => c.$.add(c.$.blur(0.2).$.mult(10))).out()",
         ],
         declarations: [
             'blur(input: VideoField, radius?: VideoValue): VideoField;',
@@ -269,17 +270,17 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'radius',
                 description:
-                    'Radius of the blur as a fraction of the frame height (default 0.04)',
+                    'Radius of the blur, with 5 the whole frame height (default 0.2)',
             },
             {
                 name: 'amount',
                 description:
-                    'How strongly the blurred copy is added back (default 1)',
+                    'How strongly the blurred copy is added back; 5 adds all of it (default 5)',
             },
         ],
         examples: [
-            "$v.out($v.bloom($v.hsv(0.1, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.15, 0.002)), 0.05, 2))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.15, 0.002).$.tint(0.55).$.bloom(0.06, 2.5).out()",
+            "$v.out($v.bloom($v.hsv(0.5, 5, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.75, 0.01)), 0.25, 10))",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.75, 0.01).$.tint(2.75).$.bloom(0.3, 12.5).out()",
         ],
         declarations: [
             'bloom(input: VideoField, radius?: VideoValue, amount?: VideoValue): VideoField;',
@@ -295,11 +296,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Gain on the result, which is clipped to 0..1 (default 1)',
+                    'Gain on the result, which is clipped to 0 to 5; 5 leaves it as it is (default 5)',
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.4, 1, $v.edges($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time), 4)))",
+            "$v.out($v.hsv(2, 5, $v.edges($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time), 20)))",
         ],
         declarations: [
             'edges(input: VideoField | VideoColor, amount?: VideoValue): VideoField;',
@@ -323,7 +324,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.image('pictures/photo.png'))",
-            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.05)).out()",
+            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.25)).out()",
         ],
         declarations: [
             "image(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
@@ -357,7 +358,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.video('clips/loop.mp4'))",
-            "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 0.5, 1)).$.warp({ rotate: 0.02 }).out()",
+            "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 2.5, 5)).$.warp({ rotate: 0.02 }).out()",
             "$v.video('clips/loop.mp4', { speed: 0.5, loop: [1, 2.5] }).out()",
         ],
         declarations: [
@@ -368,25 +369,25 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'shape',
         group: 'Generators',
         description:
-            '1 inside a shape and 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame; offset them to move it. Circles stay round at any window aspect.',
+            '5 inside a shape and 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame; offset them to move it. Circles stay round at any window aspect.',
         params: [
             {
                 name: 'x',
-                description: 'Horizontal position field; 0.5 is the center',
+                description: 'Horizontal position field; 2.5 is the center',
             },
             {
                 name: 'y',
-                description: 'Vertical position field; 0.5 is the center',
+                description: 'Vertical position field; 2.5 is the center',
             },
             {
                 name: 'size',
                 description:
-                    'Half-extent as a fraction of frame height (default 0.25)',
+                    'Half-extent, with 5 the whole frame height (default 1.25)',
             },
             {
                 name: 'softness',
                 description:
-                    'Width of the edge in the same units (default 0.01)',
+                    'Width of the edge in the same units (default 0.05)',
             },
             {
                 name: 'config.shape',
@@ -394,8 +395,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3, 0.05)))",
-            "$v.out($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2, 0, { shape: 'diamond' })))",
+            "$v.out($v.hsv(3, 5, $v.shape($v.ramp(), $v.ramp('v'), 1.5, 0.25)))",
+            "$v.out($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 1, 0, { shape: 'diamond' })))",
         ],
         declarations: [
             "shape(\n    x: VideoValue,\n    y: VideoValue,\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: { shape?: 'circle' | 'box' | 'diamond' },\n): VideoField;",
@@ -405,9 +406,9 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'colorize',
         group: 'Color',
         description:
-            'Combines three fields into a color. Each channel is clipped to 0..1.',
+            'Combines three fields into a color. Each channel runs from 0 (off) to 5 (full) and is clipped to that.',
         params: [],
-        examples: ["$v.out($v.colorize($v.ramp(), $v.ramp('v'), 1))"],
+        examples: ["$v.out($v.colorize($v.ramp(), $v.ramp('v'), 5))"],
         declarations: [
             'colorize(r: VideoValue, g: VideoValue, b: VideoValue): VideoColor;',
         ],
@@ -416,11 +417,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'hsv',
         group: 'Color',
         description:
-            'Color from hue, saturation and value. Hue wraps every 1.0; saturation and value are clipped to 0..1.',
+            'Color from hue, saturation and value. Hue wraps every 5, so a ramp across the frame is one trip round the rainbow; saturation and value run from 0 to 5 and are clipped to that.',
         params: [],
         examples: [
-            '$v.out($v.hsv($v.ramp(), 1, 1))',
-            "$v.out($v.hsv($v.osc($v.ramp(), 2, $v.time), 0.8, $v.ramp('v')))",
+            '$v.out($v.hsv($v.ramp(), 5, 5))',
+            "$v.out($v.hsv($v.osc($v.ramp(), 2, $v.time), 4, $v.ramp('v')))",
         ],
         declarations: [
             'hsv(h: VideoValue, s?: VideoValue, v?: VideoValue): VideoColor;',
@@ -436,17 +437,21 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 name: 'input',
                 description: 'Color (a field is treated as gray)',
             },
-            { name: 'gain', description: 'Multiplier (default 1)' },
+            {
+                name: 'gain',
+                description: 'Multiplier; 5 leaves it as it is (default 5)',
+            },
             {
                 name: 'bias',
-                description: 'Offset added after gain (default 0)',
+                description:
+                    'Offset added after gain, with 5 the whole range (default 0)',
             },
             {
                 name: 'saturation',
-                description: '0 is gray, 1 is unchanged (default 1)',
+                description: '0 is gray, 5 is unchanged (default 5)',
             },
         ],
-        examples: ['$v.out($v.procAmp($v.hsv($v.ramp()), 1.5, -0.2, 0.5))'],
+        examples: ['$v.out($v.procAmp($v.hsv($v.ramp()), 7.5, -1, 2.5))'],
         declarations: [
             'procAmp(\n    input: VideoSignal,\n    gain?: VideoValue,\n    bias?: VideoValue,\n    saturation?: VideoValue,\n): VideoColor;',
         ],
@@ -454,7 +459,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'add',
         group: 'Math',
-        description: 'Sum, clipped to 0..1. Colors add per channel.',
+        description: 'Sum, clipped to 0 to 5. Colors add per channel.',
         params: [],
         examples: [
             "$v.out($v.hsv($v.add($v.ramp(), $v.osc($v.ramp('v'), 3))))",
@@ -468,7 +473,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mult',
         group: 'Math',
         description:
-            'Product. Multiplying by a field darkens; colors multiply per channel.',
+            'Product, as a fraction of 5: multiplying by 5 changes nothing and by 2.5 halves. Colors multiply per channel.',
         params: [],
         examples: ["$v.out($v.mult($v.hsv($v.ramp()), $v.ramp('v')))"],
         declarations: [
@@ -494,7 +499,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'The larger of two values. With shapes this is their union; colors take the larger channel.',
         params: [],
         examples: [
-            "$v.out($v.hsv(0.1, 1, $v.max($v.shape($v.ramp(), $v.ramp('v'), 0.2), $v.shape($v.add($v.ramp(), 0.2), $v.ramp('v'), 0.2))))",
+            "$v.out($v.hsv(0.5, 5, $v.max($v.shape($v.ramp(), $v.ramp('v'), 1), $v.shape($v.add($v.ramp(), 1), $v.ramp('v'), 1))))",
         ],
         declarations: [
             'max(a: VideoValue, b: VideoValue): VideoField;',
@@ -508,7 +513,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'The smaller of two values. With shapes this is their intersection; colors take the smaller channel.',
         params: [],
         examples: [
-            "$v.out($v.hsv(0.5, 1, $v.min($v.shape($v.ramp(), $v.ramp('v'), 0.3), $v.shape($v.add($v.ramp(), 0.2), $v.ramp('v'), 0.3))))",
+            "$v.out($v.hsv(2.5, 5, $v.min($v.shape($v.ramp(), $v.ramp('v'), 1.5), $v.shape($v.add($v.ramp(), 1), $v.ramp('v'), 1.5))))",
         ],
         declarations: [
             'min(a: VideoValue, b: VideoValue): VideoField;',
@@ -518,7 +523,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'invert',
         group: 'Math',
-        description: 'Complement, 1 minus the input.',
+        description: 'Complement, 5 minus the input.',
         params: [],
         examples: ['$v.out($v.invert($v.hsv($v.ramp())))'],
         declarations: [
@@ -529,15 +534,15 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'mix',
         group: 'Math',
-        description: 'Crossfade from `a` (amount 0) to `b` (amount 1).',
+        description: 'Crossfade from `a` (amount 0) to `b` (amount 5).',
         params: [
             {
                 name: 'amount',
-                description: 'Mix position, clipped to 0..1 (default 0.5)',
+                description: 'Mix position, clipped to 0 to 5 (default 2.5)',
             },
         ],
         examples: [
-            "$v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('v')), $v.osc($v.time, 0.25)))",
+            "$v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('v')), $v.osc($v.time, 1.25)))",
         ],
         declarations: [
             'mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoField;',
@@ -545,10 +550,27 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'range',
+        group: 'Shaping',
+        description:
+            "Maps a field's 0 to 5 volts onto `min` to `max` volts, as `.range` does for an audio signal. Use it to give an input that has its own units, such as turns or cycles, the span you want. It is also called on the field itself, as `field.range(min, max)`.",
+        params: [
+            { name: 'min', description: 'The value 0 becomes (default 0)' },
+            { name: 'max', description: 'The value 5 becomes (default 5)' },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.ramp('a', { rotate: $v.range($v.osc($v.time, 0.5), 0, 0.5) })))",
+            '$v.out($v.hsv($v.ramp().range(0, 2.5)))',
+        ],
+        declarations: [
+            'range(input: VideoField, min?: VideoValue, max?: VideoValue): VideoField;',
+        ],
+    },
+    {
         name: 'wrap',
         group: 'Shaping',
         description:
-            'Multiplies by `gain`, then keeps the fractional part: a sawtooth of the input that repeats `gain` times as the input goes from 0 to 1.',
+            'Multiplies by `gain`, then keeps the fractional part: a sawtooth of the input that repeats `gain` times as the input goes from 0 to 5.',
         params: [],
         examples: ['$v.out($v.hsv($v.wrap($v.ramp(), 4)))'],
         declarations: [
@@ -559,7 +581,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'fold',
         group: 'Shaping',
         description:
-            'Multiplies by `gain`, then reflects whatever passes 1 back down: a triangle of the input that matches it where it stays under 1 / gain.',
+            'Multiplies by `gain`, then reflects whatever passes 5 back down: a triangle of the input that matches it where it stays under 5 / gain.',
         params: [],
         examples: ['$v.out($v.hsv($v.fold($v.ramp(), 3)))'],
         declarations: [
@@ -570,10 +592,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'comparator',
         group: 'Shaping',
         description:
-            'Threshold: 0 below `threshold`, 1 above, with a linear ramp `softness` wide centered on it (a hard edge when 0).',
+            'Threshold: 0 below `threshold`, 5 above, with a linear ramp `softness` wide centered on it (a hard edge when 0). Both are in volts; the threshold defaults to 2.5.',
         params: [],
         examples: [
-            '$v.out($v.hsv(0.1, 1, $v.comparator($v.osc($v.ramp(), 4), 0.5, 0.1)))',
+            '$v.out($v.hsv(0.5, 5, $v.comparator($v.osc($v.ramp(), 4), 2.5, 0.5)))',
         ],
         declarations: [
             'comparator(\n    input: VideoValue,\n    threshold?: VideoValue,\n    softness?: VideoValue,\n): VideoField;',
@@ -583,7 +605,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'posterize',
         group: 'Shaping',
         description:
-            'Quantizes to `levels` evenly spaced values between 0 and 1.',
+            'Quantizes to `levels` evenly spaced values between 0 and 5.',
         params: [
             {
                 name: 'levels',
@@ -598,10 +620,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'key',
         group: 'Compositing',
-        description: 'Shows `fg` where `mask` is 1 and `bg` where it is 0.',
+        description: 'Shows `fg` where `mask` is 5 and `bg` where it is 0.',
         params: [],
         examples: [
-            "$v.out($v.key($v.hsv(0.9), $v.hsv($v.ramp(), 1, 0.5), $v.shape($v.ramp(), $v.ramp('v'), 0.3)))",
+            "$v.out($v.key($v.hsv(4.5), $v.hsv($v.ramp(), 5, 2.5), $v.shape($v.ramp(), $v.ramp('v'), 1.5)))",
         ],
         declarations: [
             'key(fg: VideoSignal, bg: VideoSignal, mask: VideoValue): VideoColor;',
@@ -627,12 +649,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.shiftX',
                 description:
-                    'Horizontal move per frame as a fraction of the width; positive moves right (default 0)',
+                    'Horizontal move per frame, with 5 the whole width; positive moves right (default 0)',
             },
             {
                 name: 'config.shiftY',
                 description:
-                    'Vertical move per frame as a fraction of the height; positive moves up (default 0)',
+                    'Vertical move per frame, with 5 the whole height; positive moves up (default 0)',
             },
             {
                 name: 'config.edge',
@@ -641,8 +663,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.1)), prev, 0.9), { zoom: 1.02, rotate: 0.004 }))",
-            "$v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 0.2), 1, $v.shape($v.add($v.ramp(), -0.2), $v.ramp('v'), 0.05)), $v.mult(prev, 0.96)), { rotate: 0.01 }))",
+            "$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 0.5)), prev, 4.5), { zoom: 1.02, rotate: 0.004 }))",
+            "$v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 1), 5, $v.shape($v.add($v.ramp(), -1), $v.ramp('v'), 0.25)), $v.mult(prev, 4.8)), { rotate: 0.01 }))",
         ],
         declarations: [
             "feedback(\n    update: (prev: VideoColor) => VideoSignal,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoColor;",
@@ -674,7 +696,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'toCV',
         group: 'Output',
         description:
-            'Averages a region of a signal each frame into an audio control signal between 0 and 1, so the picture can modulate the sound. A color contributes its brightness. The value is read from the picture about 30 times a second. Scale the result with `.range(min, max)` like any ranged signal.',
+            'Averages a region of a signal each frame into an audio control signal from 0 to 5 volts, so the picture can modulate the sound: black is 0 and white is 5. A color contributes its brightness. The value is read from the picture about 30 times a second. Scale the result with `.range(min, max)` like any ranged signal.',
         params: [
             {
                 name: 'config.x',
@@ -693,7 +715,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$sine($v.toCV($v.shape($v.ramp(), $v.ramp('v'), 0.3), { size: 0.1 }).range(110, 440)).out()",
+            "$sine($v.toCV($v.shape($v.ramp(), $v.ramp('v'), 1.5), { size: 0.1 }).range(110, 440)).out()",
         ],
         declarations: [
             'toCV(signal: VideoField | VideoColor, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
@@ -717,17 +739,17 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.shiftX',
                 description:
-                    'Horizontal move as a fraction of the width; positive moves right (default 0)',
+                    'Horizontal move, with 5 the whole width; positive moves right (default 0)',
             },
             {
                 name: 'config.shiftY',
                 description:
-                    'Vertical move as a fraction of the height; positive moves up (default 0)',
+                    'Vertical move, with 5 the whole height; positive moves up (default 0)',
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.warp($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4)), { rotate: $v.mult($v.time, 0.05), zoom: 2 })))",
-            "$v.out($v.warp($v.hsv($v.shape($v.ramp(), $v.ramp('v'), 0.15)), { shiftX: $v.osc($v.time, 0.25), rotate: 0.1 }))",
+            "$v.out($v.hsv($v.warp($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4)), { rotate: $v.mult($v.time, 0.25), zoom: 2 })))",
+            "$v.out($v.warp($v.hsv($v.shape($v.ramp(), $v.ramp('v'), 0.75)), { shiftX: $v.osc($v.time, 1.25), rotate: 0.1 }))",
         ],
         declarations: [
             'warp(input: VideoField, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoField;',
@@ -738,25 +760,25 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'displace',
         group: 'Warping',
         description:
-            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 0.5 means no push in that direction.',
+            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 2.5 means no push in that direction.',
         params: [
             {
                 name: 'dx',
                 description:
-                    'Horizontal push; below 0.5 pulls left, above pushes right',
+                    'Horizontal push; below 2.5 pulls left, above pushes right',
             },
             {
                 name: 'dy',
-                description: 'Vertical push, the same way (default 0.5)',
+                description: 'Vertical push, the same way (default 2.5)',
             },
             {
                 name: 'amount',
                 description:
-                    'Largest push as a fraction of the frame (default 0.1)',
+                    'Largest push, with 5 the whole frame (default 0.5)',
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.displace($v.osc($v.ramp(), 8), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.5, 0.2)))",
+            "$v.out($v.hsv($v.displace($v.osc($v.ramp(), 8), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 2.5, 1)))",
         ],
         declarations: [
             'displace(input: VideoField, dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoField;',
@@ -776,12 +798,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Largest push as a fraction of the frame (default 0.1)',
+                    'Largest push, with 5 the whole frame (default 0.5)',
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.modulate($v.osc($v.ramp(), 10), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3)))",
-            "$v.out($v.modulate($v.hsv($v.ramp('r')), $v.hsv($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), 0)), 0.2))",
+            "$v.out($v.hsv($v.modulate($v.osc($v.ramp(), 10), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 1.5)))",
+            "$v.out($v.modulate($v.hsv($v.ramp('r')), $v.hsv($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), 0)), 1))",
         ],
         declarations: [
             'modulate(input: VideoField, modulator: VideoField | VideoColor, amount?: VideoValue): VideoField;',
@@ -831,7 +853,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'y', description: 'Tiles up (default the same as x)' },
         ],
         examples: [
-            "$v.out($v.repeat($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3)), 4, 3))",
+            "$v.out($v.repeat($v.hsv(3, 5, $v.shape($v.ramp(), $v.ramp('v'), 1.5)), 4, 3))",
         ],
         declarations: [
             'repeat(input: VideoField, x?: VideoValue, y?: VideoValue): VideoField;',
@@ -847,11 +869,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Fraction of the hue circle to turn by; 0.5 is the opposite hue (default 0.5)',
+                    'How far round the hue circle to turn, with 5 all the way round; 2.5 is the opposite hue (default 2.5)',
             },
         ],
         examples: [
-            '$v.out($v.hueShift($v.hsv($v.ramp()), $v.osc($v.time, 0.1)))',
+            '$v.out($v.hueShift($v.hsv($v.ramp()), $v.osc($v.time, 0.5)))',
         ],
         declarations: [
             'hueShift(input: VideoSignal, amount?: VideoValue): VideoColor;',
@@ -861,12 +883,15 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'contrast',
         group: 'Color',
         description:
-            "Scales each channel's distance from mid-gray by `amount`: above 1 pushes colors apart, below 1 pulls them toward gray.",
+            "Scales each channel's distance from mid-gray by `amount`: above 5 pushes colors apart, below 5 pulls them toward gray, and 5 leaves them as they are.",
         params: [
-            { name: 'amount', description: 'Contrast factor (default 1.6)' },
+            {
+                name: 'amount',
+                description: 'Contrast factor; 5 is no change (default 8)',
+            },
         ],
         examples: [
-            "$v.out($v.contrast($v.hsv($v.ramp(), 0.6, $v.ramp('v')), 3))",
+            "$v.out($v.contrast($v.hsv($v.ramp(), 3, $v.ramp('v')), 15))",
         ],
         declarations: [
             'contrast(input: VideoSignal, amount?: VideoValue): VideoColor;',
@@ -885,10 +910,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'strength',
                 description:
-                    'How dark each line gets at its darkest, 0 to 1 (default 0.4)',
+                    'How dark each line gets at its darkest, 0 to 5 (default 2)',
             },
         ],
-        examples: ['$v.out($v.scanlines($v.hsv($v.ramp()), 120, 0.5))'],
+        examples: ['$v.out($v.scanlines($v.hsv($v.ramp()), 120, 2.5))'],
         declarations: [
             'scanlines(input: VideoSignal, count?: VideoValue, strength?: VideoValue): VideoColor;',
         ],
@@ -901,15 +926,15 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'strength',
-                description: 'How dark the corners get, 0 to 1 (default 0.6)',
+                description: 'How dark the corners get, 0 to 5 (default 3)',
             },
             {
                 name: 'radius',
                 description:
-                    'Distance from the center, as a fraction of the frame height, where the darkening starts (default 0.3)',
+                    'Distance from the center, with 5 the whole frame height, where the darkening starts (default 1.5)',
             },
         ],
-        examples: ['$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2))'],
+        examples: ['$v.out($v.vignette($v.hsv($v.ramp()), 4, 1))'],
         declarations: [
             'vignette(input: VideoSignal, strength?: VideoValue, radius?: VideoValue): VideoColor;',
         ],
@@ -923,12 +948,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Largest change to a channel, 0 to 1 (default 0.1)',
+                    'Largest change to a channel, 0 to 5 (default 0.5)',
             },
         ],
         examples: [
-            '$v.out($v.grain($v.hsv($v.ramp(), 0.6, 0.6), 0.15))',
-            '$v.hsv($v.ramp()).$.scanlines(180, 0.35).$.vignette(0.7).$.grain(0.08).out()',
+            '$v.out($v.grain($v.hsv($v.ramp(), 3, 3), 0.75))',
+            '$v.hsv($v.ramp()).$.scanlines(180, 1.75).$.vignette(3.5).$.grain(0.4).out()',
         ],
         declarations: [
             'grain(input: VideoSignal, amount?: VideoValue): VideoColor;',
@@ -974,8 +999,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
-            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',
-            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.08)).$.add(b.read({ rotate: 0.01 }).$.mult(0.95))); b.write(a.read({ zoom: 1.03 }).$.mult(0.9)); $v.out(a.read())",
+            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).$.hsv().$.mult(1).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(4.8)).write(trail).out()',
+            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 5, $v.shape($v.ramp(), $v.ramp('v'), 0.4)).$.add(b.read({ rotate: 0.01 }).$.mult(4.75))); b.write(a.read({ zoom: 1.03 }).$.mult(4.5)); $v.out(a.read())",
         ],
         declarations: ['buffer(): VideoBuffer;'],
     },
@@ -985,7 +1010,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Shows a color behind the code, and in the performance window when it is open. A field is shown as a gray picture. Last call wins.',
         params: [],
-        examples: ['$v.out($v.colorize(1, 0, 0))'],
+        examples: ['$v.out($v.colorize(5, 0, 0))'],
         declarations: ['out(input: VideoSignal): void;'],
     },
 ];
@@ -1006,20 +1031,20 @@ export interface VideoChainDoc {
 }
 
 export const VIDEO_CHAIN_INTRO =
-    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 1 for the result: `x.$m.kaleid(0.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way by default. `out`, `preview`, `toCV` and `write` end or tap a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
+    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 5 for the result: `x.$m.kaleid(2.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way (2.5) by default. `range(min, max)` is called directly on a field and maps its 0 to 5 volts onto `min` to `max`. `out`, `preview`, `toCV`, `write` and `range` end, tap or rescale a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
 
 export const VIDEO_CHAIN_EXAMPLES: string[] = [
-    "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3).$.kaleid(6).$.hsv().out()",
-    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(0.8).preview().out()",
-    '$v.osc($v.ramp(), 8).$.hsv().$m.kaleid(0.5, 5).out()',
-    '$v.osc($v.ramp(), 8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out()',
-    '$v.osc($v.ramp(), 8).$.hsv().pipeMix((c) => c.$.invert(), $v.osc($v.time, 0.2)).out()',
+    "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 1.5).$.kaleid(6).$.hsv().out()",
+    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(4).preview().out()",
+    '$v.osc($v.ramp(), 8).$.hsv().$m.kaleid(2.5, 5).out()',
+    '$v.osc($v.ramp(), 8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(1.5)).out()',
+    '$v.osc($v.ramp(), 8).$.hsv().pipeMix((c) => c.$.invert(), $v.osc($v.time, 1)).out()',
 ];
 
 export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'add',
-        description: 'Sum with `b`, clipped to 0..1.',
+        description: 'Sum with `b`, clipped to 0 to 5.',
         field: [
             'add(b: VideoValue): VideoField;',
             'add(b: VideoSignal): VideoColor;',
@@ -1073,8 +1098,18 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'invert',
-        description: 'The complement, 1 minus this.',
+        description: 'The complement, 5 minus this.',
         declarations: ['invert(): {self};'],
+    },
+    {
+        name: 'range',
+        direct: true,
+        description:
+            "Maps this field's 0 to 5 volts onto `min` to `max` volts: `field.range(0, 1)` gives a value from 0 to 1, for an input measured in turns or cycles.",
+        declarations: [
+            'range(min?: VideoValue, max?: VideoValue): VideoField;',
+        ],
+        on: ['field'],
     },
     {
         name: 'posterize',
@@ -1138,7 +1173,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'hueShift',
         description:
-            'Turns every hue of this color by `amount` of a full circle.',
+            'Turns every hue of this color round the hue circle by `amount`, 5 being all the way round.',
         declarations: ['hueShift(amount?: VideoValue): VideoColor;'],
     },
     {
@@ -1200,7 +1235,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'key',
         description:
-            'Shows this where `mask` is 1 and `background` where it is 0.',
+            'Shows this where `mask` is 5 and `background` where it is 0.',
         declarations: [
             'key(background: VideoSignal, mask: VideoValue): VideoColor;',
         ],
@@ -1226,7 +1261,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'scroll',
         description:
-            'Shifts everything this draws right by `x` and up by `y`, as fractions of the frame.',
+            'Shifts everything this draws right by `x` and up by `y`, with 5 the whole frame.',
         declarations: ['scroll(x?: VideoValue, y?: VideoValue): {self};'],
     },
     {

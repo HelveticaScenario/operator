@@ -20,6 +20,7 @@ import {
     mixColor,
     mult,
     multColor,
+    range,
 } from './math';
 import { noise, voronoi } from './noise';
 import { osc } from './osc';
@@ -77,6 +78,7 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     posterize,
     procAmp,
     ramp,
+    range,
     scanlines,
     swizzle,
     repeat: repeat.field,

@@ -1,10 +1,14 @@
 import { VideoOutput } from './VideoOutput';
-import type { VideoCore, VideoSource } from './videoBuilderTypes';
+import {
+    describe,
+    type VideoCore,
+    type VideoSource,
+} from './videoBuilderTypes';
 
 /** The `$v` functions that combine and shape signals. */
 export function mathMethods(core: VideoCore) {
     return {
-        /** Sum, clipped to 0..1. Colors add per channel. */
+        /** Sum, clipped to 0..5. Colors add per channel. */
         add: (a: VideoSource, b: VideoSource): VideoOutput =>
             core.arith('$v.add', 'add', { a, b }),
 
@@ -28,17 +32,35 @@ export function mathMethods(core: VideoCore) {
         invert: (input: VideoSource): VideoOutput =>
             core.arith('$v.invert', 'invert', { input }),
 
+        /** Maps a field's 0 to 5 volts onto `min` to `max` volts. */
+        range: (
+            input: VideoSource,
+            low: VideoSource = 0,
+            high: VideoSource = 5,
+        ): VideoOutput => {
+            if (!(input instanceof VideoOutput) || input.type !== 'field') {
+                throw new Error(
+                    `$v.range: input must be a video field, got ${describe(input)}`,
+                );
+            }
+            return core.addNode('range', 'field', {
+                input: input.value,
+                max: core.asField('$v.range', 'max', high),
+                min: core.asField('$v.range', 'min', low),
+            });
+        },
+
         /** Crossfade from `a` (amount 0) to `b` (amount 1). */
         mix: (
             a: VideoSource,
             b: VideoSource,
-            amount: VideoSource = 0.5,
+            amount: VideoSource = 2.5,
         ): VideoOutput => core.arith('$v.mix', 'mix', { a, b }, { amount }),
 
         /** Threshold: 0 below `threshold`, 1 above, with a ramp `softness` wide. */
         comparator: (
             input: VideoSource,
-            threshold: VideoSource = 0.5,
+            threshold: VideoSource = 2.5,
             softness: VideoSource = 0,
         ): VideoOutput =>
             core.addNode('comparator', 'field', {
@@ -63,7 +85,7 @@ export function mathMethods(core: VideoCore) {
                 mask: core.asField('$v.key', 'mask', mask),
             }),
 
-        /** Quantizes to `levels` values between 0 and 1. */
+        /** Quantizes to `levels` values between 0 and 5. */
         posterize: (input: VideoSource, levels: VideoSource = 4): VideoOutput =>
             core.addNode('posterize', 'field', {
                 input: core.asField('$v.posterize', 'input', input),

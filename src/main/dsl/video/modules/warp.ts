@@ -9,6 +9,7 @@ import type { VideoValueType } from '../../../../shared/video/videoGraph';
  */
 function coordinateModule(
     extraInputs: readonly string[],
+    natural: readonly string[],
     coordinates: (args: Record<string, string>) => string,
     helpers: readonly string[] = [],
 ): { field: VideoModuleDef; color: VideoModuleDef } {
@@ -18,6 +19,7 @@ function coordinateModule(
             ...Object.fromEntries(extraInputs.map((name) => [name, 'field'])),
         },
         warped: ['input'],
+        natural,
         output: type,
         params: {},
         helpers,
@@ -29,6 +31,7 @@ function coordinateModule(
 /** Zooms about the center, turns and shifts everything `input` draws. */
 export const warp = coordinateModule(
     ['zoom', 'rotate', 'shiftX', 'shiftY'],
+    ['zoom', 'rotate'],
     ({ zoom, rotate, shiftX, shiftY }) =>
         `video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY}))`,
     [TRANSFORM_HELPER],
@@ -37,12 +40,14 @@ export const warp = coordinateModule(
 /** Reads `input` at positions pushed by `dx` and `dy`, where 0.5 is no push. */
 export const displace = coordinateModule(
     ['dx', 'dy', 'amount'],
+    [],
     ({ dx, dy, amount }) =>
         `uv + (vec2f(${dx}, ${dy}) - vec2f(0.5)) * ${amount}`,
 );
 
 /** Mirrors `input` around the center into `sides` wedges. */
 export const kaleid = coordinateModule(
+    ['sides'],
     ['sides'],
     ({ sides }) => `video_kaleid(uv, ${sides})`,
     [
@@ -60,6 +65,7 @@ export const kaleid = coordinateModule(
 /** Holds `input` constant across a grid of `x` by `y` cells. */
 export const pixelate = coordinateModule(
     ['x', 'y'],
+    ['x', 'y'],
     ({ x, y }) => `video_pixelate(uv, vec2f(${x}, ${y}))`,
     [
         `fn video_pixelate(uv: vec2f, cells: vec2f) -> vec2f {
@@ -71,6 +77,7 @@ export const pixelate = coordinateModule(
 
 /** Tiles `input` `x` by `y` times across the frame. */
 export const repeat = coordinateModule(
+    ['x', 'y'],
     ['x', 'y'],
     ({ x, y }) => `fract(uv * vec2f(${x}, ${y}))`,
 );

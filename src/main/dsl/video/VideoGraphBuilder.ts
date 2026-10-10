@@ -437,7 +437,7 @@ export class VideoGraphBuilder implements VideoCore {
 
     /**
      * Averages a region of `signal` each frame into an audio control signal
-     * between 0 and 1. A color contributes its brightness.
+     * from 0 to 5 volts. A color contributes its brightness.
      */
     toCV = (
         signal: VideoOutput,

@@ -23,24 +23,24 @@ const whole = { size: 0.5, x: 0.5, y: 0.5 };
 describe('regionAverage', () => {
     it('averages the whole frame by default region', () => {
         const frame = frameOf(10, 10, (x) => (x < 5 ? 0 : 1));
-        expect(regionAverage(frame, whole)).toBeCloseTo(0.5, 2);
+        expect(regionAverage(frame, whole)).toBeCloseTo(2.5, 1);
     });
 
     it('reads a small region around its center', () => {
         const frame = frameOf(100, 100, (x) => x / 99);
         expect(
             regionAverage(frame, { size: 0.02, x: 0.25, y: 0.5 }),
-        ).toBeCloseTo(0.25, 1);
+        ).toBeCloseTo(1.25, 0);
         expect(
             regionAverage(frame, { size: 0.02, x: 0.9, y: 0.5 }),
-        ).toBeCloseTo(0.9, 1);
+        ).toBeCloseTo(4.5, 0);
     });
 
     it('measures y up from the bottom of the frame', () => {
         const frame = frameOf(10, 10, (_x, y) => (y < 5 ? 1 : 0));
         expect(regionAverage(frame, { size: 0.1, x: 0.5, y: 0.9 })).toBeCloseTo(
+            5,
             1,
-            2,
         );
         expect(regionAverage(frame, { size: 0.1, x: 0.5, y: 0.1 })).toBeCloseTo(
             0,
@@ -51,14 +51,14 @@ describe('regionAverage', () => {
     it('weights red, green and blue by perceived brightness', () => {
         const data = new Uint8Array([255, 0, 0, 255]);
         const red = { data, height: 1, index: 0, width: 1 };
-        expect(regionAverage(red, whole)).toBeCloseTo(0.299, 3);
+        expect(regionAverage(red, whole)).toBeCloseTo(1.495, 2);
     });
 
     it('clips a region that hangs off the frame', () => {
         const frame = frameOf(10, 10, () => 0.6);
         expect(regionAverage(frame, { size: 0.3, x: 0, y: 0 })).toBeCloseTo(
-            0.6,
-            2,
+            3,
+            1,
         );
     });
 
@@ -66,6 +66,6 @@ describe('regionAverage', () => {
         const frame = frameOf(10, 10, () => 0.8);
         expect(
             regionAverage(frame, { size: 0.0001, x: 0.5, y: 0.5 }),
-        ).toBeCloseTo(0.8, 2);
+        ).toBeCloseTo(4, 1);
     });
 });

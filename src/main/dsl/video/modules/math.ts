@@ -107,3 +107,13 @@ export const minColor: VideoModuleDef = {
     params: {},
     emit: ({ a, b }) => `min(${a}, ${b})`,
 };
+
+/** Maps 0..5 volts onto `min`..`max` volts: what `.range` does to a field. */
+export const range: VideoModuleDef = {
+    inputs: { input: 'field', min: 'field', max: 'field' },
+    natural: ['min', 'max'],
+    output: 'field',
+    params: {},
+    emit: (args) =>
+        `((${args.min} + ${args.input} * (${args.max} - ${args.min})) * 0.2)`,
+};

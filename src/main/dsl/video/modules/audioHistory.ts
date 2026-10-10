@@ -2,11 +2,13 @@ import type { VideoModuleDef } from './types';
 
 /**
  * The recent audio-rate samples of a signal laid along `position`: 0 is the
- * oldest sample in the window and 1 the newest. The value is in volts, as the
- * audio graph produces it, and is interpolated between samples.
+ * oldest sample in the window and 1 the newest. The texture holds volts as the
+ * audio graph produces them and is interpolated between samples; the field is
+ * those volts as a fraction of 5.
  */
 export const audioHistory: VideoModuleDef = {
     inputs: { position: 'field', samples: 'field' },
+    natural: ['samples'],
     history: true,
     output: 'field',
     params: {},
@@ -21,5 +23,5 @@ export const audioHistory: VideoModuleDef = {
 }`,
     ],
     emit: ({ position, samples }, _params, { history }) =>
-        `history_sample(${history}, ${position}, ${samples})`,
+        `(history_sample(${history}, ${position}, ${samples}) * 0.2)`,
 };

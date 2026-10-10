@@ -39,6 +39,7 @@ export const procAmp: VideoModuleDef = {
 /** Quantizes to `levels` evenly spaced values between 0 and 1 (minimum 2). */
 export const posterize: VideoModuleDef = {
     inputs: { input: 'field', levels: 'field' },
+    natural: ['levels'],
     output: 'field',
     params: {},
     helpers: [

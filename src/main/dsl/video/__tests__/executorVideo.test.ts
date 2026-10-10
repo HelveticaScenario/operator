@@ -60,7 +60,7 @@ describe('$v in the DSL executor', () => {
 
         it('uses the field variant for fields and the color variant for colors', () => {
             const fields = wgslOf(
-                `$v.out($v.colorize($v.mult($v.ramp(), 0.5), 0, 0));`,
+                `$v.out($v.colorize($v.mult($v.ramp(), 2.5), 0, 0));`,
             );
             expect(fields).toContain('let v1: f32 = v0 * 0.5;');
             const colors = wgslOf(`
@@ -72,7 +72,7 @@ describe('$v in the DSL executor', () => {
 
         it('promotes a field operand of a color operation to gray', () => {
             const wgsl = wgslOf(`
-                $v.out($v.add($v.colorize(1, 0, 0), 0.25));
+                $v.out($v.add($v.colorize(5, 0, 0), 1.25));
             `);
             expect(wgsl).toContain('vec3f(0.25, 0.25, 0.25)');
         });
@@ -510,7 +510,7 @@ describe('$v in the DSL executor', () => {
             expect(video!.wgsl).toContain('fn noise_hash(');
             expect(video!.wgsl).toContain('fn noise_value(');
             expect(video!.wgsl).toMatch(
-                /noise_value\(vec3f\(v\d, v\d, u\.time\)\)/,
+                /noise_value\(vec3f\(\(v\d \* 5\.0\), \(v\d \* 5\.0\), u\.time\)\)/,
             );
         });
 
@@ -605,7 +605,7 @@ describe('$v in the DSL executor', () => {
             // The noise and both of its coordinates are functions of the
             // coordinate; the warp calls the noise at the moved one.
             expect(wgsl).toContain(
-                'fn f4(uv: vec2f) -> f32 {\n    return noise_value(vec3f(f1(uv), f3(uv), 0.0));',
+                'fn f4(uv: vec2f) -> f32 {\n    return noise_value(vec3f((f1(uv) * 5.0), (f3(uv) * 5.0), 0.0));',
             );
             expect(wgsl).toContain(
                 'let v5: f32 = f4(video_transform(uv, 1.0, 0.1, vec2f(0.0, 0.0)));',
@@ -636,7 +636,7 @@ describe('$v in the DSL executor', () => {
         it('warps a constant or time input through a constant function', () => {
             const wgsl = wgslOf(`$v.out($v.hsv($v.warp($v.time)));`);
             expect(wgsl).toMatch(
-                /fn k0\(uv: vec2f\) -> f32 \{\n    return u\.time;/,
+                /fn k0\(uv: vec2f\) -> f32 \{\n    return \(u\.time \* 0\.2\);/,
             );
             expect(wgsl).toContain('k0(video_transform(');
         });
@@ -784,7 +784,7 @@ describe('$v in the DSL executor', () => {
             });
 
             it('takes only the mix for a function with no other arguments', () => {
-                const mixed = wgslOf(`$v.hsv($v.ramp()).$m.invert(0.5).out();`);
+                const mixed = wgslOf(`$v.hsv($v.ramp()).$m.invert(2.5).out();`);
                 expect(mixed).toMatch(/mix\(v\d, v\d, clamp\(0\.5/);
             });
 
@@ -844,7 +844,7 @@ describe('$v in the DSL executor', () => {
                 `);
                 const long = wgslOf(`
                     const c = $v.hsv($v.ramp());
-                    $v.out($v.mix(c, $v.invert(c), 0.5));
+                    $v.out($v.mix(c, $v.invert(c), 2.5));
                 `);
                 expect(mixed).toBe(long);
             });
@@ -874,7 +874,7 @@ describe('$v in the DSL executor', () => {
             expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn voronoi_distance(');
             expect(wgsl).toMatch(
-                /voronoi_distance\(vec2f\(v\d, v\d\), u\.time\)/,
+                /voronoi_distance\(vec2f\(\(v\d \* 5\.0\), \(v\d \* 5\.0\)\), u\.time\)/,
             );
         });
 
@@ -890,7 +890,7 @@ describe('$v in the DSL executor', () => {
 
         it('turns hue with the shared hsv helper', () => {
             const wgsl = wgslOf(`
-                $v.hsv($v.ramp()).$.hueShift(0.25).$.contrast(2).out();
+                $v.hsv($v.ramp()).$.hueShift(1.25).$.contrast(10).out();
             `);
             expect(wgsl.match(/fn hsv_to_rgb\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn rgb_to_hsv(');
@@ -1008,7 +1008,7 @@ describe('$v in the DSL executor', () => {
 
         it('vignette darkens by distance from the center', () => {
             const wgsl = wgslOf(
-                `$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2));`,
+                `$v.out($v.vignette($v.hsv($v.ramp()), 4, 1));`,
             );
             expect(wgsl).toContain('fn vignette_falloff(');
             expect(wgsl).toContain('vignette_falloff(uv, 0.2)');
@@ -1290,6 +1290,79 @@ describe('$v in the DSL executor', () => {
             const { video } = exec(`$v.ramp().preview();`);
             expect(video).not.toBeNull();
             expect(video!.hasOutput).toBe(false);
+        });
+    });
+
+    describe('volts', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('reads a constant as a fraction of 5 volts, so 5 is full', () => {
+            expect(wgslOf(`$v.out($v.colorize(5, 2.5, 0));`)).toContain(
+                'clamp(vec3f(1.0, 0.5, 0.0)',
+            );
+        });
+
+        it('hands a natural input its constant as it is', () => {
+            expect(
+                wgslOf(`$v.out($v.hsv($v.osc($v.ramp(), 10, 0.25)));`),
+            ).toMatch(/fract\(v\d \* 10\.0 \+ 0\.25\)/);
+        });
+
+        it('reads an audio signal as a fraction of 5 volts, or as volts for a natural input', () => {
+            const full = wgslOf(`$v.out($v.hsv($sine('1hz').range(0, 5)));`);
+            expect(full).toMatch(/\(u\.slots\[0\]\[0\] \* 0\.2\)/);
+            const natural = wgslOf(
+                `$v.ramp('h', { rotate: $sine('1hz').range(0, 1) }).$.hsv().out();`,
+            );
+            expect(natural).toMatch(
+                /video_transform\(uv, 1\.0, u\.slots\[0\]\[0\]/,
+            );
+        });
+
+        it('reads the clock as volts: seconds for a natural input, a fifth of them otherwise', () => {
+            expect(wgslOf(`$v.out($v.hsv($v.time));`)).toContain(
+                '(u.time * 0.2)',
+            );
+            expect(
+                wgslOf(`$v.out($v.hsv($v.osc($v.ramp(), 4, $v.time)));`),
+            ).toMatch(/\+ u\.time\)/);
+        });
+
+        it('multiplies a field by 5 where a natural input reads it', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.hsv($v.osc($v.ramp(), $v.ramp('v'))));`,
+            );
+            expect(wgsl).toMatch(/fract\(v\d \* \(v\d \* 5\.0\)/);
+        });
+
+        it('maps 0 to 5 volts onto a range with range', () => {
+            const wgsl = wgslOf(`
+                $v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 1).range(0, 1) })));
+            `);
+            expect(wgsl).toMatch(
+                /\(\(0\.0 \+ v\d \* \(1\.0 - 0\.0\)\) \* 0\.2\)/,
+            );
+        });
+
+        it('has range as a method of a field and as $v.range', () => {
+            const method = wgslOf(`$v.out($v.hsv($v.ramp().range(0, 2.5)));`);
+            const call = wgslOf(`$v.out($v.hsv($v.range($v.ramp(), 0, 2.5)));`);
+            expect(method).toBe(call);
+        });
+
+        it('rejects range on a color or a number', () => {
+            expect(() => exec(`$v.hsv(0).range(0, 1);`)).toThrow(
+                /\$v\.range: input must be a video field, got a color/,
+            );
+            expect(() => exec(`$v.range(3, 0, 1);`)).toThrow(
+                /\$v\.range: input must be a video field/,
+            );
+        });
+
+        it('reads audio history as a fraction of 5 volts', () => {
+            expect(
+                wgslOf(`$v.out($v.hsv($v.fromAudio($sine('110hz'))));`),
+            ).toContain('* 0.2)');
         });
     });
 });

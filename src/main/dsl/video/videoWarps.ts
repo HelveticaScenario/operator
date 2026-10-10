@@ -23,8 +23,8 @@ export function warpMethods(core: VideoCore) {
         displace: (
             input: VideoOutput,
             dx: VideoSource,
-            dy: VideoSource = 0.5,
-            amount: VideoSource = 0.1,
+            dy: VideoSource = 2.5,
+            amount: VideoSource = 0.5,
         ): VideoOutput =>
             transform(core, '$v.displace', 'displace', input, {
                 amount,
@@ -39,7 +39,7 @@ export function warpMethods(core: VideoCore) {
         modulate: (
             input: VideoOutput,
             modulator: VideoOutput,
-            amount: VideoSource = 0.1,
+            amount: VideoSource = 0.5,
         ): VideoOutput => {
             if (!(modulator instanceof VideoOutput)) {
                 throw new Error(

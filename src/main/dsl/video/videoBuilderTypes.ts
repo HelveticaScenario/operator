@@ -31,7 +31,7 @@ export interface VideoGraphHost {
     /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
     publishTap(output: ModuleOutput, slot: number): void;
     /**
-     * A `$signal` module with id `id` carrying 0..1, which the renderer
+     * A `$signal` module with id `id` carrying 0..5 volts, which the renderer
      * overwrites with a region average of a video signal.
      */
     cvSignal(id: string): CollectionWithRange;

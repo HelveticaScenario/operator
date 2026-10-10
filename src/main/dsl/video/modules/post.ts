@@ -7,6 +7,7 @@ import type { VideoModuleDef } from './types';
  */
 export const scanlines: VideoModuleDef = {
     inputs: { input: 'color', count: 'field', strength: 'field' },
+    natural: ['count'],
     output: 'color',
     params: {},
     emit: ({ input, count, strength }) =>

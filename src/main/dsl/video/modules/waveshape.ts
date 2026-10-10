@@ -3,6 +3,7 @@ import type { VideoModuleDef } from './types';
 /** Multiplies by `gain`, then keeps the fractional part: a sawtooth of the input. */
 export const wrap: VideoModuleDef = {
     inputs: { input: 'field', gain: 'field' },
+    natural: ['gain'],
     output: 'field',
     params: {},
     emit: ({ input, gain }) => `fract(${input} * ${gain})`,
@@ -14,6 +15,7 @@ export const wrap: VideoModuleDef = {
  */
 export const fold: VideoModuleDef = {
     inputs: { input: 'field', gain: 'field' },
+    natural: ['gain'],
     output: 'field',
     params: {},
     emit: ({ input, gain }) =>

@@ -1778,9 +1778,9 @@ declare const $table: {
 };
 
 /**
- * A video signal that varies across the frame, in the range 0..1. Fields come
- * from \`$v.ramp\`, \`$v.osc\` and \`$v.time\`; \`$v.colorize\` combines three
- * into a {@link VideoColor}.
+ * A video signal that varies across the frame, in volts from 0 to 5 as audio
+ * signals are, with 5 full. Fields come from \`$v.ramp\`, \`$v.osc\` and
+ * \`$v.time\`; \`$v.colorize\` combines three into a {@link VideoColor}.
  */
 interface VideoField {
     readonly __videoField: true;
