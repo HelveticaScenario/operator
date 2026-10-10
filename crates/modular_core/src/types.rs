@@ -49,7 +49,7 @@ use std::result::Result as StdResult;
 use std::{collections::HashMap, sync::Arc};
 
 use crate::dsp::tables::warp;
-use crate::dsp::utils::{PHASE_FULL_SCALE, hz_to_voct, midi_to_voct};
+use crate::dsp::utils::{hz_to_voct, midi_to_voct};
 use crate::patch::Patch;
 use crate::poly::PolySignal;
 
@@ -1810,8 +1810,7 @@ impl PartialEq for Buffer {
 // ============================================================================
 
 /// A function-object param type used by modules (e.g., `$wavetable`) that need a
-/// parameterized phase-warp. Warp parameters are volts: 0 to 5V spans each
-/// warp's range (bend spans -5 to 5V). Each variant holds `PolySignal` fields for dynamic
+/// parameterized phase-warp. Each variant holds `PolySignal` fields for dynamic
 /// parameters; the consuming module resolves signals via `connect()` and calls
 /// `evaluate(x, channel)` per-sample.
 ///
@@ -1858,13 +1857,11 @@ impl Table {
     pub fn evaluate(&self, x: f32, channel: usize) -> f32 {
         match self {
             Table::Identity => x,
-            Table::Mirror { amount } => {
-                warp::mirror(x, amount.get_value(channel) / PHASE_FULL_SCALE)
-            }
-            Table::Bend { amount } => warp::bend(x, amount.get_value(channel) / PHASE_FULL_SCALE),
-            Table::Sync { ratio } => warp::sync(x, ratio.get_value(channel) / PHASE_FULL_SCALE),
-            Table::Fold { amount } => warp::fold(x, amount.get_value(channel) / PHASE_FULL_SCALE),
-            Table::Pwm { width } => warp::pwm(x, width.get_value(channel) / PHASE_FULL_SCALE),
+            Table::Mirror { amount } => warp::mirror(x, amount.get_value(channel)),
+            Table::Bend { amount } => warp::bend(x, amount.get_value(channel)),
+            Table::Sync { ratio } => warp::sync(x, ratio.get_value(channel)),
+            Table::Fold { amount } => warp::fold(x, amount.get_value(channel)),
+            Table::Pwm { width } => warp::pwm(x, width.get_value(channel)),
             Table::Pipe { first, second } => second.evaluate(first.evaluate(x, channel), channel),
         }
     }
@@ -3816,9 +3813,9 @@ mod table_tests {
             let x = i as f32 / 10.0;
             assert!((t.evaluate(x, 0) - x).abs() < 1e-6);
         }
-        // amount=5V at midpoint => 1.0.
+        // amount=1 at midpoint => 1.0.
         let t = Table::Mirror {
-            amount: constant(5.0),
+            amount: constant(1.0),
         };
         assert!((t.evaluate(0.5, 0) - 1.0).abs() < 1e-6);
     }
@@ -3867,7 +3864,7 @@ mod table_tests {
     #[test]
     fn pwm_evaluates_with_constant_signal() {
         let t = Table::Pwm {
-            width: constant(2.5),
+            width: constant(0.5),
         };
         assert!(t.evaluate(0.0, 0).abs() < 1e-6);
         assert!((t.evaluate(1.0, 0) - 1.0).abs() < 1e-6);
@@ -3890,7 +3887,7 @@ mod table_tests {
                 amount: constant(0.5),
             },
             Table::Pwm {
-                width: constant(1.5),
+                width: constant(0.3),
             },
         ];
         for t in &cases {
@@ -3924,10 +3921,10 @@ mod table_tests {
         let patch = Patch::new();
 
         let mut mirror = Table::Mirror {
-            amount: constant(1.25),
+            amount: constant(0.25),
         };
         mirror.connect(&patch);
-        // At x=0.5 the reflection is 1.0; interpolated at amount=1.25V (0.25): 0.5 + 0.5*0.25 = 0.625.
+        // At x=0.5 the reflection is 1.0; interpolated at amount=0.25: 0.5 + 0.5*0.25 = 0.625.
         assert!((mirror.evaluate(0.5, 0) - 0.625).abs() < 1e-4);
 
         let mut bend = Table::Bend {
@@ -3949,7 +3946,7 @@ mod table_tests {
         assert!((fold.evaluate(0.5, 0) - 0.5).abs() < 1e-6);
 
         let mut pwm = Table::Pwm {
-            width: constant(2.5),
+            width: constant(0.5),
         };
         pwm.connect(&patch);
         assert!((pwm.evaluate(0.5, 0) - 0.5).abs() < 1e-6);
@@ -4048,7 +4045,7 @@ mod table_tests {
         // Then bend(0.0) at 1.0 → 1.0 (identity at amount=0).
         let t = Table::Pipe {
             first: Box::new(Table::Mirror {
-                amount: constant(5.0),
+                amount: constant(1.0),
             }),
             second: Box::new(Table::Bend {
                 amount: constant(0.0),
