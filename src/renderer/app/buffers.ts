@@ -20,12 +20,16 @@ export const readUnsavedBuffers = (): EditorBuffer[] => {
         const parsed = JSON.parse(raw) as UnsavedBufferSnapshot[];
         return parsed.map((snapshot): EditorBuffer => {
             if (snapshot.kind === 'file') {
+                const savedContent = snapshot.savedContent ?? null;
                 return {
                     content: snapshot.content,
-                    dirty: true,
+                    dirty:
+                        savedContent === null ||
+                        snapshot.content !== savedContent,
                     filePath: snapshot.filePath,
                     id: snapshot.id,
                     kind: 'file',
+                    savedContent,
                 };
             }
             return {
@@ -56,6 +60,9 @@ export const saveUnsavedBuffers = (buffers: EditorBuffer[]) => {
                         filePath: buffer.filePath,
                         id: buffer.filePath,
                         kind: 'file',
+                        ...(buffer.savedContent !== null && {
+                            savedContent: buffer.savedContent,
+                        }),
                     };
                 }
                 return {
@@ -75,6 +82,51 @@ export const saveUnsavedBuffers = (buffers: EditorBuffer[]) => {
     }
 };
 
+/**
+ * Replace a buffer's content. A file buffer is dirty only while its content
+ * differs from what is on disk; an untitled buffer is dirty once edited.
+ */
+export const withBufferContent = (
+    buffer: EditorBuffer,
+    content: string,
+): EditorBuffer =>
+    buffer.kind === 'file'
+        ? {
+              ...buffer,
+              content,
+              dirty:
+                  buffer.savedContent === null ||
+                  content !== buffer.savedContent,
+          }
+        : { ...buffer, content, dirty: true };
+
+/** Record that `savedContent` is what the buffer's file now holds on disk. */
+export const withSavedContent = (
+    buffer: EditorBuffer & { kind: 'file' },
+    savedContent: string,
+): EditorBuffer => ({
+    ...buffer,
+    dirty: buffer.content !== savedContent,
+    savedContent,
+});
+
+/**
+ * Apply a change to a file buffer's file on disk. A clean buffer takes the new
+ * content; a dirty one keeps its edits, and its next save reports a conflict.
+ */
+export const withDiskChange = (
+    buffer: EditorBuffer & { kind: 'file' },
+    diskContent: string,
+): EditorBuffer => {
+    if (buffer.content === diskContent || !buffer.dirty) {
+        return withSavedContent(
+            { ...buffer, content: diskContent },
+            diskContent,
+        );
+    }
+    return buffer;
+};
+
 export const getBufferId = (buffer: EditorBuffer): string =>
     buffer.kind === 'file' ? buffer.filePath : buffer.id;
 
@@ -92,7 +144,11 @@ export const toAbsoluteWorkspacePath = (
     workspaceRoot: string | null,
     path: string,
 ): string => {
-    if (workspaceRoot && !path.startsWith('/') && !/^[a-zA-Z]:[\\/]/.test(path)) {
+    if (
+        workspaceRoot &&
+        !path.startsWith('/') &&
+        !/^[a-zA-Z]:[\\/]/.test(path)
+    ) {
         return `${workspaceRoot}/${path}`;
     }
     return path;

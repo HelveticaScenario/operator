@@ -238,6 +238,15 @@ export interface FSOperationResult {
     error?: string;
 }
 
+export interface FileChange {
+    filePath: string;
+    content: string;
+}
+
+export type FSWriteResult =
+    | FSOperationResult
+    | { success: false; conflict: true };
+
 export interface WorkspaceFolder {
     path: string;
 }
@@ -373,6 +382,8 @@ export const IPC_CHANNELS = {
     FS_CREATE_FOLDER: 'modular:fs:create-folder',
     FS_SHOW_SAVE_DIALOG: 'modular:fs:show-save-dialog',
     FS_SHOW_INPUT_DIALOG: 'modular:fs:show-input-dialog',
+    FS_WATCH_OPEN_FILES: 'modular:fs:watch-open-files',
+    FS_ON_FILE_CHANGED: 'modular:fs:on-file-changed',
 
     // UI operations
     SHOW_CONTEXT_MENU: 'ui:show-context-menu',
@@ -535,10 +546,17 @@ export interface IPCHandlers {
     [IPC_CHANNELS.FS_GET_WORKSPACE]: () => WorkspaceFolder | null;
     [IPC_CHANNELS.FS_LIST_FILES]: () => FileTreeEntry[];
     [IPC_CHANNELS.FS_READ_FILE]: (filePath: string) => string;
+    /**
+     * With `expectedDiskContent`, the write is refused with a `conflict`
+     * result when the file holds anything other than that or `content`.
+     */
     [IPC_CHANNELS.FS_WRITE_FILE]: (
         filePath: string,
         content: string,
-    ) => FSOperationResult;
+        expectedDiskContent?: string,
+    ) => FSWriteResult;
+    /** Replace the set of files reported through FS_ON_FILE_CHANGED. */
+    [IPC_CHANNELS.FS_WATCH_OPEN_FILES]: (filePaths: string[]) => void;
     [IPC_CHANNELS.FS_RENAME_FILE]: (
         oldPath: string,
         newPath: string,
@@ -594,6 +612,9 @@ export interface IPCHandlers {
 
     // WAV operations
     [IPC_CHANNELS.WAVS_ON_CHANGE]: () => void;
+
+    /** A watched file changed on disk; `content` is as FS_READ_FILE returns. */
+    [IPC_CHANNELS.FS_ON_FILE_CHANGED]: (change: FileChange) => void;
 
     // Update operations (invokable)
     [IPC_CHANNELS.UPDATE_CHECK]: () => void;

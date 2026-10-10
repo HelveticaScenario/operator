@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { v4 } from 'uuid';
 import electronAPI from '../../electronAPI';
 import type { EditorBuffer } from '../../types/editor';
+import type { FSWriteResult } from '../../../shared/ipcTypes';
 import {
     DEFAULT_PATCH,
     formatBufferLabel,
@@ -10,7 +11,13 @@ import {
     readUnsavedBuffers,
     saveUnsavedBuffers,
     toAbsoluteWorkspacePath,
+    withBufferContent,
+    withDiskChange,
+    withSavedContent,
 } from '../buffers';
+
+const writeErrorMessage = (result: FSWriteResult) =>
+    ('error' in result && result.error) || 'Failed to save file';
 
 interface UseEditorBuffersParams {
     workspaceRoot: string | null;
@@ -24,19 +31,23 @@ export function useEditorBuffers({
     refreshFileTree,
     onFileSaved,
 }: UseEditorBuffersParams) {
-    const [buffers, setBuffers] = useState<EditorBuffer[]>(() => {
-        const saved = readUnsavedBuffers();
-        return saved;
-    });
+    const [restoredBuffers] = useState(readUnsavedBuffers);
+    const [buffers, setBuffers] = useState(restoredBuffers);
 
     const [activeBufferId, setActiveBufferId] = useState<string | undefined>(
-        () => {
-            const saved = readUnsavedBuffers();
-            return saved.length > 0 ? getBufferId(saved[0]) : undefined;
-        },
+        () =>
+            restoredBuffers.length > 0
+                ? getBufferId(restoredBuffers[0])
+                : undefined,
     );
 
     const [renamingPath, setRenamingPath] = useState<string | null>(null);
+
+    /** A save refused because the file changed on disk since it was read. */
+    const [saveConflict, setSaveConflict] = useState<{
+        bufferId: string;
+        filePath: string;
+    } | null>(null);
 
     const resolvePath = useCallback(
         (path: string) => toAbsoluteWorkspacePath(workspaceRoot, path),
@@ -50,17 +61,72 @@ export function useEditorBuffers({
         saveUnsavedBuffers(buffers);
     }, [buffers]);
 
+    const watchedPathsKey = JSON.stringify(
+        buffers.flatMap((b) => (b.kind === 'file' ? [b.filePath] : [])).sort(),
+    );
+    useEffect(() => {
+        electronAPI.filesystem
+            .watchOpenFiles(JSON.parse(watchedPathsKey) as string[])
+            .catch((error: unknown) =>
+                console.error('Failed to watch open files:', error),
+            );
+    }, [watchedPathsKey]);
+
+    useEffect(
+        () =>
+            electronAPI.filesystem.onFileChanged(({ filePath, content }) => {
+                setBuffers((prev) =>
+                    prev.map((b) =>
+                        b.kind === 'file' && b.filePath === filePath
+                            ? withDiskChange(b, content)
+                            : b,
+                    ),
+                );
+            }),
+        [],
+    );
+
+    // Compare file buffers restored from storage against their files as they
+    // are now. One whose baseline is unknown adopts the disk content as its
+    // baseline; one with a baseline treats the disk content like an external
+    // change, so edits made against an older file still conflict on save.
+    useEffect(() => {
+        for (const buffer of restoredBuffers) {
+            if (buffer.kind !== 'file') {
+                continue;
+            }
+            const { filePath, savedContent } = buffer;
+            electronAPI.filesystem
+                .readFile(filePath)
+                .then((diskContent) => {
+                    setBuffers((prev) =>
+                        prev.map((b) => {
+                            // A save or reload since the read makes it stale.
+                            if (
+                                b.kind !== 'file' ||
+                                b.filePath !== filePath ||
+                                b.savedContent !== savedContent
+                            ) {
+                                return b;
+                            }
+                            return b.savedContent === null
+                                ? withSavedContent(b, diskContent)
+                                : withDiskChange(b, diskContent);
+                        }),
+                    );
+                })
+                .catch(() => {
+                    // A missing or unreadable file keeps the buffer dirty.
+                });
+        }
+    }, [restoredBuffers]);
+
     const handlePatchChange = useCallback(
         (value: string) => {
             setBuffers((prev) =>
                 prev.map((b) =>
                     getBufferId(b) === activeBufferId
-                        ? {
-                              ...b,
-                              content: value,
-                              dirty: true,
-                              isPreview: false,
-                          }
+                        ? { ...withBufferContent(b, value), isPreview: false }
                         : b,
                 ),
             );
@@ -116,6 +182,7 @@ export function useEditorBuffers({
                     id: v4(),
                     isPreview: options?.preview ?? false,
                     kind: 'file',
+                    savedContent: content,
                 };
                 return [...nextBuffers, newBuffer];
             });
@@ -144,6 +211,7 @@ export function useEditorBuffers({
                 id: v4(),
                 isPreview: false,
                 kind: 'file',
+                savedContent: content,
             };
             setBuffers((prev) => [...prev, newBuffer]);
             setActiveBufferId(absPath);
@@ -187,14 +255,18 @@ export function useEditorBuffers({
     /**
      * Save a buffer to disk. Returns the buffer's id after the save (the
      * absolute file path — saving an untitled buffer changes its id), or
-     * undefined when nothing was saved (buffer missing, dialog cancelled).
+     * undefined when nothing was saved (buffer missing, dialog cancelled, or
+     * a save conflict).
      *
-     * Edits can land while the async write is in flight, so the dirty flag is
-     * only cleared on buffers whose content still equals the snapshot that
-     * reached disk.
+     * A file that changed on disk since the buffer last read or wrote it is
+     * not overwritten: the save is refused and `saveConflict` is set, unless
+     * `overwrite` is passed.
+     *
+     * Edits can land while the async write is in flight, so the buffer is
+     * compared against the snapshot that reached disk, not marked clean.
      */
     const saveFile = useCallback(
-        async (targetId?: string) => {
+        async (targetId?: string, options?: { overwrite?: boolean }) => {
             const idToSave = targetId || activeBufferId;
             const buffer = buffers.find((b) => getBufferId(b) === idToSave);
             if (!buffer) {
@@ -242,14 +314,15 @@ export function useEditorBuffers({
                             return prev
                                 .filter((b) => getBufferId(b) !== idToSave)
                                 .map((b) =>
-                                    b.kind === 'file' &&
-                                    b.filePath === filePath
+                                    b.kind === 'file' && b.filePath === filePath
                                         ? {
-                                              ...b,
-                                              content: source.content,
-                                              dirty:
-                                                  source.content !==
+                                              ...withSavedContent(
+                                                  {
+                                                      ...b,
+                                                      content: source.content,
+                                                  },
                                                   savedContent,
+                                              ),
                                               isPreview: false,
                                           }
                                         : b,
@@ -263,6 +336,7 @@ export function useEditorBuffers({
                                       filePath,
                                       id: b.id,
                                       kind: 'file' as const,
+                                      savedContent,
                                   }
                                 : b,
                         );
@@ -274,37 +348,68 @@ export function useEditorBuffers({
                     onFileSaved?.(filePath);
                     return filePath;
                 } else {
-                    throw new Error(result.error || 'Failed to save file');
+                    throw new Error(writeErrorMessage(result));
                 }
             } else {
                 const result = await electronAPI.filesystem.writeFile(
                     buffer.filePath,
                     savedContent,
+                    options?.overwrite
+                        ? undefined
+                        : (buffer.savedContent ?? undefined),
                 );
 
                 if (result.success) {
                     setBuffers((prev) =>
                         prev.map((b) =>
-                            getBufferId(b) === idToSave &&
-                            b.content === savedContent
-                                ? { ...b, dirty: false }
+                            getBufferId(b) === idToSave && b.kind === 'file'
+                                ? withSavedContent(b, savedContent)
                                 : b,
                         ),
                     );
                     onFileSaved?.(buffer.filePath);
                     return buffer.filePath;
+                } else if ('conflict' in result) {
+                    setSaveConflict({
+                        bufferId: getBufferId(buffer),
+                        filePath: buffer.filePath,
+                    });
+                    return undefined;
                 } else {
-                    throw new Error(result.error || 'Failed to save file');
+                    throw new Error(writeErrorMessage(result));
                 }
             }
         },
-        [
-            activeBufferId,
-            buffers,
-            refreshFileTree,
-            onFileSaved,
-            resolvePath,
-        ],
+        [activeBufferId, buffers, refreshFileTree, onFileSaved, resolvePath],
+    );
+
+    const dismissSaveConflict = useCallback(() => setSaveConflict(null), []);
+
+    /** Resolve a save conflict by writing the buffer over the file on disk. */
+    const overwriteOnConflict = useCallback(
+        async (bufferId: string) => {
+            setSaveConflict(null);
+            await saveFile(bufferId, { overwrite: true });
+        },
+        [saveFile],
+    );
+
+    /** Resolve a save conflict by replacing the buffer with the disk content. */
+    const revertToDiskContent = useCallback(
+        (bufferId: string, diskContent: string) => {
+            setSaveConflict(null);
+            setBuffers((prev) =>
+                prev.map((b) =>
+                    getBufferId(b) === bufferId && b.kind === 'file'
+                        ? withSavedContent(
+                              { ...b, content: diskContent },
+                              diskContent,
+                          )
+                        : b,
+                ),
+            );
+        },
+        [],
     );
 
     const renameFile = useCallback(
@@ -575,15 +680,19 @@ export function useEditorBuffers({
         closeBuffer,
         createUntitledFile,
         deleteFile,
+        dismissSaveConflict,
         formatFileLabel,
         handlePatchChange,
         handleRenameCommit,
         keepBuffer,
         openAbsoluteFile,
         openFile,
+        overwriteOnConflict,
         patchCode,
         renameFile,
         renamingPath,
+        revertToDiskContent,
+        saveConflict,
         saveFile,
         setActiveBufferId,
         setBuffers,

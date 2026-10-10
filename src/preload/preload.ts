@@ -17,7 +17,7 @@ import {
     SyphonToggleResult,
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
-import type { QueuedTrigger } from '../shared/ipcTypes';
+import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
 
 /**
  * Type-safe wrapper for IPC invoke calls
@@ -191,6 +191,10 @@ export interface ElectronAPI {
         showInputDialog: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.FS_SHOW_INPUT_DIALOG]
         >;
+        watchOpenFiles: Promisify<
+            IPCHandlers[typeof IPC_CHANNELS.FS_WATCH_OPEN_FILES]
+        >;
+        onFileChanged: (callback: (change: FileChange) => void) => () => void;
     };
     // Menu events
     onMenuNewFile: (callback: () => void) => () => void;
@@ -460,6 +464,10 @@ const electronAPI: ElectronAPI = {
             invokeIPC('FS_SHOW_INPUT_DIALOG', ...args),
 
         showSaveDialog: (...args) => invokeIPC('FS_SHOW_SAVE_DIALOG', ...args),
+
+        watchOpenFiles: (...args) => invokeIPC('FS_WATCH_OPEN_FILES', ...args),
+
+        onFileChanged: menuEventHandler(IPC_CHANNELS.FS_ON_FILE_CHANGED),
 
         writeFile: (...args) => invokeIPC('FS_WRITE_FILE', ...args),
     },
