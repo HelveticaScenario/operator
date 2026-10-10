@@ -985,6 +985,7 @@ export function executePatchScript(
             repeat: videoBuilder.repeat,
             scanlines: videoBuilder.scanlines,
             shape: videoBuilder.shape,
+            swiz: videoBuilder.swiz,
             time: videoBuilder.time,
             toCV: videoBuilder.toCV,
             video: videoBuilder.video,

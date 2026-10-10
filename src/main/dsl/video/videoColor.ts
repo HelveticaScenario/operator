@@ -1,9 +1,5 @@
 import { VideoOutput } from './VideoOutput';
-import {
-    describe,
-    type VideoSource,
-    type VideoCore,
-} from './videoBuilderTypes';
+import { type VideoSource, type VideoCore } from './videoBuilderTypes';
 
 /** The `$v` functions that make or adjust colors. */
 export function colorMethods(core: VideoCore) {
@@ -37,14 +33,9 @@ export function colorMethods(core: VideoCore) {
             input: VideoOutput,
             amount: VideoSource = 0.5,
         ): VideoOutput => {
-            if (!(input instanceof VideoOutput) || input.type !== 'color') {
-                throw new Error(
-                    `$v.hueShift: input must be a video color, got ${describe(input)}`,
-                );
-            }
             return core.addNode('hueShift', 'color', {
                 amount: core.asField('$v.hueShift', 'amount', amount),
-                input: input.value,
+                input: core.asColorOrGray('$v.hueShift', 'input', input),
             });
         },
 
@@ -53,14 +44,9 @@ export function colorMethods(core: VideoCore) {
             input: VideoOutput,
             amount: VideoSource = 1.6,
         ): VideoOutput => {
-            if (!(input instanceof VideoOutput) || input.type !== 'color') {
-                throw new Error(
-                    `$v.contrast: input must be a video color, got ${describe(input)}`,
-                );
-            }
             return core.addNode('contrast', 'color', {
                 amount: core.asField('$v.contrast', 'amount', amount),
-                input: input.value,
+                input: core.asColorOrGray('$v.contrast', 'input', input),
             });
         },
 
@@ -90,7 +76,7 @@ export function colorMethods(core: VideoCore) {
         ): VideoOutput =>
             core.addNode('scanlines', 'color', {
                 count: core.asField('$v.scanlines', 'count', count),
-                input: core.asColor('$v.scanlines', 'input', input),
+                input: core.asColorOrGray('$v.scanlines', 'input', input),
                 strength: core.asField('$v.scanlines', 'strength', strength),
             }),
 
@@ -101,7 +87,7 @@ export function colorMethods(core: VideoCore) {
             radius: VideoSource = 0.3,
         ): VideoOutput =>
             core.addNode('vignette', 'color', {
-                input: core.asColor('$v.vignette', 'input', input),
+                input: core.asColorOrGray('$v.vignette', 'input', input),
                 radius: core.asField('$v.vignette', 'radius', radius),
                 strength: core.asField('$v.vignette', 'strength', strength),
             }),
@@ -110,7 +96,7 @@ export function colorMethods(core: VideoCore) {
         grain: (input: VideoOutput, amount: VideoSource = 0.1): VideoOutput =>
             core.addNode('grain', 'color', {
                 amount: core.asField('$v.grain', 'amount', amount),
-                input: core.asColor('$v.grain', 'input', input),
+                input: core.asColorOrGray('$v.grain', 'input', input),
             }),
     };
 }

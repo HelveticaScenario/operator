@@ -115,7 +115,6 @@ export const isColor = (value: unknown): boolean =>
 export interface VideoCore {
     /** An input that must be a field: a number, a video field, or an audio signal. */
     asField(fn: string, name: string, v: unknown): VideoValue;
-    asColor(fn: string, name: string, v: unknown): VideoValue;
     /** A color operand; a field or number becomes the gray of that level. */
     asColorOrGray(fn: string, name: string, v: unknown): VideoValue;
     addNode(

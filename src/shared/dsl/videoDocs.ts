@@ -634,7 +634,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 0.2), 1, $v.shape($v.add($v.ramp(), -0.2), $v.ramp('v'), 0.05)), $v.mult(prev, 0.96)), { rotate: 0.01 }))",
         ],
         declarations: [
-            "feedback(\n    update: (prev: VideoColor) => VideoColor,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoColor;",
+            "feedback(\n    update: (prev: VideoColor) => VideoSignal,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoColor;",
         ],
     },
     {
@@ -843,7 +843,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.out($v.hueShift($v.hsv($v.ramp()), $v.osc($v.time, 0.1)))',
         ],
         declarations: [
-            'hueShift(input: VideoColor, amount?: VideoValue): VideoColor;',
+            'hueShift(input: VideoSignal, amount?: VideoValue): VideoColor;',
         ],
     },
     {
@@ -858,7 +858,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.contrast($v.hsv($v.ramp(), 0.6, $v.ramp('v')), 3))",
         ],
         declarations: [
-            'contrast(input: VideoColor, amount?: VideoValue): VideoColor;',
+            'contrast(input: VideoSignal, amount?: VideoValue): VideoColor;',
         ],
     },
     {
@@ -879,7 +879,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: ['$v.out($v.scanlines($v.hsv($v.ramp()), 120, 0.5))'],
         declarations: [
-            'scanlines(input: VideoColor, count?: VideoValue, strength?: VideoValue): VideoColor;',
+            'scanlines(input: VideoSignal, count?: VideoValue, strength?: VideoValue): VideoColor;',
         ],
     },
     {
@@ -900,7 +900,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: ['$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2))'],
         declarations: [
-            'vignette(input: VideoColor, strength?: VideoValue, radius?: VideoValue): VideoColor;',
+            'vignette(input: VideoSignal, strength?: VideoValue, radius?: VideoValue): VideoColor;',
         ],
     },
     {
@@ -920,20 +920,40 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.hsv($v.ramp()).$.scanlines(180, 0.35).$.vignette(0.7).$.grain(0.08).out()',
         ],
         declarations: [
-            'grain(input: VideoColor, amount?: VideoValue): VideoColor;',
+            'grain(input: VideoSignal, amount?: VideoValue): VideoColor;',
         ],
     },
     {
         name: 'channel',
         group: 'Color',
         description:
-            "One channel of a color as a field: `'r'`, `'g'`, `'b'`, or `'luma'` for brightness (the default).",
+            "One channel of a color as a field: `'r'`, `'g'`, `'b'`, or `'luma'` for brightness (the default). A field is its own channel. A color's channels are also its `.r`, `.g` and `.b` properties.",
         params: [{ name: 'which', description: 'Which channel to take' }],
         examples: [
             "$v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'r'), 0, 0))",
         ],
         declarations: [
-            "channel(input: VideoColor, which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
+            "channel(input: VideoSignal, which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
+        ],
+    },
+    {
+        name: 'swiz',
+        group: 'Color',
+        description:
+            "Reorders the channels of a color. Each letter of `pattern` names the channel of `input` that fills red, green and blue in turn: `'gbr'` makes red from green, green from blue and blue from red, and `'rrr'` is the red channel as gray. A field is gray, so every pattern gives it back as a gray color.",
+        params: [
+            {
+                name: 'pattern',
+                description:
+                    "Three of `r`, `g` and `b`, such as `'rrr'` or `'gbr'`",
+            },
+        ],
+        examples: [
+            "$v.out($v.swiz($v.hsv($v.ramp()), 'gbr'))",
+            "$v.hsv($v.ramp()).$.swiz('bgr').out()",
+        ],
+        declarations: [
+            'swiz(input: VideoSignal, pattern: string): VideoColor;',
         ],
     },
     {
@@ -951,10 +971,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'out',
         group: 'Output',
-        description: 'Shows a color in the performance window. Last call wins.',
+        description:
+            'Shows a color in the performance window. A field is shown as a gray picture. Last call wins.',
         params: [],
         examples: ['$v.out($v.colorize(1, 0, 0))'],
-        declarations: ['out(input: VideoColor): void;'],
+        declarations: ['out(input: VideoSignal): void;'],
     },
 ];
 
@@ -1054,9 +1075,8 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'write',
         direct: true,
         description:
-            'Stores this color in a buffer for the next frame to read, and returns it.',
+            'Stores this in a buffer for the next frame to read, and returns it as a color.',
         declarations: ['write(buffer: VideoBuffer): VideoColor;'],
-        on: ['color'],
     },
     {
         name: 'wrap',
@@ -1109,13 +1129,11 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Turns every hue of this color by `amount` of a full circle.',
         declarations: ['hueShift(amount?: VideoValue): VideoColor;'],
-        on: ['color'],
     },
     {
         name: 'contrast',
         description: "Scales this color's distance from mid-gray by `amount`.",
         declarations: ['contrast(amount?: VideoValue): VideoColor;'],
-        on: ['color'],
     },
     {
         name: 'blur',
@@ -1141,7 +1159,6 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         declarations: [
             'scanlines(count?: VideoValue, strength?: VideoValue): VideoColor;',
         ],
-        on: ['color'],
     },
     {
         name: 'vignette',
@@ -1149,21 +1166,25 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         declarations: [
             'vignette(strength?: VideoValue, radius?: VideoValue): VideoColor;',
         ],
-        on: ['color'],
     },
     {
         name: 'grain',
         description: 'Adds film grain to this color, redrawn every frame.',
         declarations: ['grain(amount?: VideoValue): VideoColor;'],
-        on: ['color'],
     },
     {
         name: 'channel',
-        description: 'One channel of this color as a field.',
+        description:
+            'One channel of this as a field; a field is its own channel.',
         declarations: [
             "channel(which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
         ],
-        on: ['color'],
+    },
+    {
+        name: 'swiz',
+        description:
+            "Reorders the channels of this color: each letter of `pattern` names the channel that fills red, green and blue in turn, so `'gbr'` shifts them round and `'rrr'` is the red channel as gray. A field is gray, so it comes back as a gray color.",
+        declarations: ['swiz(pattern: string): VideoColor;'],
     },
     {
         name: 'key',
@@ -1245,8 +1266,8 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'out',
         direct: true,
-        description: 'Shows this color in the performance window.',
+        description:
+            'Shows this in the performance window; a field is shown as a gray picture.',
         declarations: ['out(): void;'],
-        on: ['color'],
     },
 ];

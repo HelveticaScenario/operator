@@ -28,9 +28,18 @@ describe('$v in the DSL executor', () => {
         expect(video!.wgsl).not.toContain('uv.y');
     });
 
-    it('rejects a field passed where a color is required', () => {
-        expect(() => exec(`$v.out($v.ramp());`)).toThrow(
-            /\$v\.out: input must be a video color/,
+    it('shows a field as the gray color of its level', () => {
+        const field = exec(`$v.out($v.ramp());`).video!.wgsl;
+        const gray = exec(`
+            const r = $v.ramp();
+            $v.out($v.colorize(r, r, r));
+        `).video!.wgsl;
+        expect(field).toBe(gray);
+    });
+
+    it('rejects an output that is not a video signal', () => {
+        expect(() => exec(`$v.out('red');`)).toThrow(
+            /\$v\.out: input must be a number or a video field/,
         );
     });
 
@@ -188,9 +197,14 @@ describe('$v in the DSL executor', () => {
             expect(video!.feedbackBufferCount).toBe(1);
         });
 
-        it('rejects an update that returns a field', () => {
-            expect(() => exec(`$v.feedback((prev) => $v.ramp());`)).toThrow(
-                /\$v\.feedback: update must return a video color/,
+        it('accepts an update that returns a field, as gray', () => {
+            const video = exec(`$v.feedback((prev) => $v.ramp()).out();`).video;
+            expect(video!.feedbackBufferCount).toBe(1);
+        });
+
+        it('rejects an update that returns something else', () => {
+            expect(() => exec(`$v.feedback((prev) => 'red');`)).toThrow(
+                /\$v\.feedback: update must return a video field or color/,
             );
         });
 
@@ -668,8 +682,8 @@ describe('$v in the DSL executor', () => {
             expect(() => exec(`$v.warp(0.5);`)).toThrow(
                 /\$v\.warp: input must be a video field or color/,
             );
-            expect(() => exec(`$v.channel($v.ramp());`)).toThrow(
-                /\$v\.channel: input must be a video color/,
+            expect(() => exec(`$v.channel(0.5);`)).toThrow(
+                /\$v\.channel: input must be a video field or color/,
             );
             expect(() =>
                 exec(
@@ -752,8 +766,8 @@ describe('$v in the DSL executor', () => {
             expect(() => exec(`$v.ramp().$.kaleid('six');`)).toThrow(
                 /\$v\.kaleid: sides must be a number or a video field/,
             );
-            expect(() => exec(`$v.ramp().out();`)).toThrow(
-                /\$v\.out: input must be a video color/,
+            expect(() => exec(`$v.ramp().$.hueShift('slow');`)).toThrow(
+                /\$v\.hueShift: amount must be a number or a video field/,
             );
         });
 
@@ -884,12 +898,19 @@ describe('$v in the DSL executor', () => {
             expect(wgsl).toMatch(/\* 2\.0 \+ vec3f\(0\.5\)/);
         });
 
-        it('rejects a field where a color is required', () => {
-            expect(() => exec(`$v.hueShift($v.ramp());`)).toThrow(
-                /\$v\.hueShift: input must be a video color/,
+        it('treats a field or number as a gray color', () => {
+            const gray = `
+                const r = $v.ramp();
+                const g = $v.colorize(r, r, r);
+            `;
+            expect(wgslOf(`$v.out($v.hueShift($v.ramp(), 0.3));`)).toBe(
+                wgslOf(`${gray} $v.out($v.hueShift(g, 0.3));`),
             );
-            expect(() => exec(`$v.contrast(0.5);`)).toThrow(
-                /\$v\.contrast: input must be a video color/,
+            expect(wgslOf(`$v.out($v.contrast($v.ramp(), 2));`)).toBe(
+                wgslOf(`${gray} $v.out($v.contrast(g, 2));`),
+            );
+            expect(() => exec(`$v.contrast('x');`)).toThrow(
+                /\$v\.contrast: input must be a number or a video field/,
             );
         });
     });
@@ -1009,16 +1030,16 @@ describe('$v in the DSL executor', () => {
             expect(wgsl).toContain('grain_value(');
         });
 
-        it('rejects a field where a color is required', () => {
-            expect(() => exec(`$v.scanlines($v.ramp());`)).toThrow(
-                /\$v\.scanlines: input must be a video color/,
-            );
-            expect(() => exec(`$v.vignette(0.5);`)).toThrow(
-                /\$v\.vignette: input must be a video color/,
-            );
-            expect(() => exec(`$v.grain($v.ramp());`)).toThrow(
-                /\$v\.grain: input must be a video color/,
-            );
+        it('treats a field as a gray color', () => {
+            const gray = `
+                const r = $v.ramp();
+                const g = $v.colorize(r, r, r);
+            `;
+            for (const fn of ['scanlines', 'vignette', 'grain']) {
+                expect(wgslOf(`$v.out($v.${fn}($v.ramp()));`)).toBe(
+                    wgslOf(`${gray} $v.out($v.${fn}(g));`),
+                );
+            }
         });
     });
 
@@ -1144,6 +1165,50 @@ describe('$v in the DSL executor', () => {
             expect(() => exec(`$v.bloom(0.5);`)).toThrow(
                 /\$v\.bloom: input must be a video field or color/,
             );
+        });
+    });
+
+    describe('channels and swizzles', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('exposes the channels of a color as r, g and b', () => {
+            const props = wgslOf(`
+                const c = $v.hsv($v.ramp());
+                $v.out($v.colorize(c.b, c.r, c.g));
+            `);
+            const calls = wgslOf(`
+                const c = $v.hsv($v.ramp());
+                $v.out($v.colorize($v.channel(c, 'b'), $v.channel(c, 'r'), $v.channel(c, 'g')));
+            `);
+            expect(props).toBe(calls);
+        });
+
+        it('gives a field back as each of its own channels', () => {
+            expect(wgslOf(`const f = $v.ramp(); $v.out($v.hsv(f.g));`)).toBe(
+                wgslOf(`const f = $v.ramp(); $v.out($v.hsv(f));`),
+            );
+        });
+
+        it('remaps the channels of a color', () => {
+            const wgsl = wgslOf(`$v.hsv($v.ramp()).$.swiz('gbr').out();`);
+            expect(wgsl).toMatch(/\.gbr;/);
+            expect(
+                wgslOf(`$v.out($v.swiz($v.hsv($v.ramp()), 'rrr'));`),
+            ).toMatch(/\.rrr;/);
+        });
+
+        it('swizzles a field as a gray color', () => {
+            expect(wgslOf(`$v.out($v.swiz($v.ramp(), 'bgr'));`)).toMatch(
+                /\.bgr;/,
+            );
+        });
+
+        it('rejects a pattern that is not three channels', () => {
+            for (const pattern of ["'rg'", "'rgba'", "'rgx'", '3']) {
+                expect(() => exec(`$v.swiz($v.hsv(0), ${pattern});`)).toThrow(
+                    /\$v\.swiz: pattern must be three of r, g and b/,
+                );
+            }
         });
     });
 });

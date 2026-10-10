@@ -34,6 +34,21 @@ export class VideoOutput {
         readonly ops: object,
     ) {}
 
+    /** The red channel as a field; a field is gray, so each channel is itself. */
+    get r(): unknown {
+        return (this.ops as VideoOps).channel(this, 'r');
+    }
+
+    /** The green channel as a field. */
+    get g(): unknown {
+        return (this.ops as VideoOps).channel(this, 'g');
+    }
+
+    /** The blue channel as a field. */
+    get b(): unknown {
+        return (this.ops as VideoOps).channel(this, 'b');
+    }
+
     /** The `$v` functions that take a signal first, applied to this signal. */
     get $(): ChainProxy {
         return this.chain(false);
@@ -116,6 +131,7 @@ const PROCESSING: Record<string, ChainCall> = {
     rotate: (o, s, turns) => o.warp(s, { rotate: turns }),
     scale: (o, s, zoom) => o.warp(s, { zoom }),
     scanlines: (o, s, count, strength) => o.scanlines(s, count, strength),
+    swiz: (o, s, pattern) => o.swiz(s, pattern),
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),
     tint: (o, s, hue, saturation) => o.hsv(hue ?? 0, saturation ?? 1, s),
     vignette: (o, s, strength, radius) => o.vignette(s, strength, radius),

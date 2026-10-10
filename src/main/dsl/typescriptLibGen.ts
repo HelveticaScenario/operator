@@ -1784,12 +1784,26 @@ declare const $table: {
  */
 interface VideoField {
     readonly __videoField: true;
+    /** A field is gray, so each of its channels is the field itself. */
+    readonly r: VideoField;
+    readonly g: VideoField;
+    readonly b: VideoField;
 ${generateVideoChainMembers('field')}
 }
 
-/** An RGB video signal built by \`$v.colorize\`; display it with \`$v.out\`. */
+/**
+ * An RGB video signal from \`$v.colorize\`, \`$v.hsv\`, \`$v.image\` and others;
+ * display it with \`$v.out\`. Wherever a color is wanted, a {@link VideoField}
+ * works too and is treated as a black and white color.
+ */
 interface VideoColor {
     readonly __videoColor: true;
+    /** The red channel as a field. */
+    readonly r: VideoField;
+    /** The green channel as a field. */
+    readonly g: VideoField;
+    /** The blue channel as a field. */
+    readonly b: VideoField;
 ${generateVideoChainMembers('color')}
 }
 
@@ -1819,7 +1833,7 @@ interface VideoBuffer {
         edge?: 'clamp' | 'repeat' | 'mirror';
     }): VideoColor;
     /** Stores a color for the next frame to read, and returns it. */
-    write(color: VideoColor): VideoColor;
+    write(color: VideoSignal): VideoColor;
 }
 
 /**

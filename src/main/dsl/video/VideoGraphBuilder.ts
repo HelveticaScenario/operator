@@ -158,22 +158,20 @@ export class VideoGraphBuilder implements VideoCore {
         );
     }
 
-    asColor(fn: string, name: string, v: unknown): VideoValue {
-        if (v instanceof VideoOutput && v.type === 'color') return v.value;
-        throw new Error(
-            `${fn}: ${name} must be a video color, got ${describe(v)}`,
-        );
-    }
-
     /** A color operand; a field or number becomes the gray of that level. */
     asColorOrGray(fn: string, name: string, v: unknown): VideoValue {
-        if (isColor(v)) return this.asColor(fn, name, v);
+        return this.toColor(fn, name, v).value;
+    }
+
+    /** `v` as a color signal; a field or number becomes the gray of that level. */
+    toColor(fn: string, name: string, v: unknown): VideoOutput {
+        if (v instanceof VideoOutput && v.type === 'color') return v;
         const level = this.asField(fn, name, v);
         return this.addNode('colorize', 'color', {
             r: level,
             g: level,
             b: level,
-        }).value;
+        });
     }
 
     addNode(
@@ -280,21 +278,42 @@ export class VideoGraphBuilder implements VideoCore {
         return this.host.mediaExists?.(path) ?? true;
     }
 
-    /** One channel of a color as a field. */
+    /** One channel of a color as a field; every channel of a field is the field itself. */
     channel = (
         input: VideoOutput,
         which: 'r' | 'g' | 'b' | 'luma' = 'luma',
     ): VideoOutput => {
-        if (!(input instanceof VideoOutput) || input.type !== 'color') {
+        if (!(input instanceof VideoOutput)) {
             throw new Error(
-                `$v.channel: input must be a video color, got ${describe(input)}`,
+                `$v.channel: input must be a video field or color, got ${describe(input)}`,
             );
         }
+        if (input.type === 'field') return input;
         return this.addNode(
             'channel',
             'field',
             { input: input.value },
             { channel: which },
+        );
+    };
+
+    /**
+     * Reorders the channels of a color: `pattern` names, for red, green and
+     * blue in turn, the channel of `input` that supplies it, so `'gbr'` makes
+     * red from green, green from blue and blue from red. A field is gray, so
+     * every pattern gives it back as a color.
+     */
+    swiz = (input: VideoOutput, pattern: string): VideoOutput => {
+        if (typeof pattern !== 'string' || !/^[rgb]{3}$/.test(pattern)) {
+            throw new Error(
+                `$v.swiz: pattern must be three of r, g and b such as 'rrr' or 'gbr', got ${describe(pattern)}`,
+            );
+        }
+        return this.addNode(
+            'swizzle',
+            'color',
+            { input: this.toColor('$v.swiz', 'input', input).value },
+            { pattern },
         );
     };
 
@@ -314,9 +333,9 @@ export class VideoGraphBuilder implements VideoCore {
         }
         const index = this.allocateBuffer('$v.feedback');
         const next = update(this.readBuffer(index, config, '$v.feedback'));
-        if (!(next instanceof VideoOutput) || next.type !== 'color') {
+        if (!(next instanceof VideoOutput)) {
             throw new Error(
-                `$v.feedback: update must return a video color, got ${describe(next)}`,
+                `$v.feedback: update must return a video field or color, got ${describe(next)}`,
             );
         }
         return this.writeBuffer(index, next, '$v.feedback');
@@ -363,11 +382,12 @@ export class VideoGraphBuilder implements VideoCore {
         input: VideoOutput,
         fn = '$v.buffer',
     ): VideoOutput => {
-        if (!(input instanceof VideoOutput) || input.type !== 'color') {
+        if (!(input instanceof VideoOutput)) {
             throw new Error(
-                `${fn}: write takes a video color, got ${describe(input)}`,
+                `${fn}: write takes a video field or color, got ${describe(input)}`,
             );
         }
+        const color = this.toColor(fn, 'input', input);
         if (this.writtenBuffers.has(index)) {
             throw new Error(`${fn}: a buffer can be written only once`);
         }
@@ -375,11 +395,11 @@ export class VideoGraphBuilder implements VideoCore {
         this.addNode(
             'feedbackWrite',
             'color',
-            { input: input.value },
+            { input: color.value },
             undefined,
             index,
         );
-        return input;
+        return color;
     };
 
     /**
@@ -458,12 +478,9 @@ export class VideoGraphBuilder implements VideoCore {
 
     /** Shows `input` in the performance window. The last call wins. */
     out = (input: VideoOutput): void => {
-        if (!(input instanceof VideoOutput) || input.type !== 'color') {
-            throw new Error(
-                `$v.out: input must be a video color, got ${describe(input)}`,
-            );
-        }
-        this.addNode('out', 'color', { input: input.value });
+        this.addNode('out', 'color', {
+            input: this.asColorOrGray('$v.out', 'input', input),
+        });
         this.outputId = this.nodes[this.nodes.length - 1].id;
     };
 

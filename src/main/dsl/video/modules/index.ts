@@ -28,6 +28,7 @@ import { out } from './out';
 import { ramp } from './ramp';
 import { polygon, shape } from './shape';
 import { source } from './source';
+import { swizzle } from './swizzle';
 import type { VideoModuleDef } from './types';
 import { channel, displace, kaleid, pixelate, repeat, warp } from './warp';
 import { fold, wrap } from './waveshape';
@@ -77,6 +78,7 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     procAmp,
     ramp,
     scanlines,
+    swizzle,
     repeat: repeat.field,
     repeatColor: repeat.color,
     shape,
