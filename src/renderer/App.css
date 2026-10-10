@@ -58,6 +58,64 @@
     position: relative;
 }
 
+/* The patch's $v.out, drawn behind the code. */
+.video-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+}
+
+.video-backdrop-error {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    margin: 0;
+    z-index: 0;
+    pointer-events: none;
+    color: #ff6b6b;
+    white-space: pre-wrap;
+}
+
+/* While a picture shows behind the code, each line of code gets a backing that
+ * ends where its text ends. The shadow extends it to the right without moving
+ * the text, which Monaco's cursor and selection depend on. */
+.editor-panel.has-video-backdrop {
+    --code-backing: color-mix(
+        in srgb,
+        var(--bg-primary) calc(var(--code-backdrop-opacity, 0.6) * 100%),
+        transparent
+    );
+}
+
+.editor-panel.has-video-backdrop .monaco-editor .view-line > span {
+    background: var(--code-backing);
+    box-shadow: 8px 0 0 0 var(--code-backing);
+}
+
+/* Only the digits are backed, from the top of the line to the bottom, not the
+ * empty space to their left, and the backing carries on to the code. */
+.editor-panel.has-video-backdrop .monaco-editor .line-number-text {
+    display: block;
+    width: max-content;
+    height: 100%;
+    margin-left: auto;
+    padding-left: 6px;
+    background: var(--code-backing);
+}
+
+.editor-panel.has-video-backdrop .monaco-editor .line-numbers::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 100%;
+    width: 15px;
+    background: var(--code-backing);
+}
+
 /* Lissajous background canvas — sits behind Monaco, never receives events. */
 .scope-xy-background {
     position: absolute;

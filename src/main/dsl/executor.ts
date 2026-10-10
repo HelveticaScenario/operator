@@ -39,9 +39,17 @@ import {
 } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
+import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p, setActiveCycleFactory, type CycleFactory } from './miniNotation';
 import { isPatternValue } from './patternKinds';
+import { VideoGraphBuilder } from './video/VideoGraphBuilder';
+import type {
+    CompiledVideoShader,
+    VideoPreviewSite,
+} from '../../shared/video/videoGraph';
+import { compileVideoGraph } from './video/wgslCompiler';
+import { VIDEO_DOCS } from '../../shared/dsl/videoDocs';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -66,12 +74,68 @@ export interface DSLExecutionResult {
     buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
+    /** Shader for the video renderer; null when the patch has no `$v.out` or `$v.preview` */
+    video: CompiledVideoShader | null;
+    /** One entry per `$v.preview` call, in the order the shader draws them */
+    videoPreviews: VideoPreviewSite[];
 }
 
 export interface WavsFolderNode {
     [name: string]: WavsFolderNode | 'file';
 }
 
+/** What the engine reports about a decoded WAV or media audio track. */
+interface LoadedWav {
+    channels: number;
+    frameCount: number;
+    path: string;
+    sampleRate: number;
+    duration: number;
+    bitDepth: number;
+    pitch?: number | null;
+    playback?: string | null;
+    bpm?: number | null;
+    beats?: number | null;
+    timeSignature?: { num: number; den: number } | null;
+    barCount?: number | null;
+    loops: Array<{ loopType: string; start: number; end: number }>;
+    cuePoints: Array<{ position: number; label: string }>;
+    mtime: number;
+}
+
+/** The `wav` parameter value that refers to decoded audio held by the engine. */
+function wavRef(path: string, info: LoadedWav) {
+    return {
+        type: 'wav_ref' as const,
+        path,
+        channels: info.channels,
+        sampleRate: info.sampleRate,
+        frameCount: info.frameCount,
+        duration: info.duration,
+        bitDepth: info.bitDepth,
+        mtime: info.mtime,
+        ...(info.pitch != null && { pitch: info.pitch }),
+        ...(info.playback != null && { playback: info.playback }),
+        ...(info.bpm != null && { bpm: info.bpm }),
+        ...(info.beats != null && { beats: info.beats }),
+        ...(info.timeSignature != null && {
+            timeSignature: {
+                num: info.timeSignature.num,
+                den: info.timeSignature.den,
+            },
+        }),
+        ...(info.barCount != null && { barCount: info.barCount }),
+        loops: info.loops.map((l) => ({
+            type: l.loopType as 'forward' | 'pingpong' | 'backward',
+            start: l.start,
+            end: l.end,
+        })),
+        cuePoints: info.cuePoints.map((c) => ({
+            position: c.position,
+            label: c.label,
+        })),
+    };
+}
 export interface DSLExecutionOptions {
     sampleRate?: number;
     /**
@@ -83,25 +147,16 @@ export interface DSLExecutionOptions {
      * device is.
      */
     inputChannels?: number;
+    /** Whether a workspace-relative path names an existing file, for media errors. */
+    mediaExists?: (path: string) => boolean;
     workspaceRoot?: string | null;
     wavsFolderTree?: WavsFolderNode | null;
-    loadWav?: (path: string) => {
-        channels: number;
-        frameCount: number;
-        path: string;
-        sampleRate: number;
-        duration: number;
-        bitDepth: number;
-        pitch?: number | null;
-        playback?: string | null;
-        bpm?: number | null;
-        beats?: number | null;
-        timeSignature?: { num: number; den: number } | null;
-        barCount?: number | null;
-        loops: Array<{ loopType: string; start: number; end: number }>;
-        cuePoints: Array<{ position: number; label: string }>;
-        mtime: number;
-    };
+    loadWav?: (path: string) => LoadedWav;
+    /**
+     * Decodes the audio track of a workspace media file, or returns null when
+     * it has none. The returned `path` names the decoded audio for a `Wav`.
+     */
+    loadMediaAudio?: (path: string) => LoadedWav | null;
 }
 
 // Install pipe() on Array.prototype so arrays in the DSL can use it.
@@ -135,7 +190,8 @@ export function executePatchScript(
 
     // Create the execution environment with all DSL functions
     // Remove _clock from user-facing namespace (it's internal, used only for ROOT_CLOCK)
-    const { _clock, ...userNamespaceTree } = context.namespaceTree;
+    const { _clock, _videoTap, _mediaAudio, ...userNamespaceTree } =
+        context.namespaceTree;
 
     if (typeof _clock !== 'function') {
         throw new Error(
@@ -630,6 +686,52 @@ export function executePatchScript(
             builder.$c(signal(value, { id })).withRange(min, max),
     });
 
+    if (typeof _videoTap !== 'function') {
+        throw new Error(
+            'DSL execution error: "_videoTap" module not found in schemas',
+        );
+    }
+    if (typeof _mediaAudio !== 'function') {
+        throw new Error(
+            'DSL execution error: "_mediaAudio" module not found in schemas',
+        );
+    }
+    const videoBuilder = new VideoGraphBuilder({
+        controlValue: (moduleId) => {
+            const slider = controls.sliders.find(
+                (s) => s.moduleId === moduleId,
+            );
+            if (slider) return slider.value;
+            const button = controls.buttons.find(
+                (b) => b.moduleId === moduleId,
+            );
+            if (button) return button.value ? GATE_HIGH_VOLTAGE : 0;
+            return undefined;
+        },
+        playPattern: (pattern) =>
+            cycleFactory(pattern) as
+                | ModuleOutput
+                | BaseCollection<ModuleOutput>,
+        publishTap: (output, slot) => {
+            _videoTap(output, slot);
+        },
+        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 5),
+        mediaAudio: (path, playback) => {
+            if (!options.loadMediaAudio) {
+                throw new Error(
+                    '$v.video(...).audio: media audio loading is not available',
+                );
+            }
+            const info = timedWavLoad(() => options.loadMediaAudio!(path));
+            if (info === null) {
+                throw new Error(`$v.video(...).audio: "${path}" has no audio`);
+            }
+            return _mediaAudio(wavRef(info.path, info), playback) as Collection;
+        },
+        mediaExists: options.mediaExists,
+        sourceLocation: captureSourceLocation,
+    });
+
     /**
      * Load WAV samples from the wavs/ folder.
      * Returns a proxy tree matching the folder structure; leaf nodes trigger
@@ -644,6 +746,21 @@ export function executePatchScript(
     // count the interrupted load itself.
     let wavLoadMs = 0;
     let wavLoadStart: number | null = null;
+
+    /** Runs a synchronous host load, billing its time to WAV loading. */
+    const timedWavLoad = <T>(load: () => T): T => {
+        const loadStart = performance.now();
+        wavLoadStart = loadStart;
+        try {
+            return load();
+        } finally {
+            // Also on throw: the time was still spent loading, and a
+            // stale wavLoadStart would bill everything after a caught
+            // load failure — even an infinite loop — to WAV loading.
+            wavLoadMs += performance.now() - loadStart;
+            wavLoadStart = null;
+        }
+    };
 
     const $wavs = (): unknown => {
         const tree = options.wavsFolderTree;
@@ -684,59 +801,10 @@ export function executePatchScript(
                 if (!options.loadWav) {
                     throw new Error('$wavs(): loadWav function not provided');
                 }
-                const loadStart = performance.now();
-                wavLoadStart = loadStart;
-                let info;
-                try {
-                    info = options.loadWav(relPath);
-                } finally {
-                    // Also on throw: the time was still spent loading, and a
-                    // stale wavLoadStart would bill everything after a caught
-                    // load failure — even an infinite loop — to WAV loading.
-                    wavLoadMs += performance.now() - loadStart;
-                    wavLoadStart = null;
-                }
-                return {
-                    type: 'wav_ref' as const,
-                    path: relPath,
-                    channels: info.channels,
-                    sampleRate: info.sampleRate,
-                    frameCount: info.frameCount,
-                    duration: info.duration,
-                    bitDepth: info.bitDepth,
-                    mtime: info.mtime,
-                    ...(info.pitch != null && { pitch: info.pitch }),
-                    ...(info.playback != null && { playback: info.playback }),
-                    ...(info.bpm != null && { bpm: info.bpm }),
-                    ...(info.beats != null && { beats: info.beats }),
-                    ...(info.timeSignature != null && {
-                        timeSignature: {
-                            num: info.timeSignature.num,
-                            den: info.timeSignature.den,
-                        },
-                    }),
-                    ...(info.barCount != null && { barCount: info.barCount }),
-                    loops: info.loops.map(
-                        (l: {
-                            loopType: string;
-                            start: number;
-                            end: number;
-                        }) => ({
-                            type: l.loopType as
-                                | 'forward'
-                                | 'pingpong'
-                                | 'backward',
-                            start: l.start,
-                            end: l.end,
-                        }),
-                    ),
-                    cuePoints: info.cuePoints.map(
-                        (c: { position: number; label: string }) => ({
-                            position: c.position,
-                            label: c.label,
-                        }),
-                    ),
-                };
+                return wavRef(
+                    relPath,
+                    timedWavLoad(() => options.loadWav!(relPath)),
+                );
             }
 
             return new Proxy(
@@ -920,6 +988,13 @@ export function executePatchScript(
         $setEndOfChainCb,
         // XY background oscilloscope
         $scopeXY,
+        // Video synthesis
+        $v: Object.fromEntries(
+            VIDEO_DOCS.map(({ name }) => [
+                name,
+                videoBuilder[name as keyof VideoGraphBuilder],
+            ]),
+        ),
         $buffer,
         $delay,
         $ott,
@@ -1013,6 +1088,7 @@ export function executePatchScript(
         const resultBuilder = context.getBuilder();
         const patch = resultBuilder.toPatch();
         const sourceLocationMap = resultBuilder.getSourceLocationMap();
+        const videoGraph = videoBuilder.build();
 
         return {
             buttons: controls.buttons,
@@ -1021,6 +1097,8 @@ export function executePatchScript(
             patch,
             sliders: controls.sliders,
             sourceLocationMap,
+            video: videoGraph === null ? null : compileVideoGraph(videoGraph),
+            videoPreviews: videoBuilder.getPreviewSites(),
         };
     } catch (error) {
         if (

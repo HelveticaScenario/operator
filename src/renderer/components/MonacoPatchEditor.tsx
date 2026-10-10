@@ -5,7 +5,7 @@ import { useTheme } from '../themes/ThemeContext';
 import { useCustomMonaco } from '../hooks/useCustomMonaco';
 import { configSchema } from '../configSchema';
 import { formatPath } from './monaco/monacoHelpers';
-import type { ScopeView } from '../types/editor';
+import type { ScopeView, VideoPreviewZone } from '../types/editor';
 import { setupMonacoJavascript } from './monaco/monacoLanguage';
 import {
     DEFAULT_PRETTIER_OPTIONS,
@@ -18,6 +18,10 @@ import {
     type ScopeViewZoneHandle,
     createScopeViewZones,
 } from './monaco/scopeViewZones';
+import {
+    type VideoPreviewViewZoneHandle,
+    createVideoPreviewViewZones,
+} from './monaco/videoPreviewViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
 import { registerControlQuickFixProvider } from './monaco/controlQuickFixProvider';
@@ -53,7 +57,18 @@ export interface PatchEditorProps {
     onRegisterScopeCanvas?: (key: string, canvas: HTMLCanvasElement) => void;
     onUnregisterScopeCanvas?: (key: string) => void;
     runningBufferId?: string | null;
+    /** `$v.preview` panels, anchored by `videoPreviewDecorations`. */
+    videoPreviewZones?: VideoPreviewZone[];
+    videoPreviewDecorations?: editor.IEditorDecorationsCollection | null;
 }
+
+/**
+ * A line number in a box of its own, which Monaco places in the gutter as
+ * markup. Over a picture the box carries the backing, so it is as tall as the
+ * line and as wide as the digits.
+ */
+const renderLineNumber = (lineNumber: number): string =>
+    `<span class="line-number-text">${lineNumber}</span>`;
 
 export function MonacoPatchEditor({
     value,
@@ -67,6 +82,8 @@ export function MonacoPatchEditor({
     onRegisterScopeCanvas,
     onUnregisterScopeCanvas,
     runningBufferId,
+    videoPreviewZones = [],
+    videoPreviewDecorations = null,
 }: PatchEditorProps) {
     // Fetch DSL lib source once at mount for Monaco autocomplete
     const [libSource, setLibSource] = useState<string | null>(null);
@@ -166,14 +183,41 @@ export function MonacoPatchEditor({
         onUnregisterScopeCanvas,
     ]);
 
+    const previewZoneHandleRef = useRef<VideoPreviewViewZoneHandle | null>(
+        null,
+    );
+    const activeVideoPreviewZones = useMemo(
+        () => videoPreviewZones.filter((zone) => zone.file === currentFile),
+        [videoPreviewZones, currentFile],
+    );
+
+    // Create / recreate the `$v.preview` panels when the preview list changes
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        const handle = createVideoPreviewViewZones({
+            decorations: videoPreviewDecorations,
+            editor,
+            zones: activeVideoPreviewZones,
+        });
+        previewZoneHandleRef.current = handle;
+        return () => {
+            handle.dispose();
+            previewZoneHandleRef.current = null;
+        };
+    }, [editor, activeVideoPreviewZones, videoPreviewDecorations]);
+
     // On every content change, re-read positions from tracked decorations and
-    // Reposition view zones if any scope call has moved to a different line.
+    // reposition view zones if any scope or preview call has moved to a
+    // different line.
     useEffect(() => {
         if (!editor) {
             return;
         }
         const disposable = editor.onDidChangeModelContent(() => {
             scopeZoneHandleRef.current?.repositionZones();
+            previewZoneHandleRef.current?.repositionZones();
         });
         return () => disposable.dispose();
     }, [editor]);
@@ -439,7 +483,7 @@ export function MonacoPatchEditor({
             // through a pinned sticky header as a ghosted duplicate, so the
             // sticky-scroll feature is disabled here.
             stickyScroll: { enabled: false },
-            lineNumbers: 'on',
+            lineNumbers: renderLineNumber,
             folding: false,
             matchBrackets: 'always',
             automaticLayout: true,

@@ -2,7 +2,8 @@
 
 /**
  * Patches the development Electron.app Info.plist with Local Network
- * permission keys required for Ableton Link (mDNS/Bonjour discovery), and
+ * permission keys required for Ableton Link (mDNS/Bonjour discovery), the
+ * camera usage string that `$v.camera` needs for the system to ask, and
  * names the bundle "Operator Dev (<checkout folder>)" so the macOS menu bar
  * and Dock tell dev builds from different worktrees apart. The name matches
  * the dev app name set in src/main/main.ts.
@@ -72,6 +73,10 @@ function setString(key, value) {
 }
 
 setString('NSLocalNetworkUsageDescription', description);
+setString(
+    'NSCameraUsageDescription',
+    'Operator shows the camera in video patches that use $v.camera.',
+);
 setString('CFBundleName', 'Electron');
 setString('CFBundleDisplayName', 'Electron');
 

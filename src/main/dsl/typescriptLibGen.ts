@@ -15,6 +15,11 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
+import {
+    generateVideoChainInterfaces,
+    generateVideoChainMembers,
+    generateVideoNamespace,
+} from './videoLibGen';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -1792,6 +1797,83 @@ declare const $table: {
     /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
     pwm(width: Poly<Signal>, next?: Table): Table;
 };
+
+/**
+ * A video signal that varies across the frame, in volts from 0 to 5 as audio
+ * signals are, with 5 full. Fields come from \`$v.ramp\`, \`$v.osc\` and
+ * \`$v.time\`; \`$v.colorize\` combines three into a {@link VideoColor}.
+ */
+interface VideoField {
+    readonly __videoField: true;
+${generateVideoChainMembers('field')}
+}
+
+/**
+ * An RGB video signal from \`$v.colorize\`, \`$v.hsv\`, \`$v.image\` and others;
+ * display it with \`$v.out\`. Wherever a color is wanted, a {@link VideoField}
+ * works too and is treated as a black and white color.
+ */
+interface VideoColor {
+    readonly __videoColor: true;
+    /** The red channel as a field. */
+    readonly r: VideoField;
+    /** The green channel as a field. */
+    readonly g: VideoField;
+    /** The blue channel as a field. */
+    readonly b: VideoField;
+${generateVideoChainMembers('color')}
+}
+
+/**
+ * A video file's picture from \`$v.video\`: a {@link VideoColor} that also has
+ * the file's sound as \`audio\`, an audio signal. Chaining from it, such as
+ * \`.$.hsv()\`, gives a plain {@link VideoColor}; \`out\` and \`preview\` return
+ * the file itself.
+ */
+interface VideoFile extends VideoColor {
+    /** The sound of the file, playing at its speed between its loop points. */
+    readonly audio: Collection;
+}
+
+/**
+ * A constant, a {@link VideoField}, or an audio signal whose live value drives
+ * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any single-channel
+ * module output such as an LFO or envelope. A pattern from \`$p(...)\`,
+ * \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays through a \`$cycle\`
+ * and its values are volts, so \`$p('0 2.5 5')\` steps a full-scale input.
+ */
+type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange | PatternSource;
+
+${generateVideoChainInterfaces()}
+
+/**
+ * A frame store from \`$v.buffer\`: \`write\` a color into it, and \`read\` what
+ * it held on the previous frame.
+ */
+interface VideoBuffer {
+    /**
+     * The previous frame of the buffer, resampled through a zoom, rotation,
+     * shift and edge mode, as for \`$v.feedback\`.
+     */
+    read(config?: {
+        zoom?: VideoValue;
+        rotate?: VideoValue;
+        shiftX?: VideoValue;
+        shiftY?: VideoValue;
+        edge?: 'clamp' | 'repeat' | 'mirror';
+    }): VideoColor;
+    /** Stores a color for the next frame to read, and returns it. */
+    write(color: VideoSignal): VideoColor;
+}
+
+/**
+ * A constant, a {@link VideoField} or a {@link VideoColor}. Math modules work
+ * on colors when any operand is a color; a field or number operand is then
+ * treated as that gray level.
+ */
+type VideoSignal = VideoValue | VideoColor;
+
+${generateVideoNamespace()}
 `;
 
 function generateWavsTypeDeclaration(tree: WavsFolderNode | null): string {
@@ -2335,9 +2417,10 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
+    // Modules named with a leading `_` are internal, and $buffer has a custom
+    // declaration below.
     const userFacingSchemas = schemas.filter(
-        (s) => s.name !== '_clock' && s.name !== '$buffer',
+        (s) => !s.name.startsWith('_') && s.name !== '$buffer',
     );
     const tree = buildTreeFromSchemas(userFacingSchemas);
     const lines = renderTree(tree, 0);

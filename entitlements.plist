@@ -19,6 +19,10 @@
     <!-- Audio access (you have audio dependencies, so you likely need this) -->
     <key>com.apple.security.device.audio-input</key>
     <true/>
+
+    <!-- Camera, for $v.camera -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
     
     <!-- File access (if your app needs to read/write files) -->
     <!-- Uncomment these if needed: -->

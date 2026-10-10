@@ -25,6 +25,8 @@ interface ThemeContextValue {
     xyScopePersistence: number;
     xyScopeUpsample: boolean;
     xyScopeLineWidth: number;
+    codeBackdropOpacity: number;
+    performanceScale: number;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -87,6 +89,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [xyScopePersistence, setXyScopePersistence] = useState(0.6);
     const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
     const [xyScopeLineWidth, setXyScopeLineWidth] = useState(0.012);
+    const [codeBackdropOpacity, setCodeBackdropOpacity] = useState(0.6);
+    const [performanceScale, setPerformanceScale] = useState(1);
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -122,6 +126,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.xyScopeUpsample != null) {
                 setXyScopeUpsample(config.xyScopeUpsample);
             }
+            if (config.codeBackdropOpacity != null) {
+                setCodeBackdropOpacity(config.codeBackdropOpacity);
+            }
+            if (config.performanceScale != null) {
+                setPerformanceScale(config.performanceScale);
+            }
             if (config.xyScopeLineWidth != null) {
                 setXyScopeLineWidth(config.xyScopeLineWidth);
             }
@@ -154,6 +164,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 }
                 if (newConfig.xyScopeUpsample != null) {
                     setXyScopeUpsample(newConfig.xyScopeUpsample);
+                }
+                if (newConfig.codeBackdropOpacity != null) {
+                    setCodeBackdropOpacity(newConfig.codeBackdropOpacity);
+                }
+                if (newConfig.performanceScale != null) {
+                    setPerformanceScale(newConfig.performanceScale);
                 }
                 if (newConfig.xyScopeLineWidth != null) {
                     setXyScopeLineWidth(newConfig.xyScopeLineWidth);
@@ -189,6 +205,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 xyScopePersistence,
                 xyScopeUpsample,
                 xyScopeLineWidth,
+                codeBackdropOpacity,
+                performanceScale,
             }}
         >
             {children}

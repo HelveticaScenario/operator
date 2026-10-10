@@ -14576,6 +14576,117 @@
     ]
   },
   {
+    "name": "_videoTap",
+    "documentation": "Publishes its input to the video renderer, which polls the latest value\nand the recent samples of each tap slot. The DSL inserts one per audio\nsignal a `$v` input reads.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "VideoTapParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "signal published to the video renderer",
+          "$ref": "#/$defs/MonoSignal"
+        },
+        "slot": {
+          "description": "index of the tap slot the renderer reads (0–63)",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "slot"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "input signal passthrough",
+        "polyphonic": false,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal published to the video renderer",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "slot"
+      }
+    ]
+  },
+  {
     "name": "$wrap",
     "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\nSet **octave** to `true` to shift by whole integers instead, preserving the\nfractional part (pitch class in V/Oct signals). Always exact when\n`max − min ≥ 1`; makes the closest-octave attempt otherwise.\n\n```js\n// wrap a saw into 0–5 V\n$wrap($saw('c3'), 0, 5)\n// keep pitch class, clamp to octave range 0–2 V\n$wrap($cycle($p('c2 c5 c3')), 0, 2, { octave: true })\n```",
     "paramsSchema": {
@@ -17713,6 +17824,85 @@
       },
       {
         "name": "gate"
+      }
+    ]
+  },
+  {
+    "name": "_mediaAudio",
+    "documentation": "Plays the audio track of a media file in a loop, at a fixed speed, from\nthe loop start when the patch starts. The DSL creates one for each\n`$v.video(...).audio`.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MediaAudioParams",
+      "type": "object",
+      "properties": {
+        "loopEnd": {
+          "description": "Loop end in seconds; the end of the file by default.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "loopStart": {
+          "description": "Loop start in seconds (default 0).",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "speed": {
+          "description": "Playback rate: 1 is normal speed, 0 is silent (default 1).",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "wav": {
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "wav"
+      ],
+      "$defs": {
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "audio of the media file",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [],
+    "positionalArgs": [
+      {
+        "name": "wav"
       }
     ]
   },

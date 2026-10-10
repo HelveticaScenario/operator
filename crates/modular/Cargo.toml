@@ -36,6 +36,18 @@ ringbuf = "0.4"
 rtrb = "0.3"
 schemars = "1.1.0"
 serde_json = "1.0.147"
+symphonia = { version = "0.5", default-features = false, features = [
+  "aac",
+  "alac",
+  "flac",
+  "isomp4",
+  "mkv",
+  "mp3",
+  "ogg",
+  "pcm",
+  "vorbis",
+  "wav",
+] }
 tracy-client = { workspace = true, optional = true }
 
   [dependencies.napi]

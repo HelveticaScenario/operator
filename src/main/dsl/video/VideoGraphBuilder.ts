@@ -1,0 +1,483 @@
+import {
+    MAX_VIDEO_TAPS,
+    sameSource,
+    type VideoGraph,
+    type VideoHistory,
+    VIDEO_HISTORY_LEN,
+    type VideoNode,
+    type VideoPreview,
+    type VideoPreviewSite,
+    type VideoSourceDef,
+    type VideoUniform,
+    type VideoValue,
+    type VideoValueType,
+} from '../../../shared/video/videoGraph';
+import {
+    BaseCollection,
+    type Collection,
+    type CollectionWithRange,
+    ModuleOutput,
+} from '../GraphBuilder';
+import { isPatternValue } from '../patternKinds';
+import { VideoOutput, type VideoOps } from './VideoOutput';
+import { colorMethods } from './videoColor';
+import { filterMethods } from './videoFilters';
+import { generatorMethods } from './videoGenerators';
+import { mathMethods } from './videoMath';
+import { memoryMethods } from './videoMemory';
+import { modulatorMethods } from './videoModulators';
+import { sourceMethods } from './videoSources';
+import { warpMethods } from './videoWarps';
+import {
+    describe,
+    isColor,
+    type VideoInputs,
+    type VideoNodeExtra,
+    type VideoAudioConfig,
+    type VideoAudioPlayback,
+    type VideoCore,
+    type VideoCvConfig,
+    type VideoGraphHost,
+    type VideoPreviewConfig,
+    type VideoSource,
+} from './videoBuilderTypes';
+
+/** `Omit` applied to each member of a union. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+    ? Omit<T, K>
+    : never;
+
+const PREVIEW_VIEWS: readonly string[] = ['image', 'waveform', 'vectorscope'];
+
+/**
+ * Collects `$v.*` calls into a {@link VideoGraph}. The functions that only
+ * build nodes live in the `video*.ts` files beside it and are mixed in; this
+ * class holds the graph state and the functions that touch it.
+ */
+// The mixed-in groups are typed by merging their return types into the class.
+// eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
+export interface VideoGraphBuilder
+    extends
+        ReturnType<typeof generatorMethods>,
+        ReturnType<typeof mathMethods>,
+        ReturnType<typeof memoryMethods>,
+        ReturnType<typeof colorMethods>,
+        ReturnType<typeof filterMethods>,
+        ReturnType<typeof modulatorMethods>,
+        ReturnType<typeof sourceMethods>,
+        ReturnType<typeof warpMethods> {}
+
+export class VideoGraphBuilder implements VideoCore {
+    private nodes: VideoNode[] = [];
+    private outputId: string | null = null;
+    private uniforms: VideoUniform[] = [];
+    private previews: VideoPreview[] = [];
+    private previewSites: VideoPreviewSite[] = [];
+    private cvCount = 0;
+    /** The engine tap of each audio signal already published, by signal identity. */
+    private tapIndexes = new Map<string, number>();
+    private histories: VideoHistory[] = [];
+    private sources: VideoSourceDef[] = [];
+    private tapCount = 0;
+
+    constructor(private readonly host: VideoGraphHost) {
+        Object.assign(
+            this,
+            generatorMethods(this),
+            mathMethods(this),
+            memoryMethods(this),
+            colorMethods(this),
+            filterMethods(this),
+            modulatorMethods(this),
+            sourceMethods(this),
+            warpMethods(this),
+        );
+    }
+
+    readonly time = this.signal({ kind: 'time' }, 'field');
+
+    /** A video signal whose chain methods call this builder's functions. */
+    private signal(value: VideoValue, type: VideoValueType): VideoOutput {
+        return new VideoOutput(value, type, this as unknown as VideoOps);
+    }
+
+    /**
+     * Binds an audio signal to a uniform slot: a slider or button by its
+     * backing module, anything else through an engine tap. Each source gets
+     * one slot however often it is used.
+     */
+    private bindSignal(
+        fn: string,
+        name: string,
+        output: ModuleOutput,
+    ): VideoValue {
+        const control = this.host.controlValue(output.moduleId);
+        if (control !== undefined) {
+            return this.uniformSlot(
+                (u) => u.kind === 'control' && u.moduleId === output.moduleId,
+                { kind: 'control', moduleId: output.moduleId, value: control },
+            );
+        }
+        const tap = this.tapFor(fn, name, output);
+        return this.uniformSlot((u) => u.kind === 'tap' && u.tap === tap, {
+            kind: 'tap',
+            tap,
+            value: 0,
+        });
+    }
+
+    /** The slot of the uniform `matches` finds, adding `binding` when there is none. */
+    private uniformSlot(
+        matches: (u: VideoUniform) => boolean,
+        binding: DistributiveOmit<VideoUniform, 'slot'>,
+    ): VideoValue {
+        let uniform = this.uniforms.find(matches);
+        if (uniform === undefined) {
+            uniform = {
+                ...binding,
+                slot: this.uniforms.length,
+            } as VideoUniform;
+            this.uniforms.push(uniform);
+        }
+        return { kind: 'uniform', slot: uniform.slot };
+    }
+
+    /** The engine tap carrying `output`, publishing it on first use. */
+    private tapFor(fn: string, name: string, output: ModuleOutput): number {
+        const key = `${output.moduleId}\0${output.portName}\0${output.channel}`;
+        const known = this.tapIndexes.get(key);
+        if (known !== undefined) return known;
+        if (this.tapCount >= MAX_VIDEO_TAPS) {
+            throw new Error(
+                `${fn}: ${name} would be signal ${MAX_VIDEO_TAPS + 1}; a patch can read at most ${MAX_VIDEO_TAPS} audio signals into video`,
+            );
+        }
+        const tap = this.tapCount++;
+        this.host.publishTap(output, tap);
+        this.tapIndexes.set(key, tap);
+        return tap;
+    }
+
+    asField(fn: string, name: string, value: unknown): VideoValue {
+        const v = isPatternValue(value) ? this.host.playPattern(value) : value;
+        if (typeof v === 'number') return { kind: 'const', value: v };
+        if (v instanceof VideoOutput && v.type === 'field') return v.value;
+        if (v instanceof ModuleOutput) return this.bindSignal(fn, name, v);
+        if (v instanceof BaseCollection && v.length === 1) {
+            return this.bindSignal(fn, name, v[0]);
+        }
+        if (v instanceof BaseCollection) {
+            throw new Error(
+                `${fn}: ${name} has ${v.length} channels; video inputs take one, so pick a channel such as signal[0]`,
+            );
+        }
+        throw new Error(
+            `${fn}: ${name} must be a number or a video field, got ${describe(v)}`,
+        );
+    }
+
+    fields(fn: string, values: Record<string, unknown>): VideoInputs {
+        const inputs: VideoInputs = {};
+        for (const [name, v] of Object.entries(values)) {
+            inputs[name] = this.asField(fn, name, v);
+        }
+        return inputs;
+    }
+
+    /** `v` as a color signal; a field or number becomes the gray of that level. */
+    toColor(fn: string, name: string, v: unknown): VideoOutput {
+        if (v instanceof VideoOutput && v.type === 'color') return v;
+        const level = this.asField(fn, name, v);
+        return this.addNode('colorize', 'color', {
+            r: level,
+            g: level,
+            b: level,
+        });
+    }
+
+    addNode(
+        kind: string,
+        type: VideoValueType,
+        inputs: VideoInputs,
+        extra?: VideoNodeExtra,
+    ): VideoOutput {
+        const id = `${kind}_${this.nodes.length}`;
+        this.nodes.push({ id, kind, inputs, ...extra });
+        return this.signal({ kind: 'node', id }, type);
+    }
+
+    /**
+     * Builds a math node whose operands are fields, or colors when any operand
+     * is a color (`<kind>Color`). `fieldInputs` are fields in both variants.
+     */
+    arith(
+        fn: string,
+        kind: string,
+        operands: Record<string, unknown>,
+        fieldInputs: Record<string, unknown> = {},
+    ): VideoOutput {
+        const color = Object.values(operands).some(isColor);
+        const inputs = color
+            ? Object.fromEntries(
+                  Object.entries(operands).map(([name, v]) => [
+                      name,
+                      this.toColor(fn, name, v).value,
+                  ]),
+              )
+            : this.fields(fn, operands);
+        Object.assign(inputs, this.fields(fn, fieldInputs));
+        return this.addNode(
+            color ? `${kind}Color` : kind,
+            color ? 'color' : 'field',
+            inputs,
+        );
+    }
+
+    /**
+     * The recent audio-rate samples of an audio signal laid along `position`,
+     * oldest at 0 and newest at 1, in volts.
+     */
+    fromAudio = (
+        signal: ModuleOutput | BaseCollection<ModuleOutput>,
+        position: VideoSource = this.ramp('h'),
+        config?: VideoAudioConfig,
+    ): VideoOutput => {
+        const played = isPatternValue(signal)
+            ? this.host.playPattern(signal)
+            : signal;
+        const output =
+            played instanceof BaseCollection && played.length === 1
+                ? played[0]
+                : played;
+        if (!(output instanceof ModuleOutput)) {
+            throw new Error(
+                `$v.fromAudio: signal must be a single-channel audio signal, got ${describe(signal)}`,
+            );
+        }
+        const samples = config?.samples ?? 512;
+        if (
+            !Number.isInteger(samples) ||
+            samples < 2 ||
+            samples > VIDEO_HISTORY_LEN
+        ) {
+            throw new Error(
+                `$v.fromAudio: samples must be an integer from 2 to ${VIDEO_HISTORY_LEN}, got ${samples}`,
+            );
+        }
+        const trigger = config?.trigger ?? true;
+        const tap = this.tapFor('$v.fromAudio', 'signal', output);
+        let row = this.histories.findIndex(
+            (h) =>
+                h.tap === tap && h.samples === samples && h.trigger === trigger,
+        );
+        if (row < 0) {
+            row = this.histories.length;
+            this.histories.push({ samples, tap, trigger });
+        }
+        return this.addNode(
+            'audioHistory',
+            'field',
+            {
+                position: this.asField('$v.fromAudio', 'position', position),
+                samples: { kind: 'const', value: samples },
+            },
+            { history: row },
+        );
+    };
+
+    sourceIndex(def: VideoSourceDef): number {
+        const known = this.sources.findIndex((s) => sameSource(s, def));
+        if (known >= 0) return known;
+        this.sources.push(def);
+        return this.sources.length - 1;
+    }
+
+    mediaExists(path: string): boolean {
+        return this.host.mediaExists?.(path) ?? true;
+    }
+
+    mediaAudio(path: string, playback: VideoAudioPlayback): Collection {
+        return this.host.mediaAudio(path, playback);
+    }
+
+    /** One channel of a color as a field; every channel of a field is the field itself. */
+    channel = (
+        input: VideoOutput,
+        which: 'r' | 'g' | 'b' | 'luma' = 'luma',
+    ): VideoOutput => {
+        if (!(input instanceof VideoOutput)) {
+            throw new Error(
+                `$v.channel: input must be a video field or color, got ${describe(input)}`,
+            );
+        }
+        if (input.type === 'field') return input;
+        return this.addNode(
+            'channel',
+            'field',
+            { input: input.value },
+            { params: { channel: which } },
+        );
+    };
+
+    /**
+     * Reorders the channels of a color: `pattern` names, for red, green and
+     * blue in turn, the channel of `input` that supplies it, so `'gbr'` makes
+     * red from green, green from blue and blue from red. A field is gray, so
+     * every pattern gives it back as a color.
+     */
+    swiz = (input: VideoOutput, pattern: string): VideoOutput => {
+        if (typeof pattern !== 'string' || !/^[rgb]{3}$/.test(pattern)) {
+            throw new Error(
+                `$v.swiz: pattern must be three of r, g and b such as 'rrr' or 'gbr', got ${describe(pattern)}`,
+            );
+        }
+        return this.addNode(
+            'swizzle',
+            'color',
+            { input: this.toColor('$v.swiz', 'input', input).value },
+            { params: { pattern } },
+        );
+    };
+
+    /**
+     * Shows `signal` in the editor beside this call and returns it unchanged,
+     * so a preview can sit inside an expression.
+     */
+    preview = (
+        signal: VideoOutput,
+        config?: VideoPreviewConfig,
+    ): VideoOutput => {
+        if (!(signal instanceof VideoOutput)) {
+            throw new Error(
+                `$v.preview: signal must be a video field or color, got ${describe(signal)}`,
+            );
+        }
+        const view = config?.view ?? 'image';
+        if (!PREVIEW_VIEWS.includes(view)) {
+            throw new Error(
+                `$v.preview: view must be one of ${PREVIEW_VIEWS.join(', ')}, got "${view}"`,
+            );
+        }
+        this.previewSites.push({
+            index: this.previews.length,
+            sourceLocation: this.host.sourceLocation(),
+            view,
+        });
+        this.previews.push({ type: signal.type, value: signal.value });
+        return signal;
+    };
+
+    /**
+     * Averages a region of `signal` each frame into an audio control signal
+     * from 0 to 5 volts. A color contributes its brightness.
+     */
+    toCV = (
+        signal: VideoOutput,
+        config?: VideoCvConfig,
+    ): CollectionWithRange => {
+        if (!(signal instanceof VideoOutput)) {
+            throw new Error(
+                `$v.toCV: signal must be a video field or color, got ${describe(signal)}`,
+            );
+        }
+        const x = config?.x ?? 0.5;
+        const y = config?.y ?? 0.5;
+        const size = config?.size ?? 0.5;
+        for (const [name, value] of [
+            ['x', x],
+            ['y', y],
+            ['size', size],
+        ] as const) {
+            if (typeof value !== 'number' || !Number.isFinite(value)) {
+                throw new Error(
+                    `$v.toCV: ${name} must be a finite number, got ${value}`,
+                );
+            }
+        }
+        if (size <= 0) {
+            throw new Error(
+                `$v.toCV: size must be greater than 0, got ${size}`,
+            );
+        }
+        const id = `__videoCV_${this.cvCount++}`;
+        this.previews.push({
+            cv: { id, size, x, y },
+            type: signal.type,
+            value: signal.value,
+        });
+        return this.host.cvSignal(id);
+    };
+
+    /** One entry per `$v.preview` call, in the order the shader draws them. */
+    getPreviewSites(): VideoPreviewSite[] {
+        return this.previewSites;
+    }
+
+    /** Shows `input` as the patch's picture and returns it. The last call wins. */
+    out = (input: VideoOutput): VideoOutput => {
+        this.outputId = this.addOut(
+            this.toColor('$v.out', 'input', input).value,
+        );
+        return input;
+    };
+
+    /** Adds the node that shows `color` on screen, and returns its id. */
+    private addOut(color: VideoValue): string {
+        this.addNode('out', 'color', { input: color });
+        return this.nodes[this.nodes.length - 1].id;
+    }
+
+    /**
+     * The graph reachable from the output and the previews, or null when the
+     * patch has neither. A patch with previews but no `$v.out` shows black.
+     */
+    build(): VideoGraph | null {
+        const hasOutput = this.outputId !== null;
+        if (this.outputId === null && this.previews.length > 0) {
+            this.outputId = this.addOut(
+                this.toColor('$v.out', 'input', 0).value,
+            );
+        }
+        if (this.outputId === null) return null;
+        const live = new Set<string>(
+            this.nodes
+                .filter(
+                    (n) => n.id === this.outputId || n.kind === 'feedbackWrite',
+                )
+                .map((n) => n.id),
+        );
+        for (const preview of this.previews) {
+            if (preview.value.kind === 'node') live.add(preview.value.id);
+        }
+        for (let i = this.nodes.length - 1; i >= 0; i--) {
+            const node = this.nodes[i];
+            if (!live.has(node.id)) continue;
+            for (const input of Object.values(node.inputs)) {
+                if (input.kind === 'node') live.add(input.id);
+            }
+        }
+        const liveNodes = this.nodes.filter((n) => live.has(n.id));
+        // Buffers a patch allocated but never used, or whose reads were all
+        // pruned, must not leave gaps in the numbering the shader binds.
+        const used = [
+            ...new Set(
+                liveNodes.flatMap((n) =>
+                    n.buffer === undefined ? [] : [n.buffer],
+                ),
+            ),
+        ].sort((a, b) => a - b);
+        return {
+            nodes: liveNodes.map((n) =>
+                n.buffer === undefined
+                    ? n
+                    : { ...n, buffer: used.indexOf(n.buffer) },
+            ),
+            output: this.outputId,
+            hasOutput,
+            histories: this.histories,
+            sources: this.sources,
+            previews: this.previews,
+            uniforms: this.uniforms,
+        };
+    }
+}
