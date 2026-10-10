@@ -3,9 +3,26 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-vi.mock('electron', () => ({ net: {}, protocol: {} }));
+const protocolMock = vi.hoisted(() => ({
+    handler: null as ((request: Request) => Promise<Response>) | null,
+}));
+vi.mock('electron', () => ({
+    protocol: {
+        handle: (
+            _scheme: string,
+            handler: (request: Request) => Promise<Response>,
+        ) => {
+            protocolMock.handler = handler;
+        },
+    },
+}));
 
-const { mediaFileExists, resolveMediaFile } = await import('../mediaProtocol');
+const {
+    handleMediaProtocol,
+    mediaFileExists,
+    parseByteRange,
+    resolveMediaFile,
+} = await import('../mediaProtocol');
 const { mediaUrl } = await import('../../shared/video/mediaUrl');
 
 describe('media files', () => {
@@ -65,5 +82,92 @@ describe('media files', () => {
         expect(mediaFileExists(root, 'pictures/missing.png')).toBe(false);
         expect(mediaFileExists(root, '../secret.png')).toBe(false);
         expect(mediaFileExists(null, 'pictures/photo.png')).toBe(false);
+    });
+});
+
+describe('byte ranges', () => {
+    it('reads a closed, an open and a suffix range', () => {
+        expect(parseByteRange('bytes=10-19', 100)).toEqual({
+            start: 10,
+            end: 19,
+        });
+        expect(parseByteRange('bytes=90-', 100)).toEqual({
+            start: 90,
+            end: 99,
+        });
+        expect(parseByteRange('bytes=-10', 100)).toEqual({
+            start: 90,
+            end: 99,
+        });
+    });
+
+    it('clips an end past the file and a suffix longer than it', () => {
+        expect(parseByteRange('bytes=90-500', 100)).toEqual({
+            start: 90,
+            end: 99,
+        });
+        expect(parseByteRange('bytes=-500', 100)).toEqual({
+            start: 0,
+            end: 99,
+        });
+    });
+
+    it('answers no header, or one it does not understand, with the whole file', () => {
+        expect(parseByteRange(null, 100)).toBeNull();
+        expect(parseByteRange('bytes=0-1,5-9', 100)).toBeNull();
+        expect(parseByteRange('items=0-1', 100)).toBeNull();
+        expect(parseByteRange('bytes=-', 100)).toBeNull();
+    });
+
+    it('rejects a range outside the file', () => {
+        expect(parseByteRange('bytes=100-', 100)).toBe('unsatisfiable');
+        expect(parseByteRange('bytes=50-10', 100)).toBe('unsatisfiable');
+        expect(parseByteRange('bytes=-0', 100)).toBe('unsatisfiable');
+    });
+});
+
+describe('serving media', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'media-serve-'));
+    fs.mkdirSync(path.join(root, 'clips'));
+    fs.writeFileSync(path.join(root, 'clips', 'a.mp4'), '0123456789');
+    handleMediaProtocol(() => root);
+    const get = (relative: string, range?: string) =>
+        protocolMock.handler!(
+            new Request(mediaUrl(relative), {
+                headers: range === undefined ? {} : { Range: range },
+            }),
+        );
+
+    it('serves the whole file with the range support a video needs to seek', async () => {
+        const response = await get('clips/a.mp4');
+        expect(response.status).toBe(200);
+        expect(response.headers.get('Accept-Ranges')).toBe('bytes');
+        expect(response.headers.get('Content-Type')).toBe('video/mp4');
+        expect(response.headers.get('Content-Length')).toBe('10');
+        expect(await response.text()).toBe('0123456789');
+    });
+
+    it('serves the bytes of a range as partial content', async () => {
+        const response = await get('clips/a.mp4', 'bytes=3-5');
+        expect(response.status).toBe(206);
+        expect(response.headers.get('Content-Range')).toBe('bytes 3-5/10');
+        expect(response.headers.get('Content-Length')).toBe('3');
+        expect(await response.text()).toBe('345');
+    });
+
+    it('serves from an offset to the end', async () => {
+        const response = await get('clips/a.mp4', 'bytes=7-');
+        expect(response.status).toBe(206);
+        expect(await response.text()).toBe('789');
+    });
+
+    it('refuses a range outside the file', async () => {
+        const response = await get('clips/a.mp4', 'bytes=20-');
+        expect(response.status).toBe(416);
+        expect(response.headers.get('Content-Range')).toBe('bytes */10');
+    });
+
+    it('does not find a file that is missing', async () => {
+        expect((await get('clips/none.mp4')).status).toBe(404);
     });
 });

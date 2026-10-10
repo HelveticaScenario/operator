@@ -1,7 +1,7 @@
-import { net, protocol } from 'electron';
+import { protocol } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { Readable } from 'node:stream';
 import { MEDIA_SCHEME, parseMediaUrl } from '../shared/video/mediaUrl';
 
 /**
@@ -51,7 +51,50 @@ export function mediaFileExists(
     return file.startsWith(root + path.sep) && fs.existsSync(file);
 }
 
-/** Serves workspace files over the media scheme, with range requests for video. */
+const CONTENT_TYPES: Record<string, string> = {
+    avif: 'image/avif',
+    bmp: 'image/bmp',
+    gif: 'image/gif',
+    jpeg: 'image/jpeg',
+    jpg: 'image/jpeg',
+    m4v: 'video/x-m4v',
+    mov: 'video/quicktime',
+    mp4: 'video/mp4',
+    ogv: 'video/ogg',
+    png: 'image/png',
+    webm: 'video/webm',
+    webp: 'image/webp',
+};
+
+/**
+ * The bytes a `Range` header asks of a file of `size` bytes, as an inclusive
+ * range; `null` when there is no usable header, which is answered with the
+ * whole file; `'unsatisfiable'` when the range lies outside the file.
+ */
+export function parseByteRange(
+    header: string | null,
+    size: number,
+): { start: number; end: number } | 'unsatisfiable' | null {
+    const match = header === null ? null : /^bytes=(\d*)-(\d*)$/.exec(header);
+    if (match === null || (match[1] === '' && match[2] === '')) return null;
+    let start: number;
+    let end: number;
+    if (match[1] === '') {
+        const suffix = Number(match[2]);
+        if (suffix === 0) return 'unsatisfiable';
+        start = Math.max(0, size - suffix);
+        end = size - 1;
+    } else {
+        start = Number(match[1]);
+        end = match[2] === '' ? size - 1 : Math.min(Number(match[2]), size - 1);
+    }
+    return start >= size || start > end ? 'unsatisfiable' : { start, end };
+}
+
+/**
+ * Serves workspace files over the media scheme. Byte ranges are answered so a
+ * video can seek, which its loop points depend on.
+ */
 export function handleMediaProtocol(
     getWorkspaceRoot: () => string | null,
 ): void {
@@ -60,15 +103,33 @@ export function handleMediaProtocol(
         if (file === null || !fs.existsSync(file)) {
             return new Response('Not found', { status: 404 });
         }
-        const response = await net.fetch(pathToFileURL(file).toString(), {
-            headers: request.headers,
-        });
-        const headers = new Headers(response.headers);
-        headers.set('Access-Control-Allow-Origin', '*');
-        return new Response(response.body, {
+        const { size } = await fs.promises.stat(file);
+        const headers: Record<string, string> = {
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Content-Type':
+                CONTENT_TYPES[path.extname(file).slice(1).toLowerCase()] ??
+                'application/octet-stream',
+        };
+        const range = parseByteRange(request.headers.get('Range'), size);
+        if (range === 'unsatisfiable') {
+            headers['Content-Range'] = `bytes */${size}`;
+            return new Response(null, { headers, status: 416 });
+        }
+        const { start, end } = range ?? { start: 0, end: size - 1 };
+        headers['Content-Length'] = String(size === 0 ? 0 : end - start + 1);
+        if (range !== null) {
+            headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
+        }
+        const body =
+            size === 0
+                ? null
+                : (Readable.toWeb(
+                      fs.createReadStream(file, { end, start }),
+                  ) as ReadableStream);
+        return new Response(body, {
             headers,
-            status: response.status,
-            statusText: response.statusText,
+            status: range === null ? 200 : 206,
         });
     });
 }

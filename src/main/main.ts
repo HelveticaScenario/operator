@@ -44,7 +44,7 @@ import {
 } from './mediaProtocol';
 import {
     getVideoShader,
-    pullTapSamples,
+    pullVideo,
     setVideoControl,
     setVideoTapSource,
     togglePerformanceWindow,
@@ -992,9 +992,10 @@ registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
 setVideoTapSource({
     read: (tap, since) => synth.getVideoTapChunk(tap, since),
     sampleRate: () => synth.sampleRate(),
+    isStopped: () => synth.isStopped(),
 });
 
-registerIPCHandler('VIDEO_PULL_TAP_SAMPLES', () => pullTapSamples());
+registerIPCHandler('VIDEO_PULL', () => pullVideo());
 
 // Region averages computed by the performance window drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {

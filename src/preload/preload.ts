@@ -22,7 +22,7 @@ import type {
     CompiledVideoShader,
     VideoCvValue,
     VideoPreviewFrame,
-    VideoTapSamples,
+    VideoPull,
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
 
@@ -250,7 +250,7 @@ export interface ElectronAPI {
         onUniform: (
             callback: (updates: VideoUniformUpdate[]) => void,
         ) => () => void;
-        pullTapSamples: () => Promise<VideoTapSamples[]>;
+        pull: () => Promise<VideoPull>;
         sendPreviewFrame: (frame: VideoPreviewFrame) => Promise<void>;
         sendCvValues: (values: VideoCvValue[]) => Promise<void>;
         onPreviewFrame: (
@@ -537,7 +537,7 @@ const electronAPI: ElectronAPI = {
         onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
-        pullTapSamples: () => invokeIPC('VIDEO_PULL_TAP_SAMPLES'),
+        pull: () => invokeIPC('VIDEO_PULL'),
         sendPreviewFrame: (frame) => invokeIPC('VIDEO_PREVIEW_FRAME', frame),
         sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
         onPreviewFrame: menuEventHandler<[VideoPreviewFrame]>(

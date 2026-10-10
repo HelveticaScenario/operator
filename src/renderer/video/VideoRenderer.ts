@@ -11,6 +11,7 @@ import type {
     CompiledVideoShader,
     VideoCvValue,
     VideoPreviewFrame,
+    VideoPull,
     VideoTapSamples,
 } from '../../shared/video/videoGraph';
 import {
@@ -37,7 +38,12 @@ export class VideoRenderer {
     private pendingSlots = new Map<number, number>();
     private frameHandle = 0;
     private frameIndex = 0;
-    private tapSource: (() => Promise<VideoTapSamples[]>) | null = null;
+    private pullSource: (() => Promise<VideoPull>) | null = null;
+    /** False while the engine is stopped, when the picture holds still. */
+    private running = true;
+    private stoppedAt = 0;
+    /** Milliseconds spent stopped, which the shader's time does not count. */
+    private stoppedMs = 0;
     /** True while a request for audio samples is waiting on the engine. */
     private pulling = false;
     private previewSink: ((frame: VideoPreviewFrame) => void) | null = null;
@@ -157,11 +163,21 @@ export class VideoRenderer {
     }
 
     /**
-     * Where audio samples come from: asked once per frame, and only while the
-     * shader reads an audio signal, for whatever the engine has produced since.
+     * Where the engine's state comes from: asked once per frame for whether it
+     * is running and for the audio samples it has produced since. While it is
+     * stopped nothing is drawn, videos pause and the shader's time stands still.
      */
-    setTapSource(source: (() => Promise<VideoTapSamples[]>) | null): void {
-        this.tapSource = source;
+    setPullSource(source: (() => Promise<VideoPull>) | null): void {
+        this.pullSource = source;
+    }
+
+    private setRunning(running: boolean): void {
+        if (running === this.running) return;
+        const now = performance.now();
+        if (running) this.stoppedMs += now - this.stoppedAt;
+        else this.stoppedAt = now;
+        this.running = running;
+        this.sources.setPlaying(running);
     }
 
     /** Receives problems loading media, such as a file that will not decode. */
@@ -300,23 +316,23 @@ export class VideoRenderer {
 
     private frame = (): void => {
         this.frameHandle = requestAnimationFrame(this.frame);
-        this.fitCanvas();
 
-        const program = this.program;
-        if (
-            program !== null &&
-            this.tapSource !== null &&
-            !this.pulling &&
-            (program.tapSlots.length > 0 || program.histories.length > 0)
-        ) {
+        if (this.pullSource !== null && !this.pulling) {
             this.pulling = true;
-            this.tapSource()
-                .then((chunks) => this.pushTapSamples(chunks))
+            this.pullSource()
+                .then(({ running, taps }) => {
+                    this.setRunning(running);
+                    this.pushTapSamples(taps);
+                })
                 .catch(() => undefined)
                 .finally(() => {
                     this.pulling = false;
                 });
         }
+        if (!this.running) return;
+        this.fitCanvas();
+
+        const program = this.program;
         if (program !== null) {
             this.buffers.resize(
                 program.bufferCount,
@@ -353,7 +369,8 @@ export class VideoRenderer {
             const now = performance.now();
             this.updateAudioInputs(program, now);
             this.sources.update();
-            uniforms[UNIFORM_TIME_OFFSET] = (now - this.startMs) / 1000;
+            uniforms[UNIFORM_TIME_OFFSET] =
+                (now - this.startMs - this.stoppedMs) / 1000;
             uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
             uniforms[UNIFORM_RESOLUTION_OFFSET + 1] = this.canvas.height;
             this.device.queue.writeBuffer(uniformBuffer, 0, uniforms);

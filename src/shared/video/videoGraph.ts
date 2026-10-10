@@ -105,6 +105,14 @@ export interface VideoTapSamples {
     sampleRate: number;
 }
 
+/** What the performance window asks the main process for once per frame. */
+export interface VideoPull {
+    /** False while the engine is stopped; the picture holds still until it runs again. */
+    running: boolean;
+    /** The audio taps' samples since the last pull; empty while stopped. */
+    taps: VideoTapSamples[];
+}
+
 /** A new value for one uniform slot. */
 export interface VideoUniformUpdate {
     slot: number;
@@ -133,6 +141,12 @@ export interface VideoSourceDef {
     kind: 'image' | 'video';
     /** Path relative to the workspace folder. */
     path: string;
+    /** Playback rate of a video, 1 being normal speed and 0 paused. */
+    speed?: number;
+    /** Seconds into a video where playback loops back to; 0 when absent. */
+    loopStart?: number;
+    /** Seconds into a video where playback loops back to `loopStart`; the end of the file when absent. */
+    loopEnd?: number;
 }
 
 /** A region of the frame whose average becomes an audio control signal. */

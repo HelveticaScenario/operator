@@ -333,7 +333,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'video',
         group: 'Generators',
         description:
-            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop with its sound off. Like `$v.image`, it is read at the coordinate being drawn. Which formats play depends on the codecs the app's browser engine includes.",
+            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop with its sound off. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays and holds its frame when the patch is stopped. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
         params: [
             {
                 name: 'path',
@@ -344,13 +344,24 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
             },
+            {
+                name: 'config.speed',
+                description:
+                    'Playback rate from 0 to 16: 1 is normal speed, 0.5 half speed, 0 holds the current frame (default 1)',
+            },
+            {
+                name: 'config.loop',
+                description:
+                    'Loop points in seconds as `[start, end]`; playback returns to `start` on reaching `end`. `end` defaults to the end of the file, so `[2]` loops the part from 2 seconds on',
+            },
         ],
         examples: [
             "$v.out($v.video('clips/loop.mp4'))",
             "$v.video('clips/loop.mp4').$.mult($v.hsv($v.ramp(), 0.5, 1)).$.warp({ rotate: 0.02 }).out()",
+            "$v.video('clips/loop.mp4', { speed: 0.5, loop: [1, 2.5] }).out()",
         ],
         declarations: [
-            "video(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+            "video(\n    path: string,\n    config?: {\n        fit?: 'cover' | 'contain' | 'stretch';\n        speed?: number;\n        loop?: [start: number, end?: number];\n    },\n): VideoColor;",
         ],
     },
     {

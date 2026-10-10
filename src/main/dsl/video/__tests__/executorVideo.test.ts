@@ -1074,6 +1074,75 @@ describe('$v in the DSL executor', () => {
             expect(video!.wgsl).toContain('video_source(src_0, uv, 0)');
         });
 
+        it('gives a video its speed and loop points', () => {
+            const { video } = exec(`
+                $v.video('a.mp4', { speed: 0.5, loop: [1, 2.5] }).out();
+            `);
+            expect(video!.sources).toEqual([
+                {
+                    kind: 'video',
+                    loopEnd: 2.5,
+                    loopStart: 1,
+                    path: 'a.mp4',
+                    speed: 0.5,
+                },
+            ]);
+        });
+
+        it('leaves out settings that are the defaults', () => {
+            const { video } = exec(`
+                $v.video('a.mp4', { speed: 1, loop: [0] }).out();
+            `);
+            expect(video!.sources).toEqual([{ kind: 'video', path: 'a.mp4' }]);
+        });
+
+        it('loops from a start to the end of the file', () => {
+            const { video } = exec(`$v.video('a.mp4', { loop: [2] }).out();`);
+            expect(video!.sources).toEqual([
+                { kind: 'video', loopStart: 2, path: 'a.mp4' },
+            ]);
+        });
+
+        it('plays one file twice when the settings differ', () => {
+            const { video } = exec(`
+                $v.mix($v.video('a.mp4'), $v.video('a.mp4', { speed: 2 }), 0.5).out();
+            `);
+            expect(video!.sources).toHaveLength(2);
+            const same = exec(`
+                $v.mix($v.video('a.mp4', { speed: 2 }), $v.video('a.mp4', { speed: 2 }), 0.5).out();
+            `);
+            expect(same.video!.sources).toHaveLength(1);
+        });
+
+        it('rejects a speed or loop it cannot play', () => {
+            for (const speed of ['-1', '17', "'fast'", 'NaN']) {
+                expect(() =>
+                    exec(`$v.video('a.mp4', { speed: ${speed} });`),
+                ).toThrow(/\$v\.video: speed must be a number from 0 to 16/);
+            }
+            for (const loop of [
+                '[2, 1]',
+                '[1, 1]',
+                '[-1]',
+                '[]',
+                '[0, 1, 2]',
+                '3',
+                "['a']",
+            ]) {
+                expect(() =>
+                    exec(`$v.video('a.mp4', { loop: ${loop} });`),
+                ).toThrow(
+                    /\$v\.video: loop must be \[start\] or \[start, end\]/,
+                );
+            }
+        });
+
+        it('rejects speed and loop on an image', () => {
+            expect(() => exec(`$v.image('a.png', { speed: 2 });`)).toThrow(
+                /\$v\.image: speed and loop apply only to video/,
+            );
+        });
+
         it('binds media after the feedback and audio history textures', () => {
             const { video } = exec(`
                 const trail = $v.buffer();

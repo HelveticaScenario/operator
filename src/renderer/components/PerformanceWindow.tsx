@@ -34,7 +34,7 @@ export function PerformanceWindow() {
                 });
                 const stopShader = electronAPI.video.onShader(show);
                 created.setErrorSink(setError);
-                created.setTapSource(() => electronAPI.video.pullTapSamples());
+                created.setPullSource(() => electronAPI.video.pull());
                 const stopUniform = electronAPI.video.onUniform((updates) => {
                     for (const { slot, value } of updates) {
                         created.setUniform(slot, value);

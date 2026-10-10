@@ -3,6 +3,7 @@ import path from 'node:path';
 import { IPC_CHANNELS } from '../shared/ipcTypes';
 import type {
     CompiledVideoShader,
+    VideoPull,
     VideoTapSamples,
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
@@ -21,6 +22,7 @@ export interface TapSource {
     /** The samples tap `tap` has written since `since`, or its latest few without it. */
     read(tap: number, since?: number): { head: number; samples: number[] };
     sampleRate(): number;
+    isStopped(): boolean;
 }
 
 export function setVideoTapSource(source: TapSource): void {
@@ -43,13 +45,15 @@ function neededTaps(shader: CompiledVideoShader | null): Set<number> {
 }
 
 /**
- * Every audio sample the shader's taps have produced since the last pull. The
- * renderer asks once per display frame and plays the samples back against its
- * own clock, so the signals it reads are as smooth as the audio however the
- * engine's callbacks fall.
+ * Whether the engine is running, and every audio sample the shader's taps have
+ * produced since the last pull. The renderer asks once per display frame and
+ * plays the samples back against its own clock, so the signals it reads are as
+ * smooth as the audio however the engine's callbacks fall.
  */
-export function pullTapSamples(): VideoTapSamples[] {
-    if (tapSource === null) return [];
+export function pullVideo(): VideoPull {
+    if (tapSource === null || tapSource.isStopped()) {
+        return { running: false, taps: [] };
+    }
     const chunks: VideoTapSamples[] = [];
     const sampleRate = tapSource.sampleRate();
     for (const tap of neededTaps(latestShader)) {
@@ -63,7 +67,7 @@ export function pullTapSamples(): VideoTapSamples[] {
             });
         }
     }
-    return chunks;
+    return { running: true, taps: chunks };
 }
 
 function createPerformanceWindow(): BrowserWindow {

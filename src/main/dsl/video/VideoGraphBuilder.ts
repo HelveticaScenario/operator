@@ -267,7 +267,12 @@ export class VideoGraphBuilder implements VideoCore {
     };
     sourceIndex(def: VideoSourceDef): number {
         const known = this.sources.findIndex(
-            (s) => s.kind === def.kind && s.path === def.path,
+            (s) =>
+                s.kind === def.kind &&
+                s.path === def.path &&
+                s.speed === def.speed &&
+                s.loopStart === def.loopStart &&
+                s.loopEnd === def.loopEnd,
         );
         if (known >= 0) return known;
         this.sources.push(def);

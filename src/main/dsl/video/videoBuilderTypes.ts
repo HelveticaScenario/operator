@@ -145,3 +145,10 @@ export interface VideoMediaConfig {
     /** How a picture of another shape fills the frame (default 'cover'). */
     fit?: 'cover' | 'contain' | 'stretch';
 }
+
+export interface VideoVideoConfig extends VideoMediaConfig {
+    /** Playback rate: 1 is normal speed, 0 holds the current frame (default 1). */
+    speed?: number;
+    /** Seconds the loop plays between, `[start, end]`; `end` defaults to the end of the file. */
+    loop?: [start: number, end?: number];
+}

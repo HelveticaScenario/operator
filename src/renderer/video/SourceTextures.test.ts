@@ -110,4 +110,81 @@ describe('SourceTextures', () => {
             expect.stringContaining('no picture'),
         );
     });
+
+    it('keeps a video playing when only its speed or loop points change', () => {
+        const sources = new SourceTextures(fakeDevice(), vi.fn());
+        sources.sync([video('clips/a.mp4')]);
+        videos[0].currentTime = 1.5;
+        sources.sync([
+            {
+                kind: 'video',
+                path: 'clips/a.mp4',
+                speed: 2,
+                loopStart: 1,
+                loopEnd: 3,
+            },
+        ]);
+        expect(videos).toHaveLength(1);
+        expect(videos[0].playbackRate).toBe(2);
+        expect(videos[0].loop).toBe(false);
+        expect(videos[0].currentTime).toBe(1.5);
+    });
+
+    it('moves a video that is outside its new loop into it', () => {
+        const sources = new SourceTextures(fakeDevice(), vi.fn());
+        sources.sync([video('clips/a.mp4')]);
+        videos[0].currentTime = 5;
+        sources.sync([
+            { kind: 'video', path: 'clips/a.mp4', loopStart: 1, loopEnd: 3 },
+        ]);
+        expect(videos[0].currentTime).toBe(1);
+    });
+
+    it('lets each of two uses of one file keep its own element', () => {
+        const sources = new SourceTextures(fakeDevice(), vi.fn());
+        const a = video('clips/a.mp4');
+        const fast = { ...a, speed: 2 };
+        sources.sync([a, fast]);
+        sources.sync([fast, a]);
+        expect(videos).toHaveLength(2);
+        expect(videos[0].playbackRate).toBe(1);
+        expect(videos[1].playbackRate).toBe(2);
+    });
+
+    it('pauses every video while stopped and resumes them', () => {
+        const sources = new SourceTextures(fakeDevice(), vi.fn());
+        sources.sync([video('clips/a.mp4'), video('clips/b.mp4')]);
+        play.mockClear();
+        sources.setPlaying(false);
+        expect(pause).toHaveBeenCalledTimes(2);
+        sources.setPlaying(true);
+        expect(play).toHaveBeenCalledTimes(2);
+    });
+
+    it('starts a video that arrives while stopped paused', () => {
+        const sources = new SourceTextures(fakeDevice(), vi.fn());
+        sources.setPlaying(false);
+        play.mockClear();
+        sources.sync([video('clips/a.mp4')]);
+        expect(play).not.toHaveBeenCalled();
+    });
+
+    it('holds a video at speed 0', () => {
+        const sources = new SourceTextures(fakeDevice(), vi.fn());
+        play.mockClear();
+        sources.sync([{ kind: 'video', path: 'clips/a.mp4', speed: 0 }]);
+        expect(play).not.toHaveBeenCalled();
+    });
+
+    it('ignores the abort of a play that a pause cancelled', async () => {
+        const onError = vi.fn();
+        const abort = new Error('interrupted');
+        abort.name = 'AbortError';
+        play.mockRejectedValueOnce(abort);
+        const sources = new SourceTextures(fakeDevice(), onError);
+        sources.sync([video('clips/a.mp4')]);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(onError).not.toHaveBeenCalled();
+    });
 });
