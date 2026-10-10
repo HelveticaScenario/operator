@@ -167,8 +167,6 @@ type Note = \`\${NoteNames}\${Accidental}\${number | ''}\`
 
 type HZ = \`\${number}hz\` | \`\${number}Hz\`
 
-type MidiNote = \`\${number}m\`
-
 type CaseVariants<T extends string> = 
   | Lowercase<T>
   | Uppercase<T>
@@ -216,16 +214,6 @@ type ModeString =
  */
 type ScaleSpec = \`\${string}(\${string})\` | \`\${string}[\${string}]\` | "chromatic";
 
-/**
- * A scale pattern string for generating multiple pitches.
- * Format: "{count}s({root}:{mode})"
- * @example $sine("4s(C:major)").out()  // 4 notes of C major scale
- * @example $sine("8s(A:minor)").out()  // 8 notes of A minor scale
- * @see {@link Signal}
- * @see {@link Note}
- */
-type Scale = \`\${number}s(\${Note}:\${ModeString})\`
-
 type OrArray<T> = T | T[];
 
 /**
@@ -245,8 +233,6 @@ type ElementsOf<T extends unknown[][]> = { [K in keyof T]: T[K] extends (infer E
  * - A **number** (constant voltage)
  * - A **{@link Note}** string like \`"C4"\` or \`"A#3"\`
  * - A **{@link HZ}** string like \`"440hz"\`
- * - A **{@link MidiNote}** string like \`"60m"\`
- * - A **{@link Scale}** pattern like \`"4s(C:major)"\`
  * - A **{@link ModuleOutput}** from another module
  * 
  * @example $sine("C4")           // Note string
@@ -256,7 +242,7 @@ type ElementsOf<T extends unknown[][]> = { [K in keyof T]: T[K] extends (infer E
  * @see {@link Poly<Signal>} - for multi-channel signals
  * @see {@link ModuleOutput} - for module connections
  */
-type Signal = number | Note | HZ | MidiNote | Scale | ModuleOutput;
+type Signal = number | Note | HZ | ModuleOutput;
 
 /**
  * A potentially multi-channel signal for polyphonic patches.

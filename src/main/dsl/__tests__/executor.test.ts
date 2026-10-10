@@ -108,12 +108,6 @@ describe('basic oscillators', () => {
         expect(sines.length).toBe(1);
     });
 
-    test('$sine with MIDI note string "60m"', () => {
-        const patch = execPatch('$sine("60m").out()');
-        const sines = findModules(patch, '$sine');
-        expect(sines.length).toBe(1);
-    });
-
     test('$sine with raw number', () => {
         const patch = execPatch('$sine(0).out()');
         const sines = findModules(patch, '$sine');
@@ -169,11 +163,6 @@ describe('signal input variants', () => {
     test('$setTempo() accepts plain BPM number', () => {
         const _patch = execPatch('$setTempo(140)');
         // Should not throw — $setTempo(140) sets tempo as plain BPM
-    });
-
-    test('scale pattern string produces polyphonic module', () => {
-        const patch = execPatch('$sine("4s(C4:major)").out()');
-        expect(findModules(patch, '$sine').length).toBe(1);
     });
 });
 
@@ -500,6 +489,11 @@ describe('sequencing', () => {
             (cycle.params as { pattern: { argument_span?: unknown } }).pattern
                 .argument_span,
         ).toEqual({ start: 9, end: 16 });
+    });
+
+    test('MIDI-number and scale-interval signal strings are rejected', () => {
+        expect(() => execPatch('$sine("60m").out()')).toThrow();
+        expect(() => execPatch('$sine("4s(C:major)").out()')).toThrow();
     });
 
     test('$track with keyframes', () => {

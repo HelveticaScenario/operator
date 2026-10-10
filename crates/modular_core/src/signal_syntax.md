@@ -29,32 +29,6 @@ Frequency values with Hz suffix, converted to V/Oct:
 110hz           // A1 = 1V
 ```
 
-### MIDI Note Numbers (`Xm`)
-
-MIDI note numbers with `m` suffix:
-
-```
-72m             // MIDI 72 = C4
-69m             // MIDI 69 = A3
-33m             // MIDI 33 = A0 = 0V
-```
-
-### Scale Intervals (`Xs(Root:Scale)`)
-
-Scale-relative intervals with root and scale name:
-
-```
-1s(C4:Major)    // 1st degree of C Major = C4
-3s(C4:Major)    // 3rd degree of C Major = E4
-5s(A3:Minor)    // 5th degree of A Minor = E4
-```
-
-Decimal values add cents:
-
-```
-1.5s(C4:Major)  // Root + 50 cents
-```
-
 ## V/Oct Reference
 
 The V/Oct (Volts per Octave) standard used:
@@ -74,18 +48,6 @@ The V/Oct (Volts per Octave) standard used:
 | A4   | 81   | 4.000 | 880    |
 | A5   | 93   | 5.000 | 1760   |
 
-## Supported Scale Names
-
-Common scales (case-insensitive):
-
-- `Major`, `Minor`
-- `Dorian`, `Phrygian`, `Lydian`, `Mixolydian`, `Aeolian`, `Locrian`
-- `HarmonicMinor`, `MelodicMinor`
-- `MajorPentatonic`, `MinorPentatonic`
-- `Blues`
-- `Chromatic`
-- `WholeTone`
-
 ## Examples
 
 ```rust
@@ -93,6 +55,4 @@ Common scales (case-insensitive):
 let pitch = Signal::from_str("c4").unwrap();      // C4
 let pitch = Signal::from_str("a").unwrap();       // A3 (default octave)
 let pitch = Signal::from_str("440hz").unwrap();   // A3 via frequency
-let pitch = Signal::from_str("72m").unwrap();     // C4 via MIDI
-let pitch = Signal::from_str("1s(C4:Major)").unwrap(); // C4 via scale
 ```
