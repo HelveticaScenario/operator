@@ -15,10 +15,18 @@ import type {
     VideoShaderUpdate,
     VideoTapSamples,
 } from '../../shared/video/videoGraph';
+import { MAX_FEEDBACK_BUFFERS } from '../../shared/video/videoGraph';
 import {
     UNIFORM_RESOLUTION_OFFSET,
     UNIFORM_TIME_OFFSET,
 } from '../../shared/video/uniformLayout';
+
+/**
+ * Bytes per pixel the shader writes when every frame buffer is in use: each
+ * is a half-float color of 8 bytes, and the canvas takes 8 more once its
+ * format is padded. The default limit is 32, which holds only three buffers.
+ */
+const COLOR_BYTES_PER_SAMPLE = 8 + MAX_FEEDBACK_BUFFERS * 8;
 
 /** Previews are drawn this many pixels tall, at the output's aspect ratio. */
 const PREVIEW_HEIGHT = 144;
@@ -113,7 +121,14 @@ export class VideoRenderer {
         if (!navigator.gpu) throw new Error('WebGPU is not available');
         const adapter = await navigator.gpu.requestAdapter();
         if (adapter === null) throw new Error('No WebGPU adapter found');
-        const device = await adapter.requestDevice();
+        const device = await adapter.requestDevice({
+            requiredLimits: {
+                maxColorAttachmentBytesPerSample: Math.min(
+                    adapter.limits.maxColorAttachmentBytesPerSample,
+                    COLOR_BYTES_PER_SAMPLE,
+                ),
+            },
+        });
         if (signal.aborted) {
             device.destroy();
             throw signal.reason;

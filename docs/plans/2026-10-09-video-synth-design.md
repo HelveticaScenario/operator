@@ -181,7 +181,6 @@ Not built yet, in rough order of value:
 - Performance window options: fullscreen on a chosen display, aspect, resolution scale. The window currently has the size and aspect the user gives it.
 - Syphon publishing of the performance window.
 - Sequences as parameters, as Hydra's arrays: a `$p` pattern through an audio tap already steps values with exact edges, but there is no video-side shorthand.
-- `$v.frameDelay` (a buffer read does most of this).
 
 Deferred indefinitely:
 

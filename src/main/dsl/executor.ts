@@ -977,6 +977,7 @@ export function executePatchScript(
             edges: videoBuilder.edges,
             feedback: videoBuilder.feedback,
             fold: videoBuilder.fold,
+            frameDelay: videoBuilder.frameDelay,
             grain: videoBuilder.grain,
             fromAudio: videoBuilder.fromAudio,
             hsv: videoBuilder.hsv,

@@ -131,6 +131,8 @@ export interface VideoCore {
         history?: number,
         source?: number,
     ): VideoOutput;
+    /** A color signal; a field or number becomes the gray of that level. */
+    toColor(fn: string, name: string, v: unknown): VideoOutput;
     /** A math node on fields, or on colors when any operand is a color. */
     arith(
         fn: string,

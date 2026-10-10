@@ -1,5 +1,4 @@
 import {
-    MAX_FEEDBACK_BUFFERS,
     MAX_VIDEO_TAPS,
     type VideoGraph,
     type VideoHistory,
@@ -18,12 +17,12 @@ import {
     ModuleOutput,
 } from '../GraphBuilder';
 import { isPatternValue } from '../patternKinds';
-import { VideoBuffer } from './VideoBuffer';
 import { VideoOutput } from './VideoOutput';
 import { colorMethods } from './videoColor';
 import { filterMethods } from './videoFilters';
 import { generatorMethods } from './videoGenerators';
 import { mathMethods } from './videoMath';
+import { memoryMethods } from './videoMemory';
 import { modulatorMethods } from './videoModulators';
 import { sourceMethods } from './videoSources';
 import { warpMethods } from './videoWarps';
@@ -33,7 +32,6 @@ import {
     type VideoAudioConfig,
     type VideoCore,
     type VideoCvConfig,
-    type VideoFeedbackConfig,
     type VideoGraphHost,
     type VideoPreviewConfig,
     type VideoSource,
@@ -52,6 +50,7 @@ export interface VideoGraphBuilder
     extends
         ReturnType<typeof generatorMethods>,
         ReturnType<typeof mathMethods>,
+        ReturnType<typeof memoryMethods>,
         ReturnType<typeof colorMethods>,
         ReturnType<typeof filterMethods>,
         ReturnType<typeof modulatorMethods>,
@@ -62,8 +61,6 @@ export class VideoGraphBuilder implements VideoCore {
     private nodes: VideoNode[] = [];
     private outputId: string | null = null;
     private uniforms: VideoUniform[] = [];
-    private bufferCount = 0;
-    private writtenBuffers = new Set<number>();
     private previews: VideoPreview[] = [];
     private previewSites: VideoPreviewSite[] = [];
     private cvCount = 0;
@@ -79,6 +76,7 @@ export class VideoGraphBuilder implements VideoCore {
             this,
             generatorMethods(this),
             mathMethods(this),
+            memoryMethods(this),
             colorMethods(this),
             filterMethods(this),
             modulatorMethods(this),
@@ -328,91 +326,6 @@ export class VideoGraphBuilder implements VideoCore {
             { input: this.toColor('$v.swiz', 'input', input).value },
             { pattern },
         );
-    };
-
-    /**
-     * Feeds a frame back into itself. `update` receives the previous frame's
-     * result, resampled through the transform in `config`, and returns this
-     * frame's color; `feedback` returns that color.
-     */
-    feedback = (
-        update: (prev: VideoOutput) => VideoOutput,
-        config?: VideoFeedbackConfig,
-    ): VideoOutput => {
-        if (typeof update !== 'function') {
-            throw new Error(
-                `$v.feedback: update must be a function, got ${describe(update)}`,
-            );
-        }
-        const index = this.allocateBuffer('$v.feedback');
-        const next = update(this.readBuffer(index, config, '$v.feedback'));
-        if (!(next instanceof VideoOutput)) {
-            throw new Error(
-                `$v.feedback: update must return a video field or color, got ${describe(next)}`,
-            );
-        }
-        return this.writeBuffer(index, next, '$v.feedback');
-    };
-
-    /**
-     * A frame store: signals write it, and any signal can read what it held on
-     * the previous frame, so buffers can feed themselves or each other.
-     */
-    buffer = (): VideoBuffer =>
-        new VideoBuffer(this.allocateBuffer('$v.buffer'), this);
-
-    private allocateBuffer(fn: string): number {
-        if (this.bufferCount >= MAX_FEEDBACK_BUFFERS) {
-            throw new Error(
-                `${fn}: a patch can use at most ${MAX_FEEDBACK_BUFFERS} feedback loops`,
-            );
-        }
-        return this.bufferCount++;
-    }
-
-    /** The previous frame of buffer `index`, resampled through the transform in `config`. */
-    readBuffer = (
-        index: number,
-        config?: VideoFeedbackConfig,
-        fn = '$v.buffer',
-    ): VideoOutput =>
-        this.addNode(
-            'feedbackRead',
-            'color',
-            {
-                zoom: this.asField(fn, 'zoom', config?.zoom ?? 1),
-                rotate: this.asField(fn, 'rotate', config?.rotate ?? 0),
-                shiftX: this.asField(fn, 'shiftX', config?.shiftX ?? 0),
-                shiftY: this.asField(fn, 'shiftY', config?.shiftY ?? 0),
-            },
-            config?.edge === undefined ? undefined : { edge: config.edge },
-            index,
-        );
-
-    /** Stores `input` in buffer `index` for the next frame, and returns it. */
-    writeBuffer = (
-        index: number,
-        input: VideoOutput,
-        fn = '$v.buffer',
-    ): VideoOutput => {
-        if (!(input instanceof VideoOutput)) {
-            throw new Error(
-                `${fn}: write takes a video field or color, got ${describe(input)}`,
-            );
-        }
-        const color = this.toColor(fn, 'input', input);
-        if (this.writtenBuffers.has(index)) {
-            throw new Error(`${fn}: a buffer can be written only once`);
-        }
-        this.writtenBuffers.add(index);
-        this.addNode(
-            'feedbackWrite',
-            'color',
-            { input: color.value },
-            undefined,
-            index,
-        );
-        return color;
     };
 
     /**

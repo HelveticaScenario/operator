@@ -1495,4 +1495,56 @@ describe('$v in the DSL executor', () => {
             );
         });
     });
+
+    describe('frameDelay', () => {
+        it('holds a frame back through one buffer per frame', () => {
+            const { video } = exec(`
+                $v.out($v.frameDelay($v.hsv($v.ramp()), 3));
+            `);
+            expect(video!.feedbackBufferCount).toBe(3);
+        });
+
+        it('delays by a frame by default, and shifts each stage into the next', () => {
+            const wgsl = exec(`$v.out($v.frameDelay($v.hsv($v.ramp())));`)
+                .video!.wgsl;
+            expect(wgsl).toContain('textureSampleLevel(fb_0');
+            expect(
+                exec(`$v.out($v.frameDelay($v.hsv($v.ramp())));`).video!
+                    .feedbackBufferCount,
+            ).toBe(1);
+        });
+
+        it('turns a field into a gray color', () => {
+            const { video } = exec(`$v.out($v.frameDelay($v.ramp(), 2));`);
+            expect(video!.feedbackBufferCount).toBe(2);
+        });
+
+        it('chains the way the function is called', () => {
+            const chained = exec(`$v.hsv($v.ramp()).$.frameDelay(2).out();`)
+                .video!.wgsl;
+            const called = exec(`$v.out($v.frameDelay($v.hsv($v.ramp()), 2));`)
+                .video!.wgsl;
+            expect(chained).toBe(called);
+        });
+
+        it('shares the frame buffers with feedback loops and buffers', () => {
+            expect(() =>
+                exec(`
+                    const a = $v.frameDelay($v.hsv($v.ramp()), 6);
+                    $v.out($v.feedback((prev) => $v.mix(a, prev, 2.5)));
+                    $v.buffer();
+                `),
+            ).toThrow(/at most 7 feedback loops/);
+        });
+
+        it('rejects a delay that is not a whole number from 1 to 7', () => {
+            for (const frames of ['0', '8', '1.5', "'two'"]) {
+                expect(() =>
+                    exec(`$v.frameDelay($v.hsv(0), ${frames});`),
+                ).toThrow(
+                    /\$v\.frameDelay: frames must be a whole number from 1 to 7/,
+                );
+            }
+        });
+    });
 });

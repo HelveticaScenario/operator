@@ -675,6 +675,25 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'frameDelay',
+        group: 'Memory',
+        description:
+            '`input` as it was `frames` frames ago, always as a color (a field comes out gray); until that many frames have passed it is black. Add it back to the live picture for echoes and trails. Each frame held back takes one of the seven frame buffers that feedback loops and `$v.buffer` also use, so a long delay leaves fewer for them.',
+        params: [
+            {
+                name: 'frames',
+                description:
+                    'Whole number of frames to hold back, 1 to 7 (default 1)',
+            },
+        ],
+        examples: [
+            "const dot = $v.hsv(1.5, 5, $v.shape($v.add($v.ramp(), $v.osc($v.time, 2.5)), $v.ramp('v'), 0.6)); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(2.5)))",
+        ],
+        declarations: [
+            'frameDelay(input: VideoSignal, frames?: number): VideoColor;',
+        ],
+    },
+    {
         name: 'preview',
         group: 'Output',
         description:
@@ -1513,6 +1532,12 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             "Reorders the channels of this color: each letter of `pattern` names the channel that fills red, green and blue in turn, so `'gbr'` shifts them round and `'rrr'` is the red channel as gray. A field is gray, so it comes back as a gray color.",
         declarations: ['swiz(pattern: string): VideoColor;'],
+    },
+    {
+        name: 'frameDelay',
+        description:
+            'This as it was `frames` frames ago, as a color; black until then.',
+        declarations: ['frameDelay(frames?: number): VideoColor;'],
     },
     {
         name: 'key',

@@ -112,6 +112,7 @@ const PROCESSING: Record<string, ChainCall> = {
     displace: (o, s, dx, dy, amount) => o.displace(s, dx, dy, amount),
     edges: (o, s, amount) => o.edges(s, amount),
     fold: (o, s, gain) => o.fold(s, gain),
+    frameDelay: (o, s, frames) => o.frameDelay(s, frames),
     grain: (o, s, amount) => o.grain(s, amount),
     hsv: (o, s, saturation, value) => o.hsv(s, saturation, value),
     hueShift: (o, s, amount) => o.hueShift(s, amount),
