@@ -60,6 +60,14 @@ export interface PatchEditorProps {
     videoPreviewDecorations?: editor.IEditorDecorationsCollection | null;
 }
 
+/**
+ * A line number in a box of its own, which Monaco places in the gutter as
+ * markup. Over a picture the box carries the backing, so it is as tall as the
+ * line and as wide as the digits.
+ */
+const renderLineNumber = (lineNumber: number): string =>
+    `<span class="line-number-text">${lineNumber}</span>`;
+
 export function MonacoPatchEditor({
     value,
     currentFile,
@@ -452,7 +460,7 @@ export function MonacoPatchEditor({
             // through a pinned sticky header as a ghosted duplicate, so the
             // sticky-scroll feature is disabled here.
             stickyScroll: { enabled: false },
-            lineNumbers: 'on',
+            lineNumbers: renderLineNumber,
             folding: false,
             matchBrackets: 'always',
             automaticLayout: true,

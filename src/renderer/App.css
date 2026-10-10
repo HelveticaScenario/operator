@@ -95,9 +95,13 @@
     box-shadow: 8px 0 0 0 var(--code-backing);
 }
 
-/* Only the digits are backed, not the empty space to their left, and the
- * backing carries on to the code. */
-.editor-panel.has-video-backdrop .monaco-editor .line-numbers::first-line {
+/* Only the digits are backed, from the top of the line to the bottom, not the
+ * empty space to their left, and the backing carries on to the code. */
+.editor-panel.has-video-backdrop .monaco-editor .line-number-text {
+    display: block;
+    width: max-content;
+    height: 100%;
+    margin-left: auto;
     background: var(--code-backing);
 }
 
