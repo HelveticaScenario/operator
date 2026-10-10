@@ -46,11 +46,11 @@ export function modulatorMethods(core: VideoCore) {
             });
         },
 
-        /** Turns `input` about the center by `offset + multiple * red`, in turns. */
+        /** Turns `input` about the center by `offset + multiple * red`; 5 is a full turn. */
         modulateRotate: (
             input: VideoOutput,
             modulator: VideoOutput,
-            multiple: VideoSource = 1,
+            multiple: VideoSource = 5,
             offset: VideoSource = 0,
         ): VideoOutput => {
             const [mr] = channels('$v.modulateRotate', modulator, ['r']);

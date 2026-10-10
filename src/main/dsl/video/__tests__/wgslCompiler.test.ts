@@ -93,7 +93,7 @@ describe('compileVideoGraph', () => {
           fn fs(@builtin(position) frag: vec4f) -> @location(0) vec4f {
               let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
               let v0: f32 = uv.x;
-              let v1: f32 = abs(2.0 * fract(v0 * u.slots[0][0] + u.time) - 1.0);
+              let v1: f32 = abs(2.0 * fract(v0 * u.slots[0][0] + (u.time * 0.2)) - 1.0);
               let v2: vec3f = clamp(vec3f(v1, 0.5, 1.0), vec3f(0.0), vec3f(1.0));
               let v3: vec3f = clamp(v2, vec3f(0.0), vec3f(1.0));
               return vec4f(v3, 1.0);

@@ -14,7 +14,7 @@ export const feedbackRead: VideoModuleDef = {
         shiftX: 'field',
         shiftY: 'field',
     },
-    natural: ['zoom', 'rotate'],
+    natural: ['zoom'],
     buffer: 'read',
     output: 'color',
     params: {
