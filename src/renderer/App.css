@@ -82,14 +82,22 @@
 /* While a picture shows behind the code, each line of code gets a backing that
  * ends where its text ends. The shadow extends it to the right without moving
  * the text, which Monaco's cursor and selection depend on. */
-.editor-panel.has-video-backdrop .monaco-editor .view-line > span {
+.editor-panel.has-video-backdrop {
     --code-backing: color-mix(
         in srgb,
         var(--bg-primary) calc(var(--code-backdrop-opacity, 0.6) * 100%),
         transparent
     );
+}
+
+.editor-panel.has-video-backdrop .monaco-editor .view-line > span {
     background: var(--code-backing);
     box-shadow: 8px 0 0 0 var(--code-backing);
+}
+
+.editor-panel.has-video-backdrop .monaco-editor .line-numbers {
+    background: var(--code-backing);
+    box-shadow: 15px 0 0 0 var(--code-backing);
 }
 
 /* Lissajous background canvas — sits behind Monaco, never receives events. */
