@@ -10,6 +10,7 @@ import {
 import type { SourceSpan } from '../../shared/dsl/spanTypes';
 import type { CallSiteKey, SpanRegistry } from './analyzeSource';
 import { processModuleSchema } from './paramsSchema';
+import { isPatternValue } from './patternKinds';
 import { isSignalGroupLike } from './signalGroups';
 import { buildSignalMapper } from './signalSchemaMapper';
 import {
@@ -112,16 +113,6 @@ function isPatternWrapperLike(
         value.__kind === 'SlowPattern' ||
         value.__kind === 'StructPattern' ||
         value.__kind === 'BeatPattern'
-    );
-}
-
-/** Structural check for any pattern value `$cycle` accepts as its pattern. */
-function isPatternValueLike(value: unknown): boolean {
-    return (
-        isParsedPatternLike(value) ||
-        isSpPatternLike(value) ||
-        isArrangePatternLike(value) ||
-        isPatternWrapperLike(value)
     );
 }
 
@@ -405,7 +396,7 @@ export class DSLContext {
         value: unknown,
         sourceLocation: SourceLocation | undefined,
     ): unknown {
-        if (!isPatternValueLike(value)) {
+        if (!isPatternValue(value)) {
             return value;
         }
         const cycle = this.instantiators.get('$cycle');

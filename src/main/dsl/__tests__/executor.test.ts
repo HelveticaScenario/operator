@@ -525,6 +525,40 @@ describe('sequencing', () => {
         expect(findModules(patch, '$cycle').length).toBe(2);
     });
 
+    test('.range accepts patterns for its bounds', () => {
+        const patch = execPatch(`
+            $signal(1).range($p("0 1"), 5, -5, 5).out();
+            $c($sine("c3")).range($p("0 1"), $p("2 3"), 0, 5).out();
+            $sine("c3").range($p("0 1"), 5).out();
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(4);
+    });
+
+    test('.outMono(channel, pattern) plays the pattern as the gain', () => {
+        const patch = execPatch('$sine("c3").outMono(1, $p("0.5 1"))');
+        expect(findModules(patch, '$cycle').length).toBe(1);
+    });
+
+    test('.outMono rejects a pattern in the channel position', () => {
+        expect(() => execPatch('$sine("c3").outMono($p("0.5 1"))')).toThrow(
+            /first argument is a channel number/,
+        );
+    });
+
+    test('$table helpers play patterns as their signals', () => {
+        const patch = execPatch(`
+            $table.mirror($p("0 1"), $table.pwm($p("1 2")));
+        `);
+        expect(findModules(patch, '$cycle').length).toBe(2);
+    });
+
+    test('$c rejects values that are not signals', () => {
+        expect(() => execPatch('$c({}).out()')).toThrow(/\$c: cannot make/);
+        expect(() => execPatch('$c(undefined).out()')).toThrow(
+            /\$c: cannot make/,
+        );
+    });
+
     test('$track with keyframes', () => {
         const patch = execPatch('$track([[$hz(440), 0], [$hz(880), 1]]).out()');
         expect(findModules(patch, '$track').length).toBe(1);

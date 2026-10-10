@@ -21,6 +21,7 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import { captureSourceLocation } from './captureSourceLocation';
+import { isPatternValue, type PatternValue } from './patternKinds';
 import {
     assertSignalGroupsTopLevelOnly,
     expandSignalGroups,
@@ -29,30 +30,6 @@ import {
 import z from 'zod';
 
 export const PORT_MAX_CHANNELS = 64;
-
-const PATTERN_KINDS: ReadonlySet<unknown> = new Set([
-    'ParsedPattern',
-    'SpPattern',
-    'ArrangePattern',
-    'FastPattern',
-    'SlowPattern',
-    'StructPattern',
-    'BeatPattern',
-]);
-
-/** A `$p(...)` pattern or a `.fast`/`.slow`/`.struct`/`.beat` chain of one. */
-interface PatternObject {
-    readonly __kind: string;
-}
-
-function isPatternObject(value: unknown): value is PatternObject {
-    return (
-        typeof value === 'object' &&
-        value !== null &&
-        PATTERN_KINDS.has((value as { __kind?: unknown }).__kind)
-    );
-}
-
 
 /**
  * Scope with an optional source location captured at call time.
@@ -218,13 +195,18 @@ export interface MonoOutGroup extends OutGroupVuState {
 
 /**
  * True for a plain `{ ... }` literal — distinguishes MonoOutOptions from a
- * gain PolySignal (number | string | array | ModuleOutput | iterable).
+ * gain PolySignal (number | string | array | pattern | ModuleOutput | iterable).
  * Patch scripts evaluate in a vm realm whose `Object.prototype` is a
  * different object from the host's, so plainness is judged by chain depth
  * (a prototype that is itself the chain root) rather than identity.
  */
 function isMonoOutOptions(v: unknown): v is MonoOutOptions {
-    if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    if (
+        typeof v !== 'object' ||
+        v === null ||
+        Array.isArray(v) ||
+        isPatternValue(v)
+    ) {
         return false;
     }
     const proto = Object.getPrototypeOf(v);
@@ -242,6 +224,14 @@ function resolveMonoOutArgs(
 ): MonoOutOptions {
     if (isMonoOutOptions(channelOrOptions)) {
         return channelOrOptions;
+    }
+    if (
+        channelOrOptions !== undefined &&
+        typeof channelOrOptions !== 'number'
+    ) {
+        throw new Error(
+            '.outMono: the first argument is a channel number or an options object; pass a gain as the second argument',
+        );
     }
     if (isMonoOutOptions(gainOrOptions)) {
         return { channel: channelOrOptions, ...gainOrOptions };
@@ -680,6 +670,16 @@ export class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 }
 
 /**
+ * Play a pattern argument through its own `$cycle`; any other value is
+ * returned unchanged.
+ */
+function playPattern(builder: GraphBuilder, value: PolySignal): PolySignal {
+    return isPatternValue(value)
+        ? (builder.getFactory('$cycle')(value) as Collection)
+        : value;
+}
+
+/**
  * Collection of ModuleOutput instances.
  * Use .range(outMin, outMax, inMin, inMax) to remap with explicit input range.
  */
@@ -696,10 +696,15 @@ export class Collection extends BaseCollection<ModuleOutput> {
         if (this.items.length === 0) {
             return new CollectionWithRange();
         }
-        const factory = this.items[0].builder.getFactory('$remap');
+        const { builder } = this.items[0];
+        const factory = builder.getFactory('$remap');
         if (!factory) {
             throw new Error('Factory for util.remap not registered');
         }
+        outMin = playPattern(builder, outMin);
+        outMax = playPattern(builder, outMax);
+        inMin = playPattern(builder, inMin);
+        inMax = playPattern(builder, inMax);
         return (
             factory(this.items, outMin, outMax, inMin, inMax) as Collection
         ).withRange(outMin, outMax);
@@ -723,10 +728,13 @@ export class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
         if (this.items.length === 0) {
             return new CollectionWithRange();
         }
-        const factory = this.items[0].builder.getFactory('$remap');
+        const { builder } = this.items[0];
+        const factory = builder.getFactory('$remap');
         if (!factory) {
             throw new Error('Factory for util.remap not registered');
         }
+        outMin = playPattern(builder, outMin);
+        outMax = playPattern(builder, outMax);
         return (
             factory(
                 this.items,
@@ -1141,14 +1149,14 @@ export class GraphBuilder {
      * factory, hence a builder method.
      */
     $c(
-        ...args: (Signal | PatternObject | Iterable<Signal | PatternObject>)[]
+        ...args: (Signal | PatternValue | Iterable<Signal | PatternValue>)[]
     ): Collection {
         // Resolved on the first scalar: a Collection of only ModuleOutputs
         // needs no factory.
         let signal: FactoryFunction | undefined;
         const lift = (value: unknown): ModuleOutput[] => {
             // A pattern plays through its own `$cycle`.
-            if (isPatternObject(value)) {
+            if (isPatternValue(value)) {
                 return [...(this.getFactory('$cycle')(value) as Collection)];
             }
             // Scalar literal checked before the iterable branch so a string is
@@ -1159,6 +1167,15 @@ export class GraphBuilder {
             }
             if (value instanceof ModuleOutput) {
                 return [value];
+            }
+            if (
+                typeof value !== 'object' ||
+                value === null ||
+                !(Symbol.iterator in value)
+            ) {
+                throw new Error(
+                    `$c: cannot make a collection from ${value === null ? 'null' : typeof value}`,
+                );
             }
             return [...(value as Iterable<unknown>)].flatMap(lift);
         };
@@ -2193,6 +2210,10 @@ export class ModuleOutput {
         inMax: PolySignal,
     ): CollectionWithRange {
         const factory = this.builder.getFactory('$remap');
+        outMin = playPattern(this.builder, outMin);
+        outMax = playPattern(this.builder, outMax);
+        inMin = playPattern(this.builder, inMin);
+        inMax = playPattern(this.builder, inMax);
         return (
             factory(this, outMin, outMax, inMin, inMax) as Collection
         ).withRange(outMin, outMax);
@@ -2235,6 +2256,8 @@ export class ModuleOutputWithRange extends ModuleOutput {
      */
     range(outMin: PolySignal, outMax: PolySignal): CollectionWithRange {
         const factory = this.builder.getFactory('$remap');
+        outMin = playPattern(this.builder, outMin);
+        outMax = playPattern(this.builder, outMax);
         return (
             factory(
                 this,
@@ -2420,16 +2443,7 @@ export function replaceValues(input: unknown, replacer: Replacer): unknown {
         // payload must be walked so outputs become cables; expandSignalGroups
         // later erases the wrapper itself.
         if (!Array.isArray(replaced)) {
-            const kind = (replaced as { __kind?: unknown }).__kind;
-            if (
-                kind === 'ParsedPattern' ||
-                kind === 'SpPattern' ||
-                kind === 'ArrangePattern' ||
-                kind === 'FastPattern' ||
-                kind === 'SlowPattern' ||
-                kind === 'StructPattern' ||
-                kind === 'BeatPattern'
-            ) {
+            if (isPatternValue(replaced)) {
                 return replaced;
             }
         }
@@ -2505,16 +2519,7 @@ export function replaceDeferredStrings(
         // verbatim instead of deep-walking their mini-notation AST sub-tree.
         // SignalGroup wrappers are deliberately NOT listed here either — their
         // signals payload may carry deferred-output strings to resolve.
-        const kind = (input as { __kind?: unknown }).__kind;
-        if (
-            kind === 'ParsedPattern' ||
-            kind === 'SpPattern' ||
-            kind === 'ArrangePattern' ||
-            kind === 'FastPattern' ||
-            kind === 'SlowPattern' ||
-            kind === 'StructPattern' ||
-            kind === 'BeatPattern'
-        ) {
+        if (isPatternValue(input)) {
             return input;
         }
 

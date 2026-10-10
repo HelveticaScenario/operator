@@ -704,7 +704,7 @@ function factorArgumentSpans(
     return [...innerSpans, factorSpan];
 }
 
-export type CycleFactory = (pattern: SectionPattern, ...rest: unknown[]) => unknown;
+export type CycleFactory = (pattern: unknown, ...rest: unknown[]) => unknown;
 
 /**
  * The `$cycle` factory of the active DSL execution, which `.cycle(...)`
