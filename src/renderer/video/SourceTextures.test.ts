@@ -151,19 +151,28 @@ describe('SourceTextures', () => {
         expect(videos[1].playbackRate).toBe(2);
     });
 
-    it('pauses every video while stopped and resumes them', () => {
+    it('pauses every video while stopped and restarts them from the loop start', () => {
         const sources = new SourceTextures(fakeDevice(), vi.fn());
-        sources.sync([video('clips/a.mp4'), video('clips/b.mp4')]);
+        sources.sync([
+            video('clips/a.mp4'),
+            { kind: 'video', path: 'clips/b.mp4', loopStart: 2, loopEnd: 4 },
+        ]);
+        videos[0].currentTime = 3;
+        videos[1].currentTime = 3;
         play.mockClear();
-        sources.setPlaying(false);
+        sources.pause();
         expect(pause).toHaveBeenCalledTimes(2);
-        sources.setPlaying(true);
+        expect(videos[0].currentTime).toBe(3);
+
+        sources.restart();
         expect(play).toHaveBeenCalledTimes(2);
+        expect(videos[0].currentTime).toBe(0);
+        expect(videos[1].currentTime).toBe(2);
     });
 
     it('starts a video that arrives while stopped paused', () => {
         const sources = new SourceTextures(fakeDevice(), vi.fn());
-        sources.setPlaying(false);
+        sources.pause();
         play.mockClear();
         sources.sync([video('clips/a.mp4')]);
         expect(play).not.toHaveBeenCalled();

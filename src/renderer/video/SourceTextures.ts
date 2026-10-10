@@ -83,10 +83,21 @@ export class SourceTextures {
         this.generation++;
     }
 
-    /** Plays or pauses every video; paused videos hold their position. */
-    setPlaying(playing: boolean): void {
-        this.playing = playing;
+    /** Pauses every video where it is, and holds videos that arrive later. */
+    pause(): void {
+        this.playing = false;
         for (const entry of this.order) this.syncPlayback(entry);
+    }
+
+    /** Plays every video again from its loop start. */
+    restart(): void {
+        this.playing = true;
+        for (const entry of this.order) {
+            if (entry.video !== null) {
+                entry.video.currentTime = entry.def.loopStart ?? 0;
+            }
+            this.syncPlayback(entry);
+        }
     }
 
     view(index: number): GPUTextureView {

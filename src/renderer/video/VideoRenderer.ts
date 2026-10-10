@@ -165,7 +165,8 @@ export class VideoRenderer {
     /**
      * Where the engine's state comes from: asked once per frame for whether it
      * is running and for the audio samples it has produced since. While it is
-     * stopped nothing is drawn, videos pause and the shader's time stands still.
+     * stopped nothing is drawn, videos pause and the shader's time stands still;
+     * when it runs again, videos start over from their loop start.
      */
     setPullSource(source: (() => Promise<VideoPull>) | null): void {
         this.pullSource = source;
@@ -177,7 +178,8 @@ export class VideoRenderer {
         if (running) this.stoppedMs += now - this.stoppedAt;
         else this.stoppedAt = now;
         this.running = running;
-        this.sources.setPlaying(running);
+        if (running) this.sources.restart();
+        else this.sources.pause();
     }
 
     /** Receives problems loading media, such as a file that will not decode. */
