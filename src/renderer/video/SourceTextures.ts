@@ -147,6 +147,13 @@ export class SourceTextures {
                 video.error?.message || 'the file could not be played',
             ),
         );
+        // A file whose audio decodes but whose picture does not loads without
+        // an error and reports no frame size.
+        video.addEventListener('loadedmetadata', () => {
+            if (video.videoWidth === 0) {
+                this.fail(entry, 'the file has no picture the app can decode');
+            }
+        });
         video.src = mediaUrl(entry.def.path);
         video.requestVideoFrameCallback(onFrame);
         video.play().catch((error: unknown) => this.fail(entry, error));
@@ -171,7 +178,7 @@ export class SourceTextures {
         const detail = error instanceof Error ? error.message : String(error);
         const hint =
             entry.def.kind === 'video'
-                ? ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes and other codecs need converting)'
+                ? ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes, Motion JPEG and other codecs need converting)'
                 : '';
         this.onError(`${entry.def.kind} "${entry.def.path}": ${detail}${hint}`);
     }

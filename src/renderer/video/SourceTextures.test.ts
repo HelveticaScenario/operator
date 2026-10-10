@@ -100,4 +100,14 @@ describe('SourceTextures', () => {
         sources.sync([video('a.mp4')]);
         expect(sources.generation).toBeGreaterThan(before);
     });
+
+    it('reports a video whose picture cannot be decoded', () => {
+        const onError = vi.fn();
+        const sources = new SourceTextures(fakeDevice(), onError);
+        sources.sync([video('clips/a.mov')]);
+        videos[0].dispatchEvent(new Event('loadedmetadata'));
+        expect(onError).toHaveBeenCalledWith(
+            expect.stringContaining('no picture'),
+        );
+    });
 });
