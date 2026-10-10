@@ -516,7 +516,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
         description:
             'Tag a parameter value into signal group 1 (also $g2, $g3). Parameters in different groups multiply — the module gets the cartesian product of the group widths as voices — while parameters in the same group cycle together. Untagged parameters are group 0. Lower-numbered groups vary fastest. The product may not exceed 64 channels, and $gN must wrap the entire parameter value.',
         examples: [
-            '$sine($g1(["c3", "e3", "g3"]), { phaseOffset: $g2([0, 1.25]) }).out()\n// 3 x 2 = 6 voices',
+            '$sine($g1(["c3", "e3", "g3"]), { phaseOffset: $g2([0, 0.25]) }).out()\n// 3 x 2 = 6 voices',
         ],
         group: 'Helpers',
         name: '$g1',
@@ -525,7 +525,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     {
         description: 'Tag a parameter value into signal group 2 — see $g1.',
         examples: [
-            '$sine($g1(["c3", "e3", "g3"]), { phaseOffset: $g2([0, 1.25]) }).out()',
+            '$sine($g1(["c3", "e3", "g3"]), { phaseOffset: $g2([0, 0.25]) }).out()',
         ],
         group: 'Helpers',
         name: '$g2',
@@ -534,7 +534,7 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     {
         description: 'Tag a parameter value into signal group 3 — see $g1.',
         examples: [
-            '$saw($g1(["c2", "c3"]), { shape: $g2([0, 2.5]), phaseOffset: $g3([0, 2.5]) }).out()',
+            '$saw($g1(["c2", "c3"]), { shape: $g2([0, 2.5]), phaseOffset: $g3([0, 0.5]) }).out()',
         ],
         group: 'Helpers',
         name: '$g3',

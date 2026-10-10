@@ -2,7 +2,7 @@ use crate::{
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::{PHASE_FULL_SCALE, SchmittTrigger, interpolate, wrap_phase},
+        utils::{SchmittTrigger, interpolate, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
@@ -27,8 +27,8 @@ struct SineOscillatorParams {
     /// hard sync source — rising edges reset the oscillator phase
     #[deserr(default)]
     sync: Option<PolySignal>,
-    /// phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling
-    #[signal(default = 0.0, range = (0.0, 5.0))]
+    /// phase offset in [0, 1) added to the internal phase before sampling
+    #[signal(default = 0.0, range = (0.0, 1.0))]
     #[deserr(default)]
     phase_offset: Option<PolySignal>,
 }
@@ -80,7 +80,7 @@ impl SineOscillator {
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.
-            let offset = self.params.phase_offset.value_or(ch, 0.0) / PHASE_FULL_SCALE;
+            let offset = self.params.phase_offset.value_or(ch, 0.0);
             let read_phase = (state.phase + offset).rem_euclid(1.0);
 
             // Naive sample at the (pre-reset) phase, plus any residual carried

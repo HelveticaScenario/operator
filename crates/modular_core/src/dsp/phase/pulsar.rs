@@ -7,7 +7,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::dsp::fx::enosc_tables::aa_pulsar;
-use crate::dsp::utils::{PHASE_FULL_SCALE, voct_to_hz};
+use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
@@ -15,8 +15,8 @@ use crate::types::Clickless;
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct PulsarParams {
-    /// input phase (0 to 5V, one cycle)
-    #[signal(range = (0.0, 5.0))]
+    /// input phase (0 to 1)
+    #[signal(range = (0.0, 1.0))]
     input: PolySignal,
     /// compression amount (0-5, where 0 = no compression, 5 = maximum compression)
     #[signal(range = (0.0, 5.0))]
@@ -31,7 +31,7 @@ struct PulsarParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct PulsarOutputs {
-    #[output("output", "pulsar phase output (0 to 5V)", default, range = (0.0, 5.0))]
+    #[output("output", "pulsar phase output", default, range = (0.0, 1.0))]
     sample: PolyOutput,
 }
 
@@ -42,7 +42,7 @@ struct ChannelState {
 
 /// Phase effect: pulsar synthesis distortion.
 ///
-/// Transforms a 0–5V phase signal by compressing the active portion of each
+/// Transforms a 0–1 phase signal by compressing the active portion of each
 /// cycle into a narrower window, leaving the rest silent. Feed the output
 /// into a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear pulsed
 /// waveforms — at higher amounts the pulse becomes extremely narrow,
@@ -70,7 +70,7 @@ impl Pulsar {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            let input = self.params.input.get_value(ch) / PHASE_FULL_SCALE;
+            let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
             // Smooth amount parameter to avoid clicks
@@ -101,9 +101,7 @@ impl Pulsar {
             let compressed_phase = (phase * multiplier).min(1.0);
 
             // Output the distorted phase
-            self.outputs
-                .sample
-                .set(ch, compressed_phase * PHASE_FULL_SCALE);
+            self.outputs.sample.set(ch, compressed_phase);
         }
     }
 }

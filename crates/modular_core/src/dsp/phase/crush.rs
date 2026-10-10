@@ -6,7 +6,6 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::PHASE_FULL_SCALE;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
@@ -14,8 +13,8 @@ use crate::types::Clickless;
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct CrushParams {
-    /// input phase (0 to 5V, one cycle)
-    #[signal(range = (0.0, 5.0))]
+    /// input phase (0 to 1)
+    #[signal(range = (0.0, 1.0))]
     input: PolySignal,
     /// crush amount (0-5, where 0 = clean, 5 = maximum distortion)
     #[signal(range = (0.0, 5.0))]
@@ -26,7 +25,7 @@ struct CrushParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct CrushOutputs {
-    #[output("output", "crushed phase output (0 to 5V)", default, range = (0.0, 5.0))]
+    #[output("output", "crushed phase output", default, range = (0.0, 1.0))]
     sample: PolyOutput,
 }
 
@@ -37,7 +36,7 @@ struct ChannelState {
 
 /// Phase effect: digital bit-crush distortion.
 ///
-/// Transforms a 0–5V phase signal by quantizing it into coarse steps,
+/// Transforms a 0–1 phase signal by quantizing it into coarse steps,
 /// creating glitchy, staircase-like phase patterns. Feed the output into
 /// a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear the result
 /// as gritty digital artifacts — fractured harmonics at low settings,
@@ -63,7 +62,7 @@ impl Crush {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            let input = self.params.input.get_value(ch) / PHASE_FULL_SCALE;
+            let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
             // Smooth amount parameter
@@ -97,9 +96,7 @@ impl Crush {
             let crushed_phase = x as f32 / 4_294_967_295.0;
 
             // Output the distorted phase
-            self.outputs
-                .sample
-                .set(ch, crushed_phase * PHASE_FULL_SCALE);
+            self.outputs.sample.set(ch, crushed_phase);
         }
     }
 }
