@@ -26,6 +26,7 @@ export interface VideoDoc {
 export const VIDEO_GROUPS = [
     'Generators',
     'Warping',
+    'Filters',
     'Color',
     'Math',
     'Shaping',
@@ -194,7 +195,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.hsv(0.55, 0.8, $v.voronoi($v.mult($v.ramp(), 8), $v.mult($v.ramp('v'), 5), $v.mult($v.time, 2))))",
-            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).$.invert().$.hsv(0.1).out()",
+            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).$.invert().$.tint(0.1).out()",
         ],
         declarations: [
             'voronoi(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
@@ -231,10 +232,50 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.hsv(0.12, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.3, 0.02)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.hsv(0.6).out()",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.tint(0.6).out()",
         ],
         declarations: [
             'polygon(x: VideoValue, y: VideoValue, sides?: VideoValue, size?: VideoValue, softness?: VideoValue): VideoField;',
+        ],
+    },
+    {
+        name: 'blur',
+        group: 'Filters',
+        description:
+            "Averages `input` over a disk of `radius`, softening it. The input's whole sub-patch is read at sixteen nearby coordinates, so its cost is paid sixteen times: blur cheap things, or blur late. A field or color in gives the same type out. Adding a blurred copy back on top of the original is a glow.",
+        params: [
+            {
+                name: 'radius',
+                description:
+                    'Radius of the disk as a fraction of the frame height (default 0.01)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.blur($v.polygon($v.ramp(), $v.ramp('v'), 5, 0.2, 0.001), 0.04)))",
+            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.18, 0.002).$.tint(0.12).pipe((c) => c.$.add(c.$.blur(0.04).$.mult(2))).out()",
+        ],
+        declarations: [
+            'blur(input: VideoField, radius?: VideoValue): VideoField;',
+            'blur(input: VideoColor, radius?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'edges',
+        group: 'Filters',
+        description:
+            'Brightness of the steepest change around each pixel (a Sobel filter): 0 on flat areas, rising along edges. It reads `input` at the eight neighbors one pixel away, so it sees the same pixel grid at any window size. A color contributes its brightness.',
+        params: [
+            {
+                name: 'amount',
+                description:
+                    'Gain on the result, which is clipped to 0..1 (default 1)',
+            },
+        ],
+        examples: [
+            "$v.out($v.hsv(0.4, 1, $v.edges($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time), 4)))",
+        ],
+        declarations: [
+            'edges(input: VideoField | VideoColor, amount?: VideoValue): VideoField;',
         ],
     },
     {
@@ -903,9 +944,19 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'hsv',
-        description: 'Uses this field as the hue of a color.',
+        description:
+            'Uses this field as the hue of a color, so the field paints a rainbow. To color a mask instead, with a fixed hue and this field as the brightness, use `tint`.',
         declarations: [
             'hsv(saturation?: VideoValue, value?: VideoValue): VideoColor;',
+        ],
+        on: ['field'],
+    },
+    {
+        name: 'tint',
+        description:
+            'Colors this field: it becomes the brightness of a color with the given hue and saturation, so a mask turns into a shape of that color.',
+        declarations: [
+            'tint(hue?: VideoValue, saturation?: VideoValue): VideoColor;',
         ],
         on: ['field'],
     },
@@ -928,6 +979,16 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description: "Scales this color's distance from mid-gray by `amount`.",
         declarations: ['contrast(amount?: VideoValue): VideoColor;'],
         on: ['color'],
+    },
+    {
+        name: 'blur',
+        description: 'Averages this over a disk of `radius`.',
+        declarations: ['blur(radius?: VideoValue): {self};'],
+    },
+    {
+        name: 'edges',
+        description: 'Brightness of the steepest change around each pixel.',
+        declarations: ['edges(amount?: VideoValue): VideoField;'],
     },
     {
         name: 'channel',

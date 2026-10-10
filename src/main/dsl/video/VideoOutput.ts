@@ -87,12 +87,14 @@ export class VideoOutput {
 /** Functions of `.$` and `.$m`: each returns a new signal from this one. */
 const PROCESSING: Record<string, ChainCall> = {
     add: (o, s, b) => o.add(s, b),
+    blur: (o, s, radius) => o.blur(s, radius),
     channel: (o, s, which) => o.channel(s, which),
     comparator: (o, s, threshold, softness) =>
         o.comparator(s, threshold, softness),
     contrast: (o, s, amount) => o.contrast(s, amount),
     diff: (o, s, b) => o.diff(s, b),
     displace: (o, s, dx, dy, amount) => o.displace(s, dx, dy, amount),
+    edges: (o, s, amount) => o.edges(s, amount),
     fold: (o, s, gain) => o.fold(s, gain),
     hsv: (o, s, saturation, value) => o.hsv(s, saturation, value),
     hueShift: (o, s, amount) => o.hueShift(s, amount),
@@ -112,6 +114,7 @@ const PROCESSING: Record<string, ChainCall> = {
     rotate: (o, s, turns) => o.warp(s, { rotate: turns }),
     scale: (o, s, zoom) => o.warp(s, { zoom }),
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),
+    tint: (o, s, hue, saturation) => o.hsv(hue ?? 0, saturation ?? 1, s),
     warp: (o, s, config) => o.warp(s, config),
     wrap: (o, s, gain) => o.wrap(s, gain),
 };

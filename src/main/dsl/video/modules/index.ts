@@ -1,5 +1,6 @@
 import { audioHistory } from './audioHistory';
 import { colorize } from './colorize';
+import { blur, blurColor, edges, edgesColor } from './filter';
 import { feedbackRead, feedbackWrite } from './feedback';
 import { contrast, hsv, hueShift, posterize, procAmp } from './color';
 import { comparator } from './comparator';
@@ -33,6 +34,8 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     add,
     addColor,
     audioHistory,
+    blur,
+    blurColor,
     channel,
     colorize,
     comparator,
@@ -41,6 +44,8 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     diffColor,
     displace: displace.field,
     displaceColor: displace.color,
+    edges,
+    edgesColor,
     feedbackRead,
     feedbackWrite,
     fold,

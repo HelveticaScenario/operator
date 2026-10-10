@@ -19,6 +19,7 @@ import {
 import { VideoBuffer } from './VideoBuffer';
 import { VideoOutput } from './VideoOutput';
 import { colorMethods } from './videoColor';
+import { filterMethods } from './videoFilters';
 import { generatorMethods } from './videoGenerators';
 import { mathMethods } from './videoMath';
 import { warpMethods } from './videoWarps';
@@ -48,6 +49,7 @@ export interface VideoGraphBuilder
         ReturnType<typeof generatorMethods>,
         ReturnType<typeof mathMethods>,
         ReturnType<typeof colorMethods>,
+        ReturnType<typeof filterMethods>,
         ReturnType<typeof warpMethods> {}
 
 export class VideoGraphBuilder implements VideoCore {
@@ -71,6 +73,7 @@ export class VideoGraphBuilder implements VideoCore {
             generatorMethods(this),
             mathMethods(this),
             colorMethods(this),
+            filterMethods(this),
             warpMethods(this),
         );
     }

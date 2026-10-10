@@ -893,4 +893,85 @@ describe('$v in the DSL executor', () => {
             );
         });
     });
+
+    describe('filters', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('blur reads its whole input at sixteen nearby coordinates', () => {
+            const wgsl = wgslOf(`
+                $v.out($v.hsv($v.blur($v.noise($v.ramp(), $v.ramp('v')), 0.02)));
+            `);
+            const returned = wgsl.match(/let v\d+: f32 = \(f\d+\(uv/);
+            expect(returned).not.toBeNull();
+            expect(wgsl.match(/f\d+\(uv \+ blur_offset\(/g)).toHaveLength(16);
+            expect(wgsl).toContain('fn blur_offset(');
+        });
+
+        it('blur keeps a color a color', () => {
+            const wgsl = wgslOf(`$v.hsv($v.ramp()).$.blur(0.05).out();`);
+            expect(wgsl).toMatch(/let v\d+: vec3f = \(f\d+\(uv/);
+        });
+
+        it('edges is a field whatever it reads', () => {
+            const fromField = wgslOf(`
+                $v.out($v.hsv($v.edges($v.noise($v.ramp(), $v.ramp('v')), 3)));
+            `);
+            expect(fromField).toMatch(
+                /let v\d+: f32 = clamp\(sobel_magnitude\(/,
+            );
+            const fromColor = wgslOf(`
+                $v.out($v.hsv($v.edges($v.hsv($v.ramp()))));
+            `);
+            expect(fromColor).toContain('dot(f');
+            expect(fromColor).toMatch(
+                /let v\d+: f32 = clamp\(sobel_magnitude\(/,
+            );
+        });
+
+        it('edges reads the eight neighbors one pixel away', () => {
+            const wgsl = wgslOf(`$v.edges($v.ramp()).$.hsv().out();`);
+            expect(wgsl.match(/\/ u\.resolution\)/g)).toHaveLength(8);
+        });
+
+        it('chains', () => {
+            const wgsl = wgslOf(`
+                $v.noise($v.ramp(), $v.ramp('v')).$.blur(0.01).$.edges(2).$.hsv().out();
+            `);
+            expect(wgsl).toContain('sobel_magnitude(');
+        });
+
+        it('rejects a number or a missing signal', () => {
+            expect(() => exec(`$v.blur(0.5);`)).toThrow(
+                /\$v\.blur: input must be a video field or color/,
+            );
+            expect(() => exec(`$v.edges(0.5);`)).toThrow(
+                /\$v\.edges: input must be a video field or color/,
+            );
+        });
+    });
+
+    describe('tint', () => {
+        it('colors a mask with a fixed hue, using the field as brightness', () => {
+            const tinted = exec(`$v.ramp().$.tint(0.3, 0.8).out();`).video!
+                .wgsl;
+            const long = exec(`$v.out($v.hsv(0.3, 0.8, $v.ramp()));`).video!
+                .wgsl;
+            expect(tinted).toBe(long);
+        });
+
+        it('differs from hsv, which uses the field as the hue', () => {
+            const tinted = exec(`$v.ramp().$.tint(0.3).out();`).video!.wgsl;
+            const hued = exec(`$v.ramp().$.hsv(0.3).out();`).video!.wgsl;
+            expect(tinted).not.toBe(hued);
+        });
+
+        it('defaults to a red of full saturation', () => {
+            const tinted = exec(`$v.ramp().$.tint().out();`).video!.wgsl;
+            expect(tinted).toContain('hsv_to_rgb(0.0, 1.0, v0)');
+        });
+
+        it('is not available on a color', () => {
+            expect(() => exec(`$v.hsv(0.2).$.tint(0.1);`)).toThrow();
+        });
+    });
 });
