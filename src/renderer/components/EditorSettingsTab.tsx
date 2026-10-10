@@ -202,9 +202,9 @@ export function EditorSettingsTab({
                 </select>
             </div>
 
-            {/* Video Backdrop Dimming */}
+            {/* Code Backdrop Opacity */}
             <div className="settings-section">
-                <h3>Video Backdrop Dimming</h3>
+                <h3>Code Backing Over Video</h3>
                 <div className="settings-row">
                     <input
                         type="range"
@@ -212,15 +212,15 @@ export function EditorSettingsTab({
                         min={0}
                         max={1}
                         step={0.01}
-                        value={config.videoBackdropDim ?? 0.6}
+                        value={config.codeBackdropOpacity ?? 0.6}
                         onChange={(e) =>
                             onConfigChange({
-                                videoBackdropDim: Number(e.target.value),
+                                codeBackdropOpacity: Number(e.target.value),
                             })
                         }
                     />
                     <span className="settings-range-value">
-                        {(config.videoBackdropDim ?? 0.6).toFixed(2)}
+                        {(config.codeBackdropOpacity ?? 0.6).toFixed(2)}
                     </span>
                 </div>
             </div>

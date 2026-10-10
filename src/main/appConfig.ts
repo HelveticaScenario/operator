@@ -65,7 +65,7 @@ const AppConfigSchema = z.object({
     xyScopePersistence: z.number().min(0).max(1).optional(),
     xyScopeUpsample: z.boolean().optional(),
     xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
-    videoBackdropDim: z.number().min(0).max(1).optional(),
+    codeBackdropOpacity: z.number().min(0).max(1).optional(),
     vuPanelVisible: z.boolean().optional(),
     vuPanelHeight: z.number().min(84).max(480).optional(),
 });

@@ -134,8 +134,8 @@ export interface AppConfig {
     xyScopeUpsample?: boolean;
     /** XY scope beam half-width in clip-space units. Default 0.012. */
     xyScopeLineWidth?: number;
-    /** How far the video behind the code is darkened (0..1) so the code stays readable. Default 0.6. */
-    videoBackdropDim?: number;
+    /** Opacity (0..1) of the dark backing behind each line of code while video shows behind the code. Default 0.6. */
+    codeBackdropOpacity?: number;
     /** VU meter panel visibility. Default false. */
     vuPanelVisible?: boolean;
     /** VU meter panel height in px (84–480). Default 150. */

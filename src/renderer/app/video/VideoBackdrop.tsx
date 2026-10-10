@@ -11,11 +11,15 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * performance window the picture fills the whole editor area. With one open,
  * the picture has that window's resolution and aspect ratio and is fitted
  * inside the area, and each frame is copied into that window, so the
- * performer sees exactly what the audience sees. `dim` darkens only the
- * picture behind the code, from 0 (as drawn) to 1 (black), so the code stays
- * readable; the performance window is not dimmed.
+ * performer sees exactly what the audience sees. While a picture shows, each
+ * line of code gets a backing of `codeBackdropOpacity` (0 to 1) so the code
+ * stays readable, and the rest of the picture is left as drawn.
  */
-export function VideoBackdrop({ dim }: { dim: number }) {
+export function VideoBackdrop({
+    codeBackdropOpacity,
+}: {
+    codeBackdropOpacity: number;
+}) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [renderer, setRenderer] = useState<VideoRenderer | null>(null);
     const [shown, setShown] = useState(false);
@@ -104,12 +108,20 @@ export function VideoBackdrop({ dim }: { dim: number }) {
         void electronAPI.performanceWindow.setOpen(open);
     }, [open]);
 
-    // The panel gets a dark halo behind its text while a picture shows.
+    // The panel backs each line of code while a picture shows.
     useEffect(() => {
         const panel = canvasRef.current?.parentElement;
         panel?.classList.toggle('has-video-backdrop', shown);
         return () => panel?.classList.remove('has-video-backdrop');
     }, [shown]);
+
+    useEffect(() => {
+        const panel = canvasRef.current?.parentElement;
+        panel?.style.setProperty(
+            '--code-backdrop-opacity',
+            String(codeBackdropOpacity),
+        );
+    }, [codeBackdropOpacity]);
 
     useEffect(() => {
         renderer?.setFixedSize(size);
@@ -124,7 +136,6 @@ export function VideoBackdrop({ dim }: { dim: number }) {
                 ref={canvasRef}
                 className="video-backdrop"
                 style={{
-                    filter: `brightness(${1 - dim})`,
                     objectFit: size === null ? 'fill' : 'contain',
                     visibility: shown ? 'visible' : 'hidden',
                 }}

@@ -25,7 +25,7 @@ interface ThemeContextValue {
     xyScopePersistence: number;
     xyScopeUpsample: boolean;
     xyScopeLineWidth: number;
-    videoBackdropDim: number;
+    codeBackdropOpacity: number;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -88,7 +88,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [xyScopePersistence, setXyScopePersistence] = useState(0.6);
     const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
     const [xyScopeLineWidth, setXyScopeLineWidth] = useState(0.012);
-    const [videoBackdropDim, setVideoBackdropDim] = useState(0.6);
+    const [codeBackdropOpacity, setCodeBackdropOpacity] = useState(0.6);
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -124,8 +124,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.xyScopeUpsample != null) {
                 setXyScopeUpsample(config.xyScopeUpsample);
             }
-            if (config.videoBackdropDim != null) {
-                setVideoBackdropDim(config.videoBackdropDim);
+            if (config.codeBackdropOpacity != null) {
+                setCodeBackdropOpacity(config.codeBackdropOpacity);
             }
             if (config.xyScopeLineWidth != null) {
                 setXyScopeLineWidth(config.xyScopeLineWidth);
@@ -160,8 +160,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 if (newConfig.xyScopeUpsample != null) {
                     setXyScopeUpsample(newConfig.xyScopeUpsample);
                 }
-                if (newConfig.videoBackdropDim != null) {
-                    setVideoBackdropDim(newConfig.videoBackdropDim);
+                if (newConfig.codeBackdropOpacity != null) {
+                    setCodeBackdropOpacity(newConfig.codeBackdropOpacity);
                 }
                 if (newConfig.xyScopeLineWidth != null) {
                     setXyScopeLineWidth(newConfig.xyScopeLineWidth);
@@ -197,7 +197,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 xyScopePersistence,
                 xyScopeUpsample,
                 xyScopeLineWidth,
-                videoBackdropDim,
+                codeBackdropOpacity,
             }}
         >
             {children}

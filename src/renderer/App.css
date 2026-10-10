@@ -79,8 +79,19 @@
     white-space: pre-wrap;
 }
 
-/* A dark halo keeps the code legible over a bright picture. */
-.editor-panel.has-video-backdrop .monaco-editor .view-line,
+/* While a picture shows behind the code, each line of code gets a backing that
+ * ends where its text ends. The shadow extends it to the right without moving
+ * the text, which Monaco's cursor and selection depend on. */
+.editor-panel.has-video-backdrop .monaco-editor .view-line > span {
+    --code-backing: color-mix(
+        in srgb,
+        var(--bg-primary) calc(var(--code-backdrop-opacity, 0.6) * 100%),
+        transparent
+    );
+    background: var(--code-backing);
+    box-shadow: 8px 0 0 0 var(--code-backing);
+}
+
 .editor-panel.has-video-backdrop .monaco-editor .line-numbers {
     text-shadow:
         0 0 3px rgba(0, 0, 0, 0.9),
