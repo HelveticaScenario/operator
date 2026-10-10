@@ -1665,7 +1665,7 @@ function $cartesian<A extends unknown[][]>(...arrays: A): ElementsOf<A>[];
  * @example
  * // 3 pitches x 2 phase offsets = 6 voices
  * $sine($g1(["c3", "e3", "g3"]), {
- *   phaseOffset: $g2([0, 0.25]),
+ *   phaseOffset: $g2([0, 1.25]),
  * }).out()
  */
 function $g1(signals: Poly<Signal>): SignalGroup;
@@ -1676,7 +1676,7 @@ function $g1(signals: Poly<Signal>): SignalGroup;
  * @example
  * // 3 pitches x 2 phase offsets = 6 voices
  * $sine($g1(["c3", "e3", "g3"]), {
- *   phaseOffset: $g2([0, 0.25]),
+ *   phaseOffset: $g2([0, 1.25]),
  * }).out()
  */
 function $g2(signals: Poly<Signal>): SignalGroup;
@@ -1688,7 +1688,7 @@ function $g2(signals: Poly<Signal>): SignalGroup;
  * // 2 pitches x 2 shapes x 2 phases = 8 voices
  * $saw($g1(["c2", "c3"]), {
  *   shape: $g2([0, 2.5]),
- *   phaseOffset: $g3([0, 0.5]),
+ *   phaseOffset: $g3([0, 2.5]),
  * }).out()
  */
 function $g3(signals: Poly<Signal>): SignalGroup;

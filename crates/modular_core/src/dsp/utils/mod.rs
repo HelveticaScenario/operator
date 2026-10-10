@@ -14,6 +14,8 @@ use crate::dsp::consts::{LUT_PITCH_RATIO_HIGH, LUT_PITCH_RATIO_LOW};
 // - High threshold: 1.0V (signal goes high when input rises above this)
 // - Low threshold: 0.1V (signal goes low when input falls below this)
 pub const GATE_HIGH_VOLTAGE: f32 = 5.0;
+/// Volts that make one full cycle of a phase signal; a phase of 0 to 5V maps to 0 to 1 of a cycle.
+pub const PHASE_FULL_SCALE: f32 = 5.0;
 pub const GATE_LOW_VOLTAGE: f32 = 0.0;
 pub const GATE_DETECTION_HIGH_THRESHOLD: f32 = 1.0;
 pub const GATE_DETECTION_LOW_THRESHOLD: f32 = 0.1;

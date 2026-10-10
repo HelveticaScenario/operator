@@ -1,5 +1,5 @@
 use crate::{
-    dsp::utils::wrap,
+    dsp::utils::{PHASE_FULL_SCALE, wrap},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
@@ -11,8 +11,8 @@ use schemars::JsonSchema;
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
 struct PPulseOscillatorParams {
-    /// phasor input (0–1, wraps at boundaries)
-    #[signal(range = (0.0, 1.0))]
+    /// phasor input (0–5V, one cycle, wraps at boundaries)
+    #[signal(range = (0.0, 5.0))]
     phase: PolySignal,
     /// pulse width (0-5, 2.5 is square)
     #[signal(default = 2.5, range = (0.0, 5.0))]
@@ -40,7 +40,7 @@ struct ChannelState {
 /// Phase-driven pulse/square oscillator with pulse width modulation.
 ///
 /// Instead of a frequency input, this oscillator is driven by an external
-/// phasor signal (0–1). Connect a `ramp` or other phase source to `phase`
+/// phasor signal (0–5V). Connect a `ramp` or other phase source to `phase`
 /// and use phase-distortion modules between them for complex timbres.
 ///
 /// The `width` parameter sets the duty cycle: 0 = narrow pulse,
@@ -66,7 +66,7 @@ impl PPulseOscillator {
             let pwm = self.params.pwm.value_or(ch, 0.0);
             state.width.update((base_width + pwm).clamp(0.0, 5.0));
 
-            let phase = wrap(0.0..1.0, self.params.phase.get_value(ch));
+            let phase = wrap(0.0..1.0, self.params.phase.get_value(ch) / PHASE_FULL_SCALE);
 
             // Derive phase increment from external phasor
             let mut phase_increment = phase - state.prev_phase;

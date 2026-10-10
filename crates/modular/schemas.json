@@ -3029,7 +3029,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "phaseOffset": {
-          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3172,11 +3172,11 @@
       },
       {
         "name": "phaseOffset",
-        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3214,7 +3214,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "phaseOffset": {
-          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3381,11 +3381,11 @@
       },
       {
         "name": "phaseOffset",
-        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3423,7 +3423,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "phaseOffset": {
-          "description": "phase offset in [0, 1) added to the internal phase before sampling",
+          "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -3604,11 +3604,11 @@
       },
       {
         "name": "phaseOffset",
-        "description": "phase offset in [0, 1) added to the internal phase before sampling",
+        "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3619,14 +3619,14 @@
   },
   {
     "name": "$pSine",
-    "documentation": "Phase-driven sine wave oscillator.\n\nInstead of a frequency input, this oscillator is driven by an external\nphasor signal (0–1). Connect a `ramp` or other phase source to `phase`\nand use phase-distortion modules between them for complex timbres.\n\nOutput range is **±5V**.",
+    "documentation": "Phase-driven sine wave oscillator.\n\nInstead of a frequency input, this oscillator is driven by an external\nphasor signal (0–5V). Connect a `ramp` or other phase source to `phase`\nand use phase-distortion modules between them for complex timbres.\n\nOutput range is **±5V**.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "PSineOscillatorParams",
       "type": "object",
       "properties": {
         "phase": {
-          "description": "phasor input (0–1, wraps at boundaries)",
+          "description": "phasor input (0–5V, one cycle, wraps at boundaries)",
           "$ref": "#/$defs/PolySignal"
         }
       },
@@ -3707,11 +3707,11 @@
     "signalParams": [
       {
         "name": "phase",
-        "description": "phasor input (0–1, wraps at boundaries)",
+        "description": "phasor input (0–5V, one cycle, wraps at boundaries)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -3722,14 +3722,14 @@
   },
   {
     "name": "$pSaw",
-    "documentation": "Phase-driven variable-symmetry triangle oscillator.\n\nInstead of a frequency input, this oscillator is driven by an external\nphasor signal (0–1). Connect a `ramp` or other phase source to `phase`\nand use phase-distortion modules between them for complex timbres.\n\nThe `shape` parameter shifts the peak position of a triangle wave,\nsmoothly morphing between waveforms by adjusting attack/release time:\n- **0** — Saw (all rise, instant drop)\n- **2.5** — Triangle (symmetric)\n- **5** — Ramp (instant rise, all fall)\n\nOutput range is **±5V**.",
+    "documentation": "Phase-driven variable-symmetry triangle oscillator.\n\nInstead of a frequency input, this oscillator is driven by an external\nphasor signal (0–5V). Connect a `ramp` or other phase source to `phase`\nand use phase-distortion modules between them for complex timbres.\n\nThe `shape` parameter shifts the peak position of a triangle wave,\nsmoothly morphing between waveforms by adjusting attack/release time:\n- **0** — Saw (all rise, instant drop)\n- **2.5** — Triangle (symmetric)\n- **5** — Ramp (instant rise, all fall)\n\nOutput range is **±5V**.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "PSawOscillatorParams",
       "type": "object",
       "properties": {
         "phase": {
-          "description": "phasor input (0–1, wraps at boundaries)",
+          "description": "phasor input (0–5V, one cycle, wraps at boundaries)",
           "$ref": "#/$defs/PolySignal"
         },
         "shape": {
@@ -3821,11 +3821,11 @@
     "signalParams": [
       {
         "name": "phase",
-        "description": "phasor input (0–1, wraps at boundaries)",
+        "description": "phasor input (0–5V, one cycle, wraps at boundaries)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       },
       {
         "name": "shape",
@@ -3844,14 +3844,14 @@
   },
   {
     "name": "$pPulse",
-    "documentation": "Phase-driven pulse/square oscillator with pulse width modulation.\n\nInstead of a frequency input, this oscillator is driven by an external\nphasor signal (0–1). Connect a `ramp` or other phase source to `phase`\nand use phase-distortion modules between them for complex timbres.\n\nThe `width` parameter sets the duty cycle: 0 = narrow pulse,\n2.5 = square wave, 5 = inverted narrow pulse.\n`pwm` is added to `width` for modulation.\n\nOutput range is **±5V**.",
+    "documentation": "Phase-driven pulse/square oscillator with pulse width modulation.\n\nInstead of a frequency input, this oscillator is driven by an external\nphasor signal (0–5V). Connect a `ramp` or other phase source to `phase`\nand use phase-distortion modules between them for complex timbres.\n\nThe `width` parameter sets the duty cycle: 0 = narrow pulse,\n2.5 = square wave, 5 = inverted narrow pulse.\n`pwm` is added to `width` for modulation.\n\nOutput range is **±5V**.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "PPulseOscillatorParams",
       "type": "object",
       "properties": {
         "phase": {
-          "description": "phasor input (0–1, wraps at boundaries)",
+          "description": "phasor input (0–5V, one cycle, wraps at boundaries)",
           "$ref": "#/$defs/PolySignal"
         },
         "pwm": {
@@ -3954,11 +3954,11 @@
     "signalParams": [
       {
         "name": "phase",
-        "description": "phasor input (0–1, wraps at boundaries)",
+        "description": "phasor input (0–5V, one cycle, wraps at boundaries)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       },
       {
         "name": "width",
@@ -4757,7 +4757,7 @@
           ]
         },
         "phaseOffset": {
-          "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+          "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before warping/sampling",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -5068,11 +5068,11 @@
       },
       {
         "name": "phaseOffset",
-        "description": "phase offset in [0, 1) added to the internal phase before warping/sampling",
+        "description": "phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before warping/sampling",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -10858,7 +10858,7 @@
   },
   {
     "name": "$crush",
-    "documentation": "Phase effect: digital bit-crush distortion.\n\nTransforms a 0–1 phase signal by quantizing it into coarse steps,\ncreating glitchy, staircase-like phase patterns. Feed the output into\na phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear the result\nas gritty digital artifacts — fractured harmonics at low settings,\naggressive bit-reduction at high settings.\n\n# Example\n\n```js\n// Bit-crush a ramp phase and convert to audio with $pSine\n$pSine($crush($ramp('c3'), 2)).out()\n```",
+    "documentation": "Phase effect: digital bit-crush distortion.\n\nTransforms a 0–5V phase signal by quantizing it into coarse steps,\ncreating glitchy, staircase-like phase patterns. Feed the output into\na phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear the result\nas gritty digital artifacts — fractured harmonics at low settings,\naggressive bit-reduction at high settings.\n\n# Example\n\n```js\n// Bit-crush a ramp phase and convert to audio with $pSine\n$pSine($crush($ramp('c3'), 2)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "CrushParams",
@@ -10876,7 +10876,7 @@
           ]
         },
         "input": {
-          "description": "input phase (0 to 1)",
+          "description": "input phase (0 to 5V, one cycle)",
           "$ref": "#/$defs/PolySignal"
         }
       },
@@ -10946,22 +10946,22 @@
     "outputs": [
       {
         "name": "output",
-        "description": "crushed phase output",
+        "description": "crushed phase output (0 to 5V)",
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
-        "description": "input phase (0 to 1)",
+        "description": "input phase (0 to 5V, one cycle)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       },
       {
         "name": "amount",
@@ -10983,7 +10983,7 @@
   },
   {
     "name": "$feedback",
-    "documentation": "Phase effect: FM feedback distortion.\n\nTransforms a 0–1 phase signal by feeding the output back into itself,\nprogressively adding harmonic complexity and chaotic motion. Feed the\nresult into a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear\nthe effect. At low amounts the timbre gains subtle overtones; at high\namounts it becomes chaotic and noisy.\n\n# Example\n\n```js\n// Apply feedback distortion to a ramp phase and convert to audio\n$pSine($feedback($ramp('c3'), 3)).out()\n```",
+    "documentation": "Phase effect: FM feedback distortion.\n\nTransforms a 0–5V phase signal by feeding the output back into itself,\nprogressively adding harmonic complexity and chaotic motion. Feed the\nresult into a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear\nthe effect. At low amounts the timbre gains subtle overtones; at high\namounts it becomes chaotic and noisy.\n\n# Example\n\n```js\n// Apply feedback distortion to a ramp phase and convert to audio\n$pSine($feedback($ramp('c3'), 3)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "FeedbackParams",
@@ -11012,7 +11012,7 @@
           ]
         },
         "input": {
-          "description": "input phase (0 to 1)",
+          "description": "input phase (0 to 5V, one cycle)",
           "$ref": "#/$defs/PolySignal"
         }
       },
@@ -11082,22 +11082,22 @@
     "outputs": [
       {
         "name": "output",
-        "description": "feedback-distorted phase output",
+        "description": "feedback-distorted phase output (0 to 5V)",
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
-        "description": "input phase (0 to 1)",
+        "description": "input phase (0 to 5V, one cycle)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       },
       {
         "name": "amount",
@@ -11127,7 +11127,7 @@
   },
   {
     "name": "$pulsar",
-    "documentation": "Phase effect: pulsar synthesis distortion.\n\nTransforms a 0–1 phase signal by compressing the active portion of each\ncycle into a narrower window, leaving the rest silent. Feed the output\ninto a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear pulsed\nwaveforms — at higher amounts the pulse becomes extremely narrow,\nproducing bright, impulse-like timbres useful for excitation signals\nand metallic tones.\n\n# Example\n\n```js\n// Compress the phase with pulsar and convert to audio\n$pSine($pulsar($ramp('c3'), 3)).out()\n```",
+    "documentation": "Phase effect: pulsar synthesis distortion.\n\nTransforms a 0–5V phase signal by compressing the active portion of each\ncycle into a narrower window, leaving the rest silent. Feed the output\ninto a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear pulsed\nwaveforms — at higher amounts the pulse becomes extremely narrow,\nproducing bright, impulse-like timbres useful for excitation signals\nand metallic tones.\n\n# Example\n\n```js\n// Compress the phase with pulsar and convert to audio\n$pSine($pulsar($ramp('c3'), 3)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "PulsarParams",
@@ -11156,7 +11156,7 @@
           ]
         },
         "input": {
-          "description": "input phase (0 to 1)",
+          "description": "input phase (0 to 5V, one cycle)",
           "$ref": "#/$defs/PolySignal"
         }
       },
@@ -11226,22 +11226,22 @@
     "outputs": [
       {
         "name": "output",
-        "description": "pulsar phase output",
+        "description": "pulsar phase output (0 to 5V)",
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "bufferOutputs": [],
     "signalParams": [
       {
         "name": "input",
-        "description": "input phase (0 to 1)",
+        "description": "input phase (0 to 5V, one cycle)",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       },
       {
         "name": "amount",
@@ -11271,7 +11271,7 @@
   },
   {
     "name": "$ramp",
-    "documentation": "Phase ramp generator.\n\nProduces a rising sawtooth phase signal from 0 to 1 at the given frequency.\nThis is the fundamental building block for phase-based synthesis:\nfeed its output into phase-distortion modules (crush, feedback, pulsar)\nand then into a waveshaper (e.g. `$pSine`) to produce audio.",
+    "documentation": "Phase ramp generator.\n\nProduces a rising sawtooth phase signal from 0 to 5V at the given frequency.\nThis is the fundamental building block for phase-based synthesis:\nfeed its output into phase-distortion modules (crush, feedback, pulsar)\nand then into a waveshaper (e.g. `$pSine`) to produce audio.",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "RampParams",
@@ -11348,11 +11348,11 @@
     "outputs": [
       {
         "name": "output",
-        "description": "phase ramp output (0 to 1)",
+        "description": "phase ramp output (0 to 5)",
         "polyphonic": true,
         "default": true,
         "minValue": 0.0,
-        "maxValue": 1.0
+        "maxValue": 5.0
       }
     ],
     "bufferOutputs": [],

@@ -1,5 +1,5 @@
 use crate::{
-    dsp::utils::wrap,
+    dsp::utils::{PHASE_FULL_SCALE, wrap},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
@@ -11,8 +11,8 @@ use schemars::JsonSchema;
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
 struct PSawOscillatorParams {
-    /// phasor input (0–1, wraps at boundaries)
-    #[signal(range = (0.0, 1.0))]
+    /// phasor input (0–5V, one cycle, wraps at boundaries)
+    #[signal(range = (0.0, 5.0))]
     phase: PolySignal,
     /// waveform shape: 0=saw, 2.5=triangle, 5=ramp
     #[signal(range = (0.0, 5.0))]
@@ -40,7 +40,7 @@ struct ChannelState {
 /// Phase-driven variable-symmetry triangle oscillator.
 ///
 /// Instead of a frequency input, this oscillator is driven by an external
-/// phasor signal (0–1). Connect a `ramp` or other phase source to `phase`
+/// phasor signal (0–5V). Connect a `ramp` or other phase source to `phase`
 /// and use phase-distortion modules between them for complex timbres.
 ///
 /// The `shape` parameter shifts the peak position of a triangle wave,
@@ -68,7 +68,7 @@ impl PSawOscillator {
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
             state.shape.update(shape_val);
 
-            let phase = wrap(0.0..1.0, self.params.phase.get_value(ch)) as f64;
+            let phase = wrap(0.0..1.0, self.params.phase.get_value(ch) / PHASE_FULL_SCALE) as f64;
 
             // Calculate phase increment from phase difference
             // Handle phase wrapping correctly

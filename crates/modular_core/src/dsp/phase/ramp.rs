@@ -1,11 +1,11 @@
 //! Phase ramp generator module.
 //!
-//! Produces a phase ramp from 0 to 1 at a given frequency.
+//! Produces a phase ramp from 0 to 5V at a given frequency.
 
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::dsp::utils::{voct_to_hz, wrap_phase};
+use crate::dsp::utils::{PHASE_FULL_SCALE, voct_to_hz, wrap_phase};
 use crate::poly::{PolyOutput, PolySignal};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -20,7 +20,7 @@ struct RampParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct RampOutputs {
-    #[output("output", "phase ramp output (0 to 1)", default, range = (0.0, 1.0))]
+    #[output("output", "phase ramp output (0 to 5)", default, range = (0.0, 5.0))]
     sample: PolyOutput,
 }
 
@@ -32,7 +32,7 @@ struct ChannelState {
 
 /// Phase ramp generator.
 ///
-/// Produces a rising sawtooth phase signal from 0 to 1 at the given frequency.
+/// Produces a rising sawtooth phase signal from 0 to 5V at the given frequency.
 /// This is the fundamental building block for phase-based synthesis:
 /// feed its output into phase-distortion modules (crush, feedback, pulsar)
 /// and then into a waveshaper (e.g. `$pSine`) to produce audio.
@@ -56,7 +56,7 @@ impl Ramp {
 
             state.phase = wrap_phase(state.phase + phase_increment);
 
-            self.outputs.sample.set(ch, state.phase);
+            self.outputs.sample.set(ch, state.phase * PHASE_FULL_SCALE);
         }
     }
 }
@@ -87,12 +87,12 @@ mod tests {
     #[test]
     fn output_stays_in_range_above_twice_the_sample_rate() {
         // ~8.55 V is ≈ 96 kHz at C4 tuning, a phase increment of ~2 per
-        // sample: the wrap must keep the output in [0, 1) for any increment.
+        // sample: the wrap must keep the output in [0, 5) for any increment.
         let mut ramp = make_ramp(8.55);
         for _ in 0..1000 {
             ramp.update(48_000.0);
             let v = ramp.outputs.sample.get(0);
-            assert!((0.0..1.0).contains(&v), "output {v} must stay in [0, 1)");
+            assert!((0.0..5.0).contains(&v), "output {v} must stay in [0, 5)");
         }
     }
 

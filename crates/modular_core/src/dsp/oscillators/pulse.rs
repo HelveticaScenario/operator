@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::{SchmittTrigger, wrap_phase},
+        utils::{PHASE_FULL_SCALE, SchmittTrigger, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -35,8 +35,8 @@ struct PulseOscillatorParams {
     /// hard sync source — rising edges reset the oscillator phase
     #[deserr(default)]
     sync: Option<PolySignal>,
-    /// phase offset in [0, 1) added to the internal phase before sampling
-    #[signal(default = 0.0, range = (0.0, 1.0))]
+    /// phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before sampling
+    #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     phase_offset: Option<PolySignal>,
 }
@@ -104,7 +104,7 @@ impl PulseOscillator {
 
             // Phase offset shifts the read position without altering the
             // accumulator, so it never drifts.
-            let offset = self.params.phase_offset.value_or(ch, 0.0);
+            let offset = self.params.phase_offset.value_or(ch, 0.0) / PHASE_FULL_SCALE;
             let read_offset = offset.rem_euclid(1.0);
             let read_phase = (state.phase + read_offset).rem_euclid(1.0);
 

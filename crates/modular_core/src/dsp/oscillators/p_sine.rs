@@ -1,7 +1,7 @@
 use crate::{
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
-        utils::{interpolate, wrap},
+        utils::{PHASE_FULL_SCALE, interpolate, wrap},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
@@ -13,8 +13,8 @@ use schemars::JsonSchema;
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
 struct PSineOscillatorParams {
-    /// phasor input (0–1, wraps at boundaries)
-    #[signal(range = (0.0, 1.0))]
+    /// phasor input (0–5V, one cycle, wraps at boundaries)
+    #[signal(range = (0.0, 5.0))]
     phase: PolySignal,
 }
 
@@ -28,7 +28,7 @@ struct PSineOscillatorOutputs {
 /// Phase-driven sine wave oscillator.
 ///
 /// Instead of a frequency input, this oscillator is driven by an external
-/// phasor signal (0–1). Connect a `ramp` or other phase source to `phase`
+/// phasor signal (0–5V). Connect a `ramp` or other phase source to `phase`
 /// and use phase-distortion modules between them for complex timbres.
 ///
 /// Output range is **±5V**.
@@ -43,7 +43,7 @@ impl PSineOscillator {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
-            let phase = wrap(0.0..1.0, self.params.phase.get_value(ch));
+            let phase = wrap(0.0..1.0, self.params.phase.get_value(ch) / PHASE_FULL_SCALE);
             let sine = interpolate(LUT_SINE, phase, LUT_SINE_SIZE);
             self.outputs.sample.set(ch, sine * 5.0);
         }

@@ -22,7 +22,7 @@ use crate::{
         oscillators::{
             FmMode, apply_fm, sync_blep, sync_edge_fraction, wavetable_prep::PreparedWavetable,
         },
-        utils::SchmittTrigger,
+        utils::{PHASE_FULL_SCALE, SchmittTrigger},
     },
     poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
     types::{Table, Wav, WavData},
@@ -56,8 +56,8 @@ pub(crate) struct WavetableOscParams {
     /// Optional phase-warp table applied before sampling.
     #[deserr(default)]
     pub(crate) phase: Option<Table>,
-    /// phase offset in [0, 1) added to the internal phase before warping/sampling
-    #[signal(default = 0.0, range = (0.0, 1.0))]
+    /// phase offset in [0, 5) volts (5V is one cycle) added to the internal phase before warping/sampling
+    #[signal(default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     pub(crate) phase_offset: Option<PolySignal>,
     /// Pre-computed mipmap pyramid, populated by `prepare_resources` on the
@@ -209,7 +209,7 @@ impl WavetableOsc {
             // very first sample uses the state's starting phase (0.0 by
             // default). The phase offset shifts the read position without
             // altering the accumulator, so it never drifts.
-            let offset = self.params.phase_offset.value_or(ch, 0.0);
+            let offset = self.params.phase_offset.value_or(ch, 0.0) / PHASE_FULL_SCALE;
             let read_offset = offset.rem_euclid(1.0);
             let raw_phase = (state.phase as f32 + read_offset).rem_euclid(1.0);
             let warped_phase = match &self.params.phase {

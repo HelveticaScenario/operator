@@ -9,7 +9,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::dsp::fx::enosc_tables::aa_feedback;
-use crate::dsp::utils::{sanitize, voct_to_hz};
+use crate::dsp::utils::{PHASE_FULL_SCALE, sanitize, voct_to_hz};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::Clickless;
 
@@ -17,8 +17,8 @@ use crate::types::Clickless;
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct FeedbackParams {
-    /// input phase (0 to 1)
-    #[signal(range = (0.0, 1.0))]
+    /// input phase (0 to 5V, one cycle)
+    #[signal(range = (0.0, 5.0))]
     input: PolySignal,
     /// feedback amount (0-5, where 0 = no feedback, 5 = maximum feedback FM)
     #[signal(range = (0.0, 5.0))]
@@ -33,7 +33,7 @@ struct FeedbackParams {
 #[derive(Outputs, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct FeedbackOutputs {
-    #[output("output", "feedback-distorted phase output", default, range = (0.0, 1.0))]
+    #[output("output", "feedback-distorted phase output (0 to 5V)", default, range = (0.0, 5.0))]
     sample: PolyOutput,
 }
 
@@ -45,7 +45,7 @@ struct ChannelState {
 
 /// Phase effect: FM feedback distortion.
 ///
-/// Transforms a 0–1 phase signal by feeding the output back into itself,
+/// Transforms a 0–5V phase signal by feeding the output back into itself,
 /// progressively adding harmonic complexity and chaotic motion. Feed the
 /// result into a phase oscillator (`$pSine`, `$pSaw`, `$pPulse`) to hear
 /// the effect. At low amounts the timbre gains subtle overtones; at high
@@ -72,7 +72,7 @@ impl Feedback {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            let input = self.params.input.get_value(ch);
+            let input = self.params.input.get_value(ch) / PHASE_FULL_SCALE;
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
             // Smooth amount parameter to avoid clicks
@@ -118,7 +118,7 @@ impl Feedback {
             state.lp_state = sanitize(state.lp_state);
 
             // Output the distorted phase
-            self.outputs.sample.set(ch, phase);
+            self.outputs.sample.set(ch, phase * PHASE_FULL_SCALE);
         }
     }
 }
