@@ -1371,4 +1371,82 @@ describe('$v in the DSL executor', () => {
             ).toContain('* 0.2)');
         });
     });
+
+    describe("Hydra's modulators", () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+        const names = [
+            ['modulateScale', 'video_mod_scale('],
+            ['modulateRotate', 'video_transform(uv, 1.0,'],
+            ['modulatePixelate', 'video_mod_pixelate('],
+            ['modulateKaleid', 'video_mod_kaleid('],
+            ['modulateHue', 'u.resolution'],
+            ['modulateRepeat', 'video_mod_repeat('],
+            ['modulateRepeatX', 'video_mod_repeat_x('],
+            ['modulateRepeatY', 'video_mod_repeat_y('],
+            ['modulateScrollX', 'fract(uv + vec2f('],
+            ['modulateScrollY', 'fract(uv + vec2f('],
+        ] as const;
+        const noise = `$v.noise($v.ramp(), $v.ramp('v'))`;
+
+        it.each(names)('%s moves a field by a field', (name, emitted) => {
+            const wgsl = wgslOf(
+                `$v.out($v.hsv($v.${name}($v.osc($v.ramp(), 4), ${noise})));`,
+            );
+            expect(wgsl).toContain(emitted);
+            expect(wgsl).toMatch(/let v\d+: f32 = f\d+\(/);
+        });
+
+        it.each(names)('%s moves a color by a color', (name, emitted) => {
+            const wgsl = wgslOf(
+                `$v.out($v.${name}($v.hsv($v.ramp()), $v.hsv(${noise})));`,
+            );
+            expect(wgsl).toContain(emitted);
+            expect(wgsl).toMatch(/let v\d+: vec3f = f\d+\(/);
+        });
+
+        it('reads the channels of a color modulator, and a field for every channel', () => {
+            const color = wgslOf(
+                `$v.out($v.modulateScale($v.hsv($v.ramp()), $v.hsv(${noise})));`,
+            );
+            expect(color).toContain('.r;');
+            expect(color).toContain('.g;');
+            const field = wgslOf(
+                `$v.out($v.modulateScale($v.hsv($v.ramp()), ${noise}));`,
+            );
+            expect(field).not.toContain('.r;');
+        });
+
+        it('chains the way the function is called', () => {
+            const chained = wgslOf(`
+                $v.hsv($v.ramp()).$.modulateScale(${noise}, 2, 0.5).out();
+            `);
+            const called = wgslOf(`
+                $v.out($v.modulateScale($v.hsv($v.ramp()), ${noise}, 2, 0.5));
+            `);
+            expect(chained).toBe(called);
+        });
+
+        it('reads its angles and its scroll as fractions of 5, and its counts as they are', () => {
+            const rotate = wgslOf(
+                `$v.out($v.modulateRotate($v.hsv($v.ramp()), ${noise}, 2.5, 5));`,
+            );
+            expect(rotate).toMatch(
+                /video_transform\(uv, 1\.0, 1\.0 \+ v\d+ \* 0\.5/,
+            );
+            const cells = wgslOf(
+                `$v.out($v.modulatePixelate($v.hsv($v.ramp()), ${noise}, 12, 4));`,
+            );
+            expect(cells).toMatch(/vec2f\(4\.0 \+ v\d+ \* 12\.0/);
+        });
+
+        it('rejects a modulator that is not a video signal', () => {
+            for (const [name] of names) {
+                expect(() => exec(`$v.${name}($v.hsv(0), 'noise');`)).toThrow(
+                    new RegExp(
+                        `\\$v\\.${name}: modulator must be a video field or color`,
+                    ),
+                );
+            }
+        });
+    });
 });

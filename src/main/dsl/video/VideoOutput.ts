@@ -123,6 +123,26 @@ const PROCESSING: Record<string, ChainCall> = {
     mix: (o, s, b, amount) => o.mix(s, b, amount),
     modulate: (o, s, modulator, amount) => o.modulate(s, modulator, amount),
     mult: (o, s, b) => o.mult(s, b),
+    modulateHue: (o, s, modulator, amount) =>
+        o.modulateHue(s, modulator, amount),
+    modulateKaleid: (o, s, modulator, sides) =>
+        o.modulateKaleid(s, modulator, sides),
+    modulatePixelate: (o, s, modulator, multiple, offset) =>
+        o.modulatePixelate(s, modulator, multiple, offset),
+    modulateRepeat: (o, s, modulator, repeatX, repeatY, offsetX, offsetY) =>
+        o.modulateRepeat(s, modulator, repeatX, repeatY, offsetX, offsetY),
+    modulateRepeatX: (o, s, modulator, reps, offset) =>
+        o.modulateRepeatX(s, modulator, reps, offset),
+    modulateRepeatY: (o, s, modulator, reps, offset) =>
+        o.modulateRepeatY(s, modulator, reps, offset),
+    modulateRotate: (o, s, modulator, multiple, offset) =>
+        o.modulateRotate(s, modulator, multiple, offset),
+    modulateScale: (o, s, modulator, multiple, offset) =>
+        o.modulateScale(s, modulator, multiple, offset),
+    modulateScrollX: (o, s, modulator, scroll, speed) =>
+        o.modulateScrollX(s, modulator, scroll, speed),
+    modulateScrollY: (o, s, modulator, scroll, speed) =>
+        o.modulateScrollY(s, modulator, scroll, speed),
     pixelate: (o, s, x, y) => o.pixelate(s, x, y),
     posterize: (o, s, levels) => o.posterize(s, levels),
     procAmp: (o, s, gain, bias, saturation) =>

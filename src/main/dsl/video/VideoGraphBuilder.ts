@@ -23,6 +23,7 @@ import { colorMethods } from './videoColor';
 import { filterMethods } from './videoFilters';
 import { generatorMethods } from './videoGenerators';
 import { mathMethods } from './videoMath';
+import { modulatorMethods } from './videoModulators';
 import { sourceMethods } from './videoSources';
 import { warpMethods } from './videoWarps';
 import {
@@ -52,6 +53,7 @@ export interface VideoGraphBuilder
         ReturnType<typeof mathMethods>,
         ReturnType<typeof colorMethods>,
         ReturnType<typeof filterMethods>,
+        ReturnType<typeof modulatorMethods>,
         ReturnType<typeof sourceMethods>,
         ReturnType<typeof warpMethods> {}
 
@@ -78,6 +80,7 @@ export class VideoGraphBuilder implements VideoCore {
             mathMethods(this),
             colorMethods(this),
             filterMethods(this),
+            modulatorMethods(this),
             sourceMethods(this),
             warpMethods(this),
         );

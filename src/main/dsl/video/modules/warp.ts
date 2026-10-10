@@ -7,7 +7,7 @@ import type { VideoValueType } from '../../../../shared/video/videoGraph';
  * at coordinates it computes, so the input's whole sub-patch is moved, turned
  * or folded rather than just its output.
  */
-function coordinateModule(
+export function coordinateModule(
     extraInputs: readonly string[],
     natural: readonly string[],
     coordinates: (args: Record<string, string>) => string,

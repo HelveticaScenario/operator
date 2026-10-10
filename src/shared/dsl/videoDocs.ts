@@ -815,6 +815,283 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'modulateScale',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateScale`: scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical (a field sets both). Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            {
+                name: 'multiple',
+                description:
+                    'How much the modulator adds to the scale factor (default 1)',
+            },
+            {
+                name: 'offset',
+                description:
+                    'The scale factor where the modulator is 0 (default 1)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateScale($v.hsv($v.osc($v.ramp('r'), 10)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 1.5, 1))",
+        ],
+        declarations: [
+            'modulateScale(input: VideoField, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoField;',
+            'modulateScale(input: VideoColor, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateRotate',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateRotate`: turns `input` about the center by `offset + multiple * red`, so the brighter parts of the modulator turn the picture further. Angles are fractions of 5: 5 is a full turn.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            {
+                name: 'multiple',
+                description:
+                    'Turn at a full modulator, with 5 a full turn (default 5)',
+            },
+            {
+                name: 'offset',
+                description: 'Turn where the modulator is 0 (default 0)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateRotate($v.hsv($v.osc($v.ramp(), 8)), $v.osc($v.ramp('r'), 3, $v.time), 2.5))",
+        ],
+        declarations: [
+            'modulateRotate(input: VideoField, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoField;',
+            'modulateRotate(input: VideoColor, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulatePixelate',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulatePixelate`: holds `input` constant over a grid of `offset + multiple * channel` cells, red setting the cells across and green the cells up, so the pixels grow large where the modulator is dark.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            {
+                name: 'multiple',
+                description: 'Cells the modulator adds when full (default 10)',
+            },
+            {
+                name: 'offset',
+                description: 'Cells where the modulator is 0 (default 3)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulatePixelate($v.hsv($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time)), $v.ramp(), 30, 4))",
+        ],
+        declarations: [
+            'modulatePixelate(input: VideoField, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoField;',
+            'modulatePixelate(input: VideoColor, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateKaleid',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateKaleid`: mirrors `input` around the center into `sides` wedges, with the distance from the center pushed out by the modulator's red channel, so the kaleidoscope swells where the modulator is bright.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            { name: 'sides', description: 'Number of wedges (default 4)' },
+        ],
+        examples: [
+            "$v.out($v.modulateKaleid($v.hsv($v.osc($v.ramp(), 6, $v.time)), $v.ramp('r'), 6))",
+        ],
+        declarations: [
+            'modulateKaleid(input: VideoField, modulator: VideoField | VideoColor, sides?: VideoValue): VideoField;',
+            'modulateKaleid(input: VideoColor, modulator: VideoField | VideoColor, sides?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateHue',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateHue`: pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A field has the same value in every channel, so it has no differences and does not move `input`.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            {
+                name: 'amount',
+                description:
+                    'Pixels of push for a channel difference of full scale (default 50)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateHue($v.hsv($v.osc($v.ramp(), 8)), $v.hsv($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time)), 120))",
+        ],
+        declarations: [
+            'modulateHue(input: VideoField, modulator: VideoField | VideoColor, amount?: VideoValue): VideoField;',
+            'modulateHue(input: VideoColor, modulator: VideoField | VideoColor, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateRepeat',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateRepeat`: tiles `input` `repeatX` by `repeatY` times with alternate rows and columns offset, the offsets growing with the modulator's red channel for x and green for y. 5 is a whole tile.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            { name: 'repeatX', description: 'Tiles across (default 3)' },
+            { name: 'repeatY', description: 'Tiles up (default 3)' },
+            {
+                name: 'offsetX',
+                description:
+                    'Shift of alternate rows at a full red channel, with 5 a whole tile (default 2.5)',
+            },
+            {
+                name: 'offsetY',
+                description:
+                    'Shift of alternate columns at a full green channel (default 2.5)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateRepeat($v.hsv(3, 5, $v.shape($v.ramp(), $v.ramp('v'), 1.5)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 4, 4, 2.5, 2.5))",
+        ],
+        declarations: [
+            'modulateRepeat(input: VideoField, modulator: VideoField | VideoColor, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoField;',
+            'modulateRepeat(input: VideoColor, modulator: VideoField | VideoColor, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateRepeatX',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateRepeatX`: tiles `input` `reps` times across, shifting alternate columns up by `offset` times the modulator's red channel.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            { name: 'reps', description: 'Tiles across (default 3)' },
+            {
+                name: 'offset',
+                description:
+                    'Shift at a full red channel, with 5 a whole tile (default 2.5)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateRepeatX($v.hsv(3, 5, $v.shape($v.ramp(), $v.ramp('v'), 1.5)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 4))",
+        ],
+        declarations: [
+            'modulateRepeatX(input: VideoField, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoField;',
+            'modulateRepeatX(input: VideoColor, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateRepeatY',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateRepeatY`: tiles `input` `reps` times up, shifting alternate rows right by `offset` times the modulator's red channel.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            { name: 'reps', description: 'Tiles up (default 3)' },
+            {
+                name: 'offset',
+                description:
+                    'Shift at a full red channel, with 5 a whole tile (default 2.5)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateRepeatY($v.hsv(3, 5, $v.shape($v.ramp(), $v.ramp('v'), 1.5)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 4))",
+        ],
+        declarations: [
+            'modulateRepeatY(input: VideoField, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoField;',
+            'modulateRepeatY(input: VideoColor, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateScrollX',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateScrollX`: scrolls `input` across by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            {
+                name: 'scroll',
+                description:
+                    'Scroll at a full red channel, with 5 the whole width (default 2.5)',
+            },
+            {
+                name: 'speed',
+                description:
+                    'Scroll per second, with 5 the whole width (default 0)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateScrollX($v.hsv($v.osc($v.ramp(), 8)), $v.ramp('v'), 2.5, 0.5))",
+        ],
+        declarations: [
+            'modulateScrollX(input: VideoField, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoField;',
+            'modulateScrollX(input: VideoColor, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'modulateScrollY',
+        group: 'Warping',
+        description:
+            "As Hydra's `modulateScrollY`: scrolls `input` up by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
+        params: [
+            {
+                name: 'modulator',
+                description:
+                    'The signal that moves `input`; a color uses its channels, a field its one value',
+            },
+            {
+                name: 'scroll',
+                description:
+                    'Scroll at a full red channel, with 5 the whole height (default 2.5)',
+            },
+            {
+                name: 'speed',
+                description:
+                    'Scroll per second, with 5 the whole height (default 0)',
+            },
+        ],
+        examples: [
+            "$v.out($v.modulateScrollY($v.hsv($v.osc($v.ramp('v'), 8)), $v.ramp(), 2.5, 0.5))",
+        ],
+        declarations: [
+            'modulateScrollY(input: VideoField, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoField;',
+            'modulateScrollY(input: VideoColor, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoColor;',
+        ],
+    },
+    {
         name: 'kaleid',
         group: 'Warping',
         description:
@@ -1280,6 +1557,83 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description: 'Pushes this around by another signal.',
         declarations: [
             'modulate(modulator: VideoField | VideoColor, amount?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateScale',
+        description:
+            'Scales this about the center by `offset + multiple * channel` of a modulator.',
+        declarations: [
+            'modulateScale(modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateRotate',
+        description:
+            'Turns this about the center by `offset + multiple * red` of a modulator.',
+        declarations: [
+            'modulateRotate(modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulatePixelate',
+        description:
+            'Holds this constant over a grid of `offset + multiple * channel` cells.',
+        declarations: [
+            'modulatePixelate(modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateKaleid',
+        description:
+            'Mirrors this into `sides` wedges, pushed outward by a modulator.',
+        declarations: [
+            'modulateKaleid(modulator: VideoField | VideoColor, sides?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateHue',
+        description:
+            "Pushes this by the differences between a modulator's color channels.",
+        declarations: [
+            'modulateHue(modulator: VideoField | VideoColor, amount?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateRepeat',
+        description:
+            'Tiles this with alternate rows and columns offset by a modulator.',
+        declarations: [
+            'modulateRepeat(modulator: VideoField | VideoColor, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateRepeatX',
+        description:
+            'Tiles this across, shifting alternate columns by a modulator.',
+        declarations: [
+            'modulateRepeatX(modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateRepeatY',
+        description: 'Tiles this up, shifting alternate rows by a modulator.',
+        declarations: [
+            'modulateRepeatY(modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateScrollX',
+        description: 'Scrolls this across by a modulator, wrapping.',
+        declarations: [
+            'modulateScrollX(modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): {self};',
+        ],
+    },
+    {
+        name: 'modulateScrollY',
+        description: 'Scrolls this up by a modulator, wrapping.',
+        declarations: [
+            'modulateScrollY(modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): {self};',
         ],
     },
     {

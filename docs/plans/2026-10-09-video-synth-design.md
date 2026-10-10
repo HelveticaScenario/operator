@@ -97,6 +97,7 @@ The engine produces samples a callback at a time, so the newest sample only move
 - **Warps that move a whole sub-patch.** Every node can be compiled as a function of the coordinate, `fn f<i>(uv) -> T`, alongside the memoized statement at the pixel's own coordinate. `warp`, `displace`, `modulate`, `kaleid`, `pixelate` and `repeat` call their input as a function at coordinates they compute, so they move, bend or fold everything behind it, not just its output. Graphs without warps compile as before.
 - **Chaining.** Every video signal has the `$v` functions as methods with itself as the first argument (`$v.osc(...).modulate(...).kaleid(6).hsv().out()`), plus `rotate`, `scale` and `scroll` as shorthand for `warp`.
 - **Named buffers.** `$v.buffer()` gives a frame store any signal can write and any number of signals can read the previous frame of, so buffers can feed themselves and each other. `$v.feedback` is the same mechanism with one read and one write.
+- **All of Hydra's modulators.** `modulate`, `modulateScale`, `modulateRotate`, `modulatePixelate`, `modulateKaleid`, `modulateHue`, `modulateRepeat`, `modulateRepeatX`, `modulateRepeatY`, `modulateScrollX` and `modulateScrollY`, each a coordinate module like `warp`: the input's whole sub-patch is read at coordinates that the modulator moves. A color modulator supplies its red, green and blue as Hydra's do, and a field its one value for every channel it is asked for (so `modulateHue`, which uses channel differences, does nothing with a field). Counts and scale factors take their numbers from Hydra; angles, offsets, scrolls and the other fractions are fractions of 5 volts, so `modulateRotate`'s `multiple` of 5 is a full turn.
 - **Library gaps filled:** `voronoi`, `polygon`, `hueShift`, `contrast`, `channel`. Hydra's `thresh`, `luma`, `brightness` and `saturate` are `comparator`, `key` and `procAmp`.
 - **Filters on whole sub-patches.** Because any node can be read as a function of the coordinate, `blur` (sixteen taps over a disk, turned per pixel so the gaps read as grain, not ghost copies) and `edges` (a Sobel filter) work on any signal without textures. Their cost is the input's cost times the taps.
 - **Media.** `$v.image(path)` and `$v.video(path)` read pictures and recordings from the workspace folder as colors, with `cover`, `contain` or `stretch` fitting. They are textures the shader samples at the coordinate being drawn, so warps and feedback move footage like any pattern. The files are served to the renderer over an `operator-media://` scheme that resolves inside the workspace folder only; videos play muted in a loop and a texture refreshes when the video has a new frame. H.264 MP4 and VP9 WebM both play in the app's browser engine.
@@ -181,7 +182,6 @@ Not built yet, in rough order of value:
 - Syphon publishing of the performance window.
 - Sequences as parameters, as Hydra's arrays: a `$p` pattern through an audio tap already steps values with exact edges, but there is no video-side shorthand.
 - `$v.frameDelay` (a buffer read does most of this).
-- Bloom as a single module (a blurred copy added back works today with `pipe`).
 
 Deferred indefinitely:
 
