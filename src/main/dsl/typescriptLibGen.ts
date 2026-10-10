@@ -1776,25 +1776,25 @@ function $cross(
  *
  * @example
  * // Compose two tables (mirror feeds into bend):
- * $table.mirror(0.5, $table.bend(0.3))
+ * $table.mirror(2.5, $table.bend(1.5))
  *
  * // Compose three tables left-to-right:
- * $table.mirror(0.5, $table.bend(0.3, $table.fold(0.2)))
+ * $table.mirror(2.5, $table.bend(1.5, $table.fold(1)))
  *
  * // Generic function application via .pipe:
- * const addBend = (t) => $table.bend(0.3, t)
- * $table.mirror(0.5).pipe(addBend)
+ * const addBend = (t) => $table.bend(1.5, t)
+ * $table.mirror(2.5).pipe(addBend)
  */
 declare const $table: {
-    /** Reflect the phase around its midpoint by \`amount\` (0..1). */
+    /** Reflect the phase around its midpoint by \`amount\` (0..5V). */
     mirror(amount: Poly<Signal>, next?: Table): Table;
-    /** Bend the phase curve by \`amount\` (0..1 = linear..extreme). */
+    /** Bend the phase curve by \`amount\` (-5..5V; 0 is linear, 5 is extreme). */
     bend(amount: Poly<Signal>, next?: Table): Table;
-    /** Hard-sync: restart the phase every \`ratio\` of a cycle. */
+    /** Hard-sync: restart the phase every \`ratio\` of a cycle (0..5V = 1x..16x). */
     sync(ratio: Poly<Signal>, next?: Table): Table;
-    /** Fold the phase back on itself by \`amount\`. */
+    /** Fold the phase back on itself by \`amount\` (0..5V). */
     fold(amount: Poly<Signal>, next?: Table): Table;
-    /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
+    /** Pulse-width modulation warp with duty cycle \`width\` (0..5V). */
     pwm(width: Poly<Signal>, next?: Table): Table;
 };
 
