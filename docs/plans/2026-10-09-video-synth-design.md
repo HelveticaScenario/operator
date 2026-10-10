@@ -98,6 +98,10 @@ The engine produces samples a callback at a time, so the newest sample only move
 - **Chaining.** Every video signal has the `$v` functions as methods with itself as the first argument (`$v.osc(...).modulate(...).kaleid(6).hsv().out()`), plus `rotate`, `scale` and `scroll` as shorthand for `warp`.
 - **Named buffers.** `$v.buffer()` gives a frame store any signal can write and any number of signals can read the previous frame of, so buffers can feed themselves and each other. `$v.feedback` is the same mechanism with one read and one write.
 - **Library gaps filled:** `voronoi`, `polygon`, `hueShift`, `contrast`, `channel`. Hydra's `thresh`, `luma`, `brightness` and `saturate` are `comparator`, `key` and `procAmp`.
+- **Filters on whole sub-patches.** Because any node can be read as a function of the coordinate, `blur` (sixteen taps over a disk, turned per pixel so the gaps read as grain, not ghost copies) and `edges` (a Sobel filter) work on any signal without textures. Their cost is the input's cost times the taps.
+- **Media.** `$v.image(path)` and `$v.video(path)` read pictures and recordings from the workspace folder as colors, with `cover`, `contain` or `stretch` fitting. They are textures the shader samples at the coordinate being drawn, so warps and feedback move footage like any pattern. The files are served to the renderer over an `operator-media://` scheme that resolves inside the workspace folder only; videos play muted in a loop and a texture refreshes when the video has a new frame. H.264 MP4 and VP9 WebM both play in the app's browser engine.
+- **Post effects:** `scanlines`, `vignette` and `grain`.
+- **Chaining mechanics match the audio graph.** `.$` is a namespace of the `$v` functions that take a signal first, `.$m` adds a leading mix, `.pipe(fn)` and `.pipe(fn, array)` apply functions, and `.pipeMix(fn, mix)` crossfades; `out`, `preview`, `toCV` and `write` end or tap a chain as direct methods. `tint(hue, saturation)` colors a mask, where `hsv` on a field treats it as the hue.
 
 ### Phase 3 — Feedback and memory (done)
 
@@ -154,14 +158,12 @@ One table, `src/shared/dsl/videoDocs.ts`, generates both the Monaco typings (JSD
 
 Not built yet, in rough order of value:
 
-- **External sources as fields:** camera, video, image and screen capture, as Hydra offers, so live input can go through the same feedback and warps. An image from the workspace folder would parallel `$wavs()`.
+- **Camera and screen capture as sources.** Needs a camera entitlement and usage string in the packaging and an OS permission prompt, so it was left for a step that can be tested with a real camera. Everything else about it (a texture refreshed from a video element, bound like `$v.video`) already exists.
 - Performance window options: fullscreen on a chosen display, aspect, resolution scale.
 - Syphon publishing of the performance window.
 - Sequences as parameters, as Hydra's arrays: a `$p` pattern through an audio tap already steps values with exact edges, but there is no video-side shorthand.
 - `$v.frameDelay` (a buffer read does most of this).
-- Analog-look post-processing: scanlines, bloom.
-- Filters that need neighbouring pixels, such as blur.
-- `VideoGraphBuilder.ts` has grown past the file-size guideline and should be split by domain.
+- Bloom as a single module (a blurred copy added back works today with `pipe`).
 
 Deferred indefinitely:
 
