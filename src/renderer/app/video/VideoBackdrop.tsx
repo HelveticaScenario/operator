@@ -11,9 +11,11 @@ const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
  * performance window the picture fills the whole editor area. With one open,
  * the picture has that window's resolution and aspect ratio and is fitted
  * inside the area, and each frame is copied into that window, so the
- * performer sees exactly what the audience sees.
+ * performer sees exactly what the audience sees. `dim` darkens only the
+ * picture behind the code, from 0 (as drawn) to 1 (black), so the code stays
+ * readable; the performance window is not dimmed.
  */
-export function VideoBackdrop() {
+export function VideoBackdrop({ dim }: { dim: number }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [renderer, setRenderer] = useState<VideoRenderer | null>(null);
     const [shown, setShown] = useState(false);
@@ -102,6 +104,13 @@ export function VideoBackdrop() {
         void electronAPI.performanceWindow.setOpen(open);
     }, [open]);
 
+    // The panel gets a dark halo behind its text while a picture shows.
+    useEffect(() => {
+        const panel = canvasRef.current?.parentElement;
+        panel?.classList.toggle('has-video-backdrop', shown);
+        return () => panel?.classList.remove('has-video-backdrop');
+    }, [shown]);
+
     useEffect(() => {
         renderer?.setFixedSize(size);
         renderer?.setFrameSink(
@@ -115,6 +124,7 @@ export function VideoBackdrop() {
                 ref={canvasRef}
                 className="video-backdrop"
                 style={{
+                    filter: `brightness(${1 - dim})`,
                     objectFit: size === null ? 'fill' : 'contain',
                     visibility: shown ? 'visible' : 'hidden',
                 }}

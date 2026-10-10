@@ -202,6 +202,29 @@ export function EditorSettingsTab({
                 </select>
             </div>
 
+            {/* Video Backdrop Dimming */}
+            <div className="settings-section">
+                <h3>Video Backdrop Dimming</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={config.videoBackdropDim ?? 0.6}
+                        onChange={(e) =>
+                            onConfigChange({
+                                videoBackdropDim: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.videoBackdropDim ?? 0.6).toFixed(2)}
+                    </span>
+                </div>
+            </div>
+
             {/* XY Scope Intensity */}
             <div className="settings-section">
                 <h3>XY Scope Beam Intensity</h3>
