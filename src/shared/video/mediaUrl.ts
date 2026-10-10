@@ -30,22 +30,13 @@ export function mediaUrl(path: string): string {
     return `${MEDIA_SCHEME}://${MEDIA_HOST}/${encoded}`;
 }
 
-/**
- * The workspace-relative path a media URL names, or null when the URL is not a
- * well-formed media URL. The result may still contain `..`; resolving it
- * against the workspace folder and checking containment is the caller's job.
- */
-export function parseMediaUrl(url: string): string | null {
-    let parsed: URL;
+/** The decoded path of a media URL whose host is `host`, or null when it is not one. */
+function pathOnHost(url: string, host: string): string | null {
     try {
-        parsed = new URL(url);
-    } catch {
-        return null;
-    }
-    if (parsed.protocol !== `${MEDIA_SCHEME}:` || parsed.host !== MEDIA_HOST) {
-        return null;
-    }
-    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== `${MEDIA_SCHEME}:` || parsed.host !== host) {
+            return null;
+        }
         return parsed.pathname
             .slice(1)
             .split('/')
@@ -56,21 +47,17 @@ export function parseMediaUrl(url: string): string | null {
     }
 }
 
+/**
+ * The workspace-relative path a media URL names, or null when the URL is not a
+ * well-formed media URL. The result may still contain `..`; resolving it
+ * against the workspace folder and checking containment is the caller's job.
+ */
+export function parseMediaUrl(url: string): string | null {
+    return pathOnHost(url, MEDIA_HOST);
+}
+
 /** The network URL a media URL stands for, or null when it is not one. */
 export function parseRemoteMediaUrl(url: string): string | null {
-    let parsed: URL;
-    try {
-        parsed = new URL(url);
-    } catch {
-        return null;
-    }
-    if (parsed.protocol !== `${MEDIA_SCHEME}:` || parsed.host !== REMOTE_HOST) {
-        return null;
-    }
-    try {
-        const remote = decodeURIComponent(parsed.pathname.slice(1));
-        return isRemoteMedia(remote) ? remote : null;
-    } catch {
-        return null;
-    }
+    const remote = pathOnHost(url, REMOTE_HOST);
+    return remote !== null && isRemoteMedia(remote) ? remote : null;
 }

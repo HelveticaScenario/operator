@@ -159,15 +159,12 @@ function withAudio(
 
 /** The `$v` functions that read pictures, recordings, cameras and screens. */
 export function sourceMethods(core: VideoCore) {
-    const live = (def: VideoSourceDef, fit: string): VideoOutput =>
+    const source = (def: VideoSourceDef, fit: string): VideoOutput =>
         core.addNode(
             'source',
             'color',
             {},
-            { fit },
-            undefined,
-            undefined,
-            core.sourceIndex(def),
+            { params: { fit }, source: core.sourceIndex(def) },
         );
     const make =
         (fn: string, kind: 'image' | 'video', extensions: string[]) =>
@@ -187,15 +184,7 @@ export function sourceMethods(core: VideoCore) {
                 kind === 'image',
             );
             const timing = kind === 'video' ? playback(config) : {};
-            const output = core.addNode(
-                'source',
-                'color',
-                {},
-                { fit },
-                undefined,
-                undefined,
-                core.sourceIndex({ kind, path: normalized, ...timing }),
-            );
+            const output = source({ kind, path: normalized, ...timing }, fit);
             return kind === 'video'
                 ? withAudio(core, output, normalized, timing)
                 : output;
@@ -225,7 +214,7 @@ export function sourceMethods(core: VideoCore) {
                     `$v.stream: url must be an http or https address, got ${describe(url)}`,
                 );
             }
-            return live(
+            return source(
                 { kind: 'video', path: networkUrl('$v.stream', url) },
                 fit,
             );
@@ -243,7 +232,7 @@ export function sourceMethods(core: VideoCore) {
                     `$v.camera: device must be part of a camera's name, got ${describe(device)}`,
                 );
             }
-            return live(
+            return source(
                 { kind: 'camera', path: '', ...(device ? { device } : {}) },
                 fit,
             );
@@ -261,7 +250,7 @@ export function sourceMethods(core: VideoCore) {
                     `$v.screen: display must be a whole number from 1, got ${describe(display)}`,
                 );
             }
-            return live(
+            return source(
                 {
                     kind: 'screen',
                     path: '',

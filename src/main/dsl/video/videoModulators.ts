@@ -13,17 +13,30 @@ import {
  * every channel it is asked for.
  */
 export function modulatorMethods(core: VideoCore) {
-    const channels = (
-        fn: string,
-        modulator: unknown,
+    /**
+     * Reads the whole `input` at coordinates the `which` channels of
+     * `modulator` move, as module `kind`; `fields` are its other inputs.
+     */
+    const modulate = (
+        kind: string,
         which: readonly ('r' | 'g' | 'b')[],
-    ): VideoOutput[] => {
+        input: unknown,
+        modulator: unknown,
+        fields: Record<string, unknown>,
+    ): VideoOutput => {
+        const fn = `$v.${kind}`;
         if (!(modulator instanceof VideoOutput)) {
             throw new Error(
                 `${fn}: modulator must be a video field or color, got ${describe(modulator)}`,
             );
         }
-        return which.map((channel) => core.channel(modulator, channel));
+        const channels = Object.fromEntries(
+            which.map((channel) => [
+                `m${channel}`,
+                core.channel(modulator, channel),
+            ]),
+        );
+        return transform(core, fn, kind, input, { ...channels, ...fields });
     };
 
     return {
@@ -33,18 +46,11 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             multiple: VideoSource = 1,
             offset: VideoSource = 1,
-        ): VideoOutput => {
-            const [mr, mg] = channels('$v.modulateScale', modulator, [
-                'r',
-                'g',
-            ]);
-            return transform(core, '$v.modulateScale', 'modulateScale', input, {
-                mg,
-                mr,
+        ): VideoOutput =>
+            modulate('modulateScale', ['r', 'g'], input, modulator, {
                 multiple,
                 offset,
-            });
-        },
+            }),
 
         /** Turns `input` about the center by `offset + multiple * red`; 5 is a full turn. */
         modulateRotate: (
@@ -52,16 +58,11 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             multiple: VideoSource = 5,
             offset: VideoSource = 0,
-        ): VideoOutput => {
-            const [mr] = channels('$v.modulateRotate', modulator, ['r']);
-            return transform(
-                core,
-                '$v.modulateRotate',
-                'modulateRotate',
-                input,
-                { mr, multiple, offset },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateRotate', ['r'], input, modulator, {
+                multiple,
+                offset,
+            }),
 
         /** Holds `input` constant over `offset + multiple * channel` cells across and up. */
         modulatePixelate: (
@@ -69,54 +70,29 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             multiple: VideoSource = 10,
             offset: VideoSource = 3,
-        ): VideoOutput => {
-            const [mr, mg] = channels('$v.modulatePixelate', modulator, [
-                'r',
-                'g',
-            ]);
-            return transform(
-                core,
-                '$v.modulatePixelate',
-                'modulatePixelate',
-                input,
-                { mg, mr, multiple, offset },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulatePixelate', ['r', 'g'], input, modulator, {
+                multiple,
+                offset,
+            }),
 
         /** Mirrors `input` into `sides` wedges, pushing outward by the red channel. */
         modulateKaleid: (
             input: VideoOutput,
             modulator: VideoOutput,
             sides: VideoSource = 4,
-        ): VideoOutput => {
-            const [mr] = channels('$v.modulateKaleid', modulator, ['r']);
-            return transform(
-                core,
-                '$v.modulateKaleid',
-                'modulateKaleid',
-                input,
-                { mr, sides },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateKaleid', ['r'], input, modulator, { sides }),
 
         /** Pushes `input` by the differences between the modulator's channels, `amount` pixels at most. */
         modulateHue: (
             input: VideoOutput,
             modulator: VideoOutput,
             amount: VideoSource = 50,
-        ): VideoOutput => {
-            const [mr, mg, mb] = channels('$v.modulateHue', modulator, [
-                'r',
-                'g',
-                'b',
-            ]);
-            return transform(core, '$v.modulateHue', 'modulateHue', input, {
+        ): VideoOutput =>
+            modulate('modulateHue', ['r', 'g', 'b'], input, modulator, {
                 amount,
-                mb,
-                mg,
-                mr,
-            });
-        },
+            }),
 
         /** Tiles `input` with alternate rows and columns shifted by the red and green channels. */
         modulateRepeat: (
@@ -126,19 +102,13 @@ export function modulatorMethods(core: VideoCore) {
             repeatY: VideoSource = 3,
             offsetX: VideoSource = 2.5,
             offsetY: VideoSource = 2.5,
-        ): VideoOutput => {
-            const [mr, mg] = channels('$v.modulateRepeat', modulator, [
-                'r',
-                'g',
-            ]);
-            return transform(
-                core,
-                '$v.modulateRepeat',
-                'modulateRepeat',
-                input,
-                { mg, mr, offsetX, offsetY, repeatX, repeatY },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateRepeat', ['r', 'g'], input, modulator, {
+                repeatX,
+                repeatY,
+                offsetX,
+                offsetY,
+            }),
 
         /** Tiles `input` across, shifting alternate columns up by the red channel. */
         modulateRepeatX: (
@@ -146,16 +116,11 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             reps: VideoSource = 3,
             offset: VideoSource = 2.5,
-        ): VideoOutput => {
-            const [mr] = channels('$v.modulateRepeatX', modulator, ['r']);
-            return transform(
-                core,
-                '$v.modulateRepeatX',
-                'modulateRepeatX',
-                input,
-                { mr, offset, reps },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateRepeatX', ['r'], input, modulator, {
+                reps,
+                offset,
+            }),
 
         /** Tiles `input` up, shifting alternate rows right by the red channel. */
         modulateRepeatY: (
@@ -163,16 +128,11 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             reps: VideoSource = 3,
             offset: VideoSource = 2.5,
-        ): VideoOutput => {
-            const [mr] = channels('$v.modulateRepeatY', modulator, ['r']);
-            return transform(
-                core,
-                '$v.modulateRepeatY',
-                'modulateRepeatY',
-                input,
-                { mr, offset, reps },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateRepeatY', ['r'], input, modulator, {
+                reps,
+                offset,
+            }),
 
         /** Scrolls `input` across by the red channel times `scroll`, and by `speed` per second, wrapping. */
         modulateScrollX: (
@@ -180,16 +140,11 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             scroll: VideoSource = 2.5,
             speed: VideoSource = 0,
-        ): VideoOutput => {
-            const [mr] = channels('$v.modulateScrollX', modulator, ['r']);
-            return transform(
-                core,
-                '$v.modulateScrollX',
-                'modulateScrollX',
-                input,
-                { mr, scroll, speed },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateScrollX', ['r'], input, modulator, {
+                scroll,
+                speed,
+            }),
 
         /** Scrolls `input` up by the red channel times `scroll`, and by `speed` per second, wrapping. */
         modulateScrollY: (
@@ -197,15 +152,10 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             scroll: VideoSource = 2.5,
             speed: VideoSource = 0,
-        ): VideoOutput => {
-            const [mr] = channels('$v.modulateScrollY', modulator, ['r']);
-            return transform(
-                core,
-                '$v.modulateScrollY',
-                'modulateScrollY',
-                input,
-                { mr, scroll, speed },
-            );
-        },
+        ): VideoOutput =>
+            modulate('modulateScrollY', ['r'], input, modulator, {
+                scroll,
+                speed,
+            }),
     };
 }

@@ -26,13 +26,37 @@ function wgslFloat(value: number): string {
 }
 
 /**
+ * Checks a node's index into a resource: present and in `0..count` when its
+ * module `uses` the resource, absent otherwise.
+ */
+function checkIndex(
+    uses: boolean,
+    index: number | undefined,
+    count: number,
+    resource: string,
+    label: string,
+): void {
+    if (!uses) {
+        if (index !== undefined) throw new Error(`module has no ${resource}`);
+        return;
+    }
+    if (
+        index === undefined ||
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= count
+    ) {
+        throw new Error(`${label} must be an integer from 0 to ${count - 1}`);
+    }
+}
+
+/**
  * Compiles a video graph to one WGSL module with a fullscreen-triangle vertex
  * stage and a fragment stage that evaluates every node per pixel.
  */
 export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const types = new Map<string, VideoValueType>();
     const names = new Map<string, string>();
-    const lines: string[] = [];
     const helpers = new Set<string>();
     /** Each node's WGSL statement, with the nodes it reads, in graph order. */
     const statements: { id: string; text: string; reads: string[] }[] = [];
@@ -60,64 +84,6 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const wgslType = (type: VideoValueType) =>
         type === 'field' ? 'f32' : 'vec3f';
 
-    /**
-     * The WGSL for an input. Modules compute with 5 volts as 1, so a constant,
-     * an audio signal or the clock is divided by 5 on its way in, and a
-     * field's value is the volts of a `natural` input times 5 on its way out.
-     */
-    const resolve = (
-        value: VideoValue,
-        expected: VideoValueType,
-        natural = false,
-    ): string => {
-        switch (value.kind) {
-            case 'const':
-            case 'uniform':
-            case 'time':
-                if (expected !== 'field') {
-                    throw new Error(
-                        `expected a ${expected}, got a ${value.kind}`,
-                    );
-                }
-                if (value.kind === 'const') {
-                    return wgslFloat(
-                        natural
-                            ? value.value
-                            : fractionOfFullScale(value.value),
-                    );
-                }
-                if (value.kind === 'time') {
-                    return natural ? 'u.time' : '(u.time * 0.2)';
-                }
-                if (
-                    !Number.isInteger(value.slot) ||
-                    value.slot < 0 ||
-                    value.slot >= graph.uniforms.length
-                ) {
-                    throw new Error(
-                        `uniform slot ${value.slot} is out of range`,
-                    );
-                }
-                return natural
-                    ? `u.slots[${value.slot >> 2}][${value.slot & 3}]`
-                    : `(u.slots[${value.slot >> 2}][${value.slot & 3}] * 0.2)`;
-            case 'node': {
-                const actual = types.get(value.id);
-                if (actual === undefined) {
-                    throw new Error(`unknown or forward node "${value.id}"`);
-                }
-                if (actual !== expected) {
-                    throw new Error(
-                        `node "${value.id}" is a ${actual}, expected a ${expected}`,
-                    );
-                }
-                return natural
-                    ? `(${names.get(value.id)!} * 5.0)`
-                    : names.get(value.id)!;
-            }
-        }
-    };
-
     const checkNodeType = (id: string, expected: VideoValueType) => {
         const actual = types.get(id);
         if (actual === undefined) {
@@ -128,6 +94,46 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 `node "${id}" is a ${actual}, expected a ${expected}`,
             );
         }
+    };
+
+    /**
+     * The WGSL for an input. Modules compute with 5 volts as 1, so a constant,
+     * an audio signal or the clock is divided by 5 on its way in, and a
+     * field's value is the volts of a `natural` input times 5 on its way out.
+     */
+    const resolve = (
+        value: VideoValue,
+        expected: VideoValueType,
+        natural = false,
+    ): string => {
+        if (value.kind === 'node') {
+            checkNodeType(value.id, expected);
+            const name = names.get(value.id)!;
+            return natural ? `(${name} * 5.0)` : name;
+        }
+        if (expected !== 'field') {
+            throw new Error(`expected a ${expected}, got a ${value.kind}`);
+        }
+        if (value.kind === 'const') {
+            return wgslFloat(
+                natural ? value.value : fractionOfFullScale(value.value),
+            );
+        }
+        if (
+            value.kind === 'uniform' &&
+            !(
+                Number.isInteger(value.slot) &&
+                value.slot >= 0 &&
+                value.slot < graph.uniforms.length
+            )
+        ) {
+            throw new Error(`uniform slot ${value.slot} is out of range`);
+        }
+        const volts =
+            value.kind === 'time'
+                ? 'u.time'
+                : `u.slots[${value.slot >> 2}][${value.slot & 3}]`;
+        return natural ? volts : `(${volts} * 0.2)`;
     };
 
     /** An input read at the coordinate `uv` of the function it appears in. */
@@ -166,21 +172,31 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         return name;
     };
 
+    /**
+     * The WGSL of each input of `node`: warped inputs as functions of the
+     * coordinate, the rest through `read`.
+     */
+    function argsOf(
+        node: VideoGraph['nodes'][number],
+        def: VideoModuleDef,
+        read: typeof resolve,
+    ): Record<string, string> {
+        const args: Record<string, string> = {};
+        for (const [name, type] of Object.entries(def.inputs)) {
+            const value = node.inputs[name];
+            if (value === undefined) throw new Error(`missing input "${name}"`);
+            args[name] = def.warped?.includes(name)
+                ? resolveAsFunction(value, type)
+                : read(value, type, def.natural?.includes(name) ?? false);
+        }
+        return args;
+    }
+
     function defineFunction(id: string): void {
         if (functionsDone.has(id)) return;
         functionsDone.add(id);
         const { index, node, def, params, indices } = records.get(id)!;
-        const args: Record<string, string> = {};
-        for (const [name, type] of Object.entries(def.inputs)) {
-            const value = node.inputs[name];
-            args[name] = def.warped?.includes(name)
-                ? resolveAsFunction(value, type)
-                : resolveInFunction(
-                      value,
-                      type,
-                      def.natural?.includes(name) ?? false,
-                  );
-        }
+        const args = argsOf(node, def, resolveInFunction);
         functions.push(
             `fn f${index}(uv: vec2f) -> ${wgslType(def.output)} {\n    return ${def.emit(args, params, indices)};\n}`,
         );
@@ -195,25 +211,13 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             throw new Error(`duplicate node id "${node.id}"`);
         }
         try {
-            const args: Record<string, string> = {};
-            for (const [name, type] of Object.entries(def.inputs)) {
-                const value = node.inputs[name];
-                if (value === undefined)
-                    throw new Error(`missing input "${name}"`);
-                args[name] = def.warped?.includes(name)
-                    ? resolveAsFunction(value, type)
-                    : resolve(
-                          value,
-                          type,
-                          def.natural?.includes(name) ?? false,
-                      );
-            }
+            const args = argsOf(node, def, resolve);
             for (const name of Object.keys(node.inputs)) {
                 if (!(name in def.inputs))
                     throw new Error(`unknown input "${name}"`);
             }
             const params: Record<string, string> = {};
-            for (const [name, spec] of Object.entries(def.params)) {
+            for (const [name, spec] of Object.entries(def.params ?? {})) {
                 const chosen = node.params?.[name] ?? spec.default;
                 if (!spec.values.includes(chosen)) {
                     throw new Error(
@@ -223,51 +227,30 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 params[name] = chosen;
             }
             for (const name of Object.keys(node.params ?? {})) {
-                if (!(name in def.params))
+                if (!(name in (def.params ?? {})))
                     throw new Error(`unknown param "${name}"`);
             }
-            if (def.history === undefined) {
-                if (node.history !== undefined) {
-                    throw new Error('module has no audio history');
-                }
-            } else if (
-                node.history === undefined ||
-                !Number.isInteger(node.history) ||
-                node.history < 0 ||
-                node.history >= graph.histories.length
-            ) {
-                throw new Error(
-                    `audio history row must be an integer from 0 to ${graph.histories.length - 1}`,
-                );
-            }
-            if (def.source === undefined) {
-                if (node.source !== undefined) {
-                    throw new Error('module has no media source');
-                }
-            } else if (
-                node.source === undefined ||
-                !Number.isInteger(node.source) ||
-                node.source < 0 ||
-                node.source >= graph.sources.length
-            ) {
-                throw new Error(
-                    `media source must be an integer from 0 to ${graph.sources.length - 1}`,
-                );
-            }
-            if (def.buffer === undefined) {
-                if (node.buffer !== undefined) {
-                    throw new Error('module has no feedback buffer');
-                }
-            } else if (
-                node.buffer === undefined ||
-                !Number.isInteger(node.buffer) ||
-                node.buffer < 0 ||
-                node.buffer >= MAX_FEEDBACK_BUFFERS
-            ) {
-                throw new Error(
-                    `feedback buffer must be an integer from 0 to ${MAX_FEEDBACK_BUFFERS - 1}`,
-                );
-            }
+            checkIndex(
+                def.history !== undefined,
+                node.history,
+                graph.histories.length,
+                'audio history',
+                'audio history row',
+            );
+            checkIndex(
+                def.source !== undefined,
+                node.source,
+                graph.sources.length,
+                'media source',
+                'media source',
+            );
+            checkIndex(
+                def.buffer !== undefined,
+                node.buffer,
+                MAX_FEEDBACK_BUFFERS,
+                'feedback buffer',
+                'feedback buffer',
+            );
             for (const helper of def.helpers ?? []) helpers.add(helper);
             const local = `v${index}`;
             const indices = {
@@ -277,7 +260,6 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             };
             records.set(node.id, { def, index, indices, node, params });
             const text = `    let ${local}: ${wgslType(def.output)} = ${def.emit(args, params, indices)};`;
-            lines.push(text);
             statements.push({
                 id: node.id,
                 reads: Object.values(node.inputs).flatMap((v) =>
@@ -398,7 +380,7 @@ fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
 @fragment
 fn fs(@builtin(position) frag: vec4f) -> ${bufferCount === 0 ? '@location(0) vec4f' : 'FragOut'} {
     let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
-${lines.join('\n')}
+${statements.map((s) => s.text).join('\n')}
     return ${result};
 }
 ${previewEntries.join('')}`;

@@ -44,6 +44,5 @@ export const feedbackWrite: VideoModuleDef = {
     inputs: { input: 'color' },
     buffer: 'write',
     output: 'color',
-    params: {},
     emit: ({ input }) => input,
 };

@@ -37,7 +37,8 @@ export interface VideoModuleDef {
      */
     natural?: readonly string[];
     output: VideoValueType;
-    params: Record<string, VideoParamSpec>;
+    /** Enumerated options; none when absent. */
+    params?: Record<string, VideoParamSpec>;
     /**
      * WGSL function declarations the expression calls, one per entry. A
      * declaration shared by several modules is emitted once, so equal text

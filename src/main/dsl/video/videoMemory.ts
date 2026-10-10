@@ -37,14 +37,18 @@ export function memoryMethods(core: VideoCore) {
         core.addNode(
             'feedbackRead',
             'color',
+            core.fields(fn, {
+                zoom: config?.zoom ?? 1,
+                rotate: config?.rotate ?? 0,
+                shiftX: config?.shiftX ?? 0,
+                shiftY: config?.shiftY ?? 0,
+            }),
             {
-                zoom: core.asField(fn, 'zoom', config?.zoom ?? 1),
-                rotate: core.asField(fn, 'rotate', config?.rotate ?? 0),
-                shiftX: core.asField(fn, 'shiftX', config?.shiftX ?? 0),
-                shiftY: core.asField(fn, 'shiftY', config?.shiftY ?? 0),
+                buffer: index,
+                ...(config?.edge !== undefined && {
+                    params: { edge: config.edge },
+                }),
             },
-            config?.edge === undefined ? undefined : { edge: config.edge },
-            index,
         );
 
     /** Stores `input` in buffer `index` for the next frame, and returns it. */
@@ -67,8 +71,7 @@ export function memoryMethods(core: VideoCore) {
             'feedbackWrite',
             'color',
             { input: color.value },
-            undefined,
-            index,
+            { buffer: index },
         );
         return color;
     };

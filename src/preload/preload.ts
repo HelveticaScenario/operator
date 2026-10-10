@@ -20,7 +20,6 @@ import {
 import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
 import type {
     VideoCvValue,
-    VideoPreviewFrame,
     VideoPull,
     VideoShaderUpdate,
     VideoUniformUpdate,
@@ -262,11 +261,7 @@ export interface ElectronAPI {
         getScreenSource: (
             display: number,
         ) => Promise<{ id: string } | { error: string }>;
-        sendPreviewFrame: (frame: VideoPreviewFrame) => Promise<void>;
         sendCvValues: (values: VideoCvValue[]) => Promise<void>;
-        onPreviewFrame: (
-            callback: (frame: VideoPreviewFrame) => void,
-        ) => () => void;
     };
 
     // Config operations
@@ -558,11 +553,7 @@ const electronAPI: ElectronAPI = {
         pull: (fresh) => invokeIPC('VIDEO_PULL', fresh),
         requestCameraAccess: () => invokeIPC('VIDEO_REQUEST_CAMERA'),
         getScreenSource: (display) => invokeIPC('VIDEO_SCREEN_SOURCE', display),
-        sendPreviewFrame: (frame) => invokeIPC('VIDEO_PREVIEW_FRAME', frame),
         sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
-        onPreviewFrame: menuEventHandler<[VideoPreviewFrame]>(
-            IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME,
-        ),
     },
 
     // Config operations

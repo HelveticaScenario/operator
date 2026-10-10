@@ -5,7 +5,6 @@ export const wrap: VideoModuleDef = {
     inputs: { input: 'field', gain: 'field' },
     natural: ['gain'],
     output: 'field',
-    params: {},
     emit: ({ input, gain }) => `fract(${input} * ${gain})`,
 };
 
@@ -17,7 +16,6 @@ export const fold: VideoModuleDef = {
     inputs: { input: 'field', gain: 'field' },
     natural: ['gain'],
     output: 'field',
-    params: {},
     emit: ({ input, gain }) =>
         `(1.0 - abs(1.0 - 2.0 * fract(${input} * ${gain} * 0.5)))`,
 };

@@ -30,10 +30,6 @@ export class PreviewCapture {
         private readonly onFrame: (frame: VideoPreviewFrame) => void,
     ) {}
 
-    get size(): { width: number; height: number } {
-        return { height: this.height, width: this.width };
-    }
-
     /** Sizes the set to `count` targets of `width` x `height` pixels. */
     resize(count: number, width: number, height: number): void {
         if (

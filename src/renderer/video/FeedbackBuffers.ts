@@ -24,10 +24,6 @@ export class FeedbackBuffers {
 
     constructor(private readonly device: GPUDevice) {}
 
-    get count(): number {
-        return this.pairs.length;
-    }
-
     /**
      * Sizes the set to `count` buffers of `width` x `height`. Existing
      * buffers keep their contents when the size is unchanged.

@@ -206,27 +206,19 @@ function toggleSyphonPublish(
 ): SyphonToggleResult {
     const window =
         requested === 'performance' ? getPerformanceWindow() : mainWindow;
-    if (!window || window.isDestroyed()) {
-        const reason =
-            requested === 'performance'
-                ? 'Open the performance window first.'
-                : 'No window is available to publish.';
-        if (mainWindow && !mainWindow.isDestroyed()) {
-            void dialog.showMessageBox(mainWindow, {
-                buttons: ['OK'],
-                detail: reason,
-                message: 'Could not start Syphon output',
-                type: 'warning',
-            });
-        }
-        syncSyphonMenuItem();
-        return { ok: false, reason };
-    }
     let result: SyphonToggleResult = {
         ok: false,
         reason: SyphonBridge.unsupportedReason,
     };
-    if (syphonBridge) {
+    if (!window || window.isDestroyed()) {
+        result = {
+            ok: false,
+            reason:
+                requested === 'performance'
+                    ? 'Open the performance window first.'
+                    : 'No window is available to publish.',
+        };
+    } else if (syphonBridge) {
         const action = syphonAction(
             syphonBridge.isEnabled,
             syphonTarget,
@@ -241,7 +233,12 @@ function toggleSyphonPublish(
         }
     }
     syncSyphonMenuItem();
-    if (!result.ok && result.reason && mainWindow) {
+    if (
+        !result.ok &&
+        result.reason &&
+        mainWindow &&
+        !mainWindow.isDestroyed()
+    ) {
         void dialog.showMessageBox(mainWindow, {
             buttons: ['OK'],
             detail: result.reason,
@@ -987,6 +984,14 @@ function submitPatchUpdate(
 }
 
 // DSL execution in main process with direct N-API access
+/** Wraps an engine load so it resolves paths against the current workspace. */
+function inWavWorkspace<T>(load: (path: string) => T): (path: string) => T {
+    return (relative) => {
+        if (currentWorkspaceRoot) synth.setWavWorkspace(currentWorkspaceRoot);
+        return load(relative);
+    };
+}
+
 registerIPCHandler(
     'DSL_EXECUTE',
     (source, sourceId, trigger): DSLExecuteResult => {
@@ -1007,18 +1012,10 @@ registerIPCHandler(
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
                 wavsFolderTree: currentWavsFolderTree,
-                loadMediaAudio: (mediaPath: string) => {
-                    if (currentWorkspaceRoot) {
-                        synth.setWavWorkspace(currentWorkspaceRoot);
-                    }
-                    return synth.loadMediaAudio(mediaPath);
-                },
-                loadWav: (wavPath: string) => {
-                    if (currentWorkspaceRoot) {
-                        synth.setWavWorkspace(currentWorkspaceRoot);
-                    }
-                    return synth.loadWav(wavPath);
-                },
+                loadMediaAudio: inWavWorkspace((mediaPath) =>
+                    synth.loadMediaAudio(mediaPath),
+                ),
+                loadWav: inWavWorkspace((wavPath) => synth.loadWav(wavPath)),
             });
             patch.moduleIdRemaps = [];
 
@@ -1052,10 +1049,6 @@ registerIPCHandler(
                 trigger,
             );
 
-            if (errors.length === 0) {
-                updateVideoShader(video, updateId);
-            }
-
             if (errors.length > 0) {
                 return {
                     appliedPatch: patch,
@@ -1072,6 +1065,7 @@ registerIPCHandler(
                 };
             }
 
+            updateVideoShader(video, updateId);
             return {
                 appliedPatch: patch,
                 buttons,
@@ -1123,13 +1117,6 @@ registerIPCHandler('VIDEO_SCREEN_SOURCE', (display) => screenSource(display));
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {
     for (const { id, value } of values) {
         synth.setModuleParam(id, '$signal', { source: value });
-    }
-});
-
-// Preview frames drawn by the video renderer go to the editor.
-registerIPCHandler('VIDEO_PREVIEW_FRAME', (frame) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME, frame);
     }
 });
 
@@ -2146,6 +2133,13 @@ function menuShortcut(
 /**
  * Create the application menu
  */
+/** Asks the editor window to open or close the performance window, which it owns. */
+function togglePerformanceWindow(): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW);
+    }
+}
+
 const createMenu = (): void => {
     const isMac = process.platform === 'darwin';
 
@@ -2321,24 +2315,12 @@ const createMenu = (): void => {
                         'operator.togglePerformanceWindow',
                         'Ctrl+Shift+V',
                     ),
-                    click: () => {
-                        if (mainWindow && !mainWindow.isDestroyed()) {
-                            mainWindow.webContents.send(
-                                MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW,
-                            );
-                        }
-                    },
+                    click: togglePerformanceWindow,
                     label: 'Toggle Performance Window',
                 },
                 {
                     label: 'Performance Window Fullscreen',
-                    submenu: performanceFullscreenMenu(() => {
-                        if (mainWindow && !mainWindow.isDestroyed()) {
-                            mainWindow.webContents.send(
-                                MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW,
-                            );
-                        }
-                    }),
+                    submenu: performanceFullscreenMenu(togglePerformanceWindow),
                 },
                 {
                     click: () => {

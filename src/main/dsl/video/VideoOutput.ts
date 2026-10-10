@@ -31,7 +31,7 @@ export class VideoOutput {
         readonly value: VideoValue,
         readonly type: VideoValueType,
         /** The builder that made this signal; chain methods call its functions. */
-        readonly ops: object,
+        readonly ops: VideoOps,
     ) {}
 
     /** The red channel of a color as a field; a field has no channels. */
@@ -79,17 +79,17 @@ export class VideoOutput {
         if (typeof fn !== 'function') {
             throw new Error('pipeMix: expects a function');
         }
-        return (this.ops as VideoOps).mix(this, fn(this), mix);
+        return this.ops.mix(this, fn(this), mix);
     }
 
     private channelOf(which: 'r' | 'g' | 'b'): unknown {
         return this.type === 'color'
-            ? (this.ops as VideoOps).channel(this, which)
+            ? this.ops.channel(this, which)
             : undefined;
     }
 
     private chain(withMix: boolean): ChainProxy {
-        const ops = this.ops as VideoOps;
+        const { ops } = this;
         return new Proxy({} as ChainProxy, {
             get: (_target, prop) => {
                 const call =
@@ -105,74 +105,73 @@ export class VideoOutput {
     }
 }
 
+/** `$v` functions offered on `.$` and `.$m` under their own names, with the signal first. */
+const FORWARDED = [
+    'add',
+    'bloom',
+    'blur',
+    'channel',
+    'comparator',
+    'contrast',
+    'diff',
+    'displace',
+    'edges',
+    'fold',
+    'frameDelay',
+    'grain',
+    'hsv',
+    'hueShift',
+    'invert',
+    'kaleid',
+    'key',
+    'max',
+    'min',
+    'mix',
+    'modulate',
+    'modulateHue',
+    'modulateKaleid',
+    'modulatePixelate',
+    'modulateRepeat',
+    'modulateRepeatX',
+    'modulateRepeatY',
+    'modulateRotate',
+    'modulateScale',
+    'modulateScrollX',
+    'modulateScrollY',
+    'mult',
+    'osc',
+    'pixelate',
+    'posterize',
+    'procAmp',
+    'repeat',
+    'scanlines',
+    'swiz',
+    'vignette',
+    'warp',
+    'wrap',
+];
+
+const forward = (names: string[]): Record<string, ChainCall> =>
+    Object.fromEntries(
+        names.map((name) => [
+            name,
+            (ops: VideoOps, self: VideoOutput, ...args: unknown[]) =>
+                ops[name](self, ...args),
+        ]),
+    );
+
 /** Functions of `.$` and `.$m`: each returns a new signal from this one. */
 const PROCESSING: Record<string, ChainCall> = {
-    add: (o, s, b) => o.add(s, b),
-    bloom: (o, s, radius, amount) => o.bloom(s, radius, amount),
-    blur: (o, s, radius) => o.blur(s, radius),
-    channel: (o, s, which) => o.channel(s, which),
-    comparator: (o, s, threshold, softness) =>
-        o.comparator(s, threshold, softness),
-    contrast: (o, s, amount) => o.contrast(s, amount),
-    diff: (o, s, b) => o.diff(s, b),
-    displace: (o, s, dx, dy, amount) => o.displace(s, dx, dy, amount),
-    edges: (o, s, amount) => o.edges(s, amount),
-    fold: (o, s, gain) => o.fold(s, gain),
-    frameDelay: (o, s, frames) => o.frameDelay(s, frames),
-    grain: (o, s, amount) => o.grain(s, amount),
-    hsv: (o, s, saturation, value) => o.hsv(s, saturation, value),
-    hueShift: (o, s, amount) => o.hueShift(s, amount),
-    invert: (o, s) => o.invert(s),
-    kaleid: (o, s, sides) => o.kaleid(s, sides),
-    key: (o, s, background, mask) => o.key(s, background, mask),
-    max: (o, s, b) => o.max(s, b),
-    min: (o, s, b) => o.min(s, b),
-    mix: (o, s, b, amount) => o.mix(s, b, amount),
-    modulate: (o, s, modulator, amount) => o.modulate(s, modulator, amount),
-    mult: (o, s, b) => o.mult(s, b),
-    modulateHue: (o, s, modulator, amount) =>
-        o.modulateHue(s, modulator, amount),
-    modulateKaleid: (o, s, modulator, sides) =>
-        o.modulateKaleid(s, modulator, sides),
-    modulatePixelate: (o, s, modulator, multiple, offset) =>
-        o.modulatePixelate(s, modulator, multiple, offset),
-    modulateRepeat: (o, s, modulator, repeatX, repeatY, offsetX, offsetY) =>
-        o.modulateRepeat(s, modulator, repeatX, repeatY, offsetX, offsetY),
-    modulateRepeatX: (o, s, modulator, reps, offset) =>
-        o.modulateRepeatX(s, modulator, reps, offset),
-    modulateRepeatY: (o, s, modulator, reps, offset) =>
-        o.modulateRepeatY(s, modulator, reps, offset),
-    modulateRotate: (o, s, modulator, multiple, offset) =>
-        o.modulateRotate(s, modulator, multiple, offset),
-    modulateScale: (o, s, modulator, multiple, offset) =>
-        o.modulateScale(s, modulator, multiple, offset),
-    modulateScrollX: (o, s, modulator, scroll, speed) =>
-        o.modulateScrollX(s, modulator, scroll, speed),
-    modulateScrollY: (o, s, modulator, scroll, speed) =>
-        o.modulateScrollY(s, modulator, scroll, speed),
-    osc: (o, s, freq, phase, config) => o.osc(s, freq, phase, config),
-    pixelate: (o, s, x, y) => o.pixelate(s, x, y),
-    posterize: (o, s, levels) => o.posterize(s, levels),
-    procAmp: (o, s, gain, bias, saturation) =>
-        o.procAmp(s, gain, bias, saturation),
-    repeat: (o, s, x, y) => o.repeat(s, x, y),
+    ...forward(FORWARDED),
     rotate: (o, s, turns) => o.warp(s, { rotate: turns }),
     scale: (o, s, zoom) => o.warp(s, { zoom }),
-    scanlines: (o, s, count, strength) => o.scanlines(s, count, strength),
-    swiz: (o, s, pattern) => o.swiz(s, pattern),
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),
     tint: (o, s, hue, saturation) => o.hsv(hue ?? 0, saturation ?? 5, s),
-    vignette: (o, s, strength, radius) => o.vignette(s, strength, radius),
-    warp: (o, s, config) => o.warp(s, config),
-    wrap: (o, s, gain) => o.wrap(s, gain),
 };
 
 /** Direct methods that end a chain or tap it: they do not make a new signal to chain on. */
 const DIRECT: Record<string, ChainCall> = {
-    range: (o, s, min, max) => o.range(s, min, max),
-    out: (o, s) => o.out(s),
-    preview: (o, s, config) => o.preview(s, config),
-    toCV: (o, s, config) => o.toCV(s, config),
+    ...forward(['range', 'out', 'preview', 'toCV']),
     write: (_o, s, buffer) =>
         (buffer as { write(color: VideoOutput): unknown }).write(s),
 };
@@ -181,7 +180,7 @@ for (const [name, call] of Object.entries(DIRECT)) {
     Object.defineProperty(VideoOutput.prototype, name, {
         configurable: true,
         value(this: VideoOutput, ...args: unknown[]) {
-            return call(this.ops as VideoOps, this, ...args);
+            return call(this.ops, this, ...args);
         },
     });
 }

@@ -1,4 +1,3 @@
-import type { VideoValue } from '../../../shared/video/videoGraph';
 import { VideoOutput } from './VideoOutput';
 import { describe, type VideoCore } from './videoBuilderTypes';
 
@@ -18,13 +17,9 @@ export function transform(
             `${fn}: input must be a video field or color, got ${describe(input)}`,
         );
     }
-    const inputs: Record<string, VideoValue> = { input: input.value };
-    for (const [name, value] of Object.entries(fields)) {
-        inputs[name] = core.asField(fn, name, value);
-    }
     return core.addNode(
         input.type === 'color' ? `${kind}Color` : kind,
         input.type,
-        inputs,
+        { input: input.value, ...core.fields(fn, fields) },
     );
 }

@@ -11,7 +11,6 @@ export const audioHistory: VideoModuleDef = {
     natural: ['samples'],
     history: true,
     output: 'field',
-    params: {},
     helpers: [
         `fn history_sample(row: i32, position: f32, count: f32) -> f32 {
     let x = clamp(position, 0.0, 1.0) * max(count - 1.0, 0.0);

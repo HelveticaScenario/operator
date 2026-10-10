@@ -1,6 +1,6 @@
 import type { editor } from 'monaco-editor';
-import electronAPI from '../../electronAPI';
 import type { VideoPreviewZone } from '../../types/editor';
+import { subscribePreviewFrames } from '../../video/previewFrames';
 import { drawPreview } from '../../video/previewViews';
 
 interface VideoPreviewViewZoneParams {
@@ -87,7 +87,7 @@ export function createVideoPreviewViewZones({
         canvasByIndex.set(panel.zone.index, panel.canvas);
         viewByIndex.set(panel.zone.index, panel.zone.view);
     }
-    const stopFrames = electronAPI.video.onPreviewFrame((frame) => {
+    const stopFrames = subscribePreviewFrames((frame) => {
         const canvas = canvasByIndex.get(frame.index);
         const view = viewByIndex.get(frame.index);
         if (canvas && view) drawPreview(canvas, view, frame);

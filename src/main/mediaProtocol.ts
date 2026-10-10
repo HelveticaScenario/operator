@@ -36,9 +36,18 @@ export function resolveMediaFile(
     workspaceRoot: string | null,
     url: string,
 ): string | null {
-    if (workspaceRoot === null) return null;
     const relative = parseMediaUrl(url);
-    if (relative === null || relative === '') return null;
+    return relative === null || relative === ''
+        ? null
+        : workspaceFile(workspaceRoot, relative);
+}
+
+/** The absolute path of `relative`, or null when there is no workspace or it would leave the workspace folder. */
+function workspaceFile(
+    workspaceRoot: string | null,
+    relative: string,
+): string | null {
+    if (workspaceRoot === null) return null;
     const root = path.resolve(workspaceRoot);
     const file = path.resolve(root, relative);
     return file.startsWith(root + path.sep) ? file : null;
@@ -49,10 +58,8 @@ export function mediaFileExists(
     workspaceRoot: string | null,
     relative: string,
 ): boolean {
-    if (workspaceRoot === null) return false;
-    const root = path.resolve(workspaceRoot);
-    const file = path.resolve(root, relative);
-    return file.startsWith(root + path.sep) && fs.existsSync(file);
+    const file = workspaceFile(workspaceRoot, relative);
+    return file !== null && fs.existsSync(file);
 }
 
 const CONTENT_TYPES: Record<string, string> = {

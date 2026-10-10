@@ -1,5 +1,6 @@
 import {
     MAX_VIDEO_TAPS,
+    sameSource,
     type VideoGraph,
     type VideoHistory,
     VIDEO_HISTORY_LEN,
@@ -18,7 +19,7 @@ import {
     ModuleOutput,
 } from '../GraphBuilder';
 import { isPatternValue } from '../patternKinds';
-import { VideoOutput } from './VideoOutput';
+import { VideoOutput, type VideoOps } from './VideoOutput';
 import { colorMethods } from './videoColor';
 import { filterMethods } from './videoFilters';
 import { generatorMethods } from './videoGenerators';
@@ -30,6 +31,8 @@ import { warpMethods } from './videoWarps';
 import {
     describe,
     isColor,
+    type VideoInputs,
+    type VideoNodeExtra,
     type VideoAudioConfig,
     type VideoAudioPlayback,
     type VideoCore,
@@ -38,6 +41,11 @@ import {
     type VideoPreviewConfig,
     type VideoSource,
 } from './videoBuilderTypes';
+
+/** `Omit` applied to each member of a union. */
+type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
+    ? Omit<T, K>
+    : never;
 
 const PREVIEW_VIEWS: readonly string[] = ['image', 'waveform', 'vectorscope'];
 
@@ -66,8 +74,7 @@ export class VideoGraphBuilder implements VideoCore {
     private previews: VideoPreview[] = [];
     private previewSites: VideoPreviewSite[] = [];
     private cvCount = 0;
-    /** Uniform slot of each audio signal already published, by signal identity. */
-    private tapSlots = new Map<string, number>();
+    /** The engine tap of each audio signal already published, by signal identity. */
     private tapIndexes = new Map<string, number>();
     private histories: VideoHistory[] = [];
     private sources: VideoSourceDef[] = [];
@@ -87,7 +94,12 @@ export class VideoGraphBuilder implements VideoCore {
         );
     }
 
-    readonly time = new VideoOutput({ kind: 'time' }, 'field', this);
+    readonly time = this.signal({ kind: 'time' }, 'field');
+
+    /** A video signal whose chain methods call this builder's functions. */
+    private signal(value: VideoValue, type: VideoValueType): VideoOutput {
+        return new VideoOutput(value, type, this as unknown as VideoOps);
+    }
 
     /**
      * Binds an audio signal to a uniform slot: a slider or button by its
@@ -101,37 +113,38 @@ export class VideoGraphBuilder implements VideoCore {
     ): VideoValue {
         const control = this.host.controlValue(output.moduleId);
         if (control !== undefined) {
-            const existing = this.uniforms.find(
+            return this.uniformSlot(
                 (u) => u.kind === 'control' && u.moduleId === output.moduleId,
+                { kind: 'control', moduleId: output.moduleId, value: control },
             );
-            if (existing) return { kind: 'uniform', slot: existing.slot };
-            const slot = this.uniforms.length;
-            this.uniforms.push({
-                kind: 'control',
-                moduleId: output.moduleId,
-                slot,
-                value: control,
-            });
-            return { kind: 'uniform', slot };
         }
-
-        const key = this.signalKey(output);
-        const known = this.tapSlots.get(key);
-        if (known !== undefined) return { kind: 'uniform', slot: known };
         const tap = this.tapFor(fn, name, output);
-        const slot = this.uniforms.length;
-        this.uniforms.push({ kind: 'tap', slot, tap, value: 0 });
-        this.tapSlots.set(key, slot);
-        return { kind: 'uniform', slot };
+        return this.uniformSlot((u) => u.kind === 'tap' && u.tap === tap, {
+            kind: 'tap',
+            tap,
+            value: 0,
+        });
     }
 
-    private signalKey(output: ModuleOutput): string {
-        return `${output.moduleId}\0${output.portName}\0${output.channel}`;
+    /** The slot of the uniform `matches` finds, adding `binding` when there is none. */
+    private uniformSlot(
+        matches: (u: VideoUniform) => boolean,
+        binding: DistributiveOmit<VideoUniform, 'slot'>,
+    ): VideoValue {
+        let uniform = this.uniforms.find(matches);
+        if (uniform === undefined) {
+            uniform = {
+                ...binding,
+                slot: this.uniforms.length,
+            } as VideoUniform;
+            this.uniforms.push(uniform);
+        }
+        return { kind: 'uniform', slot: uniform.slot };
     }
 
     /** The engine tap carrying `output`, publishing it on first use. */
     private tapFor(fn: string, name: string, output: ModuleOutput): number {
-        const key = this.signalKey(output);
+        const key = `${output.moduleId}\0${output.portName}\0${output.channel}`;
         const known = this.tapIndexes.get(key);
         if (known !== undefined) return known;
         if (this.tapCount >= MAX_VIDEO_TAPS) {
@@ -163,9 +176,12 @@ export class VideoGraphBuilder implements VideoCore {
         );
     }
 
-    /** A color operand; a field or number becomes the gray of that level. */
-    asColorOrGray(fn: string, name: string, v: unknown): VideoValue {
-        return this.toColor(fn, name, v).value;
+    fields(fn: string, values: Record<string, unknown>): VideoInputs {
+        const inputs: VideoInputs = {};
+        for (const [name, v] of Object.entries(values)) {
+            inputs[name] = this.asField(fn, name, v);
+        }
+        return inputs;
     }
 
     /** `v` as a color signal; a field or number becomes the gray of that level. */
@@ -182,15 +198,12 @@ export class VideoGraphBuilder implements VideoCore {
     addNode(
         kind: string,
         type: VideoValueType,
-        inputs: Record<string, VideoValue>,
-        params?: Record<string, string>,
-        buffer?: number,
-        history?: number,
-        source?: number,
+        inputs: VideoInputs,
+        extra?: VideoNodeExtra,
     ): VideoOutput {
         const id = `${kind}_${this.nodes.length}`;
-        this.nodes.push({ id, kind, inputs, params, buffer, history, source });
-        return new VideoOutput({ kind: 'node', id }, type, this);
+        this.nodes.push({ id, kind, inputs, ...extra });
+        return this.signal({ kind: 'node', id }, type);
     }
 
     /**
@@ -204,15 +217,15 @@ export class VideoGraphBuilder implements VideoCore {
         fieldInputs: Record<string, unknown> = {},
     ): VideoOutput {
         const color = Object.values(operands).some(isColor);
-        const inputs: Record<string, VideoValue> = {};
-        for (const [name, v] of Object.entries(operands)) {
-            inputs[name] = color
-                ? this.asColorOrGray(fn, name, v)
-                : this.asField(fn, name, v);
-        }
-        for (const [name, v] of Object.entries(fieldInputs)) {
-            inputs[name] = this.asField(fn, name, v);
-        }
+        const inputs = color
+            ? Object.fromEntries(
+                  Object.entries(operands).map(([name, v]) => [
+                      name,
+                      this.toColor(fn, name, v).value,
+                  ]),
+              )
+            : this.fields(fn, operands);
+        Object.assign(inputs, this.fields(fn, fieldInputs));
         return this.addNode(
             color ? `${kind}Color` : kind,
             color ? 'color' : 'field',
@@ -268,22 +281,12 @@ export class VideoGraphBuilder implements VideoCore {
                 position: this.asField('$v.fromAudio', 'position', position),
                 samples: { kind: 'const', value: samples },
             },
-            undefined,
-            undefined,
-            row,
+            { history: row },
         );
     };
+
     sourceIndex(def: VideoSourceDef): number {
-        const known = this.sources.findIndex(
-            (s) =>
-                s.kind === def.kind &&
-                s.path === def.path &&
-                s.device === def.device &&
-                s.display === def.display &&
-                s.speed === def.speed &&
-                s.loopStart === def.loopStart &&
-                s.loopEnd === def.loopEnd,
-        );
+        const known = this.sources.findIndex((s) => sameSource(s, def));
         if (known >= 0) return known;
         this.sources.push(def);
         return this.sources.length - 1;
@@ -312,7 +315,7 @@ export class VideoGraphBuilder implements VideoCore {
             'channel',
             'field',
             { input: input.value },
-            { channel: which },
+            { params: { channel: which } },
         );
     };
 
@@ -332,7 +335,7 @@ export class VideoGraphBuilder implements VideoCore {
             'swizzle',
             'color',
             { input: this.toColor('$v.swiz', 'input', input).value },
-            { pattern },
+            { params: { pattern } },
         );
     };
 
@@ -412,12 +415,17 @@ export class VideoGraphBuilder implements VideoCore {
 
     /** Shows `input` as the patch's picture and returns it. The last call wins. */
     out = (input: VideoOutput): VideoOutput => {
-        this.addNode('out', 'color', {
-            input: this.asColorOrGray('$v.out', 'input', input),
-        });
-        this.outputId = this.nodes[this.nodes.length - 1].id;
+        this.outputId = this.addOut(
+            this.toColor('$v.out', 'input', input).value,
+        );
         return input;
     };
+
+    /** Adds the node that shows `color` on screen, and returns its id. */
+    private addOut(color: VideoValue): string {
+        this.addNode('out', 'color', { input: color });
+        return this.nodes[this.nodes.length - 1].id;
+    }
 
     /**
      * The graph reachable from the output and the previews, or null when the
@@ -426,14 +434,9 @@ export class VideoGraphBuilder implements VideoCore {
     build(): VideoGraph | null {
         const hasOutput = this.outputId !== null;
         if (this.outputId === null && this.previews.length > 0) {
-            const black = { kind: 'const', value: 0 } as const;
-            const color = this.addNode('colorize', 'color', {
-                b: black,
-                g: black,
-                r: black,
-            });
-            this.addNode('out', 'color', { input: color.value });
-            this.outputId = this.nodes[this.nodes.length - 1].id;
+            this.outputId = this.addOut(
+                this.toColor('$v.out', 'input', 0).value,
+            );
         }
         if (this.outputId === null) return null;
         const live = new Set<string>(

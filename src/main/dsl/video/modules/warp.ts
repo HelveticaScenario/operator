@@ -21,7 +21,6 @@ export function coordinateModule(
         warped: ['input'],
         natural,
         output: type,
-        params: {},
         helpers,
         emit: (args) => `${args.input}(${coordinates(args)})`,
     });
@@ -45,21 +44,25 @@ export const displace = coordinateModule(
         `uv + (vec2f(${dx}, ${dy}) - vec2f(0.5)) * ${amount}`,
 );
 
-/** Mirrors `input` around the center into `sides` wedges. */
-export const kaleid = coordinateModule(
-    ['sides'],
-    ['sides'],
-    ({ sides }) => `video_kaleid(uv, ${sides})`,
-    [
-        `fn video_kaleid(uv: vec2f, sides: f32) -> vec2f {
+/**
+ * `video_kaleid`: mirrors coordinates around the center into `sides` wedges,
+ * with the distance from the center pushed out by `push`.
+ */
+export const KALEID_HELPER = `fn video_kaleid(uv: vec2f, sides: f32, push: f32) -> vec2f {
     let aspect = vec2f(u.resolution.x / u.resolution.y, 1.0);
     let p = (uv - vec2f(0.5)) * aspect;
     let wedge = 6.28318530718 / max(sides, 1.0);
     let turn = ((atan2(p.y, p.x) % wedge) + wedge) % wedge;
     let folded = abs(turn - wedge * 0.5);
-    return vec2f(cos(folded), sin(folded)) * length(p) / aspect + vec2f(0.5);
-}`,
-    ],
+    return vec2f(cos(folded), sin(folded)) * (length(p) + push) / aspect + vec2f(0.5);
+}`;
+
+/** Mirrors `input` around the center into `sides` wedges. */
+export const kaleid = coordinateModule(
+    ['sides'],
+    ['sides'],
+    ({ sides }) => `video_kaleid(uv, ${sides}, 0.0)`,
+    [KALEID_HELPER],
 );
 
 /** Holds `input` constant across a grid of `x` by `y` cells. */

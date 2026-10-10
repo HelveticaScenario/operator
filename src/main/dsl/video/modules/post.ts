@@ -9,7 +9,6 @@ export const scanlines: VideoModuleDef = {
     inputs: { input: 'color', count: 'field', strength: 'field' },
     natural: ['count'],
     output: 'color',
-    params: {},
     emit: ({ input, count, strength }) =>
         `(${input} * (1.0 - clamp(${strength}, 0.0, 1.0) * (0.5 + 0.5 * cos(6.28318530718 * uv.y * ${count}))))`,
 };
@@ -21,7 +20,6 @@ export const scanlines: VideoModuleDef = {
 export const vignette: VideoModuleDef = {
     inputs: { input: 'color', strength: 'field', radius: 'field' },
     output: 'color',
-    params: {},
     helpers: [
         `fn vignette_falloff(uv: vec2f, radius: f32) -> f32 {
     let aspect = vec2f(u.resolution.x / u.resolution.y, 1.0);
@@ -40,7 +38,6 @@ export const vignette: VideoModuleDef = {
 export const grain: VideoModuleDef = {
     inputs: { input: 'color', amount: 'field' },
     output: 'color',
-    params: {},
     helpers: [
         NOISE_HASH,
         `fn grain_value(uv: vec2f, time: f32) -> f32 {

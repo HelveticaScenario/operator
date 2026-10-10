@@ -1,7 +1,7 @@
 import type { VideoModuleDef } from './types';
 
 /** 1 inside `size` and 0 outside, with a linear edge `softness` wide. */
-export const SHAPE_EDGE = `fn shape_edge(d: f32, size: f32, softness: f32) -> f32 {
+const SHAPE_EDGE = `fn shape_edge(d: f32, size: f32, softness: f32) -> f32 {
     return 1.0 - clamp((d - size) / max(softness, 0.00001) + 0.5, 0.0, 1.0);
 }`;
 
@@ -50,7 +50,6 @@ export const polygon: VideoModuleDef = {
     },
     natural: ['sides'],
     output: 'field',
-    params: {},
     helpers: [
         SHAPE_EDGE,
         `fn polygon_distance(x: f32, y: f32, sides: f32) -> f32 {

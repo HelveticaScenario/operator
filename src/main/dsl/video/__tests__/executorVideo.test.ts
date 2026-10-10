@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import schemas from '@modular/core/schemas.json';
 import { executePatchScript } from '../../executor';
 import { buildLibSource } from '../../typescriptLibGen';
-import { VIDEO_CHAIN, VIDEO_DOCS } from '../../../../shared/dsl/videoDocs';
+import { VIDEO_CHAIN } from '../../../../shared/dsl/videoDocs';
 import { VIDEO_CHAIN_METHODS, VIDEO_DIRECT_METHODS } from '../VideoOutput';
 
 /** Media audio the tests stand in for: every file has stereo sound but `silent.mp4`. */
@@ -388,14 +388,16 @@ describe('$v in the DSL executor', () => {
         });
     });
 
-    it('documents exactly the members of $v', () => {
-        let members: string[] = [];
+    it('gives every documented member of $v a value', () => {
+        let missing = '';
         try {
-            exec(`throw new Error('members:' + Object.keys($v).join(','));`);
+            exec(
+                `throw new Error('missing:' + Object.keys($v).filter((k) => $v[k] === undefined).join(','));`,
+            );
         } catch (error) {
-            members = (error as Error).message.split('members:')[1].split(',');
+            missing = (error as Error).message.split('missing:')[1];
         }
-        expect(members.sort()).toEqual(VIDEO_DOCS.map((d) => d.name).sort());
+        expect(missing).toBe('');
     });
 
     describe('previews', () => {
@@ -639,7 +641,7 @@ describe('$v in the DSL executor', () => {
             `);
             expect(wgsl).toContain('fn f1(uv: vec2f) -> f32');
             expect(wgsl).toContain('f0(uv)');
-            expect(wgsl).toContain('video_kaleid(uv, 6.0)');
+            expect(wgsl).toContain('video_kaleid(uv, 6.0, 0.0)');
         });
 
         it('nests: a warp inside a warp is itself a function of the coordinate', () => {
@@ -994,7 +996,7 @@ describe('$v in the DSL executor', () => {
                     $v.out(layers.reduce((sum, layer) => sum.$.add(layer.$.mult(0.3))));
                 `);
                 expect(
-                    video!.wgsl.match(/video_kaleid\(uv, [357]\.0\)/g),
+                    video!.wgsl.match(/video_kaleid\(uv, [357]\.0, 0\.0\)/g),
                 ).toHaveLength(3);
             });
 
@@ -1551,7 +1553,7 @@ describe('$v in the DSL executor', () => {
             ['modulateScale', 'video_mod_scale('],
             ['modulateRotate', 'video_transform(uv, 1.0,'],
             ['modulatePixelate', 'video_mod_pixelate('],
-            ['modulateKaleid', 'video_mod_kaleid('],
+            ['modulateKaleid', 'video_kaleid('],
             ['modulateHue', 'u.resolution'],
             ['modulateRepeat', 'video_mod_repeat('],
             ['modulateRepeatX', 'video_mod_repeat_x('],

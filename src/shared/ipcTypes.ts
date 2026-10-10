@@ -25,7 +25,6 @@ import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
 import type {
     VideoCvValue,
-    VideoPreviewFrame,
     VideoPreviewSite,
     VideoPull,
     VideoShaderUpdate,
@@ -430,9 +429,7 @@ export const IPC_CHANNELS = {
     VIDEO_PULL: 'modular:video:pull',
     VIDEO_REQUEST_CAMERA: 'modular:video:request-camera',
     VIDEO_SCREEN_SOURCE: 'modular:video:screen-source',
-    VIDEO_PREVIEW_FRAME: 'modular:video:preview-frame',
     VIDEO_CV_VALUES: 'modular:video:cv-values',
-    VIDEO_ON_PREVIEW_FRAME: 'modular:video:on-preview-frame',
 
     // Syphon window output (macOS)
     SYPHON_TOGGLE: 'modular:syphon:toggle',
@@ -636,8 +633,6 @@ export interface IPCHandlers {
     [IPC_CHANNELS.VIDEO_SET_OUTPUT_OPEN]: (open: boolean) => void;
     [IPC_CHANNELS.VIDEO_GET_SHADER]: () => VideoShaderUpdate;
     [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
-    [IPC_CHANNELS.VIDEO_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
-    [IPC_CHANNELS.VIDEO_ON_PREVIEW_FRAME]: (frame: VideoPreviewFrame) => void;
     [IPC_CHANNELS.VIDEO_PULL]: (fresh: boolean) => VideoPull;
     [IPC_CHANNELS.VIDEO_REQUEST_CAMERA]: () => Promise<boolean>;
     [IPC_CHANNELS.VIDEO_SCREEN_SOURCE]: (

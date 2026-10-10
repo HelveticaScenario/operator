@@ -3,6 +3,7 @@ import type { VideoShaderUpdate } from '../../../shared/video/videoGraph';
 import electronAPI from '../../electronAPI';
 import { performanceOutput } from '../../video/PerformanceOutput';
 import { openLiveSource } from '../../video/liveSources';
+import { publishPreviewFrame } from '../../video/previewFrames';
 import { VideoRenderer } from '../../video/VideoRenderer';
 
 const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -68,9 +69,7 @@ export function VideoBackdrop({
                     made.setCvSink((values) => {
                         void electronAPI.video.sendCvValues(values);
                     });
-                    made.setPreviewSink((frame) => {
-                        void electronAPI.video.sendPreviewFrame(frame);
-                    });
+                    made.setPreviewSink(publishPreviewFrame);
                     setRenderer(made);
                     apply();
                 },

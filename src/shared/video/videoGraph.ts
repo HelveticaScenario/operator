@@ -169,6 +169,16 @@ export interface VideoSourceDef {
     loopEnd?: number;
 }
 
+/** Whether two definitions name the same media with the same settings. */
+export const sameSource = (a: VideoSourceDef, b: VideoSourceDef): boolean =>
+    a.kind === b.kind &&
+    a.path === b.path &&
+    a.device === b.device &&
+    a.display === b.display &&
+    a.speed === b.speed &&
+    a.loopStart === b.loopStart &&
+    a.loopEnd === b.loopEnd;
+
 /** A region of the frame whose average becomes an audio control signal. */
 export interface VideoCvSample {
     /** Module id of the `$signal` the average is written to. */

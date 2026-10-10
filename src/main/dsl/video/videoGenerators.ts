@@ -22,25 +22,13 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'ramp',
                 'field',
-                {
-                    zoom: core.asField('$v.ramp', 'zoom', config?.zoom ?? 1),
-                    rotate: core.asField(
-                        '$v.ramp',
-                        'rotate',
-                        config?.rotate ?? 0,
-                    ),
-                    shiftX: core.asField(
-                        '$v.ramp',
-                        'shiftX',
-                        config?.shiftX ?? 0,
-                    ),
-                    shiftY: core.asField(
-                        '$v.ramp',
-                        'shiftY',
-                        config?.shiftY ?? 0,
-                    ),
-                },
-                { axis },
+                core.fields('$v.ramp', {
+                    zoom: config?.zoom ?? 1,
+                    rotate: config?.rotate ?? 0,
+                    shiftX: config?.shiftX ?? 0,
+                    shiftY: config?.shiftY ?? 0,
+                }),
+                { params: { axis } },
             ),
 
         /** Periodic shaper: `freq` cycles per unit of `input`, offset by `phase` cycles. */
@@ -53,14 +41,10 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'osc',
                 'field',
-                {
-                    input: core.asField('$v.osc', 'input', input),
-                    freq: core.asField('$v.osc', 'freq', freq),
-                    phase: core.asField('$v.osc', 'phase', phase),
-                },
+                core.fields('$v.osc', { input, freq, phase }),
                 config?.shape === undefined
                     ? undefined
-                    : { shape: config.shape },
+                    : { params: { shape: config.shape } },
             ),
 
         /** 1 inside a shape centered on (x, y), 0 outside. */
@@ -74,15 +58,10 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'shape',
                 'field',
-                {
-                    x: core.asField('$v.shape', 'x', x),
-                    y: core.asField('$v.shape', 'y', y),
-                    size: core.asField('$v.shape', 'size', size),
-                    softness: core.asField('$v.shape', 'softness', softness),
-                },
+                core.fields('$v.shape', { x, y, size, softness }),
                 config?.shape === undefined
                     ? undefined
-                    : { shape: config.shape },
+                    : { params: { shape: config.shape } },
             ),
 
         /** 1 inside a regular polygon centered on (x, y), 0 outside. */
@@ -93,13 +72,11 @@ export function generatorMethods(core: VideoCore) {
             size: VideoSource = 1.25,
             softness: VideoSource = 0.05,
         ): VideoOutput =>
-            core.addNode('polygon', 'field', {
-                sides: core.asField('$v.polygon', 'sides', sides),
-                size: core.asField('$v.polygon', 'size', size),
-                softness: core.asField('$v.polygon', 'softness', softness),
-                x: core.asField('$v.polygon', 'x', x),
-                y: core.asField('$v.polygon', 'y', y),
-            }),
+            core.addNode(
+                'polygon',
+                'field',
+                core.fields('$v.polygon', { x, y, sides, size, softness }),
+            ),
 
         /** Smooth value noise between 0 and 5; `z` moves through it. */
         noise: (
@@ -107,11 +84,11 @@ export function generatorMethods(core: VideoCore) {
             y: VideoSource,
             z: VideoSource = 0,
         ): VideoOutput =>
-            core.addNode('noise', 'field', {
-                x: core.asField('$v.noise', 'x', x),
-                y: core.asField('$v.noise', 'y', y),
-                z: core.asField('$v.noise', 'z', z),
-            }),
+            core.addNode(
+                'noise',
+                'field',
+                core.fields('$v.noise', { x, y, z }),
+            ),
 
         /** Cellular noise: the distance to the nearest of a scatter of points; `z` moves them. */
         voronoi: (
@@ -119,10 +96,10 @@ export function generatorMethods(core: VideoCore) {
             y: VideoSource,
             z: VideoSource = 0,
         ): VideoOutput =>
-            core.addNode('voronoi', 'field', {
-                x: core.asField('$v.voronoi', 'x', x),
-                y: core.asField('$v.voronoi', 'y', y),
-                z: core.asField('$v.voronoi', 'z', z),
-            }),
+            core.addNode(
+                'voronoi',
+                'field',
+                core.fields('$v.voronoi', { x, y, z }),
+            ),
     };
 }

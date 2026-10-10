@@ -25,7 +25,6 @@ function blurModule(type: VideoValueType): VideoModuleDef {
         inputs: { input: type, radius: 'field' },
         warped: ['input'],
         output: type,
-        params: {},
         helpers: [
             `fn blur_offset(tap: vec2f, uv: vec2f, radius: f32) -> vec2f {
     let pixel = floor(uv * u.resolution);
@@ -46,8 +45,7 @@ function blurModule(type: VideoValueType): VideoModuleDef {
     };
 }
 
-export const blur = blurModule('field');
-export const blurColor = blurModule('color');
+export const blur = { field: blurModule('field'), color: blurModule('color') };
 
 const LUMA = 'vec3f(0.299, 0.587, 0.114)';
 
@@ -63,7 +61,6 @@ function edgesModule(type: VideoValueType): VideoModuleDef {
         inputs: { input: type, amount: 'field' },
         warped: ['input'],
         output: 'field',
-        params: {},
         helpers: [
             `fn sobel_magnitude(tl: f32, t: f32, tr: f32, l: f32, r: f32, bl: f32, b: f32, br: f32) -> f32 {
     let gx = -tl - 2.0 * l - bl + tr + 2.0 * r + br;
@@ -81,5 +78,7 @@ function edgesModule(type: VideoValueType): VideoModuleDef {
     };
 }
 
-export const edges = edgesModule('field');
-export const edgesColor = edgesModule('color');
+export const edges = {
+    field: edgesModule('field'),
+    color: edgesModule('color'),
+};

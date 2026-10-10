@@ -17,7 +17,6 @@ export const noise: VideoModuleDef = {
     inputs: { x: 'field', y: 'field', z: 'field' },
     natural: ['x', 'y', 'z'],
     output: 'field',
-    params: {},
     helpers: [
         NOISE_HASH,
         `fn noise_value(p: vec3f) -> f32 {
@@ -44,7 +43,6 @@ export const voronoi: VideoModuleDef = {
     inputs: { x: 'field', y: 'field', z: 'field' },
     natural: ['x', 'y', 'z'],
     output: 'field',
-    params: {},
     helpers: [
         NOISE_HASH,
         `fn voronoi_distance(p: vec2f, z: f32) -> f32 {

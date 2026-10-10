@@ -1,6 +1,6 @@
 import type { VideoModuleDef } from './types';
 
-export const HSV_TO_RGB = `fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
+const HSV_TO_RGB = `fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
     let p = abs(fract(vec3f(h) + vec3f(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - vec3f(3.0));
     let rgb = clamp(p - vec3f(1.0), vec3f(0.0), vec3f(1.0));
     return clamp(v, 0.0, 1.0) * mix(vec3f(1.0), rgb, clamp(s, 0.0, 1.0));
@@ -10,7 +10,6 @@ export const HSV_TO_RGB = `fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
 export const hsv: VideoModuleDef = {
     inputs: { h: 'field', s: 'field', v: 'field' },
     output: 'color',
-    params: {},
     helpers: [HSV_TO_RGB],
     emit: ({ h, s, v }) => `hsv_to_rgb(${h}, ${s}, ${v})`,
 };
@@ -24,7 +23,6 @@ export const procAmp: VideoModuleDef = {
         saturation: 'field',
     },
     output: 'color',
-    params: {},
     helpers: [
         `fn procamp(c: vec3f, gain: f32, bias: f32, saturation: f32) -> vec3f {
     let luma = vec3f(dot(c, vec3f(0.299, 0.587, 0.114)));
@@ -41,7 +39,6 @@ export const posterize: VideoModuleDef = {
     inputs: { input: 'field', levels: 'field' },
     natural: ['levels'],
     output: 'field',
-    params: {},
     helpers: [
         `fn posterize_levels(x: f32, levels: f32) -> f32 {
     let n = max(levels, 2.0);
@@ -55,7 +52,6 @@ export const posterize: VideoModuleDef = {
 export const hueShift: VideoModuleDef = {
     inputs: { input: 'color', amount: 'field' },
     output: 'color',
-    params: {},
     helpers: [
         HSV_TO_RGB,
         `fn rgb_to_hsv(c: vec3f) -> vec3f {
@@ -78,7 +74,6 @@ export const hueShift: VideoModuleDef = {
 export const contrast: VideoModuleDef = {
     inputs: { input: 'color', amount: 'field' },
     output: 'color',
-    params: {},
     emit: ({ input, amount }) =>
         `clamp((${input} - vec3f(0.5)) * ${amount} + vec3f(0.5), vec3f(0.0), vec3f(1.0))`,
 };

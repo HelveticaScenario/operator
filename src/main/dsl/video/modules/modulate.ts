@@ -1,5 +1,5 @@
 import { TRANSFORM_HELPER } from './transform';
-import { coordinateModule } from './warp';
+import { coordinateModule, KALEID_HELPER } from './warp';
 
 /*
  * The modulators of Hydra, which read the whole input at coordinates that
@@ -50,17 +50,8 @@ export const modulatePixelate = coordinateModule(
 export const modulateKaleid = coordinateModule(
     ['mr', 'sides'],
     ['sides'],
-    ({ mr, sides }) => `video_mod_kaleid(uv, ${sides}, ${mr})`,
-    [
-        `fn video_mod_kaleid(uv: vec2f, sides: f32, push: f32) -> vec2f {
-    let aspect = vec2f(u.resolution.x / u.resolution.y, 1.0);
-    let p = (uv - vec2f(0.5)) * aspect;
-    let wedge = 6.28318530718 / max(sides, 1.0);
-    let turn = ((atan2(p.y, p.x) % wedge) + wedge) % wedge;
-    let folded = abs(turn - wedge * 0.5);
-    return vec2f(cos(folded), sin(folded)) * (length(p) + push) / aspect + vec2f(0.5);
-}`,
-    ],
+    ({ mr, sides }) => `video_kaleid(uv, ${sides}, ${mr})`,
+    [KALEID_HELPER],
 );
 
 /** Pushes by the differences between the channels, `amount` pixels for a difference of full scale. */

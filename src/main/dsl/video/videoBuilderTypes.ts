@@ -1,4 +1,5 @@
 import type {
+    VideoNode,
     VideoPreviewView,
     VideoSourceDef,
     VideoValue,
@@ -116,6 +117,14 @@ export interface VideoShapeConfig {
     shape?: 'circle' | 'box' | 'diamond';
 }
 
+export type VideoInputs = Record<string, VideoValue>;
+
+/** A node's options and the buffer, audio history row or media it uses. */
+export type VideoNodeExtra = Pick<
+    VideoNode,
+    'params' | 'buffer' | 'history' | 'source'
+>;
+
 export function describe(value: unknown): string {
     if (value instanceof VideoOutput) return `a ${value.type}`;
     if (value instanceof ModuleOutput || value instanceof BaseCollection) {
@@ -134,16 +143,13 @@ export const isColor = (value: unknown): boolean =>
 export interface VideoCore {
     /** An input that must be a field: a number, a video field, or an audio signal. */
     asField(fn: string, name: string, v: unknown): VideoValue;
-    /** A color operand; a field or number becomes the gray of that level. */
-    asColorOrGray(fn: string, name: string, v: unknown): VideoValue;
+    /** Each of `values` as a field input, named by its key. */
+    fields(fn: string, values: Record<string, unknown>): VideoInputs;
     addNode(
         kind: string,
         type: VideoValueType,
-        inputs: Record<string, VideoValue>,
-        params?: Record<string, string>,
-        buffer?: number,
-        history?: number,
-        source?: number,
+        inputs: VideoInputs,
+        extra?: VideoNodeExtra,
     ): VideoOutput;
     /** A color signal; a field or number becomes the gray of that level. */
     toColor(fn: string, name: string, v: unknown): VideoOutput;

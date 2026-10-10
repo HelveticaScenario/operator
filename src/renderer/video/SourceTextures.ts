@@ -1,5 +1,5 @@
 /// <reference types="@webgpu/types" />
-import type { VideoSourceDef } from '../../shared/video/videoGraph';
+import { sameSource, type VideoSourceDef } from '../../shared/video/videoGraph';
 import { isHlsUrl, isRemoteMedia, mediaUrl } from '../../shared/video/mediaUrl';
 import { attachHls } from './hls';
 
@@ -24,15 +24,6 @@ interface Entry {
 
 const isLive = (def: VideoSourceDef) =>
     def.kind === 'camera' || def.kind === 'screen';
-
-const sameSource = (a: VideoSourceDef, b: VideoSourceDef) =>
-    a.kind === b.kind &&
-    a.path === b.path &&
-    a.device === b.device &&
-    a.display === b.display &&
-    a.speed === b.speed &&
-    a.loopStart === b.loopStart &&
-    a.loopEnd === b.loopEnd;
 
 /** The same file, whatever its playback settings; a camera or screen has none. */
 const sameFile = (a: VideoSourceDef, b: VideoSourceDef) =>
@@ -194,9 +185,13 @@ export class SourceTextures {
         }
     }
 
-    private loadVideo(entry: Entry): void {
+    /**
+     * Gives `entry` a muted video element that marks the entry fresh on each
+     * new frame and returns to the loop start at the loop end. Errors are
+     * reported with `fallback` when the element gives no message.
+     */
+    private createVideo(entry: Entry, fallback: string): HTMLVideoElement {
         const video = document.createElement('video');
-        video.crossOrigin = 'anonymous';
         video.muted = true;
         video.playsInline = true;
         entry.video = video;
@@ -209,18 +204,22 @@ export class SourceTextures {
             }
             video.requestVideoFrameCallback(onFrame);
         };
+        video.requestVideoFrameCallback(onFrame);
+        video.addEventListener('error', () =>
+            this.fail(entry, video.error?.message || fallback),
+        );
+        return video;
+    }
+
+    private loadVideo(entry: Entry): void {
+        const video = this.createVideo(entry, 'the file could not be played');
+        video.crossOrigin = 'anonymous';
         // Without a loop end the file plays to its end, then returns to the loop start.
         video.addEventListener('ended', () => {
             if (entry.disposed) return;
             video.currentTime = entry.def.loopStart ?? 0;
             this.syncPlayback(entry);
         });
-        video.addEventListener('error', () =>
-            this.fail(
-                entry,
-                video.error?.message || 'the file could not be played',
-            ),
-        );
         // A file whose audio decodes but whose picture does not loads without
         // an error and reports no frame size.
         video.addEventListener('loadedmetadata', () => {
@@ -241,28 +240,12 @@ export class SourceTextures {
         } else {
             video.src = mediaUrl(path);
         }
-        video.requestVideoFrameCallback(onFrame);
         this.applyPlayback(entry);
     }
 
     /** Shows a camera or a screen: a video element with a stream for a source. */
     private loadLive(entry: Entry): void {
-        const video = document.createElement('video');
-        video.muted = true;
-        video.playsInline = true;
-        entry.video = video;
-        const onFrame = () => {
-            if (entry.disposed) return;
-            entry.fresh = true;
-            video.requestVideoFrameCallback(onFrame);
-        };
-        video.requestVideoFrameCallback(onFrame);
-        video.addEventListener('error', () =>
-            this.fail(
-                entry,
-                video.error?.message || 'the picture could not be shown',
-            ),
-        );
+        const video = this.createVideo(entry, 'the picture could not be shown');
         if (this.openStream === undefined) {
             this.fail(entry, 'live sources are not available here');
             return;

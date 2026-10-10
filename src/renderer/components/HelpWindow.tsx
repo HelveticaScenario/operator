@@ -209,7 +209,7 @@ export const HelpWindow: React.FC = () => {
         electronAPI
             .getSchemas()
             .then((schemaList) => {
-                // _clock is internal-only (used for ROOT_CLOCK); hide from user-facing docs
+                // Modules named with a leading `_` are internal; hide them from user-facing docs
                 setSchemas(schemaList.filter((e) => !e.name.startsWith('_')));
             })
             .catch(console.error);

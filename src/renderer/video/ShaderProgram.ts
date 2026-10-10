@@ -16,6 +16,50 @@ import { PREVIEW_FORMAT } from './PreviewCapture';
 
 type ParityGroups = [GPUBindGroup, GPUBindGroup];
 
+type ResourceKind = 'uniform' | 'sampler' | 'buffer' | 'history' | 'source';
+
+/** What each kind of resource looks like in the bind group layout. */
+const LAYOUT_ENTRIES: Record<
+    ResourceKind,
+    Omit<GPUBindGroupLayoutEntry, 'binding' | 'visibility'>
+> = {
+    buffer: { texture: { sampleType: 'float' } },
+    history: { texture: { sampleType: 'unfilterable-float' } },
+    sampler: { sampler: { type: 'filtering' } },
+    source: { texture: { sampleType: 'float' } },
+    uniform: { buffer: { type: 'uniform' } },
+};
+
+/**
+ * Every resource a shader binds, in binding order: the uniforms, the sampler
+ * when anything is sampled, each feedback buffer, the audio history when
+ * there is any, and each media source. `index` counts within its kind.
+ */
+function resourceSlots(
+    bufferCount: number,
+    historyCount: number,
+    sourceCount: number,
+): { binding: number; kind: ResourceKind; index: number }[] {
+    const at = bindingSlots(bufferCount, historyCount);
+    const many = (kind: ResourceKind, start: number, count: number) =>
+        Array.from({ length: count }, (_, index) => ({
+            binding: start + index,
+            index,
+            kind,
+        }));
+    return [
+        ...many('uniform', 0, 1),
+        ...many(
+            'sampler',
+            at.sampler,
+            bufferCount > 0 || sourceCount > 0 ? 1 : 0,
+        ),
+        ...many('buffer', at.buffer, bufferCount),
+        ...many('history', at.history, historyCount > 0 ? 1 : 0),
+        ...many('source', at.source, sourceCount),
+    ];
+}
+
 /**
  * A compiled shader's GPU objects: the output pipeline, one pipeline per
  * preview, and the uniform buffers each pass reads. The previews have their
@@ -84,45 +128,16 @@ export class ShaderProgram {
         }
 
         const bufferCount = compiled.feedbackBufferCount;
-        const slots = bindingSlots(bufferCount, compiled.histories.length);
         const layout = device.createBindGroupLayout({
-            entries: [
-                {
-                    binding: 0,
-                    buffer: { type: 'uniform' },
-                    visibility: GPUShaderStage.FRAGMENT,
-                },
-                ...(bufferCount === 0 && compiled.sources.length === 0
-                    ? []
-                    : [
-                          {
-                              binding: slots.sampler,
-                              sampler: { type: 'filtering' as const },
-                              visibility: GPUShaderStage.FRAGMENT,
-                          },
-                      ]),
-                ...Array.from({ length: bufferCount }, (_, k) => ({
-                    binding: slots.buffer + k,
-                    texture: { sampleType: 'float' as const },
-                    visibility: GPUShaderStage.FRAGMENT,
-                })),
-                ...(compiled.histories.length === 0
-                    ? []
-                    : [
-                          {
-                              binding: slots.history,
-                              texture: {
-                                  sampleType: 'unfilterable-float' as const,
-                              },
-                              visibility: GPUShaderStage.FRAGMENT,
-                          },
-                      ]),
-                ...compiled.sources.map((_, k) => ({
-                    binding: slots.source + k,
-                    texture: { sampleType: 'float' as const },
-                    visibility: GPUShaderStage.FRAGMENT,
-                })),
-            ],
+            entries: resourceSlots(
+                bufferCount,
+                compiled.histories.length,
+                compiled.sources.length,
+            ).map(({ binding, kind }) => ({
+                binding,
+                visibility: GPUShaderStage.FRAGMENT,
+                ...LAYOUT_ENTRIES[kind],
+            })),
         });
         const pipelineLayout = device.createPipelineLayout({
             bindGroupLayouts: [layout],
@@ -191,33 +206,30 @@ export class ShaderProgram {
     ): { main: ParityGroups; preview: ParityGroups } {
         const generation = `${buffers.generation}:${history.generation}:${sources.generation}`;
         if (this.groups === null || this.groupsGeneration !== generation) {
-            const slots = bindingSlots(this.bufferCount, this.histories.length);
-            const build = (uniform: GPUBuffer, parity: number) =>
-                device.createBindGroup({
-                    entries: [
-                        { binding: 0, resource: { buffer: uniform } },
-                        ...(this.bufferCount === 0 && this.sources.length === 0
-                            ? []
-                            : [{ binding: slots.sampler, resource: sampler }]),
-                        ...Array.from({ length: this.bufferCount }, (_, k) => ({
-                            binding: slots.buffer + k,
-                            resource: buffers.readView(k, parity),
-                        })),
-                        ...(this.histories.length === 0
-                            ? []
-                            : [
-                                  {
-                                      binding: slots.history,
-                                      resource: history.view,
-                                  },
-                              ]),
-                        ...this.sources.map((_, k) => ({
-                            binding: slots.source + k,
-                            resource: sources.view(k),
-                        })),
-                    ],
+            const slots = resourceSlots(
+                this.bufferCount,
+                this.histories.length,
+                this.sources.length,
+            );
+            const build = (uniform: GPUBuffer, parity: number) => {
+                const resources: Record<
+                    ResourceKind,
+                    (index: number) => GPUBindingResource
+                > = {
+                    buffer: (index) => buffers.readView(index, parity),
+                    history: () => history.view,
+                    sampler: () => sampler,
+                    source: (index) => sources.view(index),
+                    uniform: () => ({ buffer: uniform }),
+                };
+                return device.createBindGroup({
+                    entries: slots.map(({ binding, kind, index }) => ({
+                        binding,
+                        resource: resources[kind](index),
+                    })),
                     layout: this.layout,
                 });
+            };
             this.groups = {
                 main: [
                     build(this.uniformBuffer, 0),

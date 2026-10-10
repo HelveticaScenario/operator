@@ -2417,13 +2417,10 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
+    // Modules named with a leading `_` are internal, and $buffer has a custom
+    // declaration below.
     const userFacingSchemas = schemas.filter(
-        (s) =>
-            s.name !== '_clock' &&
-            s.name !== '_videoTap' &&
-            s.name !== '_mediaAudio' &&
-            s.name !== '$buffer',
+        (s) => !s.name.startsWith('_') && s.name !== '$buffer',
     );
     const tree = buildTreeFromSchemas(userFacingSchemas);
     const lines = renderTree(tree, 0);
