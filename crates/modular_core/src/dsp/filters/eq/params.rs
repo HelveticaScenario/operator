@@ -1,4 +1,4 @@
-//! Section-list params for `$unstable.eq`, their validation, and the Q mapping.
+//! Section-list params for `$eq`, their validation, and the Q mapping.
 
 use deserr::{DeserializeError, Deserr, ErrorKind, IntoValue, Sequence, ValuePointerRef};
 use schemars::JsonSchema;
@@ -11,43 +11,42 @@ pub const DEFAULT_Q: f32 = std::f32::consts::FRAC_1_SQRT_2;
 pub const MIN_Q: f32 = 0.1;
 pub const MAX_Q: f32 = 20.0;
 
-/// Filter shape of one EQ section.
+/// The kind of EQ band.
 #[derive(Clone, Copy, Debug, Default, Deserr, JsonSchema, PartialEq, Eq, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 pub enum EqSectionType {
-    /// Bell boost/cut around freq.
+    /// boost or cut around freq
     #[default]
     Peak,
-    /// Shelving boost/cut below freq.
+    /// boost or cut everything below freq
     LowShelf,
-    /// Shelving boost/cut above freq.
+    /// boost or cut everything above freq
     HighShelf,
-    /// 12 dB/oct lowpass at freq (gain ignored).
+    /// remove everything above freq
     Lowpass,
-    /// 12 dB/oct highpass at freq (gain ignored).
+    /// remove everything below freq
     Highpass,
-    /// Band-reject at freq (gain ignored).
+    /// remove a narrow band around freq
     Notch,
 }
 
-/// One EQ section. `freq`, `gain`, and `q` accept modulation; a polyphonic
-/// cable is summed to mono.
+/// One EQ band. `freq`, `gain`, and `q` can all be modulated.
 #[derive(Clone, Deserr, JsonSchema, Connect)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 pub struct EqSection {
-    /// section type (default peak)
+    /// kind of band (default peak)
     #[serde(rename = "type", default)]
     #[deserr(rename = "type", default)]
     pub r#type: EqSectionType,
-    /// center/corner frequency in V/Oct (0 V = C4)
+    /// where the band sits, like '1000hz' or 'c4'
     pub freq: MonoSignal,
-    /// boost/cut in dB (-24 to 24; peak and shelf types only, default 0)
+    /// boost or cut in dB, -24 to 24 (peaks and shelves only, default 0)
     #[deserr(default)]
     pub gain: Option<MonoSignal>,
-    /// bandwidth Q (0.1-20, default 0.707); on shelves, below 0.707 gentles the
-    /// slope and above it adds a resonant bump at the corner
+    /// how narrow the band is, 0.1 to 20 (default 0.707); above 0.707, shelves
+    /// and lowpass/highpass get a resonant bump
     #[deserr(default)]
     pub q: Option<MonoSignal>,
 }
@@ -127,19 +126,18 @@ impl JsonSchema for EqSections {
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields, validate = validate_eq_params -> ModuleParamErrors)]
 pub struct ParametricEqParams {
-    /// signal input
+    /// sound to EQ
     pub input: PolySignal,
-    /// up to 8 filter sections applied in series, or one such list per channel
-    /// (default none: the input passes through)
+    /// up to 8 bands, or one list of bands per channel (default none: the sound
+    /// passes through unchanged)
     #[serde(default)]
     #[deserr(default)]
     pub sections: EqSections,
-    /// narrow peak sections as their boost or cut grows (default false)
+    /// make peaks narrower the more they boost or cut (default false)
     #[serde(default)]
     #[deserr(default)]
     pub adaptive_q: bool,
-    /// show the interactive EQ panel under the call in the editor (default
-    /// false); the engine ignores it
+    /// show an EQ editor under the call (default false)
     #[serde(default)]
     #[deserr(default)]
     pub ui: bool,

@@ -1,5 +1,5 @@
 /** Module type whose `ui: true` param requests an inline EQ panel. */
-export const EQ_MODULE_TYPE = '$unstable.eq';
+export const EQ_MODULE_TYPE = '$eq';
 
 /**
  * Frame window of the headless spectrum scope. Short enough that the scope's
@@ -17,7 +17,8 @@ export interface EqPanelDef {
     key: string;
     moduleId: string;
     /**
-     * Location of the `eq` method name in the DSL source. Absent when several
+     * Location of the call's callee in the DSL source (`$eq`, or the `eq` of a
+     * `.$.eq(...)` chain). Absent when several
      * EQs share the call site (a loop or helper): a source edit there would
      * rewrite every instance, so such panels act on the live graph only.
      */

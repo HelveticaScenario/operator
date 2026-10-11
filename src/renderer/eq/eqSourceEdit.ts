@@ -1,7 +1,7 @@
 /**
  * Source edits behind the EQ panel's controls. Each edit parses the current
- * document, finds the `$unstable.eq(...)` call by the offset of its `eq`
- * method name (the panel's tracked anchor), and rewrites a section list
+ * document, finds the EQ call by the offset of its callee — `$eq` itself, or
+ * the `eq` of a `.$.eq(...)` chain (the panel's tracked anchor) — and rewrites a section list
  * literal in its config's `sections` — the array itself, or one channel's
  * nested array in the per-channel form: a section's property values, an
  * appended section (adding `sections` when absent), or a removed one. Only literal values are rewritten; a section property holding any
@@ -82,9 +82,12 @@ function findEqCall(
         }
         if (
             ts.isCallExpression(node) &&
-            ts.isPropertyAccessExpression(node.expression) &&
-            node.expression.name.text === 'eq' &&
-            node.expression.name.getStart(sf) === anchor
+            ((ts.isIdentifier(node.expression) &&
+                node.expression.text === '$eq' &&
+                node.expression.getStart(sf) === anchor) ||
+                (ts.isPropertyAccessExpression(node.expression) &&
+                    node.expression.name.text === 'eq' &&
+                    node.expression.name.getStart(sf) === anchor))
         ) {
             found = node;
             return;

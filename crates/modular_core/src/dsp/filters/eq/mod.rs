@@ -1,4 +1,4 @@
-//! `$unstable.eq`: serial parametric EQ of trapezoidal state-variable filter
+//! `$eq`: serial parametric EQ of trapezoidal state-variable filter
 //! sections.
 
 use schemars::JsonSchema;
@@ -55,36 +55,42 @@ impl Default for ParametricEqState {
     }
 }
 
-/// Serial parametric EQ of up to 8 trapezoidal state-variable filter
-/// sections that stay clean under fast freq/gain/q modulation.
+/// Parametric EQ: shape the tone of a sound with up to 8 bands.
 ///
-/// **sections** lists the filters, applied in series. Each section selects
-/// **type** `'peak'`, `'lowShelf'`, `'highShelf'`, `'lowpass'`, `'highpass'`,
-/// or `'notch'` (default peak) and sets **freq** in V/Oct (0 V = C4),
-/// **gain** in dB (-24 to 24, peak and shelf types only), and **q** (0.1-20,
-/// default 0.707). All three accept modulation; section params are mono, so
-/// a polyphonic cable is summed. On shelves, 0.707 is the steepest shelf that
-/// never overshoots: lower values make the slope gentler, higher values add a
-/// resonant bump just inside the corner and a dip just outside it. Without
-/// sections the input passes through.
+/// Each band in **sections** has a **type**:
 ///
-/// One sections list applies to every channel. To EQ channels differently,
-/// pass an array of section lists instead: channel `c` uses list `c % n`,
-/// and the output has at least as many channels as there are lists.
+/// - `'peak'` (default): boost or cut around a frequency.
+/// - `'lowShelf'` / `'highShelf'`: boost or cut everything below / above a
+///   frequency.
+/// - `'lowpass'` / `'highpass'`: remove everything above / below a frequency.
+/// - `'notch'`: remove a narrow band around a frequency.
 ///
-/// **adaptiveQ** (default false) narrows peak sections as their boost or cut
-/// grows, by about 2x per 12 dB, like the proportional-Q behavior of classic
-/// analog EQs.
+/// and sets:
 ///
-/// **ui** (default false) shows an interactive panel under the call. Drag a
-/// section's node to set freq and gain, scroll over it or drag its
-/// bandwidth handles to set q, double-click the graph to add a section, and
-/// pick types below the graph. Changes play immediately and are written back
-/// into the code; hold Ctrl/Cmd to edit the code only.
+/// - **freq**: where the band sits, like `'1000hz'` or `'c4'`.
+/// - **gain**: how much to boost or cut, in dB (-24 to 24). Peaks and shelves
+///   only.
+/// - **q**: how narrow the band is (0.1 to 20, default 0.707). On shelves and
+///   lowpass/highpass, values above 0.707 add a resonant bump at the
+///   frequency; on shelves, lower values make a gentler slope.
+///
+/// Any of them can be modulated. With no sections, the sound passes through
+/// unchanged.
+///
+/// To EQ channels differently, give **sections** one list of bands per
+/// channel, like one for left and one for right.
+///
+/// **adaptiveQ** makes peaks narrower the more you boost or cut them, like
+/// many classic analog EQs.
+///
+/// **ui: true** shows an editor under the call. Drag a band's dot to move it,
+/// scroll over it or drag its handles to change q, and double-click to add a
+/// band. Changes play right away and are written into your code. Hold
+/// Ctrl/Cmd to change only the code, and right-click a control to reset it.
 ///
 /// ```js
-/// // Shared by every channel
-/// $unstable.eq($saw('c2'), {
+/// // Warm up the lows, sweep a dip through the mids, clear out rumble
+/// $eq($saw('c2'), {
 ///   sections: [
 ///     { type: 'lowShelf', freq: '150hz', gain: 3 },
 ///     { type: 'peak', freq: $sine('0.5hz').range('400hz', '2000hz'), gain: -6, q: 2 },
@@ -93,18 +99,18 @@ impl Default for ParametricEqState {
 ///   adaptiveQ: true,
 /// })
 ///
-/// // Per channel: a darker left, a brighter right
-/// $unstable.eq($saw(['c2', 'g2']), {
+/// // A darker left channel, a brighter right one
+/// $eq($saw(['c2', 'g2']), {
 ///   sections: [
 ///     [{ type: 'highShelf', freq: '3000hz', gain: -6 }],
 ///     [{ type: 'highShelf', freq: '3000hz', gain: 4 }],
 ///   ],
 /// })
 ///
-/// // Start empty and add sections in the panel
-/// $unstable.eq($saw('c2'), { ui: true })
+/// // Start empty and build the EQ in the editor
+/// $eq($saw('c2'), { ui: true })
 /// ```
-#[module(name = "$unstable.eq", channels_derive = eq_derive_channel_count, patch_update, stateful, args(input))]
+#[module(name = "$eq", channels_derive = eq_derive_channel_count, patch_update, stateful, args(input))]
 pub struct ParametricEq {
     outputs: ParametricEqOutputs,
     state: ParametricEqState,

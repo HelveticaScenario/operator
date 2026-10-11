@@ -23,12 +23,18 @@ const num = (text: string) => () => text;
 
 const shared = (count: number) => ({ count, list: null, listCount: 1 });
 
+/** The panel's anchor: the `$eq` callee, or the `eq` of a `.$.eq(` chain. */
+const anchorOf = (source: string) =>
+    source.includes('.$.eq(')
+        ? source.lastIndexOf('eq(')
+        : source.lastIndexOf('$eq(');
+
 function run(
     source: string,
     count: number | EqListTarget,
     op: EqSourceOp,
 ): string {
-    const anchor = source.lastIndexOf('eq(');
+    const anchor = anchorOf(source);
     const target = typeof count === 'number' ? shared(count) : count;
     const res = computeEqSourceEdit(source, anchor, target, op, layout);
     if (!res.ok) {
@@ -45,16 +51,10 @@ function run(
 }
 
 function result(source: string, target: EqListTarget, op: EqSourceOp) {
-    return computeEqSourceEdit(
-        source,
-        source.lastIndexOf('eq('),
-        target,
-        op,
-        layout,
-    );
+    return computeEqSourceEdit(source, anchorOf(source), target, op, layout);
 }
 
-const multi = `const x = $unstable.eq($saw('c2'), {
+const multi = `const x = $eq($saw('c2'), {
     sections: [
         { type: 'lowShelf', freq: "150hz", gain: 3 },
         { freq: '1000hz', gain: -6, q: 2 }, // mids
@@ -94,7 +94,7 @@ describe('computeEqSourceEdit set', () => {
     });
 
     it('skips non-literal values and still writes the rest', () => {
-        const src = `$unstable.eq(x, { sections: [{ freq: lfo, gain: g }], ui: true })`;
+        const src = `$eq(x, { sections: [{ freq: lfo, gain: g }], ui: true })`;
         const op: EqSourceOp = {
             fields: { freq: str('100hz'), q: num('3') },
             index: 0,
@@ -103,7 +103,7 @@ describe('computeEqSourceEdit set', () => {
         const res = result(src, shared(1), op);
         expect(res.ok && res.skipped).toEqual(['freq']);
         expect(run(src, 1, op)).toBe(
-            `$unstable.eq(x, { sections: [{ freq: lfo, gain: g, q: 3 }], ui: true })`,
+            `$eq(x, { sections: [{ freq: lfo, gain: g, q: 3 }], ui: true })`,
         );
     });
 
@@ -120,7 +120,7 @@ describe('computeEqSourceEdit set', () => {
     it('reports a moved anchor as stale', () => {
         const res = computeEqSourceEdit(
             multi,
-            multi.indexOf('eq(') + 1,
+            anchorOf(multi) + 1,
             shared(2),
             { fields: { gain: num('1') }, index: 0, kind: 'set' },
             layout,
@@ -130,30 +130,26 @@ describe('computeEqSourceEdit set', () => {
 
     it('reports a non-literal sections value as unsupported', () => {
         expect(
-            result(
-                `$unstable.eq(x, { sections: bands, ui: true })`,
-                shared(1),
-                {
-                    fields: { gain: num('1') },
-                    index: 0,
-                    kind: 'set',
-                },
-            ),
+            result(`$eq(x, { sections: bands, ui: true })`, shared(1), {
+                fields: { gain: num('1') },
+                index: 0,
+                kind: 'set',
+            }),
         ).toEqual({ ok: false, reason: 'unsupported' });
     });
 
     it('ignores other eq calls and strings spelling eq(', () => {
-        const src = `a.eq(1); const s = 'eq('; $unstable.eq(x, { sections: [{ freq: 0 }], ui: true })`;
+        const src = `a.eq(1); const s = 'eq('; $eq(x, { sections: [{ freq: 0 }], ui: true })`;
         expect(
             run(src, 1, { fields: { freq: num('1') }, index: 0, kind: 'set' }),
         ).toBe(
-            `a.eq(1); const s = 'eq('; $unstable.eq(x, { sections: [{ freq: 1 }], ui: true })`,
+            `a.eq(1); const s = 'eq('; $eq(x, { sections: [{ freq: 1 }], ui: true })`,
         );
     });
 });
 
 describe('computeEqSourceEdit per-channel lists', () => {
-    const perChannel = `$unstable.eq(x, {
+    const perChannel = `$eq(x, {
     sections: [
         [{ freq: 0 }],
         [{ freq: 1 }, { freq: 2 }],
@@ -200,7 +196,7 @@ describe('computeEqSourceEdit per-channel lists', () => {
     it('reports a non-literal channel list as unsupported', () => {
         expect(
             result(
-                `$unstable.eq(x, { sections: [[{ freq: 0 }], bands], ui: true })`,
+                `$eq(x, { sections: [[{ freq: 0 }], bands], ui: true })`,
                 { count: 1, list: 1, listCount: 2 },
                 { fields: { freq: num('1') }, index: 0, kind: 'set' },
             ),
@@ -210,17 +206,17 @@ describe('computeEqSourceEdit per-channel lists', () => {
 
 describe('computeEqSourceEdit call forms', () => {
     it('finds sections in the $ chain form', () => {
-        const src = `$saw('c2').$.unstable.eq({ sections: [{ freq: 0 }], ui: true })`;
+        const src = `$saw('c2').$.eq({ sections: [{ freq: 0 }], ui: true })`;
         expect(
             run(src, 1, { fields: { gain: num('2') }, index: 0, kind: 'set' }),
         ).toBe(
-            `$saw('c2').$.unstable.eq({ sections: [{ freq: 0, gain: 2 }], ui: true })`,
+            `$saw('c2').$.eq({ sections: [{ freq: 0, gain: 2 }], ui: true })`,
         );
     });
 
     it('needs the config holding ui', () => {
         expect(
-            result(`$unstable.eq(x, { sections: [{ freq: 0 }] })`, shared(1), {
+            result(`$eq(x, { sections: [{ freq: 0 }] })`, shared(1), {
                 fields: { gain: num('1') },
                 index: 0,
                 kind: 'set',
@@ -232,16 +228,16 @@ describe('computeEqSourceEdit call forms', () => {
 describe('computeEqSourceEdit add/remove', () => {
     it('adds sections to a config without them', () => {
         expect(
-            run(`$unstable.eq(x, { ui: true })`, 0, {
+            run(`$eq(x, { ui: true })`, 0, {
                 fields: { freq: str('1000hz'), type: str('peak') },
                 kind: 'add',
             }),
         ).toBe(
-            `$unstable.eq(x, { ui: true, sections: [{ type: 'peak', freq: '1000hz' }] })`,
+            `$eq(x, { ui: true, sections: [{ type: 'peak', freq: '1000hz' }] })`,
         );
         // Only an empty shared list can be missing.
         expect(
-            result(`$unstable.eq(x, { ui: true })`, shared(1), {
+            result(`$eq(x, { ui: true })`, shared(1), {
                 fields: { freq: num('1') },
                 kind: 'add',
             }),
@@ -250,11 +246,11 @@ describe('computeEqSourceEdit add/remove', () => {
 
     it('appends to an empty array', () => {
         expect(
-            run(`$unstable.eq(x, { sections: [], ui: true })`, 0, {
+            run(`$eq(x, { sections: [], ui: true })`, 0, {
                 fields: { freq: num('1') },
                 kind: 'add',
             }),
-        ).toBe(`$unstable.eq(x, { sections: [{ freq: 1 }], ui: true })`);
+        ).toBe(`$eq(x, { sections: [{ freq: 1 }], ui: true })`);
     });
 
     it('appends to an expanded array on its own line', () => {
@@ -270,11 +266,11 @@ describe('computeEqSourceEdit add/remove', () => {
     });
 
     it('appends to an expanded array without a trailing comma', () => {
-        const src = `$unstable.eq(x, { ui: true, sections: [
+        const src = `$eq(x, { ui: true, sections: [
   { freq: 0 }
 ] })`;
         expect(run(src, 1, { fields: { freq: num('1') }, kind: 'add' }))
-            .toBe(`$unstable.eq(x, { ui: true, sections: [
+            .toBe(`$eq(x, { ui: true, sections: [
   { freq: 0 },
   { freq: 1 }
 ] })`);
@@ -282,13 +278,11 @@ describe('computeEqSourceEdit add/remove', () => {
 
     it('appends inline to a one-line array', () => {
         expect(
-            run(`$unstable.eq(x, { sections: [{ freq: 0 }], ui: true })`, 1, {
+            run(`$eq(x, { sections: [{ freq: 0 }], ui: true })`, 1, {
                 fields: { freq: num('1') },
                 kind: 'add',
             }),
-        ).toBe(
-            `$unstable.eq(x, { sections: [{ freq: 0 }, { freq: 1 }], ui: true })`,
-        );
+        ).toBe(`$eq(x, { sections: [{ freq: 0 }, { freq: 1 }], ui: true })`);
     });
 
     it('removes a first or middle element with its separator', () => {
@@ -299,13 +293,11 @@ describe('computeEqSourceEdit add/remove', () => {
         );
         expect(
             run(
-                `$unstable.eq(x, { sections: [{ freq: 0 }, { freq: 1 }, { freq: 2 }], ui: true })`,
+                `$eq(x, { sections: [{ freq: 0 }, { freq: 1 }, { freq: 2 }], ui: true })`,
                 3,
                 { index: 1, kind: 'remove' },
             ),
-        ).toBe(
-            `$unstable.eq(x, { sections: [{ freq: 0 }, { freq: 2 }], ui: true })`,
-        );
+        ).toBe(`$eq(x, { sections: [{ freq: 0 }, { freq: 2 }], ui: true })`);
     });
 
     it('removes the last element, keeping a trailing comma', () => {
@@ -318,11 +310,11 @@ describe('computeEqSourceEdit add/remove', () => {
 
     it('removing the only section leaves an empty list', () => {
         expect(
-            run(`$unstable.eq(x, { sections: [{ freq: 0 }], ui: true })`, 1, {
+            run(`$eq(x, { sections: [{ freq: 0 }], ui: true })`, 1, {
                 index: 0,
                 kind: 'remove',
             }),
-        ).toBe(`$unstable.eq(x, { sections: [], ui: true })`);
+        ).toBe(`$eq(x, { sections: [], ui: true })`);
     });
 });
 
@@ -334,7 +326,7 @@ describe('computeEqChannelEdit', () => {
     ): string => {
         const res = computeEqChannelEdit(
             source,
-            source.lastIndexOf('eq('),
+            anchorOf(source),
             listCount,
             op,
             layout,
@@ -351,15 +343,11 @@ describe('computeEqChannelEdit', () => {
 
     it('splits a one-line shared list into two copies inline', () => {
         expect(
-            channel(
-                `$unstable.eq(x, { sections: [{ freq: 0 }], ui: true })`,
-                0,
-                {
-                    kind: 'split',
-                },
-            ),
+            channel(`$eq(x, { sections: [{ freq: 0 }], ui: true })`, 0, {
+                kind: 'split',
+            }),
         ).toBe(
-            `$unstable.eq(x, { sections: [[{ freq: 0 }], [{ freq: 0 }]], ui: true })`,
+            `$eq(x, { sections: [[{ freq: 0 }], [{ freq: 0 }]], ui: true })`,
         );
     });
 
@@ -379,29 +367,29 @@ describe('computeEqChannelEdit', () => {
     });
 
     it('splits a config without sections into two empty lists', () => {
-        expect(
-            channel(`$unstable.eq(x, { ui: true })`, 0, { kind: 'split' }),
-        ).toBe(`$unstable.eq(x, { ui: true, sections: [[], []] })`);
+        expect(channel(`$eq(x, { ui: true })`, 0, { kind: 'split' })).toBe(
+            `$eq(x, { ui: true, sections: [[], []] })`,
+        );
     });
 
     it('adds a copy of a channel list', () => {
         expect(
             channel(
-                `$unstable.eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }]], ui: true })`,
+                `$eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }]], ui: true })`,
                 2,
                 { from: 1, kind: 'addChannel' },
             ),
         ).toBe(
-            `$unstable.eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }], [{ freq: 1 }]], ui: true })`,
+            `$eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }], [{ freq: 1 }]], ui: true })`,
         );
     });
 
     it('removes a channel list, collapsing the last two to the shared form', () => {
-        const three = `$unstable.eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }], [{ freq: 2 }]], ui: true })`;
+        const three = `$eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }], [{ freq: 2 }]], ui: true })`;
         expect(channel(three, 3, { index: 1, kind: 'removeChannel' })).toBe(
-            `$unstable.eq(x, { sections: [[{ freq: 0 }], [{ freq: 2 }]], ui: true })`,
+            `$eq(x, { sections: [[{ freq: 0 }], [{ freq: 2 }]], ui: true })`,
         );
-        const two = `$unstable.eq(x, {
+        const two = `$eq(x, {
     sections: [
         [
             { freq: 0 },
@@ -412,7 +400,7 @@ describe('computeEqChannelEdit', () => {
     ui: true,
 })`;
         expect(channel(two, 2, { index: 1, kind: 'removeChannel' })).toBe(
-            `$unstable.eq(x, {
+            `$eq(x, {
     sections: [
         { freq: 0 },
         { freq: 1 },
@@ -423,8 +411,8 @@ describe('computeEqChannelEdit', () => {
     });
 
     it('reports a mismatched form or channel count as stale', () => {
-        const per = `$unstable.eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }]], ui: true })`;
-        const anchor = per.lastIndexOf('eq(');
+        const per = `$eq(x, { sections: [[{ freq: 0 }], [{ freq: 1 }]], ui: true })`;
+        const anchor = anchorOf(per);
         expect(
             computeEqChannelEdit(per, anchor, 0, { kind: 'split' }, layout),
         ).toEqual({ ok: false, reason: 'stale' });

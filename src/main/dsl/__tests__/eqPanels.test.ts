@@ -26,24 +26,26 @@ function textAt(source: string, loc: { line: number; column: number }) {
 }
 
 describe('eq panels', () => {
-    test('ui: true emits a panel anchored at the eq method name', () => {
+    test('ui: true emits a panel anchored at the $eq callee', () => {
         const source = `const sig = $saw('c2')
-$unstable.eq(sig, {
+$eq(sig, {
     sections: [{ type: 'lowShelf', freq: '150hz', gain: 3 }],
     ui: true,
 }).out()
-$unstable.eq(sig, { sections: [{ freq: 0 }] }).out()`;
+$eq(sig, { sections: [{ freq: 0 }] }).out()`;
         const result = exec(source);
         expect(result.eqPanels).toHaveLength(1);
         const [panel] = result.eqPanels;
         expect(panel.key).toBe(`eq:${panel.moduleId}`);
         expect(panel.sourceLocation).toEqual(panel.zoneLocation);
-        expect(textAt(source, panel.sourceLocation!)).toMatch(/^eq\(sig, \{$/);
+        expect(textAt(source, panel.sourceLocation!)).toMatch(
+            /^\$eq\(sig, \{$/,
+        );
 
         const module = result.patch.modules.find(
             (m) => m.id === panel.moduleId,
         )!;
-        expect(module.moduleType).toBe('$unstable.eq');
+        expect(module.moduleType).toBe('$eq');
         expect(module.params.ui).toBe(true);
 
         const key =
@@ -55,20 +57,20 @@ $unstable.eq(sig, { sections: [{ freq: 0 }] }).out()`;
     });
 
     test('anchors on line 1 too', () => {
-        const source = `$unstable.eq($saw('c2'), { ui: true }).out()`;
+        const source = `$eq($saw('c2'), { ui: true }).out()`;
         const [panel] = exec(source).eqPanels;
-        expect(textAt(source, panel.sourceLocation!)).toMatch(/^eq\(/);
+        expect(textAt(source, panel.sourceLocation!)).toMatch(/^\$eq\(/);
     });
 
     test('the $ chain form anchors at its eq method name', () => {
-        const source = `$saw('c2').$.unstable.eq({ ui: true }).out()`;
+        const source = `$saw('c2').$.eq({ ui: true }).out()`;
         const [panel] = exec(source).eqPanels;
         expect(textAt(source, panel.sourceLocation!)).toMatch(/^eq\(\{/);
     });
 
     test('a shared list gets a headless full-rate scope on channel 0', () => {
         const result = exec(
-            `$unstable.eq($saw(['c2', 'c3']), { sections: [{ freq: 0 }], ui: true }).out()`,
+            `$eq($saw(['c2', 'c3']), { sections: [{ freq: 0 }], ui: true }).out()`,
         );
         const [panel] = result.eqPanels;
         const feeds = (result.patch.scopes as ScopeWithLocation[]).filter(
@@ -90,7 +92,7 @@ $unstable.eq(sig, { sections: [{ freq: 0 }] }).out()`;
     });
 
     test('per-channel lists get one feed per list channel', () => {
-        const result = exec(`$unstable.eq($saw('c2'), {
+        const result = exec(`$eq($saw('c2'), {
             sections: [[{ freq: 0 }], [{ freq: 1 }]],
             ui: true,
         }).out()`);
@@ -104,7 +106,7 @@ $unstable.eq(sig, { sections: [{ freq: 0 }] }).out()`;
 
     test('eqs sharing a call site keep zone placement but are not editable', () => {
         const result = exec(`
-            const band = (s) => $unstable.eq(s, { ui: true })
+            const band = (s) => $eq(s, { ui: true })
             band($saw('c2')).out()
             band($saw('c3')).out()
         `);
@@ -117,7 +119,7 @@ $unstable.eq(sig, { sections: [{ freq: 0 }] }).out()`;
 
     test('no ui, no panels or feeds', () => {
         const result = exec(
-            `$unstable.eq($saw('c2'), { sections: [{ freq: 0 }] }).out()`,
+            `$eq($saw('c2'), { sections: [{ freq: 0 }] }).out()`,
         );
         expect(result.eqPanels).toEqual([]);
         expect(

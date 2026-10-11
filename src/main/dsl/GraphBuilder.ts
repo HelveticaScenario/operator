@@ -1606,7 +1606,7 @@ export class GraphBuilder {
     }
 
     /**
-     * One panel per `$unstable.eq` with `ui: true`, plus the headless scopes
+     * One panel per `$eq` with `ui: true`, plus the headless scopes
      * feeding its spectrum. EQs sharing a call site (a loop or helper) keep
      * their zone placement but carry no editable sourceLocation.
      */

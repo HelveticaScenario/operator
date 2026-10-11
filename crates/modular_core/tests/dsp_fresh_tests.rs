@@ -405,7 +405,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$plate" => json!({ "input": 0.0 }),
         "$unstable.reverb" => json!({ "input": 0.0 }),
         "$unstable.reverb2" => json!({ "input": 0.0 }),
-        "$unstable.eq" => json!({ "input": 0.0 }),
+        "$eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),
         "$step" => json!({ "steps": [0.0], "next": 0.0 }),
@@ -2759,7 +2759,7 @@ fn shape_saturate_hard_clamps_to_rail() {
 #[test]
 fn eq_sections_accept_shared_and_per_channel_forms() {
     let deserializers = get_params_deserializers();
-    let de = deserializers.get("$unstable.eq").unwrap();
+    let de = deserializers.get("$eq").unwrap();
     let shared = de(json!({ "input": 0.0, "sections": [{ "freq": "100hz", "gain": [1.0, 2.0] }] }))
         .expect("shared list; a poly gain sums to mono");
     assert_eq!(

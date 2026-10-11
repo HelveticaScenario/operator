@@ -77,7 +77,7 @@ export interface EqPanelSetup {
     defs: EqPanelDef[];
     params: Map<string, RawEqParams>;
     model: editor.ITextModel | null;
-    /** One tracked range per def, from the `eq` name to the call's last line. */
+    /** One tracked range per def, from the callee to the call's last line. */
     decorations: editor.IEditorDecorationsCollection | null;
 }
 
