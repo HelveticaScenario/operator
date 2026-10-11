@@ -3,7 +3,6 @@ import { coordinateModule, TRANSFORM_HELPER } from './transform';
 /** Zooms about the center, turns and shifts everything `input` draws. */
 export const warp = coordinateModule(
     ['zoom', 'rotate', 'shiftX', 'shiftY'],
-    ['zoom'],
     ({ zoom, rotate, shiftX, shiftY }) =>
         `video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY}))`,
     [TRANSFORM_HELPER],
@@ -12,7 +11,6 @@ export const warp = coordinateModule(
 /** Reads `input` at positions pushed by `dx` and `dy`, where 0.5 is no push. */
 export const displace = coordinateModule(
     ['dx', 'dy', 'amount'],
-    [],
     ({ dx, dy, amount }) =>
         `uv + (vec2f(${dx}, ${dy}) - vec2f(0.5)) * ${amount}`,
 );
@@ -33,14 +31,12 @@ export const KALEID_HELPER = `fn video_kaleid(uv: vec2f, sides: f32, push: f32) 
 /** Mirrors `input` around the center into `sides` wedges. */
 export const kaleid = coordinateModule(
     ['sides'],
-    ['sides'],
     ({ sides }) => `video_kaleid(uv, ${sides}, 0.0)`,
     [KALEID_HELPER],
 );
 
 /** Holds `input` constant across a grid of `x` by `y` cells. */
 export const pixelate = coordinateModule(
-    ['x', 'y'],
     ['x', 'y'],
     ({ x, y }) => `video_pixelate(uv, vec2f(${x}, ${y}))`,
     [
@@ -53,7 +49,6 @@ export const pixelate = coordinateModule(
 
 /** Tiles `input` `x` by `y` times across the frame. */
 export const repeat = coordinateModule(
-    ['x', 'y'],
     ['x', 'y'],
     ({ x, y }) => `fract(uv * vec2f(${x}, ${y}))`,
 );

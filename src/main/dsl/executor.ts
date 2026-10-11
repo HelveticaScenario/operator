@@ -715,7 +715,7 @@ export function executePatchScript(
         publishTap: (output, slot) => {
             _videoTap(output, slot);
         },
-        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 5),
+        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 1),
         mediaAudio: (path, playback) => {
             if (!options.loadMediaAudio) {
                 throw new Error(

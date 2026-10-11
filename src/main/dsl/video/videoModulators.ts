@@ -52,11 +52,11 @@ export function modulatorMethods(core: VideoCore) {
                 offset,
             }),
 
-        /** Turns `input` about the center by `offset + multiple * red`; 5 is a full turn. */
+        /** Turns `input` about the center by `offset + multiple * red`, in turns. */
         modulateRotate: (
             input: VideoOutput,
             modulator: VideoOutput,
-            multiple: VideoSource = 5,
+            multiple: VideoSource = 1,
             offset: VideoSource = 0,
         ): VideoOutput =>
             modulate('modulateRotate', ['r'], input, modulator, {
@@ -100,8 +100,8 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             repeatX: VideoSource = 3,
             repeatY: VideoSource = 3,
-            offsetX: VideoSource = 2.5,
-            offsetY: VideoSource = 2.5,
+            offsetX: VideoSource = 0.5,
+            offsetY: VideoSource = 0.5,
         ): VideoOutput =>
             modulate('modulateRepeat', ['r', 'g'], input, modulator, {
                 repeatX,
@@ -115,7 +115,7 @@ export function modulatorMethods(core: VideoCore) {
             input: VideoOutput,
             modulator: VideoOutput,
             reps: VideoSource = 3,
-            offset: VideoSource = 2.5,
+            offset: VideoSource = 0.5,
         ): VideoOutput =>
             modulate('modulateRepeatX', ['r'], input, modulator, {
                 reps,
@@ -127,7 +127,7 @@ export function modulatorMethods(core: VideoCore) {
             input: VideoOutput,
             modulator: VideoOutput,
             reps: VideoSource = 3,
-            offset: VideoSource = 2.5,
+            offset: VideoSource = 0.5,
         ): VideoOutput =>
             modulate('modulateRepeatY', ['r'], input, modulator, {
                 reps,
@@ -138,7 +138,7 @@ export function modulatorMethods(core: VideoCore) {
         modulateScrollX: (
             input: VideoOutput,
             modulator: VideoOutput,
-            scroll: VideoSource = 2.5,
+            scroll: VideoSource = 0.5,
             speed: VideoSource = 0,
         ): VideoOutput =>
             modulate('modulateScrollX', ['r'], input, modulator, {
@@ -150,7 +150,7 @@ export function modulatorMethods(core: VideoCore) {
         modulateScrollY: (
             input: VideoOutput,
             modulator: VideoOutput,
-            scroll: VideoSource = 2.5,
+            scroll: VideoSource = 0.5,
             speed: VideoSource = 0,
         ): VideoOutput =>
             modulate('modulateScrollY', ['r'], input, modulator, {

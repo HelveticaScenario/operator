@@ -27,8 +27,8 @@ export const stripes: VideoGraph = {
             kind: 'colorize',
             inputs: {
                 r: { kind: 'node', id: 'wave' },
-                g: { kind: 'const', value: 2.5 },
-                b: { kind: 'const', value: 5 },
+                g: { kind: 'const', value: 0.5 },
+                b: { kind: 'const', value: 1 },
             },
         },
         {

@@ -4,15 +4,12 @@ import { KALEID_HELPER } from './warp';
 /*
  * The modulators of Hydra, which read the whole input at coordinates that
  * another signal moves. `mr`, `mg` and `mb` are the red, green and blue of the
- * modulator, or its one value for a field; a modulator's channels are
- * fractions of full scale, so they run 0 to 1 here. Parameters that count
- * things or scale them are natural; the rest are fractions of 5 volts.
+ * modulator, or its one value for a field.
  */
 
 /** Scales about the center by `offset + multiple * channel`, a factor per axis. */
 export const modulateScale = coordinateModule(
     ['mr', 'mg', 'multiple', 'offset'],
-    ['multiple', 'offset'],
     ({ mr, mg, multiple, offset }) =>
         `video_mod_scale(uv, vec2f(${mr}, ${mg}), ${multiple}, ${offset})`,
     [
@@ -26,7 +23,6 @@ export const modulateScale = coordinateModule(
 /** Turns about the center by `offset + multiple * red`, in turns. */
 export const modulateRotate = coordinateModule(
     ['mr', 'multiple', 'offset'],
-    [],
     ({ mr, multiple, offset }) =>
         `video_transform(uv, 1.0, ${offset} + ${mr} * ${multiple}, vec2f(0.0))`,
     [TRANSFORM_HELPER],
@@ -35,7 +31,6 @@ export const modulateRotate = coordinateModule(
 /** Holds the input constant over a grid of `offset + multiple * channel` cells per axis. */
 export const modulatePixelate = coordinateModule(
     ['mr', 'mg', 'multiple', 'offset'],
-    ['multiple', 'offset'],
     ({ mr, mg, multiple, offset }) =>
         `video_mod_pixelate(uv, vec2f(${offset} + ${mr} * ${multiple}, ${offset} + ${mg} * ${multiple}))`,
     [
@@ -49,7 +44,6 @@ export const modulatePixelate = coordinateModule(
 /** Mirrors into `sides` wedges, with the distance from the center pushed out by the red channel. */
 export const modulateKaleid = coordinateModule(
     ['mr', 'sides'],
-    ['sides'],
     ({ mr, sides }) => `video_kaleid(uv, ${sides}, ${mr})`,
     [KALEID_HELPER],
 );
@@ -57,7 +51,6 @@ export const modulateKaleid = coordinateModule(
 /** Pushes by the differences between the channels, `amount` pixels for a difference of full scale. */
 export const modulateHue = coordinateModule(
     ['mr', 'mg', 'mb', 'amount'],
-    ['amount'],
     ({ mr, mg, mb, amount }) =>
         `uv + vec2f(${mg} - ${mr}, ${mb} - ${mg}) * ${amount} / u.resolution`,
 );
@@ -65,7 +58,6 @@ export const modulateHue = coordinateModule(
 /** Tiles `x` by `y` times, with alternate rows and columns shifted by `offset` times the channel. */
 export const modulateRepeat = coordinateModule(
     ['mr', 'mg', 'repeatX', 'repeatY', 'offsetX', 'offsetY'],
-    ['repeatX', 'repeatY'],
     ({ mr, mg, repeatX, repeatY, offsetX, offsetY }) =>
         `video_mod_repeat(uv, vec2f(${repeatX}, ${repeatY}), vec2f(${mr}, ${mg}), vec2f(${offsetX}, ${offsetY}))`,
     [
@@ -81,7 +73,6 @@ export const modulateRepeat = coordinateModule(
 /** Tiles across, shifting alternate columns up by `offset` times the red channel. */
 export const modulateRepeatX = coordinateModule(
     ['mr', 'reps', 'offset'],
-    ['reps'],
     ({ mr, reps, offset }) =>
         `video_mod_repeat_x(uv, ${reps}, ${mr}, ${offset})`,
     [
@@ -96,7 +87,6 @@ export const modulateRepeatX = coordinateModule(
 /** Tiles up, shifting alternate rows right by `offset` times the red channel. */
 export const modulateRepeatY = coordinateModule(
     ['mr', 'reps', 'offset'],
-    ['reps'],
     ({ mr, reps, offset }) =>
         `video_mod_repeat_y(uv, ${reps}, ${mr}, ${offset})`,
     [
@@ -111,7 +101,6 @@ export const modulateRepeatY = coordinateModule(
 /** Scrolls across by `scroll` times the red channel, plus `speed` of the frame per second, wrapping. */
 export const modulateScrollX = coordinateModule(
     ['mr', 'scroll', 'speed'],
-    [],
     ({ mr, scroll, speed }) =>
         `fract(uv + vec2f(${mr} * ${scroll} + u.time * ${speed}, 0.0))`,
 );
@@ -119,7 +108,6 @@ export const modulateScrollX = coordinateModule(
 /** Scrolls up by `scroll` times the red channel, plus `speed` of the frame per second, wrapping. */
 export const modulateScrollY = coordinateModule(
     ['mr', 'scroll', 'speed'],
-    [],
     ({ mr, scroll, speed }) =>
         `fract(uv + vec2f(0.0, ${mr} * ${scroll} + u.time * ${speed}))`,
 );

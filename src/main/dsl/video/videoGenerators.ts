@@ -12,7 +12,7 @@ export function generatorMethods(core: VideoCore) {
     return {
         /**
          * Scan ramp over the frame, optionally zoomed, rotated and shifted. `h` and
-         * `v` run 0 to 5 volts across and up, `d` along the diagonal, `r` is the
+         * `v` run 0 to 1 across and up, `d` along the diagonal, `r` is the
          * distance from the center and `a` the angle around it.
          */
         ramp: (
@@ -51,8 +51,8 @@ export function generatorMethods(core: VideoCore) {
         shape: (
             x: VideoSource,
             y: VideoSource,
-            size: VideoSource = 1.25,
-            softness: VideoSource = 0.05,
+            size: VideoSource = 0.25,
+            softness: VideoSource = 0.01,
             config?: VideoShapeConfig,
         ): VideoOutput =>
             core.addNode(
@@ -69,8 +69,8 @@ export function generatorMethods(core: VideoCore) {
             x: VideoSource,
             y: VideoSource,
             sides: VideoSource = 3,
-            size: VideoSource = 1.25,
-            softness: VideoSource = 0.05,
+            size: VideoSource = 0.25,
+            softness: VideoSource = 0.01,
         ): VideoOutput =>
             core.addNode(
                 'polygon',
@@ -78,7 +78,7 @@ export function generatorMethods(core: VideoCore) {
                 core.fields('$v.polygon', { x, y, sides, size, softness }),
             ),
 
-        /** Smooth value noise between 0 and 5; `z` moves through it. */
+        /** Smooth value noise between 0 and 1; `z` moves through it. */
         noise: (
             x: VideoSource,
             y: VideoSource,

@@ -95,7 +95,7 @@ describe('$v chaining', () => {
             });
 
             it('takes only the mix for a function with no other arguments', () => {
-                const mixed = wgslOf(`$v.hsv($v.ramp()).$m.invert(2.5).out();`);
+                const mixed = wgslOf(`$v.hsv($v.ramp()).$m.invert(0.5).out();`);
                 expect(mixed).toMatch(/mix\(v\d, v\d, clamp\(0\.5/);
             });
 
@@ -155,7 +155,7 @@ describe('$v chaining', () => {
                 `);
                 const long = wgslOf(`
                     const c = $v.hsv($v.ramp());
-                    $v.out($v.mix(c, $v.invert(c), 2.5));
+                    $v.out($v.mix(c, $v.invert(c), 0.5));
                 `);
                 expect(mixed).toBe(long);
             });

@@ -14,7 +14,6 @@ import {
     mix,
     mult,
     out,
-    range,
 } from './math';
 import * as modulators from './modulate';
 import { noise, voronoi } from './noise';
@@ -79,7 +78,6 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     posterize,
     procAmp,
     ramp,
-    range,
     scanlines,
     shape,
     source,

@@ -30,45 +30,47 @@ export function colorMethods(core: VideoCore) {
         /** Color from hue (wraps every 1.0), saturation and value. */
         hsv: (
             h: VideoSource,
-            s: VideoSource = 5,
-            v: VideoSource = 5,
+            s: VideoSource = 1,
+            v: VideoSource = 1,
         ): VideoOutput =>
             core.addNode('hsv', 'color', core.fields('$v.hsv', { h, s, v })),
 
         /** Turns every hue of `input` by `amount` of a full circle. */
         hueShift: (
             input: VideoOutput,
-            amount: VideoSource = 2.5,
+            amount: VideoSource = 0.5,
         ): VideoOutput => adjust('hueShift', input, { amount }),
 
         /** Scales each channel's distance from mid-gray by `amount`. */
-        contrast: (input: VideoOutput, amount: VideoSource = 8): VideoOutput =>
-            adjust('contrast', input, { amount }),
+        contrast: (
+            input: VideoOutput,
+            amount: VideoSource = 1.6,
+        ): VideoOutput => adjust('contrast', input, { amount }),
 
         /** Saturation, then gain and bias, clipped to the displayable range. */
         procAmp: (
             input: VideoSource,
-            gain: VideoSource = 5,
+            gain: VideoSource = 1,
             bias: VideoSource = 0,
-            saturation: VideoSource = 5,
+            saturation: VideoSource = 1,
         ): VideoOutput => adjust('procAmp', input, { gain, bias, saturation }),
 
         /** Darkens evenly spaced horizontal lines, as a CRT does. */
         scanlines: (
             input: VideoOutput,
             count: VideoSource = 240,
-            strength: VideoSource = 2,
+            strength: VideoSource = 0.4,
         ): VideoOutput => adjust('scanlines', input, { count, strength }),
 
         /** Darkens toward the corners of the frame. */
         vignette: (
             input: VideoOutput,
-            strength: VideoSource = 3,
-            radius: VideoSource = 1.5,
+            strength: VideoSource = 0.6,
+            radius: VideoSource = 0.3,
         ): VideoOutput => adjust('vignette', input, { strength, radius }),
 
         /** Adds film grain, redrawn every frame. */
-        grain: (input: VideoOutput, amount: VideoSource = 0.5): VideoOutput =>
+        grain: (input: VideoOutput, amount: VideoSource = 0.1): VideoOutput =>
             adjust('grain', input, { amount }),
     };
 }

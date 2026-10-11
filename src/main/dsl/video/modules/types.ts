@@ -5,11 +5,6 @@ export interface VideoParamSpec {
     default: string;
 }
 
-/**
- * A video shader module. Inside `emit`, a field's value is a fraction of 5
- * volts, so 5 volts is 1 and the comments of the modules give values on that
- * scale; the DSL's volts are converted as inputs are resolved.
- */
 export interface VideoModuleDef {
     inputs: Record<string, VideoValueType>;
     /**
@@ -28,14 +23,6 @@ export interface VideoModuleDef {
     history?: boolean;
     /** Marks a node that samples the media named by its `source` field. */
     source?: boolean;
-    /**
-     * Field inputs measured in natural units (a frequency, a zoom factor, a
-     * count) rather than as a fraction of full scale. Every other field input
-     * receives its value as a fraction of 5 volts, so `emit` sees 5 volts as 1,
-     * which is a full turn for a rotation and a full cycle for a phase; a
-     * natural input receives the volts themselves.
-     */
-    natural?: readonly string[];
     output: VideoValueType;
     /** Enumerated options; none when absent. */
     params?: Record<string, VideoParamSpec>;

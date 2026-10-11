@@ -15,7 +15,6 @@ export const NOISE_HASH = `fn noise_hash(cell: vec3i) -> f32 {
  */
 export const noise: VideoModuleDef = {
     inputs: { x: 'field', y: 'field', z: 'field' },
-    natural: ['x', 'y', 'z'],
     output: 'field',
     helpers: [
         NOISE_HASH,
@@ -41,7 +40,6 @@ export const noise: VideoModuleDef = {
  */
 export const voronoi: VideoModuleDef = {
     inputs: { x: 'field', y: 'field', z: 'field' },
-    natural: ['x', 'y', 'z'],
     output: 'field',
     helpers: [
         NOISE_HASH,

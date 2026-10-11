@@ -7,7 +7,7 @@ describe('$v modules', () => {
 
         it('uses the field variant for fields and the color variant for colors', () => {
             const fields = wgslOf(
-                `$v.out($v.colorize($v.mult($v.ramp(), 2.5), 0, 0));`,
+                `$v.out($v.colorize($v.mult($v.ramp(), 0.5), 0, 0));`,
             );
             expect(fields).toContain('let v1: f32 = v0 * 0.5;');
             const colors = wgslOf(`
@@ -19,7 +19,7 @@ describe('$v modules', () => {
 
         it('promotes a field operand of a color operation to gray', () => {
             const wgsl = wgslOf(`
-                $v.out($v.add($v.colorize(5, 0, 0), 1.25));
+                $v.out($v.add($v.colorize(1, 0, 0), 0.25));
             `);
             expect(wgsl).toContain('vec3f(0.25, 0.25, 0.25)');
         });
@@ -63,7 +63,7 @@ describe('$v modules', () => {
 
         it('routes a transformed ramp through video_transform', () => {
             const wgsl = wgslOf(
-                `$v.out($v.colorize($v.ramp('v', { rotate: 0.5, zoom: 2 }), 0, 0));`,
+                `$v.out($v.colorize($v.ramp('v', { rotate: 0.1, zoom: 2 }), 0, 0));`,
             );
             expect(wgsl).toContain(
                 'video_transform(uv, 2.0, 0.1, vec2f(0.0, 0.0)).y',
@@ -131,7 +131,7 @@ describe('$v modules', () => {
             expect(video!.wgsl).toContain('fn noise_hash(');
             expect(video!.wgsl).toContain('fn noise_value(');
             expect(video!.wgsl).toMatch(
-                /noise_value\(vec3f\(\(v\d \* 5\.0\), \(v\d \* 5\.0\), u\.time\)\)/,
+                /noise_value\(vec3f\(v\d, v\d, u\.time\)\)/,
             );
         });
 
@@ -157,7 +157,7 @@ describe('$v modules', () => {
             expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn voronoi_distance(');
             expect(wgsl).toMatch(
-                /voronoi_distance\(vec2f\(\(v\d \* 5\.0\), \(v\d \* 5\.0\)\), u\.time\)/,
+                /voronoi_distance\(vec2f\(v\d, v\d\), u\.time\)/,
             );
         });
 
@@ -173,7 +173,7 @@ describe('$v modules', () => {
 
         it('turns hue with the shared hsv helper', () => {
             const wgsl = wgslOf(`
-                $v.hsv($v.ramp()).$.hueShift(1.25).$.contrast(10).out();
+                $v.hsv($v.ramp()).$.hueShift(0.25).$.contrast(2).out();
             `);
             expect(wgsl.match(/fn hsv_to_rgb\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn rgb_to_hsv(');
@@ -266,7 +266,7 @@ describe('$v modules', () => {
 
         it('vignette darkens by distance from the center', () => {
             const wgsl = wgslOf(
-                `$v.out($v.vignette($v.hsv($v.ramp()), 4, 1));`,
+                `$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2));`,
             );
             expect(wgsl).toContain('fn vignette_falloff(');
             expect(wgsl).toContain('vignette_falloff(uv, 0.2)');

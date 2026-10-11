@@ -142,10 +142,10 @@ describe('compileVideoGraph previews', () => {
         const shader = compileVideoGraph(
             withPreviews([
                 { type: 'field', value: { kind: 'time' } },
-                { type: 'field', value: { kind: 'const', value: 1.25 } },
+                { type: 'field', value: { kind: 'const', value: 0.25 } },
             ]),
         );
-        expect(shader.wgsl).toContain('vec3f((u.time * 0.2))');
+        expect(shader.wgsl).toContain('vec3f(u.time)');
         expect(shader.wgsl).toContain('vec3f(0.25)');
     });
 

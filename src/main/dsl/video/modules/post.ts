@@ -7,7 +7,6 @@ import type { VideoModuleDef } from './types';
  */
 export const scanlines: VideoModuleDef = {
     inputs: { input: 'color', count: 'field', strength: 'field' },
-    natural: ['count'],
     output: 'color',
     emit: ({ input, count, strength }) =>
         `(${input} * (1.0 - clamp(${strength}, 0.0, 1.0) * (0.5 + 0.5 * cos(6.28318530718 * uv.y * ${count}))))`,

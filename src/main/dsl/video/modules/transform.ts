@@ -23,7 +23,6 @@ export const TRANSFORM_HELPER = `fn video_transform(uv: vec2f, zoom: f32, rotate
  */
 export function coordinateModule(
     extraInputs: readonly string[],
-    natural: readonly string[],
     coordinates: (args: Record<string, string>) => string,
     helpers: readonly string[] = [],
 ): { field: VideoModuleDef; color: VideoModuleDef } {
@@ -33,7 +32,6 @@ export function coordinateModule(
             ...Object.fromEntries(extraInputs.map((name) => [name, 'field'])),
         },
         warped: ['input'],
-        natural,
         output: type,
         helpers,
         emit: (args) => `${args.input}(${coordinates(args)})`,

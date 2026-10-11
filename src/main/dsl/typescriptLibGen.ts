@@ -1799,9 +1799,9 @@ declare const $table: {
 };
 
 /**
- * A video signal that varies across the frame, in volts from 0 to 5 as audio
- * signals are, with 5 full. Fields come from \`$v.ramp\`, \`$v.osc\` and
- * \`$v.time\`; \`$v.colorize\` combines three into a {@link VideoColor}.
+ * A video signal that varies across the frame, in the range 0..1. Fields come
+ * from \`$v.ramp\`, \`$v.osc\` and \`$v.time\`; \`$v.colorize\` combines three
+ * into a {@link VideoColor}.
  */
 interface VideoField {
     readonly __videoField: true;
@@ -1840,7 +1840,7 @@ interface VideoFile extends VideoColor {
  * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any single-channel
  * module output such as an LFO or envelope. A pattern from \`$p(...)\`,
  * \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays through a \`$cycle\`
- * and its values are volts, so \`$p('0 2.5 5')\` steps a full-scale input.
+ * and its values are used as they are, so \`$p('0 0.5 1')\` steps from 0 to 1.
  */
 type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange | PatternSource;
 

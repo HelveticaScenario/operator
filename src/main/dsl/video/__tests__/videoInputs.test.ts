@@ -148,22 +148,22 @@ describe('$v inputs from the audio graph', () => {
             }
         });
 
-        it('plays a pattern given to a chained method or a natural input', () => {
+        it('plays a pattern given to a chained method or a config field', () => {
             const { video } = exec(`
-                $v.ramp('h', { zoom: $p('1 2') }).$.hsv($p('0 5')).out();
+                $v.ramp('h', { zoom: $p('1 2') }).$.hsv($p('0 1')).out();
             `);
             expect(video!.uniforms).toHaveLength(2);
         });
 
         it('plays a pattern through fromAudio as it would an audio signal', () => {
             const { video } = exec(`
-                $v.out($v.hsv($v.fromAudio($p('0 5'))));
+                $v.out($v.hsv($v.fromAudio($p('0 1'))));
             `);
             expect(video!.histories).toHaveLength(1);
         });
 
         it('rejects a pattern that makes several voices', () => {
-            expect(() => exec(`$v.out($v.hsv($p('0,5')));`)).toThrow(
+            expect(() => exec(`$v.out($v.hsv($p('0,1')));`)).toThrow(
                 /has 2 channels/,
             );
         });

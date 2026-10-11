@@ -8,12 +8,12 @@ describe('$v warps and modulators', () => {
         it('re-evaluates the whole input at the moved coordinates', () => {
             const wgsl = wgslOf(`
                 const grain = $v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4));
-                $v.out($v.hsv($v.warp(grain, { rotate: 0.5 })));
+                $v.out($v.hsv($v.warp(grain, { rotate: 0.1 })));
             `);
             // The noise and both of its coordinates are functions of the
             // coordinate; the warp calls the noise at the moved one.
             expect(wgsl).toContain(
-                'fn f4(uv: vec2f) -> f32 {\n    return noise_value(vec3f((f1(uv) * 5.0), (f3(uv) * 5.0), 0.0));',
+                'fn f4(uv: vec2f) -> f32 {\n    return noise_value(vec3f(f1(uv), f3(uv), 0.0));',
             );
             expect(wgsl).toContain(
                 'let v5: f32 = f4(video_transform(uv, 1.0, 0.1, vec2f(0.0, 0.0)));',
@@ -44,7 +44,7 @@ describe('$v warps and modulators', () => {
         it('warps a constant or time input through a constant function', () => {
             const wgsl = wgslOf(`$v.out($v.hsv($v.warp($v.time)));`);
             expect(wgsl).toMatch(
-                /fn k0\(uv: vec2f\) -> f32 \{\n    return \(u\.time \* 0\.2\);/,
+                /fn k0\(uv: vec2f\) -> f32 \{\n    return u\.time;/,
             );
             expect(wgsl).toContain('k0(video_transform(');
         });
@@ -155,9 +155,9 @@ describe('$v warps and modulators', () => {
             expect(chained).toBe(called);
         });
 
-        it('reads its angles and its scroll as fractions of 5, and its counts as they are', () => {
+        it('reads its angles in turns and its counts as they are', () => {
             const rotate = wgslOf(
-                `$v.out($v.modulateRotate($v.hsv($v.ramp()), ${noise}, 2.5, 5));`,
+                `$v.out($v.modulateRotate($v.hsv($v.ramp()), ${noise}, 0.5, 1));`,
             );
             expect(rotate).toMatch(
                 /video_transform\(uv, 1\.0, 1\.0 \+ v\d+ \* 0\.5/,

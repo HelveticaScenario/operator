@@ -75,7 +75,7 @@ export class VideoOutput {
     }
 
     /** Crossfades this signal against `fn(this)`: 0 is this signal, 1 the result. */
-    pipeMix(fn: unknown, mix: unknown = 2.5): unknown {
+    pipeMix(fn: unknown, mix: unknown = 0.5): unknown {
         if (typeof fn !== 'function') {
             throw new Error('pipeMix: expects a function');
         }
@@ -166,12 +166,12 @@ const PROCESSING: Record<string, ChainCall> = {
     rotate: (o, s, turns) => o.warp(s, { rotate: turns }),
     scale: (o, s, zoom) => o.warp(s, { zoom }),
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),
-    tint: (o, s, hue, saturation) => o.hsv(hue ?? 0, saturation ?? 5, s),
+    tint: (o, s, hue, saturation) => o.hsv(hue ?? 0, saturation ?? 1, s),
 };
 
 /** Direct methods that end a chain or tap it: they do not make a new signal to chain on. */
 const DIRECT: Record<string, ChainCall> = {
-    ...forward(['range', 'out', 'preview', 'toCV']),
+    ...forward(['out', 'preview', 'toCV']),
     write: (_o, s, buffer) =>
         (buffer as { write(color: VideoOutput): unknown }).write(s),
 };
