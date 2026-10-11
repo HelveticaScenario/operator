@@ -1837,8 +1837,8 @@ interface VideoFile extends VideoColor {
 
 /**
  * A constant, a {@link VideoField}, or an audio signal whose live value drives
- * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any single-channel
- * module output such as an LFO or envelope. A pattern from \`$p(...)\`,
+ * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any module output
+ * such as an LFO or envelope, with several channels summed to one. A pattern from \`$p(...)\`,
  * \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays through a \`$cycle\`
  * and its values are used as they are, so \`$p('0 0.5 1')\` steps from 0 to 1.
  */

@@ -94,12 +94,21 @@ describe('$v inputs from the audio graph', () => {
             ).toHaveLength(0);
         });
 
-        it('rejects a polyphonic signal', () => {
-            expect(() =>
-                exec(
-                    `$v.out($v.colorize($c($sine('1hz'), $sine('2hz')), 0, 0));`,
-                ),
-            ).toThrow(/\$v\.colorize: r has 2 channels/);
+        it('sums a signal of several channels through one tap', () => {
+            const found = taps(`
+                const pair = $c($sine('1hz'), $sine('2hz'));
+                $v.out($v.colorize(pair, $v.osc($v.ramp(), pair), 0));
+            `);
+            expect(found).toHaveLength(1);
+            expect(found[0].params.input).toHaveLength(2);
+        });
+
+        it('shares a tap between a one-channel collection and its output', () => {
+            const found = taps(`
+                const lfo = $sine('1hz');
+                $v.out($v.colorize(lfo, $c(lfo), 0));
+            `);
+            expect(found).toHaveLength(1);
         });
 
         it('rejects more signals than the engine has taps', () => {
@@ -162,10 +171,9 @@ describe('$v inputs from the audio graph', () => {
             expect(video!.histories).toHaveLength(1);
         });
 
-        it('rejects a pattern that makes several voices', () => {
-            expect(() => exec(`$v.out($v.hsv($p('0,1')));`)).toThrow(
-                /has 2 channels/,
-            );
+        it('sums a pattern that makes several voices', () => {
+            const { video } = exec(`$v.out($v.hsv($p('0,1')));`);
+            expect(video!.uniforms.map((u) => u.kind)).toEqual(['tap']);
         });
     });
 
@@ -227,13 +235,21 @@ describe('$v inputs from the audio graph', () => {
             ).toThrow(/samples must be an integer/);
         });
 
-        it('rejects a video signal or a polyphonic signal', () => {
+        it('rejects a video signal', () => {
             expect(() => exec(`$v.fromAudio($v.ramp());`)).toThrow(
-                /\$v\.fromAudio: signal must be a single-channel audio signal/,
+                /\$v\.fromAudio: signal must be an audio signal/,
             );
-            expect(() =>
-                exec(`$v.fromAudio($c($sine('1hz'), $sine('2hz')));`),
-            ).toThrow(/single-channel audio signal/);
+        });
+
+        it('shows the sum of a signal of several channels', () => {
+            const { patch, video } = exec(
+                `$v.out($v.fromAudio($c($sine('1hz'), $sine('2hz'))));`,
+            );
+            expect(video!.histories).toHaveLength(1);
+            const [tap] = patch.modules.filter(
+                (m) => m.moduleType === '_videoTap',
+            );
+            expect(tap.params.input).toHaveLength(2);
         });
     });
 

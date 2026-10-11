@@ -13,15 +13,14 @@ import {
 } from '../GraphBuilder';
 import { VideoOutput } from './VideoOutput';
 
+/** An audio signal a video input reads: one output, or channels the engine sums to one. */
+export type AudioSignal = ModuleOutput | BaseCollection<ModuleOutput>;
+
 /**
  * A constant, a video signal of either type, or an audio signal (a slider,
  * button or any module output), whose live value drives a field input.
  */
-export type VideoSource =
-    | number
-    | VideoOutput
-    | ModuleOutput
-    | BaseCollection<ModuleOutput>;
+export type VideoSource = number | VideoOutput | AudioSignal;
 
 /** What the builder needs from the patch it is building inside. */
 export interface VideoGraphHost {
@@ -34,9 +33,12 @@ export interface VideoGraphHost {
      * Plays a pattern value (`$p(...)`, `$p.s(...)`, `$p.arrange(...)` or a
      * chain of them) through its own `$cycle`, as a signal parameter does.
      */
-    playPattern(pattern: unknown): ModuleOutput | BaseCollection<ModuleOutput>;
-    /** Publishes `output` to tap slot `slot`, as the engine's `_videoTap` module. */
-    publishTap(output: ModuleOutput, slot: number): void;
+    playPattern(pattern: unknown): AudioSignal;
+    /**
+     * Publishes `signal` to tap slot `slot`, as the engine's `_videoTap`
+     * module, which sums its channels to one.
+     */
+    publishTap(signal: AudioSignal, slot: number): void;
     /**
      * A `$signal` module with id `id` carrying 0..1, which the renderer
      * overwrites with a region average of a video signal.

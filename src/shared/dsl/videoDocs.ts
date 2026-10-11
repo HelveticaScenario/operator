@@ -38,12 +38,13 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a field sets any other range, such as `.range(1, 3)` for a zoom of one to three times. Pass one channel; a polyphonic signal is rejected.',
+        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a field sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
     examples: [
         '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
         "$v.out($v.hsv($p('0 0.25 0.5 0.75'), 1, $p.arrange([2, $p('1 0.5')], [1, $p('1')])))",
         "$v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.1, 0.4))))",
+        "$v.out($v.hsv($sine(['0.1hz', '0.13hz']).range(0, 0.5)))",
     ],
 };
 
@@ -134,7 +135,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'signal',
                 description:
-                    'A single-channel audio signal, such as an oscillator or an envelope, or a pattern from `$p(...)`',
+                    'An audio signal, such as an oscillator or an envelope, or a pattern from `$p(...)`; several channels are summed to one',
             },
             {
                 name: 'position',
