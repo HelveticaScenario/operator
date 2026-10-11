@@ -171,7 +171,7 @@ const PROCESSING: Record<string, ChainCall> = {
 
 /** Direct methods that end a chain or tap it: they do not make a new signal to chain on. */
 const DIRECT: Record<string, ChainCall> = {
-    ...forward(['out', 'preview', 'toCV']),
+    ...forward(['range', 'out', 'preview', 'toCV']),
     write: (_o, s, buffer) =>
         (buffer as { write(color: VideoOutput): unknown }).write(s),
 };

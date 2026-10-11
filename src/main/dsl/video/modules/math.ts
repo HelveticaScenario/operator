@@ -54,6 +54,14 @@ export const max = both(['a', 'b'], ({ a, b }) => `max(${a}, ${b})`);
 /** The smaller of two values; with 0..1 fields this is an intersection of shapes. */
 export const min = both(['a', 'b'], ({ a, b }) => `min(${a}, ${b})`);
 
+/** Maps 0..1 onto `min`..`max`: what `.range` does to a field. */
+export const range: VideoModuleDef = {
+    inputs: { input: 'field', min: 'field', max: 'field' },
+    output: 'field',
+    emit: (args) =>
+        `(${args.min} + ${args.input} * (${args.max} - ${args.min}))`,
+};
+
 /**
  * Threshold: 0 below `threshold`, 1 above, with a linear ramp `softness` wide
  * centered on it (a hard edge when softness is 0).

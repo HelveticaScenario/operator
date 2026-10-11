@@ -1,5 +1,9 @@
-import type { VideoOutput } from './VideoOutput';
-import type { VideoCore, VideoSource } from './videoBuilderTypes';
+import { VideoOutput } from './VideoOutput';
+import {
+    describe,
+    type VideoCore,
+    type VideoSource,
+} from './videoBuilderTypes';
 
 /** The `$v` functions that combine and shape signals. */
 export function mathMethods(core: VideoCore) {
@@ -27,6 +31,23 @@ export function mathMethods(core: VideoCore) {
         /** Complement: 1 - input. */
         invert: (input: VideoSource): VideoOutput =>
             core.arith('$v.invert', 'invert', { input }),
+
+        /** Maps a field's 0 to 1 onto `min` to `max`. */
+        range: (
+            input: VideoSource,
+            low: VideoSource = 0,
+            high: VideoSource = 1,
+        ): VideoOutput => {
+            if (!(input instanceof VideoOutput) || input.type !== 'field') {
+                throw new Error(
+                    `$v.range: input must be a video field, got ${describe(input)}`,
+                );
+            }
+            return core.addNode('range', 'field', {
+                input: input.value,
+                ...core.fields('$v.range', { max: high, min: low }),
+            });
+        },
 
         /** Crossfade from `a` (amount 0) to `b` (amount 1). */
         mix: (

@@ -68,4 +68,30 @@ describe('$v in the DSL executor', () => {
             expect(video!.hasOutput).toBe(false);
         });
     });
+
+    describe('range', () => {
+        const wgslOf = (source: string) => exec(source).video!.wgsl;
+
+        it('maps 0 to 1 onto min to max', () => {
+            const wgsl = wgslOf(`
+                $v.out($v.hsv($v.ramp('a', { zoom: $v.osc($v.time, 1).range(1, 3) })));
+            `);
+            expect(wgsl).toMatch(/\(1\.0 \+ v\d \* \(3\.0 - 1\.0\)\)/);
+        });
+
+        it('has range as a method of a field and as $v.range', () => {
+            const method = wgslOf(`$v.out($v.hsv($v.ramp().range(0, 0.5)));`);
+            const call = wgslOf(`$v.out($v.hsv($v.range($v.ramp(), 0, 0.5)));`);
+            expect(method).toBe(call);
+        });
+
+        it('rejects range on a color or a number', () => {
+            expect(() => exec(`$v.hsv(0).range(0, 1);`)).toThrow(
+                /\$v\.range: input must be a video field, got a color/,
+            );
+            expect(() => exec(`$v.range(3, 0, 1);`)).toThrow(
+                /\$v\.range: input must be a video field/,
+            );
+        });
+    });
 });

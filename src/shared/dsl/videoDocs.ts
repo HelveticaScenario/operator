@@ -38,7 +38,7 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`. Pass one channel; a polyphonic signal is rejected.',
+        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a field sets any other range, such as `.range(1, 3)` for a zoom of one to three times. Pass one channel; a polyphonic signal is rejected.',
     examples: [
         '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
@@ -620,6 +620,23 @@ export const VIDEO_DOCS: VideoDoc[] = [
         declarations: [
             'mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoField;',
             'mix(a: VideoSignal, b: VideoSignal, amount?: VideoValue): VideoColor;',
+        ],
+    },
+    {
+        name: 'range',
+        group: 'Shaping',
+        description:
+            "Maps a field's 0 to 1 onto `min` to `max`, as `.range` does for an audio signal. Use it to give an input that has its own units, such as a zoom factor, a frequency or a count, the span you want. It is also called on the field itself, as `field.range(min, max)`.",
+        params: [
+            { name: 'min', description: 'The value 0 becomes (default 0)' },
+            { name: 'max', description: 'The value 1 becomes (default 1)' },
+        ],
+        examples: [
+            "$v.out($v.hsv($v.ramp('a', { zoom: $v.range($v.osc($v.time, 0.1), 1, 3) })))",
+            '$v.out($v.hsv($v.ramp().range(0, 0.5)))',
+        ],
+        declarations: [
+            'range(input: VideoField, min?: VideoValue, max?: VideoValue): VideoField;',
         ],
     },
     {
@@ -1379,7 +1396,7 @@ export interface VideoChainDoc {
 }
 
 export const VIDEO_CHAIN_INTRO =
-    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 1 for the result: `x.$m.kaleid(0.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way by default. `out`, `preview`, `toCV` and `write` end or tap a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
+    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 1 for the result: `x.$m.kaleid(0.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way by default. `range(min, max)` is called directly on a field and maps its 0 to 1 onto `min` to `max`. `out`, `preview`, `toCV`, `write` and `range` end, tap or rescale a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
 
 export const VIDEO_CHAIN_EXAMPLES: string[] = [
     "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3).$.kaleid(6).$.hsv().out()",
@@ -1449,6 +1466,16 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'invert',
         description: 'The complement, 1 minus this.',
         declarations: ['invert(): {self};'],
+    },
+    {
+        name: 'range',
+        direct: true,
+        description:
+            "Maps this field's 0 to 1 onto `min` to `max`: `field.range(1, 3)` gives a value from 1 to 3, for an input in its own units such as a zoom factor or a count.",
+        declarations: [
+            'range(min?: VideoValue, max?: VideoValue): VideoField;',
+        ],
+        on: ['field'],
     },
     {
         name: 'posterize',
