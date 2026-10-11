@@ -1,6 +1,7 @@
 import { VideoOutput } from './VideoOutput';
 import type {
     VideoCore,
+    VideoNoiseConfig,
     VideoOscConfig,
     VideoRampConfig,
     VideoShapeConfig,
@@ -78,16 +79,20 @@ export function generatorMethods(core: VideoCore) {
                 core.fields('$v.polygon', { x, y, sides, size, softness }),
             ),
 
-        /** Smooth value noise between 0 and 1; `z` moves through it. */
+        /** Smooth noise between 0 and 1, simplex unless `config.type` names another; `z` moves through it. */
         noise: (
             x: VideoSource,
             y: VideoSource,
             z: VideoSource = 0,
+            config?: VideoNoiseConfig,
         ): VideoOutput =>
             core.addNode(
                 'noise',
                 'field',
                 core.fields('$v.noise', { x, y, z }),
+                config?.type === undefined
+                    ? undefined
+                    : { params: { type: config.type } },
             ),
 
         /** Cellular noise: the distance to the nearest of a scatter of points; `z` moves them. */

@@ -13,7 +13,7 @@ describe('$v warps and modulators', () => {
             // The noise and both of its coordinates are functions of the
             // coordinate; the warp calls the noise at the moved one.
             expect(wgsl).toContain(
-                'fn f4(uv: vec2f) -> f32 {\n    return noise_value(vec3f(f1(uv), f3(uv), 0.0));',
+                'fn f4(uv: vec2f) -> f32 {\n    return clamp((0.5 + 0.5 * noise_simplex(vec3f(f1(uv), f3(uv), 0.0))), 0.0, 1.0);',
             );
             expect(wgsl).toContain(
                 'let v5: f32 = f4(video_transform(uv, 1.0, 0.1, vec2f(0.0, 0.0)));',

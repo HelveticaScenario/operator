@@ -164,7 +164,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'noise',
         group: 'Generators',
         description:
-            'Smooth value noise between 0 and 1. One unit of any coordinate is one cell of the noise, so scaling the coordinates sets the grain; `z` moves through the noise, which animates it when fed `$v.time`.',
+            'Smooth noise between 0 and 1, simplex noise unless `config.type` names another algorithm. One unit of any coordinate is about one feature of the noise, so scaling the coordinates sets the grain; `z` moves through the noise, which animates it when fed `$v.time`.',
         params: [
             { name: 'x', description: 'Horizontal coordinate' },
             { name: 'y', description: 'Vertical coordinate' },
@@ -173,13 +173,20 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     'Position through the noise, such as time (default 0)',
             },
+            {
+                name: 'config.type',
+                description:
+                    "`'simplex'` (default) smooth gradient noise without grid artifacts, `'perlin'` classic gradient noise, `'value'` blended random values, blockier and aligned to the grid, `'fbm'` four octaves of simplex noise for detail at several scales, like clouds, `'ridged'` four octaves of sharp creases, like mountain ridges or marble veins",
+            },
         ],
         examples: [
             "$v.out($v.hsv($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.mult($v.time, 0.5))))",
+            "$v.out($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.mult($v.time, 0.2), { type: 'fbm' }))",
+            "$v.out($v.hsv(0.08, 0.6, $v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.mult($v.time, 0.1), { type: 'ridged' })))",
             "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise($v.mult($v.ramp('r'), 10), $v.mult($v.ramp('a'), 6), $v.time), 0.5, 0.05)))",
         ],
         declarations: [
-            'noise(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
+            "noise(\n    x: VideoValue,\n    y: VideoValue,\n    z?: VideoValue,\n    config?: { type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged' },\n): VideoField;",
         ],
     },
     {

@@ -124,20 +124,42 @@ describe('$v modules', () => {
     });
 
     describe('noise', () => {
-        it('compiles to value noise of its three coordinates', () => {
+        it('compiles to simplex noise of its three coordinates by default', () => {
             const { video } = exec(`
                 $v.out($v.hsv($v.noise($v.mult($v.ramp(), 4), $v.ramp('v'), $v.time)));
             `);
-            expect(video!.wgsl).toContain('fn noise_hash(');
-            expect(video!.wgsl).toContain('fn noise_value(');
+            expect(video!.wgsl).toContain('fn noise_simplex(');
+            expect(video!.wgsl).not.toContain('fn noise_value(');
             expect(video!.wgsl).toMatch(
-                /noise_value\(vec3f\(v\d, v\d, u\.time\)\)/,
+                /noise_simplex\(vec3f\(v\d, v\d, u\.time\)\)/,
             );
         });
 
         it('takes a constant z by default', () => {
             const { video } = exec(`$v.out($v.hsv($v.noise(0.5, 0.5)));`);
-            expect(video!.wgsl).toContain('noise_value(vec3f(0.5, 0.5, 0.0))');
+            expect(video!.wgsl).toContain(
+                'noise_simplex(vec3f(0.5, 0.5, 0.0))',
+            );
+        });
+
+        it('compiles each type to its own algorithm and only the helpers it needs', () => {
+            const wgslOf = (type: string) =>
+                exec(`$v.out($v.noise(0.5, 0.5, 0, { type: '${type}' }));`)
+                    .video!.wgsl;
+            expect(wgslOf('value')).toContain('noise_value(vec3f(');
+            expect(wgslOf('value')).not.toContain('fn noise_grad(');
+            expect(wgslOf('perlin')).toContain('noise_perlin(vec3f(');
+            expect(wgslOf('perlin')).not.toContain('fn noise_simplex(');
+            expect(wgslOf('fbm')).toContain('noise_fbm(vec3f(');
+            expect(wgslOf('ridged')).toContain('noise_ridged(vec3f(');
+        });
+
+        it('rejects an unknown type', () => {
+            expect(() =>
+                exec(`$v.out($v.noise(0, 0, 0, { type: 'pink' }));`),
+            ).toThrow(
+                /param "type" must be one of simplex, perlin, value, fbm, ridged/,
+            );
         });
 
         it('rejects a color coordinate', () => {

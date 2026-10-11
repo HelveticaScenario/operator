@@ -229,7 +229,11 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 'feedback buffer',
                 'feedback buffer',
             );
-            for (const helper of def.helpers ?? []) helpers.add(helper);
+            const needed =
+                typeof def.helpers === 'function'
+                    ? def.helpers(params)
+                    : (def.helpers ?? []);
+            for (const helper of needed) helpers.add(helper);
             const local = `v${index}`;
             const indices = {
                 buffer: node.buffer ?? 0,

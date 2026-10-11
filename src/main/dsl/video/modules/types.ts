@@ -30,8 +30,12 @@ export interface VideoModuleDef {
      * WGSL function declarations the expression calls, one per entry. A
      * declaration shared by several modules is emitted once, so equal text
      * means the same function and distinct functions need distinct names.
+     * A function of the resolved params picks the declarations those options
+     * need.
      */
-    helpers?: readonly string[];
+    helpers?:
+        | readonly string[]
+        | ((params: Record<string, string>) => readonly string[]);
     /**
      * WGSL expression for the module's value. `args` holds one WGSL
      * expression per input, `params` the resolved option per param, and

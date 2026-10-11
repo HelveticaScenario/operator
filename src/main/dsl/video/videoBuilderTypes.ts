@@ -113,6 +113,11 @@ export interface VideoFeedbackConfig {
     edge?: 'clamp' | 'repeat' | 'mirror';
 }
 
+export interface VideoNoiseConfig {
+    /** The noise algorithm (default 'simplex'). */
+    type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged';
+}
+
 export interface VideoShapeConfig {
     shape?: 'circle' | 'box' | 'diamond';
 }
