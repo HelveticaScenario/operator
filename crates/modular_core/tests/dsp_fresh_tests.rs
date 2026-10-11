@@ -405,6 +405,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$plate" => json!({ "input": 0.0 }),
         "$unstable.reverb" => json!({ "input": 0.0 }),
         "$unstable.reverb2" => json!({ "input": 0.0 }),
+        "$unstable.eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),
         "$step" => json!({ "steps": [0.0], "next": 0.0 }),
@@ -2753,4 +2754,29 @@ fn shape_saturate_hard_clamps_to_rail() {
         y <= 5.01 && y > 4.5,
         "hard clip should sit at the rail, got {y}"
     );
+}
+
+#[test]
+fn eq_sections_accept_shared_and_per_channel_forms() {
+    let deserializers = get_params_deserializers();
+    let de = deserializers.get("$unstable.eq").unwrap();
+    let shared = de(json!({ "input": 0.0, "sections": [{ "freq": "100hz", "gain": [1.0, 2.0] }] }))
+        .expect("shared list; a poly gain sums to mono");
+    assert_eq!(
+        shared.channel_count, 1,
+        "mono section params add no channels"
+    );
+
+    let per = de(json!({
+        "input": 0.0,
+        "sections": [[{ "freq": 0.0 }], [{ "freq": 1.0 }, { "type": "notch", "freq": 2.0 }], [{ "freq": 0.0 }]],
+    }))
+    .expect("per-channel lists");
+    assert_eq!(per.channel_count, 3, "one channel per list");
+
+    let empty = de(json!({ "input": 0.0 })).expect("sections are optional");
+    assert_eq!(empty.channel_count, 1);
+    assert!(de(json!({ "input": 0.0, "sections": [[{ "freq": 0.0 }], []] })).is_ok());
+    assert!(de(json!({ "input": 0.0, "sections": [[{ "bogus": 0.0 }]] })).is_err());
+    assert!(de(json!({ "input": 0.0, "sections": { "freq": 0.0 } })).is_err());
 }

@@ -6,7 +6,7 @@
 //! metadata built once on the main thread from the patch params. On poll the main
 //! thread pairs the two into the editor JSON. Modules register a
 //! [`ModuleStateBuilder`] next to their own implementation (see
-//! `crate::dsp::get_module_state_builders`); `$cycle` is the only one today.
+//! `crate::dsp::get_module_state_builders`): `$cycle` and `$unstable.eq`.
 
 use std::any::Any;
 

@@ -930,6 +930,7 @@ registerIPCHandler(
                 sliders,
                 buttons,
                 callSiteSpans,
+                eqPanels,
             } = executePatchScript(source, schemas, {
                 inputChannels: synth.inputChannels(),
                 sampleRate: synth.sampleRate(),
@@ -979,6 +980,7 @@ registerIPCHandler(
                     appliedPatch: patch,
                     buttons,
                     callSiteSpans: callSiteSpansRecord,
+                    eqPanels,
                     errors,
                     interpolationResolutions: interpolationResolutionsRecord,
                     moduleIdRemap,
@@ -993,6 +995,7 @@ registerIPCHandler(
                 appliedPatch: patch,
                 buttons,
                 callSiteSpans: callSiteSpansRecord,
+                eqPanels,
                 errors: [],
                 interpolationResolutions: interpolationResolutionsRecord,
                 moduleIdRemap,

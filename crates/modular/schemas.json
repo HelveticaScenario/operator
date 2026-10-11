@@ -5670,6 +5670,227 @@
     ]
   },
   {
+    "name": "$unstable.eq",
+    "documentation": "Serial parametric EQ of up to 8 trapezoidal state-variable filter\nsections that stay clean under fast freq/gain/q modulation.\n\n**sections** lists the filters, applied in series. Each section selects\n**type** `'peak'`, `'lowShelf'`, `'highShelf'`, `'lowpass'`, `'highpass'`,\nor `'notch'` (default peak) and sets **freq** in V/Oct (0 V = C4),\n**gain** in dB (-24 to 24, peak and shelf types only), and **q** (0.1-20,\ndefault 0.707). All three accept modulation; section params are mono, so\na polyphonic cable is summed. On shelves, 0.707 is the steepest shelf that\nnever overshoots: lower values make the slope gentler, higher values add a\nresonant bump just inside the corner and a dip just outside it. Without\nsections the input passes through.\n\nOne sections list applies to every channel. To EQ channels differently,\npass an array of section lists instead: channel `c` uses list `c % n`,\nand the output has at least as many channels as there are lists.\n\n**adaptiveQ** (default false) narrows peak sections as their boost or cut\ngrows, by about 2x per 12 dB, like the proportional-Q behavior of classic\nanalog EQs.\n\n**ui** (default false) shows an interactive panel under the call. Drag a\nsection's node to set freq and gain, scroll over it or drag its\nbandwidth handles to set q, double-click the graph to add a section, and\npick types below the graph. Changes play immediately and are written back\ninto the code; hold Ctrl/Cmd to edit the code only.\n\n```js\n// Shared by every channel\n$unstable.eq($saw('c2'), {\n  sections: [\n    { type: 'lowShelf', freq: '150hz', gain: 3 },\n    { type: 'peak', freq: $sine('0.5hz').range('400hz', '2000hz'), gain: -6, q: 2 },\n    { type: 'highpass', freq: '40hz' },\n  ],\n  adaptiveQ: true,\n})\n\n// Per channel: a darker left, a brighter right\n$unstable.eq($saw(['c2', 'g2']), {\n  sections: [\n    [{ type: 'highShelf', freq: '3000hz', gain: -6 }],\n    [{ type: 'highShelf', freq: '3000hz', gain: 4 }],\n  ],\n})\n\n// Start empty and add sections in the panel\n$unstable.eq($saw('c2'), { ui: true })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ParametricEqParams",
+      "type": "object",
+      "properties": {
+        "adaptiveQ": {
+          "description": "narrow peak sections as their boost or cut grows (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "sections": {
+          "description": "up to 8 filter sections applied in series, or one such list per channel\n(default none: the input passes through)",
+          "$ref": "#/$defs/EqSections"
+        },
+        "ui": {
+          "description": "show the interactive EQ panel under the call in the editor (default\nfalse); the engine ignores it",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "EqSection": {
+          "description": "One EQ section. `freq`, `gain`, and `q` accept modulation; a polyphonic\ncable is summed to mono.",
+          "type": "object",
+          "properties": {
+            "freq": {
+              "description": "center/corner frequency in V/Oct (0 V = C4)",
+              "$ref": "#/$defs/MonoSignal"
+            },
+            "gain": {
+              "description": "boost/cut in dB (-24 to 24; peak and shelf types only, default 0)",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MonoSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "q": {
+              "description": "bandwidth Q (0.1-20, default 0.707); on shelves, below 0.707 gentles the\nslope and above it adds a resonant bump at the corner",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MonoSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "description": "section type (default peak)",
+              "$ref": "#/$defs/EqSectionType"
+            }
+          },
+          "required": [
+            "freq"
+          ]
+        },
+        "EqSectionType": {
+          "description": "Filter shape of one EQ section.",
+          "oneOf": [
+            {
+              "description": "Bell boost/cut around freq.",
+              "type": "string",
+              "const": "peak"
+            },
+            {
+              "description": "Shelving boost/cut below freq.",
+              "type": "string",
+              "const": "lowShelf"
+            },
+            {
+              "description": "Shelving boost/cut above freq.",
+              "type": "string",
+              "const": "highShelf"
+            },
+            {
+              "description": "12 dB/oct lowpass at freq (gain ignored).",
+              "type": "string",
+              "const": "lowpass"
+            },
+            {
+              "description": "12 dB/oct highpass at freq (gain ignored).",
+              "type": "string",
+              "const": "highpass"
+            },
+            {
+              "description": "Band-reject at freq (gain ignored).",
+              "type": "string",
+              "const": "notch"
+            }
+          ]
+        },
+        "EqSections": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EqSection"
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/EqSection"
+                }
+              }
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "equalized signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
     "name": "$unstable.filter.lp",
     "documentation": "Surge multimode lowpass (the \"12 dB\" / \"24 dB\" vember filter).\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; near the top the filter rings and self-oscillates.\n- **slope** — `'db12'` or `'db24'`.\n- **drive** — `'standard'`, `'driven'`, or `'clean'`.\n\n```js\n$unstable.filter.lp($saw('c2'), 'c4', 2, { slope: 'db24', drive: 'driven' })\n```",
     "paramsSchema": {

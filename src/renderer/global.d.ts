@@ -14,6 +14,12 @@ interface TestAPI {
     getScopeData: () => Promise<any>;
     getVuMeterData: () => Promise<any>;
     getVuOutputs: () => any[];
+    getEqPanels: () => {
+        key: string;
+        lists: import('./eq/eqPanelModel').EqSectionView[][];
+        perChannel: boolean;
+        visible: boolean;
+    }[];
     getAudioHealth: () => Promise<any>;
     isClockRunning: () => boolean;
     newUntitledFile: () => void;

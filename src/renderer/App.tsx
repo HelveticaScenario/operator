@@ -71,6 +71,12 @@ import {
 } from './app/vuMeter';
 import type { ScopeView } from './types/editor';
 import {
+    EqPanelController,
+    type EqPanelSetup,
+    createEqPanelSetup,
+    disposeEqPanelSetup,
+} from './eq/eqPanelController';
+import {
     FIRST_LINE_COLUMN_OFFSET,
     setActiveInterpolationResolutions,
 } from '../shared/dsl/spanTypes';
@@ -238,6 +244,20 @@ function App() {
         new Map<string, { rmsDb: number; fastDb: number; peakDb: number }[]>(),
     );
     const lastPatchResultRef = useRef<any>(null);
+    /** Inline `ui: true` EQ panels of the running patch. */
+    const [eqController] = useState(
+        () =>
+            new EqPanelController({
+                getModuleStates: () => electronAPI.synthesizer.getModuleStates(),
+                getSampleRate: () => electronAPI.synthesizer.getSampleRate(),
+                setModuleParam: (moduleId, moduleType, params) =>
+                    electronAPI.synthesizer.setModuleParam(
+                        moduleId,
+                        moduleType,
+                        params as object,
+                    ),
+            }),
+    );
 
     /** Long-lived invisible tracked decorations spanning each scope() call.
      *  Monaco automatically adjusts these ranges as the document is edited,
@@ -264,6 +284,8 @@ function App() {
         scopeDecorations: editor.IEditorDecorationsCollection | null;
         /** Same contract as scopeDecorations, for vuDecorationsRef. */
         vuDecorations: editor.IEditorDecorationsCollection | null;
+        /** EQ panels of the pending patch, committed with it. */
+        eqPanels: EqPanelSetup;
         /** Anchors on the pending patch's control calls, committed with it. */
         controlAnchors: ControlAnchors | null;
         /** Stable id of the buffer the pending patch was evaluated from. */
@@ -461,6 +483,21 @@ function App() {
         },
         [controlViews, setModuleParam],
     );
+
+    useEffect(() => {
+        eqController.attachEditor(paletteEditor);
+    }, [eqController, paletteEditor]);
+    useEffect(() => {
+        eqController.setCodeStyle(
+            codeStyleFromPrettier(resolvePrettierOptions(prettierConfig)),
+        );
+    }, [eqController, prettierConfig]);
+    useEffect(() => {
+        if (!isClockRunning) {
+            eqController.onStopped();
+        }
+    }, [eqController, isClockRunning]);
+    useEffect(() => () => eqController.dispose(), [eqController]);
 
     // Mirrors for the RAF loop and the M/S click handler, which must read
     // current values without re-subscribing.
@@ -1418,6 +1455,8 @@ function App() {
                         bufferMap.set(key, { data, stats });
                     }
 
+                    eqController.onScopeFrames(bufferMap, performance.now());
+
                     const scopeColors = readScopeColors();
 
                     // For each scope canvas, collect its channels' data and draw
@@ -1573,6 +1612,7 @@ function App() {
                         scopeDecorationsRef.current = pending.scopeDecorations;
                         vuDecorationsRef.current?.clear();
                         vuDecorationsRef.current = pending.vuDecorations;
+                        eqController.commit(pending.eqPanels);
                         commitControlAnchors(pending.controlAnchors);
                         setRunningControlsSource(pending.controlsSource);
                         setScopeViews(pending.scopeViews);
@@ -1596,6 +1636,7 @@ function App() {
                         pendingUIStateRef.current = null;
                         pending.scopeDecorations?.clear();
                         pending.vuDecorations?.clear();
+                        disposeEqPanelSetup(pending.eqPanels);
                         pending.controlAnchors?.dispose();
                         runningSourceIdRef.current =
                             pending.previousRunning.sourceId;
@@ -1618,7 +1659,7 @@ function App() {
         return () => {
             cancelled = true;
         };
-    }, [isClockRunning, clearVuGhosts, commitControlAnchors]);
+    }, [isClockRunning, clearVuGhosts, commitControlAnchors, eqController]);
 
     // Keep Link phase indicator live while Link is enabled but Operator is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
@@ -1781,6 +1822,10 @@ function App() {
 
                 for (let i = 0; i < scopes.length; i++) {
                     const scope = scopes[i];
+                    // Panel feeds (the EQ spectrum) have no view of their own.
+                    if ((scope as { headless?: boolean }).headless) {
+                        continue;
+                    }
 
                     // Derive buffer keys for each channel in this scope
                     const channelKeys = scope.channels.map((ch: any) =>
@@ -1897,6 +1942,8 @@ function App() {
                         );
                 }
 
+                const newEqPanels = createEqPanelSetup(result, editorInstance);
+
                 const newSliderDefs = result.sliders ?? [];
                 const newButtonDefs = result.buttons ?? [];
                 const newControlAnchors = model
@@ -1926,11 +1973,15 @@ function App() {
                     // Are cleaned up before storing the new pending state.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
+                    disposeEqPanelSetup(
+                        pendingUIStateRef.current?.eqPanels ?? null,
+                    );
                     pendingUIStateRef.current?.controlAnchors?.dispose();
                     pendingUIStateRef.current = {
                         buttonDefs: newButtonDefs,
                         controlAnchors: newControlAnchors,
                         controlsSource: submittedSourceId,
+                        eqPanels: newEqPanels,
                         interpolationResolutions: interpolationMap,
                         previousRunning,
                         scopeDecorations: newScopeDecorations,
@@ -1945,8 +1996,12 @@ function App() {
                     // And apply UI state right away.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
+                    disposeEqPanelSetup(
+                        pendingUIStateRef.current?.eqPanels ?? null,
+                    );
                     pendingUIStateRef.current?.controlAnchors?.dispose();
                     pendingUIStateRef.current = null;
+                    eqController.commit(newEqPanels);
                     commitControlAnchors(newControlAnchors);
                     setRunningControlsSource(submittedSourceId);
                     scopeDecorationsRef.current?.clear();
@@ -1969,7 +2024,7 @@ function App() {
                 setValidationErrors(null);
             }
         };
-    }, [activeBufferId, clearVuGhosts, commitControlAnchors]);
+    }, [activeBufferId, clearVuGhosts, commitControlAnchors, eqController]);
 
     // Expose test API for E2E tests
     useEffect(() => {
@@ -1983,6 +2038,7 @@ function App() {
             getScopeData: () => electronAPI.synthesizer.getScopes(),
             getVuMeterData: () => electronAPI.synthesizer.getVuMeters(),
             getVuOutputs: () => vuOutputsRef.current,
+            getEqPanels: () => eqController.snapshot(),
             isClockRunning: () => isClockRunningRef.current,
             newUntitledFile: () => executeCommand('operator.newFile'),
             openEngineHealth: () => setIsEngineHealthOpen(true),
@@ -1998,7 +2054,7 @@ function App() {
         return () => {
             delete window.__TEST_API__;
         };
-    }, [handleVuToggle]);
+    }, [eqController, handleVuToggle]);
 
     const handleStopRef = useRef(() => {});
     useEffect(() => {

@@ -14,7 +14,7 @@ import { Node, type SourceFile } from 'ts-morph';
 import type { CallSiteKey, CallSiteSpanRegistry } from './sourceAnalysisTypes';
 
 /** Method names tracked for call expression spans (property access calls) */
-const DSL_METHODS_TO_TRACK = new Set(['scope', 'out', 'outMono']);
+const DSL_METHODS_TO_TRACK = new Set(['scope', 'out', 'outMono', 'eq']);
 
 /** Standalone function names tracked for call expression spans */
 const DSL_FUNCTIONS_TO_TRACK = new Set(['$slider', '$btn', '$toggleBtn']);
