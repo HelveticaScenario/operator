@@ -6,7 +6,10 @@
 //! - `PolyOutput`: A fixed-capacity output buffer with channel count metadata (for module outputs)
 //! - `PolySignal`: A fixed-capacity input buffer containing Signal values (for polyphonic module inputs)
 
-use crate::{dsp::utils::sanitize, types::Signal};
+use crate::{
+    dsp::utils::sanitize,
+    types::{PolyCableView, Signal},
+};
 use deserr::{DeserializeError, ErrorKind, IntoValue, ValuePointerRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -162,6 +165,14 @@ pub struct PolySignal {
     /// Active signal channels (always at least 1, up to PORT_MAX_CHANNELS).
     /// Sized to the actual channel count on the main thread at deserialize.
     channels: Box<[Signal]>,
+    /// The channel values, densely packed, when every channel is a constant;
+    /// empty otherwise. Read in place by block modules.
+    volts: Box<[f32]>,
+    /// A single view over the upstream port when channel `i` is a cable to
+    /// channel `first + i` of one port, read in place by block modules. Resolved by
+    /// `inject_index_ptr`, which runs after `connect`; `connect` clears it so
+    /// a stale view is never read.
+    cable: Option<PolyCableView>,
 }
 
 // Hand-written rather than `#[derive(Connect)]`: deriving would require a
@@ -172,6 +183,7 @@ impl crate::types::Connect for PolySignal {
         // Signals carry no `#[default_connection]` fields — nothing to fill.
     }
     fn connect(&mut self, patch: &crate::Patch) {
+        self.cable = None;
         for signal in self.channels.iter_mut() {
             signal.connect(patch);
         }
@@ -185,15 +197,14 @@ impl crate::types::Connect for PolySignal {
         for signal in self.channels.iter_mut() {
             signal.inject_index_ptr(ptr);
         }
+        self.cable = PolyCableView::resolve(&self.channels);
     }
 }
 
 impl PolySignal {
     /// Create a mono (1-channel) PolySignal from a single Signal.
     pub fn mono(signal: Signal) -> Self {
-        Self {
-            channels: vec![signal].into_boxed_slice(),
-        }
+        Self::from_channels(vec![signal].into_boxed_slice())
     }
 
     /// Create a polyphonic PolySignal from a slice of Signals.
@@ -208,10 +219,41 @@ impl PolySignal {
             .cloned()
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        Self { channels }
+        Self::from_channels(channels)
+    }
+
+    fn from_channels(channels: Box<[Signal]>) -> Self {
+        let volts = channels
+            .iter()
+            .map(|signal| match signal {
+                Signal::Volts(v) => Some(*v),
+                Signal::Cable { .. } => None,
+            })
+            .collect::<Option<Box<[f32]>>>()
+            .unwrap_or_default();
+        Self {
+            channels,
+            volts,
+            cable: None,
+        }
     }
 
     // === Accessors ===
+
+    /// The channel values when every channel is a constant; empty otherwise.
+    pub(crate) fn volts(&self) -> &[f32] {
+        &self.volts
+    }
+
+    /// Every channel's signal.
+    pub(crate) fn signals(&self) -> &[Signal] {
+        &self.channels
+    }
+
+    /// The single-port view, when the channels resolved to one.
+    pub(crate) fn cable_view(&self) -> Option<&PolyCableView> {
+        self.cable.as_ref()
+    }
 
     /// Get the number of active channels
     pub fn channels(&self) -> usize {

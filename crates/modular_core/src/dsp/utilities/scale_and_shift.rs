@@ -1,6 +1,9 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use std::ops::Range;
+
+use crate::block_input::{self, InputScratch, OptionBlockInput};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -35,25 +38,57 @@ struct ScaleAndShiftOutputs {
 /// // invert a slow sine and shift it into 0–5 V range
 /// $scaleAndShift($sine('1hz'), -2.5, 2.5)
 /// ```
-#[module(name = "$scaleAndShift", args(input, scale, shift))]
+#[module(name = "$scaleAndShift", args(input, scale, shift), block)]
 pub struct ScaleAndShift {
     outputs: ScaleAndShiftOutputs,
     params: ScaleAndShiftParams,
 }
 
+/// `input` scaled (5 V is unity gain) and then offset.
+#[inline(always)]
+fn scale_and_shift(input: f32, scale: f32, shift: f32) -> f32 {
+    input * (scale / 5.0) + shift
+}
+
 impl ScaleAndShift {
     fn update(&mut self, _sample_rate: f32) {
-        let channels = self.channel_count();
-
-        for i in 0..channels as usize {
-            let input_val = self.params.input.get_value(i);
-            let scale_val = self.params.scale.value_or(i, 5.0);
-            let shift_val = self.params.shift.value_or(i, 0.0);
-
-            self.outputs
-                .sample
-                .set(i, input_val * (scale_val / 5.0) + shift_val);
+        for i in 0..self.channel_count() {
+            let value = scale_and_shift(
+                self.params.input.get_value(i),
+                self.params.scale.value_or(i, 5.0),
+                self.params.shift.value_or(i, 0.0),
+            );
+            self.outputs.sample.set(i, value);
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut ScaleAndShiftBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let (mut s0, mut s1, mut s2) = (
+            InputScratch::new(),
+            InputScratch::new(),
+            InputScratch::new(),
+        );
+        let input = p.input.block_input(range.clone(), channels, &mut s0)?;
+        let scale = p
+            .scale
+            .block_input_or(range.clone(), channels, 5.0, &mut s1)?;
+        let shift = p
+            .shift
+            .block_input_or(range.clone(), channels, 0.0, &mut s2)?;
+        block_input::map(
+            &mut outputs.sample,
+            range,
+            [input, scale, shift],
+            |[x, scale, shift]| x * (scale / 5.0) + shift,
+        );
+        Some(())
     }
 }
 

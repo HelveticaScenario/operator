@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 const SR: f32 = 48000.0;
 const BLOCK: usize = 64;
-const CHANNELS: [usize; 3] = [1, 8, 16];
+const CHANNELS: [usize; 4] = [1, 4, 8, 16];
 
 fn poly(base: f32, channels: usize) -> Value {
     Value::Array(
@@ -44,6 +44,12 @@ struct BenchPatch {
 
 impl BenchPatch {
     fn new(modules: Vec<(String, &str, Value)>) -> Self {
+        Self::with_mode(modules, ProcessingMode::Block)
+    }
+
+    /// Every module in `mode`; Sample mode is how feedback-cycle members run,
+    /// one slot per call.
+    fn with_mode(modules: Vec<(String, &str, Value)>, mode: ProcessingMode) -> Self {
         let deserializers = get_params_deserializers();
         let order = modules.iter().map(|(id, _, _)| id.clone()).collect();
         let mut patch = Patch::new();
@@ -58,7 +64,7 @@ impl BenchPatch {
                             params: cached.params,
                             channel_count: cached.channel_count,
                         },
-                        ProcessingMode::Block,
+                        mode,
                     )
                 }),
                 SR,
@@ -104,6 +110,108 @@ fn lpf_chain(channels: usize) -> BenchPatch {
         ));
     }
     BenchPatch::new(modules)
+}
+
+/// `$saw` into a chain of 32 `$scaleAndShift`s with constant scale and
+/// shift: almost no DSP, so this measures per-module engine overhead.
+fn scale_chain(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("s{}", i - 1)
+        };
+        modules.push((
+            format!("s{i}"),
+            "$scaleAndShift",
+            json!({ "input": poly_cable(&prev, "output", channels), "scale": 4.0, "shift": 0.1 }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// [`scale_chain`] with one cable among the constant scale channels: inputs
+/// that cannot be read in place, so block modules copy them out slot by slot.
+fn scale_fallback(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("s{}", i - 1)
+        };
+        let mut scale: Vec<Value> = (0..channels).map(|_| json!(4.0)).collect();
+        scale[0] = json!({ "type": "cable", "module": "src", "port": "output", "channel": 0 });
+        modules.push((
+            format!("s{i}"),
+            "$scaleAndShift",
+            json!({ "input": poly_cable(&prev, "output", channels), "scale": scale, "shift": 0.1 }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
+/// `$saw` into a chain of 32 `$remap`s with constant ranges: a cheap
+/// per-sample module reading several constant inputs.
+fn remap_chain(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..32 {
+        let prev = if i == 0 {
+            "src".to_string()
+        } else {
+            format!("r{}", i - 1)
+        };
+        modules.push((format!("r{i}"), "$remap", json!({ "input": poly_cable(&prev, "output", channels), "inMin": -5.0, "inMax": 5.0, "outMin": -4.0, "outMax": 4.0 })));
+    }
+    BenchPatch::new(modules)
+}
+
+/// 160 cheap modules (`$remap`, `$clamp`, `$signal`, `$scaleAndShift`) all
+/// reading one `$saw`: the shape of a large live patch, where per-module
+/// overhead and cache footprint add up.
+fn wide_mix_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(0.0, channels) }),
+    )];
+    for i in 0..160 {
+        let ty = ["$remap", "$clamp", "$signal", "$scaleAndShift"][i % 4];
+        let params = match ty {
+            "$remap" => {
+                json!({ "input": poly_cable("src", "output", channels), "inMin": -5.0, "inMax": 5.0, "outMin": -4.0, "outMax": 4.0 })
+            }
+            "$clamp" => {
+                json!({ "input": poly_cable("src", "output", channels), "min": -1.0, "max": 1.0 })
+            }
+            "$signal" => json!({ "source": poly_cable("src", "output", channels) }),
+            _ => json!({ "input": poly_cable("src", "output", channels), "scale": 4.0 }),
+        };
+        modules.push((format!("m{i}"), ty, params));
+    }
+    modules
+}
+
+fn wide_mix(channels: usize) -> BenchPatch {
+    BenchPatch::new(wide_mix_modules(channels))
+}
+
+/// [`wide_mix`] with every module in Sample mode.
+fn wide_mix_sample(channels: usize) -> BenchPatch {
+    BenchPatch::with_mode(wide_mix_modules(channels), ProcessingMode::Sample)
 }
 
 /// 8 copies of gate → `$adsr` → (`$saw` → `$lpf` with envelope cutoff →
@@ -266,7 +374,12 @@ fn wavetables(channels: usize) -> BenchPatch {
 }
 
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 5] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 10] = [
+        ("wide_mix_sample_160", wide_mix_sample),
+        ("remap_chain_32", remap_chain),
+        ("wide_mix_160", wide_mix),
+        ("scale_fallback_32", scale_fallback),
+        ("scale_chain_32", scale_chain),
         ("lpf_chain_32", lpf_chain),
         ("voices_8", voices),
         ("comp_chain_8", comp_chain),
