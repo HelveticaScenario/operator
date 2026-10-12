@@ -1,7 +1,11 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use std::ops::Range;
+
+use crate::block_input::InputScratch;
+use crate::dsp::utils::{map_range, sanitize};
+use crate::poly::{PolyOutput, PolySignal};
 use crate::types::Clickless;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -52,38 +56,80 @@ struct RemapOutputs {
 /// // convert a -5–5 V signal to 0–1 V
 /// $remap($sine('1hz'), 0, 1, -5, 5)
 /// ```
-#[module(name = "$remap", args(input, outMin, outMax, inMin, inMax))]
+#[module(name = "$remap", args(input, outMin, outMax, inMin, inMax), block)]
 pub struct Remap {
     outputs: RemapOutputs,
     channel_state: Box<[ChannelState]>,
     params: RemapParams,
 }
 
+impl ChannelState {
+    /// Smooth the range toward its targets, so changes do not click, and map
+    /// `x` through it.
+    #[inline(always)]
+    fn step(&mut self, x: f32, in_min: f32, in_max: f32, out_min: f32, out_max: f32) -> f32 {
+        self.in_min.update(in_min);
+        self.in_max.update(in_max);
+        self.out_min.update(out_min);
+        self.out_max.update(out_max);
+        map_range(x, *self.in_min, *self.in_max, *self.out_min, *self.out_max)
+    }
+}
+
 impl Remap {
     fn update(&mut self, _sample_rate: f32) {
-        let channels = self.channel_count();
-
-        for i in 0..channels as usize {
-            let input_val = self.params.input.get_value(i);
-            let state = &mut self.channel_state[i];
-
-            // Smooth range parameters to avoid clicks
-            state.in_min.update(self.params.in_min.get_value(i));
-            state.in_max.update(self.params.in_max.get_value(i));
-            state.out_min.update(self.params.out_min.get_value(i));
-            state.out_max.update(self.params.out_max.get_value(i));
-
-            // Apply remapping using map_range utility
-            let output = crate::dsp::utils::map_range(
-                input_val,
-                *state.in_min,
-                *state.in_max,
-                *state.out_min,
-                *state.out_max,
+        let p = &self.params;
+        for (i, state) in self.channel_state.iter_mut().enumerate() {
+            let value = state.step(
+                p.input.get_value(i),
+                p.in_min.get_value(i),
+                p.in_max.get_value(i),
+                p.out_min.get_value(i),
+                p.out_max.get_value(i),
             );
-
-            self.outputs.sample.set(i, output);
+            self.outputs.sample.set(i, value);
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut RemapBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let (mut s0, mut s1, mut s2, mut s3, mut s4) = (
+            InputScratch::new(),
+            InputScratch::new(),
+            InputScratch::new(),
+            InputScratch::new(),
+            InputScratch::new(),
+        );
+        let input = p.input.block_input(range.clone(), channels, &mut s0)?;
+        let in_min = p.in_min.block_input(range.clone(), channels, &mut s1)?;
+        let in_max = p.in_max.block_input(range.clone(), channels, &mut s2)?;
+        let out_min = p.out_min.block_input(range.clone(), channels, &mut s3)?;
+        let out_max = p.out_max.block_input(range.clone(), channels, &mut s4)?;
+        for i in range {
+            let rows = input
+                .row(i)
+                .iter()
+                .zip(in_min.row(i))
+                .zip(in_max.row(i))
+                .zip(out_min.row(i))
+                .zip(out_max.row(i));
+            let slots = outputs
+                .sample
+                .slot_mut(i)
+                .iter_mut()
+                .zip(self.channel_state.iter_mut());
+            for ((out, state), ((((&x, &in_min), &in_max), &out_min), &out_max)) in slots.zip(rows)
+            {
+                *out = sanitize(state.step(x, in_min, in_max, out_min, out_max));
+            }
+        }
+        Some(())
     }
 }
 
