@@ -214,6 +214,41 @@ fn wide_mix_sample(channels: usize) -> BenchPatch {
     BenchPatch::with_mode(wide_mix_modules(channels), ProcessingMode::Sample)
 }
 
+/// 16 `$sine`s at constant pitches: LFOs and drones.
+fn sine_bank(channels: usize) -> BenchPatch {
+    let modules = (0..16)
+        .map(|i| {
+            (
+                format!("s{i}"),
+                "$sine",
+                json!({ "freq": poly(i as f32 * 0.25 - 2.0, channels) }),
+            )
+        })
+        .collect();
+    BenchPatch::new(modules)
+}
+
+/// 16 `$sine`s with audio-rate exponential FM from one `$saw`.
+fn sine_fm(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(-1.0, channels) }),
+    )];
+    for i in 0..16 {
+        modules.push((
+            format!("s{i}"),
+            "$sine",
+            json!({
+                "freq": poly(i as f32 * 0.25 - 2.0, channels),
+                "fm": poly_cable("src", "output", channels),
+                "fmMode": "exp",
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
 /// 8 copies of gate → `$adsr` → (`$saw` → `$lpf` with envelope cutoff →
 /// envelope VCA) → `$mix`.
 fn voices(channels: usize) -> BenchPatch {
@@ -374,7 +409,9 @@ fn wavetables(channels: usize) -> BenchPatch {
 }
 
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 10] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 12] = [
+        ("sine_bank_16", sine_bank),
+        ("sine_fm_16", sine_fm),
         ("wide_mix_sample_160", wide_mix_sample),
         ("remap_chain_32", remap_chain),
         ("wide_mix_160", wide_mix),

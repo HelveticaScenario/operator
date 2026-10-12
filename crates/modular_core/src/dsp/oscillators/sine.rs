@@ -1,10 +1,13 @@
+use std::ops::Range;
+
 use crate::{
+    block_input::{InputScratch, OptionBlockInput},
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::{SchmittTrigger, interpolate, wrap_phase},
+        utils::{SchmittTrigger, interpolate, sanitize, wrap_phase},
     },
-    poly::{PolyOutput, PolySignal, PolySignalExt},
+    poly::{PORT_MAX_CHANNELS, PolyOutput, PolySignal, PolySignalExt},
 };
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -59,54 +62,110 @@ struct ChannelState {
 /// ```js
 /// $sine('c4').out()
 /// ```
-#[module(name = "$sine", args(freq))]
+#[module(name = "$sine", args(freq), block)]
 pub struct SineOscillator {
     outputs: SineOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
     params: SineOscillatorParams,
 }
 
+impl ChannelState {
+    /// Advance the phase by `increment` (cycles per sample) and return the
+    /// next output sample. `sync` is this sample's sync input, if connected.
+    #[inline(always)]
+    fn step(&mut self, increment: f32, offset: f32, sync: Option<f32>) -> f32 {
+        self.phase = wrap_phase(self.phase + increment);
+
+        // Phase offset shifts the read position without altering the
+        // accumulator, so it never drifts.
+        let read_phase = (self.phase + offset).rem_euclid(1.0);
+
+        // Naive sample at the (pre-reset) phase, plus any residual carried
+        // from a sync reset on the previous sample.
+        let body = interpolate(LUT_SINE, read_phase, LUT_SINE_SIZE);
+        let pending = self.blep_carry;
+        self.blep_carry = 0.0;
+
+        // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
+        // at the subsample crossing to band-limit the discontinuity.
+        let mut now = 0.0;
+        if let Some(v) = sync {
+            if self.sync_schmitt.process(v) {
+                let frac = sync_edge_fraction(self.sync_prev, v);
+                self.phase = 0.0;
+                let after = interpolate(LUT_SINE, offset.rem_euclid(1.0), LUT_SINE_SIZE);
+                let (n, carry) = sync_blep(after - body, frac);
+                now = n;
+                self.blep_carry = carry;
+            }
+            self.sync_prev = v;
+        }
+
+        (body + pending + now) * 5.0
+    }
+}
+
 impl SineOscillator {
     fn update(&mut self, sample_rate: f32) {
-        let num_channels = self.channel_count();
-
-        for ch in 0..num_channels {
-            let state = &mut self.channel_state[ch];
-
-            let pitch = self.params.freq.get_value(ch);
-            let fm = self.params.fm.value_or(ch, 0.0);
-            let frequency = apply_fm(pitch, fm, self.params.fm_mode) / sample_rate;
-            state.phase = wrap_phase(state.phase + frequency);
-
-            // Phase offset shifts the read position without altering the
-            // accumulator, so it never drifts.
-            let offset = self.params.phase_offset.value_or(ch, 0.0);
-            let read_phase = (state.phase + offset).rem_euclid(1.0);
-
-            // Naive sample at the (pre-reset) phase, plus any residual carried
-            // from a sync reset on the previous sample.
-            let body = interpolate(LUT_SINE, read_phase, LUT_SINE_SIZE);
-            let pending = state.blep_carry;
-            state.blep_carry = 0.0;
-
-            // Hard sync: a rising edge resets the phase, with a PolyBLEP placed
-            // at the subsample crossing to band-limit the discontinuity.
-            let mut now = 0.0;
-            if let Some(sync) = &self.params.sync {
-                let v = sync.get_value(ch);
-                if state.sync_schmitt.process(v) {
-                    let frac = sync_edge_fraction(state.sync_prev, v);
-                    state.phase = 0.0;
-                    let after = interpolate(LUT_SINE, offset.rem_euclid(1.0), LUT_SINE_SIZE);
-                    let (n, carry) = sync_blep(after - body, frac);
-                    now = n;
-                    state.blep_carry = carry;
-                }
-                state.sync_prev = v;
-            }
-
-            self.outputs.sample.set(ch, (body + pending + now) * 5.0);
+        let p = &self.params;
+        for (ch, state) in self.channel_state.iter_mut().enumerate() {
+            let pitch = p.freq.get_value(ch);
+            let fm = p.fm.value_or(ch, 0.0);
+            let increment = apply_fm(pitch, fm, p.fm_mode) / sample_rate;
+            let offset = p.phase_offset.value_or(ch, 0.0);
+            let sync = p.sync.as_ref().map(|sync| sync.get_value(ch));
+            self.outputs
+                .sample
+                .set(ch, state.step(increment, offset, sync));
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut SineOscillatorBlockOutputs,
+        range: Range<usize>,
+        sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let mut scratch: [InputScratch; 4] = std::array::from_fn(|_| InputScratch::new());
+        let [s0, s1, s2, s3] = &mut scratch;
+        let freq = p.freq.block_input(range.clone(), channels, s0)?;
+        let fm = p.fm.block_input_or(range.clone(), channels, 0.0, s1)?;
+        let offset = p
+            .phase_offset
+            .block_input_or(range.clone(), channels, 0.0, s2)?;
+        let sync = match &p.sync {
+            Some(sync) => Some(sync.block_input(range.clone(), channels, s3)?),
+            None => None,
+        };
+        // A pitch held for the whole range needs its exponential only once.
+        let mut held_increments = [0.0f32; PORT_MAX_CHANNELS];
+        let held = freq.is_constant() && fm.is_constant();
+        if held {
+            let (freq, fm) = (freq.row(range.start), fm.row(range.start));
+            for ((increment, &pitch), &fm) in held_increments.iter_mut().zip(freq).zip(fm) {
+                *increment = apply_fm(pitch, fm, p.fm_mode) / sample_rate;
+            }
+        }
+        for i in range {
+            let (pitch, fm, offset) = (freq.row(i), fm.row(i), offset.row(i));
+            let sync = sync.as_ref().map(|sync| sync.row(i));
+            let slots = outputs
+                .sample
+                .slot_mut(i)
+                .iter_mut()
+                .zip(self.channel_state.iter_mut());
+            for (ch, (out, state)) in slots.enumerate() {
+                let increment = if held {
+                    held_increments[ch]
+                } else {
+                    apply_fm(pitch[ch], fm[ch], p.fm_mode) / sample_rate
+                };
+                *out = sanitize(state.step(increment, offset[ch], sync.map(|sync| sync[ch])));
+            }
+        }
+        Some(())
     }
 }
 
