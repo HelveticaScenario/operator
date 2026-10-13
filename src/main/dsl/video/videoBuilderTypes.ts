@@ -66,7 +66,7 @@ export interface VideoAudioPlayback {
 }
 
 export interface VideoAudioConfig {
-    /** Samples the window spans, 2 to 4096 (default 512; 48 000 per second). */
+    /** Audio samples the window spans, 2 to 4096 (default 512), at the engine's sample rate. */
     samples?: number;
     /** Start the window at a rising zero crossing so a periodic wave holds still (default true). */
     trigger?: boolean;
