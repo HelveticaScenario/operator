@@ -8,7 +8,7 @@ describe('$v inputs from the audio graph', () => {
         it('binds a slider to a uniform slot carrying its current value', () => {
             const { video } = exec(`
                 const freq = $slider('Freq', 4, 1, 10);
-                $v.out($v.colorize($v.osc($v.ramp(), freq), 0, 0));
+                $v.out($v.colorize($v.osc(freq), 0, 0));
             `);
             expect(video!.uniforms).toEqual([
                 {
@@ -24,7 +24,7 @@ describe('$v inputs from the audio graph', () => {
         it('shares one slot between every use of a control', () => {
             const { video } = exec(`
                 const amt = $slider('Amt', 0.5, 0, 1);
-                const a = $v.osc($v.ramp(), 3, amt);
+                const a = $v.osc(3, amt);
                 $v.out($v.colorize(a, amt, $slider('Other', 1, 0, 2)));
             `);
             expect(
@@ -72,7 +72,7 @@ describe('$v inputs from the audio graph', () => {
         it('shares one tap between every use of a signal', () => {
             const found = taps(`
                 const lfo = $sine('1hz').range(0, 1);
-                $v.out($v.colorize(lfo, $v.osc($v.ramp(), lfo), 0));
+                $v.out($v.colorize(lfo, $v.osc(lfo), 0));
             `);
             expect(found).toHaveLength(1);
         });
@@ -97,7 +97,7 @@ describe('$v inputs from the audio graph', () => {
         it('sums a signal of several channels through one tap', () => {
             const found = taps(`
                 const pair = $c($sine('1hz'), $sine('2hz'));
-                $v.out($v.colorize(pair, $v.osc($v.ramp(), pair), 0));
+                $v.out($v.colorize(pair, $v.osc(pair), 0));
             `);
             expect(found).toHaveLength(1);
             expect(found[0].params.input).toHaveLength(2);
@@ -114,7 +114,7 @@ describe('$v inputs from the audio graph', () => {
         it('rejects more signals than the engine has taps', () => {
             const reads = Array.from(
                 { length: 65 },
-                (_, i) => `$v.osc($v.ramp(), $sine(${i + 1}))`,
+                (_, i) => `$v.osc($sine(${i + 1}))`,
             ).join(', ');
             expect(() =>
                 exec(`const f = [${reads}]; $v.out($v.colorize(f[0], 0, 0));`),
@@ -199,7 +199,9 @@ describe('$v inputs from the audio graph', () => {
                 samples: 512,
                 trigger: true,
             });
-            expect(video!.wgsl).toContain('let v0: f32 = uv.x;');
+            expect(video!.wgsl).toContain(
+                'let v0: vec4f = vec4f(vec3f(uv.x), 1.0);',
+            );
         });
 
         it('shares a row between identical reads and a tap with value reads', () => {
@@ -310,7 +312,7 @@ describe('$v inputs from the audio graph', () => {
 
         it('rejects something that is not a video signal', () => {
             expect(() => exec(`$v.toCV(0.5);`)).toThrow(
-                /\$v\.toCV: signal must be a video field or color/,
+                /\$v\.toCV: signal must be a video signal/,
             );
         });
     });

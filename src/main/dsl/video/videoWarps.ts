@@ -32,10 +32,7 @@ export function warpMethods(core: VideoCore) {
                 dy,
             }),
 
-        /**
-         * Pushes `input` around by another signal: a color moves it by its red and
-         * green channels, a field by its value in both directions.
-         */
+        /** Pushes `input` around by another signal's red channel across and green up. */
         modulate: (
             input: VideoOutput,
             modulator: VideoOutput,
@@ -43,11 +40,8 @@ export function warpMethods(core: VideoCore) {
         ): VideoOutput => {
             if (!(modulator instanceof VideoOutput)) {
                 throw new Error(
-                    `$v.modulate: modulator must be a video field or color, got ${describe(modulator)}`,
+                    `$v.modulate: modulator must be a video signal, got ${describe(modulator)}`,
                 );
-            }
-            if (modulator.type === 'field') {
-                return methods.displace(input, modulator, modulator, amount);
             }
             return methods.displace(
                 input,

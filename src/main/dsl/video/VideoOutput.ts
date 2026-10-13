@@ -1,7 +1,4 @@
-import type {
-    VideoValue,
-    VideoValueType,
-} from '../../../shared/video/videoGraph';
+import type { VideoValue } from '../../../shared/video/videoGraph';
 
 /** The graph builder's `$v` functions, which chain methods forward to. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -17,7 +14,8 @@ type ChainCall = (
 type ChainProxy = Record<string, (...args: unknown[]) => unknown>;
 
 /**
- * A video signal: a node's output, a constant, or the time field.
+ * A video signal: an RGBA color at every pixel, from a node, a constant, or
+ * the time.
  *
  * It chains the way an audio signal does. `.$` is a namespace of the `$v`
  * functions that take a signal first, with the signal supplied for you, so
@@ -29,24 +27,28 @@ type ChainProxy = Record<string, (...args: unknown[]) => unknown>;
 export class VideoOutput {
     constructor(
         readonly value: VideoValue,
-        readonly type: VideoValueType,
         /** The builder that made this signal; chain methods call its functions. */
         readonly ops: VideoOps,
     ) {}
 
-    /** The red channel of a color as a field; a field has no channels. */
+    /** The red channel as a gray signal. */
     get r(): unknown {
-        return this.channelOf('r');
+        return this.ops.channel(this, 'r');
     }
 
-    /** The green channel of a color as a field. */
+    /** The green channel as a gray signal. */
     get g(): unknown {
-        return this.channelOf('g');
+        return this.ops.channel(this, 'g');
     }
 
-    /** The blue channel of a color as a field. */
+    /** The blue channel as a gray signal. */
     get b(): unknown {
-        return this.channelOf('b');
+        return this.ops.channel(this, 'b');
+    }
+
+    /** The alpha as a gray signal. */
+    get a(): unknown {
+        return this.ops.channel(this, 'a');
     }
 
     /** The `$v` functions that take a signal first, applied to this signal. */
@@ -80,12 +82,6 @@ export class VideoOutput {
             throw new Error('pipeMix: expects a function');
         }
         return this.ops.mix(this, fn(this), mix);
-    }
-
-    private channelOf(which: 'r' | 'g' | 'b'): unknown {
-        return this.type === 'color'
-            ? this.ops.channel(this, which)
-            : undefined;
     }
 
     private chain(withMix: boolean): ChainProxy {
@@ -124,6 +120,9 @@ const FORWARDED = [
     'invert',
     'kaleid',
     'key',
+    'layer',
+    'luma',
+    'mask',
     'max',
     'min',
     'mix',
@@ -139,7 +138,6 @@ const FORWARDED = [
     'modulateScrollX',
     'modulateScrollY',
     'mult',
-    'osc',
     'pixelate',
     'posterize',
     'procAmp',
@@ -163,6 +161,8 @@ const forward = (names: string[]): Record<string, ChainCall> =>
 /** Functions of `.$` and `.$m`: each returns a new signal from this one. */
 const PROCESSING: Record<string, ChainCall> = {
     ...forward(FORWARDED),
+    osc: (o, s, freq, phase, config) =>
+        o.osc(freq, phase, { ...(config as object), input: s }),
     rotate: (o, s, turns) => o.warp(s, { rotate: turns }),
     scale: (o, s, zoom) => o.warp(s, { zoom }),
     scroll: (o, s, x = 0, y = 0) => o.warp(s, { shiftX: x, shiftY: y }),

@@ -1,95 +1,169 @@
-import type { VideoValueType } from '../../../../shared/video/videoGraph';
+import { LUMA_HELPER } from './rgba';
 import type { VideoModuleDef } from './types';
 
 const unit = (x: string) => `clamp(${x}, 0.0, 1.0)`;
-const unit3 = (x: string) => `clamp(${x}, vec3f(0.0), vec3f(1.0))`;
 
 /**
- * The field and color variants of a module whose `operands` are both fields
- * or both colors; `fields` are field inputs in either variant. `emit` receives
- * the variant's type along with the inputs.
+ * A module of two colors through `fn video_<name>(a: vec4f, b: vec4f)`, whose
+ * `body` is the function's return expression.
  */
-function both(
-    operands: readonly string[],
-    emit: (args: Record<string, string>, type: VideoValueType) => string,
-    fields: readonly string[] = [],
-): { field: VideoModuleDef; color: VideoModuleDef } {
-    const make = (type: VideoValueType): VideoModuleDef => ({
-        inputs: {
-            ...Object.fromEntries(operands.map((name) => [name, type])),
-            ...Object.fromEntries(fields.map((name) => [name, 'field'])),
-        },
-        output: type,
-        emit: (args) => emit(args, type),
-    });
-    return { field: make('field'), color: make('color') };
+function binary(name: string, body: string): VideoModuleDef {
+    return {
+        inputs: { a: 'rgba', b: 'rgba' },
+        output: 'rgba',
+        helpers: [
+            `fn video_${name}(a: vec4f, b: vec4f) -> vec4f {\n    return ${body};\n}`,
+        ],
+        emit: ({ a, b }) => `video_${name}(${a}, ${b})`,
+    };
 }
 
-/** Sum, clipped to 0..1. */
-export const add = both(['a', 'b'], ({ a, b }, type) =>
-    (type === 'field' ? unit : unit3)(`${a} + ${b}`),
+/**
+ * A module that reshapes each of the red, green and blue of `input` through
+ * `fn video_<name>(x: vec3f, ...)` and keeps its alpha. `numbers` are the
+ * further inputs, passed after the channels in order.
+ */
+function perChannel(
+    name: string,
+    numbers: readonly string[],
+    body: string,
+): VideoModuleDef {
+    const params = numbers.map((n) => `, ${n}: f32`).join('');
+    return {
+        inputs: {
+            input: 'rgba',
+            ...Object.fromEntries(numbers.map((n) => [n, 'number'])),
+        },
+        output: 'rgba',
+        helpers: [
+            `fn video_${name}(c: vec4f${params}) -> vec4f {\n    let x = c.rgb;\n    return vec4f(${body}, c.a);\n}`,
+        ],
+        emit: (args) =>
+            `video_${name}(${[args.input, ...numbers.map((n) => args[n])].join(', ')})`,
+    };
+}
+
+/** Sum, clipped to 0..1; the alpha is the larger of the two. */
+export const add = binary(
+    'add',
+    'vec4f(clamp(a.rgb + b.rgb, vec3f(0.0), vec3f(1.0)), max(a.a, b.a))',
 );
 
-/** Product; multiplying by a 0..1 field darkens. */
-export const mult = both(['a', 'b'], ({ a, b }) => `${a} * ${b}`);
+/** Product: multiplying by a 0..1 signal darkens, and alphas multiply too. */
+export const mult = binary('mult', 'a * b');
 
-/** Absolute difference. */
-export const diff = both(['a', 'b'], ({ a, b }) => `abs(${a} - ${b})`);
+/** Absolute difference; the alpha is the larger of the two. */
+export const diff = binary('diff', 'vec4f(abs(a.rgb - b.rgb), max(a.a, b.a))');
 
-/** Complement: 1 - input. */
-export const invert = both(['input'], ({ input }, type) =>
-    type === 'field' ? `1.0 - ${unit(input)}` : `vec3f(1.0) - ${unit3(input)}`,
+/** The larger of each channel; with masks this is a union of shapes. */
+export const max = binary('max', 'max(a, b)');
+
+/** The smaller of each channel; with masks this is an intersection of shapes. */
+export const min = binary('min', 'min(a, b)');
+
+/** Complement of red, green and blue: 1 minus each; the alpha is kept. */
+export const invert = perChannel(
+    'invert',
+    [],
+    'vec3f(1.0) - clamp(x, vec3f(0.0), vec3f(1.0))',
 );
 
-/** Crossfade from `a` (amount 0) to `b` (amount 1). */
-export const mix = both(
-    ['a', 'b'],
-    ({ a, b, amount }) => `mix(${a}, ${b}, ${unit(amount)})`,
-    ['amount'],
-);
-
-/** The larger of two values; with 0..1 fields this is a union of shapes. */
-export const max = both(['a', 'b'], ({ a, b }) => `max(${a}, ${b})`);
-
-/** The smaller of two values; with 0..1 fields this is an intersection of shapes. */
-export const min = both(['a', 'b'], ({ a, b }) => `min(${a}, ${b})`);
-
-/** Maps 0..1 onto `min`..`max`: what `.range` does to a field. */
-export const range: VideoModuleDef = {
-    inputs: { input: 'field', min: 'field', max: 'field' },
-    output: 'field',
-    emit: (args) =>
-        `(${args.min} + ${args.input} * (${args.max} - ${args.min}))`,
+/** Crossfade from `a` (amount 0) to `b` (amount 1), alpha included. */
+export const mix: VideoModuleDef = {
+    inputs: { a: 'rgba', b: 'rgba', amount: 'number' },
+    output: 'rgba',
+    emit: ({ a, b, amount }) => `mix(${a}, ${b}, ${unit(amount)})`,
 };
+
+/** Maps each channel's 0..1 onto `min`..`max`. */
+export const range = perChannel('range', ['lo', 'hi'], 'lo + x * (hi - lo)');
 
 /**
- * Threshold: 0 below `threshold`, 1 above, with a linear ramp `softness` wide
- * centered on it (a hard edge when softness is 0).
+ * Threshold per channel: 0 below `threshold`, 1 above, with a linear ramp
+ * `softness` wide centered on it (a hard edge when softness is 0).
  */
-export const comparator: VideoModuleDef = {
-    inputs: { input: 'field', threshold: 'field', softness: 'field' },
-    output: 'field',
-    emit: ({ input, threshold, softness }) =>
-        `clamp((${input} - ${threshold}) / max(${softness}, 0.00001) + 0.5, 0.0, 1.0)`,
-};
+export const comparator = perChannel(
+    'comparator',
+    ['threshold', 'softness'],
+    'clamp((x - vec3f(threshold)) / max(softness, 0.00001) + vec3f(0.5), vec3f(0.0), vec3f(1.0))',
+);
 
 /** Shows `fg` where `mask` is 1 and `bg` where it is 0. */
 export const key: VideoModuleDef = {
-    inputs: { fg: 'color', bg: 'color', mask: 'field' },
-    output: 'color',
+    inputs: { fg: 'rgba', bg: 'rgba', mask: 'number' },
+    output: 'rgba',
     emit: ({ fg, bg, mask }) => `mix(${bg}, ${fg}, ${unit(mask)})`,
 };
 
-/** Combines three fields into a color, clipping each channel to 0..1. */
-export const colorize: VideoModuleDef = {
-    inputs: { r: 'field', g: 'field', b: 'field' },
-    output: 'color',
-    emit: ({ r, g, b }) => unit3(`vec3f(${r}, ${g}, ${b})`),
+/** `top` laid over `base` by the alpha of `top`. */
+export const layer = binary(
+    'layer',
+    'vec4f(mix(a.rgb, b.rgb, clamp(b.a, 0.0, 1.0)), clamp(a.a + b.a, 0.0, 1.0))',
+);
+
+/** `input` seen through `mask`: its color and alpha scaled by the mask's luma. */
+export const mask: VideoModuleDef = {
+    inputs: { input: 'rgba', mask: 'number' },
+    output: 'rgba',
+    helpers: [
+        `fn video_mask(c: vec4f, m: f32) -> vec4f {
+    let a = clamp(m, 0.0, 1.0);
+    return vec4f(c.rgb * a, c.a * a);
+}`,
+    ],
+    emit: ({ input, mask: m }) => `video_mask(${input}, ${m})`,
 };
 
-/** Final stage before the display; clips to the displayable range. */
-export const out: VideoModuleDef = {
-    inputs: { input: 'color' },
-    output: 'color',
-    emit: ({ input }) => unit3(input),
+/**
+ * Keys `input` by its own brightness: alpha rises from 0 to 1 as the luma
+ * crosses `threshold`, over a band `tolerance` wide on either side.
+ */
+export const luma: VideoModuleDef = {
+    inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
+    output: 'rgba',
+    helpers: [
+        LUMA_HELPER,
+        `fn video_luma_key(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
+    let band = max(tolerance, 0.00001);
+    let a = smoothstep(threshold - band, threshold + band, video_luma(c));
+    return vec4f(c.rgb * a, a);
+}`,
+    ],
+    emit: ({ input, threshold, tolerance }) =>
+        `video_luma_key(${input}, ${threshold}, ${tolerance})`,
 };
+
+/** A color from four levels, each clipped to 0..1. */
+export const colorize: VideoModuleDef = {
+    inputs: { r: 'number', g: 'number', b: 'number', a: 'number' },
+    output: 'rgba',
+    emit: ({ r, g, b, a }) =>
+        `clamp(vec4f(${r}, ${g}, ${b}, ${a}), vec4f(0.0), vec4f(1.0))`,
+};
+
+/** Final stage before the display. */
+export const out: VideoModuleDef = {
+    inputs: { input: 'rgba' },
+    output: 'rgba',
+    emit: ({ input }) => input,
+};
+
+/** Quantizes each channel to `levels` evenly spaced values between 0 and 1 (minimum 2). */
+export const posterize = perChannel(
+    'posterize',
+    ['levels'],
+    'min(floor(clamp(x, vec3f(0.0), vec3f(1.0)) * max(levels, 2.0)), vec3f(max(levels, 2.0) - 1.0)) / (max(levels, 2.0) - 1.0)',
+);
+
+/** Multiplies each channel by `gain`, then keeps the fractional part: a sawtooth of the input. */
+export const wrap = perChannel('wrap', ['gain'], 'fract(x * gain)');
+
+/**
+ * Multiplies each channel by `gain`, then reflects whatever passes 1 back
+ * down: a triangle of the input that matches it up to 1 / gain.
+ */
+export const fold = perChannel(
+    'fold',
+    ['gain'],
+    'vec3f(1.0) - abs(vec3f(1.0) - 2.0 * fract(x * gain * 0.5))',
+);

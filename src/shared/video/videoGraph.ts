@@ -1,8 +1,9 @@
 /**
- * Value types a video module input or output carries. A `field` is a scalar
- * f(x, y, t); a `color` is an RGB triple of fields.
+ * How a video module input reads its value. Every signal is an RGBA color per
+ * pixel: an `rgba` input takes it whole, and a `number` input takes its luma.
+ * A number given to an `rgba` input is an opaque gray of that level.
  */
-export type VideoValueType = 'field' | 'color';
+export type VideoInputKind = 'rgba' | 'number';
 
 /**
  * Most feedback buffers a graph can use: the screen takes one of the eight
@@ -197,7 +198,6 @@ export interface VideoCvSample {
  */
 export interface VideoPreview {
     value: VideoValue;
-    type: VideoValueType;
     cv?: VideoCvSample;
 }
 

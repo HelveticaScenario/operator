@@ -10,7 +10,6 @@ import {
     type VideoSourceDef,
     type VideoUniform,
     type VideoValue,
-    type VideoValueType,
 } from '../../../shared/video/videoGraph';
 import {
     BaseCollection,
@@ -30,7 +29,6 @@ import { sourceMethods } from './videoSources';
 import { warpMethods } from './videoWarps';
 import {
     describe,
-    isColor,
     type AudioSignal,
     type VideoInputs,
     type VideoNodeExtra,
@@ -101,11 +99,11 @@ export class VideoGraphBuilder implements VideoCore {
         );
     }
 
-    readonly time = this.signal({ kind: 'time' }, 'field');
+    readonly time = this.signal({ kind: 'time' });
 
     /** A video signal whose chain methods call this builder's functions. */
-    private signal(value: VideoValue, type: VideoValueType): VideoOutput {
-        return new VideoOutput(value, type, this as unknown as VideoOps);
+    private signal(value: VideoValue): VideoOutput {
+        return new VideoOutput(value, this as unknown as VideoOps);
     }
 
     /**
@@ -175,73 +173,34 @@ export class VideoGraphBuilder implements VideoCore {
         return tap;
     }
 
-    asField(fn: string, name: string, value: unknown): VideoValue {
+    value(fn: string, name: string, value: unknown): VideoValue {
         const v = isPatternValue(value) ? this.host.playPattern(value) : value;
         if (typeof v === 'number') return { kind: 'const', value: v };
-        if (v instanceof VideoOutput && v.type === 'field') return v.value;
+        if (v instanceof VideoOutput) return v.value;
         if (v instanceof ModuleOutput || v instanceof BaseCollection) {
             return this.bindSignal(fn, name, v);
         }
         throw new Error(
-            `${fn}: ${name} must be a number or a video field, got ${describe(v)}`,
+            `${fn}: ${name} must be a number, a video signal or an audio signal, got ${describe(v)}`,
         );
     }
 
-    fields(fn: string, values: Record<string, unknown>): VideoInputs {
+    values(fn: string, values: Record<string, unknown>): VideoInputs {
         const inputs: VideoInputs = {};
         for (const [name, v] of Object.entries(values)) {
-            inputs[name] = this.asField(fn, name, v);
+            inputs[name] = this.value(fn, name, v);
         }
         return inputs;
     }
 
-    /** `v` as a color signal; a field or number becomes the gray of that level. */
-    toColor(fn: string, name: string, v: unknown): VideoOutput {
-        if (v instanceof VideoOutput && v.type === 'color') return v;
-        const level = this.asField(fn, name, v);
-        return this.addNode('colorize', 'color', {
-            r: level,
-            g: level,
-            b: level,
-        });
-    }
-
     addNode(
         kind: string,
-        type: VideoValueType,
         inputs: VideoInputs,
         extra?: VideoNodeExtra,
     ): VideoOutput {
         const id = `${kind}_${this.nodes.length}`;
         this.nodes.push({ id, kind, inputs, ...extra });
-        return this.signal({ kind: 'node', id }, type);
-    }
-
-    /**
-     * Builds a math node whose operands are fields, or colors when any operand
-     * is a color (`<kind>Color`). `fieldInputs` are fields in both variants.
-     */
-    arith(
-        fn: string,
-        kind: string,
-        operands: Record<string, unknown>,
-        fieldInputs: Record<string, unknown> = {},
-    ): VideoOutput {
-        const color = Object.values(operands).some(isColor);
-        const inputs = color
-            ? Object.fromEntries(
-                  Object.entries(operands).map(([name, v]) => [
-                      name,
-                      this.toColor(fn, name, v).value,
-                  ]),
-              )
-            : this.fields(fn, operands);
-        Object.assign(inputs, this.fields(fn, fieldInputs));
-        return this.addNode(
-            color ? `${kind}Color` : kind,
-            color ? 'color' : 'field',
-            inputs,
-        );
+        return this.signal({ kind: 'node', id });
     }
 
     /**
@@ -288,9 +247,8 @@ export class VideoGraphBuilder implements VideoCore {
         }
         return this.addNode(
             'audioHistory',
-            'field',
             {
-                position: this.asField('$v.fromAudio', 'position', position),
+                position: this.value('$v.fromAudio', 'position', position),
                 samples: { kind: 'const', value: samples },
             },
             { history: row },
@@ -312,41 +270,32 @@ export class VideoGraphBuilder implements VideoCore {
         return this.host.mediaAudio(path, playback);
     }
 
-    /** One channel of a color as a field; every channel of a field is the field itself. */
+    /** One channel of a signal, or its brightness, as a gray signal. */
     channel = (
-        input: VideoOutput,
-        which: 'r' | 'g' | 'b' | 'luma' = 'luma',
-    ): VideoOutput => {
-        if (!(input instanceof VideoOutput)) {
-            throw new Error(
-                `$v.channel: input must be a video field or color, got ${describe(input)}`,
-            );
-        }
-        if (input.type === 'field') return input;
-        return this.addNode(
+        input: VideoSource,
+        which: 'r' | 'g' | 'b' | 'a' | 'luma' = 'luma',
+    ): VideoOutput =>
+        this.addNode(
             'channel',
-            'field',
-            { input: input.value },
+            { input: this.value('$v.channel', 'input', input) },
             { params: { channel: which } },
         );
-    };
 
     /**
-     * Reorders the channels of a color: `pattern` names, for red, green and
+     * Reorders the channels of a signal: `pattern` names, for red, green and
      * blue in turn, the channel of `input` that supplies it, so `'gbr'` makes
-     * red from green, green from blue and blue from red. A field is gray, so
-     * every pattern gives it back as a color.
+     * red from green, green from blue and blue from red, and `'aaa'` shows the
+     * alpha. The alpha is kept.
      */
-    swiz = (input: VideoOutput, pattern: string): VideoOutput => {
-        if (typeof pattern !== 'string' || !/^[rgb]{3}$/.test(pattern)) {
+    swiz = (input: VideoSource, pattern: string): VideoOutput => {
+        if (typeof pattern !== 'string' || !/^[rgba]{3}$/.test(pattern)) {
             throw new Error(
-                `$v.swiz: pattern must be three of r, g and b such as 'rrr' or 'gbr', got ${describe(pattern)}`,
+                `$v.swiz: pattern must be three of r, g, b and a such as 'rrr' or 'gbr', got ${describe(pattern)}`,
             );
         }
         return this.addNode(
             'swizzle',
-            'color',
-            { input: this.toColor('$v.swiz', 'input', input).value },
+            { input: this.value('$v.swiz', 'input', input) },
             { params: { pattern } },
         );
     };
@@ -361,7 +310,7 @@ export class VideoGraphBuilder implements VideoCore {
     ): VideoOutput => {
         if (!(signal instanceof VideoOutput)) {
             throw new Error(
-                `$v.preview: signal must be a video field or color, got ${describe(signal)}`,
+                `$v.preview: signal must be a video signal, got ${describe(signal)}`,
             );
         }
         const view = config?.view ?? 'image';
@@ -375,7 +324,7 @@ export class VideoGraphBuilder implements VideoCore {
             sourceLocation: this.host.sourceLocation(),
             view,
         });
-        this.previews.push({ type: signal.type, value: signal.value });
+        this.previews.push({ value: signal.value });
         return signal;
     };
 
@@ -389,7 +338,7 @@ export class VideoGraphBuilder implements VideoCore {
     ): CollectionWithRange => {
         if (!(signal instanceof VideoOutput)) {
             throw new Error(
-                `$v.toCV: signal must be a video field or color, got ${describe(signal)}`,
+                `$v.toCV: signal must be a video signal, got ${describe(signal)}`,
             );
         }
         const x = config?.x ?? 0.5;
@@ -414,7 +363,6 @@ export class VideoGraphBuilder implements VideoCore {
         const id = `__videoCV_${this.cvCount++}`;
         this.previews.push({
             cv: { id, size, x, y },
-            type: signal.type,
             value: signal.value,
         });
         return this.host.cvSignal(id);
@@ -427,15 +375,13 @@ export class VideoGraphBuilder implements VideoCore {
 
     /** Shows `input` as the patch's picture and returns it. The last call wins. */
     out = (input: VideoOutput): VideoOutput => {
-        this.outputId = this.addOut(
-            this.toColor('$v.out', 'input', input).value,
-        );
+        this.outputId = this.addOut(this.value('$v.out', 'input', input));
         return input;
     };
 
-    /** Adds the node that shows `color` on screen, and returns its id. */
-    private addOut(color: VideoValue): string {
-        this.addNode('out', 'color', { input: color });
+    /** Adds the node that shows `input` on screen, and returns its id. */
+    private addOut(input: VideoValue): string {
+        this.addNode('out', { input });
         return this.nodes[this.nodes.length - 1].id;
     }
 
@@ -446,9 +392,7 @@ export class VideoGraphBuilder implements VideoCore {
     build(): VideoGraph | null {
         const hasOutput = this.outputId !== null;
         if (this.outputId === null && this.previews.length > 0) {
-            this.outputId = this.addOut(
-                this.toColor('$v.out', 'input', 0).value,
-            );
+            this.outputId = this.addOut({ kind: 'const', value: 0 });
         }
         if (this.outputId === null) return null;
         const live = new Set<string>(

@@ -2,15 +2,34 @@ import {
     MAX_FEEDBACK_BUFFERS,
     type CompiledVideoShader,
     type VideoGraph,
+    type VideoInputKind,
     type VideoValue,
-    type VideoValueType,
 } from '../../../shared/video/videoGraph';
 import {
     UNIFORM_SLOTS_OFFSET,
     bindingSlots,
 } from '../../../shared/video/uniformLayout';
 import { VIDEO_MODULES } from './modules';
+import { gray, LUMA_HELPER } from './modules/rgba';
 import type { VideoModuleDef } from './modules/types';
+
+/**
+ * `video_display`: what the screen shows of a color, its channels clipped to
+ * 0..1 and laid over black by its alpha.
+ */
+const DISPLAY_HELPER = `fn video_display(c: vec4f) -> vec4f {
+    let clipped = clamp(c, vec4f(0.0), vec4f(1.0));
+    return vec4f(clipped.rgb * clipped.a, 1.0);
+}`;
+
+/** The WGSL of a module's value, as an RGBA `vec4f`. */
+function emitRgba(
+    def: VideoModuleDef,
+    ...args: Parameters<VideoModuleDef['emit']>
+): string {
+    const value = def.emit(...args);
+    return def.output === 'gray' ? gray(value) : value;
+}
 
 function wgslFloat(value: number): string {
     if (!Number.isFinite(value)) {
@@ -50,7 +69,6 @@ function checkIndex(
  * stage and a fragment stage that evaluates every node per pixel.
  */
 export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
-    const types = new Map<string, VideoValueType>();
     const names = new Map<string, string>();
     const helpers = new Set<string>();
     /** Each node's WGSL statement, with the nodes it reads, in graph order. */
@@ -60,7 +78,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     let bufferCount = 0;
 
     /**
-     * Each node as a function of the coordinate, `fn f<index>(uv) -> T`, for
+     * Each node as a function of the coordinate, `fn f<index>(uv) -> vec4f`, for
      * modules that re-evaluate an input at other coordinates. Written on
      * demand; the statement per node above is the same node at the pixel's own
      * coordinate, computed once and shared.
@@ -76,30 +94,19 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     const functions: string[] = [];
     const functionsDone = new Set<string>();
     const constantFunctions = new Map<string, string>();
-    const wgslType = (type: VideoValueType) =>
-        type === 'field' ? 'f32' : 'vec3f';
-
-    const checkNodeType = (id: string, expected: VideoValueType) => {
-        const actual = types.get(id);
-        if (actual === undefined) {
-            throw new Error(`unknown or forward node "${id}"`);
-        }
-        if (actual !== expected) {
-            throw new Error(
-                `node "${id}" is a ${actual}, expected a ${expected}`,
-            );
-        }
+    const checkNode = (id: string) => {
+        if (!names.has(id)) throw new Error(`unknown or forward node "${id}"`);
     };
 
-    /** The WGSL for an input. */
-    const resolve = (value: VideoValue, expected: VideoValueType): string => {
-        if (value.kind === 'node') {
-            checkNodeType(value.id, expected);
-            return names.get(value.id)!;
-        }
-        if (expected !== 'field') {
-            throw new Error(`expected a ${expected}, got a ${value.kind}`);
-        }
+    /** A node's color, `rgba`, read whole or as its luma. */
+    const readColor = (color: string, kind: VideoInputKind): string => {
+        if (kind === 'rgba') return color;
+        helpers.add(LUMA_HELPER);
+        return `video_luma(${color})`;
+    };
+
+    /** The `f32` WGSL of an input that is not a node. */
+    const number = (value: Exclude<VideoValue, { kind: 'node' }>): string => {
         if (value.kind === 'const') return wgslFloat(value.value);
         if (
             value.kind === 'uniform' &&
@@ -116,35 +123,41 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             : `u.slots[${value.slot >> 2}][${value.slot & 3}]`;
     };
 
+    /** The WGSL for an input. */
+    const resolve = (value: VideoValue, kind: VideoInputKind): string => {
+        if (value.kind === 'node') {
+            checkNode(value.id);
+            return readColor(names.get(value.id)!, kind);
+        }
+        const level = number(value);
+        return kind === 'number' ? level : gray(level);
+    };
+
     /** An input read at the coordinate `uv` of the function it appears in. */
     const resolveInFunction = (
         value: VideoValue,
-        expected: VideoValueType,
+        kind: VideoInputKind,
     ): string => {
-        if (value.kind !== 'node') return resolve(value, expected);
-        checkNodeType(value.id, expected);
+        if (value.kind !== 'node') return resolve(value, kind);
+        checkNode(value.id);
         defineFunction(value.id);
-        return `f${records.get(value.id)!.index}(uv)`;
+        return readColor(`f${records.get(value.id)!.index}(uv)`, kind);
     };
 
-    /** An input handed to a module as a function of coordinates. */
-    const resolveAsFunction = (
-        value: VideoValue,
-        expected: VideoValueType,
-    ): string => {
+    /** An input handed to a module as a function from coordinates to its color. */
+    const resolveAsFunction = (value: VideoValue): string => {
         if (value.kind === 'node') {
-            checkNodeType(value.id, expected);
+            checkNode(value.id);
             defineFunction(value.id);
             return `f${records.get(value.id)!.index}`;
         }
-        const expression = resolve(value, expected);
-        const key = `${expected}:${expression}`;
-        let name = constantFunctions.get(key);
+        const expression = resolve(value, 'rgba');
+        let name = constantFunctions.get(expression);
         if (name === undefined) {
             name = `k${constantFunctions.size}`;
-            constantFunctions.set(key, name);
+            constantFunctions.set(expression, name);
             functions.push(
-                `fn ${name}(uv: vec2f) -> ${wgslType(expected)} {\n    return ${expression};\n}`,
+                `fn ${name}(uv: vec2f) -> vec4f {\n    return ${expression};\n}`,
             );
         }
         return name;
@@ -160,12 +173,12 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         read: typeof resolve,
     ): Record<string, string> {
         const args: Record<string, string> = {};
-        for (const [name, type] of Object.entries(def.inputs)) {
+        for (const [name, kind] of Object.entries(def.inputs)) {
             const value = node.inputs[name];
             if (value === undefined) throw new Error(`missing input "${name}"`);
             args[name] = def.warped?.includes(name)
-                ? resolveAsFunction(value, type)
-                : read(value, type);
+                ? resolveAsFunction(value)
+                : read(value, kind);
         }
         return args;
     }
@@ -176,7 +189,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         const { index, node, def, params, indices } = records.get(id)!;
         const args = argsOf(node, def, resolveInFunction);
         functions.push(
-            `fn f${index}(uv: vec2f) -> ${wgslType(def.output)} {\n    return ${def.emit(args, params, indices)};\n}`,
+            `fn f${index}(uv: vec2f) -> vec4f {\n    return ${emitRgba(def, args, params, indices)};\n}`,
         );
     }
 
@@ -185,7 +198,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         if (def === undefined) {
             throw new Error(`unknown video module "${node.kind}"`);
         }
-        if (types.has(node.id)) {
+        if (names.has(node.id)) {
             throw new Error(`duplicate node id "${node.id}"`);
         }
         try {
@@ -241,7 +254,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 source: node.source ?? 0,
             };
             records.set(node.id, { def, index, indices, node, params });
-            const text = `    let ${local}: ${wgslType(def.output)} = ${def.emit(args, params, indices)};`;
+            const text = `    let ${local}: vec4f = ${emitRgba(def, args, params, indices)};`;
             statements.push({
                 id: node.id,
                 reads: Object.values(node.inputs).flatMap((v) =>
@@ -260,7 +273,6 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                     bufferWrites.set(node.buffer, local);
                 }
             }
-            types.set(node.id, def.output);
             names.set(node.id, local);
         } catch (error) {
             const message =
@@ -272,10 +284,10 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         }
     });
 
-    const outputType = types.get(graph.output);
-    if (outputType !== 'color') {
-        throw new Error(`video output "${graph.output}" must be a color node`);
+    if (!names.has(graph.output)) {
+        throw new Error(`video output "${graph.output}" is not a node`);
     }
+    helpers.add(DISPLAY_HELPER);
 
     for (let buffer = 0; buffer < bufferCount; buffer++) {
         if (!bufferWrites.has(buffer)) {
@@ -286,7 +298,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     }
 
     const previewEntries = graph.previews.map((preview, k) => {
-        const expression = resolve(preview.value, preview.type);
+        const expression = resolve(preview.value, 'rgba');
         const needed = new Set<string>(
             preview.value.kind === 'node' ? [preview.value.id] : [],
         );
@@ -299,14 +311,12 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
             .filter((s) => needed.has(s.id))
             .map((s) => s.text)
             .join('\n');
-        const color =
-            preview.type === 'color' ? expression : `vec3f(${expression})`;
         return `
 @fragment
 fn preview_${k}(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
 ${body}
-    return vec4f(${color}, 1.0);
+    return video_display(${expression});
 }
 `;
     });
@@ -343,8 +353,8 @@ ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}:
 `;
     const result =
         bufferCount === 0
-            ? `vec4f(${names.get(graph.output)}, 1.0)`
-            : `FragOut(vec4f(${names.get(graph.output)}, 1.0), ${Array.from({ length: bufferCount }, (_, k) => `vec4f(${bufferWrites.get(k)}, 1.0)`).join(', ')})`;
+            ? `video_display(${names.get(graph.output)})`
+            : `FragOut(video_display(${names.get(graph.output)}), ${Array.from({ length: bufferCount }, (_, k) => bufferWrites.get(k)).join(', ')})`;
     const wgsl = `struct Uniforms {
     time: f32,
     resolution: vec2f,

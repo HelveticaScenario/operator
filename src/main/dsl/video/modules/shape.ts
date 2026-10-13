@@ -12,8 +12,8 @@ const SHAPE_EDGE = `fn shape_edge(d: f32, size: f32, softness: f32) -> f32 {
  * aspect-corrected, so circles stay round.
  */
 export const shape: VideoModuleDef = {
-    inputs: { x: 'field', y: 'field', size: 'field', softness: 'field' },
-    output: 'field',
+    inputs: { x: 'number', y: 'number', size: 'number', softness: 'number' },
+    output: 'gray',
     params: {
         shape: { values: ['circle', 'box', 'diamond'], default: 'circle' },
     },
@@ -42,13 +42,13 @@ export const shape: VideoModuleDef = {
  */
 export const polygon: VideoModuleDef = {
     inputs: {
-        x: 'field',
-        y: 'field',
-        sides: 'field',
-        size: 'field',
-        softness: 'field',
+        x: 'number',
+        y: 'number',
+        sides: 'number',
+        size: 'number',
+        softness: 'number',
     },
-    output: 'field',
+    output: 'gray',
     helpers: [
         SHAPE_EDGE,
         `fn polygon_distance(x: f32, y: f32, sides: f32) -> f32 {

@@ -1,4 +1,4 @@
-import type { VideoValueType } from '../../../../shared/video/videoGraph';
+import type { VideoInputKind } from '../../../../shared/video/videoGraph';
 
 export interface VideoParamSpec {
     values: readonly string[];
@@ -6,7 +6,7 @@ export interface VideoParamSpec {
 }
 
 export interface VideoModuleDef {
-    inputs: Record<string, VideoValueType>;
+    inputs: Record<string, VideoInputKind>;
     /**
      * Marks a node that reads (`feedbackRead`) or writes (`feedbackWrite`)
      * the feedback buffer named by its `buffer` field.
@@ -16,14 +16,19 @@ export interface VideoModuleDef {
      * Inputs evaluated at coordinates the module chooses rather than at the
      * pixel being drawn. `emit` receives such an input as the name of a
      * function from coordinates to the input's value, and calls it with the
-     * coordinates to sample: `${args.input}(uv + offset)`.
+     * coordinates to sample: `${args.input}(uv + offset)`. A warped input is
+     * always `rgba`.
      */
     warped?: readonly string[];
     /** Marks a node that reads the audio history row named by its `history` field. */
     history?: boolean;
     /** Marks a node that samples the media named by its `source` field. */
     source?: boolean;
-    output: VideoValueType;
+    /**
+     * What `emit` returns: an RGBA `vec4f`, or for `gray` an `f32` that is
+     * shown as an opaque gray of that level.
+     */
+    output: 'rgba' | 'gray';
     /** Enumerated options; none when absent. */
     params?: Record<string, VideoParamSpec>;
     /**

@@ -9,13 +9,13 @@ import type { VideoModuleDef } from './types';
  */
 export const feedbackRead: VideoModuleDef = {
     inputs: {
-        zoom: 'field',
-        rotate: 'field',
-        shiftX: 'field',
-        shiftY: 'field',
+        zoom: 'number',
+        rotate: 'number',
+        shiftX: 'number',
+        shiftY: 'number',
     },
     buffer: 'read',
-    output: 'color',
+    output: 'rgba',
     params: {
         edge: { values: ['clamp', 'repeat', 'mirror'], default: 'clamp' },
     },
@@ -35,13 +35,13 @@ export const feedbackRead: VideoModuleDef = {
 }`,
     ],
     emit: ({ zoom, rotate, shiftX, shiftY }, { edge }, { buffer }) =>
-        `textureSampleLevel(fb_${buffer}, fb_sampler, feedback_texcoord(feedback_${edge}(video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY})))), 0.0).rgb`,
+        `textureSampleLevel(fb_${buffer}, fb_sampler, feedback_texcoord(feedback_${edge}(video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY})))), 0.0)`,
 };
 
 /** Stores its input in the feedback buffer for the next frame to read. */
 export const feedbackWrite: VideoModuleDef = {
-    inputs: { input: 'color' },
+    inputs: { input: 'rgba' },
     buffer: 'write',
-    output: 'color',
+    output: 'rgba',
     emit: ({ input }) => input,
 };

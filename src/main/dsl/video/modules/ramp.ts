@@ -11,12 +11,12 @@ const IDENTITY = ['1.0', '0.0', '0.0', '0.0'];
  */
 export const ramp: VideoModuleDef = {
     inputs: {
-        zoom: 'field',
-        rotate: 'field',
-        shiftX: 'field',
-        shiftY: 'field',
+        zoom: 'number',
+        rotate: 'number',
+        shiftX: 'number',
+        shiftY: 'number',
     },
-    output: 'field',
+    output: 'gray',
     params: {
         axis: { values: ['h', 'v', 'd', 'r', 'a'], default: 'h' },
     },

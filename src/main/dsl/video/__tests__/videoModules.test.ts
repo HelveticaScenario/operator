@@ -5,29 +5,29 @@ describe('$v modules', () => {
     describe('math and keying modules', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
 
-        it('uses the field variant for fields and the color variant for colors', () => {
-            const fields = wgslOf(
-                `$v.out($v.colorize($v.mult($v.ramp(), 0.5), 0, 0));`,
-            );
-            expect(fields).toContain('let v1: f32 = v0 * 0.5;');
-            const colors = wgslOf(`
+        it('combines whole signals through one helper per operation', () => {
+            const wgsl = wgslOf(`
                 const c = $v.hsv($v.ramp());
-                $v.out($v.mult(c, $v.ramp('v')));
+                $v.out($v.add($v.mult(c, $v.ramp('v')), $v.mult($v.ramp(), 0.5)));
             `);
-            expect(colors).toMatch(/let v\d: vec3f = v\d \* v\d;/);
+            expect(wgsl.match(/fn video_mult\(/g)).toHaveLength(1);
+            expect(wgsl).toMatch(/let v\d: vec4f = video_mult\(v\d, v\d\);/);
+            expect(wgsl).toMatch(
+                /video_mult\(v\d, vec4f\(vec3f\(0\.5\), 1\.0\)\)/,
+            );
         });
 
-        it('promotes a field operand of a color operation to gray', () => {
+        it('gives a number to a signal operand as an opaque gray', () => {
             const wgsl = wgslOf(`
                 $v.out($v.add($v.colorize(1, 0, 0), 0.25));
             `);
-            expect(wgsl).toContain('vec3f(0.25, 0.25, 0.25)');
+            expect(wgsl).toContain('vec4f(vec3f(0.25), 1.0)');
         });
 
         it('declares each module helper once however often the module is used', () => {
             const wgsl = wgslOf(`
-                const a = $v.shape($v.ramp(), $v.ramp('v'), 0.2);
-                const b = $v.shape($v.ramp(), $v.ramp('v'), 0.1, 0, { shape: 'box' });
+                const a = $v.shape(0.2);
+                const b = $v.shape(0.1, 0, { shape: 'box' });
                 $v.out($v.key($v.hsv(a), $v.procAmp($v.hsv(b)), $v.comparator(a)));
             `);
             expect(wgsl.match(/fn shape_edge/g)).toHaveLength(1);
@@ -35,19 +35,22 @@ describe('$v modules', () => {
             expect(wgsl).toContain('fn procamp');
         });
 
-        it('rejects a color where a field is required', () => {
-            expect(() => exec(`$v.comparator($v.colorize(0, 0, 0));`)).toThrow(
-                /\$v\.comparator: input must be a number or a video field/,
+        it('reads the brightness of a signal given where a number is wanted', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.mix($v.ramp(), $v.ramp('v'), $v.hsv(0.3)));`,
             );
-            expect(() =>
-                exec(`$v.mix($v.ramp(), $v.ramp(), $v.colorize(0, 0, 0));`),
-            ).toThrow(/\$v\.mix: amount must be a number or a video field/);
+            expect(wgsl).toMatch(
+                /mix\(v\d, v\d, clamp\(video_luma\(v\d\), 0\.0, 1\.0\)\)/,
+            );
+            expect(() => exec(`$v.comparator('x');`)).toThrow(
+                /\$v\.comparator: input must be a number, a video signal or an audio signal/,
+            );
         });
 
         it('rejects an invalid shape option', () => {
             expect(() =>
                 exec(
-                    `$v.out($v.hsv($v.shape(0.5, 0.5, 0.2, 0, { shape: 'star' })));`,
+                    `$v.out($v.hsv($v.shape(0.2, 0, { shape: 'star', x: 0.5, y: 0.5 })));`,
                 ),
             ).toThrow(/param "shape" must be one of circle, box, diamond/);
         });
@@ -58,7 +61,7 @@ describe('$v modules', () => {
 
         it('compiles an untransformed ramp to the bare frame coordinate', () => {
             const wgsl = wgslOf(`$v.out($v.colorize($v.ramp(), 0, 0));`);
-            expect(wgsl).toContain('let v0: f32 = uv.x;');
+            expect(wgsl).toContain('let v0: vec4f = vec4f(vec3f(uv.x), 1.0);');
         });
 
         it('routes a transformed ramp through video_transform', () => {
@@ -104,16 +107,18 @@ describe('$v modules', () => {
                     0,
                 ));
             `);
-            expect(wgsl).toContain('fract(');
-            expect(wgsl).toMatch(/max\(v\d, v\d\)/);
-            expect(wgsl).toMatch(/min\(v\d, v\d\)/);
+            expect(wgsl).toContain('return vec4f(fract(x * gain), c.a);');
+            expect(wgsl).toMatch(/video_max\(v\d, v\d\)/);
+            expect(wgsl).toMatch(/video_min\(v\d, v\d\)/);
         });
 
-        it('applies min and max per channel to colors', () => {
+        it('shapes each channel of a color and keeps its alpha', () => {
             const wgsl = wgslOf(
-                `$v.out($v.max($v.hsv($v.ramp()), $v.hsv($v.ramp('v'))));`,
+                `$v.hsv($v.ramp()).$.posterize(3).$.comparator(0.4).out();`,
             );
-            expect(wgsl).toMatch(/let v\d: vec3f = max\(v\d, v\d\);/);
+            expect(wgsl).toMatch(/video_posterize\(v\d, 3\.0\)/);
+            expect(wgsl).toMatch(/video_comparator\(v\d, 0\.4, 0\.0\)/);
+            expect(wgsl).toContain('return vec4f(clamp((x - vec3f(threshold))');
         });
 
         it('rejects an unknown ramp axis', () => {
@@ -124,28 +129,29 @@ describe('$v modules', () => {
     });
 
     describe('noise', () => {
-        it('compiles to simplex noise of its three coordinates by default', () => {
-            const { video } = exec(`
-                $v.out($v.hsv($v.noise($v.mult($v.ramp(), 4), $v.ramp('v'), $v.time)));
-            `);
+        it('compiles to simplex noise of the pixel position by default', () => {
+            const { video } = exec(`$v.out($v.noise(4, $v.time));`);
             expect(video!.wgsl).toContain('fn noise_simplex(');
             expect(video!.wgsl).not.toContain('fn noise_value(');
             expect(video!.wgsl).toMatch(
-                /noise_simplex\(vec3f\(v\d, v\d, u\.time\)\)/,
+                /noise_simplex\(vec3f\(vec2f\(video_luma\(v\d\), video_luma\(v\d\)\) \* 4\.0, u\.time\)\)/,
             );
         });
 
-        it('takes a constant z by default', () => {
-            const { video } = exec(`$v.out($v.hsv($v.noise(0.5, 0.5)));`);
+        it('reads given coordinates times the scale, with z 0 by default', () => {
+            const { video } = exec(
+                `$v.out($v.hsv($v.noise(2, 0, { x: 0.5, y: 0.25 })));`,
+            );
             expect(video!.wgsl).toContain(
-                'noise_simplex(vec3f(0.5, 0.5, 0.0))',
+                'noise_simplex(vec3f(vec2f(0.5, 0.25) * 2.0, 0.0))',
             );
         });
 
         it('compiles each type to its own algorithm and only the helpers it needs', () => {
             const wgslOf = (type: string) =>
-                exec(`$v.out($v.noise(0.5, 0.5, 0, { type: '${type}' }));`)
-                    .video!.wgsl;
+                exec(
+                    `$v.out($v.noise(1, 0, { type: '${type}', x: 0.5, y: 0.5 }));`,
+                ).video!.wgsl;
             expect(wgslOf('value')).toContain('noise_value(vec3f(');
             expect(wgslOf('value')).not.toContain('fn noise_grad(');
             expect(wgslOf('perlin')).toContain('noise_perlin(vec3f(');
@@ -156,15 +162,15 @@ describe('$v modules', () => {
 
         it('rejects an unknown type', () => {
             expect(() =>
-                exec(`$v.out($v.noise(0, 0, 0, { type: 'pink' }));`),
+                exec(`$v.out($v.noise(1, 0, { type: 'pink', x: 0, y: 0 }));`),
             ).toThrow(
                 /param "type" must be one of simplex, perlin, value, fbm, ridged/,
             );
         });
 
-        it('rejects a color coordinate', () => {
-            expect(() => exec(`$v.noise($v.hsv(0), 0);`)).toThrow(
-                /\$v\.noise: x must be a number or a video field/,
+        it('rejects a coordinate that is not a signal or a number', () => {
+            expect(() => exec(`$v.noise(1, 0, { x: 'left' });`)).toThrow(
+                /\$v\.noise: x must be a number, a video signal or an audio signal/,
             );
         });
     });
@@ -174,19 +180,19 @@ describe('$v modules', () => {
 
         it('shares the point hash between noise and voronoi', () => {
             const wgsl = wgslOf(`
-                $v.out($v.hsv($v.add($v.noise($v.ramp(), $v.ramp('v')), $v.voronoi($v.ramp(), $v.ramp('v'), $v.time))));
+                $v.out($v.hsv($v.add($v.noise(1), $v.voronoi(3, $v.time))));
             `);
             expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn voronoi_distance(');
             expect(wgsl).toMatch(
-                /voronoi_distance\(vec2f\(v\d, v\d\), u\.time\)/,
+                /voronoi_distance\(vec2f\(video_luma\(v\d\), video_luma\(v\d\)\) \* 3\.0, u\.time\)/,
             );
         });
 
         it('shares the edge function between shape and polygon', () => {
             const wgsl = wgslOf(`
-                const a = $v.shape($v.ramp(), $v.ramp('v'), 0.2);
-                const b = $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.2);
+                const a = $v.shape(0.2);
+                const b = $v.polygon(5, 0.2);
                 $v.out($v.hsv($v.max(a, b)));
             `);
             expect(wgsl.match(/fn shape_edge\(/g)).toHaveLength(1);
@@ -200,22 +206,18 @@ describe('$v modules', () => {
             expect(wgsl.match(/fn hsv_to_rgb\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn rgb_to_hsv(');
             expect(wgsl).toContain('hue_shift(');
-            expect(wgsl).toMatch(/\* 2\.0 \+ vec3f\(0\.5\)/);
+            expect(wgsl).toMatch(/video_contrast\(v\d, 2\.0\)/);
         });
 
-        it('treats a field or number as a gray color', () => {
-            const gray = `
-                const r = $v.ramp();
-                const g = $v.colorize(r, r, r);
-            `;
-            expect(wgslOf(`$v.out($v.hueShift($v.ramp(), 0.3));`)).toBe(
-                wgslOf(`${gray} $v.out($v.hueShift(g, 0.3));`),
-            );
-            expect(wgslOf(`$v.out($v.contrast($v.ramp(), 2));`)).toBe(
-                wgslOf(`${gray} $v.out($v.contrast(g, 2));`),
+        it('adjusts a gray signal or a number like any color', () => {
+            expect(() =>
+                exec(`$v.out($v.hueShift($v.ramp(), 0.3));`),
+            ).not.toThrow();
+            expect(wgslOf(`$v.out($v.contrast(0.4, 2));`)).toContain(
+                'video_contrast(vec4f(vec3f(0.4), 1.0), 2.0)',
             );
             expect(() => exec(`$v.contrast('x');`)).toThrow(
-                /\$v\.contrast: input must be a number or a video field/,
+                /\$v\.contrast: input must be a number, a video signal or an audio signal/,
             );
         });
     });
@@ -225,32 +227,20 @@ describe('$v modules', () => {
 
         it('blur reads its whole input at sixteen nearby coordinates', () => {
             const wgsl = wgslOf(`
-                $v.out($v.hsv($v.blur($v.noise($v.ramp(), $v.ramp('v')), 0.02)));
+                $v.out($v.hsv($v.blur($v.noise(1), 0.02)));
             `);
-            const returned = wgsl.match(/let v\d+: f32 = \(f\d+\(uv/);
-            expect(returned).not.toBeNull();
+            expect(wgsl).toMatch(/let v\d+: vec4f = \(f\d+\(uv/);
             expect(wgsl.match(/f\d+\(uv \+ blur_offset\(/g)).toHaveLength(16);
             expect(wgsl).toContain('fn blur_offset(');
         });
 
-        it('blur keeps a color a color', () => {
-            const wgsl = wgslOf(`$v.hsv($v.ramp()).$.blur(0.05).out();`);
-            expect(wgsl).toMatch(/let v\d+: vec3f = \(f\d+\(uv/);
-        });
-
-        it('edges is a field whatever it reads', () => {
-            const fromField = wgslOf(`
-                $v.out($v.hsv($v.edges($v.noise($v.ramp(), $v.ramp('v')), 3)));
+        it('edges reads the brightness of its input and gives a gray', () => {
+            const wgsl = wgslOf(`
+                $v.out($v.hsv($v.edges($v.hsv($v.ramp()), 3)));
             `);
-            expect(fromField).toMatch(
-                /let v\d+: f32 = clamp\(sobel_magnitude\(/,
-            );
-            const fromColor = wgslOf(`
-                $v.out($v.hsv($v.edges($v.hsv($v.ramp()))));
-            `);
-            expect(fromColor).toContain('dot(f');
-            expect(fromColor).toMatch(
-                /let v\d+: f32 = clamp\(sobel_magnitude\(/,
+            expect(wgsl).toContain('video_luma(f');
+            expect(wgsl).toMatch(
+                /let v\d+: vec4f = vec4f\(vec3f\(clamp\(sobel_magnitude\(/,
             );
         });
 
@@ -261,17 +251,17 @@ describe('$v modules', () => {
 
         it('chains', () => {
             const wgsl = wgslOf(`
-                $v.noise($v.ramp(), $v.ramp('v')).$.blur(0.01).$.edges(2).$.hsv().out();
+                $v.noise(1).$.blur(0.01).$.edges(2).$.hsv().out();
             `);
             expect(wgsl).toContain('sobel_magnitude(');
         });
 
         it('rejects a number or a missing signal', () => {
             expect(() => exec(`$v.blur(0.5);`)).toThrow(
-                /\$v\.blur: input must be a video field or color/,
+                /\$v\.blur: input must be a video signal/,
             );
             expect(() => exec(`$v.edges(0.5);`)).toThrow(
-                /\$v\.edges: input must be a video field or color/,
+                /\$v\.edges: input must be a video signal/,
             );
         });
     });
@@ -283,7 +273,8 @@ describe('$v modules', () => {
             const wgsl = wgslOf(
                 `$v.out($v.scanlines($v.hsv($v.ramp()), 100, 0.5));`,
             );
-            expect(wgsl).toMatch(/cos\(6\.28318530718 \* uv\.y \* 100\.0\)/);
+            expect(wgsl).toContain('cos(6.28318530718 * uv.y * count)');
+            expect(wgsl).toMatch(/video_scanlines\(v\d, uv, 100\.0, 0\.5\)/);
         });
 
         it('vignette darkens by distance from the center', () => {
@@ -296,7 +287,7 @@ describe('$v modules', () => {
 
         it('grain is redrawn with the clock and shares the point hash', () => {
             const wgsl = wgslOf(`
-                $v.out($v.grain($v.hsv($v.noise($v.ramp(), $v.ramp('v'))), 0.2));
+                $v.out($v.grain($v.hsv($v.noise(1)), 0.2));
             `);
             expect(wgsl).toContain('grain_value(uv, u.time)');
             expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
@@ -310,16 +301,11 @@ describe('$v modules', () => {
             expect(wgsl).toContain('grain_value(');
         });
 
-        it('treats a field as a gray color', () => {
-            const gray = `
-                const r = $v.ramp();
-                const g = $v.colorize(r, r, r);
-            `;
-            for (const fn of ['scanlines', 'vignette', 'grain']) {
-                expect(wgslOf(`$v.out($v.${fn}($v.ramp()));`)).toBe(
-                    wgslOf(`${gray} $v.out($v.${fn}(g));`),
-                );
-            }
+        it('darkens the color and keeps the alpha', () => {
+            const wgsl = wgslOf(`$v.out($v.vignette($v.image('a.png')));`);
+            expect(wgsl).toContain(
+                'return vec4f(c.rgb * (1.0 - amount), c.a);',
+            );
         });
     });
 
@@ -328,27 +314,25 @@ describe('$v modules', () => {
 
         it('adds a blurred copy back on top of the input', () => {
             const bloomed = wgslOf(`
-                $v.out($v.bloom($v.hsv(0.1, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2)), 0.05, 2));
+                $v.out($v.bloom($v.hsv(0.1, 1, $v.shape(0.2)), 0.05, 2));
             `);
             const long = wgslOf(`
-                const c = $v.hsv(0.1, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2));
+                const c = $v.hsv(0.1, 1, $v.shape(0.2));
                 $v.out($v.add(c, $v.mult($v.blur(c, 0.05), 2)));
             `);
             expect(bloomed).toBe(long);
         });
 
-        it('keeps a field a field', () => {
+        it('adds the glow with the add helper', () => {
             const wgsl = wgslOf(`
                 $v.ramp().$.bloom(0.02).$.hsv().out();
             `);
-            expect(wgsl).toMatch(
-                /let v\d+: f32 = clamp\(v\d+ \+ v\d+, 0\.0, 1\.0\)/,
-            );
+            expect(wgsl).toMatch(/let v\d+: vec4f = video_add\(v\d+, v\d+\);/);
         });
 
         it('rejects a number', () => {
             expect(() => exec(`$v.bloom(0.5);`)).toThrow(
-                /\$v\.bloom: input must be a video field or color/,
+                /\$v\.bloom: input must be a video signal/,
             );
         });
     });

@@ -3,15 +3,22 @@ import { KALEID_HELPER } from './warp';
 
 /*
  * The modulators of Hydra, which read the whole input at coordinates that
- * another signal moves. `mr`, `mg` and `mb` are the red, green and blue of the
- * modulator, or its one value for a field.
+ * another signal moves. `m` is the modulator, read whole: its red, green and
+ * blue channels do the moving.
  */
 
-/** Scales about the center by `offset + multiple * channel`, a factor per axis. */
-export const modulateScale = coordinateModule(
-    ['mr', 'mg', 'multiple', 'offset'],
-    ({ mr, mg, multiple, offset }) =>
-        `video_mod_scale(uv, vec2f(${mr}, ${mg}), ${multiple}, ${offset})`,
+/** A modulator module: `numbers` are its further inputs, and `m` the modulator. */
+const modulator = (
+    numbers: readonly string[],
+    coordinates: (args: Record<string, string>) => string,
+    helpers: readonly string[] = [],
+) => coordinateModule(numbers, coordinates, helpers, ['m']);
+
+/** Scales about the center by `offset + multiple * channel`, red across and green up. */
+export const modulateScale = modulator(
+    ['multiple', 'offset'],
+    ({ m, multiple, offset }) =>
+        `video_mod_scale(uv, ${m}.rg, ${multiple}, ${offset})`,
     [
         `fn video_mod_scale(uv: vec2f, c: vec2f, multiple: f32, offset: f32) -> vec2f {
     let factor = max(vec2f(offset) + c * multiple, vec2f(0.00001));
@@ -21,18 +28,18 @@ export const modulateScale = coordinateModule(
 );
 
 /** Turns about the center by `offset + multiple * red`, in turns. */
-export const modulateRotate = coordinateModule(
-    ['mr', 'multiple', 'offset'],
-    ({ mr, multiple, offset }) =>
-        `video_transform(uv, 1.0, ${offset} + ${mr} * ${multiple}, vec2f(0.0))`,
+export const modulateRotate = modulator(
+    ['multiple', 'offset'],
+    ({ m, multiple, offset }) =>
+        `video_transform(uv, 1.0, ${offset} + ${m}.r * ${multiple}, vec2f(0.0))`,
     [TRANSFORM_HELPER],
 );
 
-/** Holds the input constant over a grid of `offset + multiple * channel` cells per axis. */
-export const modulatePixelate = coordinateModule(
-    ['mr', 'mg', 'multiple', 'offset'],
-    ({ mr, mg, multiple, offset }) =>
-        `video_mod_pixelate(uv, vec2f(${offset} + ${mr} * ${multiple}, ${offset} + ${mg} * ${multiple}))`,
+/** Holds the input constant over a grid of `offset + multiple * channel` cells, red across and green up. */
+export const modulatePixelate = modulator(
+    ['multiple', 'offset'],
+    ({ m, multiple, offset }) =>
+        `video_mod_pixelate(uv, vec2f(${offset}) + ${m}.rg * ${multiple})`,
     [
         `fn video_mod_pixelate(uv: vec2f, cells: vec2f) -> vec2f {
     let grid = max(cells, vec2f(1.0));
@@ -42,24 +49,28 @@ export const modulatePixelate = coordinateModule(
 );
 
 /** Mirrors into `sides` wedges, with the distance from the center pushed out by the red channel. */
-export const modulateKaleid = coordinateModule(
-    ['mr', 'sides'],
-    ({ mr, sides }) => `video_kaleid(uv, ${sides}, ${mr})`,
+export const modulateKaleid = modulator(
+    ['sides'],
+    ({ m, sides }) => `video_kaleid(uv, ${sides}, ${m}.r)`,
     [KALEID_HELPER],
 );
 
 /** Pushes by the differences between the channels, `amount` pixels for a difference of full scale. */
-export const modulateHue = coordinateModule(
-    ['mr', 'mg', 'mb', 'amount'],
-    ({ mr, mg, mb, amount }) =>
-        `uv + vec2f(${mg} - ${mr}, ${mb} - ${mg}) * ${amount} / u.resolution`,
+export const modulateHue = modulator(
+    ['amount'],
+    ({ m, amount }) => `video_mod_hue(uv, ${m}, ${amount})`,
+    [
+        `fn video_mod_hue(uv: vec2f, c: vec4f, amount: f32) -> vec2f {
+    return uv + vec2f(c.g - c.r, c.b - c.g) * amount / u.resolution;
+}`,
+    ],
 );
 
-/** Tiles `x` by `y` times, with alternate rows and columns shifted by `offset` times the channel. */
-export const modulateRepeat = coordinateModule(
-    ['mr', 'mg', 'repeatX', 'repeatY', 'offsetX', 'offsetY'],
-    ({ mr, mg, repeatX, repeatY, offsetX, offsetY }) =>
-        `video_mod_repeat(uv, vec2f(${repeatX}, ${repeatY}), vec2f(${mr}, ${mg}), vec2f(${offsetX}, ${offsetY}))`,
+/** Tiles `x` by `y` times, with alternate rows and columns shifted by `offset` times the red and green channels. */
+export const modulateRepeat = modulator(
+    ['repeatX', 'repeatY', 'offsetX', 'offsetY'],
+    ({ m, repeatX, repeatY, offsetX, offsetY }) =>
+        `video_mod_repeat(uv, vec2f(${repeatX}, ${repeatY}), ${m}.rg, vec2f(${offsetX}, ${offsetY}))`,
     [
         `fn video_mod_repeat(uv: vec2f, reps: vec2f, c: vec2f, offset: vec2f) -> vec2f {
     var st = uv * reps;
@@ -71,10 +82,10 @@ export const modulateRepeat = coordinateModule(
 );
 
 /** Tiles across, shifting alternate columns up by `offset` times the red channel. */
-export const modulateRepeatX = coordinateModule(
-    ['mr', 'reps', 'offset'],
-    ({ mr, reps, offset }) =>
-        `video_mod_repeat_x(uv, ${reps}, ${mr}, ${offset})`,
+export const modulateRepeatX = modulator(
+    ['reps', 'offset'],
+    ({ m, reps, offset }) =>
+        `video_mod_repeat_x(uv, ${reps}, ${m}.r, ${offset})`,
     [
         `fn video_mod_repeat_x(uv: vec2f, reps: f32, c: f32, offset: f32) -> vec2f {
     var st = uv * vec2f(reps, 1.0);
@@ -85,10 +96,10 @@ export const modulateRepeatX = coordinateModule(
 );
 
 /** Tiles up, shifting alternate rows right by `offset` times the red channel. */
-export const modulateRepeatY = coordinateModule(
-    ['mr', 'reps', 'offset'],
-    ({ mr, reps, offset }) =>
-        `video_mod_repeat_y(uv, ${reps}, ${mr}, ${offset})`,
+export const modulateRepeatY = modulator(
+    ['reps', 'offset'],
+    ({ m, reps, offset }) =>
+        `video_mod_repeat_y(uv, ${reps}, ${m}.r, ${offset})`,
     [
         `fn video_mod_repeat_y(uv: vec2f, reps: f32, c: f32, offset: f32) -> vec2f {
     var st = uv * vec2f(1.0, reps);
@@ -99,15 +110,15 @@ export const modulateRepeatY = coordinateModule(
 );
 
 /** Scrolls across by `scroll` times the red channel, plus `speed` of the frame per second, wrapping. */
-export const modulateScrollX = coordinateModule(
-    ['mr', 'scroll', 'speed'],
-    ({ mr, scroll, speed }) =>
-        `fract(uv + vec2f(${mr} * ${scroll} + u.time * ${speed}, 0.0))`,
+export const modulateScrollX = modulator(
+    ['scroll', 'speed'],
+    ({ m, scroll, speed }) =>
+        `fract(uv + vec2f(${m}.r * ${scroll} + u.time * ${speed}, 0.0))`,
 );
 
 /** Scrolls up by `scroll` times the red channel, plus `speed` of the frame per second, wrapping. */
-export const modulateScrollY = coordinateModule(
-    ['mr', 'scroll', 'speed'],
-    ({ mr, scroll, speed }) =>
-        `fract(uv + vec2f(0.0, ${mr} * ${scroll} + u.time * ${speed}))`,
+export const modulateScrollY = modulator(
+    ['scroll', 'speed'],
+    ({ m, scroll, speed }) =>
+        `fract(uv + vec2f(0.0, ${m}.r * ${scroll} + u.time * ${speed}))`,
 );

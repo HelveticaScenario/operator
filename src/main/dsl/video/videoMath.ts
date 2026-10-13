@@ -1,107 +1,89 @@
-import { VideoOutput } from './VideoOutput';
-import {
-    describe,
-    type VideoCore,
-    type VideoSource,
-} from './videoBuilderTypes';
+import type { VideoOutput } from './VideoOutput';
+import type { VideoCore, VideoSource } from './videoBuilderTypes';
 
-/** The `$v` functions that combine and shape signals. */
+/** The `$v` functions that combine, shape and composite signals. */
 export function mathMethods(core: VideoCore) {
+    /** A node of module `kind` whose inputs are `values`, named by their keys. */
+    const node = (kind: string, values: Record<string, unknown>) =>
+        core.addNode(kind, core.values(`$v.${kind}`, values));
+
     return {
-        /** Sum, clipped to 0..1. Colors add per channel. */
+        /** Sum, clipped to 0..1. */
         add: (a: VideoSource, b: VideoSource): VideoOutput =>
-            core.arith('$v.add', 'add', { a, b }),
+            node('add', { a, b }),
 
-        /** Product. Colors multiply per channel. */
+        /** Product. */
         mult: (a: VideoSource, b: VideoSource): VideoOutput =>
-            core.arith('$v.mult', 'mult', { a, b }),
+            node('mult', { a, b }),
 
-        /** Absolute difference. Colors differ per channel. */
+        /** Absolute difference. */
         diff: (a: VideoSource, b: VideoSource): VideoOutput =>
-            core.arith('$v.diff', 'diff', { a, b }),
+            node('diff', { a, b }),
 
-        /** The larger of two values; colors take it per channel. */
+        /** The larger of each channel. */
         max: (a: VideoSource, b: VideoSource): VideoOutput =>
-            core.arith('$v.max', 'max', { a, b }),
+            node('max', { a, b }),
 
-        /** The smaller of two values; colors take it per channel. */
+        /** The smaller of each channel. */
         min: (a: VideoSource, b: VideoSource): VideoOutput =>
-            core.arith('$v.min', 'min', { a, b }),
+            node('min', { a, b }),
 
-        /** Complement: 1 - input. */
-        invert: (input: VideoSource): VideoOutput =>
-            core.arith('$v.invert', 'invert', { input }),
+        /** Complement: 1 minus each of red, green and blue. */
+        invert: (input: VideoSource): VideoOutput => node('invert', { input }),
 
-        /** Maps a field's 0 to 1 onto `min` to `max`. */
+        /** Maps each channel's 0 to 1 onto `min` to `max`. */
         range: (
             input: VideoSource,
             low: VideoSource = 0,
             high: VideoSource = 1,
-        ): VideoOutput => {
-            if (!(input instanceof VideoOutput) || input.type !== 'field') {
-                throw new Error(
-                    `$v.range: input must be a video field, got ${describe(input)}`,
-                );
-            }
-            return core.addNode('range', 'field', {
-                input: input.value,
-                ...core.fields('$v.range', { max: high, min: low }),
-            });
-        },
+        ): VideoOutput => node('range', { input, lo: low, hi: high }),
 
         /** Crossfade from `a` (amount 0) to `b` (amount 1). */
         mix: (
             a: VideoSource,
             b: VideoSource,
             amount: VideoSource = 0.5,
-        ): VideoOutput => core.arith('$v.mix', 'mix', { a, b }, { amount }),
+        ): VideoOutput => node('mix', { a, b, amount }),
 
-        /** Threshold: 0 below `threshold`, 1 above, with a ramp `softness` wide. */
+        /** Threshold per channel: 0 below `threshold`, 1 above, with a ramp `softness` wide. */
         comparator: (
             input: VideoSource,
             threshold: VideoSource = 0.5,
             softness: VideoSource = 0,
-        ): VideoOutput =>
-            core.addNode(
-                'comparator',
-                'field',
-                core.fields('$v.comparator', { input, threshold, softness }),
-            ),
+        ): VideoOutput => node('comparator', { input, threshold, softness }),
 
         /** Shows `fg` where `mask` is 1 and `bg` where it is 0. */
         key: (
             fg: VideoSource,
             bg: VideoSource,
             mask: VideoSource,
-        ): VideoOutput =>
-            core.addNode('key', 'color', {
-                fg: core.toColor('$v.key', 'fg', fg).value,
-                bg: core.toColor('$v.key', 'bg', bg).value,
-                mask: core.asField('$v.key', 'mask', mask),
-            }),
+        ): VideoOutput => node('key', { fg, bg, mask }),
 
-        /** Quantizes to `levels` values between 0 and 1. */
+        /** Lays `top` over `base` by the alpha of `top`. */
+        layer: (base: VideoSource, top: VideoSource): VideoOutput =>
+            node('layer', { a: base, b: top }),
+
+        /** `input` seen through `mask`: its color and alpha scaled by the mask's brightness. */
+        mask: (input: VideoSource, mask: VideoSource): VideoOutput =>
+            node('mask', { input, mask }),
+
+        /** Keys `input` by its own brightness, giving it an alpha. */
+        luma: (
+            input: VideoSource,
+            threshold: VideoSource = 0.5,
+            tolerance: VideoSource = 0.1,
+        ): VideoOutput => node('luma', { input, threshold, tolerance }),
+
+        /** Quantizes each channel to `levels` values between 0 and 1. */
         posterize: (input: VideoSource, levels: VideoSource = 4): VideoOutput =>
-            core.addNode(
-                'posterize',
-                'field',
-                core.fields('$v.posterize', { input, levels }),
-            ),
+            node('posterize', { input, levels }),
 
-        /** Multiplies by `gain`, then keeps the fractional part. */
+        /** Multiplies each channel by `gain`, then keeps the fractional part. */
         wrap: (input: VideoSource, gain: VideoSource = 1): VideoOutput =>
-            core.addNode(
-                'wrap',
-                'field',
-                core.fields('$v.wrap', { input, gain }),
-            ),
+            node('wrap', { input, gain }),
 
-        /** Multiplies by `gain`, then reflects whatever passes 1 back down. */
+        /** Multiplies each channel by `gain`, then reflects whatever passes 1 back down. */
         fold: (input: VideoSource, gain: VideoSource = 1): VideoOutput =>
-            core.addNode(
-                'fold',
-                'field',
-                core.fields('$v.fold', { input, gain }),
-            ),
+            node('fold', { input, gain }),
     };
 }

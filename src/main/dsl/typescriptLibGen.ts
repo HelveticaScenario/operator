@@ -1799,56 +1799,51 @@ declare const $table: {
 };
 
 /**
- * A video signal that varies across the frame, in the range 0..1. Fields come
- * from \`$v.ramp\`, \`$v.osc\` and \`$v.time\`; \`$v.colorize\` combines three
- * into a {@link VideoColor}.
+ * A video signal: a color with an alpha at every pixel, each channel in the
+ * range 0..1. Generators such as \`$v.osc\`, \`$v.noise\` and \`$v.shape\`
+ * make gray signals; \`$v.hsv\`, \`$v.colorize\`, \`$v.image\` and others
+ * make colors. Display one with \`$v.out\`. Where a module wants a number,
+ * a signal gives its brightness.
  */
-interface VideoField {
-    readonly __videoField: true;
-${generateVideoChainMembers('field')}
+interface VideoSignal {
+    readonly __videoSignal: true;
+    /** The red channel as a gray signal. */
+    readonly r: VideoSignal;
+    /** The green channel as a gray signal. */
+    readonly g: VideoSignal;
+    /** The blue channel as a gray signal. */
+    readonly b: VideoSignal;
+    /** The alpha as a gray signal. */
+    readonly a: VideoSignal;
+${generateVideoChainMembers()}
 }
 
 /**
- * An RGB video signal from \`$v.colorize\`, \`$v.hsv\`, \`$v.image\` and others;
- * display it with \`$v.out\`. Wherever a color is wanted, a {@link VideoField}
- * works too and is treated as a black and white color.
+ * A video file's picture from \`$v.video\`: a {@link VideoSignal} that also
+ * has the file's sound as \`audio\`, an audio signal. Chaining from it, such
+ * as \`.$.hsv()\`, gives a plain {@link VideoSignal}; \`out\` and
+ * \`preview\` return the file itself.
  */
-interface VideoColor {
-    readonly __videoColor: true;
-    /** The red channel as a field. */
-    readonly r: VideoField;
-    /** The green channel as a field. */
-    readonly g: VideoField;
-    /** The blue channel as a field. */
-    readonly b: VideoField;
-${generateVideoChainMembers('color')}
-}
-
-/**
- * A video file's picture from \`$v.video\`: a {@link VideoColor} that also has
- * the file's sound as \`audio\`, an audio signal. Chaining from it, such as
- * \`.$.hsv()\`, gives a plain {@link VideoColor}; \`out\` and \`preview\` return
- * the file itself.
- */
-interface VideoFile extends VideoColor {
+interface VideoFile extends VideoSignal {
     /** The sound of the file, playing at its speed between its loop points. */
     readonly audio: Collection;
 }
 
 /**
- * A constant, a {@link VideoField}, or an audio signal whose live value drives
+ * A constant, a {@link VideoSignal}, or an audio signal whose live value drives
  * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any module output
- * such as an LFO or envelope, with several channels summed to one. A pattern from \`$p(...)\`,
- * \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays through a \`$cycle\`
- * and its values are used as they are, so \`$p('0 0.5 1')\` steps from 0 to 1.
+ * such as an LFO or envelope, with several channels summed to one. A pattern
+ * from \`$p(...)\`, \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays
+ * through a \`$cycle\` and its values are used as they are, so
+ * \`$p('0 0.5 1')\` steps from 0 to 1.
  */
-type VideoValue = number | VideoField | ModuleOutput | Collection | CollectionWithRange | PatternSource;
+type VideoValue = number | VideoSignal | ModuleOutput | Collection | CollectionWithRange | PatternSource;
 
 ${generateVideoChainInterfaces()}
 
 /**
- * A frame store from \`$v.buffer\`: \`write\` a color into it, and \`read\` what
- * it held on the previous frame.
+ * A frame store from \`$v.buffer\`: \`write\` a signal into it, and \`read\`
+ * what it held on the previous frame.
  */
 interface VideoBuffer {
     /**
@@ -1861,17 +1856,10 @@ interface VideoBuffer {
         shiftX?: VideoValue;
         shiftY?: VideoValue;
         edge?: 'clamp' | 'repeat' | 'mirror';
-    }): VideoColor;
-    /** Stores a color for the next frame to read, and returns it. */
-    write(color: VideoSignal): VideoColor;
+    }): VideoSignal;
+    /** Stores a signal for the next frame to read, and returns it. */
+    write(signal: VideoSignal): VideoSignal;
 }
-
-/**
- * A constant, a {@link VideoField} or a {@link VideoColor}. Math modules work
- * on colors when any operand is a color; a field or number operand is then
- * treated as that gray level.
- */
-type VideoSignal = VideoValue | VideoColor;
 
 ${generateVideoNamespace()}
 `;

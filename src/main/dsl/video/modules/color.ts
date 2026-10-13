@@ -1,3 +1,4 @@
+import { LUMA_HELPER } from './rgba';
 import type { VideoModuleDef } from './types';
 
 const HSV_TO_RGB = `fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
@@ -6,51 +7,38 @@ const HSV_TO_RGB = `fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
     return clamp(v, 0.0, 1.0) * mix(vec3f(1.0), rgb, clamp(s, 0.0, 1.0));
 }`;
 
-/** Color from hue (wraps every 1.0), saturation and value (both clipped to 0..1). */
+/** An opaque color from hue (wraps every 1.0), saturation and value (both clipped to 0..1). */
 export const hsv: VideoModuleDef = {
-    inputs: { h: 'field', s: 'field', v: 'field' },
-    output: 'color',
+    inputs: { h: 'number', s: 'number', v: 'number' },
+    output: 'rgba',
     helpers: [HSV_TO_RGB],
-    emit: ({ h, s, v }) => `hsv_to_rgb(${h}, ${s}, ${v})`,
+    emit: ({ h, s, v }) => `vec4f(hsv_to_rgb(${h}, ${s}, ${v}), 1.0)`,
 };
 
-/** Saturation, then gain and bias, clipped to the displayable range. */
+/** Saturation, then gain and bias, clipped to the displayable range; the alpha is kept. */
 export const procAmp: VideoModuleDef = {
     inputs: {
-        input: 'color',
-        gain: 'field',
-        bias: 'field',
-        saturation: 'field',
+        input: 'rgba',
+        gain: 'number',
+        bias: 'number',
+        saturation: 'number',
     },
-    output: 'color',
+    output: 'rgba',
     helpers: [
-        `fn procamp(c: vec3f, gain: f32, bias: f32, saturation: f32) -> vec3f {
-    let luma = vec3f(dot(c, vec3f(0.299, 0.587, 0.114)));
-    let saturated = mix(luma, c, saturation);
-    return clamp(saturated * gain + vec3f(bias), vec3f(0.0), vec3f(1.0));
+        LUMA_HELPER,
+        `fn procamp(c: vec4f, gain: f32, bias: f32, saturation: f32) -> vec4f {
+    let saturated = mix(vec3f(video_luma(c)), c.rgb, saturation);
+    return vec4f(clamp(saturated * gain + vec3f(bias), vec3f(0.0), vec3f(1.0)), c.a);
 }`,
     ],
     emit: ({ input, gain, bias, saturation }) =>
         `procamp(${input}, ${gain}, ${bias}, ${saturation})`,
 };
 
-/** Quantizes to `levels` evenly spaced values between 0 and 1 (minimum 2). */
-export const posterize: VideoModuleDef = {
-    inputs: { input: 'field', levels: 'field' },
-    output: 'field',
-    helpers: [
-        `fn posterize_levels(x: f32, levels: f32) -> f32 {
-    let n = max(levels, 2.0);
-    return min(floor(clamp(x, 0.0, 1.0) * n), n - 1.0) / (n - 1.0);
-}`,
-    ],
-    emit: ({ input, levels }) => `posterize_levels(${input}, ${levels})`,
-};
-
-/** Turns every hue by `amount` of a full circle, keeping saturation and brightness. */
+/** Turns every hue by `amount` of a full circle, keeping saturation, brightness and alpha. */
 export const hueShift: VideoModuleDef = {
-    inputs: { input: 'color', amount: 'field' },
-    output: 'color',
+    inputs: { input: 'rgba', amount: 'number' },
+    output: 'rgba',
     helpers: [
         HSV_TO_RGB,
         `fn rgb_to_hsv(c: vec3f) -> vec3f {
@@ -61,31 +49,34 @@ export const hueShift: VideoModuleDef = {
     let e = 1.0e-10;
     return vec3f(abs(q.z + (q.w - q.y) / (6.0 * d + e)), d / (q.x + e), q.x);
 }`,
-        `fn hue_shift(c: vec3f, amount: f32) -> vec3f {
-    let hsv = rgb_to_hsv(c);
-    return hsv_to_rgb(hsv.x + amount, hsv.y, hsv.z);
+        `fn hue_shift(c: vec4f, amount: f32) -> vec4f {
+    let hsv = rgb_to_hsv(c.rgb);
+    return vec4f(hsv_to_rgb(hsv.x + amount, hsv.y, hsv.z), c.a);
 }`,
     ],
     emit: ({ input, amount }) => `hue_shift(${input}, ${amount})`,
 };
 
-/** Scales each channel's distance from mid-gray by `amount`. */
+/** Scales each channel's distance from mid-gray by `amount`; the alpha is kept. */
 export const contrast: VideoModuleDef = {
-    inputs: { input: 'color', amount: 'field' },
-    output: 'color',
-    emit: ({ input, amount }) =>
-        `clamp((${input} - vec3f(0.5)) * ${amount} + vec3f(0.5), vec3f(0.0), vec3f(1.0))`,
+    inputs: { input: 'rgba', amount: 'number' },
+    output: 'rgba',
+    helpers: [
+        `fn video_contrast(c: vec4f, amount: f32) -> vec4f {
+    return vec4f(clamp((c.rgb - vec3f(0.5)) * amount + vec3f(0.5), vec3f(0.0), vec3f(1.0)), c.a);
+}`,
+    ],
+    emit: ({ input, amount }) => `video_contrast(${input}, ${amount})`,
 };
 
-/** One channel of a color as a field: red, green, blue, or brightness. */
+/** One channel of a signal, red, green, blue, alpha or brightness, as a gray. */
 export const channel: VideoModuleDef = {
-    inputs: { input: 'color' },
-    output: 'field',
+    inputs: { input: 'rgba' },
+    output: 'gray',
     params: {
-        channel: { values: ['r', 'g', 'b', 'luma'], default: 'luma' },
+        channel: { values: ['r', 'g', 'b', 'a', 'luma'], default: 'luma' },
     },
+    helpers: ({ channel: which }) => (which === 'luma' ? [LUMA_HELPER] : []),
     emit: ({ input }, { channel: which }) =>
-        which === 'luma'
-            ? `dot(${input}, vec3f(0.299, 0.587, 0.114))`
-            : `${input}.${which}`,
+        which === 'luma' ? `video_luma(${input})` : `${input}.${which}`,
 };

@@ -1,30 +1,27 @@
-import { VideoOutput } from './VideoOutput';
+import type { VideoOutput } from './VideoOutput';
 import { type VideoSource, type VideoCore } from './videoBuilderTypes';
 
 /** The `$v` functions that make or adjust colors. */
 export function colorMethods(core: VideoCore) {
-    /** A node whose `input` is a color (a field becomes gray) and whose other inputs are fields. */
+    /** A node of module `kind` that adjusts `input` by `values`. */
     const adjust = (
         kind: string,
         input: VideoSource,
-        fields: Record<string, unknown>,
+        values: Record<string, unknown>,
     ): VideoOutput =>
-        core.addNode(kind, 'color', {
-            input: core.toColor(`$v.${kind}`, 'input', input).value,
-            ...core.fields(`$v.${kind}`, fields),
-        });
+        core.addNode(kind, core.values(`$v.${kind}`, { input, ...values }));
 
     return {
-        /** Combines three fields into a color. */
+        /** A color from red, green, blue and alpha levels. */
         colorize: (
             r: VideoSource,
             g: VideoSource,
             b: VideoSource,
+            a: VideoSource = 1,
         ): VideoOutput =>
             core.addNode(
                 'colorize',
-                'color',
-                core.fields('$v.colorize', { r, g, b }),
+                core.values('$v.colorize', { r, g, b, a }),
             ),
 
         /** Color from hue (wraps every 1.0), saturation and value. */
@@ -33,7 +30,7 @@ export function colorMethods(core: VideoCore) {
             s: VideoSource = 1,
             v: VideoSource = 1,
         ): VideoOutput =>
-            core.addNode('hsv', 'color', core.fields('$v.hsv', { h, s, v })),
+            core.addNode('hsv', core.values('$v.hsv', { h, s, v })),
 
         /** Turns every hue of `input` by `amount` of a full circle. */
         hueShift: (

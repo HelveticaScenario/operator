@@ -6,9 +6,9 @@ import type { VideoModuleDef } from './types';
  * audio graph produces it, and is interpolated between samples.
  */
 export const audioHistory: VideoModuleDef = {
-    inputs: { position: 'field', samples: 'field' },
+    inputs: { position: 'number', samples: 'number' },
     history: true,
-    output: 'field',
+    output: 'gray',
     helpers: [
         `fn history_sample(row: i32, position: f32, count: f32) -> f32 {
     let x = clamp(position, 0.0, 1.0) * max(count - 1.0, 0.0);

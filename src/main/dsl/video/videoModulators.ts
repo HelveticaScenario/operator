@@ -8,35 +8,27 @@ import {
 
 /**
  * The `$v` functions of Hydra's modulators: each reads the whole `input` at
- * coordinates that a modulator moves. A color modulates through its red,
- * green and blue channels as Hydra's do; a field supplies its one value for
- * every channel it is asked for.
+ * coordinates that a modulator moves through its red, green and blue
+ * channels, as Hydra's do.
  */
 export function modulatorMethods(core: VideoCore) {
     /**
-     * Reads the whole `input` at coordinates the `which` channels of
-     * `modulator` move, as module `kind`; `fields` are its other inputs.
+     * Reads the whole `input` at coordinates `modulator` moves, as module
+     * `kind`; `values` are its other inputs.
      */
     const modulate = (
         kind: string,
-        which: readonly ('r' | 'g' | 'b')[],
         input: unknown,
         modulator: unknown,
-        fields: Record<string, unknown>,
+        values: Record<string, unknown>,
     ): VideoOutput => {
         const fn = `$v.${kind}`;
         if (!(modulator instanceof VideoOutput)) {
             throw new Error(
-                `${fn}: modulator must be a video field or color, got ${describe(modulator)}`,
+                `${fn}: modulator must be a video signal, got ${describe(modulator)}`,
             );
         }
-        const channels = Object.fromEntries(
-            which.map((channel) => [
-                `m${channel}`,
-                core.channel(modulator, channel),
-            ]),
-        );
-        return transform(core, fn, kind, input, { ...channels, ...fields });
+        return transform(core, fn, kind, input, { m: modulator, ...values });
     };
 
     return {
@@ -47,7 +39,7 @@ export function modulatorMethods(core: VideoCore) {
             multiple: VideoSource = 1,
             offset: VideoSource = 1,
         ): VideoOutput =>
-            modulate('modulateScale', ['r', 'g'], input, modulator, {
+            modulate('modulateScale', input, modulator, {
                 multiple,
                 offset,
             }),
@@ -59,7 +51,7 @@ export function modulatorMethods(core: VideoCore) {
             multiple: VideoSource = 1,
             offset: VideoSource = 0,
         ): VideoOutput =>
-            modulate('modulateRotate', ['r'], input, modulator, {
+            modulate('modulateRotate', input, modulator, {
                 multiple,
                 offset,
             }),
@@ -71,7 +63,7 @@ export function modulatorMethods(core: VideoCore) {
             multiple: VideoSource = 10,
             offset: VideoSource = 3,
         ): VideoOutput =>
-            modulate('modulatePixelate', ['r', 'g'], input, modulator, {
+            modulate('modulatePixelate', input, modulator, {
                 multiple,
                 offset,
             }),
@@ -82,7 +74,7 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             sides: VideoSource = 4,
         ): VideoOutput =>
-            modulate('modulateKaleid', ['r'], input, modulator, { sides }),
+            modulate('modulateKaleid', input, modulator, { sides }),
 
         /** Pushes `input` by the differences between the modulator's channels, `amount` pixels at most. */
         modulateHue: (
@@ -90,7 +82,7 @@ export function modulatorMethods(core: VideoCore) {
             modulator: VideoOutput,
             amount: VideoSource = 50,
         ): VideoOutput =>
-            modulate('modulateHue', ['r', 'g', 'b'], input, modulator, {
+            modulate('modulateHue', input, modulator, {
                 amount,
             }),
 
@@ -103,7 +95,7 @@ export function modulatorMethods(core: VideoCore) {
             offsetX: VideoSource = 0.5,
             offsetY: VideoSource = 0.5,
         ): VideoOutput =>
-            modulate('modulateRepeat', ['r', 'g'], input, modulator, {
+            modulate('modulateRepeat', input, modulator, {
                 repeatX,
                 repeatY,
                 offsetX,
@@ -117,7 +109,7 @@ export function modulatorMethods(core: VideoCore) {
             reps: VideoSource = 3,
             offset: VideoSource = 0.5,
         ): VideoOutput =>
-            modulate('modulateRepeatX', ['r'], input, modulator, {
+            modulate('modulateRepeatX', input, modulator, {
                 reps,
                 offset,
             }),
@@ -129,7 +121,7 @@ export function modulatorMethods(core: VideoCore) {
             reps: VideoSource = 3,
             offset: VideoSource = 0.5,
         ): VideoOutput =>
-            modulate('modulateRepeatY', ['r'], input, modulator, {
+            modulate('modulateRepeatY', input, modulator, {
                 reps,
                 offset,
             }),
@@ -141,7 +133,7 @@ export function modulatorMethods(core: VideoCore) {
             scroll: VideoSource = 0.5,
             speed: VideoSource = 0,
         ): VideoOutput =>
-            modulate('modulateScrollX', ['r'], input, modulator, {
+            modulate('modulateScrollX', input, modulator, {
                 scroll,
                 speed,
             }),
@@ -153,7 +145,7 @@ export function modulatorMethods(core: VideoCore) {
             scroll: VideoSource = 0.5,
             speed: VideoSource = 0,
         ): VideoOutput =>
-            modulate('modulateScrollY', ['r'], input, modulator, {
+            modulate('modulateScrollY', input, modulator, {
                 scroll,
                 speed,
             }),

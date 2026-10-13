@@ -29,6 +29,7 @@ export const stripes: VideoGraph = {
                 r: { kind: 'node', id: 'wave' },
                 g: { kind: 'const', value: 0.5 },
                 b: { kind: 'const', value: 1 },
+                a: { kind: 'const', value: 1 },
             },
         },
         {

@@ -2,8 +2,8 @@ import type { VideoModuleDef } from './types';
 
 /** Periodic shaper: `freq` cycles per unit of `input`, offset by `phase` cycles. */
 export const osc: VideoModuleDef = {
-    inputs: { input: 'field', freq: 'field', phase: 'field' },
-    output: 'field',
+    inputs: { input: 'number', freq: 'number', phase: 'number' },
+    output: 'gray',
     params: {
         shape: {
             values: ['sine', 'triangle', 'saw', 'square'],

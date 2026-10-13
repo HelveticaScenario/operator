@@ -3,7 +3,6 @@ import type {
     VideoPreviewView,
     VideoSourceDef,
     VideoValue,
-    VideoValueType,
 } from '../../../shared/video/videoGraph';
 import {
     BaseCollection,
@@ -17,8 +16,8 @@ import { VideoOutput } from './VideoOutput';
 export type AudioSignal = ModuleOutput | BaseCollection<ModuleOutput>;
 
 /**
- * A constant, a video signal of either type, or an audio signal (a slider,
- * button or any module output), whose live value drives a field input.
+ * A constant, a video signal, or an audio signal (a slider, button or any
+ * module output), whose live value drives an input.
  */
 export type VideoSource = number | VideoOutput | AudioSignal;
 
@@ -89,6 +88,16 @@ export interface VideoPreviewConfig {
 
 export interface VideoOscConfig {
     shape?: 'sine' | 'triangle' | 'saw' | 'square';
+    /** What the wave runs along (default the horizontal ramp, 0 to 1 across the frame). */
+    input?: VideoSource;
+}
+
+/** Where a generator is drawn: the coordinates it reads at each pixel. */
+export interface VideoPositionConfig {
+    /** Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame). */
+    x?: VideoSource;
+    /** Vertical coordinate (default the vertical ramp, 0 to 1 up the frame). */
+    y?: VideoSource;
 }
 
 export interface VideoRampConfig {
@@ -115,12 +124,12 @@ export interface VideoFeedbackConfig {
     edge?: 'clamp' | 'repeat' | 'mirror';
 }
 
-export interface VideoNoiseConfig {
+export interface VideoNoiseConfig extends VideoPositionConfig {
     /** The noise algorithm (default 'simplex'). */
     type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged';
 }
 
-export interface VideoShapeConfig {
+export interface VideoShapeConfig extends VideoPositionConfig {
     shape?: 'circle' | 'box' | 'diamond';
 }
 
@@ -133,39 +142,26 @@ export type VideoNodeExtra = Pick<
 >;
 
 export function describe(value: unknown): string {
-    if (value instanceof VideoOutput) return `a ${value.type}`;
+    if (value instanceof VideoOutput) return 'a video signal';
     if (value instanceof ModuleOutput || value instanceof BaseCollection) {
         return 'an audio signal';
     }
     return String(value);
 }
 
-export const isColor = (value: unknown): boolean =>
-    value instanceof VideoOutput && value.type === 'color';
-
 /**
  * What the groups of `$v` functions in the `video*.ts` files need from the
  * builder: the primitives that turn arguments into node inputs and add nodes.
  */
 export interface VideoCore {
-    /** An input that must be a field: a number, a video field, or an audio signal. */
-    asField(fn: string, name: string, v: unknown): VideoValue;
-    /** Each of `values` as a field input, named by its key. */
-    fields(fn: string, values: Record<string, unknown>): VideoInputs;
+    /** An input: a number, a video signal, or an audio signal. */
+    value(fn: string, name: string, v: unknown): VideoValue;
+    /** Each of `values` as an input, named by its key. */
+    values(fn: string, values: Record<string, unknown>): VideoInputs;
     addNode(
         kind: string,
-        type: VideoValueType,
         inputs: VideoInputs,
         extra?: VideoNodeExtra,
-    ): VideoOutput;
-    /** A color signal; a field or number becomes the gray of that level. */
-    toColor(fn: string, name: string, v: unknown): VideoOutput;
-    /** A math node on fields, or on colors when any operand is a color. */
-    arith(
-        fn: string,
-        kind: string,
-        operands: Record<string, unknown>,
-        fieldInputs?: Record<string, unknown>,
     ): VideoOutput;
     /** The index of `def` among the media the graph samples, adding it on first use. */
     sourceIndex(def: VideoSourceDef): number;
@@ -173,8 +169,13 @@ export interface VideoCore {
     mediaExists(path: string): boolean;
     /** The audio of a workspace video, as an audio signal. */
     mediaAudio(path: string, playback: VideoAudioPlayback): Collection;
-    /** One channel of a color as a field. */
-    channel(input: VideoOutput, which?: 'r' | 'g' | 'b' | 'luma'): VideoOutput;
+    /** One channel of a signal as a gray signal. */
+    channel(
+        input: VideoOutput,
+        which?: 'r' | 'g' | 'b' | 'a' | 'luma',
+    ): VideoOutput;
+    /** A ramp across the frame: `h` 0 to 1 across, `v` 0 to 1 up. */
+    ramp(axis: 'h' | 'v'): VideoOutput;
 }
 
 export interface VideoMediaConfig {

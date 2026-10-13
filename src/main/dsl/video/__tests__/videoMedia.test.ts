@@ -120,7 +120,7 @@ describe('$v media sources', () => {
         it('moves with the warps like any other pattern', () => {
             const wgsl = wgslOf(`$v.image('a.png').$.kaleid(6).out();`);
             expect(wgsl).toMatch(
-                /fn f0\(uv: vec2f\) -> vec3f \{\n    return video_source\(src_0/,
+                /fn f0\(uv: vec2f\) -> vec4f \{\n    return video_source\(src_0/,
             );
         });
 

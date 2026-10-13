@@ -22,7 +22,7 @@ describe('compileVideoGraph feedback', () => {
             },
             {
                 id: 'frame',
-                kind: 'mixColor',
+                kind: 'mix',
                 inputs: {
                     a: { kind: 'node', id: 'prev' },
                     b: { kind: 'node', id: 'prev' },
@@ -60,7 +60,7 @@ describe('compileVideoGraph feedback', () => {
             'feedback_mirror(video_transform(uv, 1.01',
         );
         expect(shader.wgsl).toMatch(
-            /return FragOut\(vec4f\(v3, 1.0\), vec4f\(v2, 1.0\)\);/,
+            /return FragOut\(video_display\(v3\), v2\);/,
         );
     });
 
@@ -117,23 +117,23 @@ describe('compileVideoGraph previews', () => {
     it('adds one fragment entry point per preview', () => {
         const shader = compileVideoGraph(
             withPreviews([
-                { type: 'field', value: { kind: 'node', id: 'wave' } },
-                { type: 'color', value: { kind: 'node', id: 'rgb' } },
+                { value: { kind: 'node', id: 'wave' } },
+                { value: { kind: 'node', id: 'rgb' } },
             ]),
         );
         expect(shader.previewCount).toBe(2);
         expect(shader.wgsl).toContain('fn preview_0(');
         expect(shader.wgsl).toContain('fn preview_1(');
-        expect(shader.wgsl).toContain('return vec4f(vec3f(v1), 1.0);');
-        expect(shader.wgsl).toContain('return vec4f(v2, 1.0);');
+        expect(shader.wgsl).toContain('return video_display(v1);');
+        expect(shader.wgsl).toContain('return video_display(v2);');
     });
 
     it('evaluates only the nodes a preview depends on', () => {
         const shader = compileVideoGraph(
-            withPreviews([{ type: 'field', value: { kind: 'node', id: 'x' } }]),
+            withPreviews([{ value: { kind: 'node', id: 'x' } }]),
         );
         const entry = shader.wgsl.slice(shader.wgsl.indexOf('fn preview_0('));
-        expect(entry).toContain('let v0: f32 = uv.x;');
+        expect(entry).toContain('let v0: vec4f = vec4f(vec3f(uv.x), 1.0);');
         expect(entry).not.toContain('let v1');
         expect(entry).not.toContain('let v2');
     });
@@ -141,12 +141,16 @@ describe('compileVideoGraph previews', () => {
     it('previews a constant or a time input directly', () => {
         const shader = compileVideoGraph(
             withPreviews([
-                { type: 'field', value: { kind: 'time' } },
-                { type: 'field', value: { kind: 'const', value: 0.25 } },
+                { value: { kind: 'time' } },
+                { value: { kind: 'const', value: 0.25 } },
             ]),
         );
-        expect(shader.wgsl).toContain('vec3f(u.time)');
-        expect(shader.wgsl).toContain('vec3f(0.25)');
+        expect(shader.wgsl).toContain(
+            'return video_display(vec4f(vec3f(u.time), 1.0));',
+        );
+        expect(shader.wgsl).toContain(
+            'return video_display(vec4f(vec3f(0.25), 1.0));',
+        );
     });
 
     it('declares no previews by default', () => {
@@ -155,14 +159,12 @@ describe('compileVideoGraph previews', () => {
         expect(shader.wgsl).not.toContain('preview_');
     });
 
-    it('rejects a preview whose type does not match its value', () => {
+    it('rejects a preview of a node that does not exist', () => {
         expect(() =>
             compileVideoGraph(
-                withPreviews([
-                    { type: 'color', value: { kind: 'node', id: 'x' } },
-                ]),
+                withPreviews([{ value: { kind: 'node', id: 'nope' } }]),
             ),
-        ).toThrow(/node "x" is a field, expected a color/);
+        ).toThrow(/unknown or forward node "nope"/);
     });
 });
 
@@ -188,6 +190,7 @@ describe('compileVideoGraph audio history', () => {
                     r: { kind: 'node', id: 'wave' },
                     g: { kind: 'const', value: 0 },
                     b: { kind: 'const', value: 0 },
+                    a: { kind: 'const', value: 1 },
                 },
             },
             {
@@ -203,7 +206,9 @@ describe('compileVideoGraph audio history', () => {
         expect(shader.wgsl).toContain(
             '@group(0) @binding(2) var history_tex: texture_2d<f32>;',
         );
-        expect(shader.wgsl).toContain('history_sample(0, v0, 512.0)');
+        expect(shader.wgsl).toContain(
+            'history_sample(0, video_luma(v0), 512.0)',
+        );
         expect(shader.histories).toEqual(history.histories);
     });
 
@@ -267,13 +272,13 @@ describe('compileVideoGraph audio history', () => {
 });
 
 describe('compileVideoGraph warped inputs', () => {
-    const warpGraph = (inputType: 'field' | 'color'): VideoGraph => ({
+    const warpGraph: VideoGraph = {
         ...stripes,
         nodes: [
             { id: 'x', kind: 'ramp', inputs: rampInputs },
             {
                 id: 'shifted',
-                kind: inputType === 'color' ? 'pixelateColor' : 'pixelate',
+                kind: 'pixelate',
                 inputs: {
                     input: { kind: 'node', id: 'x' },
                     x: { kind: 'const', value: 8 },
@@ -287,6 +292,7 @@ describe('compileVideoGraph warped inputs', () => {
                     r: { kind: 'node', id: 'shifted' },
                     g: { kind: 'const', value: 0 },
                     b: { kind: 'const', value: 0 },
+                    a: { kind: 'const', value: 1 },
                 },
             },
             {
@@ -295,19 +301,15 @@ describe('compileVideoGraph warped inputs', () => {
                 inputs: { input: { kind: 'node', id: 'rgb' } },
             },
         ],
-    });
+    };
 
     it('hands a warped input to the module as a function name', () => {
-        const wgsl = compileVideoGraph(warpGraph('field')).wgsl;
-        expect(wgsl).toContain('fn f0(uv: vec2f) -> f32 {\n    return uv.x;');
+        const wgsl = compileVideoGraph(warpGraph).wgsl;
         expect(wgsl).toContain(
-            'let v1: f32 = f0(video_pixelate(uv, vec2f(8.0, 8.0)));',
+            'fn f0(uv: vec2f) -> vec4f {\n    return vec4f(vec3f(uv.x), 1.0);',
         );
-    });
-
-    it('checks a warped input against the type its module declares', () => {
-        expect(() => compileVideoGraph(warpGraph('color'))).toThrow(
-            /node "x" is a field, expected a color/,
+        expect(wgsl).toContain(
+            'let v1: vec4f = f0(video_pixelate(uv, vec2f(8.0, 8.0)));',
         );
     });
 

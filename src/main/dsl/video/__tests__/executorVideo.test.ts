@@ -9,7 +9,7 @@ describe('$v in the DSL executor', () => {
     it('compiles the graph reachable from $v.out', () => {
         const { video } = exec(`
             const x = $v.ramp('h');
-            const wave = $v.osc(x, 4, $v.time, { shape: 'triangle' });
+            const wave = $v.osc(4, $v.time, { shape: 'triangle', input: x });
             $v.ramp('v');
             $v.out($v.colorize(wave, 0.5, 1));
         `);
@@ -18,24 +18,23 @@ describe('$v in the DSL executor', () => {
         expect(video!.wgsl).not.toContain('uv.y');
     });
 
-    it('shows a field as the gray color of its level', () => {
-        const field = exec(`$v.out($v.ramp());`).video!.wgsl;
-        const gray = exec(`
-            const r = $v.ramp();
-            $v.out($v.colorize(r, r, r));
-        `).video!.wgsl;
-        expect(field).toBe(gray);
+    it('draws a generator at the position of each pixel unless told otherwise', () => {
+        const implicit = exec(`$v.osc(4).out();`).video!.wgsl;
+        const explicit = exec(`$v.osc(4, 0, { input: $v.ramp('h') }).out();`)
+            .video!.wgsl;
+        expect(implicit).toBe(explicit);
+        expect(implicit).toContain('vec4f(vec3f(uv.x), 1.0)');
     });
 
     it('rejects an output that is not a video signal', () => {
         expect(() => exec(`$v.out('red');`)).toThrow(
-            /\$v\.out: input must be a number or a video field/,
+            /\$v\.out: input must be a number, a video signal or an audio signal/,
         );
     });
 
-    it('rejects a non-numeric field argument', () => {
-        expect(() => exec(`$v.osc($v.ramp(), 'fast');`)).toThrow(
-            /\$v\.osc: freq must be a number or a video field/,
+    it('rejects a non-numeric argument', () => {
+        expect(() => exec(`$v.osc('fast');`)).toThrow(
+            /\$v\.osc: freq must be a number, a video signal or an audio signal/,
         );
     });
 
@@ -72,25 +71,23 @@ describe('$v in the DSL executor', () => {
     describe('range', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
 
-        it('maps 0 to 1 onto min to max', () => {
+        it('maps each channel from 0 to 1 onto min to max', () => {
             const wgsl = wgslOf(`
-                $v.out($v.hsv($v.ramp('a', { zoom: $v.osc($v.time, 1).range(1, 3) })));
+                $v.out($v.hsv($v.ramp('a', { zoom: $v.time.$.osc(1).range(1, 3) })));
             `);
-            expect(wgsl).toMatch(/\(1\.0 \+ v\d \* \(3\.0 - 1\.0\)\)/);
+            expect(wgsl).toContain('return vec4f(lo + x * (hi - lo), c.a);');
+            expect(wgsl).toMatch(/video_range\(v\d+, 1\.0, 3\.0\)/);
         });
 
-        it('has range as a method of a field and as $v.range', () => {
+        it('has range as a method of a signal and as $v.range', () => {
             const method = wgslOf(`$v.out($v.hsv($v.ramp().range(0, 0.5)));`);
             const call = wgslOf(`$v.out($v.hsv($v.range($v.ramp(), 0, 0.5)));`);
             expect(method).toBe(call);
         });
 
-        it('rejects range on a color or a number', () => {
-            expect(() => exec(`$v.hsv(0).range(0, 1);`)).toThrow(
-                /\$v\.range: input must be a video field, got a color/,
-            );
-            expect(() => exec(`$v.range(3, 0, 1);`)).toThrow(
-                /\$v\.range: input must be a video field/,
+        it('rescales a color channel by channel', () => {
+            expect(wgslOf(`$v.hsv(0.3).range(0.2, 0.8).out();`)).toMatch(
+                /video_range\(v\d+, 0\.2, 0\.8\)/,
             );
         });
     });

@@ -7,17 +7,18 @@ const FIT_CODES: Record<string, number> = { cover: 1, contain: 2, stretch: 0 };
  * A picture or recording from the workspace folder, read at the coordinate
  * being drawn, so warps and feedback move it like any other pattern. `cover`
  * fills the frame and crops the overflow, `contain` fits the whole picture and
- * leaves black bars, and `stretch` ignores the aspect ratio.
+ * leaves transparent bars, and `stretch` ignores the aspect ratio. The alpha
+ * is the picture's own.
  */
 export const source: VideoModuleDef = {
     inputs: {},
     source: true,
-    output: 'color',
+    output: 'rgba',
     params: {
         fit: { values: ['cover', 'contain', 'stretch'], default: 'cover' },
     },
     helpers: [
-        `fn video_source(media: texture_2d<f32>, uv: vec2f, fit: i32) -> vec3f {
+        `fn video_source(media: texture_2d<f32>, uv: vec2f, fit: i32) -> vec4f {
     let size = vec2f(textureDimensions(media));
     let frame = u.resolution.x / u.resolution.y;
     let picture = size.x / size.y;
@@ -35,10 +36,10 @@ export const source: VideoModuleDef = {
             p.x = 0.5 + (uv.x - 0.5) * frame / picture;
         }
         if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0) {
-            return vec3f(0.0);
+            return vec4f(0.0);
         }
     }
-    return textureSampleLevel(media, fb_sampler, vec2f(p.x, 1.0 - p.y), 0.0).rgb;
+    return textureSampleLevel(media, fb_sampler, vec2f(p.x, 1.0 - p.y), 0.0);
 }`,
     ],
     emit: (_args, { fit }, indices) =>

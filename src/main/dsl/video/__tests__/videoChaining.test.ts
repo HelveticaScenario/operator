@@ -20,10 +20,10 @@ describe('$v chaining', () => {
 
         it('compiles a .$ chain to the same shader as nested calls', () => {
             const chained = wgslOf(`
-                $v.osc($v.ramp(), 8).$.kaleid(6).$.hsv(0.9).out();
+                $v.osc(8).$.kaleid(6).$.hsv(0.9).out();
             `);
             const nested = wgslOf(`
-                $v.out($v.hsv($v.kaleid($v.osc($v.ramp(), 8), 6), 0.9));
+                $v.out($v.hsv($v.kaleid($v.osc(8), 6), 0.9));
             `);
             expect(chained).toBe(nested);
         });
@@ -38,12 +38,12 @@ describe('$v chaining', () => {
             expect(shorthand).toBe(long);
         });
 
-        it('chains colors and fields with the right variants', () => {
+        it('chains through operations on whole signals', () => {
             const wgsl = wgslOf(`
-                $v.noise($v.ramp(), $v.ramp('v')).$.hsv().$.mult($v.ramp('v')).$.invert().out();
+                $v.noise().$.hsv().$.mult($v.ramp('v')).$.invert().out();
             `);
-            expect(wgsl).toMatch(/let v\d: vec3f = v\d \* v\d;/);
-            expect(wgsl).toMatch(/vec3f\(1\.0\) - /);
+            expect(wgsl).toMatch(/let v\d: vec4f = video_mult\(v\d, v\d\);/);
+            expect(wgsl).toMatch(/video_invert\(v\d\)/);
         });
 
         it('keeps the chain methods off the signal itself', () => {
@@ -65,7 +65,7 @@ describe('$v chaining', () => {
 
         it('previews and measures partway through a chain', () => {
             const { video, videoPreviews } = exec(`
-                const wave = $v.osc($v.ramp(), 4).preview({ view: 'waveform' });
+                const wave = $v.osc(4).preview({ view: 'waveform' });
                 wave.toCV({ size: 0.1 });
                 wave.$.hsv().out();
             `);
@@ -75,10 +75,10 @@ describe('$v chaining', () => {
 
         it('reports errors with the $v function that failed', () => {
             expect(() => exec(`$v.ramp().$.kaleid('six');`)).toThrow(
-                /\$v\.kaleid: sides must be a number or a video field/,
+                /\$v\.kaleid: sides must be a number, a video signal or an audio signal/,
             );
             expect(() => exec(`$v.ramp().$.hueShift('slow');`)).toThrow(
-                /\$v\.hueShift: amount must be a number or a video field/,
+                /\$v\.hueShift: amount must be a number, a video signal or an audio signal/,
             );
         });
 
@@ -99,11 +99,11 @@ describe('$v chaining', () => {
                 expect(mixed).toMatch(/mix\(v\d, v\d, clamp\(0\.5/);
             });
 
-            it('mixes a field result with a field signal', () => {
+            it('mixes a gray result with a gray signal', () => {
                 const wgsl = wgslOf(`
-                    $v.osc($v.ramp(), 4).$m.fold(0.5, 2).$.hsv().out();
+                    $v.osc(4).$m.fold(0.5, 2).$.hsv().out();
                 `);
-                expect(wgsl).toMatch(/let v\d: f32 = mix\(v\d, /);
+                expect(wgsl).toMatch(/let v\d: vec4f = mix\(v\d, v\d, /);
             });
 
             it('accepts a signal as the mix', () => {
@@ -162,7 +162,7 @@ describe('$v chaining', () => {
 
             it('takes the mix as a signal', () => {
                 const { video } = exec(`
-                    $v.hsv($v.ramp()).pipeMix((c) => c.$.invert(), $v.osc($v.time, 0.2)).out();
+                    $v.hsv($v.ramp()).pipeMix((c) => c.$.invert(), $v.time.$.osc(0.2)).out();
                 `);
                 expect(video!.wgsl).toContain('mix(');
             });
@@ -181,9 +181,7 @@ describe('$v chaining', () => {
         it('chains osc to the same shader as the nested call', () => {
             expect(
                 wgslOf(`$v.ramp().$.osc(8, 0.5, { shape: 'saw' }).out();`),
-            ).toBe(
-                wgslOf(`$v.out($v.osc($v.ramp(), 8, 0.5, { shape: 'saw' }));`),
-            );
+            ).toBe(wgslOf(`$v.out($v.osc(8, 0.5, { shape: 'saw' }));`));
         });
 
         it('mixes an osc into the signal with $m', () => {
@@ -209,16 +207,14 @@ describe('$v chaining', () => {
     });
 
     describe('channel properties', () => {
-        it('gives a color its r, g and b as fields, and a field none', () => {
+        it('gives every signal its r, g, b and a as gray signals', () => {
             const { video } = exec(`
                 const c = $v.hsv($v.ramp());
-                const f = $v.ramp();
-                if (f.r !== undefined || f.g !== undefined || f.b !== undefined) {
-                    throw new Error('a field has channels');
-                }
-                $v.out($v.colorize(c.b, c.r, c.g));
+                $v.out($v.colorize(c.b, c.r, c.g, $v.ramp().a));
             `);
-            expect(video).not.toBeNull();
+            expect(video!.wgsl).toMatch(
+                /let v\d: vec4f = vec4f\(vec3f\(v\d\.a\), 1\.0\);/,
+            );
         });
     });
 
@@ -239,11 +235,11 @@ describe('$v chaining', () => {
 
         it('defaults to a red of full saturation', () => {
             const tinted = exec(`$v.ramp().$.tint().out();`).video!.wgsl;
-            expect(tinted).toContain('hsv_to_rgb(0.0, 1.0, v0)');
+            expect(tinted).toContain('hsv_to_rgb(0.0, 1.0, video_luma(v0))');
         });
 
-        it('is not available on a color', () => {
-            expect(() => exec(`$v.hsv(0.2).$.tint(0.1);`)).toThrow();
+        it('colors a color by its brightness', () => {
+            expect(() => exec(`$v.hsv(0.2).$.tint(0.1).out();`)).not.toThrow();
         });
     });
 
@@ -262,32 +258,28 @@ describe('$v chaining', () => {
             expect(props).toBe(calls);
         });
 
-        it('still takes a field as its own channel through $v.channel', () => {
+        it('takes the alpha and the brightness through $v.channel', () => {
             expect(
-                wgslOf(
-                    `const f = $v.ramp(); $v.out($v.hsv($v.channel(f, 'g')));`,
-                ),
-            ).toBe(wgslOf(`const f = $v.ramp(); $v.out($v.hsv(f));`));
-        });
-
-        it('remaps the channels of a color', () => {
-            const wgsl = wgslOf(`$v.hsv($v.ramp()).$.swiz('gbr').out();`);
-            expect(wgsl).toMatch(/\.gbr;/);
-            expect(
-                wgslOf(`$v.out($v.swiz($v.hsv($v.ramp()), 'rrr'));`),
-            ).toMatch(/\.rrr;/);
-        });
-
-        it('swizzles a field as a gray color', () => {
-            expect(wgslOf(`$v.out($v.swiz($v.ramp(), 'bgr'));`)).toMatch(
-                /\.bgr;/,
+                wgslOf(`$v.out($v.channel($v.image('a.png'), 'a'));`),
+            ).toMatch(/vec4f\(vec3f\(v\d\.a\), 1\.0\)/);
+            expect(wgslOf(`$v.out($v.channel($v.hsv(0.3)));`)).toMatch(
+                /vec4f\(vec3f\(video_luma\(v\d\)\), 1\.0\)/,
             );
+        });
+
+        it('remaps the channels of a signal and keeps its alpha', () => {
+            const wgsl = wgslOf(`$v.hsv($v.ramp()).$.swiz('gbr').out();`);
+            expect(wgsl).toContain('return vec4f(c.gbr, c.a);');
+            expect(wgsl).toMatch(/video_swizzle_gbr\(v\d\)/);
+            expect(
+                wgslOf(`$v.out($v.swiz($v.hsv($v.ramp()), 'aaa'));`),
+            ).toContain('return vec4f(c.aaa, c.a);');
         });
 
         it('rejects a pattern that is not three channels', () => {
             for (const pattern of ["'rg'", "'rgba'", "'rgx'", '3']) {
                 expect(() => exec(`$v.swiz($v.hsv(0), ${pattern});`)).toThrow(
-                    /\$v\.swiz: pattern must be three of r, g and b/,
+                    /\$v\.swiz: pattern must be three of r, g, b and a/,
                 );
             }
         });

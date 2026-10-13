@@ -162,7 +162,6 @@ export function sourceMethods(core: VideoCore) {
     const source = (def: VideoSourceDef, fit: string): VideoOutput =>
         core.addNode(
             'source',
-            'color',
             {},
             { params: { fit }, source: core.sourceIndex(def) },
         );

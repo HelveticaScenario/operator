@@ -38,12 +38,12 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of fields that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nSliders, buttons and audio signals can be passed anywhere a field is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a field sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
+        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
     examples: [
-        '$v.osc($v.ramp(), 10).$.kaleid(6).$.hsv().out()',
+        '$v.osc(10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
         "$v.out($v.hsv($p('0 0.25 0.5 0.75'), 1, $p.arrange([2, $p('1 0.5')], [1, $p('1')])))",
-        "$v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($v.ramp(), $v.ramp('v'), $sine('1hz').range(0.1, 0.4))))",
+        "$v.out($v.hsv($sine('0.2hz').range(0, 1), 1, $v.shape($sine('1hz').range(0.1, 0.4))))",
         "$v.out($v.hsv($sine(['0.1hz', '0.13hz']).range(0, 0.5)))",
     ],
 };
@@ -55,8 +55,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Seconds since the patch started. It stands still while the patch is stopped and starts again from 0 when the patch is restarted. Use it as a phase to animate an oscillator.',
         params: [],
-        examples: ['$v.out($v.colorize($v.osc($v.ramp(), 4, $v.time), 0, 0))'],
-        declarations: ['readonly time: VideoField;'],
+        examples: ['$v.out($v.colorize($v.osc(4, $v.time), 0, 0))'],
+        declarations: ['readonly time: VideoSignal;'],
     },
     {
         name: 'ramp',
@@ -92,24 +92,24 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.colorize($v.ramp(), $v.ramp('v'), 0.5))",
-            "$v.out($v.hsv($v.osc($v.ramp('r'), 6, $v.time)))",
-            "$v.out($v.hsv($v.ramp('a', { rotate: $v.osc($v.time, 0.1) })))",
-            "$v.out($v.colorize($v.osc($v.ramp('h', { rotate: 0.125, zoom: 2 }), 8), 0.2, 0.5))",
+            "$v.out($v.hsv($v.osc(6, $v.time, { input: $v.ramp('r') })))",
+            "$v.out($v.hsv($v.ramp('a', { rotate: $v.time.$.osc(0.1) })))",
+            "$v.out($v.colorize($v.osc(8, 0, { input: $v.ramp('h', { rotate: 0.125, zoom: 2 }) }), 0.2, 0.5))",
         ],
         declarations: [
-            "ramp(\n    axis?: 'h' | 'v' | 'd' | 'r' | 'a',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoField;",
+            "ramp(\n    axis?: 'h' | 'v' | 'd' | 'r' | 'a',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoSignal;",
         ],
     },
     {
         name: 'osc',
         group: 'Generators',
         description:
-            'Periodic shaper: `freq` cycles per unit of `input`, offset by `phase` cycles.',
+            'A gray wave: `freq` cycles across the frame, offset by `phase` cycles. `config.input` runs it along another signal instead, `freq` cycles per unit of that signal, such as a radial ramp for rings or `$v.time` for a pulse that changes over time.',
         params: [
-            { name: 'input', description: 'Field to shape, usually a ramp' },
             {
                 name: 'freq',
-                description: 'Cycles across the full range of `input`',
+                description:
+                    'Cycles across the frame, or per unit of `config.input` (default 10)',
             },
             { name: 'phase', description: 'Offset in cycles (default 0)' },
             {
@@ -117,13 +117,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     "`'sine'` (default), `'triangle'`, `'saw'` or `'square'`",
             },
+            {
+                name: 'config.input',
+                description:
+                    'What the wave runs along (default the horizontal ramp, 0 to 1 across the frame)',
+            },
         ],
         examples: [
-            '$v.out($v.colorize($v.osc($v.ramp(), 8), 0, 0))',
-            "$v.out($v.colorize($v.osc($v.ramp(), 3, $v.time, { shape: 'saw' }), $v.osc($v.ramp('v'), 5), 0.3))",
+            '$v.out($v.colorize($v.osc(8), 0, 0))',
+            "$v.out($v.colorize($v.osc(3, $v.time, { shape: 'saw' }), $v.osc(5, 0, { input: $v.ramp('v') }), 0.3))",
         ],
         declarations: [
-            "osc(\n    input: VideoValue,\n    freq: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square' },\n): VideoField;",
+            "osc(\n    freq?: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square'; input?: VideoValue },\n): VideoSignal;",
         ],
     },
     {
@@ -158,17 +163,20 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('r'), { samples: 1024 }), 1, 1))",
         ],
         declarations: [
-            'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange | PatternSource, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoField;',
+            'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange | PatternSource, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoSignal;',
         ],
     },
     {
         name: 'noise',
         group: 'Generators',
         description:
-            'Smooth noise between 0 and 1, simplex noise unless `config.type` names another algorithm. One unit of any coordinate is about one feature of the noise, so scaling the coordinates sets the grain; `z` moves through the noise, which animates it when fed `$v.time`.',
+            'Smooth gray noise between 0 and 1, simplex noise unless `config.type` names another algorithm, with about `scale` features across the frame. `z` moves through the noise, which animates it when fed `$v.time`. With `config.x` and `config.y` it is read at those coordinates times `scale`.',
         params: [
-            { name: 'x', description: 'Horizontal coordinate' },
-            { name: 'y', description: 'Vertical coordinate' },
+            {
+                name: 'scale',
+                description:
+                    'Features across the frame, or per unit of `config.x` and `config.y` (default 5)',
+            },
             {
                 name: 'z',
                 description:
@@ -179,52 +187,67 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     "`'simplex'` (default) smooth gradient noise without grid artifacts, `'perlin'` classic gradient noise, `'value'` blended random values, blockier and aligned to the grid, `'fbm'` four octaves of simplex noise for detail at several scales, like clouds, `'ridged'` four octaves of sharp creases, like mountain ridges or marble veins",
             },
+            {
+                name: 'config.x',
+                description:
+                    'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
+            },
+            {
+                name: 'config.y',
+                description:
+                    'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
+            },
         ],
         examples: [
-            "$v.out($v.hsv($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.mult($v.time, 0.5))))",
-            "$v.out($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.mult($v.time, 0.2), { type: 'fbm' }))",
-            "$v.out($v.hsv(0.08, 0.6, $v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.mult($v.time, 0.1), { type: 'ridged' })))",
-            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise($v.mult($v.ramp('r'), 10), $v.mult($v.ramp('a'), 6), $v.time), 0.5, 0.05)))",
+            '$v.out($v.hsv($v.noise(6, $v.mult($v.time, 0.5))))',
+            "$v.out($v.noise(3, $v.mult($v.time, 0.2), { type: 'fbm' }))",
+            "$v.out($v.hsv(0.08, 0.6, $v.noise(4, $v.mult($v.time, 0.1), { type: 'ridged' })))",
+            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise(1, $v.time, { x: $v.mult($v.ramp('r'), 10), y: $v.mult($v.ramp('a'), 6) }), 0.5, 0.05)))",
         ],
         declarations: [
-            "noise(\n    x: VideoValue,\n    y: VideoValue,\n    z?: VideoValue,\n    config?: { type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged' },\n): VideoField;",
+            "noise(\n    scale?: VideoValue,\n    z?: VideoValue,\n    config?: { type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged'; x?: VideoValue; y?: VideoValue },\n): VideoSignal;",
         ],
     },
     {
         name: 'voronoi',
         group: 'Generators',
         description:
-            'Cellular noise: the distance to the nearest of a scatter of points, one per unit cell of the coordinates, between 0 (on a point) and about 1. Scale the coordinates to set the cell size; `z` moves the points, which animates the cells when fed `$v.time`.',
+            'Gray cellular noise: the distance to the nearest of a scatter of points, about `scale` cells across the frame, between 0 (on a point) and about 1. `z` moves the points, which animates the cells when fed `$v.time`. With `config.x` and `config.y` it is read at those coordinates times `scale`.',
         params: [
-            { name: 'x', description: 'Horizontal coordinate' },
-            { name: 'y', description: 'Vertical coordinate' },
+            {
+                name: 'scale',
+                description:
+                    'Cells across the frame, or per unit of `config.x` and `config.y` (default 5)',
+            },
             {
                 name: 'z',
                 description: 'Moves the points, such as time (default 0)',
             },
+            {
+                name: 'config.x',
+                description:
+                    'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
+            },
+            {
+                name: 'config.y',
+                description:
+                    'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
+            },
         ],
         examples: [
-            "$v.out($v.hsv(0.55, 0.8, $v.voronoi($v.mult($v.ramp(), 8), $v.mult($v.ramp('v'), 5), $v.mult($v.time, 2))))",
-            "$v.voronoi($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time).$.invert().$.tint(0.1).out()",
+            "$v.out($v.hsv(0.55, 0.8, $v.voronoi(1, $v.mult($v.time, 2), { x: $v.mult($v.ramp(), 8), y: $v.mult($v.ramp('v'), 5) })))",
+            '$v.voronoi(6, $v.time).$.invert().$.tint(0.1).out()',
         ],
         declarations: [
-            'voronoi(x: VideoValue, y: VideoValue, z?: VideoValue): VideoField;',
+            'voronoi(scale?: VideoValue, z?: VideoValue, config?: { x?: VideoValue; y?: VideoValue }): VideoSignal;',
         ],
     },
     {
         name: 'polygon',
         group: 'Generators',
         description:
-            '1 inside a regular polygon centered on (x, y) with one point up, 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame.',
+            'A gray mask: 1 inside a regular polygon centered on the frame with one point up, 0 outside, with a soft edge. With `config.x` and `config.y` it is centered where they are both 0.5, so adding to a ramp moves it.',
         params: [
-            {
-                name: 'x',
-                description: 'Horizontal position field; 0.5 is the center',
-            },
-            {
-                name: 'y',
-                description: 'Vertical position field; 0.5 is the center',
-            },
             {
                 name: 'sides',
                 description: 'Number of sides, at least 3 (default 3)',
@@ -239,20 +262,30 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     'Width of the edge in the same units (default 0.01)',
             },
+            {
+                name: 'config.x',
+                description:
+                    'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
+            },
+            {
+                name: 'config.y',
+                description:
+                    'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
+            },
         ],
         examples: [
-            "$v.out($v.hsv(0.12, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.3, 0.02)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.tint(0.6).out()",
+            '$v.out($v.hsv(0.12, 1, $v.polygon(5, 0.3, 0.02)))',
+            '$v.polygon(6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.tint(0.6).out()',
         ],
         declarations: [
-            'polygon(x: VideoValue, y: VideoValue, sides?: VideoValue, size?: VideoValue, softness?: VideoValue): VideoField;',
+            'polygon(sides?: VideoValue, size?: VideoValue, softness?: VideoValue, config?: { x?: VideoValue; y?: VideoValue }): VideoSignal;',
         ],
     },
     {
         name: 'blur',
         group: 'Filters',
         description:
-            "Averages `input` over a disk of `radius`, softening it. The input's whole sub-patch is read at sixteen nearby coordinates, so its cost is paid sixteen times: blur cheap things, or blur late. A field or color in gives the same type out. Adding a blurred copy back on top of the original is a glow.",
+            "Averages `input` over a disk of `radius`, softening it. The input's whole sub-patch is read at sixteen nearby coordinates, so its cost is paid sixteen times: blur cheap things, or blur late. Adding a blurred copy back on top of the original is a glow.",
         params: [
             {
                 name: 'radius',
@@ -261,19 +294,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.blur($v.polygon($v.ramp(), $v.ramp('v'), 5, 0.2, 0.001), 0.04)))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.18, 0.002).$.tint(0.12).pipe((c) => c.$.add(c.$.blur(0.04).$.mult(2))).out()",
+            '$v.out($v.hsv($v.blur($v.polygon(5, 0.2, 0.001), 0.04)))',
+            '$v.polygon(6, 0.18, 0.002).$.tint(0.12).pipe((c) => c.$.add(c.$.blur(0.04).$.mult(2))).out()',
         ],
         declarations: [
-            'blur(input: VideoField, radius?: VideoValue): VideoField;',
-            'blur(input: VideoColor, radius?: VideoValue): VideoColor;',
+            'blur(input: VideoSignal, radius?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'bloom',
         group: 'Filters',
         description:
-            'Adds a blurred copy of `input` back on top of it, so bright areas glow. It costs one blur. A field or color in gives the same type out.',
+            'Adds a blurred copy of `input` back on top of it, so bright areas glow. It costs one blur.',
         params: [
             {
                 name: 'radius',
@@ -287,19 +319,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.bloom($v.hsv(0.1, 1, $v.polygon($v.ramp(), $v.ramp('v'), 5, 0.15, 0.002)), 0.05, 2))",
-            "$v.polygon($v.ramp(), $v.ramp('v'), 6, 0.15, 0.002).$.tint(0.55).$.bloom(0.06, 2.5).out()",
+            '$v.out($v.bloom($v.hsv(0.1, 1, $v.polygon(5, 0.15, 0.002)), 0.05, 2))',
+            '$v.polygon(6, 0.15, 0.002).$.tint(0.55).$.bloom(0.06, 2.5).out()',
         ],
         declarations: [
-            'bloom(input: VideoField, radius?: VideoValue, amount?: VideoValue): VideoField;',
-            'bloom(input: VideoColor, radius?: VideoValue, amount?: VideoValue): VideoColor;',
+            'bloom(input: VideoSignal, radius?: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'edges',
         group: 'Filters',
         description:
-            'Brightness of the steepest change around each pixel (a Sobel filter): 0 on flat areas, rising along edges. It reads `input` at the eight neighbors one pixel away, so it sees the same pixel grid at any window size. A color contributes its brightness.',
+            'Brightness of the steepest change around each pixel (a Sobel filter): 0 on flat areas, rising along edges. It reads `input` at the eight neighbors one pixel away, so it sees the same pixel grid at any window size. It works on the brightness of `input`.',
         params: [
             {
                 name: 'amount',
@@ -307,11 +338,9 @@ export const VIDEO_DOCS: VideoDoc[] = [
                     'Gain on the result, which is clipped to 0..1 (default 1)',
             },
         ],
-        examples: [
-            "$v.out($v.hsv(0.4, 1, $v.edges($v.noise($v.mult($v.ramp(), 6), $v.mult($v.ramp('v'), 6), $v.time), 4)))",
-        ],
+        examples: ['$v.out($v.hsv(0.4, 1, $v.edges($v.noise(6, $v.time), 4)))'],
         declarations: [
-            'edges(input: VideoField | VideoColor, amount?: VideoValue): VideoField;',
+            'edges(input: VideoSignal, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -334,10 +363,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
         examples: [
             "$v.out($v.image('pictures/photo.png'))",
             "$v.out($v.image('https://example.com/photo.jpg'))",
-            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.05)).out()",
+            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
-            "image(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+            "image(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
         ],
     },
     {
@@ -395,10 +424,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.stream('https://example.com/live/stream.m3u8'))",
-            "$v.stream('https://example.com/clip.mp4', { fit: 'contain' }).$.hueShift($v.osc($v.time, 0.05)).out()",
+            "$v.stream('https://example.com/clip.mp4', { fit: 'contain' }).$.hueShift($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
-            "stream(url: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+            "stream(url: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
         ],
     },
     {
@@ -420,10 +449,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.camera())',
-            "$v.camera({ fit: 'contain' }).$.kaleid(6).$.hueShift($v.osc($v.time, 0.05)).out()",
+            "$v.camera({ fit: 'contain' }).$.kaleid(6).$.hueShift($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
-            "camera(config?: { device?: string; fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+            "camera(config?: { device?: string; fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
         ],
     },
     {
@@ -444,26 +473,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.screen())',
-            "$v.screen({ display: 2, fit: 'contain' }).$.hueShift($v.osc($v.time, 0.05)).out()",
+            "$v.screen({ display: 2, fit: 'contain' }).$.hueShift($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
-            "screen(config?: { display?: number; fit?: 'cover' | 'contain' | 'stretch' }): VideoColor;",
+            "screen(config?: { display?: number; fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
         ],
     },
     {
         name: 'shape',
         group: 'Generators',
         description:
-            '1 inside a shape and 0 outside, with a soft edge. Pass ramps for x and y to center it on the frame; offset them to move it. Circles stay round at any window aspect.',
+            'A gray mask: 1 inside a shape centered on the frame and 0 outside, with a soft edge. With `config.x` and `config.y` it is centered where they are both 0.5, so adding to a ramp moves it. Circles stay round at any window aspect.',
         params: [
-            {
-                name: 'x',
-                description: 'Horizontal position field; 0.5 is the center',
-            },
-            {
-                name: 'y',
-                description: 'Vertical position field; 0.5 is the center',
-            },
             {
                 name: 'size',
                 description:
@@ -478,38 +499,49 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 name: 'config.shape',
                 description: "`'circle'` (default), `'box'` or `'diamond'`",
             },
+            {
+                name: 'config.x',
+                description:
+                    'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
+            },
+            {
+                name: 'config.y',
+                description:
+                    'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
+            },
         ],
         examples: [
-            "$v.out($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3, 0.05)))",
-            "$v.out($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.2, 0, { shape: 'diamond' })))",
+            '$v.out($v.hsv(0.6, 1, $v.shape(0.3, 0.05)))',
+            '$v.out($v.hsv(0.1, 1, $v.shape(0.15, 0.01, { x: $v.add($v.ramp(), $v.time.$.osc(0.25).range(-0.3, 0.3)) })))',
+            "$v.out($v.hsv($v.time, 1, $v.shape(0.2, 0, { shape: 'diamond' })))",
         ],
         declarations: [
-            "shape(\n    x: VideoValue,\n    y: VideoValue,\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: { shape?: 'circle' | 'box' | 'diamond' },\n): VideoField;",
+            "shape(\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: { shape?: 'circle' | 'box' | 'diamond'; x?: VideoValue; y?: VideoValue },\n): VideoSignal;",
         ],
     },
     {
         name: 'colorize',
         group: 'Color',
         description:
-            'Combines three fields into a color. Each channel is clipped to 0..1.',
-        params: [],
+            'A color from red, green, blue and alpha levels, each clipped to 0..1.',
+        params: [{ name: 'a', description: 'Alpha (default 1, opaque)' }],
         examples: ["$v.out($v.colorize($v.ramp(), $v.ramp('v'), 1))"],
         declarations: [
-            'colorize(r: VideoValue, g: VideoValue, b: VideoValue): VideoColor;',
+            'colorize(r: VideoValue, g: VideoValue, b: VideoValue, a?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'hsv',
         group: 'Color',
         description:
-            'Color from hue, saturation and value. Hue wraps every 1.0; saturation and value are clipped to 0..1.',
+            'An opaque color from hue, saturation and value. Hue wraps every 1.0; saturation and value are clipped to 0..1.',
         params: [],
         examples: [
             '$v.out($v.hsv($v.ramp(), 1, 1))',
-            "$v.out($v.hsv($v.osc($v.ramp(), 2, $v.time), 0.8, $v.ramp('v')))",
+            "$v.out($v.hsv($v.osc(2, $v.time), 0.8, $v.ramp('v')))",
         ],
         declarations: [
-            'hsv(h: VideoValue, s?: VideoValue, v?: VideoValue): VideoColor;',
+            'hsv(h: VideoValue, s?: VideoValue, v?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -520,7 +552,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'input',
-                description: 'Color (a field is treated as gray)',
+                description: 'The signal to adjust',
             },
             { name: 'gain', description: 'Multiplier (default 1)' },
             {
@@ -534,72 +566,59 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: ['$v.out($v.procAmp($v.hsv($v.ramp()), 1.5, -0.2, 0.5))'],
         declarations: [
-            'procAmp(\n    input: VideoSignal,\n    gain?: VideoValue,\n    bias?: VideoValue,\n    saturation?: VideoValue,\n): VideoColor;',
+            'procAmp(\n    input: VideoValue,\n    gain?: VideoValue,\n    bias?: VideoValue,\n    saturation?: VideoValue,\n): VideoSignal;',
         ],
     },
     {
         name: 'add',
         group: 'Math',
-        description: 'Sum, clipped to 0..1. Colors add per channel.',
+        description:
+            'Sum of each channel, clipped to 0..1. The alpha is the larger of the two.',
         params: [],
         examples: [
-            "$v.out($v.hsv($v.add($v.ramp(), $v.osc($v.ramp('v'), 3))))",
+            "$v.out($v.hsv($v.add($v.ramp(), $v.osc(3, 0, { input: $v.ramp('v') }))))",
         ],
-        declarations: [
-            'add(a: VideoValue, b: VideoValue): VideoField;',
-            'add(a: VideoSignal, b: VideoSignal): VideoColor;',
-        ],
+        declarations: ['add(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
         name: 'mult',
         group: 'Math',
         description:
-            'Product. Multiplying by a field darkens; colors multiply per channel.',
+            'Product of each channel, alpha included. Multiplying by a gray darkens.',
         params: [],
         examples: ["$v.out($v.mult($v.hsv($v.ramp()), $v.ramp('v')))"],
-        declarations: [
-            'mult(a: VideoValue, b: VideoValue): VideoField;',
-            'mult(a: VideoSignal, b: VideoSignal): VideoColor;',
-        ],
+        declarations: ['mult(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
         name: 'diff',
         group: 'Math',
-        description: 'Absolute difference. Colors differ per channel.',
+        description:
+            'Absolute difference of each channel. The alpha is the larger of the two.',
         params: [],
         examples: ["$v.out($v.hsv($v.diff($v.ramp(), $v.ramp('v'))))"],
-        declarations: [
-            'diff(a: VideoValue, b: VideoValue): VideoField;',
-            'diff(a: VideoSignal, b: VideoSignal): VideoColor;',
-        ],
+        declarations: ['diff(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
         name: 'max',
         group: 'Math',
         description:
-            'The larger of two values. With shapes this is their union; colors take the larger channel.',
+            'The larger of each channel. With shapes this is their union.',
         params: [],
         examples: [
-            "$v.out($v.hsv(0.1, 1, $v.max($v.shape($v.ramp(), $v.ramp('v'), 0.2), $v.shape($v.add($v.ramp(), 0.2), $v.ramp('v'), 0.2))))",
+            '$v.out($v.hsv(0.1, 1, $v.max($v.shape(0.2), $v.shape(0.2, 0.01, { x: $v.add($v.ramp(), 0.2) }))))',
         ],
-        declarations: [
-            'max(a: VideoValue, b: VideoValue): VideoField;',
-            'max(a: VideoSignal, b: VideoSignal): VideoColor;',
-        ],
+        declarations: ['max(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
         name: 'min',
         group: 'Math',
         description:
-            'The smaller of two values. With shapes this is their intersection; colors take the smaller channel.',
+            'The smaller of each channel. With shapes this is their intersection.',
         params: [],
         examples: [
-            "$v.out($v.hsv(0.5, 1, $v.min($v.shape($v.ramp(), $v.ramp('v'), 0.3), $v.shape($v.add($v.ramp(), 0.2), $v.ramp('v'), 0.3))))",
+            '$v.out($v.hsv(0.5, 1, $v.min($v.shape(0.3), $v.shape(0.3, 0.01, { x: $v.add($v.ramp(), 0.2) }))))',
         ],
-        declarations: [
-            'min(a: VideoValue, b: VideoValue): VideoField;',
-            'min(a: VideoSignal, b: VideoSignal): VideoColor;',
-        ],
+        declarations: ['min(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
         name: 'invert',
@@ -607,10 +626,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description: 'Complement, 1 minus the input.',
         params: [],
         examples: ['$v.out($v.invert($v.hsv($v.ramp())))'],
-        declarations: [
-            'invert(input: VideoValue): VideoField;',
-            'invert(input: VideoSignal): VideoColor;',
-        ],
+        declarations: ['invert(input: VideoValue): VideoSignal;'],
     },
     {
         name: 'mix',
@@ -623,28 +639,27 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('v')), $v.osc($v.time, 0.25)))",
+            "$v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('v')), $v.time.$.osc(0.25)))",
         ],
         declarations: [
-            'mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoField;',
-            'mix(a: VideoSignal, b: VideoSignal, amount?: VideoValue): VideoColor;',
+            'mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'range',
         group: 'Shaping',
         description:
-            "Maps a field's 0 to 1 onto `min` to `max`, as `.range` does for an audio signal. Use it to give an input that has its own units, such as a zoom factor, a frequency or a count, the span you want. It is also called on the field itself, as `field.range(min, max)`.",
+            "Maps each channel's 0 to 1 onto `min` to `max`, as `.range` does for an audio signal; the alpha is kept. Use it to give an input that has its own units, such as a zoom factor, a frequency or a count, the span you want. It is also called on the signal itself, as `signal.range(min, max)`.",
         params: [
             { name: 'min', description: 'The value 0 becomes (default 0)' },
             { name: 'max', description: 'The value 1 becomes (default 1)' },
         ],
         examples: [
-            "$v.out($v.hsv($v.ramp('a', { zoom: $v.range($v.osc($v.time, 0.1), 1, 3) })))",
+            "$v.out($v.hsv($v.ramp('a', { zoom: $v.range($v.time.$.osc(0.1), 1, 3) })))",
             '$v.out($v.hsv($v.ramp().range(0, 0.5)))',
         ],
         declarations: [
-            'range(input: VideoField, min?: VideoValue, max?: VideoValue): VideoField;',
+            'range(input: VideoValue, min?: VideoValue, max?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -655,7 +670,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [],
         examples: ['$v.out($v.hsv($v.wrap($v.ramp(), 4)))'],
         declarations: [
-            'wrap(input: VideoValue, gain?: VideoValue): VideoField;',
+            'wrap(input: VideoValue, gain?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -666,7 +681,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [],
         examples: ['$v.out($v.hsv($v.fold($v.ramp(), 3)))'],
         declarations: [
-            'fold(input: VideoValue, gain?: VideoValue): VideoField;',
+            'fold(input: VideoValue, gain?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -676,10 +691,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'Threshold: 0 below `threshold`, 1 above, with a linear ramp `softness` wide centered on it (a hard edge when 0).',
         params: [],
         examples: [
-            '$v.out($v.hsv(0.1, 1, $v.comparator($v.osc($v.ramp(), 4), 0.5, 0.1)))',
+            '$v.out($v.hsv(0.1, 1, $v.comparator($v.osc(4), 0.5, 0.1)))',
         ],
         declarations: [
-            'comparator(\n    input: VideoValue,\n    threshold?: VideoValue,\n    softness?: VideoValue,\n): VideoField;',
+            'comparator(\n    input: VideoValue,\n    threshold?: VideoValue,\n    softness?: VideoValue,\n): VideoSignal;',
         ],
     },
     {
@@ -695,7 +710,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: ['$v.out($v.hsv($v.posterize($v.ramp(), 5)))'],
         declarations: [
-            'posterize(input: VideoValue, levels?: VideoValue): VideoField;',
+            'posterize(input: VideoValue, levels?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -704,17 +719,72 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description: 'Shows `fg` where `mask` is 1 and `bg` where it is 0.',
         params: [],
         examples: [
-            "$v.out($v.key($v.hsv(0.9), $v.hsv($v.ramp(), 1, 0.5), $v.shape($v.ramp(), $v.ramp('v'), 0.3)))",
+            '$v.out($v.key($v.hsv(0.9), $v.hsv($v.ramp(), 1, 0.5), $v.shape(0.3)))',
         ],
         declarations: [
-            'key(fg: VideoSignal, bg: VideoSignal, mask: VideoValue): VideoColor;',
+            'key(fg: VideoValue, bg: VideoValue, mask: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'layer',
+        group: 'Compositing',
+        description:
+            "Lays `top` over `base` by the alpha of `top`, as Hydra's `layer` does: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add.",
+        params: [
+            { name: 'base', description: 'The signal underneath' },
+            { name: 'top', description: 'The signal laid over it' },
+        ],
+        examples: [
+            '$v.out($v.layer($v.osc(8).$.hsv(), $v.noise(4, $v.time).$.luma(0.5, 0.05)))',
+            '$v.osc(20, $v.time).$.tint(0.6).$.layer($v.hsv(0.1, 1, $v.shape(0.2)).$.mask($v.shape(0.2))).out()',
+        ],
+        declarations: [
+            'layer(base: VideoValue, top: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'mask',
+        group: 'Compositing',
+        description:
+            "`input` seen through `mask`, as Hydra's `mask` does: its color and alpha are scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.",
+        params: [
+            { name: 'mask', description: 'Where `input` shows, by brightness' },
+        ],
+        examples: [
+            '$v.out($v.layer($v.hsv(0.6), $v.osc(10).$.hsv().$.mask($v.shape(0.3, 0.05))))',
+        ],
+        declarations: [
+            'mask(input: VideoValue, mask: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'luma',
+        group: 'Compositing',
+        description:
+            "Keys `input` by its own brightness, as Hydra's `luma` does: the alpha rises from 0 to 1 as the brightness crosses `threshold`, so dark parts turn transparent. Lay the result over another signal with `layer`.",
+        params: [
+            {
+                name: 'threshold',
+                description: 'Brightness where the alpha is 0.5 (default 0.5)',
+            },
+            {
+                name: 'tolerance',
+                description:
+                    'Half the width of the band over which the alpha rises (default 0.1)',
+            },
+        ],
+        examples: [
+            '$v.out($v.layer($v.hsv(0.7, 0.6, 0.4), $v.voronoi(6, $v.time).$.luma(0.4, 0.02)))',
+        ],
+        declarations: [
+            'luma(input: VideoValue, threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'feedback',
         group: 'Memory',
         description:
-            "Feeds a frame back into itself. `update` receives the previous frame's result as `prev`, resampled through the transform in `config`, and returns this frame's color; `feedback` returns that color. The first frame's `prev` is black. Re-running a patch keeps the loops' pictures, so edits take effect without wiping the trails.",
+            "Feeds a frame back into itself. `update` receives the previous frame's result as `prev`, resampled through the transform in `config`, and returns this frame's color; `feedback` returns that color. The first frame's `prev` is transparent black. Re-running a patch keeps the loops' pictures, so edits take effect without wiping the trails.",
         params: [
             { name: 'update', description: 'Builds this frame from `prev`' },
             {
@@ -744,18 +814,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.1)), prev, 0.9), { zoom: 1.02, rotate: 0.004 }))",
-            "$v.out($v.feedback((prev) => $v.add($v.hsv($v.osc($v.time, 0.2), 1, $v.shape($v.add($v.ramp(), -0.2), $v.ramp('v'), 0.05)), $v.mult(prev, 0.96)), { rotate: 0.01 }))",
+            '$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 1, $v.shape(0.1)), prev, 0.9), { zoom: 1.02, rotate: 0.004 }))',
+            '$v.out($v.feedback((prev) => $v.add($v.hsv($v.time.$.osc(0.2), 1, $v.shape(0.05, 0.01, { x: $v.add($v.ramp(), -0.2) })), $v.mult(prev, 0.96)), { rotate: 0.01 }))',
         ],
         declarations: [
-            "feedback(\n    update: (prev: VideoColor) => VideoSignal,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoColor;",
+            "feedback(\n    update: (prev: VideoSignal) => VideoSignal,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoSignal;",
         ],
     },
     {
         name: 'frameDelay',
         group: 'Memory',
         description:
-            '`input` as it was `frames` frames ago, always as a color (a field comes out gray); until that many frames have passed it is black. Add it back to the live picture for echoes and trails. Each frame held back takes one of the seven frame buffers that feedback loops and `$v.buffer` also use, so a long delay leaves fewer for them.',
+            '`input` as it was `frames` frames ago; until that many frames have passed it is transparent black. Add it back to the live picture for echoes and trails. Each frame held back takes one of the seven frame buffers that feedback loops and `$v.buffer` also use, so a long delay leaves fewer for them.',
         params: [
             {
                 name: 'frames',
@@ -764,10 +834,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "const dot = $v.hsv(0.3, 1, $v.shape($v.add($v.ramp(), $v.osc($v.time, 0.5)), $v.ramp('v'), 0.12)); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))",
+            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { x: $v.add($v.ramp(), $v.time.$.osc(0.5)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
         ],
         declarations: [
-            'frameDelay(input: VideoSignal, frames?: number): VideoColor;',
+            'frameDelay(input: VideoValue, frames?: number): VideoSignal;',
         ],
     },
     {
@@ -783,20 +853,19 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$v.out($v.hsv($v.preview($v.osc($v.ramp(), 4))))',
+            '$v.out($v.hsv($v.preview($v.osc(4))))',
             "$v.out($v.preview($v.hsv($v.ramp('r')), { view: 'waveform' }))",
             "$v.out($v.preview($v.hsv($v.ramp('a')), { view: 'vectorscope' }))",
         ],
         declarations: [
-            "preview(signal: VideoField, config?: { view?: 'image' | 'waveform' | 'vectorscope' }): VideoField;",
-            "preview(signal: VideoColor, config?: { view?: 'image' | 'waveform' | 'vectorscope' }): VideoColor;",
+            "preview(signal: VideoSignal, config?: { view?: 'image' | 'waveform' | 'vectorscope' }): VideoSignal;",
         ],
     },
     {
         name: 'toCV',
         group: 'Output',
         description:
-            'Averages a region of a signal each frame into an audio control signal between 0 and 1, so the picture can modulate the sound. A color contributes its brightness. The value is read from the picture about 30 times a second. Scale the result with `.range(min, max)` like any ranged signal.',
+            'Averages a region of a signal each frame into an audio control signal between 0 and 1, so the picture can modulate the sound: the brightness of the region as the picture shows it, over black. The value is read from the picture about 30 times a second. Scale the result with `.range(min, max)` like any ranged signal.',
         params: [
             {
                 name: 'config.x',
@@ -815,17 +884,17 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$sine($v.toCV($v.shape($v.ramp(), $v.ramp('v'), 0.3), { size: 0.1 }).range(110, 440)).out()",
+            '$sine($v.toCV($v.shape(0.3), { size: 0.1 }).range(110, 440)).out()',
         ],
         declarations: [
-            'toCV(signal: VideoField | VideoColor, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
+            'toCV(signal: VideoSignal, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
         ],
     },
     {
         name: 'warp',
         group: 'Warping',
         description:
-            'Zooms about the center, turns and shifts everything `input` draws: not just its output but the whole sub-patch behind it, which is evaluated again at the moved coordinates. A field or color in gives the same type out.',
+            'Zooms about the center, turns and shifts everything `input` draws: not just its output but the whole sub-patch behind it, which is evaluated again at the moved coordinates.',
         params: [
             {
                 name: 'config.zoom',
@@ -848,12 +917,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.warp($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4)), { rotate: $v.mult($v.time, 0.05), zoom: 2 })))",
-            "$v.out($v.warp($v.hsv($v.shape($v.ramp(), $v.ramp('v'), 0.15)), { shiftX: $v.osc($v.time, 0.25), rotate: 0.1 }))",
+            '$v.out($v.hsv($v.warp($v.noise(4), { rotate: $v.mult($v.time, 0.05), zoom: 2 })))',
+            '$v.out($v.warp($v.hsv($v.shape(0.15)), { shiftX: $v.time.$.osc(0.25), rotate: 0.1 }))',
         ],
         declarations: [
-            'warp(input: VideoField, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoField;',
-            'warp(input: VideoColor, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoColor;',
+            'warp(input: VideoSignal, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoSignal;',
         ],
     },
     {
@@ -878,18 +946,17 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.displace($v.osc($v.ramp(), 8), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.5, 0.2)))",
+            '$v.out($v.hsv($v.displace($v.osc(8), $v.noise(3, $v.time), 0.5, 0.2)))',
         ],
         declarations: [
-            'displace(input: VideoField, dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoField;',
-            'displace(input: VideoColor, dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoColor;',
+            'displace(input: VideoSignal, dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulate',
         group: 'Warping',
         description:
-            "Pushes `input` around by another signal, as Hydra's `modulate` does. A color moves it by its red and green channels, a field by its value in both directions. It is `displace` with the push taken from a signal.",
+            "Pushes `input` around by another signal, as Hydra's `modulate` does: the modulator's red channel moves it across and its green up, so a gray modulator moves it diagonally. It is `displace` with the push taken from a signal.",
         params: [
             {
                 name: 'modulator',
@@ -902,24 +969,22 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv($v.modulate($v.osc($v.ramp(), 10), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3)))",
-            "$v.out($v.modulate($v.hsv($v.ramp('r')), $v.hsv($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), 0)), 0.2))",
+            '$v.out($v.hsv($v.modulate($v.osc(10), $v.noise(3, $v.time), 0.3)))',
+            "$v.out($v.modulate($v.hsv($v.ramp('r')), $v.hsv($v.noise(4, 0)), 0.2))",
         ],
         declarations: [
-            'modulate(input: VideoField, modulator: VideoField | VideoColor, amount?: VideoValue): VideoField;',
-            'modulate(input: VideoColor, modulator: VideoField | VideoColor, amount?: VideoValue): VideoColor;',
+            'modulate(input: VideoSignal, modulator: VideoSignal, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateScale',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScale`: scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical (a field sets both). Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
+            "As Hydra's `modulateScale`: scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             {
                 name: 'multiple',
@@ -933,11 +998,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateScale($v.hsv($v.osc($v.ramp('r'), 10)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 1.5, 1))",
+            "$v.out($v.modulateScale($v.hsv($v.osc(10, 0, { input: $v.ramp('r') })), $v.noise(3, $v.time), 1.5, 1))",
         ],
         declarations: [
-            'modulateScale(input: VideoField, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoField;',
-            'modulateScale(input: VideoColor, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoColor;',
+            'modulateScale(input: VideoSignal, modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -948,8 +1012,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             {
                 name: 'multiple',
@@ -961,11 +1024,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateRotate($v.hsv($v.osc($v.ramp(), 8)), $v.osc($v.ramp('r'), 3, $v.time), 0.5))",
+            "$v.out($v.modulateRotate($v.hsv($v.osc(8)), $v.osc(3, $v.time, { input: $v.ramp('r') }), 0.5))",
         ],
         declarations: [
-            'modulateRotate(input: VideoField, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoField;',
-            'modulateRotate(input: VideoColor, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoColor;',
+            'modulateRotate(input: VideoSignal, modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -976,8 +1038,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             {
                 name: 'multiple',
@@ -989,11 +1050,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulatePixelate($v.hsv($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time)), $v.ramp(), 30, 4))",
+            '$v.out($v.modulatePixelate($v.hsv($v.noise(4, $v.time)), $v.ramp(), 30, 4))',
         ],
         declarations: [
-            'modulatePixelate(input: VideoField, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoField;',
-            'modulatePixelate(input: VideoColor, modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): VideoColor;',
+            'modulatePixelate(input: VideoSignal, modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1004,29 +1064,26 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             { name: 'sides', description: 'Number of wedges (default 4)' },
         ],
         examples: [
-            "$v.out($v.modulateKaleid($v.hsv($v.osc($v.ramp(), 6, $v.time)), $v.ramp('r'), 6))",
+            "$v.out($v.modulateKaleid($v.hsv($v.osc(6, $v.time)), $v.ramp('r'), 6))",
         ],
         declarations: [
-            'modulateKaleid(input: VideoField, modulator: VideoField | VideoColor, sides?: VideoValue): VideoField;',
-            'modulateKaleid(input: VideoColor, modulator: VideoField | VideoColor, sides?: VideoValue): VideoColor;',
+            'modulateKaleid(input: VideoSignal, modulator: VideoSignal, sides?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateHue',
         group: 'Warping',
         description:
-            "As Hydra's `modulateHue`: pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A field has the same value in every channel, so it has no differences and does not move `input`.",
+            "As Hydra's `modulateHue`: pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A gray modulator has the same value in every channel, so it has no differences and does not move `input`.",
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             {
                 name: 'amount',
@@ -1035,11 +1092,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateHue($v.hsv($v.osc($v.ramp(), 8)), $v.hsv($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time)), 120))",
+            '$v.out($v.modulateHue($v.hsv($v.osc(8)), $v.hsv($v.noise(3, $v.time)), 120))',
         ],
         declarations: [
-            'modulateHue(input: VideoField, modulator: VideoField | VideoColor, amount?: VideoValue): VideoField;',
-            'modulateHue(input: VideoColor, modulator: VideoField | VideoColor, amount?: VideoValue): VideoColor;',
+            'modulateHue(input: VideoSignal, modulator: VideoSignal, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1050,8 +1106,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             { name: 'repeatX', description: 'Tiles across (default 3)' },
             { name: 'repeatY', description: 'Tiles up (default 3)' },
@@ -1067,11 +1122,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateRepeat($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 4, 4, 0.5, 0.5))",
+            '$v.out($v.modulateRepeat($v.hsv(0.6, 1, $v.shape(0.3)), $v.noise(3, $v.time), 4, 4, 0.5, 0.5))',
         ],
         declarations: [
-            'modulateRepeat(input: VideoField, modulator: VideoField | VideoColor, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoField;',
-            'modulateRepeat(input: VideoColor, modulator: VideoField | VideoColor, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoColor;',
+            'modulateRepeat(input: VideoSignal, modulator: VideoSignal, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1082,8 +1136,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             { name: 'reps', description: 'Tiles across (default 3)' },
             {
@@ -1093,11 +1146,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateRepeatX($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 4))",
+            '$v.out($v.modulateRepeatX($v.hsv(0.6, 1, $v.shape(0.3)), $v.noise(3, $v.time), 4))',
         ],
         declarations: [
-            'modulateRepeatX(input: VideoField, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoField;',
-            'modulateRepeatX(input: VideoColor, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoColor;',
+            'modulateRepeatX(input: VideoSignal, modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1108,8 +1160,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             { name: 'reps', description: 'Tiles up (default 3)' },
             {
@@ -1119,11 +1170,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateRepeatY($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3)), $v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 4))",
+            '$v.out($v.modulateRepeatY($v.hsv(0.6, 1, $v.shape(0.3)), $v.noise(3, $v.time), 4))',
         ],
         declarations: [
-            'modulateRepeatY(input: VideoField, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoField;',
-            'modulateRepeatY(input: VideoColor, modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): VideoColor;',
+            'modulateRepeatY(input: VideoSignal, modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1134,8 +1184,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             {
                 name: 'scroll',
@@ -1149,11 +1198,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateScrollX($v.hsv($v.osc($v.ramp(), 8)), $v.ramp('v'), 0.5, 0.1))",
+            "$v.out($v.modulateScrollX($v.hsv($v.osc(8)), $v.ramp('v'), 0.5, 0.1))",
         ],
         declarations: [
-            'modulateScrollX(input: VideoField, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoField;',
-            'modulateScrollX(input: VideoColor, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoColor;',
+            'modulateScrollX(input: VideoSignal, modulator: VideoSignal, scroll?: VideoValue, speed?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1164,8 +1212,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'modulator',
-                description:
-                    'The signal that moves `input`; a color uses its channels, a field its one value',
+                description: 'The signal that moves `input` by its channels',
             },
             {
                 name: 'scroll',
@@ -1179,11 +1226,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateScrollY($v.hsv($v.osc($v.ramp('v'), 8)), $v.ramp(), 0.5, 0.1))",
+            "$v.out($v.modulateScrollY($v.hsv($v.osc(8, 0, { input: $v.ramp('v') })), $v.ramp(), 0.5, 0.1))",
         ],
         declarations: [
-            'modulateScrollY(input: VideoField, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoField;',
-            'modulateScrollY(input: VideoColor, modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): VideoColor;',
+            'modulateScrollY(input: VideoSignal, modulator: VideoSignal, scroll?: VideoValue, speed?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1195,12 +1241,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'sides', description: 'Number of wedges (default 4)' },
         ],
         examples: [
-            '$v.out($v.kaleid($v.hsv($v.osc($v.ramp(), 3, $v.time)), 6))',
-            "$v.out($v.hsv($v.kaleid($v.noise($v.mult($v.ramp(), 5), $v.mult($v.ramp('v'), 5), $v.time), 8)))",
+            '$v.out($v.kaleid($v.hsv($v.osc(3, $v.time)), 6))',
+            '$v.out($v.hsv($v.kaleid($v.noise(5, $v.time), 8)))',
         ],
         declarations: [
-            'kaleid(input: VideoField, sides?: VideoValue): VideoField;',
-            'kaleid(input: VideoColor, sides?: VideoValue): VideoColor;',
+            'kaleid(input: VideoSignal, sides?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1212,12 +1257,9 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'x', description: 'Cells across (default 20)' },
             { name: 'y', description: 'Cells up (default the same as x)' },
         ],
-        examples: [
-            "$v.out($v.hsv($v.pixelate($v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time), 24, 14)))",
-        ],
+        examples: ['$v.out($v.hsv($v.pixelate($v.noise(4, $v.time), 24, 14)))'],
         declarations: [
-            'pixelate(input: VideoField, x?: VideoValue, y?: VideoValue): VideoField;',
-            'pixelate(input: VideoColor, x?: VideoValue, y?: VideoValue): VideoColor;',
+            'pixelate(input: VideoSignal, x?: VideoValue, y?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1228,19 +1270,16 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'x', description: 'Tiles across (default 3)' },
             { name: 'y', description: 'Tiles up (default the same as x)' },
         ],
-        examples: [
-            "$v.out($v.repeat($v.hsv(0.6, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.3)), 4, 3))",
-        ],
+        examples: ['$v.out($v.repeat($v.hsv(0.6, 1, $v.shape(0.3)), 4, 3))'],
         declarations: [
-            'repeat(input: VideoField, x?: VideoValue, y?: VideoValue): VideoField;',
-            'repeat(input: VideoColor, x?: VideoValue, y?: VideoValue): VideoColor;',
+            'repeat(input: VideoSignal, x?: VideoValue, y?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'hueShift',
         group: 'Color',
         description:
-            'Turns every hue of a color by `amount` of a full circle, keeping its saturation and brightness.',
+            'Turns every hue of `input` by `amount` of a full circle, keeping its saturation, brightness and alpha.',
         params: [
             {
                 name: 'amount',
@@ -1249,10 +1288,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$v.out($v.hueShift($v.hsv($v.ramp()), $v.osc($v.time, 0.1)))',
+            '$v.out($v.hueShift($v.hsv($v.ramp()), $v.time.$.osc(0.1)))',
         ],
         declarations: [
-            'hueShift(input: VideoSignal, amount?: VideoValue): VideoColor;',
+            'hueShift(input: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1267,7 +1306,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.contrast($v.hsv($v.ramp(), 0.6, $v.ramp('v')), 3))",
         ],
         declarations: [
-            'contrast(input: VideoSignal, amount?: VideoValue): VideoColor;',
+            'contrast(input: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1288,7 +1327,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: ['$v.out($v.scanlines($v.hsv($v.ramp()), 120, 0.5))'],
         declarations: [
-            'scanlines(input: VideoSignal, count?: VideoValue, strength?: VideoValue): VideoColor;',
+            'scanlines(input: VideoValue, count?: VideoValue, strength?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1309,7 +1348,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: ['$v.out($v.vignette($v.hsv($v.ramp()), 0.8, 0.2))'],
         declarations: [
-            'vignette(input: VideoSignal, strength?: VideoValue, radius?: VideoValue): VideoColor;',
+            'vignette(input: VideoValue, strength?: VideoValue, radius?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1329,27 +1368,27 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.hsv($v.ramp()).$.scanlines(180, 0.35).$.vignette(0.7).$.grain(0.08).out()',
         ],
         declarations: [
-            'grain(input: VideoSignal, amount?: VideoValue): VideoColor;',
+            'grain(input: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'channel',
         group: 'Color',
         description:
-            "One channel of a color as a field: `'r'`, `'g'`, `'b'`, or `'luma'` for brightness (the default). A field is its own channel. A color's channels are also its `.r`, `.g` and `.b` properties; a field has none.",
+            "One channel of a signal as an opaque gray: `'r'`, `'g'`, `'b'`, `'a'` for the alpha, or `'luma'` for brightness (the default). The channels are also every signal's `.r`, `.g`, `.b` and `.a` properties.",
         params: [{ name: 'which', description: 'Which channel to take' }],
         examples: [
             "$v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'r'), 0, 0))",
         ],
         declarations: [
-            "channel(input: VideoSignal, which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
+            "channel(input: VideoValue, which?: 'r' | 'g' | 'b' | 'a' | 'luma'): VideoSignal;",
         ],
     },
     {
         name: 'swiz',
         group: 'Color',
         description:
-            "Reorders the channels of a color. Each letter of `pattern` names the channel of `input` that fills red, green and blue in turn: `'gbr'` makes red from green, green from blue and blue from red, and `'rrr'` is the red channel as gray. A field is gray, so every pattern gives it back as a gray color.",
+            "Reorders the channels of a signal. Each letter of `pattern`, one of `r`, `g`, `b` and `a`, names the channel of `input` that fills red, green and blue in turn: `'gbr'` makes red from green, green from blue and blue from red, `'rrr'` is the red channel as gray, and `'aaa'` shows the alpha. The alpha is kept.",
         params: [
             {
                 name: 'pattern',
@@ -1362,7 +1401,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.hsv($v.ramp()).$.swiz('bgr').out()",
         ],
         declarations: [
-            'swiz(input: VideoSignal, pattern: string): VideoColor;',
+            'swiz(input: VideoValue, pattern: string): VideoSignal;',
         ],
     },
     {
@@ -1372,8 +1411,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
-            'const trail = $v.buffer(); $v.osc($v.ramp(), 8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',
-            "const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 1, $v.shape($v.ramp(), $v.ramp('v'), 0.08)).$.add(b.read({ rotate: 0.01 }).$.mult(0.95))); b.write(a.read({ zoom: 1.03 }).$.mult(0.9)); $v.out(a.read())",
+            'const trail = $v.buffer(); $v.osc(8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',
+            'const a = $v.buffer(); const b = $v.buffer(); a.write($v.hsv($v.time, 1, $v.shape(0.08)).$.add(b.read({ rotate: 0.01 }).$.mult(0.95))); b.write(a.read({ zoom: 1.03 }).$.mult(0.9)); $v.out(a.read())',
         ],
         declarations: ['buffer(): VideoBuffer;'],
     },
@@ -1381,10 +1420,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'out',
         group: 'Output',
         description:
-            'Shows a color behind the code, and in the performance window when it is open. A field is shown as a gray picture. Last call wins. It returns its input unchanged, so it can sit in the middle of a chain.',
+            'Shows a signal behind the code, and in the performance window when it is open, laid over black by its alpha. Last call wins. It returns its input unchanged, so it can sit in the middle of a chain.',
         params: [],
         examples: ['$v.out($v.colorize(1, 0, 0))'],
-        declarations: ['out<T extends VideoField | VideoColor>(input: T): T;'],
+        declarations: ['out<T extends VideoSignal>(input: T): T;'],
     },
 ];
 
@@ -1392,279 +1431,259 @@ export const VIDEO_DOCS: VideoDoc[] = [
 export interface VideoChainDoc {
     name: string;
     description: string;
-    /** Declarations for every signal the method applies to; `{self}` is the signal's own type. */
-    declarations?: string[];
-    /** Declarations that replace the shared ones for a field or a color. */
-    field?: string[];
-    color?: string[];
-    /** The kinds of signal the method applies to (default both). */
-    on?: ('field' | 'color')[];
+    declarations: string[];
     /** A method of the signal itself that ends or taps a chain, not a member of `.$`. */
     direct?: boolean;
 }
 
 export const VIDEO_CHAIN_INTRO =
-    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 1 for the result: `x.$m.kaleid(0.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way by default. `range(min, max)` is called directly on a field and maps its 0 to 1 onto `min` to `max`. `out`, `preview`, `toCV`, `write` and `range` end, tap or rescale a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
+    'Video signals chain the way audio signals do. `.$` is a namespace of the `$v` functions that take a signal first, with the signal supplied for you: `x.$.rotate(0.1)` reads in signal-flow order and is `$v.warp(x, { rotate: 0.1 })`. `.$m` is the same with a leading `mix` argument that crossfades the signal against the result, 0 for the signal and 1 for the result: `x.$m.kaleid(0.5, 6)`. `.pipe(fn)` calls `fn(signal)`, and `.pipe(fn, array)` calls it once per element and returns the results as an array. `.pipeMix(fn, mix)` crossfades the signal against `fn(signal)`, half way by default. `range(min, max)` is called directly on a signal and maps the 0 to 1 of each channel onto `min` to `max`. `out`, `preview`, `toCV`, `write` and `range` end, tap or rescale a chain and are called directly on the signal. `rotate`, `scale` and `scroll` are shorthand for `warp`.';
 
 export const VIDEO_CHAIN_EXAMPLES: string[] = [
-    "$v.osc($v.ramp(), 10).$.modulate($v.noise($v.mult($v.ramp(), 3), $v.mult($v.ramp('v'), 3), $v.time), 0.3).$.kaleid(6).$.hsv().out()",
-    "$v.noise($v.mult($v.ramp(), 4), $v.mult($v.ramp('v'), 4), $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(0.8).preview().out()",
-    '$v.osc($v.ramp(), 8).$.hsv().$m.kaleid(0.5, 5).out()',
+    '$v.osc(10).$.modulate($v.noise(3, $v.time), 0.3).$.kaleid(6).$.hsv().out()',
+    '$v.noise(4, $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(0.8).preview().out()',
+    '$v.osc(8).$.hsv().$m.kaleid(0.5, 5).out()',
     "$v.ramp().$.osc(8).$.mult($v.ramp('v').$.osc(4)).$.hsv().out()",
-    '$v.osc($v.ramp(), 8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out()',
-    '$v.osc($v.ramp(), 8).$.hsv().pipeMix((c) => c.$.invert(), $v.osc($v.time, 0.2)).out()',
+    '$v.osc(8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out()',
+    '$v.osc(8).$.hsv().pipeMix((c) => c.$.invert(), $v.time.$.osc(0.2)).out()',
 ];
 
 export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'add',
         description: 'Sum with `b`, clipped to 0..1.',
-        field: [
-            'add(b: VideoValue): VideoField;',
-            'add(b: VideoSignal): VideoColor;',
-        ],
-        color: ['add(b: VideoSignal): VideoColor;'],
+        declarations: ['add(b: VideoValue): VideoSignal;'],
     },
     {
         name: 'mult',
         description: 'Product with `b`.',
-        field: [
-            'mult(b: VideoValue): VideoField;',
-            'mult(b: VideoSignal): VideoColor;',
-        ],
-        color: ['mult(b: VideoSignal): VideoColor;'],
+        declarations: ['mult(b: VideoValue): VideoSignal;'],
     },
     {
         name: 'diff',
         description: 'Absolute difference from `b`.',
-        field: [
-            'diff(b: VideoValue): VideoField;',
-            'diff(b: VideoSignal): VideoColor;',
-        ],
-        color: ['diff(b: VideoSignal): VideoColor;'],
+        declarations: ['diff(b: VideoValue): VideoSignal;'],
     },
     {
         name: 'max',
         description: 'The larger of this and `b`.',
-        field: [
-            'max(b: VideoValue): VideoField;',
-            'max(b: VideoSignal): VideoColor;',
-        ],
-        color: ['max(b: VideoSignal): VideoColor;'],
+        declarations: ['max(b: VideoValue): VideoSignal;'],
     },
     {
         name: 'min',
         description: 'The smaller of this and `b`.',
-        field: [
-            'min(b: VideoValue): VideoField;',
-            'min(b: VideoSignal): VideoColor;',
-        ],
-        color: ['min(b: VideoSignal): VideoColor;'],
+        declarations: ['min(b: VideoValue): VideoSignal;'],
     },
     {
         name: 'mix',
         description: 'Crossfade from this to `b`.',
-        field: [
-            'mix(b: VideoValue, amount?: VideoValue): VideoField;',
-            'mix(b: VideoSignal, amount?: VideoValue): VideoColor;',
-        ],
-        color: ['mix(b: VideoSignal, amount?: VideoValue): VideoColor;'],
+        declarations: ['mix(b: VideoValue, amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'invert',
         description: 'The complement, 1 minus this.',
-        declarations: ['invert(): {self};'],
+        declarations: ['invert(): VideoSignal;'],
     },
     {
         name: 'range',
         direct: true,
         description:
-            "Maps this field's 0 to 1 onto `min` to `max`: `field.range(1, 3)` gives a value from 1 to 3, for an input in its own units such as a zoom factor or a count.",
+            "Maps each channel's 0 to 1 onto `min` to `max`: `signal.range(1, 3)` gives values from 1 to 3, for an input in its own units such as a zoom factor or a count.",
         declarations: [
-            'range(min?: VideoValue, max?: VideoValue): VideoField;',
+            'range(min?: VideoValue, max?: VideoValue): VideoSignal;',
         ],
-        on: ['field'],
     },
     {
         name: 'posterize',
         description: 'Quantizes to `levels` steps.',
-        declarations: ['posterize(levels?: VideoValue): VideoField;'],
-        on: ['field'],
+        declarations: ['posterize(levels?: VideoValue): VideoSignal;'],
     },
     {
         name: 'write',
         direct: true,
         description:
-            'Stores this in a buffer for the next frame to read, and returns it as a color.',
-        declarations: ['write(buffer: VideoBuffer): VideoColor;'],
+            'Stores this in a buffer for the next frame to read, and returns it.',
+        declarations: ['write(buffer: VideoBuffer): VideoSignal;'],
     },
     {
         name: 'wrap',
         description: 'Multiplies by `gain`, then keeps the fractional part.',
-        declarations: ['wrap(gain?: VideoValue): VideoField;'],
-        on: ['field'],
+        declarations: ['wrap(gain?: VideoValue): VideoSignal;'],
     },
     {
         name: 'fold',
         description:
             'Multiplies by `gain`, then reflects what passes 1 back down.',
-        declarations: ['fold(gain?: VideoValue): VideoField;'],
-        on: ['field'],
+        declarations: ['fold(gain?: VideoValue): VideoSignal;'],
     },
     {
         name: 'osc',
         description:
-            'Shapes this field into a repeating wave: `freq` cycles per unit of this field, offset by `phase`.',
+            'A gray wave along this signal: `freq` cycles per unit of its brightness, offset by `phase`.',
         declarations: [
-            "osc(\n    freq: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square' },\n): VideoField;",
+            "osc(\n    freq: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square' },\n): VideoSignal;",
         ],
-        on: ['field'],
     },
     {
         name: 'comparator',
         description: 'Threshold with a soft edge.',
         declarations: [
-            'comparator(threshold?: VideoValue, softness?: VideoValue): VideoField;',
+            'comparator(threshold?: VideoValue, softness?: VideoValue): VideoSignal;',
         ],
-        on: ['field'],
     },
     {
         name: 'hsv',
         description:
-            'Uses this field as the hue of a color, so the field paints a rainbow. To color a mask instead, with a fixed hue and this field as the brightness, use `tint`.',
+            'Uses the brightness of this as the hue of a color, so a ramp paints a rainbow. To color a mask instead, with a fixed hue and this as the brightness, use `tint`.',
         declarations: [
-            'hsv(saturation?: VideoValue, value?: VideoValue): VideoColor;',
+            'hsv(saturation?: VideoValue, value?: VideoValue): VideoSignal;',
         ],
-        on: ['field'],
     },
     {
         name: 'tint',
         description:
-            'Colors this field: it becomes the brightness of a color with the given hue and saturation, so a mask turns into a shape of that color.',
+            'Colors this: its brightness becomes the value of a color with the given hue and saturation, so a mask turns into a shape of that color.',
         declarations: [
-            'tint(hue?: VideoValue, saturation?: VideoValue): VideoColor;',
+            'tint(hue?: VideoValue, saturation?: VideoValue): VideoSignal;',
         ],
-        on: ['field'],
     },
     {
         name: 'procAmp',
         description: 'Saturation, then gain and bias.',
         declarations: [
-            'procAmp(gain?: VideoValue, bias?: VideoValue, saturation?: VideoValue): VideoColor;',
+            'procAmp(gain?: VideoValue, bias?: VideoValue, saturation?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'hueShift',
-        description:
-            'Turns every hue of this color by `amount` of a full circle.',
-        declarations: ['hueShift(amount?: VideoValue): VideoColor;'],
+        description: 'Turns every hue of this by `amount` of a full circle.',
+        declarations: ['hueShift(amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'contrast',
-        description: "Scales this color's distance from mid-gray by `amount`.",
-        declarations: ['contrast(amount?: VideoValue): VideoColor;'],
+        description: "Scales this signal's distance from mid-gray by `amount`.",
+        declarations: ['contrast(amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'blur',
         description: 'Averages this over a disk of `radius`.',
-        declarations: ['blur(radius?: VideoValue): {self};'],
+        declarations: ['blur(radius?: VideoValue): VideoSignal;'],
     },
     {
         name: 'bloom',
         description:
             'Adds a blurred copy of this back on top of it, so bright areas glow.',
         declarations: [
-            'bloom(radius?: VideoValue, amount?: VideoValue): {self};',
+            'bloom(radius?: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'edges',
         description: 'Brightness of the steepest change around each pixel.',
-        declarations: ['edges(amount?: VideoValue): VideoField;'],
+        declarations: ['edges(amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'scanlines',
-        description: 'Darkens evenly spaced horizontal lines of this color.',
+        description: 'Darkens evenly spaced horizontal lines of this.',
         declarations: [
-            'scanlines(count?: VideoValue, strength?: VideoValue): VideoColor;',
+            'scanlines(count?: VideoValue, strength?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'vignette',
-        description: 'Darkens this color toward the corners of the frame.',
+        description: 'Darkens this toward the corners of the frame.',
         declarations: [
-            'vignette(strength?: VideoValue, radius?: VideoValue): VideoColor;',
+            'vignette(strength?: VideoValue, radius?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'grain',
-        description: 'Adds film grain to this color, redrawn every frame.',
-        declarations: ['grain(amount?: VideoValue): VideoColor;'],
+        description: 'Adds film grain to this, redrawn every frame.',
+        declarations: ['grain(amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'channel',
         description:
-            'One channel of this as a field; a field is its own channel.',
+            'One channel of this, or its brightness, as an opaque gray.',
         declarations: [
-            "channel(which?: 'r' | 'g' | 'b' | 'luma'): VideoField;",
+            "channel(which?: 'r' | 'g' | 'b' | 'a' | 'luma'): VideoSignal;",
         ],
     },
     {
         name: 'swiz',
         description:
-            "Reorders the channels of this color: each letter of `pattern` names the channel that fills red, green and blue in turn, so `'gbr'` shifts them round and `'rrr'` is the red channel as gray. A field is gray, so it comes back as a gray color.",
-        declarations: ['swiz(pattern: string): VideoColor;'],
+            "Reorders the channels of this: each letter of `pattern` names the channel that fills red, green and blue in turn, so `'gbr'` shifts them round and `'aaa'` shows the alpha. The alpha is kept.",
+        declarations: ['swiz(pattern: string): VideoSignal;'],
     },
     {
         name: 'frameDelay',
         description:
-            'This as it was `frames` frames ago, as a color; black until then.',
-        declarations: ['frameDelay(frames?: number): VideoColor;'],
+            'This as it was `frames` frames ago; transparent black until then.',
+        declarations: ['frameDelay(frames?: number): VideoSignal;'],
     },
     {
         name: 'key',
         description:
             'Shows this where `mask` is 1 and `background` where it is 0.',
         declarations: [
-            'key(background: VideoSignal, mask: VideoValue): VideoColor;',
+            'key(background: VideoValue, mask: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'layer',
+        description: 'Lays `top` over this by the alpha of `top`.',
+        declarations: ['layer(top: VideoValue): VideoSignal;'],
+    },
+    {
+        name: 'mask',
+        description:
+            'This seen through `mask`: its color and alpha scaled by the brightness of `mask`.',
+        declarations: ['mask(mask: VideoValue): VideoSignal;'],
+    },
+    {
+        name: 'luma',
+        description:
+            'Keys this by its own brightness, so dark parts turn transparent.',
+        declarations: [
+            'luma(threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'warp',
         description: 'Zooms, turns and shifts everything this draws.',
         declarations: [
-            'warp(config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): {self};',
+            'warp(config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoSignal;',
         ],
     },
     {
         name: 'rotate',
         description:
             'Turns everything this draws by `turns`; positive is clockwise.',
-        declarations: ['rotate(turns: VideoValue): {self};'],
+        declarations: ['rotate(turns: VideoValue): VideoSignal;'],
     },
     {
         name: 'scale',
         description: 'Zooms everything this draws by `zoom` about the center.',
-        declarations: ['scale(zoom: VideoValue): {self};'],
+        declarations: ['scale(zoom: VideoValue): VideoSignal;'],
     },
     {
         name: 'scroll',
         description:
             'Shifts everything this draws right by `x` and up by `y`, as fractions of the frame.',
-        declarations: ['scroll(x?: VideoValue, y?: VideoValue): {self};'],
+        declarations: ['scroll(x?: VideoValue, y?: VideoValue): VideoSignal;'],
     },
     {
         name: 'displace',
         description: 'Reads this at positions pushed by `dx` and `dy`.',
         declarations: [
-            'displace(dx: VideoValue, dy?: VideoValue, amount?: VideoValue): {self};',
+            'displace(dx: VideoValue, dy?: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulate',
         description: 'Pushes this around by another signal.',
         declarations: [
-            'modulate(modulator: VideoField | VideoColor, amount?: VideoValue): {self};',
+            'modulate(modulator: VideoSignal, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1672,7 +1691,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Scales this about the center by `offset + multiple * channel` of a modulator.',
         declarations: [
-            'modulateScale(modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): {self};',
+            'modulateScale(modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1680,7 +1699,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Turns this about the center by `offset + multiple * red` of a modulator.',
         declarations: [
-            'modulateRotate(modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): {self};',
+            'modulateRotate(modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1688,7 +1707,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Holds this constant over a grid of `offset + multiple * channel` cells.',
         declarations: [
-            'modulatePixelate(modulator: VideoField | VideoColor, multiple?: VideoValue, offset?: VideoValue): {self};',
+            'modulatePixelate(modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1696,7 +1715,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Mirrors this into `sides` wedges, pushed outward by a modulator.',
         declarations: [
-            'modulateKaleid(modulator: VideoField | VideoColor, sides?: VideoValue): {self};',
+            'modulateKaleid(modulator: VideoSignal, sides?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1704,7 +1723,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             "Pushes this by the differences between a modulator's color channels.",
         declarations: [
-            'modulateHue(modulator: VideoField | VideoColor, amount?: VideoValue): {self};',
+            'modulateHue(modulator: VideoSignal, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1712,7 +1731,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Tiles this with alternate rows and columns offset by a modulator.',
         declarations: [
-            'modulateRepeat(modulator: VideoField | VideoColor, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): {self};',
+            'modulateRepeat(modulator: VideoSignal, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -1720,44 +1739,46 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         description:
             'Tiles this across, shifting alternate columns by a modulator.',
         declarations: [
-            'modulateRepeatX(modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): {self};',
+            'modulateRepeatX(modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateRepeatY',
         description: 'Tiles this up, shifting alternate rows by a modulator.',
         declarations: [
-            'modulateRepeatY(modulator: VideoField | VideoColor, reps?: VideoValue, offset?: VideoValue): {self};',
+            'modulateRepeatY(modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateScrollX',
         description: 'Scrolls this across by a modulator, wrapping.',
         declarations: [
-            'modulateScrollX(modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): {self};',
+            'modulateScrollX(modulator: VideoSignal, scroll?: VideoValue, speed?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateScrollY',
         description: 'Scrolls this up by a modulator, wrapping.',
         declarations: [
-            'modulateScrollY(modulator: VideoField | VideoColor, scroll?: VideoValue, speed?: VideoValue): {self};',
+            'modulateScrollY(modulator: VideoSignal, scroll?: VideoValue, speed?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'kaleid',
         description: 'Mirrors this around the center into `sides` wedges.',
-        declarations: ['kaleid(sides?: VideoValue): {self};'],
+        declarations: ['kaleid(sides?: VideoValue): VideoSignal;'],
     },
     {
         name: 'pixelate',
         description: 'Holds this constant across a grid of `x` by `y` cells.',
-        declarations: ['pixelate(x?: VideoValue, y?: VideoValue): {self};'],
+        declarations: [
+            'pixelate(x?: VideoValue, y?: VideoValue): VideoSignal;',
+        ],
     },
     {
         name: 'repeat',
         description: 'Tiles this `x` by `y` times.',
-        declarations: ['repeat(x?: VideoValue, y?: VideoValue): {self};'],
+        declarations: ['repeat(x?: VideoValue, y?: VideoValue): VideoSignal;'],
     },
     {
         name: 'preview',
@@ -1779,7 +1800,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'out',
         direct: true,
         description:
-            'Shows this behind the code, and in the performance window when it is open; a field is shown as a gray picture. Returns this unchanged, so the chain can go on.',
+            'Shows this behind the code, and in the performance window when it is open, laid over black by its alpha. Returns this unchanged, so the chain can go on.',
         declarations: ['out(): this;'],
     },
 ];

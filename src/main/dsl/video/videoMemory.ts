@@ -36,8 +36,7 @@ export function memoryMethods(core: VideoCore) {
     ): VideoOutput =>
         core.addNode(
             'feedbackRead',
-            'color',
-            core.fields(fn, {
+            core.values(fn, {
                 zoom: config?.zoom ?? 1,
                 rotate: config?.rotate ?? 0,
                 shiftX: config?.shiftX ?? 0,
@@ -59,21 +58,19 @@ export function memoryMethods(core: VideoCore) {
     ): VideoOutput => {
         if (!(input instanceof VideoOutput)) {
             throw new Error(
-                `${fn}: write takes a video field or color, got ${describe(input)}`,
+                `${fn}: write takes a video signal, got ${describe(input)}`,
             );
         }
-        const color = core.toColor(fn, 'input', input);
         if (written.has(index)) {
             throw new Error(`${fn}: a buffer can be written only once`);
         }
         written.add(index);
         core.addNode(
             'feedbackWrite',
-            'color',
-            { input: color.value },
+            { input: input.value },
             { buffer: index },
         );
-        return color;
+        return input;
     };
 
     return {
@@ -95,7 +92,7 @@ export function memoryMethods(core: VideoCore) {
             const next = update(read(index, config, '$v.feedback'));
             if (!(next instanceof VideoOutput)) {
                 throw new Error(
-                    `$v.feedback: update must return a video field or color, got ${describe(next)}`,
+                    `$v.feedback: update must return a video signal, got ${describe(next)}`,
                 );
             }
             return write(index, next, '$v.feedback');
@@ -112,7 +109,7 @@ export function memoryMethods(core: VideoCore) {
             }),
 
         /**
-         * `input` as it was `frames` frames ago, as a color; before then it is
+         * `input` as it was `frames` frames ago; before then it is transparent
          * black. Each frame held back costs one frame buffer.
          */
         frameDelay: (input: VideoOutput, frames = 1): VideoOutput => {
@@ -121,7 +118,12 @@ export function memoryMethods(core: VideoCore) {
                     `$v.frameDelay: frames must be a whole number from 1 to ${MAX_DELAY}, got ${describe(frames)}`,
                 );
             }
-            let delayed = core.toColor('$v.frameDelay', 'input', input);
+            if (!(input instanceof VideoOutput)) {
+                throw new Error(
+                    `$v.frameDelay: input must be a video signal, got ${describe(input)}`,
+                );
+            }
+            let delayed = input;
             for (let held = 0; held < frames; held++) {
                 const index = allocate('$v.frameDelay');
                 write(index, delayed, '$v.frameDelay');

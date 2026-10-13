@@ -75,30 +75,13 @@ export function generateVideoNamespace(): string {
     ].join('\n');
 }
 
-/** Declarations of the chain functions that apply to `kind`, with `{self}` filled in. */
+/** Declarations of the chain functions, the direct methods or the members of `.$`. */
 function chainDeclarations(
-    kind: 'field' | 'color',
     direct: boolean,
 ): { doc: string; declarations: string[] }[] {
-    const self = kind === 'field' ? 'VideoField' : 'VideoColor';
-    return VIDEO_CHAIN.filter(
-        (doc) => (doc.direct ?? false) === direct,
-    ).flatMap((doc) => {
-        const declarations =
-            doc[kind] ??
-            ((doc.on ?? ['field', 'color']).includes(kind)
-                ? doc.declarations
-                : undefined);
-        if (!declarations) return [];
-        return [
-            {
-                declarations: declarations.map((declaration) =>
-                    declaration.replace('{self}', self),
-                ),
-                doc: doc.description,
-            },
-        ];
-    });
+    return VIDEO_CHAIN.filter((doc) => (doc.direct ?? false) === direct).map(
+        (doc) => ({ declarations: doc.declarations, doc: doc.description }),
+    );
 }
 
 /** A chain declaration with a leading `mix` parameter, as `.$m` takes. */
@@ -123,42 +106,30 @@ function renderMembers(
 }
 
 /**
- * The members a video signal has besides its type tag: the direct methods
- * that end or tap a chain, `$` and `$m`, `pipe` and `pipeMix`.
+ * The members a video signal has besides its type tag and channels: the
+ * direct methods that end or tap a chain, `$` and `$m`, `pipe` and `pipeMix`.
  */
-export function generateVideoChainMembers(kind: 'field' | 'color'): string {
-    const self = kind === 'field' ? 'VideoField' : 'VideoColor';
-    const sig = kind === 'field' ? 'Field' : 'Color';
-    const pipeMix =
-        kind === 'field'
-            ? `    pipeMix(fn: (self: VideoField) => VideoField, mix?: VideoValue): VideoField;
-    pipeMix(fn: (self: VideoField) => VideoColor, mix?: VideoValue): VideoColor;`
-            : `    pipeMix(fn: (self: VideoColor) => VideoField | VideoColor, mix?: VideoValue): VideoColor;`;
+export function generateVideoChainMembers(): string {
     return [
         '    /** The `$v` functions that take a signal first, applied to this signal: `x.$.rotate(0.1)`. */',
-        `    readonly $: Video${sig}Chain;`,
+        '    readonly $: VideoChain;',
         '    /** Like `$`, with a leading `mix` that crossfades this signal against the result: 0 is this signal, 1 the result. */',
-        `    readonly $m: Video${sig}MixChain;`,
+        '    readonly $m: VideoMixChain;',
         '    /** Calls `fn` with this signal and returns what it returns. */',
-        `    pipe<U>(fn: (self: ${self}) => U): U;`,
+        '    pipe<U>(fn: (self: VideoSignal) => U): U;',
         '    /** Calls `fn(this, element)` for each element of `array` and returns the results. */',
-        `    pipe<U, E>(fn: (self: ${self}, element: E) => U, array: E[]): U[];`,
+        '    pipe<U, E>(fn: (self: VideoSignal, element: E) => U, array: E[]): U[];',
         '    /** Crossfades this signal against `fn(this)`: 0 is this signal, 1 the result (default 0.5). */',
-        pipeMix,
-        renderMembers(chainDeclarations(kind, true)),
+        '    pipeMix(fn: (self: VideoSignal) => VideoValue, mix?: VideoValue): VideoSignal;',
+        renderMembers(chainDeclarations(true)),
     ].join('\n');
 }
 
-/** The four `$` and `$m` namespace interfaces, generated from {@link VIDEO_CHAIN}. */
+/** The `$` and `$m` namespace interfaces, generated from {@link VIDEO_CHAIN}. */
 export function generateVideoChainInterfaces(): string {
-    return (['field', 'color'] as const)
-        .flatMap((kind) => {
-            const sig = kind === 'field' ? 'Field' : 'Color';
-            const entries = chainDeclarations(kind, false);
-            return [
-                `/** The functions of \`.$\` on a video ${kind}. */\ninterface Video${sig}Chain {\n${renderMembers(entries)}\n}`,
-                `/** The functions of \`.$m\` on a video ${kind}: each takes a leading \`mix\`. */\ninterface Video${sig}MixChain {\n${renderMembers(entries, withMix)}\n}`,
-            ];
-        })
-        .join('\n\n');
+    const entries = chainDeclarations(false);
+    return [
+        `/** The functions of \`.$\` on a video signal. */\ninterface VideoChain {\n${renderMembers(entries)}\n}`,
+        `/** The functions of \`.$m\` on a video signal: each takes a leading \`mix\`. */\ninterface VideoMixChain {\n${renderMembers(entries, withMix)}\n}`,
+    ].join('\n\n');
 }

@@ -5,7 +5,7 @@ describe('$v memory and previews', () => {
     describe('feedback', () => {
         it('compiles an update function into a read and a write of one buffer', () => {
             const { video } = exec(`
-                const seed = $v.shape($v.ramp(), $v.ramp('v'), 0.1);
+                const seed = $v.shape(0.1);
                 const trail = $v.feedback(
                     (prev) => $v.mix($v.hsv($v.time, 1, seed), prev, 0.9),
                     { zoom: 1.02, rotate: 0.005, edge: 'mirror' },
@@ -55,7 +55,7 @@ describe('$v memory and previews', () => {
 
         it('rejects an update that returns something else', () => {
             expect(() => exec(`$v.feedback((prev) => 'red');`)).toThrow(
-                /\$v\.feedback: update must return a video field or color/,
+                /\$v\.feedback: update must return a video signal/,
             );
         });
 
@@ -129,7 +129,7 @@ describe('$v memory and previews', () => {
     describe('previews', () => {
         it('records each preview call with its view and source line', () => {
             const result = exec(`
-                const wave = $v.preview($v.osc($v.ramp(), 4));
+                const wave = $v.preview($v.osc(4));
                 $v.out($v.preview($v.hsv(wave), { view: 'waveform' }));
             `);
             expect(
@@ -163,7 +163,7 @@ describe('$v memory and previews', () => {
 
         it('keeps the nodes a preview reads even when the output ignores them', () => {
             const { video } = exec(`
-                $v.preview($v.osc($v.ramp(), 9));
+                $v.preview($v.osc(9));
                 $v.out($v.hsv(0.5));
             `);
             expect(video!.wgsl).toContain('fn preview_0(');
@@ -180,7 +180,7 @@ describe('$v memory and previews', () => {
 
         it('rejects something that is not a video signal', () => {
             expect(() => exec(`$v.preview(0.5);`)).toThrow(
-                /\$v\.preview: signal must be a video field or color/,
+                /\$v\.preview: signal must be a video signal/,
             );
         });
 

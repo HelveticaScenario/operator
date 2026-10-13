@@ -127,30 +127,30 @@ const NOISE_TYPES: Record<
 };
 
 /**
- * Smooth noise between 0 and 1 of the algorithm `type` names. One unit of any
- * coordinate is about one feature of the noise, so scaling the coordinates
- * sets the grain; `z` moves through the noise, which animates it when fed
- * `$v.time`.
+ * Smooth noise between 0 and 1 of the algorithm `type` names, read at
+ * (`x`, `y`) times `scale`: one unit of the scaled coordinates is about one
+ * feature of the noise. `z` moves through the noise, which animates it when
+ * fed `$v.time`.
  */
 export const noise: VideoModuleDef = {
-    inputs: { x: 'field', y: 'field', z: 'field' },
-    output: 'field',
+    inputs: { x: 'number', y: 'number', z: 'number', scale: 'number' },
+    output: 'gray',
     params: {
         type: { values: Object.keys(NOISE_TYPES), default: 'simplex' },
     },
     helpers: ({ type }) => NOISE_TYPES[type].helpers,
-    emit: ({ x, y, z }, { type }) =>
-        `clamp(${NOISE_TYPES[type].emit(`vec3f(${x}, ${y}, ${z})`)}, 0.0, 1.0)`,
+    emit: ({ x, y, z, scale }, { type }) =>
+        `clamp(${NOISE_TYPES[type].emit(`vec3f(vec2f(${x}, ${y}) * ${scale}, ${z})`)}, 0.0, 1.0)`,
 };
 
 /**
  * Cellular noise: the distance to the nearest of a scatter of points, one per
- * unit cell of the coordinates, between 0 (on a point) and about 1. `z` moves
- * the points, which animates the cells when fed `$v.time`.
+ * unit cell of (`x`, `y`) times `scale`, between 0 (on a point) and about 1.
+ * `z` moves the points, which animates the cells when fed `$v.time`.
  */
 export const voronoi: VideoModuleDef = {
-    inputs: { x: 'field', y: 'field', z: 'field' },
-    output: 'field',
+    inputs: { x: 'number', y: 'number', z: 'number', scale: 'number' },
+    output: 'gray',
     helpers: [
         NOISE_HASH,
         `fn voronoi_distance(p: vec2f, z: f32) -> f32 {
@@ -172,5 +172,6 @@ export const voronoi: VideoModuleDef = {
     return clamp(nearest, 0.0, 1.0);
 }`,
     ],
-    emit: ({ x, y, z }) => `voronoi_distance(vec2f(${x}, ${y}), ${z})`,
+    emit: ({ x, y, z, scale }) =>
+        `voronoi_distance(vec2f(${x}, ${y}) * ${scale}, ${z})`,
 };
