@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { exec } from './videoExec';
+import { callWgsl } from './wgslEval';
 
 describe('$v warps and modulators', () => {
     describe('coordinate warps', () => {
@@ -167,7 +168,7 @@ describe('$v warps and modulators', () => {
             expect(wgsl).toContain('(floor(uv * grid) + vec2f(0.5)) / grid');
         });
 
-        it('alternates repeated rows and columns below zero too', () => {
+        it('slides every repeated row and column alike, as Hydra does', () => {
             const wgsl = wgslOf(
                 `$v.out($v.modulateRepeat($v.hsv($v.ramp()), $v.hsv(${noise})));`,
             );
@@ -175,6 +176,30 @@ describe('$v warps and modulators', () => {
             expect(repeat).toContain('video_mod(st.y, 2.0)');
             expect(repeat).not.toContain('%');
             expect(wgsl).toContain('x - m * floor(x / m)');
+
+            const at = (uv: number[]) =>
+                (
+                    callWgsl(
+                        wgsl,
+                        'video_mod_repeat',
+                        uv,
+                        [4, 4],
+                        [0.5, 0.25],
+                        [0.4, 0.4],
+                    ) as number[]
+                ).map((x) => Number(x.toFixed(6)));
+            const slid = [0.05 * 4 + 0.2, 0.05 * 4 + 0.1].map((x) =>
+                Number(x.toFixed(6)),
+            );
+            for (const cell of [
+                [0, 0],
+                [0.25, 0],
+                [0, 0.25],
+                [0.25, 0.25],
+                [-0.25, -0.5],
+            ]) {
+                expect(at([cell[0] + 0.05, cell[1] + 0.05])).toEqual(slid);
+            }
         });
 
         it('rejects a modulator that is not a video signal', () => {

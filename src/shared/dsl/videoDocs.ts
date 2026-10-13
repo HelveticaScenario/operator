@@ -1142,7 +1142,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeat',
         group: 'Warping',
         description:
-            "Tiles `input` `repeatX` by `repeatY` times with alternate rows and columns offset, the offsets growing with the modulator's red channel for x and green for y. 1 is a whole tile.",
+            "Tiles `input` `repeatX` by `repeatY` times and slides the picture inside every tile across by `offsetX` times the modulator's red channel and up by `offsetY` times its green, 1 being a whole tile. Every row and column slides alike, as in Hydra.",
         params: [
             {
                 name: 'modulator',
@@ -1153,12 +1153,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'offsetX',
                 description:
-                    'Shift of alternate rows at a full red channel, with 1 a whole tile (default 0.5)',
+                    'Slide across at a full red channel, with 1 a whole tile (default 0.5)',
             },
             {
                 name: 'offsetY',
                 description:
-                    'Shift of alternate columns at a full green channel (default 0.5)',
+                    'Slide up at a full green channel, with 1 a whole tile (default 0.5)',
             },
         ],
         examples: [
@@ -1172,7 +1172,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeatX',
         group: 'Warping',
         description:
-            "Tiles `input` `reps` times across, shifting alternate columns up by `offset` times the modulator's red channel.",
+            "Tiles `input` `reps` times across and slides the picture inside every tile up by `offset` times the modulator's red channel. Every column slides alike, as in Hydra.",
         params: [
             {
                 name: 'modulator',
@@ -1196,7 +1196,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeatY',
         group: 'Warping',
         description:
-            "Tiles `input` `reps` times up, shifting alternate rows right by `offset` times the modulator's red channel.",
+            "Tiles `input` `reps` times up and slides the picture inside every tile across by `offset` times the modulator's red channel. Every row slides alike, as in Hydra.",
         params: [
             {
                 name: 'modulator',
@@ -1769,7 +1769,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'modulateRepeat',
         description:
-            'Tiles this with alternate rows and columns offset by a modulator.',
+            'Tiles this and slides the picture inside every tile by a modulator.',
         declarations: [
             'modulateRepeat(modulator: VideoSignal, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoSignal;',
         ],
@@ -1777,14 +1777,15 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'modulateRepeatX',
         description:
-            'Tiles this across, shifting alternate columns by a modulator.',
+            'Tiles this across and slides the picture inside every tile up by a modulator.',
         declarations: [
             'modulateRepeatX(modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateRepeatY',
-        description: 'Tiles this up, shifting alternate rows by a modulator.',
+        description:
+            'Tiles this up and slides the picture inside every tile across by a modulator.',
         declarations: [
             'modulateRepeatY(modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],

@@ -92,7 +92,7 @@ export function modulatorMethods(core: VideoCore) {
                 amount,
             }),
 
-        /** Tiles `input` with alternate rows and columns shifted by the red and green channels. */
+        /** Tiles `input`, sliding every tile's picture by the red and green channels. */
         modulateRepeat: (
             input: VideoOutput,
             modulator: VideoOutput,
@@ -108,7 +108,7 @@ export function modulatorMethods(core: VideoCore) {
                 offsetY,
             }),
 
-        /** Tiles `input` across, shifting alternate columns up by the red channel. */
+        /** Tiles `input` across, sliding every tile's picture up by the red channel. */
         modulateRepeatX: (
             input: VideoOutput,
             modulator: VideoOutput,
@@ -120,7 +120,7 @@ export function modulatorMethods(core: VideoCore) {
                 offset,
             }),
 
-        /** Tiles `input` up, shifting alternate rows right by the red channel. */
+        /** Tiles `input` up, sliding every tile's picture across by the red channel. */
         modulateRepeatY: (
             input: VideoOutput,
             modulator: VideoOutput,
