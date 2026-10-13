@@ -1,0 +1,347 @@
+/// <reference types="@webgpu/types" />
+import { sameSource, type VideoSourceDef } from '../../shared/video/videoGraph';
+import { isHlsUrl, isRemoteMedia, mediaUrl } from '../../shared/video/mediaUrl';
+import { attachHls } from './hls';
+
+const FORMAT: GPUTextureFormat = 'rgba8unorm';
+
+/** Opens the stream of a camera or a screen. */
+export type OpenStream = (def: VideoSourceDef) => Promise<MediaStream>;
+
+interface Entry {
+    def: VideoSourceDef;
+    texture: GPUTexture | null;
+    view: GPUTextureView;
+    video: HTMLVideoElement | null;
+    /** What a camera or screen is showing; stopped when the entry is dropped. */
+    stream: MediaStream | null;
+    /** Stops an HLS stream's player. */
+    releaseHls: (() => void) | null;
+    /** True when the video has a frame the texture has not been given yet. */
+    fresh: boolean;
+    disposed: boolean;
+}
+
+const isLive = (def: VideoSourceDef) =>
+    def.kind === 'camera' || def.kind === 'screen';
+
+/** The same file, whatever its playback settings; a camera or screen has none. */
+const sameFile = (a: VideoSourceDef, b: VideoSourceDef) =>
+    !isLive(a) && a.kind === b.kind && a.path === b.path;
+
+const stopStream = (stream: MediaStream) => {
+    for (const track of stream.getTracks()) track.stop();
+};
+
+/**
+ * The pictures, recordings, cameras and screens a shader samples, as GPU
+ * textures. Each is a black texel until it has loaded; a video's texture is
+ * refreshed whenever the video has a new frame.
+ */
+export class SourceTextures {
+    /** Changes whenever a texture is created, replaced or destroyed. */
+    generation = 0;
+    /** The live entries, indexed as the shader's `sources`. */
+    private order: Entry[] = [];
+    private playing = true;
+    private readonly placeholder: GPUTextureView;
+    private readonly placeholderTexture: GPUTexture;
+
+    constructor(
+        private readonly device: GPUDevice,
+        private readonly onError: (message: string) => void,
+        private readonly openStream?: OpenStream,
+    ) {
+        this.placeholderTexture = device.createTexture({
+            format: FORMAT,
+            size: [1, 1],
+            usage: GPUTextureUsage.TEXTURE_BINDING,
+        });
+        this.placeholder = this.placeholderTexture.createView();
+    }
+
+    /**
+     * Makes the set match `defs`. A file that is still wanted keeps its
+     * element, and so its playback position, even when its speed or loop
+     * points change; the rest are dropped.
+     */
+    sync(defs: VideoSourceDef[]): void {
+        const unclaimed = new Set(this.order);
+        const claimed: (Entry | undefined)[] = defs.map(() => undefined);
+        for (const matches of [sameSource, sameFile]) {
+            defs.forEach((def, i) => {
+                if (claimed[i] !== undefined) return;
+                for (const entry of unclaimed) {
+                    if (matches(entry.def, def)) {
+                        unclaimed.delete(entry);
+                        claimed[i] = entry;
+                        return;
+                    }
+                }
+            });
+        }
+        for (const entry of unclaimed) this.dispose(entry);
+        this.order = defs.map((def, i) => {
+            const entry = claimed[i];
+            if (entry === undefined) return this.create(def);
+            if (!sameSource(entry.def, def)) {
+                entry.def = def;
+                this.applyPlayback(entry);
+            }
+            return entry;
+        });
+        this.generation++;
+    }
+
+    /** Pauses every video where it is, and holds videos that arrive later. */
+    pause(): void {
+        this.playing = false;
+        for (const entry of this.order) this.syncPlayback(entry);
+    }
+
+    /** Plays every video again from its loop start. */
+    restart(): void {
+        this.playing = true;
+        for (const entry of this.order) {
+            if (entry.video !== null && !isLive(entry.def)) {
+                entry.video.currentTime = entry.def.loopStart ?? 0;
+            }
+            this.syncPlayback(entry);
+        }
+    }
+
+    view(index: number): GPUTextureView {
+        return this.order[index]?.view ?? this.placeholder;
+    }
+
+    /** Copies the newest frame of each playing video into its texture. */
+    update(): void {
+        for (const entry of this.order) {
+            const { video } = entry;
+            if (video === null || !entry.fresh || video.videoWidth === 0) {
+                continue;
+            }
+            entry.fresh = false;
+            if (
+                entry.texture === null ||
+                entry.texture.width !== video.videoWidth ||
+                entry.texture.height !== video.videoHeight
+            ) {
+                this.replaceTexture(entry, video.videoWidth, video.videoHeight);
+            }
+            try {
+                this.device.queue.copyExternalImageToTexture(
+                    { source: video },
+                    { texture: entry.texture! },
+                    [video.videoWidth, video.videoHeight],
+                );
+            } catch (error) {
+                this.fail(entry, error);
+            }
+        }
+    }
+
+    destroy(): void {
+        for (const entry of this.order) this.dispose(entry);
+        this.order = [];
+        this.placeholderTexture.destroy();
+    }
+
+    private create(def: VideoSourceDef): Entry {
+        const entry: Entry = {
+            def,
+            disposed: false,
+            fresh: false,
+            releaseHls: null,
+            stream: null,
+            texture: null,
+            video: null,
+            view: this.placeholder,
+        };
+        if (def.kind === 'image') void this.loadImage(entry);
+        else if (def.kind === 'video') this.loadVideo(entry);
+        else this.loadLive(entry);
+        return entry;
+    }
+
+    private async loadImage(entry: Entry): Promise<void> {
+        try {
+            const response = await fetch(mediaUrl(entry.def.path));
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const bitmap = await createImageBitmap(await response.blob());
+            if (entry.disposed) {
+                bitmap.close();
+                return;
+            }
+            this.replaceTexture(entry, bitmap.width, bitmap.height);
+            this.device.queue.copyExternalImageToTexture(
+                { source: bitmap },
+                { texture: entry.texture! },
+                [bitmap.width, bitmap.height],
+            );
+            bitmap.close();
+        } catch (error) {
+            this.fail(entry, error);
+        }
+    }
+
+    /**
+     * Gives `entry` a muted video element that marks the entry fresh on each
+     * new frame and returns to the loop start at the loop end. Errors are
+     * reported with `fallback` when the element gives no message.
+     */
+    private createVideo(entry: Entry, fallback: string): HTMLVideoElement {
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        entry.video = video;
+        const onFrame = () => {
+            if (entry.disposed) return;
+            entry.fresh = true;
+            const { loopStart = 0, loopEnd } = entry.def;
+            if (loopEnd !== undefined && video.currentTime >= loopEnd) {
+                video.currentTime = loopStart;
+            }
+            video.requestVideoFrameCallback(onFrame);
+        };
+        video.requestVideoFrameCallback(onFrame);
+        video.addEventListener('error', () =>
+            this.fail(entry, video.error?.message || fallback),
+        );
+        return video;
+    }
+
+    private loadVideo(entry: Entry): void {
+        const video = this.createVideo(entry, 'the file could not be played');
+        video.crossOrigin = 'anonymous';
+        // Without a loop end the file plays to its end, then returns to the loop start.
+        video.addEventListener('ended', () => {
+            if (entry.disposed) return;
+            video.currentTime = entry.def.loopStart ?? 0;
+            this.syncPlayback(entry);
+        });
+        // A file whose audio decodes but whose picture does not loads without
+        // an error and reports no frame size.
+        video.addEventListener('loadedmetadata', () => {
+            if (video.videoWidth === 0) {
+                this.fail(entry, 'the file has no picture the app can decode');
+            }
+            this.applyPlayback(entry);
+        });
+        const { path } = entry.def;
+        if (isRemoteMedia(path) && isHlsUrl(path)) {
+            attachHls(video, path, (error) => this.fail(entry, error)).then(
+                (release) => {
+                    if (entry.disposed) release();
+                    else entry.releaseHls = release;
+                },
+                (error: unknown) => this.fail(entry, error),
+            );
+        } else {
+            video.src = mediaUrl(path);
+        }
+        this.applyPlayback(entry);
+    }
+
+    /** Shows a camera or a screen: a video element with a stream for a source. */
+    private loadLive(entry: Entry): void {
+        const video = this.createVideo(entry, 'the picture could not be shown');
+        if (this.openStream === undefined) {
+            this.fail(entry, 'live sources are not available here');
+            return;
+        }
+        this.openStream(entry.def).then(
+            (stream) => {
+                if (entry.disposed) {
+                    stopStream(stream);
+                    return;
+                }
+                entry.stream = stream;
+                stream
+                    .getVideoTracks()[0]
+                    ?.addEventListener('ended', () =>
+                        this.fail(
+                            entry,
+                            'the source stopped sending a picture',
+                        ),
+                    );
+                video.srcObject = stream;
+                this.syncPlayback(entry);
+            },
+            (error: unknown) => this.fail(entry, error),
+        );
+    }
+
+    /** Gives a video its speed and loop points, moving it into the loop if it is outside. */
+    private applyPlayback(entry: Entry): void {
+        const { video } = entry;
+        if (video === null) return;
+        const { speed = 1, loopStart = 0, loopEnd } = entry.def;
+        video.playbackRate = speed;
+        video.loop = loopStart === 0 && loopEnd === undefined;
+        const outside =
+            video.currentTime < loopStart ||
+            (loopEnd !== undefined && video.currentTime >= loopEnd);
+        if (outside) video.currentTime = loopStart;
+        this.syncPlayback(entry);
+    }
+
+    /** Starts or pauses a video: it plays while the engine runs and its speed is above 0. */
+    private syncPlayback(entry: Entry): void {
+        const { video } = entry;
+        if (video === null) return;
+        if (this.playing && (entry.def.speed ?? 1) > 0) {
+            video.play().catch((error: unknown) => {
+                // A pause that lands while play() is pending cancels it.
+                if (error instanceof Error && error.name === 'AbortError') {
+                    return;
+                }
+                this.fail(entry, error);
+            });
+        } else {
+            video.pause();
+        }
+    }
+
+    private replaceTexture(entry: Entry, width: number, height: number): void {
+        entry.texture?.destroy();
+        entry.texture = this.device.createTexture({
+            format: FORMAT,
+            size: [width, height],
+            usage:
+                GPUTextureUsage.TEXTURE_BINDING |
+                GPUTextureUsage.COPY_DST |
+                GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        entry.view = entry.texture.createView();
+        this.generation++;
+    }
+
+    private fail(entry: Entry, error: unknown): void {
+        if (entry.disposed) return;
+        const detail = error instanceof Error ? error.message : String(error);
+        const hint =
+            entry.def.kind !== 'video'
+                ? ''
+                : isRemoteMedia(entry.def.path)
+                  ? ' (the address must give an H.264, HEVC, VP8/VP9 or AV1 video, as mp4 or webm, or an .m3u8 HLS playlist)'
+                  : ' (the app plays H.264, HEVC, VP8/VP9 and AV1; ProRes, Motion JPEG and other codecs need converting)';
+        const label = isLive(entry.def)
+            ? entry.def.kind
+            : `${entry.def.kind} "${entry.def.path}"`;
+        this.onError(`${label}: ${detail}${hint}`);
+    }
+
+    private dispose(entry: Entry): void {
+        entry.disposed = true;
+        entry.releaseHls?.();
+        if (entry.stream !== null) stopStream(entry.stream);
+        if (entry.video !== null) {
+            entry.video.pause();
+            entry.video.srcObject = null;
+            entry.video.removeAttribute('src');
+            entry.video.load();
+        }
+        entry.texture?.destroy();
+    }
+}
