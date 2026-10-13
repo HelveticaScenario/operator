@@ -20,6 +20,12 @@ export function generatorMethods(core: VideoCore) {
         x: config?.x ?? core.ramp('horizontal'),
         y: config?.y ?? core.ramp('vertical'),
     });
+    /**
+     * How a noise module reads its coordinates: as the position in the frame,
+     * kept in proportion, when the config gives neither `x` nor `y`.
+     */
+    const coordinates = (config: VideoPositionConfig | undefined) =>
+        config?.x === undefined && config?.y === undefined ? 'frame' : 'given';
     /** The `params` of a node, holding `name` when the config chose one. */
     const option = (name: string, value: string | undefined) =>
         value === undefined ? undefined : { params: { [name]: value } };
@@ -101,7 +107,7 @@ export function generatorMethods(core: VideoCore) {
                 }),
             ),
 
-        /** Smooth noise between 0 and 1, about `scale` features across the frame; `z` moves through it. */
+        /** Smooth noise between 0 and 1, about `scale` features up the frame; `z` moves through it. */
         noise: (
             scale: VideoSource = 5,
             z: VideoSource = 0,
@@ -110,10 +116,17 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'noise',
                 core.values('$v.noise', { ...position(config), z, scale }),
-                option('type', config?.type),
+                {
+                    params: {
+                        coordinates: coordinates(config),
+                        ...(config?.type !== undefined && {
+                            type: config.type,
+                        }),
+                    },
+                },
             ),
 
-        /** Cellular noise: the distance to the nearest of a scatter of points, about `scale` across the frame. */
+        /** Cellular noise: the distance to the nearest of a scatter of points, about `scale` cells up the frame. */
         voronoi: (
             scale: VideoSource = 5,
             z: VideoSource = 0,
@@ -122,6 +135,7 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'voronoi',
                 core.values('$v.voronoi', { ...position(config), z, scale }),
+                { params: { coordinates: coordinates(config) } },
             ),
     };
 }

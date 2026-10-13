@@ -170,12 +170,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'noise',
         group: 'Generators',
         description:
-            'Smooth gray noise between 0 and 1, simplex noise unless `config.type` names another algorithm, with about `scale` features across the frame. `z` moves through the noise, which animates it when fed `$v.time`. With `config.x` and `config.y` it is read at those coordinates times `scale`.',
+            'Smooth gray noise between 0 and 1, simplex noise unless `config.type` names another algorithm, with about `scale` features up the frame. Its features keep their proportions in any window, and resizing the window shows more or less of the noise around the center rather than stretching it. `z` moves through the noise, which animates it when fed `$v.time`. With `config.x` or `config.y` it is read at those coordinates times `scale` instead.',
         params: [
             {
                 name: 'scale',
                 description:
-                    'Features across the frame, or per unit of `config.x` and `config.y` (default 5)',
+                    'Features up the frame, or per unit of `config.x` and `config.y` (default 5)',
             },
             {
                 name: 'z',
@@ -212,12 +212,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'voronoi',
         group: 'Generators',
         description:
-            'Gray cellular noise: the distance to the nearest of a scatter of points, about `scale` cells across the frame, between 0 (on a point) and about 1. `z` moves the points, which animates the cells when fed `$v.time`. With `config.x` and `config.y` it is read at those coordinates times `scale`.',
+            'Gray cellular noise: the distance to the nearest of a scatter of points, about `scale` cells up the frame, between 0 (on a point) and about 1. Its cells keep their proportions in any window, as for `$v.noise`. `z` moves the points, which animates the cells when fed `$v.time`. With `config.x` or `config.y` it is read at those coordinates times `scale` instead.',
         params: [
             {
                 name: 'scale',
                 description:
-                    'Cells across the frame, or per unit of `config.x` and `config.y` (default 5)',
+                    'Cells up the frame, or per unit of `config.x` and `config.y` (default 5)',
             },
             {
                 name: 'z',

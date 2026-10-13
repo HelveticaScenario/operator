@@ -136,8 +136,19 @@ describe('$v modules', () => {
             expect(video!.wgsl).toContain('fn noise_simplex(');
             expect(video!.wgsl).not.toContain('fn noise_value(');
             expect(video!.wgsl).toMatch(
-                /noise_simplex\(vec3f\(vec2f\(video_luma\(v\d\), video_luma\(v\d\)\) \* 4\.0, u\.time\)\)/,
+                /noise_simplex\(vec3f\(video_frame_point\(vec2f\(video_luma\(v\d\), video_luma\(v\d\)\)\) \* 4\.0, u\.time\)\)/,
             );
+        });
+
+        it('keeps the default position in proportion, measured from the center in frame heights', () => {
+            const { wgsl } = exec(`$v.out($v.noise());`).video!;
+            expect(wgsl).toContain(
+                'return (p - vec2f(0.5)) * vec2f(u.resolution.x / u.resolution.y, 1.0);',
+            );
+            expect(wgsl).toContain('video_frame_point(vec2f(');
+            expect(
+                exec(`$v.out($v.noise(5, 0, { x: $v.ramp() }));`).video!.wgsl,
+            ).not.toContain('video_frame_point');
         });
 
         it('reads given coordinates times the scale, with z 0 by default', () => {
@@ -187,7 +198,7 @@ describe('$v modules', () => {
             expect(wgsl.match(/fn noise_hash\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn voronoi_distance(');
             expect(wgsl).toMatch(
-                /voronoi_distance\(vec2f\(video_luma\(v\d\), video_luma\(v\d\)\) \* 3\.0, u\.time\)/,
+                /voronoi_distance\(video_frame_point\(vec2f\(video_luma\(v\d\), video_luma\(v\d\)\)\) \* 3\.0, u\.time\)/,
             );
         });
 

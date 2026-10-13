@@ -127,6 +127,34 @@ const NOISE_TYPES: Record<
 };
 
 /**
+ * `video_frame_point`: frame coordinates measured from the center in frame
+ * heights, so a unit is the same length across and up at any aspect ratio.
+ */
+const FRAME_POINT = `fn video_frame_point(p: vec2f) -> vec2f {
+    return (p - vec2f(0.5)) * vec2f(u.resolution.x / u.resolution.y, 1.0);
+}`;
+
+/**
+ * How a noise module reads `x` and `y`: `frame` takes them as the position in
+ * the frame (0 to 1 across and up) and measures it from the center in frame
+ * heights, so the noise keeps its proportions in any window; `given` uses them
+ * as they are.
+ */
+const COORDINATES = { values: ['given', 'frame'], default: 'given' };
+
+/** The WGSL point a noise module reads, `scale` times its coordinates. */
+const point = (
+    { x, y, scale }: Record<string, string>,
+    coordinates: string,
+): string =>
+    coordinates === 'frame'
+        ? `video_frame_point(vec2f(${x}, ${y})) * ${scale}`
+        : `vec2f(${x}, ${y}) * ${scale}`;
+
+const pointHelpers = (coordinates: string) =>
+    coordinates === 'frame' ? [FRAME_POINT] : [];
+
+/**
  * Smooth noise between 0 and 1 of the algorithm `type` names, read at
  * (`x`, `y`) times `scale`: one unit of the scaled coordinates is about one
  * feature of the noise. `z` moves through the noise, which animates it when
@@ -137,10 +165,14 @@ export const noise: VideoModuleDef = {
     output: 'gray',
     params: {
         type: { values: Object.keys(NOISE_TYPES), default: 'simplex' },
+        coordinates: COORDINATES,
     },
-    helpers: ({ type }) => NOISE_TYPES[type].helpers,
-    emit: ({ x, y, z, scale }, { type }) =>
-        `clamp(${NOISE_TYPES[type].emit(`vec3f(vec2f(${x}, ${y}) * ${scale}, ${z})`)}, 0.0, 1.0)`,
+    helpers: ({ type, coordinates }) => [
+        ...NOISE_TYPES[type].helpers,
+        ...pointHelpers(coordinates),
+    ],
+    emit: (args, { type, coordinates }) =>
+        `clamp(${NOISE_TYPES[type].emit(`vec3f(${point(args, coordinates)}, ${args.z})`)}, 0.0, 1.0)`,
 };
 
 /**
@@ -151,7 +183,9 @@ export const noise: VideoModuleDef = {
 export const voronoi: VideoModuleDef = {
     inputs: { x: 'number', y: 'number', z: 'number', scale: 'number' },
     output: 'gray',
-    helpers: [
+    params: { coordinates: COORDINATES },
+    helpers: ({ coordinates }) => [
+        ...pointHelpers(coordinates),
         NOISE_HASH,
         `fn voronoi_distance(p: vec2f, z: f32) -> f32 {
     let base = floor(p);
@@ -172,6 +206,6 @@ export const voronoi: VideoModuleDef = {
     return clamp(nearest, 0.0, 1.0);
 }`,
     ],
-    emit: ({ x, y, z, scale }) =>
-        `voronoi_distance(vec2f(${x}, ${y}) * ${scale}, ${z})`,
+    emit: (args, { coordinates }) =>
+        `voronoi_distance(${point(args, coordinates)}, ${args.z})`,
 };
