@@ -80,7 +80,11 @@ export interface VideoCvValue {
     value: number;
 }
 
-/** One drawn preview, as tightly packed RGBA8 rows from the top. */
+/**
+ * One drawn preview, as tightly packed RGBA8 rows from the top. The alpha is
+ * the signal's own and the color is not laid over anything, so a transparent
+ * pixel is distinct from black.
+ */
 export interface VideoPreviewFrame {
     /** Position among the shader's previews. */
     index: number;

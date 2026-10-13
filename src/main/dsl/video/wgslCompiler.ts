@@ -297,6 +297,8 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         }
     }
 
+    // A preview keeps the signal's own alpha, so the editor can show its
+    // transparency; whatever reads it as a picture lays it over black.
     const previewEntries = graph.previews.map((preview, k) => {
         const expression = resolve(preview.value, 'rgba');
         const needed = new Set<string>(
@@ -316,7 +318,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
 fn preview_${k}(@builtin(position) frag: vec4f) -> @location(0) vec4f {
     let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
 ${body}
-    return video_display(${expression});
+    return clamp(${expression}, vec4f(0.0), vec4f(1.0));
 }
 `;
     });

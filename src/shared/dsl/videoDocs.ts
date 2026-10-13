@@ -864,7 +864,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.view',
                 description:
-                    "How the panel draws the signal: `'image'` (default) shows it as a picture, `'waveform'` plots brightness against horizontal position like a waveform monitor, `'vectorscope'` plots every pixel's color by hue and saturation",
+                    "How the panel draws the signal: `'image'` (default) shows it as a picture, with transparent parts over a checkerboard, `'waveform'` plots brightness against horizontal position like a waveform monitor, `'vectorscope'` plots every pixel's color by hue and saturation",
             },
         ],
         examples: [

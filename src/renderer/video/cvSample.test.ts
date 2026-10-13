@@ -21,6 +21,12 @@ function frameOf(
 const whole = { size: 0.5, x: 0.5, y: 0.5 };
 
 describe('regionAverage', () => {
+    it('reads a pixel as it shows over black, scaled by its alpha', () => {
+        const data = new Uint8Array([255, 255, 255, 51]);
+        const pixel = { data, height: 1, index: 0, width: 1 };
+        expect(regionAverage(pixel, whole)).toBeCloseTo(0.2, 3);
+    });
+
     it('averages the whole frame by default region', () => {
         const frame = frameOf(10, 10, (x) => (x < 5 ? 0 : 1));
         expect(regionAverage(frame, whole)).toBeCloseTo(0.5, 2);

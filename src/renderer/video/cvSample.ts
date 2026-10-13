@@ -5,8 +5,8 @@ import type {
 
 /**
  * Average brightness, 0..1, of the pixels of `frame` inside the region
- * `sample` names. A region is clipped to the frame and always covers at least
- * one pixel.
+ * `sample` names, as they show over black. A region is clipped to the frame
+ * and always covers at least one pixel.
  */
 export function regionAverage(
     frame: VideoPreviewFrame,
@@ -27,7 +27,10 @@ export function regionAverage(
     for (let y = top; y < Math.max(bottom, top + 1); y++) {
         for (let x = left; x < Math.max(right, left + 1); x++) {
             const i = (y * width + x) * 4;
-            sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+            sum +=
+                ((0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) *
+                    data[i + 3]) /
+                255;
             count++;
         }
     }

@@ -30,6 +30,29 @@ const green = (
     width: number,
 ) => pixels[(y * width + x) * 4 + 1];
 
+/** A frame of one color, `[r, g, b, a]` in 0..255, everywhere. */
+const solid = (rgba: number[]): VideoPreviewFrame => {
+    const data = new Uint8Array(4 * 4 * 4);
+    for (let i = 0; i < 16; i++) data.set(rgba, i * 4);
+    return { data, height: 4, index: 0, width: 4 };
+};
+
+describe('transparency', () => {
+    it('plots a transparent white as black on the waveform', () => {
+        const pixels = waveformPixels(solid([255, 255, 255, 0]));
+        expect(green(pixels, 0, WAVEFORM_HEIGHT - 1, 4)).toBeGreaterThan(200);
+        expect(green(pixels, 0, 0, 4)).toBe(0);
+    });
+
+    it('plots a transparent red at the center of the vectorscope', () => {
+        const pixels = vectorscopePixels(solid([255, 0, 0, 0]));
+        const center = Math.round((VECTORSCOPE_SIZE - 1) / 2);
+        expect(green(pixels, center, center, VECTORSCOPE_SIZE)).toBeGreaterThan(
+            200,
+        );
+    });
+});
+
 describe('waveformPixels', () => {
     it('plots a uniform gray as a single line at its brightness', () => {
         const frame = frameOf(8, 8, () => [128, 128, 128]);

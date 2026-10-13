@@ -8,8 +8,18 @@ export const WAVEFORM_HEIGHT = 128;
 /** Side of the square vectorscope, in pixels. */
 export const VECTORSCOPE_SIZE = 144;
 
-const luma = (r: number, g: number, b: number): number =>
-    (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+/** The brightness, 0..1, of pixel `i` of RGBA8 `data` as it shows over black. */
+const luma = (data: Uint8Array, i: number): number =>
+    ((0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]) *
+        data[i + 3]) /
+    (255 * 255);
+
+/**
+ * What shows behind a preview picture, so transparent parts read as such. It
+ * stops at the content box, so the canvas's translucent border stays plain.
+ */
+const CHECKERBOARD =
+    'repeating-conic-gradient(#555 0% 25%, #888 0% 50%) 50% / 12px 12px content-box';
 
 /**
  * Writes green phosphor into a black RGBA image. Every plotted sample shows at
@@ -33,7 +43,7 @@ function phosphor(counts: Float32Array): Uint8ClampedArray {
 
 /**
  * A waveform monitor: each column of the picture plots the brightness of its
- * pixels, with white at the top. Returns RGBA pixels of `frame.width` by
+ * pixels over black, with white at the top. Returns RGBA pixels of `frame.width` by
  * {@link WAVEFORM_HEIGHT}.
  */
 export function waveformPixels(frame: VideoPreviewFrame): Uint8ClampedArray {
@@ -42,10 +52,7 @@ export function waveformPixels(frame: VideoPreviewFrame): Uint8ClampedArray {
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
             const i = (y * width + x) * 4;
-            const row = Math.round(
-                (1 - luma(data[i], data[i + 1], data[i + 2])) *
-                    (WAVEFORM_HEIGHT - 1),
-            );
+            const row = Math.round((1 - luma(data, i)) * (WAVEFORM_HEIGHT - 1));
             counts[row * width + x] += 1 / height;
         }
     }
@@ -53,9 +60,9 @@ export function waveformPixels(frame: VideoPreviewFrame): Uint8ClampedArray {
 }
 
 /**
- * A vectorscope: every pixel is plotted by its blue-difference (horizontal)
- * and red-difference (vertical, up) chroma, so hue is the angle from the
- * center and saturation the distance. Returns RGBA pixels of
+ * A vectorscope: every pixel, as it shows over black, is plotted by its
+ * blue-difference (horizontal) and red-difference (vertical, up) chroma, so
+ * hue is the angle from the center and saturation the distance. Returns RGBA pixels of
  * {@link VECTORSCOPE_SIZE} squared.
  */
 export function vectorscopePixels(frame: VideoPreviewFrame): Uint8ClampedArray {
@@ -64,9 +71,10 @@ export function vectorscopePixels(frame: VideoPreviewFrame): Uint8ClampedArray {
     const last = VECTORSCOPE_SIZE - 1;
     const weight = 1 / (width * height);
     for (let i = 0; i < width * height; i++) {
-        const r = data[i * 4] / 255;
-        const g = data[i * 4 + 1] / 255;
-        const b = data[i * 4 + 2] / 255;
+        const alpha = data[i * 4 + 3] / (255 * 255);
+        const r = data[i * 4] * alpha;
+        const g = data[i * 4 + 1] * alpha;
+        const b = data[i * 4 + 2] * alpha;
         const cb = -0.168736 * r - 0.331264 * g + 0.5 * b;
         const cr = 0.5 * r - 0.418688 * g - 0.081312 * b;
         const x = Math.round((cb + 0.5) * last);
@@ -76,7 +84,11 @@ export function vectorscopePixels(frame: VideoPreviewFrame): Uint8ClampedArray {
     return phosphor(counts);
 }
 
-/** Draws `frame` into `canvas` in the requested view, resizing the canvas to fit. */
+/**
+ * Draws `frame` into `canvas` in the requested view, resizing the canvas to
+ * fit. The picture keeps its transparency over a checkerboard; the monitors
+ * draw on black.
+ */
 export function drawPreview(
     canvas: HTMLCanvasElement,
     view: VideoPreviewView,
@@ -103,6 +115,10 @@ export function drawPreview(
         );
     }
 
+    if (canvas.dataset.view !== view) {
+        canvas.dataset.view = view;
+        canvas.style.background = view === 'image' ? CHECKERBOARD : '#000';
+    }
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
     canvas.style.aspectRatio = `${width} / ${height}`;

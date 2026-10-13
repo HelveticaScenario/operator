@@ -124,8 +124,12 @@ describe('compileVideoGraph previews', () => {
         expect(shader.previewCount).toBe(2);
         expect(shader.wgsl).toContain('fn preview_0(');
         expect(shader.wgsl).toContain('fn preview_1(');
-        expect(shader.wgsl).toContain('return video_display(v1);');
-        expect(shader.wgsl).toContain('return video_display(v2);');
+        expect(shader.wgsl).toContain(
+            'return clamp(v1, vec4f(0.0), vec4f(1.0));',
+        );
+        expect(shader.wgsl).toContain(
+            'return clamp(v2, vec4f(0.0), vec4f(1.0));',
+        );
     });
 
     it('evaluates only the nodes a preview depends on', () => {
@@ -146,10 +150,10 @@ describe('compileVideoGraph previews', () => {
             ]),
         );
         expect(shader.wgsl).toContain(
-            'return video_display(vec4f(vec3f(u.time), 1.0));',
+            'return clamp(vec4f(vec3f(u.time), 1.0), vec4f(0.0), vec4f(1.0));',
         );
         expect(shader.wgsl).toContain(
-            'return video_display(vec4f(vec3f(0.25), 1.0));',
+            'return clamp(vec4f(vec3f(0.25), 1.0), vec4f(0.0), vec4f(1.0));',
         );
     });
 
