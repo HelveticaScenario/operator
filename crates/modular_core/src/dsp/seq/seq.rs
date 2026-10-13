@@ -346,6 +346,7 @@ struct SeqOutputs {
     channels_derive = seq_derive_channel_count,
     args(pattern),
     stateful,
+    patch_update,
 )]
 pub struct Seq {
     outputs: SeqOutputs,
@@ -389,6 +390,28 @@ struct SeqState {
     /// Pre-allocated DP scratch for nearest-value voice assignment. Boxed and
     /// built here (main thread) so the audio thread never allocates.
     assign: Box<AssignScratch>,
+    /// The span between adjacent window edges of the last scanned cycle's
+    /// onset haps that held the playhead. While both this frame's and the
+    /// previous frame's positions stay inside it, every hap's window holds the
+    /// same membership for both, so no hap is entered and the scan is skipped.
+    /// Cleared on every patch update, which may replace the baked haps.
+    quiet: Option<QuietSpan>,
+}
+
+/// See [`SeqState::quiet`].
+#[derive(Clone, Copy)]
+struct QuietSpan {
+    storage_index: usize,
+    /// Inclusive lower edge.
+    lo: f64,
+    /// Exclusive upper edge.
+    hi: f64,
+}
+
+impl QuietSpan {
+    fn holds(&self, storage_index: usize, pos: f64) -> bool {
+        self.storage_index == storage_index && self.lo <= pos && pos < self.hi
+    }
 }
 
 impl Default for SeqState {
@@ -400,6 +423,7 @@ impl Default for SeqState {
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
             assign: Box::new(AssignScratch::default()),
+            quiet: None,
         }
     }
 }
@@ -525,13 +549,31 @@ impl Seq {
         // mutating voice state.
         let events_to_process = &mut self.state.events_to_process;
         events_to_process.clear();
+        let quiet = started
+            && !lap_wrapped
+            && self.state.quiet.is_some_and(|span| {
+                span.holds(storage_index, prev_logical) && span.holds(storage_index, logical)
+            });
         let storage_opt = self.params.pattern.cached_haps().get(storage_index);
-        if let Some(storage) = storage_opt {
+        if !quiet && let Some(storage) = storage_opt {
+            let mut span = QuietSpan {
+                storage_index,
+                lo: f64::NEG_INFINITY,
+                hi: f64::INFINITY,
+            };
+            let mut complete = true;
             for (hap_index, hap) in storage.haps.iter().enumerate() {
-                if !hap.has_onset || logical < hap.part_begin || logical >= hap.part_end {
+                if !hap.has_onset || hap.value.is_rest() {
                     continue;
                 }
-                if hap.value.is_rest() {
+                for edge in [hap.part_begin, hap.part_end] {
+                    if edge <= logical {
+                        span.lo = span.lo.max(edge);
+                    } else {
+                        span.hi = span.hi.min(edge);
+                    }
+                }
+                if logical < hap.part_begin || logical >= hap.part_end {
                     continue;
                 }
                 // Window-membership edge: fire only on *entering* the window. Skip
@@ -564,6 +606,7 @@ impl Seq {
                     continue;
                 }
                 if events_to_process.remaining_capacity() == 0 {
+                    complete = false;
                     break;
                 }
                 events_to_process.push(PendingEvent {
@@ -573,6 +616,7 @@ impl Seq {
                     value: hap.value,
                 });
             }
+            self.state.quiet = complete.then_some(span);
         }
 
         // Assign this frame's onsets to voices by nearest previously-held value
@@ -896,6 +940,12 @@ impl crate::types::StatefulModule for Seq {
                 }
             }
         }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Seq {
+    fn on_patch_update(&mut self) {
+        self.state.quiet = None;
     }
 }
 
