@@ -28,7 +28,7 @@ describe('pullVideo', () => {
     });
 
     it('reports stopped and reads nothing while the engine is stopped', () => {
-        const read = vi.fn(() => ({ head: 2, samples: [0.5, 0.25] }));
+        const read = vi.fn(() => ({ head: 2, samples: Float32Array.of(0.5, 0.25) }));
         let stopped = true;
         setVideoTapSource({
             isStopped: () => stopped,
@@ -59,7 +59,7 @@ describe('pullVideo', () => {
     it('is running with no samples when the shader reads no audio', () => {
         setVideoTapSource({
             isStopped: () => false,
-            read: () => ({ head: 0, samples: [] }),
+            read: () => ({ head: 0, samples: Float32Array.of() }),
             updates: () => ({ applied: 1, cancelled: 0 }),
             sampleRate: () => 48000,
         });
@@ -77,7 +77,7 @@ describe('across patch updates', () => {
     it('serves the taps of the shader before the latest while the renderer may still draw it', () => {
         const read = vi.fn((_tap: number, _since?: number) => ({
             head: 1,
-            samples: [0.5],
+            samples: Float32Array.of(0.5),
         }));
         setVideoTapSource({
             isStopped: () => false,
@@ -100,7 +100,7 @@ describe('across patch updates', () => {
             isStopped: () => false,
             read: () => {
                 order.push('read');
-                return { head: 1, samples: [0.5] };
+                return { head: 1, samples: Float32Array.of(0.5) };
             },
             sampleRate: () => 48000,
             updates: () => {
@@ -122,7 +122,7 @@ describe('a fresh pull', () => {
     it("restarts each tap from the engine's newest samples instead of where the last pull left off", () => {
         const read = vi.fn((_tap: number, since?: number) => ({
             head: (since ?? 100) + 10,
-            samples: [0.1],
+            samples: Float32Array.of(0.1),
         }));
         setVideoTapSource({
             isStopped: () => false,
