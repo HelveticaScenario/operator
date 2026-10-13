@@ -196,6 +196,15 @@ struct ReverbState {
     /// Smoothed cross-coupling angle (radians).
     smoothed_width: Clickless,
 
+    // Values derived from the inputs above, each cached with the input it was
+    // derived from and recomputed only when that input changes.
+    /// `(decay voltage, target gain exponent)`.
+    decay_k_target: Option<(f32, f32)>,
+    /// `(smoothed angle, sin, cos)`.
+    cross: Option<(f32, f32, f32)>,
+    /// `((smoothed decay_k, smoothed size), per-line decay gain)`.
+    line_gains: Option<((f32, f32), [f32; NUM_LINES])>,
+
     sample_rate: f32,
 
     // Fixed read lengths, derived from the sample rate only (so constant for
@@ -309,10 +318,17 @@ impl Reverb {
         // Decay maps to a target T60, then to the per-sample-length gain
         // exponent `k` where each line's gain is `exp(k · length)`.
         let decay_v = self.params.decay.value_or(0.0);
-        let t60 = map_range(decay_v, -5.0, 5.0, MIN_T60.ln(), MAX_T60.ln())
-            .exp()
-            .clamp(MIN_T60, MAX_T60);
-        let decay_k = -LN_1000 / (self.state.sample_rate * t60);
+        let decay_k = match self.state.decay_k_target {
+            Some((cached, decay_k)) if cached == decay_v => decay_k,
+            _ => {
+                let t60 = map_range(decay_v, -5.0, 5.0, MIN_T60.ln(), MAX_T60.ln())
+                    .exp()
+                    .clamp(MIN_T60, MAX_T60);
+                let decay_k = -LN_1000 / (self.state.sample_rate * t60);
+                self.state.decay_k_target = Some((decay_v, decay_k));
+                decay_k
+            }
+        };
         self.state.smoothed_decay_k.update(decay_k);
         let decay_k = *self.state.smoothed_decay_k;
 
@@ -334,7 +350,15 @@ impl Reverb {
         )
         .clamp(WIDE_ANGLE, NARROW_ANGLE);
         self.state.smoothed_width.update(angle_raw);
-        let (cross_sin, cross_cos) = (*self.state.smoothed_width).sin_cos();
+        let angle = *self.state.smoothed_width;
+        let (cross_sin, cross_cos) = match self.state.cross {
+            Some((cached, sin, cos)) if cached == angle => (sin, cos),
+            _ => {
+                let (sin, cos) = angle.sin_cos();
+                self.state.cross = Some((angle, sin, cos));
+                (sin, cos)
+            }
+        };
 
         let mod_depth = map_range(
             self.params.modulation.value_or(0.0).clamp(-5.0, 5.0),
@@ -378,6 +402,19 @@ impl Reverb {
 
         // ── Read the network, damp, attenuate ────────────────────────────
 
+        let line_gains = match &self.state.line_gains {
+            Some((cached, gains)) if *cached == (decay_k, size) => *gains,
+            _ => {
+                let mut gains = [0.0; NUM_LINES];
+                for (i, gain) in gains.iter_mut().enumerate() {
+                    let length = self.state.base_len[i] * size;
+                    *gain = (decay_k * length).exp().min(MAX_FEEDBACK);
+                }
+                self.state.line_gains = Some(((decay_k, size), gains));
+                gains
+            }
+        };
+
         let mut returns = [0.0f32; NUM_LINES];
         let mut left_out = 0.0f32;
         let mut right_out = 0.0f32;
@@ -407,8 +444,7 @@ impl Reverb {
             // the loop recursion.
             let damped = sanitize(one_pole(self.state.damp_state[i], delayed, damp_coeff));
             self.state.damp_state[i] = damped;
-            let gain = (decay_k * length).exp().min(MAX_FEEDBACK);
-            returns[i] = damped * gain;
+            returns[i] = damped * line_gains[i];
         }
 
         // ── Mix each block, cross-couple, write back with stereo input ───

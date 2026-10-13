@@ -220,6 +220,15 @@ struct Reverb2State {
     /// Smoothed cross-coupling angle (radians).
     smoothed_width: Clickless,
 
+    // Values derived from the inputs above, each cached with the input it was
+    // derived from and recomputed only when that input changes.
+    /// `(decay voltage, target gain exponent)`.
+    decay_k_target: Option<(f32, f32)>,
+    /// `(smoothed angle, sin, cos)`.
+    cross: Option<(f32, f32, f32)>,
+    /// `((smoothed decay_k, smoothed size, hf_exponent), per-line (g_dc, k))`.
+    absorption: Option<((f32, f32, f32), [(f32, f32); NUM_LINES])>,
+
     sample_rate: f32,
 
     // Fixed lengths, derived from the sample rate only.
@@ -336,10 +345,17 @@ impl Reverb2 {
 
         // Low-band decay time → per-sample-length gain exponent.
         let decay_v = self.params.decay.value_or(0.0);
-        let t60 = map_range(decay_v, -5.0, 5.0, MIN_T60.ln(), MAX_T60.ln())
-            .exp()
-            .clamp(MIN_T60, MAX_T60);
-        let decay_k = -LN_1000 / (self.state.sample_rate * t60);
+        let decay_k = match self.state.decay_k_target {
+            Some((cached, decay_k)) if cached == decay_v => decay_k,
+            _ => {
+                let t60 = map_range(decay_v, -5.0, 5.0, MIN_T60.ln(), MAX_T60.ln())
+                    .exp()
+                    .clamp(MIN_T60, MAX_T60);
+                let decay_k = -LN_1000 / (self.state.sample_rate * t60);
+                self.state.decay_k_target = Some((decay_v, decay_k));
+                decay_k
+            }
+        };
         self.state.smoothed_decay_k.update(decay_k);
         let decay_k = *self.state.smoothed_decay_k;
 
@@ -375,7 +391,15 @@ impl Reverb2 {
         )
         .clamp(WIDE_ANGLE, NARROW_ANGLE);
         self.state.smoothed_width.update(angle_raw);
-        let (cross_sin, cross_cos) = (*self.state.smoothed_width).sin_cos();
+        let angle = *self.state.smoothed_width;
+        let (cross_sin, cross_cos) = match self.state.cross {
+            Some((cached, sin, cos)) if cached == angle => (sin, cos),
+            _ => {
+                let (sin, cos) = angle.sin_cos();
+                self.state.cross = Some((angle, sin, cos));
+                (sin, cos)
+            }
+        };
 
         let mod_depth = map_range(
             self.params.modulation.value_or(0.0).clamp(-5.0, 5.0),
@@ -419,6 +443,26 @@ impl Reverb2 {
 
         // ── Read the network, run per-line absorption ────────────────────
 
+        let key = (decay_k, size, hf_exponent);
+        let absorption = match &self.state.absorption {
+            Some((cached, absorption)) if *cached == key => *absorption,
+            _ => {
+                let mut absorption = [(0.0, 0.0); NUM_LINES];
+                for (i, line) in absorption.iter_mut().enumerate() {
+                    let length = self.state.base_len[i] * size;
+                    let loop_len = length + self.state.scatter_len[i] as f32;
+                    let length_gain = decay_k * loop_len;
+                    let g_dc = length_gain.exp().min(MAX_FEEDBACK);
+                    let rho = (length_gain * hf_exponent)
+                        .exp()
+                        .clamp(MIN_ABSORPTION_RATIO, 1.0);
+                    *line = (g_dc, (1.0 - rho) / (1.0 + rho));
+                }
+                self.state.absorption = Some((key, absorption));
+                absorption
+            }
+        };
+
         let mut mix = [0.0f32; NUM_LINES];
         let mut left_out = 0.0f32;
         let mut right_out = 0.0f32;
@@ -448,13 +492,7 @@ impl Reverb2 {
             // is designed over the full loop delay a signal accrues in this
             // line — the main tap plus the scattering delay it traverses before
             // re-entering the network — so the realized decay matches `decay`.
-            let loop_len = length + self.state.scatter_len[i] as f32;
-            let length_gain = decay_k * loop_len;
-            let g_dc = length_gain.exp().min(MAX_FEEDBACK);
-            let rho = (length_gain * hf_exponent)
-                .exp()
-                .clamp(MIN_ABSORPTION_RATIO, 1.0);
-            let k = (1.0 - rho) / (1.0 + rho);
+            let (g_dc, k) = absorption[i];
             // Sanitized every sample so a non-finite input cannot lodge in the
             // loop recursion.
             let absorbed = sanitize(k * self.state.absorb_state[i] + g_dc * (1.0 - k) * delayed);
