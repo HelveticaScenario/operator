@@ -2,8 +2,9 @@
  * Live spectrum for the EQ panel, computed in the renderer from a headless
  * full-rate scope. The scope ring holds only 1024 samples, too short for
  * useful low-end resolution, so successive polls are stitched into a longer
- * history by the scope's write position; a poll gap long enough to overrun
- * the ring restarts the history.
+ * history by the scope's write position. A poll gap long enough to overrun
+ * the ring breaks continuity, so the history restarts and the spectrum holds
+ * until a full window of continuous samples has arrived again.
  */
 
 export const SPECTRUM_FFT_SIZE = 4096;
@@ -62,6 +63,8 @@ export class SpectrumAnalyzer {
     private head = 0;
     private lastOffset = -1;
     private lastMs = 0;
+    /** Samples at the end of `history` received without a break. */
+    private continuous = 0;
     private readonly window = new Float64Array(SPECTRUM_FFT_SIZE);
     private readonly windowSum: number;
     private readonly re = new Float64Array(SPECTRUM_FFT_SIZE);
@@ -99,6 +102,7 @@ export class SpectrumAnalyzer {
         let count: number;
         if (this.lastOffset < 0 || elapsedSamples >= cap) {
             count = cap;
+            this.continuous = 0;
         } else {
             count = (readOffset - this.lastOffset + cap) % cap;
         }
@@ -112,11 +116,18 @@ export class SpectrumAnalyzer {
             this.history[this.head] = ring[(first + i) % cap];
             this.head = (this.head + 1) % SPECTRUM_FFT_SIZE;
         }
+        this.continuous = Math.min(this.continuous + count, SPECTRUM_FFT_SIZE);
         return true;
     }
 
-    /** Recompute `binsDb` from the history, applying the release. */
+    /**
+     * Recompute `binsDb` from the history, applying the release. Holds the
+     * previous result until the history is one continuous window.
+     */
     compute(nowMs: number): void {
+        if (this.continuous < SPECTRUM_FFT_SIZE) {
+            return;
+        }
         const n = SPECTRUM_FFT_SIZE;
         for (let i = 0; i < n; i++) {
             this.re[i] = this.history[(this.head + i) % n] * this.window[i];
@@ -146,6 +157,7 @@ export class SpectrumAnalyzer {
         this.binsDb.fill(SPECTRUM_FLOOR_DB);
         this.lastOffset = -1;
         this.lastComputeMs = 0;
+        this.continuous = 0;
     }
 
     /**

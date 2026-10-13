@@ -6,6 +6,8 @@
  * filter that plays.
  */
 
+import { parseSliderValue } from '../../shared/dsl/sliderUnits';
+
 export type EqSectionType =
     | 'peak'
     | 'lowShelf'
@@ -33,33 +35,10 @@ export const MAX_GAIN_DB = 24;
 export const MIN_FREQ_HZ = 20;
 export const MAX_FREQ_HZ = 20000;
 
-/** 0 V on the V/Oct scale. */
-const C4_HZ = 261.6255653005986;
-
 /** Types whose `gain` shapes the response; the others ignore it. */
 export function typeHasGain(type: EqSectionType): boolean {
     return type === 'peak' || type === 'lowShelf' || type === 'highShelf';
 }
-
-export function voctToHz(volts: number): number {
-    return C4_HZ * Math.pow(2, volts);
-}
-
-export function hzToVoct(hz: number): number {
-    return Math.log2(hz / C4_HZ);
-}
-
-const HZ_RE = /^(-?\d*\.?\d+)hz$/i;
-const NOTE_RE = /^([A-Ga-g])([#b]?)(-?\d+)?$/;
-const PITCH_CLASS: Record<string, number> = {
-    a: 9,
-    b: 11,
-    c: 0,
-    d: 2,
-    e: 4,
-    f: 5,
-    g: 7,
-};
 
 /**
  * A mono signal param's constant value in engine units (V/Oct for freq, raw
@@ -86,20 +65,11 @@ export function constantSignalValue(value: unknown): number | null {
     if (typeof value !== 'string') {
         return null;
     }
-    const hz = HZ_RE.exec(value);
-    if (hz) {
-        const f = parseFloat(hz[1]);
-        return f > 0 ? hzToVoct(f) : null;
+    try {
+        return parseSliderValue(value).volts;
+    } catch {
+        return null;
     }
-    const note = NOTE_RE.exec(value);
-    if (note) {
-        const accidental = note[2] === '#' ? 1 : note[2] === 'b' ? -1 : 0;
-        const octave = note[3] === undefined ? 4 : parseInt(note[3], 10);
-        const midi =
-            (octave + 1) * 12 + PITCH_CLASS[note[1].toLowerCase()] + accidental;
-        return (midi - 60) / 12;
-    }
-    return null;
 }
 
 export function clamp(v: number, lo: number, hi: number): number {

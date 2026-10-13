@@ -45,12 +45,25 @@ impl Default for ParametricEqChannel {
 struct ParametricEqState {
     /// Coefficients of the shared section list, used by every channel.
     mono: [SectionRuntime; MAX_EQ_SECTIONS],
+    /// The runtimes that ran last; the others hold smoothing from an older
+    /// form. None before the first patch update.
+    active: Option<ActiveRuntimes>,
+}
+
+/// Which runtimes a sections form drives.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveRuntimes {
+    /// `state.mono`.
+    Shared,
+    /// `per` on the first this-many channels.
+    PerChannel(usize),
 }
 
 impl Default for ParametricEqState {
     fn default() -> Self {
         Self {
             mono: [SectionRuntime::default(); MAX_EQ_SECTIONS],
+            active: None,
         }
     }
 }
@@ -174,7 +187,30 @@ impl crate::types::PatchUpdateHandler for ParametricEq {
     /// change only on patch updates and are invisible to the per-sample
     /// change gate, so every section recomputes its coefficients on the next
     /// sample.
+    ///
+    /// Runtimes coming back into use after another form ran hold stale
+    /// smoothing, so they start fresh and snap to the new values.
     fn on_patch_update(&mut self) {
+        let now = match &self.params.sections {
+            EqSections::Shared(_) => ActiveRuntimes::Shared,
+            EqSections::PerChannel(lists) => {
+                ActiveRuntimes::PerChannel(lists.len().min(self.channel_count()))
+            }
+        };
+        let fresh_lists = match (self.state.active, now) {
+            (Some(ActiveRuntimes::Shared), ActiveRuntimes::Shared) => 0..0,
+            (_, ActiveRuntimes::Shared) => {
+                self.state.mono = [SectionRuntime::default(); MAX_EQ_SECTIONS];
+                0..0
+            }
+            (Some(ActiveRuntimes::PerChannel(was)), ActiveRuntimes::PerChannel(n)) => was.min(n)..n,
+            (_, ActiveRuntimes::PerChannel(n)) => 0..n,
+        };
+        for cs in &mut self.channel_state[fresh_lists] {
+            cs.per = [SectionRuntime::default(); MAX_EQ_SECTIONS];
+        }
+        self.state.active = Some(now);
+
         for rt in self.state.mono.iter_mut() {
             rt.invalidate();
         }
@@ -497,6 +533,30 @@ mod tests {
         assert!(
             rms.is_finite() && rms > 0.1,
             "the chain recovers, got {rms}"
+        );
+    }
+
+    #[test]
+    fn returning_to_a_form_does_not_glide_from_its_old_values() {
+        use crate::types::PatchUpdateHandler;
+        let band = |volts: f32| {
+            let mut s = section(EqSectionType::Peak, 6.0, 1.0);
+            s.freq = PolySignal::mono(Signal::Volts(volts)).into();
+            s
+        };
+        let mut m = make_with(EqSections::Shared(vec![band(-1.0)]), 2);
+        m.on_patch_update();
+        sine_rms(&mut m, C4_HZ, 2000);
+        m.params.sections = EqSections::PerChannel(vec![vec![band(-1.0)], vec![band(-1.0)]]);
+        m.on_patch_update();
+        sine_rms(&mut m, C4_HZ, 2000);
+        m.params.sections = EqSections::Shared(vec![band(4.0)]);
+        m.on_patch_update();
+        m.update(48000.0);
+        let freq = m.state.mono[0].live_values()[0];
+        assert!(
+            (freq - 4.0).abs() < 1e-3,
+            "the shared runtime starts at the new freq, got {freq} V"
         );
     }
 

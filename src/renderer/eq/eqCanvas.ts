@@ -1,213 +1,27 @@
 /**
- * EQ panel graph: log-frequency × dB geometry, hit testing, and canvas
- * drawing of the grid, live spectrum, response curves, and section nodes.
- * All geometry is in CSS pixels; drawing scales by devicePixelRatio.
+ * EQ panel graph drawing: response curves (live, other channels, and the
+ * code's when it diverges) and Q handles over the painted layers. Geometry
+ * is in CSS pixels; drawing scales by devicePixelRatio.
  */
-import {
-    MAX_FREQ_HZ,
-    MAX_GAIN_DB,
-    MIN_FREQ_HZ,
-    type EqSectionValues,
-    sectionResponseDb,
-    typeHasGain,
-} from './eqMath';
+import { sectionResponseDb } from './eqMath';
 import type { EqSectionView } from './eqPanelModel';
 import { sectionIsModulated } from './eqPanelModel';
 import {
-    SPECTRUM_CEIL_DB,
-    SPECTRUM_FLOOR_DB,
-    type SpectrumAnalyzer,
-} from './eqSpectrum';
+    type EqGeometry,
+    SECTION_COLORS,
+    gainToY,
+    knownValues,
+    nodePosition,
+    qHandles,
+} from './eqGeometry';
+import {
+    type EqColors,
+    drawGrid,
+    drawNode,
+    drawSpectrum,
+} from './eqCanvasLayers';
+import type { SpectrumAnalyzer } from './eqSpectrum';
 
-export const NODE_RADIUS = 7;
-const HIT_RADIUS = 11;
-
-/** Per-section node colors, by section index. */
-export const SECTION_COLORS = [
-    '#f0a04b',
-    '#5fb3f0',
-    '#d47fd8',
-    '#9fd94f',
-    '#f06a6a',
-    '#e8d26a',
-    '#6ae0c8',
-    '#b49cf5',
-];
-
-export interface EqGeometry {
-    width: number;
-    height: number;
-    left: number;
-    right: number;
-    top: number;
-    bottom: number;
-    fMin: number;
-    fMax: number;
-    /** Frequency at each plot column, for curve and spectrum sampling. */
-    freqs: Float64Array;
-}
-
-export function makeGeometry(
-    width: number,
-    height: number,
-    sampleRate: number,
-): EqGeometry {
-    const left = 30;
-    const right = width - 6;
-    const top = 6;
-    const bottom = height - 16;
-    const fMin = MIN_FREQ_HZ;
-    const fMax = Math.min(MAX_FREQ_HZ, sampleRate * 0.495);
-    const cols = Math.max(2, Math.ceil(right - left) + 1);
-    const freqs = new Float64Array(cols);
-    for (let i = 0; i < cols; i++) {
-        freqs[i] = fMin * Math.pow(fMax / fMin, i / (cols - 1));
-    }
-    return { bottom, fMax, fMin, freqs, height, left, right, top, width };
-}
-
-export function freqToX(g: EqGeometry, hz: number): number {
-    return (
-        g.left +
-        (Math.log(hz / g.fMin) / Math.log(g.fMax / g.fMin)) * (g.right - g.left)
-    );
-}
-
-export function xToFreq(g: EqGeometry, x: number): number {
-    const t = (x - g.left) / (g.right - g.left);
-    return g.fMin * Math.pow(g.fMax / g.fMin, t);
-}
-
-export function gainToY(g: EqGeometry, db: number): number {
-    const mid = (g.top + g.bottom) / 2;
-    return mid - (db / MAX_GAIN_DB) * ((g.bottom - g.top) / 2);
-}
-
-export function yToGain(g: EqGeometry, y: number): number {
-    const mid = (g.top + g.bottom) / 2;
-    return ((mid - y) / ((g.bottom - g.top) / 2)) * MAX_GAIN_DB;
-}
-
-/** Section values for the response, or null while any is unknown (a
- *  signal-driven param with no live value yet). */
-export function knownValues(sec: EqSectionView): EqSectionValues | null {
-    if (sec.freqHz === null || sec.gainDb === null || sec.q === null) {
-        return null;
-    }
-    return {
-        freqHz: sec.freqHz,
-        gainDb: sec.gainDb,
-        q: sec.q,
-        type: sec.type,
-    };
-}
-
-/**
- * Where a section's node sits: its freq, and its gain for types that use
- * gain (0 dB otherwise, or while gain is unknown). Null while freq is
- * unknown.
- */
-export function nodePosition(
-    g: EqGeometry,
-    sec: Pick<EqSectionView, 'type' | 'freqHz' | 'gainDb'>,
-): { x: number; y: number } | null {
-    if (sec.freqHz === null) {
-        return null;
-    }
-    const gain = typeHasGain(sec.type) && sec.gainDb !== null ? sec.gainDb : 0;
-    return { x: freqToX(g, sec.freqHz), y: gainToY(g, gain) };
-}
-
-/** Bandwidth in octaves of a peak with this Q. */
-export function qToOctaves(q: number): number {
-    return (2 / Math.LN2) * Math.asinh(1 / (2 * q));
-}
-
-/** Q of a peak spanning `octaves`. */
-export function octavesToQ(octaves: number): number {
-    return 1 / (2 * Math.sinh((Math.LN2 * octaves) / 2));
-}
-
-/**
- * The selected section's Q handles: either side of its node, half its
- * bandwidth away, at the node's height. Null while freq or q is unknown.
- */
-export function qHandles(
-    g: EqGeometry,
-    sec: EqSectionView,
-): { x: number; y: number }[] | null {
-    const node = nodePosition(g, sec);
-    if (!node || sec.q === null || sec.freqHz === null) {
-        return null;
-    }
-    const half = Math.pow(2, qToOctaves(sec.q) / 2);
-    return [sec.freqHz / half, sec.freqHz * half].map((f) => ({
-        x: freqToX(g, f),
-        y: node.y,
-    }));
-}
-
-/** True when (x, y) is on one of the section's Q handles. */
-export function hitTestQHandle(
-    g: EqGeometry,
-    sec: EqSectionView,
-    x: number,
-    y: number,
-): boolean {
-    return (
-        qHandles(g, sec)?.some(
-            (h) => Math.abs(h.x - x) <= 6 && Math.abs(h.y - y) <= 10,
-        ) ?? false
-    );
-}
-
-/** Index of the node under (x, y), nearest first; selected wins ties. */
-export function hitTestNode(
-    g: EqGeometry,
-    sections: EqSectionView[],
-    x: number,
-    y: number,
-): number | null {
-    let best: number | null = null;
-    let bestDist = HIT_RADIUS;
-    for (let i = sections.length - 1; i >= 0; i--) {
-        const p = nodePosition(g, sections[i]);
-        if (!p) {
-            continue;
-        }
-        const d = Math.hypot(p.x - x, p.y - y);
-        if (d < bestDist) {
-            bestDist = d;
-            best = i;
-        }
-    }
-    return best;
-}
-
-export interface EqColors {
-    bg: string;
-    grid: string;
-    text: string;
-    curve: string;
-    spectrum: string;
-    font: string;
-}
-
-export function readEqColors(): EqColors {
-    const s = getComputedStyle(document.documentElement);
-    const v = (name: string, fallback: string) =>
-        s.getPropertyValue(name).trim() || fallback;
-    return {
-        bg: v('--bg-primary', '#0a0a0a'),
-        curve: v('--text-primary', '#e6e6e6'),
-        font: v('--font-mono', 'monospace'),
-        grid: v('--border-subtle', '#222222'),
-        spectrum: v('--text-muted', '#8a8a8a'),
-        text: v('--text-muted', '#8a8a8a'),
-    };
-}
-
-/** A section's node as drawn: live values plus its code-side ghost. */
 export interface DrawSection {
     view: EqSectionView;
     /** Code-side values diverging from the audio; drawn as a ghost node. */
@@ -223,100 +37,6 @@ export interface EqDrawState {
     adaptiveQ: boolean;
     sampleRate: number;
     spectrum: SpectrumAnalyzer | null;
-}
-
-const FREQ_LABELS: [number, string][] = [
-    [50, '50'],
-    [100, '100'],
-    [200, '200'],
-    [500, '500'],
-    [1000, '1k'],
-    [2000, '2k'],
-    [5000, '5k'],
-    [10000, '10k'],
-];
-
-function drawGrid(
-    ctx: CanvasRenderingContext2D,
-    g: EqGeometry,
-    colors: EqColors,
-): void {
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = colors.grid;
-    ctx.beginPath();
-    for (let decade = 10; decade <= 10000; decade *= 10) {
-        for (let m = 1; m < 10; m++) {
-            const f = decade * m;
-            if (f < g.fMin || f > g.fMax) {
-                continue;
-            }
-            const x = Math.round(freqToX(g, f)) + 0.5;
-            ctx.moveTo(x, g.top);
-            ctx.lineTo(x, g.bottom);
-        }
-    }
-    for (const db of [-18, -12, -6, 6, 12, 18]) {
-        const y = Math.round(gainToY(g, db)) + 0.5;
-        ctx.moveTo(g.left, y);
-        ctx.lineTo(g.right, y);
-    }
-    ctx.stroke();
-
-    ctx.strokeStyle = colors.text;
-    ctx.globalAlpha = 0.5;
-    ctx.beginPath();
-    const y0 = Math.round(gainToY(g, 0)) + 0.5;
-    ctx.moveTo(g.left, y0);
-    ctx.lineTo(g.right, y0);
-    ctx.stroke();
-    ctx.globalAlpha = 1;
-
-    ctx.fillStyle = colors.text;
-    ctx.font = `10px ${colors.font}`;
-    ctx.textBaseline = 'top';
-    ctx.textAlign = 'center';
-    for (const [f, label] of FREQ_LABELS) {
-        if (f <= g.fMax) {
-            ctx.fillText(label, freqToX(g, f), g.bottom + 3);
-        }
-    }
-    ctx.textAlign = 'right';
-    ctx.textBaseline = 'middle';
-    for (const db of [12, 0, -12]) {
-        ctx.fillText(
-            db > 0 ? `+${db}` : String(db),
-            g.left - 5,
-            gainToY(g, db),
-        );
-    }
-}
-
-function drawSpectrum(
-    ctx: CanvasRenderingContext2D,
-    g: EqGeometry,
-    spectrum: SpectrumAnalyzer,
-    colors: EqColors,
-    scratch: Float64Array,
-): void {
-    spectrum.sample(g.freqs, scratch);
-    const span = SPECTRUM_CEIL_DB - SPECTRUM_FLOOR_DB;
-    const yOf = (db: number) =>
-        g.bottom -
-        ((Math.min(Math.max(db, SPECTRUM_FLOOR_DB), SPECTRUM_CEIL_DB) -
-            SPECTRUM_FLOOR_DB) /
-            span) *
-            (g.bottom - g.top);
-    ctx.beginPath();
-    ctx.moveTo(g.left, g.bottom);
-    for (let i = 0; i < g.freqs.length; i++) {
-        ctx.lineTo(g.left + i, yOf(scratch[i]));
-    }
-    ctx.lineTo(g.left + g.freqs.length - 1, g.bottom);
-    ctx.closePath();
-    ctx.fillStyle = colors.spectrum;
-    ctx.globalAlpha = 0.18;
-    ctx.fill();
-    ctx.globalAlpha = 1;
 }
 
 function strokeCurve(
@@ -350,54 +70,6 @@ function fillToZero(
     ctx.closePath();
 }
 
-function drawNode(
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    index: number,
-    opts: {
-        selected: boolean;
-        hovered: boolean;
-        modulated: boolean;
-        ghost: boolean;
-    },
-    colors: EqColors,
-): void {
-    const color = SECTION_COLORS[index % SECTION_COLORS.length];
-    const r = NODE_RADIUS + (opts.hovered || opts.selected ? 1.5 : 0);
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
-    if (opts.ghost) {
-        ctx.setLineDash([2, 2]);
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1.5;
-        ctx.globalAlpha = 0.7;
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-        return;
-    }
-    ctx.fillStyle = color;
-    ctx.fill();
-    if (opts.modulated) {
-        ctx.setLineDash([3, 2]);
-        ctx.strokeStyle = colors.curve;
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-        ctx.setLineDash([]);
-    } else if (opts.selected) {
-        ctx.strokeStyle = colors.curve;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-    }
-    ctx.fillStyle = '#111111';
-    ctx.font = `bold 9px ${colors.font}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(String(index + 1), x, y + 0.5);
-}
-
-/** Reusable per-canvas buffers, sized to the geometry. */
 export interface EqScratch {
     section: Float64Array;
     sum: Float64Array;

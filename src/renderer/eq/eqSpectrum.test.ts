@@ -61,6 +61,37 @@ describe('SpectrumAnalyzer', () => {
         expect(out[0]).toBeLessThan(out[1] - 20);
     });
 
+    it('restarts after a poll gap overruns the ring, never splicing across it', () => {
+        const an = new SpectrumAnalyzer();
+        an.sampleRate = SR;
+        const scope = new FakeScope();
+        const tone = (t: number) => 5 * Math.sin((2 * Math.PI * 100 * t) / SR);
+        let now = 1000;
+        for (let i = 0; i < 12; i++) {
+            scope.feed(768, tone);
+            now += 16;
+            an.push(scope.ring, scope.readOffset, now);
+        }
+        an.compute(now);
+        const before = Float64Array.from(an.binsDb);
+        // A stall: the scope keeps writing, phase-jumped, past the ring size.
+        scope.feed(5000, (t) => 5 * Math.sin((2 * Math.PI * 100 * t) / SR + 2));
+        now += 200;
+        an.push(scope.ring, scope.readOffset, now);
+        an.compute(now);
+        expect(Array.from(an.binsDb)).toEqual(Array.from(before));
+        // Once a full continuous window arrives, it computes again.
+        for (let i = 0; i < 6; i++) {
+            scope.feed(768, tone);
+            now += 16;
+            an.push(scope.ring, scope.readOffset, now);
+        }
+        an.compute(now);
+        const out = new Float64Array(2);
+        an.sample([100, 400], out);
+        expect(out[1]).toBeLessThan(out[0] - 40);
+    });
+
     it('reports no new samples for an unchanged poll', () => {
         const an = new SpectrumAnalyzer();
         const scope = new FakeScope();

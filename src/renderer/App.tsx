@@ -70,12 +70,8 @@ import {
     voltsToDb,
 } from './app/vuMeter';
 import type { ScopeView } from './types/editor';
-import {
-    EqPanelController,
-    type EqPanelSetup,
-    createEqPanelSetup,
-    disposeEqPanelSetup,
-} from './eq/eqPanelController';
+import { EqPanelController } from './eq/eqPanelController';
+import { type EqPanelSetup, disposeEqPanelSetup } from './eq/eqPanelSetup';
 import {
     FIRST_LINE_COLUMN_OFFSET,
     setActiveInterpolationResolutions,
@@ -248,7 +244,8 @@ function App() {
     const [eqController] = useState(
         () =>
             new EqPanelController({
-                getModuleStates: () => electronAPI.synthesizer.getModuleStates(),
+                getModuleStates: () =>
+                    electronAPI.synthesizer.getModuleStates(),
                 getSampleRate: () => electronAPI.synthesizer.getSampleRate(),
                 setModuleParam: (moduleId, moduleType, params) =>
                     electronAPI.synthesizer.setModuleParam(
@@ -1942,7 +1939,7 @@ function App() {
                         );
                 }
 
-                const newEqPanels = createEqPanelSetup(result, editorInstance);
+                const newEqPanels = eqController.stage(result, editorInstance);
 
                 const newSliderDefs = result.sliders ?? [];
                 const newButtonDefs = result.buttons ?? [];

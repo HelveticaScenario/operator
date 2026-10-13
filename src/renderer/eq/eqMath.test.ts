@@ -4,12 +4,10 @@ import {
     DEFAULT_Q,
     type EqSectionValues,
     constantSignalValue,
-    hzToVoct,
     quantizeGain,
     quantizeHz,
     quantizeQ,
     sectionResponseDb,
-    voctToHz,
 } from './eqMath';
 
 const SR = 48000;
@@ -51,10 +49,6 @@ describe('quantizers', () => {
         expect(quantizeGain(30)).toBe(24);
         expect(quantizeQ(0.7071)).toBe(0.71);
         expect(quantizeQ(12.4)).toBe(12);
-    });
-
-    it('round-trips V/Oct', () => {
-        expect(voctToHz(hzToVoct(1234))).toBeCloseTo(1234, 9);
     });
 });
 

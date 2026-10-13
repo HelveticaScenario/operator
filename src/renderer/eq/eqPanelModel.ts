@@ -6,12 +6,15 @@
  * audio agree exactly.
  */
 import {
+    formatHzLiteral,
+    hzToVolts,
+    voltsToHz,
+} from '../../shared/dsl/sliderUnits';
+import {
     DEFAULT_Q,
     type EqSectionType,
     EQ_SECTION_TYPES,
     constantSignalValue,
-    hzToVoct,
-    voctToHz,
 } from './eqMath';
 
 /** Raw params of one section as the engine receives them. */
@@ -84,7 +87,7 @@ export function decodeSection(raw: RawEqSection): EqSectionView {
     const q = decodeOptional(raw.q, DEFAULT_Q);
     return {
         driven: { freq: volts === null, gain: gainDb === null, q: q === null },
-        freqHz: volts === null ? null : voctToHz(volts),
+        freqHz: volts === null ? null : voltsToHz(volts),
         freqStyle: typeof raw.freq === 'number' ? 'volts' : 'hz',
         gainDb,
         q,
@@ -106,7 +109,7 @@ export function withLive(
     const finite = (v: number) => (Number.isFinite(v) ? v : null);
     return {
         ...sec,
-        freqHz: sec.driven.freq ? finite(voctToHz(live[0])) : sec.freqHz,
+        freqHz: sec.driven.freq ? finite(voltsToHz(live[0])) : sec.freqHz,
         gainDb: sec.driven.gain ? finite(live[1]) : sec.gainDb,
         q: sec.driven.q ? finite(live[2]) : sec.q,
     };
@@ -131,10 +134,10 @@ function formatNumber(v: number): string {
 
 export function encodeFreq(hz: number, style: 'hz' | 'volts'): EncodedValue {
     if (style === 'volts') {
-        const volts = Number(hzToVoct(hz).toFixed(4));
+        const volts = Number(hzToVolts(hz).toFixed(4));
         return { code: () => formatNumber(volts), engine: volts };
     }
-    const text = `${formatNumber(hz)}hz`;
+    const text = formatHzLiteral(hz);
     return { code: (quote) => `${quote}${text}${quote}`, engine: text };
 }
 
