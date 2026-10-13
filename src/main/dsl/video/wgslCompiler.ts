@@ -32,11 +32,43 @@ function emitRgba(
 }
 
 function wgslFloat(value: number): string {
-    if (!Number.isFinite(value)) {
-        throw new Error(`video constant must be finite, got ${value}`);
+    if (!Number.isFinite(Math.fround(value))) {
+        throw new Error(
+            `video constant must be finite and within the f32 range, got ${value}`,
+        );
     }
     const text = String(value);
     return /^-?\d+$/.test(text) ? `${text}.0` : text;
+}
+
+/**
+ * Most node evaluations a pixel may cost. A warped input re-evaluates its whole
+ * sub-patch per sample, so nesting multiplies: blurring an oscillator twice
+ * costs about 570 and three times about 9000, which can stall the GPU long
+ * enough for the system to reset it.
+ */
+const MAX_EVALUATIONS_PER_PIXEL = 2048;
+
+/** How many times `def.emit` writes each input into its expression. */
+function inputUses(
+    def: VideoModuleDef,
+    params: Record<string, string>,
+    indices: Parameters<VideoModuleDef['emit']>[2],
+): Map<string, number> {
+    const token = (name: string) => `\u0000${name}\u0000`;
+    const text = def.emit(
+        Object.fromEntries(
+            Object.keys(def.inputs).map((name) => [name, token(name)]),
+        ),
+        params,
+        indices,
+    );
+    return new Map(
+        Object.keys(def.inputs).map((name) => [
+            name,
+            text.split(token(name)).length - 1,
+        ]),
+    );
 }
 
 /**
@@ -91,6 +123,9 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         indices: { buffer: number; history: number; source: number };
     }
     const records = new Map<string, NodeRecord>();
+    /** Evaluations one call of each node's coordinate function costs, its inputs' included. */
+    const callCosts = new Map<string, number>();
+    let pixelCost = 0;
     const functions: string[] = [];
     const functionsDone = new Set<string>();
     const constantFunctions = new Map<string, string>();
@@ -254,6 +289,17 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 source: node.source ?? 0,
             };
             records.set(node.id, { def, index, indices, node, params });
+            let callCost = 1;
+            let statementCost = 1;
+            for (const [name, uses] of inputUses(def, params, indices)) {
+                const value = node.inputs[name];
+                if (value.kind !== 'node') continue;
+                const inputCost = uses * callCosts.get(value.id)!;
+                callCost += inputCost;
+                if (def.warped?.includes(name)) statementCost += inputCost;
+            }
+            callCosts.set(node.id, callCost);
+            pixelCost += statementCost;
             const text = `    let ${local}: vec4f = ${emitRgba(def, args, params, indices)};`;
             statements.push({
                 id: node.id,
@@ -286,6 +332,11 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
 
     if (!names.has(graph.output)) {
         throw new Error(`video output "${graph.output}" is not a node`);
+    }
+    if (pixelCost > MAX_EVALUATIONS_PER_PIXEL) {
+        throw new Error(
+            `$v: the picture costs ${pixelCost} evaluations per pixel, more than the ${MAX_EVALUATIONS_PER_PIXEL} the GPU can draw in time; blur, bloom, edges and the warps re-evaluate their whole input at each coordinate they read, so nesting them multiplies the cost`,
+        );
     }
     helpers.add(DISPLAY_HELPER);
 
