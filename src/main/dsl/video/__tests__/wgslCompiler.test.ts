@@ -210,6 +210,25 @@ describe('compileVideoGraph', () => {
             },
             /must be finite/,
         ],
+        [
+            'constant beyond the f32 range',
+            {
+                nodes: [
+                    { id: 'x', kind: 'ramp', inputs: rampInputs },
+                    {
+                        id: 'w',
+                        kind: 'osc',
+                        inputs: {
+                            input: { kind: 'node', id: 'x' },
+                            freq: { kind: 'const', value: 1e39 },
+                            phase: { kind: 'const', value: 0 },
+                        },
+                    },
+                ],
+                output: 'w',
+            },
+            /within the f32 range/,
+        ],
     ] as const)('rejects %s', (_name, partial, message) => {
         const graph = {
             histories: [],
