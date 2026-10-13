@@ -1,6 +1,7 @@
 /// <reference types="@webgpu/types" />
 import { FeedbackBuffers } from './FeedbackBuffers';
 import { AudioInputs } from './AudioInputs';
+import { withinTextureLimit } from './canvasSize';
 import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
 import { ShaderProgram } from './ShaderProgram';
@@ -28,6 +29,8 @@ const COLOR_BYTES_PER_SAMPLE = 8 + MAX_FEEDBACK_BUFFERS * 8;
 /** Previews are drawn and read back on every Nth frame: 30 fps at 60 Hz. */
 const PREVIEW_FRAME_INTERVAL = 2;
 
+const CLEAR_COLOR: GPUColor = { a: 1, b: 0, g: 0, r: 0 };
+
 /**
  * Draws a compiled video shader to a canvas every animation frame, and when a
  * preview sink is set, draws the shader's previews and reads them back. With
@@ -36,12 +39,15 @@ const PREVIEW_FRAME_INTERVAL = 2;
 export class VideoRenderer {
     private program: ShaderProgram | null = null;
     private readonly gate = new ShaderGate<ShaderProgram>();
-    /** Control values received while a shader is still being built. */
-    private pendingSlots = new Map<number, number>();
+    /** Control values received since the latest shader was requested, by module id. */
+    private pendingControls = new Map<string, number>();
     private frameHandle = 0;
     private frameIndex = 0;
     private pullSource: ((fresh: boolean) => Promise<VideoPull>) | null = null;
-    /** Counts shader changes, so a pull begun before one is not applied after it. */
+    /**
+     * Counts shader changes, so a pull begun before one is not applied after
+     * it, and a preview read back from one program is not taken for another's.
+     */
     private epoch = 0;
     /** True until the first pull after a shader change, which restarts every tap. */
     private freshPull = true;
@@ -63,7 +69,11 @@ export class VideoRenderer {
     private readonly audio: AudioInputs;
     private readonly sources: SourceTextures;
     private errorSink: ((message: string) => void) | null = null;
+    private liveSink: ((hasOutput: boolean) => void) | null = null;
+    private lostSink: ((message: string) => void) | null = null;
     private readonly sampler: GPUSampler;
+    /** The output pass's color attachments, whose views are set each frame. */
+    private readonly attachments: GPURenderPassColorAttachment[] = [];
 
     private constructor(
         private readonly canvas: HTMLCanvasElement,
@@ -79,14 +89,22 @@ export class VideoRenderer {
             (message) => this.errorSink?.(message),
             openStream,
         );
-        this.previews = new PreviewCapture(device, (frame) =>
-            this.routeFrame(frame),
+        this.previews = new PreviewCapture(device, (frame, drawnBy) =>
+            this.routeFrame(frame, drawnBy),
         );
         this.sampler = device.createSampler({
             addressModeU: 'clamp-to-edge',
             addressModeV: 'clamp-to-edge',
             magFilter: 'linear',
             minFilter: 'linear',
+        });
+        device.addEventListener('uncapturederror', (event) => {
+            this.errorSink?.(event.error.message);
+        });
+        void device.lost.then((info) => {
+            if (info.reason === 'destroyed') return;
+            cancelAnimationFrame(this.frameHandle);
+            this.lostSink?.(info.message);
         });
         this.frameHandle = requestAnimationFrame(this.frame);
     }
@@ -126,17 +144,18 @@ export class VideoRenderer {
     }
 
     /**
-     * Builds the shader of a patch update. It goes live once the audio engine
-     * has applied that update, because the audio taps it reads are numbered by
-     * the patch; until then the previous shader keeps drawing, and from the
-     * moment the engine applies the update that shader holds its last frame
-     * rather than read the new patch's signals. Rejects with the WGSL
-     * compiler's messages when the shader is invalid, leaving the previous
-     * shader on screen.
+     * Builds the shader of a patch update, which goes live once the engine
+     * applies that update, since its taps and control slots are numbered by
+     * the patch. Until then the previous shader draws, holding its last frame
+     * while the build finishes after the update applies.
+     *
+     * Rejects with the WGSL compiler's messages when the shader is invalid; the
+     * picture then clears once the update applies. Resolves to false, without
+     * effect, when a newer update supersedes this one, and to true otherwise.
      */
-    async setShader({ shader, updateId }: VideoShaderUpdate): Promise<void> {
+    async setShader({ shader, updateId }: VideoShaderUpdate): Promise<boolean> {
         const token = this.gate.request(updateId);
-        this.pendingSlots = new Map();
+        this.pendingControls = new Map();
 
         let program: ShaderProgram | null = null;
         try {
@@ -148,20 +167,25 @@ export class VideoRenderer {
                 );
             }
         } catch (error) {
-            this.gate.fail(token);
+            if (!this.gate.offer(token, null)) return false;
+            this.settle(false);
             throw error;
         }
-        if (this.gate.offer(token, program)) this.settle(false);
+        if (!this.gate.offer(token, program)) return false;
+        this.settle(false);
+        return true;
     }
 
     /**
-     * Sets a control-bound input of the shader being displayed, or of the one
-     * being built when a replacement is in flight.
+     * Sets the inputs bound to the control `moduleId` in the shader being
+     * displayed and in the one waiting to replace it. Each finds the control
+     * in its own uniform slots; a shader still being built takes the value
+     * when it is ready.
      */
-    setUniform(slot: number, value: number): void {
-        this.pendingSlots.set(slot, value);
-        if (this.gate.swapping) this.gate.waiting?.setSlot(slot, value);
-        else this.program?.setSlot(slot, value);
+    setControl(moduleId: string, value: number): void {
+        this.pendingControls.set(moduleId, value);
+        this.program?.setControl(moduleId, value);
+        this.gate.waiting?.setControl(moduleId, value);
     }
 
     /**
@@ -176,9 +200,25 @@ export class VideoRenderer {
         this.pullSource = source;
     }
 
-    /** Receives problems loading media, such as a file that will not decode. */
+    /**
+     * Receives problems loading media, such as a file that will not decode,
+     * and GPU errors no other path reports.
+     */
     setErrorSink(sink: ((message: string) => void) | null): void {
         this.errorSink = sink;
+    }
+
+    /** Receives, each time a shader goes live, whether it draws a picture. */
+    setLiveSink(sink: ((hasOutput: boolean) => void) | null): void {
+        this.liveSink = sink;
+    }
+
+    /**
+     * Receives the reason when the GPU device is lost. The renderer stops
+     * drawing for good; a new one must be created to draw again.
+     */
+    setLostSink(sink: ((message: string) => void) | null): void {
+        this.lostSink = sink;
     }
 
     /** Receives every editor preview frame; with no sinks, previews are not drawn. */
@@ -226,6 +266,7 @@ export class VideoRenderer {
         this.audio.reset(program?.histories ?? []);
         this.freshPull = true;
         this.epoch++;
+        this.liveSink?.(program?.hasOutput ?? false);
         if (program === null) {
             this.clear();
             this.buffers.resize(0, this.canvas.width, this.canvas.height);
@@ -241,8 +282,8 @@ export class VideoRenderer {
             this.canvas.height,
         );
         this.sources.sync(program.sources);
-        for (const [slot, value] of this.pendingSlots) {
-            program.setSlot(slot, value);
+        for (const [moduleId, value] of this.pendingControls) {
+            program.setControl(moduleId, value);
         }
     }
 
@@ -259,16 +300,48 @@ export class VideoRenderer {
         this.previews.resize(0, 0, 0);
     }
 
-    /** Sends a delivered frame to the CV sink or, for an editor preview, the preview sink. */
-    private routeFrame(frame: VideoPreviewFrame): void {
+    /**
+     * Sends a frame the live program drew to the CV sink or, for an editor
+     * preview, the preview sink. A frame an earlier program drew is dropped:
+     * its index means another preview now. While the gate holds, the engine
+     * runs the next patch, so a region average is dropped rather than written
+     * to that patch's signal of the same id.
+     */
+    private routeFrame(frame: VideoPreviewFrame, drawnBy: number): void {
+        if (drawnBy !== this.epoch) return;
         const sample = this.program?.cvSamples.get(frame.index);
         if (sample === undefined) {
             this.previewSink?.(frame);
-        } else {
+        } else if (!this.gate.holding) {
             this.cvSink?.([
                 { id: sample.id, value: regionAverage(frame, sample) },
             ]);
         }
+    }
+
+    /** The canvas, then `bufferCount` feedback buffers, each cleared before drawing. */
+    private colorAttachments(
+        bufferCount: number,
+    ): GPURenderPassColorAttachment[] {
+        const { attachments } = this;
+        attachments.length = Math.min(attachments.length, 1 + bufferCount);
+        for (let k = 0; k <= bufferCount; k++) {
+            const view =
+                k === 0
+                    ? this.context.getCurrentTexture().createView()
+                    : this.buffers.writeView(k - 1);
+            if (k < attachments.length) {
+                attachments[k].view = view;
+            } else {
+                attachments.push({
+                    clearValue: CLEAR_COLOR,
+                    loadOp: 'clear',
+                    storeOp: 'store',
+                    view,
+                });
+            }
+        }
+        return attachments;
     }
 
     private setRunning(running: boolean): void {
@@ -284,12 +357,13 @@ export class VideoRenderer {
 
     private fitCanvas(): void {
         const scale = window.devicePixelRatio;
-        const width =
+        const { width, height } = withinTextureLimit(
             this.fixedSize?.width ??
-            Math.max(1, Math.round(this.canvas.clientWidth * scale));
-        const height =
+                Math.max(1, Math.round(this.canvas.clientWidth * scale)),
             this.fixedSize?.height ??
-            Math.max(1, Math.round(this.canvas.clientHeight * scale));
+                Math.max(1, Math.round(this.canvas.clientHeight * scale)),
+            this.device.limits.maxTextureDimension2D,
+        );
         if (this.canvas.width !== width) this.canvas.width = width;
         if (this.canvas.height !== height) this.canvas.height = height;
     }
@@ -325,11 +399,12 @@ export class VideoRenderer {
 
     private frame = (): void => {
         this.frameHandle = requestAnimationFrame(this.frame);
+        // Pulled even with nothing to draw, so the engine's starts and stops
+        // keep the shader's clock in step with it.
+        this.pull();
         if (this.program === null && this.cleared && !this.gate.swapping) {
             return;
         }
-
-        this.pull();
         if (this.gate.holding) return;
         if (!this.running && this.program !== null) return;
         // A frame drawn before an audio input has any samples would read it as
@@ -346,26 +421,9 @@ export class VideoRenderer {
             );
         }
 
-        const clear = { a: 1, b: 0, g: 0, r: 0 };
         const encoder = this.device.createCommandEncoder();
         const pass = encoder.beginRenderPass({
-            colorAttachments: [
-                {
-                    clearValue: clear,
-                    loadOp: 'clear',
-                    storeOp: 'store',
-                    view: this.context.getCurrentTexture().createView(),
-                },
-                ...Array.from(
-                    { length: program?.bufferCount ?? 0 },
-                    (_, k) => ({
-                        clearValue: clear,
-                        loadOp: 'clear' as const,
-                        storeOp: 'store' as const,
-                        view: this.buffers.writeView(k),
-                    }),
-                ),
-            ],
+            colorAttachments: this.colorAttachments(program?.bufferCount ?? 0),
         });
 
         let groups: ReturnType<ShaderProgram['bindGroups']> | null = null;
@@ -410,7 +468,7 @@ export class VideoRenderer {
         this.device.queue.submit([encoder.finish()]);
         this.cleared = program === null;
         this.frameSink?.(this.canvas);
-        this.previews.deliver(copied);
+        this.previews.deliver(copied, this.epoch);
         this.buffers.flip();
         this.frameIndex++;
     };

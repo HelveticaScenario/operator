@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
 
-const AppConfigSchema = z.object({
+export const AppConfigSchema = z.object({
     audioConfig: z
         .object({
             hostId: z.string().optional(),

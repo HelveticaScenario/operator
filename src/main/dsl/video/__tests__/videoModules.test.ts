@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { exec } from './videoExec';
+import { callWgsl } from './wgslEval';
 
 describe('$v modules', () => {
     describe('math and keying modules', () => {
@@ -119,6 +120,33 @@ describe('$v modules', () => {
             expect(wgsl).toMatch(/video_posterize\(v\d, 3\.0\)/);
             expect(wgsl).toMatch(/video_comparator\(v\d, 0\.4, 0\.0\)/);
             expect(wgsl).toContain('return vec4f(clamp((x - vec3f(threshold))');
+        });
+
+        it('posterizes to a whole number of evenly spaced levels', () => {
+            const wgsl = wgslOf(`$v.ramp().$.posterize(3.7).out();`);
+            const level = (x: number, levels: number) =>
+                (
+                    callWgsl(
+                        wgsl,
+                        'video_posterize',
+                        [x, x, x, 1],
+                        levels,
+                    ) as number[]
+                )[0];
+            const outputs = (levels: number) =>
+                [0, 0.2, 0.4, 0.6, 0.8, 1].map((x) => level(x, levels));
+            expect(outputs(3.7)).toEqual(outputs(3));
+            expect(outputs(3)).toEqual([0, 0, 0.5, 0.5, 1, 1]);
+            expect(outputs(1)).toEqual([0, 0, 0, 1, 1, 1]);
+        });
+
+        it('folds to match the input times the gain below 1 / gain', () => {
+            const wgsl = wgslOf(`$v.ramp().$.fold(4).out();`);
+            const fold = (x: number) =>
+                (callWgsl(wgsl, 'video_fold', [x, x, x, 1], 4) as number[])[0];
+            expect(fold(0.1)).toBeCloseTo(0.4);
+            expect(fold(0.3)).toBeCloseTo(0.8);
+            expect(fold(0.375)).toBeCloseTo(0.5);
         });
 
         it('swaps the sides of comparator with invert', () => {

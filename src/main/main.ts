@@ -65,6 +65,7 @@ import {
     getPerformanceWindow,
     performanceFullscreenMenu,
     setPerformanceAspect,
+    togglePerformanceWindow,
     trackPerformanceWindow,
 } from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
@@ -112,20 +113,21 @@ const SYPHON_PERFORMANCE_MENU_ITEM_ID = 'syphon-toggle-performance';
 let syphonTarget: SyphonTarget = 'editor';
 
 /**
- * Reflect publishing state in the View-menu checkbox. Driven by the bridge's
- * enabled intent, not by child-process presence — the helper exits asynchronously
- * and crash-restarts with the child momentarily absent, either of which would
- * make `isActive` misreport the box. Intent stays steady across both.
+ * Whether the View-menu checkbox for `target` is checked. It follows the
+ * bridge's enabled intent, which holds steady while the helper process exits
+ * or crash-restarts.
  */
+function syphonPublishing(target: SyphonTarget): boolean {
+    return (syphonBridge?.isEnabled ?? false) && syphonTarget === target;
+}
+
+/** Reflect publishing state in the View-menu checkboxes. */
 function syncSyphonMenuItem(): void {
-    const enabled = syphonBridge?.isEnabled ?? false;
     const menu = Menu.getApplicationMenu();
     const editor = menu?.getMenuItemById(SYPHON_MENU_ITEM_ID);
-    if (editor) editor.checked = enabled && syphonTarget === 'editor';
+    if (editor) editor.checked = syphonPublishing('editor');
     const performance = menu?.getMenuItemById(SYPHON_PERFORMANCE_MENU_ITEM_ID);
-    if (performance) {
-        performance.checked = enabled && syphonTarget === 'performance';
-    }
+    if (performance) performance.checked = syphonPublishing('performance');
 }
 
 /** Whether the performance window is open; it shows frames this window draws. */
@@ -197,38 +199,39 @@ function promptScreenRecordingPermission(): void {
 }
 
 /**
- * Toggle Syphon publishing. Single entry point shared by the View-menu item and
- * the `operator.toggleSyphon` command (dispatched from the palette/keymap via
- * IPC), so both surfaces behave identically — including the failure dialog.
+ * Toggles Syphon publishing for the View-menu checkboxes and the
+ * `operator.toggleSyphon` command, which share its failure dialog.
+ * `requested` names the window a checkbox stands for; the command names none
+ * (see {@link syphonAction}).
  */
-function toggleSyphonPublish(
-    requested: SyphonTarget = 'editor',
-): SyphonToggleResult {
-    const window =
-        requested === 'performance' ? getPerformanceWindow() : mainWindow;
+function toggleSyphonPublish(requested?: SyphonTarget): SyphonToggleResult {
     let result: SyphonToggleResult = {
         ok: false,
         reason: SyphonBridge.unsupportedReason,
     };
-    if (!window || window.isDestroyed()) {
-        result = {
-            ok: false,
-            reason:
-                requested === 'performance'
-                    ? 'Open the performance window first.'
-                    : 'No window is available to publish.',
-        };
-    } else if (syphonBridge) {
+    if (syphonBridge) {
         const action = syphonAction(
             syphonBridge.isEnabled,
             syphonTarget,
             requested,
         );
-        if (action === 'stop' || action === 'switch') syphonBridge.stop();
+        const target = requested ?? 'editor';
+        const window =
+            target === 'performance' ? getPerformanceWindow() : mainWindow;
         if (action === 'stop') {
+            syphonBridge.stop();
             result = { ok: true };
+        } else if (!window || window.isDestroyed()) {
+            result = {
+                ok: false,
+                reason:
+                    target === 'performance'
+                        ? 'Open the performance window first.'
+                        : 'No window is available to publish.',
+            };
         } else {
-            syphonTarget = requested;
+            if (action === 'switch') syphonBridge.stop();
+            syphonTarget = target;
             result = syphonBridge.start(window);
         }
     }
@@ -1113,10 +1116,24 @@ registerIPCHandler('VIDEO_PULL', (fresh) => pullVideo(fresh));
 registerIPCHandler('VIDEO_REQUEST_CAMERA', () => requestCameraAccess());
 registerIPCHandler('VIDEO_SCREEN_SOURCE', (display) => screenSource(display));
 
+/**
+ * The value each region's signal holds, so a frame that repeats it constructs
+ * no module. Applying a patch update or rebuilding the audio streams rebuilds
+ * the signals at 0, which empties the record.
+ */
+const cvSent = { updateId: -1, values: new Map<string, number>() };
+
 // Region averages computed by the video renderer drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {
+    const applied = synth.getTransportState().lastAppliedUpdateId;
+    if (applied !== cvSent.updateId) {
+        cvSent.updateId = applied;
+        cvSent.values.clear();
+    }
     for (const { id, value } of values) {
+        if (cvSent.values.get(id) === value) continue;
         synth.setModuleParam(id, '$signal', { source: value });
+        cvSent.values.set(id, value);
     }
 });
 
@@ -1214,6 +1231,7 @@ registerIPCHandler('SYNTH_IS_AUDIO_THREAD_PANICKED', () =>
 
 registerIPCHandler('SYNTH_RESTART_AUDIO', () => {
     synth.restartAudio();
+    cvSent.values.clear();
 });
 
 registerIPCHandler('SYNTH_PANIC_LOG_DIR', () => synth.panicLogDir());
@@ -1255,6 +1273,7 @@ registerIPCHandler(
             bufferSize ?? undefined,
             inputDeviceId ?? undefined,
         );
+        cvSent.values.clear();
         fallbackWarnings.report(synth.getCurrentAudioState().fallbackWarning);
         saveAudioConfig();
     },
@@ -2000,10 +2019,10 @@ const createWindow = (): void => {
         trafficLightPosition: isMac ? { x: 12, y: 10 } : undefined,
         webPreferences: {
             // backgroundThrottling is left at its power-saving default and
-            // flipped off only while publishing to Syphon (see
-            // applySyphonRenderTuning), so a backgrounded window keeps feeding
-            // the capture at full rate without paying the cost when the feature
-            // is idle.
+            // flipped off only while publishing to Syphon or while the
+            // performance window is open (see applySyphonRenderTuning), so a
+            // backgrounded window keeps feeding both at full rate without
+            // paying the cost when neither is in use.
             preload: path.join(__dirname, 'preload.js'),
         },
         title: app.name,
@@ -2019,19 +2038,23 @@ const createWindow = (): void => {
         }
     });
     setPerformanceAspect(configStore.load().performanceAspect ?? 'free');
-    mainWindow.webContents.setWindowOpenHandler(({ frameName }) =>
-        frameName === PERFORMANCE_WINDOW_NAME
-            ? {
-                  action: 'allow',
-                  overrideBrowserWindowOptions: {
-                      backgroundColor: '#000000',
-                      height: 720,
-                      title: 'Operator Performance',
-                      width: 1280,
-                  },
-              }
-            : { action: 'allow' },
-    );
+    // The performance window is the app's only child window; any other open
+    // (such as a link in an editor hover) goes to the system browser.
+    mainWindow.webContents.setWindowOpenHandler(({ frameName, url }) => {
+        if (frameName === PERFORMANCE_WINDOW_NAME) {
+            return {
+                action: 'allow',
+                overrideBrowserWindowOptions: {
+                    backgroundColor: '#000000',
+                    height: 720,
+                    title: 'Operator Performance',
+                    width: 1280,
+                },
+            };
+        }
+        if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+        return { action: 'deny' };
+    });
 
     // Keep the app name as the title rather than index.html's static <title>.
     mainWindow.on('page-title-updated', (event) => event.preventDefault());
@@ -2130,16 +2153,16 @@ function menuShortcut(
     };
 }
 
-/**
- * Create the application menu
- */
 /** Asks the editor window to open or close the performance window, which it owns. */
-function togglePerformanceWindow(): void {
+function sendPerformanceWindowToggle(): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW);
     }
 }
 
+/**
+ * Create the application menu
+ */
 const createMenu = (): void => {
     const isMac = process.platform === 'darwin';
 
@@ -2313,14 +2336,17 @@ const createMenu = (): void => {
                 {
                     ...menuShortcut(
                         'operator.togglePerformanceWindow',
-                        'Ctrl+Shift+V',
+                        isMac ? 'Ctrl+Shift+V' : 'Ctrl+Shift+Y',
                     ),
-                    click: togglePerformanceWindow,
+                    click: () =>
+                        togglePerformanceWindow(sendPerformanceWindowToggle),
                     label: 'Toggle Performance Window',
                 },
                 {
                     label: 'Performance Window Fullscreen',
-                    submenu: performanceFullscreenMenu(togglePerformanceWindow),
+                    submenu: performanceFullscreenMenu(
+                        sendPerformanceWindowToggle,
+                    ),
                 },
                 {
                     click: () => {
@@ -2342,18 +2368,18 @@ const createMenu = (): void => {
                     ? ([
                           { type: 'separator' },
                           {
-                              checked: false,
+                              checked: syphonPublishing('editor'),
                               // Funnels through the same toggle as the
                               // operator.toggleSyphon command (palette/keymap).
                               click: () => {
-                                  toggleSyphonPublish();
+                                  toggleSyphonPublish('editor');
                               },
                               id: SYPHON_MENU_ITEM_ID,
                               label: 'Toggle Syphon Output',
                               type: 'checkbox',
                           },
                           {
-                              checked: false,
+                              checked: syphonPublishing('performance'),
                               click: () => {
                                   toggleSyphonPublish('performance');
                               },
@@ -2538,13 +2564,9 @@ app.on('ready', () => {
     createWindow();
     createMenu();
     // The fullscreen entries list the displays, so the menu follows them.
-    const rebuildMenu = () => {
-        createMenu();
-        syncSyphonMenuItem();
-    };
-    screen.on('display-added', rebuildMenu);
-    screen.on('display-removed', rebuildMenu);
-    screen.on('display-metrics-changed', rebuildMenu);
+    screen.on('display-added', createMenu);
+    screen.on('display-removed', createMenu);
+    screen.on('display-metrics-changed', createMenu);
     setupSyphonBridge();
 
     if (app.isPackaged) {

@@ -46,6 +46,7 @@ use crate::audio::{
 use crate::commands::{GraphCommand, QueuedTrigger, TransportMeta};
 use crate::midi::MidiInputManager;
 
+use modular_core::dsp::utilities::video_tap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -63,6 +64,14 @@ pub fn get_reserved_output_names() -> Vec<String> {
         .map(|s| s.to_string())
         .collect()
 }
+
+/// Number of video tap slots the engine publishes.
+#[napi]
+pub const MAX_VIDEO_TAPS: u32 = video_tap::MAX_VIDEO_TAPS as u32;
+
+/// Samples of history each video tap keeps.
+#[napi]
+pub const VIDEO_HISTORY_LEN: u32 = video_tap::VIDEO_HISTORY_LEN as u32;
 
 // ============================================================================
 // WAV Cache
@@ -574,10 +583,10 @@ pub struct MidiInputInfo {
 }
 
 /// New samples of a video tap, with the count to pass back as `since`.
-#[napi(object)]
+#[napi(object, object_from_js = false)]
 pub struct VideoTapChunk {
     pub head: u32,
-    pub samples: Vec<f64>,
+    pub samples: Float32Array,
 }
 
 /// A finished recording. `dropped_samples > 0` means the disk writer could
@@ -1216,12 +1225,17 @@ impl Synthesizer {
     /// The samples video tap `tap` has written since `since` (a `head` from an
     /// earlier call), or its latest few when `since` is omitted.
     #[napi]
-    pub fn get_video_tap_chunk(&self, tap: u32, since: Option<u32>) -> VideoTapChunk {
-        let chunk = modular_core::dsp::utilities::video_tap::read_video_since(tap as usize, since);
-        VideoTapChunk {
+    pub fn get_video_tap_chunk(&self, tap: u32, since: Option<u32>) -> Result<VideoTapChunk> {
+        let chunk = video_tap::read_video_since(tap as usize, since).ok_or_else(|| {
+            napi::Error::from_reason(format!(
+                "video tap {tap} is out of range (0-{})",
+                video_tap::MAX_VIDEO_TAPS - 1
+            ))
+        })?;
+        Ok(VideoTapChunk {
             head: chunk.head,
-            samples: chunk.samples.into_iter().map(f64::from).collect(),
-        }
+            samples: Float32Array::new(chunk.samples),
+        })
     }
 
     /// Drain the per-module profiler snapshot accumulated since the last

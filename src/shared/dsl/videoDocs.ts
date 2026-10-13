@@ -38,7 +38,7 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
+        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Control+Shift+V on macOS, Ctrl+Shift+Y elsewhere) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
     examples: [
         '$v.osc(10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
@@ -246,7 +246,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'polygon',
         group: 'Generators',
         description:
-            'A gray mask: 1 inside a regular polygon centered on the frame with one point up, 0 outside, with a soft edge. With `config.mapX` and `config.mapY` it is centered where they are both 0.5, so adding to a ramp moves it.',
+            'A gray mask: 1 inside a regular polygon centered on the frame, 0 outside, with a soft edge. With `config.mapX` and `config.mapY` it is centered where they are both 0.5, so adding to a ramp moves it. The bottom is always a flat side, so a polygon with an odd number of sides has a point up and one with an even number a flat side up.',
         params: [
             {
                 name: 'sides',
@@ -299,7 +299,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$v.out($v.hsv($v.blur($v.polygon(5, 0.2, 0.001), 0.04)))',
+            '$v.out($v.hsv(0.6, 1, $v.blur($v.polygon(5, 0.2, 0.001), 0.04)))',
             '$v.polygon(6, 0.18, 0.002).$.tint(0.12).pipe((c) => c.$.add(c.$.blur(0.04).$.mult(2))).out()',
         ],
         declarations: [
@@ -362,7 +362,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
         ],
         examples: [
@@ -378,7 +378,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'video',
         group: 'Generators',
         description:
-            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop. The picture is muted; the video's sound is its `.audio` property, an audio signal you route like any other, such as `$v.video('clips/loop.mp4').audio.out()`. The sound plays at the same `speed` between the same `loop` points, starting when the patch starts, and has no sound at speed 0. A file without sound has no `.audio`, and reading it is an error. Sound is read from AAC, MP3, Vorbis, FLAC and PCM tracks of up to ten minutes (Opus, common in `.webm`, is not read). For a video at a network address, use `$v.stream`, which has no sound. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
+            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop. The picture is muted; the video's sound is its `.audio` property, an audio signal you route like any other, such as `$v.video('clips/loop.mp4').audio.out()`. The sound plays at the same `speed` between the same `loop` points, starting when the patch starts, and has no sound at speed 0. Reading `.audio` of a file without sound is an error. Sound is read from AAC, ALAC, FLAC, MP3, Vorbis and PCM tracks of up to ten minutes; the sound of a file with Opus audio, as most `.webm` files have, does not play. For a video at a network address, use `$v.stream`, which has no sound. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
         params: [
             {
                 name: 'path',
@@ -387,7 +387,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
             {
                 name: 'config.speed',
@@ -424,7 +424,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
         ],
         examples: [
@@ -449,7 +449,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
         ],
         examples: [
@@ -703,7 +703,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'fold',
         group: 'Shaping',
         description:
-            'Multiplies by `gain`, then reflects whatever passes 1 back down: a triangle of the input that matches it where it stays under 1 / gain.',
+            'Multiplies by `gain`, then reflects whatever passes 1 back down: a triangle of the input that matches `input × gain` where the input stays under 1 / gain.',
         params: [],
         examples: ['$v.out($v.hsv($v.fold($v.ramp(), 3)))'],
         declarations: [
@@ -716,6 +716,16 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Threshold of each channel: 0 below `threshold`, 1 above, with a linear ramp `softness` wide centered on it (a hard edge when 0). `config.invert` swaps the sides: 1 below and 0 above.',
         params: [
+            {
+                name: 'threshold',
+                description:
+                    'Level at which the output crosses 0.5 (default 0.5)',
+            },
+            {
+                name: 'softness',
+                description:
+                    'Width of the ramp centered on `threshold`; 0 is a hard edge (default 0)',
+            },
             {
                 name: 'config.invert',
                 description:
@@ -738,7 +748,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'levels',
-                description: 'Number of steps, at least 2 (default 4)',
+                description:
+                    'Number of steps, rounded down to a whole number, at least 2 (default 4)',
             },
         ],
         examples: ['$v.out($v.hsv($v.posterize($v.ramp(), 5)))'],
@@ -762,7 +773,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'layer',
         group: 'Compositing',
         description:
-            "Lays `top` over `base` by the alpha of `top`, as Hydra's `layer` does: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add.",
+            'Lays `top` over `base` by the alpha of `top`: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add. `luma` and `mask` clear the color of what they key out, so a keyed-out part of `base` adds no color under a translucent `top`.',
         params: [
             { name: 'base', description: 'The signal underneath' },
             { name: 'top', description: 'The signal laid over it' },
@@ -779,7 +790,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mask',
         group: 'Compositing',
         description:
-            "`input` seen through `mask`, like Hydra's `mask`: its alpha is scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.",
+            '`input` seen through `mask`: its color and alpha are both scaled by the brightness of `mask`, as in Hydra, so it is opaque where the mask is white and transparent and black where it is black. What is masked out adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. Lay the result over another signal with `layer`.',
         params: [
             { name: 'mask', description: 'Where `input` shows, by brightness' },
         ],
@@ -794,7 +805,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'luma',
         group: 'Compositing',
         description:
-            "Keys `input` by its own brightness, like Hydra's `luma`: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.",
+            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is scaled by the same key, as in Hydra, so what is keyed out is black as well as transparent and adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations; `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.',
         params: [
             {
                 name: 'threshold',
@@ -874,10 +885,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.5)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
+            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.5).range(-0.3, 0.3)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
         ],
         declarations: [
-            'frameDelay(input: VideoValue, frames?: number): VideoSignal;',
+            'frameDelay(input: VideoSignal, frames?: number): VideoSignal;',
         ],
     },
     {
@@ -924,7 +935,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$sine($v.toCV($v.shape(0.3), { size: 0.1 }).range(110, 440)).out()',
+            '$sine($v.toCV($v.shape(0.3), { size: 0.1 }).range(-1, 1)).out()',
         ],
         declarations: [
             'toCV(signal: VideoSignal, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
@@ -939,7 +950,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.zoom',
                 description:
-                    'Magnification about the center; above 1 enlarges (default 1)',
+                    'Magnification about the center; above 1 enlarges, and a negative zoom mirrors through the center (default 1)',
             },
             {
                 name: 'config.rotate',
@@ -958,7 +969,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.hsv($v.warp($v.noise(4), { rotate: $v.mult($v.time, 0.05), zoom: 2 })))',
-            '$v.out($v.warp($v.hsv($v.shape(0.15)), { shiftX: $v.time.$.osc(0.25), rotate: 0.1 }))',
+            '$v.out($v.warp($v.hsv($v.shape(0.15)), { shiftX: $v.time.$.osc(0.25).range(-0.3, 0.3), rotate: 0.1 }))',
         ],
         declarations: [
             'warp(input: VideoSignal, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoSignal;',
@@ -968,12 +979,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'displace',
         group: 'Warping',
         description:
-            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 0.5 means no push in that direction.',
+            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 0.5 means no push in that direction. The picture moves opposite to the push: pushing the read position right moves the picture left.',
         params: [
             {
                 name: 'dx',
                 description:
-                    'Horizontal push; below 0.5 pulls left, above pushes right',
+                    'Horizontal push of the read position; below 0.5 reads further left, above further right',
             },
             {
                 name: 'dy',
@@ -982,7 +993,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Largest push as a fraction of the frame (default 0.1)',
+                    'Push as a fraction of the frame for each unit `dx` or `dy` is away from 0.5, so a push of 0 or 1 moves by half of it (default 0.1)',
             },
         ],
         examples: [
@@ -996,7 +1007,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulate',
         group: 'Warping',
         description:
-            "Pushes `input` around by another signal, as Hydra's `modulate` does: the modulator's red channel moves it across and its green up, so a gray modulator moves it diagonally. It is `displace` with the push taken from a signal.",
+            "Pushes `input` around by another signal: `input` is read `amount` of the frame further right for each unit of the modulator's red channel and further up for each unit of its green, so the picture moves left and down. A black modulator leaves `input` in place, and a gray one moves it diagonally.",
         params: [
             {
                 name: 'modulator',
@@ -1005,7 +1016,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Largest push as a fraction of the frame (default 0.1)',
+                    'Push as a fraction of the frame for each unit of the channel (default 0.1)',
             },
         ],
         examples: [
@@ -1020,7 +1031,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScale',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScale`: scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
+            "Scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`; a negative factor mirrors through the center.",
         params: [
             {
                 name: 'modulator',
@@ -1048,7 +1059,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRotate',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRotate`: turns `input` about the center by `offset + multiple * red`, so the brighter parts of the modulator turn the picture further. Angles are in turns: 1 is a full turn.",
+            'Turns `input` about the center by `offset + multiple * red`, so the brighter parts of the modulator turn the picture further. Angles are in turns: 1 is a full turn.',
         params: [
             {
                 name: 'modulator',
@@ -1074,7 +1085,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulatePixelate',
         group: 'Warping',
         description:
-            "As Hydra's `modulatePixelate`: holds `input` constant over a grid of `offset + multiple * channel` cells, red setting the cells across and green the cells up, so the pixels grow large where the modulator is dark.",
+            'Holds `input` constant over a grid of `offset + multiple * channel` cells, red setting the cells across and green the cells up, so the pixels grow large where the modulator is dark.',
         params: [
             {
                 name: 'modulator',
@@ -1100,7 +1111,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateKaleid',
         group: 'Warping',
         description:
-            "As Hydra's `modulateKaleid`: mirrors `input` around the center into `sides` wedges, with the distance from the center pushed out by the modulator's red channel, so the kaleidoscope swells where the modulator is bright.",
+            "Mirrors `input` around the center into `sides` wedges, with the distance from the center pushed out by the modulator's red channel, so the kaleidoscope swells where the modulator is bright.",
         params: [
             {
                 name: 'modulator',
@@ -1119,7 +1130,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateHue',
         group: 'Warping',
         description:
-            "As Hydra's `modulateHue`: pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A gray modulator has the same value in every channel, so it has no differences and does not move `input`.",
+            "Pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A gray modulator has the same value in every channel, so it has no differences and does not move `input`.",
         params: [
             {
                 name: 'modulator',
@@ -1128,7 +1139,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Pixels of push for a channel difference of full scale (default 50)',
+                    'Pixels of push for a channel difference of full scale (default 1)',
             },
         ],
         examples: [
@@ -1142,7 +1153,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeat',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRepeat`: tiles `input` `repeatX` by `repeatY` times with alternate rows and columns offset, the offsets growing with the modulator's red channel for x and green for y. 1 is a whole tile.",
+            "Tiles `input` `repeatX` by `repeatY` times and slides the picture inside every tile across by `offsetX` times the modulator's red channel and up by `offsetY` times its green, 1 being a whole tile. Every row and column slides alike, as in Hydra.",
         params: [
             {
                 name: 'modulator',
@@ -1153,12 +1164,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'offsetX',
                 description:
-                    'Shift of alternate rows at a full red channel, with 1 a whole tile (default 0.5)',
+                    'Slide across at a full red channel, with 1 a whole tile (default 0.5)',
             },
             {
                 name: 'offsetY',
                 description:
-                    'Shift of alternate columns at a full green channel (default 0.5)',
+                    'Slide up at a full green channel, with 1 a whole tile (default 0.5)',
             },
         ],
         examples: [
@@ -1172,7 +1183,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeatX',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRepeatX`: tiles `input` `reps` times across, shifting alternate columns up by `offset` times the modulator's red channel.",
+            "Tiles `input` `reps` times across and slides the picture inside every tile up by `offset` times the modulator's red channel. Every column slides alike, as in Hydra.",
         params: [
             {
                 name: 'modulator',
@@ -1196,7 +1207,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeatY',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRepeatY`: tiles `input` `reps` times up, shifting alternate rows right by `offset` times the modulator's red channel.",
+            "Tiles `input` `reps` times up and slides the picture inside every tile across by `offset` times the modulator's red channel. Every row slides alike, as in Hydra.",
         params: [
             {
                 name: 'modulator',
@@ -1220,7 +1231,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScrollX',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScrollX`: scrolls `input` across by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
+            "Scrolls `input` across by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
         params: [
             {
                 name: 'modulator',
@@ -1248,7 +1259,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScrollY',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScrollY`: scrolls `input` up by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
+            "Scrolls `input` up by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
         params: [
             {
                 name: 'modulator',
@@ -1292,7 +1303,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'pixelate',
         group: 'Warping',
         description:
-            'Holds `input` constant across a grid of `x` by `y` cells, giving it large square pixels.',
+            "Holds `input` constant across a grid of `x` by `y` cells, giving it large blocky pixels. Each cell is `1 / x` of the frame wide and `1 / y` high, so cells are square only when `x / y` matches the frame's aspect ratio.",
         params: [
             { name: 'x', description: 'Cells across (default 20)' },
             { name: 'y', description: 'Cells up (default the same as x)' },
@@ -1448,7 +1459,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'buffer',
         group: 'Memory',
         description:
-            "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
+            "A frame store that persists from one frame to the next. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
             'const trail = $v.buffer(); $v.osc(8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',
@@ -1677,13 +1688,13 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'mask',
         description:
-            'This seen through `mask`: its alpha scaled by the brightness of `mask`.',
+            'This seen through `mask`: its color and alpha scaled by the brightness of `mask`.',
         declarations: ['mask(mask: VideoValue): VideoSignal;'],
     },
     {
         name: 'luma',
         description:
-            'Keys this by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`; `config.invert` keeps the dark side.',
+            'Keys this by its own brightness: opaque from `threshold` up, transparent and black below `threshold - tolerance`; `config.invert` keeps the dark side.',
         declarations: [
             'luma(threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
         ],
@@ -1769,7 +1780,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'modulateRepeat',
         description:
-            'Tiles this with alternate rows and columns offset by a modulator.',
+            'Tiles this and slides the picture inside every tile by a modulator.',
         declarations: [
             'modulateRepeat(modulator: VideoSignal, repeatX?: VideoValue, repeatY?: VideoValue, offsetX?: VideoValue, offsetY?: VideoValue): VideoSignal;',
         ],
@@ -1777,14 +1788,15 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'modulateRepeatX',
         description:
-            'Tiles this across, shifting alternate columns by a modulator.',
+            'Tiles this across and slides the picture inside every tile up by a modulator.',
         declarations: [
             'modulateRepeatX(modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'modulateRepeatY',
-        description: 'Tiles this up, shifting alternate rows by a modulator.',
+        description:
+            'Tiles this up and slides the picture inside every tile across by a modulator.',
         declarations: [
             'modulateRepeatY(modulator: VideoSignal, reps?: VideoValue, offset?: VideoValue): VideoSignal;',
         ],

@@ -74,7 +74,7 @@ export const shape: VideoModuleDef = {
 
 /**
  * 1 inside a regular polygon centered where `mapX` and `mapY` are 0.5, with
- * one point up, 0 outside, with an edge `softness` wide following `falloff`. `size` is the
+ * a flat side down, 0 outside, with an edge `softness` wide following `falloff`. `size` is the
  * distance from the center to the middle of a side, as a fraction of the frame
  * height; distances are aspect-corrected.
  */

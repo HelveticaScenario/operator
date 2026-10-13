@@ -16,7 +16,8 @@ describe('compileVideoGraph', () => {
 
           fn video_transform(uv: vec2f, zoom: f32, rotate: f32, shift: vec2f) -> vec2f {
               let aspect = vec2f(u.resolution.x / u.resolution.y, 1.0);
-              let p = (uv - vec2f(0.5) - shift) * aspect / max(zoom, 0.00001);
+              let z = select(-1.0, 1.0, zoom >= 0.0) * max(abs(zoom), 0.00001);
+              let p = (uv - vec2f(0.5) - shift) * aspect / z;
               let a = rotate * 6.28318530718;
               let c = cos(a);
               let s = sin(a);
@@ -209,6 +210,25 @@ describe('compileVideoGraph', () => {
                 output: 'w',
             },
             /must be finite/,
+        ],
+        [
+            'constant beyond the f32 range',
+            {
+                nodes: [
+                    { id: 'x', kind: 'ramp', inputs: rampInputs },
+                    {
+                        id: 'w',
+                        kind: 'osc',
+                        inputs: {
+                            input: { kind: 'node', id: 'x' },
+                            freq: { kind: 'const', value: 1e39 },
+                            phase: { kind: 'const', value: 0 },
+                        },
+                    },
+                ],
+                output: 'w',
+            },
+            /within the f32 range/,
         ],
     ] as const)('rejects %s', (_name, partial, message) => {
         const graph = {

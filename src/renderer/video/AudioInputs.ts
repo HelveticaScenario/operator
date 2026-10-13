@@ -16,8 +16,10 @@ import { TapStream } from './TapStream';
 export class AudioInputs {
     readonly history: HistoryTexture;
     private readonly streams = new Map<number, TapStream>();
-    /** Scratch the audio history windows are copied into, per history row. */
+    /** Scratch the recent samples are copied into, per history row. */
     private scratch: Float32Array[] = [];
+    /** The window each history row shows, rewritten every frame. */
+    private windows: Float32Array<ArrayBuffer>[] = [];
 
     constructor(device: GPUDevice) {
         this.history = new HistoryTexture(device);
@@ -39,6 +41,9 @@ export class AudioInputs {
                         : samples,
                 ),
         );
+        this.windows = histories.map(
+            ({ samples }) => new Float32Array(samples),
+        );
     }
 
     /** Adds audio samples that have just arrived. */
@@ -56,11 +61,11 @@ export class AudioInputs {
 
     /** Whether every signal `program` reads has samples. */
     ready(program: ShaderProgram): boolean {
-        const taps = [
-            ...program.tapSlots.map(({ tap }) => tap),
-            ...program.histories.map(({ tap }) => tap),
-        ];
-        return taps.every((tap) => this.streams.get(tap)?.hasData === true);
+        const has = (tap: number) => this.streams.get(tap)?.hasData === true;
+        return (
+            program.tapSlots.every(({ tap }) => has(tap)) &&
+            program.histories.every(({ tap }) => has(tap))
+        );
     }
 
     /**
@@ -73,12 +78,15 @@ export class AudioInputs {
         for (const { slot, tap } of program.tapSlots) {
             program.setSlot(slot, this.streams.get(tap)?.value() ?? 0);
         }
-        program.histories.forEach(({ tap, samples, trigger }, row) => {
+        program.histories.forEach(({ tap, trigger }, row) => {
             const stream = this.streams.get(tap);
             if (stream === undefined) return;
             const recent = this.scratch[row];
             stream.recent(recent);
-            this.history.write(row, alignWindow(recent, samples, trigger));
+            this.history.write(
+                row,
+                alignWindow(recent, this.windows[row], trigger),
+            );
         });
     }
 

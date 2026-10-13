@@ -1,9 +1,9 @@
 import { coordinateModule, TRANSFORM_HELPER } from './transform';
-import { KALEID_HELPER } from './warp';
+import { KALEID_HELPER, MOD_HELPER, PIXELATE_HELPER } from './warp';
 
 /*
- * The modulators of Hydra, which read the whole input at coordinates that
- * another signal moves. `m` is the modulator, read whole: its red, green and
+ * The modulators, which read the whole input at coordinates that another
+ * signal moves. `m` is the modulator, read whole: its red, green and
  * blue channels do the moving.
  */
 
@@ -14,14 +14,21 @@ const modulator = (
     helpers: readonly string[] = [],
 ) => coordinateModule(numbers, coordinates, helpers, ['m']);
 
-/** Scales about the center by `offset + multiple * channel`, red across and green up. */
+/** Moves across by `amount` times the red channel and up by `amount` times the green. */
+export const modulate = modulator(
+    ['amount'],
+    ({ m, amount }) => `uv + ${m}.rg * ${amount}`,
+);
+
+/** Scales about the center by `offset + multiple * channel`, red across and green up; a negative factor mirrors. */
 export const modulateScale = modulator(
     ['multiple', 'offset'],
     ({ m, multiple, offset }) =>
         `video_mod_scale(uv, ${m}.rg, ${multiple}, ${offset})`,
     [
         `fn video_mod_scale(uv: vec2f, c: vec2f, multiple: f32, offset: f32) -> vec2f {
-    let factor = max(vec2f(offset) + c * multiple, vec2f(0.00001));
+    let raw = vec2f(offset) + c * multiple;
+    let factor = select(vec2f(-1.0), vec2f(1.0), raw >= vec2f(0.0)) * max(abs(raw), vec2f(0.00001));
     return (uv - vec2f(0.5)) / factor + vec2f(0.5);
 }`,
     ],
@@ -39,20 +46,15 @@ export const modulateRotate = modulator(
 export const modulatePixelate = modulator(
     ['multiple', 'offset'],
     ({ m, multiple, offset }) =>
-        `video_mod_pixelate(uv, vec2f(${offset}) + ${m}.rg * ${multiple})`,
-    [
-        `fn video_mod_pixelate(uv: vec2f, cells: vec2f) -> vec2f {
-    let grid = max(cells, vec2f(1.0));
-    return floor(uv * grid + vec2f(0.5)) / grid;
-}`,
-    ],
+        `video_pixelate(uv, vec2f(${offset}) + ${m}.rg * ${multiple})`,
+    [PIXELATE_HELPER],
 );
 
 /** Mirrors into `sides` wedges, with the distance from the center pushed out by the red channel. */
 export const modulateKaleid = modulator(
     ['sides'],
     ({ m, sides }) => `video_kaleid(uv, ${sides}, ${m}.r)`,
-    [KALEID_HELPER],
+    [MOD_HELPER, KALEID_HELPER],
 );
 
 /** Pushes by the differences between the channels, `amount` pixels for a difference of full scale. */
@@ -66,44 +68,51 @@ export const modulateHue = modulator(
     ],
 );
 
-/** Tiles `x` by `y` times, with alternate rows and columns shifted by `offset` times the red and green channels. */
+/**
+ * Tiles `x` by `y` times and slides every tile's picture by `offset` times
+ * the red and green channels. The `step` terms follow Hydra's formula; they
+ * add whole tiles, which `fract` removes, so every row and column slides alike.
+ */
 export const modulateRepeat = modulator(
     ['repeatX', 'repeatY', 'offsetX', 'offsetY'],
     ({ m, repeatX, repeatY, offsetX, offsetY }) =>
         `video_mod_repeat(uv, vec2f(${repeatX}, ${repeatY}), ${m}.rg, vec2f(${offsetX}, ${offsetY}))`,
     [
+        MOD_HELPER,
         `fn video_mod_repeat(uv: vec2f, reps: vec2f, c: vec2f, offset: vec2f) -> vec2f {
     var st = uv * reps;
-    st.x += step(1.0, st.y % 2.0) + c.x * offset.x;
-    st.y += step(1.0, st.x % 2.0) + c.y * offset.y;
+    st.x += step(1.0, video_mod(st.y, 2.0)) + c.x * offset.x;
+    st.y += step(1.0, video_mod(st.x, 2.0)) + c.y * offset.y;
     return fract(st);
 }`,
     ],
 );
 
-/** Tiles across, shifting alternate columns up by `offset` times the red channel. */
+/** Tiles across, sliding every tile's picture up by `offset` times the red channel. */
 export const modulateRepeatX = modulator(
     ['reps', 'offset'],
     ({ m, reps, offset }) =>
         `video_mod_repeat_x(uv, ${reps}, ${m}.r, ${offset})`,
     [
+        MOD_HELPER,
         `fn video_mod_repeat_x(uv: vec2f, reps: f32, c: f32, offset: f32) -> vec2f {
     var st = uv * vec2f(reps, 1.0);
-    st.y += step(1.0, st.x % 2.0) + c * offset;
+    st.y += step(1.0, video_mod(st.x, 2.0)) + c * offset;
     return fract(st);
 }`,
     ],
 );
 
-/** Tiles up, shifting alternate rows right by `offset` times the red channel. */
+/** Tiles up, sliding every tile's picture across by `offset` times the red channel. */
 export const modulateRepeatY = modulator(
     ['reps', 'offset'],
     ({ m, reps, offset }) =>
         `video_mod_repeat_y(uv, ${reps}, ${m}.r, ${offset})`,
     [
+        MOD_HELPER,
         `fn video_mod_repeat_y(uv: vec2f, reps: f32, c: f32, offset: f32) -> vec2f {
     var st = uv * vec2f(1.0, reps);
-    st.x += step(1.0, st.y % 2.0) + c * offset;
+    st.x += step(1.0, video_mod(st.y, 2.0)) + c * offset;
     return fract(st);
 }`,
     ],

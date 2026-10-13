@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { exec } from './videoExec';
+import { callWgsl } from './wgslEval';
 
 describe('$v warps and modulators', () => {
     describe('coordinate warps', () => {
@@ -65,15 +66,6 @@ describe('$v warps and modulators', () => {
             expect(wgsl).toMatch(/let v\d: vec4f = f\d\(video_pixelate/);
         });
 
-        it('modulates by the red and green of the modulator', () => {
-            const wgsl = wgslOf(`
-                const m = $v.hsv($v.ramp());
-                $v.out($v.hsv($v.modulate($v.osc(4), m, 0.2)));
-            `);
-            expect(wgsl).toMatch(/vec4f\(vec3f\(v\d+\.r\), 1\.0\)/);
-            expect(wgsl).toMatch(/vec4f\(vec3f\(v\d+\.g\), 1\.0\)/);
-        });
-
         it('pulls a channel or the brightness out of a signal', () => {
             const wgsl = wgslOf(`
                 $v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'g'), $v.channel($v.hsv($v.ramp())), 0));
@@ -94,12 +86,13 @@ describe('$v warps and modulators', () => {
         });
     });
 
-    describe("Hydra's modulators", () => {
+    describe('modulators', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
         const names = [
+            ['modulate', 'uv + v'],
             ['modulateScale', 'video_mod_scale('],
             ['modulateRotate', 'video_transform(uv, 1.0,'],
-            ['modulatePixelate', 'video_mod_pixelate('],
+            ['modulatePixelate', 'video_pixelate(uv, vec2f('],
             ['modulateKaleid', 'video_kaleid('],
             ['modulateHue', 'video_mod_hue('],
             ['modulateRepeat', 'video_mod_repeat('],
@@ -136,6 +129,27 @@ describe('$v warps and modulators', () => {
             expect(wgsl).toMatch(/video_mod_scale\(uv, v\d+\.rg, 1\.0, 1\.0\)/);
         });
 
+        it('mirrors through the center for a negative scale and keeps it off zero', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulateScale($v.hsv($v.ramp()), $v.hsv(${noise})));`,
+            );
+            const scaled = (factor: number) =>
+                (
+                    callWgsl(
+                        wgsl,
+                        'video_mod_scale',
+                        [0.75, 0.5],
+                        [0, 0],
+                        1,
+                        factor,
+                    ) as number[]
+                ).map((x) => Number(x.toFixed(6)));
+            expect(scaled(2)).toEqual([0.625, 0.5]);
+            expect(scaled(-2)).toEqual([0.375, 0.5]);
+            expect(scaled(0)[0]).toBeGreaterThan(1000);
+            expect(scaled(-1e-9)[0]).toBeLessThan(-1000);
+        });
+
         it('chains the way the function is called', () => {
             const chained = wgslOf(`
                 $v.hsv($v.ramp()).$.modulateScale(${noise}, 2, 0.5).out();
@@ -157,8 +171,56 @@ describe('$v warps and modulators', () => {
                 `$v.out($v.modulatePixelate($v.hsv($v.ramp()), ${noise}, 12, 4));`,
             );
             expect(cells).toMatch(
-                /video_mod_pixelate\(uv, vec2f\(4\.0\) \+ v\d+\.rg \* 12\.0\)/,
+                /video_pixelate\(uv, vec2f\(4\.0\) \+ v\d+\.rg \* 12\.0\)/,
             );
+        });
+
+        it('pushes by the channels themselves, so black leaves the input in place', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulate($v.hsv($v.ramp()), $v.hsv(${noise}), 0.2));`,
+            );
+            expect(wgsl).toMatch(/f\d+\(uv \+ v\d+\.rg \* 0\.2\)/);
+        });
+
+        it('samples pixelated cells at their centers', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulatePixelate($v.hsv($v.ramp()), ${noise}));`,
+            );
+            expect(wgsl).toContain('(floor(uv * grid) + vec2f(0.5)) / grid');
+        });
+
+        it('slides every repeated row and column alike, as Hydra does', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulateRepeat($v.hsv($v.ramp()), $v.hsv(${noise})));`,
+            );
+            const repeat = wgsl.match(/fn video_mod_repeat\(.*?\n}/s)?.[0];
+            expect(repeat).toContain('video_mod(st.y, 2.0)');
+            expect(repeat).not.toContain('%');
+            expect(wgsl).toContain('x - m * floor(x / m)');
+
+            const at = (uv: number[]) =>
+                (
+                    callWgsl(
+                        wgsl,
+                        'video_mod_repeat',
+                        uv,
+                        [4, 4],
+                        [0.5, 0.25],
+                        [0.4, 0.4],
+                    ) as number[]
+                ).map((x) => Number(x.toFixed(6)));
+            const slid = [0.05 * 4 + 0.2, 0.05 * 4 + 0.1].map((x) =>
+                Number(x.toFixed(6)),
+            );
+            for (const cell of [
+                [0, 0],
+                [0.25, 0],
+                [0, 0.25],
+                [0.25, 0.25],
+                [-0.25, -0.5],
+            ]) {
+                expect(at([cell[0] + 0.05, cell[1] + 0.05])).toEqual(slid);
+            }
         });
 
         it('rejects a modulator that is not a video signal', () => {

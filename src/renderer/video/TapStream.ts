@@ -50,8 +50,12 @@ export class TapStream {
             this.ring[(this.written + i) & (RING - 1)] = samples[i];
         }
         this.written += samples.length;
-        if (this.lastArrivalMs >= 0) {
-            this.gaps.push({ at: nowMs, gap: nowMs - this.lastArrivalMs });
+        // A gap as long as a stall is the engine stopping or the display
+        // pausing, not how batches arrive, and would hold the trail at its
+        // longest for the whole window.
+        const gap = nowMs - this.lastArrivalMs;
+        if (this.lastArrivalMs >= 0 && gap <= STALL_SECONDS * 1000) {
+            this.gaps.push({ at: nowMs, gap });
         }
         this.lastArrivalMs = nowMs;
     }

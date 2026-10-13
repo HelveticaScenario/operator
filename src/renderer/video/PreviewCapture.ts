@@ -34,7 +34,10 @@ export class PreviewCapture {
 
     constructor(
         private readonly device: GPUDevice,
-        private readonly onFrame: (frame: VideoPreviewFrame) => void,
+        private readonly onFrame: (
+            frame: VideoPreviewFrame,
+            drawnBy: number,
+        ) => void,
     ) {}
 
     /** Sizes the set to `count` targets of `width` x `height` pixels. */
@@ -132,8 +135,12 @@ export class PreviewCapture {
         return copied;
     }
 
-    /** Reads back the targets `draw` copied. Call after submitting. */
-    deliver(indices: number[]): void {
+    /**
+     * Reads back the targets `draw` copied. Call after submitting. Each frame
+     * reaches `onFrame` with `drawnBy`, which names the program that drew it,
+     * since a readback can land after another program has gone live.
+     */
+    deliver(indices: number[], drawnBy: number): void {
         const { width, height, bytesPerRow } = this;
         for (const index of indices) {
             const target = this.targets[index];
@@ -154,7 +161,7 @@ export class PreviewCapture {
                     }
                     target.staging.unmap();
                     target.busy = false;
-                    this.onFrame({ data, height, index, width });
+                    this.onFrame({ data, height, index, width }, drawnBy);
                 },
                 () => {
                     target.busy = false;

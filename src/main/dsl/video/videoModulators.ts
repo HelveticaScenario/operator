@@ -7,9 +7,8 @@ import {
 } from './videoBuilderTypes';
 
 /**
- * The `$v` functions of Hydra's modulators: each reads the whole `input` at
- * coordinates that a modulator moves through its red, green and blue
- * channels, as Hydra's do.
+ * The `$v` modulator functions: each reads the whole `input` at coordinates
+ * that a modulator moves through its red, green and blue channels.
  */
 export function modulatorMethods(core: VideoCore) {
     /**
@@ -32,6 +31,13 @@ export function modulatorMethods(core: VideoCore) {
     };
 
     return {
+        /** Pushes `input` across by the modulator's red channel and up by its green, `amount` of the frame per unit. */
+        modulate: (
+            input: VideoOutput,
+            modulator: VideoOutput,
+            amount: VideoSource = 0.1,
+        ): VideoOutput => modulate('modulate', input, modulator, { amount }),
+
         /** Scales `input` about the center by `offset + multiple * channel`, red for x and green for y. */
         modulateScale: (
             input: VideoOutput,
@@ -76,17 +82,17 @@ export function modulatorMethods(core: VideoCore) {
         ): VideoOutput =>
             modulate('modulateKaleid', input, modulator, { sides }),
 
-        /** Pushes `input` by the differences between the modulator's channels, `amount` pixels at most. */
+        /** Pushes `input` by the differences between the modulator's channels, green minus red across and blue minus green up, `amount` pixels for a difference of full scale. */
         modulateHue: (
             input: VideoOutput,
             modulator: VideoOutput,
-            amount: VideoSource = 50,
+            amount: VideoSource = 1,
         ): VideoOutput =>
             modulate('modulateHue', input, modulator, {
                 amount,
             }),
 
-        /** Tiles `input` with alternate rows and columns shifted by the red and green channels. */
+        /** Tiles `input`, sliding every tile's picture by the red and green channels. */
         modulateRepeat: (
             input: VideoOutput,
             modulator: VideoOutput,
@@ -102,7 +108,7 @@ export function modulatorMethods(core: VideoCore) {
                 offsetY,
             }),
 
-        /** Tiles `input` across, shifting alternate columns up by the red channel. */
+        /** Tiles `input` across, sliding every tile's picture up by the red channel. */
         modulateRepeatX: (
             input: VideoOutput,
             modulator: VideoOutput,
@@ -114,7 +120,7 @@ export function modulatorMethods(core: VideoCore) {
                 offset,
             }),
 
-        /** Tiles `input` up, shifting alternate rows right by the red channel. */
+        /** Tiles `input` up, sliding every tile's picture across by the red channel. */
         modulateRepeatY: (
             input: VideoOutput,
             modulator: VideoOutput,

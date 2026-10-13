@@ -90,7 +90,7 @@ export const mix: VideoModuleDef = {
     emit: ({ a, b, amount }) => `mix(${a}, ${b}, ${unit(amount)})`,
 };
 
-/** Maps each channel's 0..1 onto `min`..`max`. */
+/** Maps each channel's 0..1 onto `lo`..`hi`; the alpha is kept. */
 export const range = perChannel('range', ['lo', 'hi'], 'lo + x * (hi - lo)');
 
 /**
@@ -124,21 +124,27 @@ export const layer = binary(
     'vec4f(mix(a.rgb, b.rgb, clamp(b.a, 0.0, 1.0)), clamp(a.a + b.a, 0.0, 1.0))',
 );
 
-/** `input` seen through `mask`: its alpha scaled by the mask's luma. */
+/**
+ * `input` seen through `mask`: its color and alpha both scaled by the mask's
+ * luma, as in Hydra, so a masked-out color adds nothing when combined.
+ */
 export const mask: VideoModuleDef = {
     inputs: { input: 'rgba', mask: 'number' },
     output: 'rgba',
     helpers: [
         `fn video_mask(c: vec4f, m: f32) -> vec4f {
-    return vec4f(c.rgb, c.a * clamp(m, 0.0, 1.0));
+    let k = clamp(m, 0.0, 1.0);
+    return vec4f(c.rgb * k, c.a * k);
 }`,
     ],
     emit: ({ input, mask: m }) => `video_mask(${input}, ${m})`,
 };
 
 /**
- * Keys `input` by its own brightness through `fn video_<name>`, whose alpha
- * is the expression `alpha` of the brightness `l`, `threshold` and `band`.
+ * Keys `input` by its own brightness through `fn video_<name>`, whose key is
+ * the expression `alpha` of the brightness `l`, `threshold` and `band`. The
+ * key scales the color as well as the alpha, as in Hydra, so a keyed-out
+ * color adds nothing when combined.
  */
 const lumaKey = (name: string, alpha: string): VideoModuleDef => ({
     inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
@@ -148,7 +154,8 @@ const lumaKey = (name: string, alpha: string): VideoModuleDef => ({
         `fn video_${name}(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
     let l = video_luma(c);
     let band = max(tolerance, 0.00001);
-    return vec4f(c.rgb, c.a * ${alpha});
+    let k = ${alpha};
+    return vec4f(c.rgb * k, c.a * k);
 }`,
     ],
     emit: ({ input, threshold, tolerance }) =>
@@ -184,11 +191,13 @@ export const out: VideoModuleDef = {
     emit: ({ input }) => input,
 };
 
-/** Quantizes each channel to `levels` evenly spaced values between 0 and 1 (minimum 2). */
+const POSTERIZE_LEVELS = 'max(floor(levels), 2.0)';
+
+/** Quantizes each channel to `levels` (rounded down, minimum 2) evenly spaced values between 0 and 1. */
 export const posterize = perChannel(
     'posterize',
     ['levels'],
-    'min(floor(clamp(x, vec3f(0.0), vec3f(1.0)) * max(levels, 2.0)), vec3f(max(levels, 2.0) - 1.0)) / (max(levels, 2.0) - 1.0)',
+    `min(floor(clamp(x, vec3f(0.0), vec3f(1.0)) * ${POSTERIZE_LEVELS}), vec3f(${POSTERIZE_LEVELS} - 1.0)) / (${POSTERIZE_LEVELS} - 1.0)`,
 );
 
 /** Multiplies each channel by `gain`, then keeps the fractional part: a sawtooth of the input. */
@@ -196,7 +205,8 @@ export const wrap = perChannel('wrap', ['gain'], 'fract(x * gain)');
 
 /**
  * Multiplies each channel by `gain`, then reflects whatever passes 1 back
- * down: a triangle of the input that matches it up to 1 / gain.
+ * down: a triangle of the input that matches `input * gain` up to an input of
+ * 1 / gain.
  */
 export const fold = perChannel(
     'fold',

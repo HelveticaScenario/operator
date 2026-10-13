@@ -1,7 +1,6 @@
-import { VideoOutput } from './VideoOutput';
+import type { VideoOutput } from './VideoOutput';
 import { transform } from './videoTransform';
 import {
-    describe,
     type VideoCore,
     type VideoRampConfig,
     type VideoSource,
@@ -9,7 +8,7 @@ import {
 
 /** The `$v` functions that move a whole sub-patch by changing the coordinates it is read at. */
 export function warpMethods(core: VideoCore) {
-    const methods = {
+    return {
         /** Zooms, turns and shifts everything `input` draws. */
         warp: (input: VideoOutput, config?: VideoRampConfig): VideoOutput =>
             transform(core, '$v.warp', 'warp', input, {
@@ -32,25 +31,6 @@ export function warpMethods(core: VideoCore) {
                 dy,
             }),
 
-        /** Pushes `input` around by another signal's red channel across and green up. */
-        modulate: (
-            input: VideoOutput,
-            modulator: VideoOutput,
-            amount: VideoSource = 0.1,
-        ): VideoOutput => {
-            if (!(modulator instanceof VideoOutput)) {
-                throw new Error(
-                    `$v.modulate: modulator must be a video signal, got ${describe(modulator)}`,
-                );
-            }
-            return methods.displace(
-                input,
-                core.channel(modulator, 'r'),
-                core.channel(modulator, 'g'),
-                amount,
-            );
-        },
-
         /** Mirrors `input` around the center into `sides` wedges. */
         kaleid: (input: VideoOutput, sides: VideoSource = 4): VideoOutput =>
             transform(core, '$v.kaleid', 'kaleid', input, { sides }),
@@ -71,5 +51,4 @@ export function warpMethods(core: VideoCore) {
         ): VideoOutput =>
             transform(core, '$v.repeat', 'repeat', input, { x, y }),
     };
-    return methods;
 }
