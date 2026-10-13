@@ -28,7 +28,10 @@ describe('pullVideo', () => {
     });
 
     it('reports stopped and reads nothing while the engine is stopped', () => {
-        const read = vi.fn(() => ({ head: 2, samples: Float32Array.of(0.5, 0.25) }));
+        const read = vi.fn(() => ({
+            head: 2,
+            samples: Float32Array.of(0.5, 0.25),
+        }));
         let stopped = true;
         setVideoTapSource({
             isStopped: () => stopped,
@@ -101,7 +104,7 @@ describe('across patch updates', () => {
     it('keeps serving the live shader when a queued update is submitted again before it applies', () => {
         const read = vi.fn((_tap: number, _since?: number) => ({
             head: 1,
-            samples: [0.5],
+            samples: Float32Array.of(0.5),
         }));
         let applied = 10;
         setVideoTapSource({
@@ -225,7 +228,7 @@ describe('delivery to the editor window', () => {
         setVideoTarget(() => target as never);
         setVideoTapSource({
             isStopped: () => false,
-            read: () => ({ head: 0, samples: [] }),
+            read: () => ({ head: 0, samples: new Float32Array() }),
             sampleRate: () => 48000,
             updates: () => ({ applied: 20, cancelled: 0 }),
         });
