@@ -144,17 +144,14 @@ export class VideoRenderer {
     }
 
     /**
-     * Builds the shader of a patch update. It goes live once the audio engine
-     * has applied that update, because the audio taps and control slots it
-     * reads are numbered by the patch; until then the previous shader keeps
-     * drawing, and from the moment the engine applies the update that shader
-     * holds its last frame rather than read the new patch's signals.
+     * Builds the shader of a patch update, which goes live once the engine
+     * applies that update, since its taps and control slots are numbered by
+     * the patch. Until then the previous shader draws, holding its last frame
+     * while the build finishes after the update applies.
      *
-     * Rejects with the WGSL compiler's messages when the shader is invalid.
-     * The previous shader keeps drawing until the engine applies the update,
-     * and then the picture clears, since no shader reads that patch's
-     * signals. Resolves to false, without effect, when a newer update
-     * supersedes this one before its build finishes, and to true otherwise.
+     * Rejects with the WGSL compiler's messages when the shader is invalid; the
+     * picture then clears once the update applies. Resolves to false, without
+     * effect, when a newer update supersedes this one, and to true otherwise.
      */
     async setShader({ shader, updateId }: VideoShaderUpdate): Promise<boolean> {
         const token = this.gate.request(updateId);
