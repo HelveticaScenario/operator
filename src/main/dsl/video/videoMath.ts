@@ -58,9 +58,9 @@ export function mathMethods(core: VideoCore) {
         /** Maps each channel's 0 to 1 onto `min` to `max`. */
         range: (
             input: VideoSource,
-            low: VideoSource = 0,
-            high: VideoSource = 1,
-        ): VideoOutput => node('range', { input, lo: low, hi: high }),
+            min: VideoSource = 0,
+            max: VideoSource = 1,
+        ): VideoOutput => node('range', { input, lo: min, hi: max }),
 
         /** Crossfade from `a` (amount 0) to `b` (amount 1). */
         mix: (

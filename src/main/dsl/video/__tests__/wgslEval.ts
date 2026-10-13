@@ -64,6 +64,7 @@ const BUILTINS: Record<string, (...args: Value[]) => Value> = {
         map3(v, lo, hi, (x, l, h) => Math.min(Math.max(x, l), h)),
     mix: (a, b, t) => map3(a, b, t, (x, y, k) => x + (y - x) * k),
     smoothstep: (e0, e1, x) => map3(e0, e1, x, smooth),
+    select: (f, t, cond) => map3(f, t, cond, (a, b, c) => (c ? b : a)),
     dot: (a, b) =>
         (a as number[]).reduce((s, x, i) => s + x * (b as number[])[i], 0),
 };
@@ -181,7 +182,7 @@ export function callWgsl(wgsl: string, name: string, ...args: Value[]): Value {
             return value;
         };
 
-        const expression = (): Value => {
+        const sum = (): Value => {
             let value = product();
             while (peek() === '+' || peek() === '-') {
                 const op = take();
@@ -193,6 +194,21 @@ export function callWgsl(wgsl: string, name: string, ...args: Value[]): Value {
                 );
             }
             return value;
+        };
+
+        /** A sum, or a comparison of two, as 1 for true and 0 for false. */
+        const expression = (): Value => {
+            const value = sum();
+            if (peek() !== '>' && peek() !== '<') return value;
+            const op = take() + (t[pos] === '=' ? take() : '');
+            const rhs = sum();
+            const compare: Record<string, (a: number, b: number) => boolean> = {
+                '>': (a, b) => a > b,
+                '>=': (a, b) => a >= b,
+                '<': (a, b) => a < b,
+                '<=': (a, b) => a <= b,
+            };
+            return zip(value, rhs, (a, b) => (compare[op](a, b) ? 1 : 0));
         };
 
         while (pos < t.length) {

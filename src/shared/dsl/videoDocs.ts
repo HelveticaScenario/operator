@@ -738,7 +738,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [
             {
                 name: 'levels',
-                description: 'Number of steps, at least 2 (default 4)',
+                description:
+                    'Number of steps, rounded down to a whole number, at least 2 (default 4)',
             },
         ],
         examples: ['$v.out($v.hsv($v.posterize($v.ramp(), 5)))'],
@@ -939,7 +940,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.zoom',
                 description:
-                    'Magnification about the center; above 1 enlarges (default 1)',
+                    'Magnification about the center; above 1 enlarges, and a negative zoom mirrors through the center (default 1)',
             },
             {
                 name: 'config.rotate',
@@ -1020,7 +1021,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScale',
         group: 'Warping',
         description:
-            "Scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
+            "Scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`; a negative factor mirrors through the center.",
         params: [
             {
                 name: 'modulator',
