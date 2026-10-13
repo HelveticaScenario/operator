@@ -1,7 +1,7 @@
 /**
  * Runs the WGSL helper functions of a compiled patch on the CPU, so tests can
  * check what a module computes rather than how its source reads. It covers
- * the subset the color helpers use: `let`/`var` bindings, `return`, scalar
+ * the subset the helpers use: `let`/`var` bindings, assignments, `return`, scalar
  * and vector arithmetic, swizzles and the common built-ins.
  */
 
@@ -198,13 +198,32 @@ export function callWgsl(wgsl: string, name: string, ...args: Value[]): Value {
         while (pos < t.length) {
             const tok = take();
             if (tok === 'return') return expression();
-            if (tok !== 'let' && tok !== 'var') {
+            if (tok === 'let' || tok === 'var') {
+                const id = take();
+                take('=');
+                scope.set(id, expression());
+                take(';');
+                continue;
+            }
+            if (!scope.has(tok)) {
                 throw new Error(`unsupported WGSL statement at ${tok}`);
             }
-            const id = take();
+            const lane =
+                peek() === '.'
+                    ? (take('.'), SWIZZLE[take() as keyof typeof SWIZZLE])
+                    : undefined;
+            const op = peek() === '=' ? '' : take();
             take('=');
-            scope.set(id, expression());
+            const rhs = expression() as number;
             take(';');
+            if (lane === undefined) {
+                if (op !== '') throw new Error(`unsupported ${op}= on ${tok}`);
+                scope.set(tok, rhs);
+            } else {
+                const target = [...(scope.get(tok) as number[])];
+                target[lane] = op === '+' ? target[lane] + rhs : rhs;
+                scope.set(tok, target);
+            }
         }
         throw new Error(`${fname} returns nothing`);
     };

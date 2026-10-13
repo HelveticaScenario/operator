@@ -67,7 +67,11 @@ export const modulateHue = modulator(
     ],
 );
 
-/** Tiles `x` by `y` times, with alternate rows and columns shifted by `offset` times the red and green channels. */
+/**
+ * Tiles `x` by `y` times and slides every tile's picture by `offset` times
+ * the red and green channels. The `step` terms follow Hydra's formula; they
+ * add whole tiles, which `fract` removes, so every row and column slides alike.
+ */
 export const modulateRepeat = modulator(
     ['repeatX', 'repeatY', 'offsetX', 'offsetY'],
     ({ m, repeatX, repeatY, offsetX, offsetY }) =>
@@ -83,7 +87,7 @@ export const modulateRepeat = modulator(
     ],
 );
 
-/** Tiles across, shifting alternate columns up by `offset` times the red channel. */
+/** Tiles across, sliding every tile's picture up by `offset` times the red channel. */
 export const modulateRepeatX = modulator(
     ['reps', 'offset'],
     ({ m, reps, offset }) =>
@@ -98,7 +102,7 @@ export const modulateRepeatX = modulator(
     ],
 );
 
-/** Tiles up, shifting alternate rows right by `offset` times the red channel. */
+/** Tiles up, sliding every tile's picture across by `offset` times the red channel. */
 export const modulateRepeatY = modulator(
     ['reps', 'offset'],
     ({ m, reps, offset }) =>
