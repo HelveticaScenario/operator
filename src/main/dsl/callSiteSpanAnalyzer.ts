@@ -2,7 +2,7 @@
  * Call Site Span Analyzer
  *
  * Tracks the full source span (start line through end line) of DSL method
- * calls like .scope() and standalone calls like $slider(). This information
+ * calls like .scope() and $v.preview() and standalone calls like $slider(). This information
  * is used to position view zones after the closing paren of multi-line calls.
  *
  * Designed to be extensible — any DSL function whose view zone needs to know
@@ -14,7 +14,7 @@ import { Node, type SourceFile } from 'ts-morph';
 import type { CallSiteKey, CallSiteSpanRegistry } from './sourceAnalysisTypes';
 
 /** Method names tracked for call expression spans (property access calls) */
-const DSL_METHODS_TO_TRACK = new Set(['scope', 'out', 'outMono']);
+const DSL_METHODS_TO_TRACK = new Set(['scope', 'out', 'outMono', 'preview']);
 
 /** Standalone function names tracked for call expression spans */
 const DSL_FUNCTIONS_TO_TRACK = new Set(['$slider', '$btn', '$toggleBtn']);
