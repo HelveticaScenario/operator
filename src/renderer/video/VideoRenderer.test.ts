@@ -283,6 +283,32 @@ describe('VideoRenderer', () => {
         expect(sink).toHaveBeenCalledWith(preview);
     });
 
+    it('writes no region average while the engine runs a patch whose shader is not live', async () => {
+        const renderer = await makeRenderer();
+        const cv = vi.fn();
+        renderer.setCvSink(cv);
+        const live = fakeProgram(1);
+        live.cvSamples.set(0, { id: 'cv', size: 0.5, x: 0.5, y: 0.5 });
+        await goLive(renderer, live, 1);
+        await frame();
+        await frame();
+        const drawnBy = gpu.delivered.at(-1)!;
+        const region = {
+            data: new Uint8Array([255, 255, 255, 255]),
+            height: 1,
+            index: 0,
+            width: 1,
+        };
+        gpu.previewFrame?.(region, drawnBy);
+        expect(cv).toHaveBeenCalledTimes(1);
+
+        void renderer.setShader({ shader, updateId: 2 });
+        engine.applied = 2;
+        await frame();
+        gpu.previewFrame?.(region, drawnBy);
+        expect(cv).toHaveBeenCalledTimes(1);
+    });
+
     it('keeps asking the engine for its state while it has nothing to draw', async () => {
         const renderer = await makeRenderer();
         const pull = vi.fn(async () => ({ ...engine }));

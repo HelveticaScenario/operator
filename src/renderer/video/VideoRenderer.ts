@@ -306,14 +306,16 @@ export class VideoRenderer {
     /**
      * Sends a frame the live program drew to the CV sink or, for an editor
      * preview, the preview sink. A frame an earlier program drew is dropped:
-     * its index means another preview now.
+     * its index means another preview now. While the gate holds, the engine
+     * runs the next patch, so a region average is dropped rather than written
+     * to that patch's signal of the same id.
      */
     private routeFrame(frame: VideoPreviewFrame, drawnBy: number): void {
         if (drawnBy !== this.epoch) return;
         const sample = this.program?.cvSamples.get(frame.index);
         if (sample === undefined) {
             this.previewSink?.(frame);
-        } else {
+        } else if (!this.gate.holding) {
             this.cvSink?.([
                 { id: sample.id, value: regionAverage(frame, sample) },
             ]);
