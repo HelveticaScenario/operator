@@ -26,7 +26,7 @@ function map3(
     c: Value,
     f: (x: number, y: number, z: number) => number,
 ): Value {
-    const n = [a, b, c].reduce<number>(
+    const n = [a, b, c].reduce(
         (m, v) => (typeof v === 'number' ? m : Math.max(m, v.length)),
         0,
     );
@@ -146,23 +146,27 @@ export function callWgsl(wgsl: string, name: string, ...args: Value[]): Value {
                 value = Number(tok);
             } else if (peek() === '(') {
                 take('(');
-                const values: Value[] = [];
+                const callArgs: Value[] = [];
                 while (peek() !== ')') {
-                    values.push(expression());
+                    callArgs.push(expression());
                     if (peek() === ',') take(',');
                 }
                 take(')');
-                value = call(tok, values);
+                value = call(tok, callArgs);
             } else {
                 if (!scope.has(tok)) throw new Error(`unbound ${tok}`);
                 value = scope.get(tok)!;
             }
             while (peek() === '.') {
                 take('.');
-                const picked = [...take()].map(
-                    (c) =>
-                        (value as number[])[SWIZZLE[c as keyof typeof SWIZZLE]],
-                );
+                const picked = take()
+                    .split('')
+                    .map(
+                        (c) =>
+                            (value as number[])[
+                                SWIZZLE[c as keyof typeof SWIZZLE]
+                            ],
+                    );
                 value = picked.length === 1 ? picked[0] : picked;
             }
             return value;
