@@ -7,6 +7,7 @@ import {
     dialog,
     globalShortcut,
     ipcMain,
+    screen,
     shell,
 } from 'electron';
 import type {
@@ -41,9 +42,31 @@ import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
 import { createFallbackWarningChannel } from './fallbackWarning';
 import { sendNavigateToSymbol } from './helpNavigation';
+import {
+    handleMediaProtocol,
+    mediaFileExists,
+    registerMediaScheme,
+} from './mediaProtocol';
+import {
+    getVideoShader,
+    pullVideo,
+    setVideoControl,
+    setVideoTapSource,
+    setVideoTarget,
+    updateVideoShader,
+} from './videoBridge';
+import { PERFORMANCE_WINDOW_NAME } from '../shared/video/performanceWindowName';
 import { serializeForIPC } from './serializeForIPC';
 import { resolveWorkspacePath } from './workspacePaths';
 import { SyphonBridge, type SyphonStatus } from './syphon/SyphonBridge';
+import { syphonAction, type SyphonTarget } from './syphon/syphonTarget';
+import { requestCameraAccess, screenSource } from './liveSources';
+import {
+    getPerformanceWindow,
+    performanceFullscreenMenu,
+    setPerformanceAspect,
+    trackPerformanceWindow,
+} from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
@@ -84,6 +107,9 @@ let mainWindow: BrowserWindow | null = null;
 // Headless ScreenCaptureKit -> Syphon companion (macOS only); created on ready.
 let syphonBridge: SyphonBridge | null = null;
 const SYPHON_MENU_ITEM_ID = 'syphon-toggle';
+const SYPHON_PERFORMANCE_MENU_ITEM_ID = 'syphon-toggle-performance';
+/** The window Syphon publishes while it is on. */
+let syphonTarget: SyphonTarget = 'editor';
 
 /**
  * Reflect publishing state in the View-menu checkbox. Driven by the bridge's
@@ -92,23 +118,33 @@ const SYPHON_MENU_ITEM_ID = 'syphon-toggle';
  * make `isActive` misreport the box. Intent stays steady across both.
  */
 function syncSyphonMenuItem(): void {
-    const item =
-        Menu.getApplicationMenu()?.getMenuItemById(SYPHON_MENU_ITEM_ID);
-    if (!item) return;
-    item.checked = syphonBridge?.isEnabled ?? false;
+    const enabled = syphonBridge?.isEnabled ?? false;
+    const menu = Menu.getApplicationMenu();
+    const editor = menu?.getMenuItemById(SYPHON_MENU_ITEM_ID);
+    if (editor) editor.checked = enabled && syphonTarget === 'editor';
+    const performance = menu?.getMenuItemById(SYPHON_PERFORMANCE_MENU_ITEM_ID);
+    if (performance) {
+        performance.checked = enabled && syphonTarget === 'performance';
+    }
 }
 
+/** Whether the performance window is open; it shows frames this window draws. */
+let performanceOutputOpen = false;
+
 /**
- * While Syphon is publishing, keep the renderer painting at full rate even when
- * the window is backgrounded or minimized, so the captured feed never throttles.
- * Restored to the power-saving default once publishing stops. (The companion
- * occlusion switch is global and can't be gated this way — see the top of this
- * file.)
+ * While Syphon is publishing or the performance window is open, keep the
+ * renderer painting at full rate even when the window is backgrounded or
+ * minimized, so the captured feed and the performance window never throttle.
+ * Restored to the power-saving default once neither is the case. (The
+ * companion occlusion switch is global and can't be gated this way — see the
+ * top of this file.)
  */
 function applySyphonRenderTuning(): void {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const publishing = syphonBridge?.isEnabled ?? false;
-    mainWindow.webContents.setBackgroundThrottling(!publishing);
+    mainWindow.webContents.setBackgroundThrottling(
+        !(publishing || performanceOutputOpen),
+    );
 }
 
 /** Construct the Syphon bridge (macOS only) and route status changes to the UI. */
@@ -165,16 +201,44 @@ function promptScreenRecordingPermission(): void {
  * the `operator.toggleSyphon` command (dispatched from the palette/keymap via
  * IPC), so both surfaces behave identically — including the failure dialog.
  */
-function toggleSyphonPublish(): SyphonToggleResult {
-    if (!mainWindow || mainWindow.isDestroyed()) {
-        return { ok: false, reason: 'No window is available to publish.' };
-    }
-    const result = syphonBridge?.toggle(mainWindow) ?? {
+function toggleSyphonPublish(
+    requested: SyphonTarget = 'editor',
+): SyphonToggleResult {
+    const window =
+        requested === 'performance' ? getPerformanceWindow() : mainWindow;
+    let result: SyphonToggleResult = {
         ok: false,
         reason: SyphonBridge.unsupportedReason,
     };
+    if (!window || window.isDestroyed()) {
+        result = {
+            ok: false,
+            reason:
+                requested === 'performance'
+                    ? 'Open the performance window first.'
+                    : 'No window is available to publish.',
+        };
+    } else if (syphonBridge) {
+        const action = syphonAction(
+            syphonBridge.isEnabled,
+            syphonTarget,
+            requested,
+        );
+        if (action === 'stop' || action === 'switch') syphonBridge.stop();
+        if (action === 'stop') {
+            result = { ok: true };
+        } else {
+            syphonTarget = requested;
+            result = syphonBridge.start(window);
+        }
+    }
     syncSyphonMenuItem();
-    if (!result.ok && result.reason) {
+    if (
+        !result.ok &&
+        result.reason &&
+        mainWindow &&
+        !mainWindow.isDestroyed()
+    ) {
         void dialog.showMessageBox(mainWindow, {
             buttons: ['OK'],
             detail: result.reason,
@@ -561,6 +625,7 @@ function startConfigWatcher() {
 
     // Watch for config file changes
     configWatcher = configStore.watch((config) => {
+        setPerformanceAspect(config.performanceAspect ?? 'free');
         // Send updated config to renderer
         if (mainWindow && !mainWindow.isDestroyed()) {
             mainWindow.webContents.send(IPC_CHANNELS.CONFIG_ON_CHANGE, config);
@@ -919,6 +984,14 @@ function submitPatchUpdate(
 }
 
 // DSL execution in main process with direct N-API access
+/** Wraps an engine load so it resolves paths against the current workspace. */
+function inWavWorkspace<T>(load: (path: string) => T): (path: string) => T {
+    return (relative) => {
+        if (currentWorkspaceRoot) synth.setWavWorkspace(currentWorkspaceRoot);
+        return load(relative);
+    };
+}
+
 registerIPCHandler(
     'DSL_EXECUTE',
     (source, sourceId, trigger): DSLExecuteResult => {
@@ -930,17 +1003,19 @@ registerIPCHandler(
                 sliders,
                 buttons,
                 callSiteSpans,
+                video,
+                videoPreviews,
             } = executePatchScript(source, schemas, {
                 inputChannels: synth.inputChannels(),
+                mediaExists: (relative) =>
+                    mediaFileExists(currentWorkspaceRoot, relative),
                 sampleRate: synth.sampleRate(),
                 workspaceRoot: currentWorkspaceRoot,
                 wavsFolderTree: currentWavsFolderTree,
-                loadWav: (wavPath: string) => {
-                    if (currentWorkspaceRoot) {
-                        synth.setWavWorkspace(currentWorkspaceRoot);
-                    }
-                    return synth.loadWav(wavPath);
-                },
+                loadMediaAudio: inWavWorkspace((mediaPath) =>
+                    synth.loadMediaAudio(mediaPath),
+                ),
+                loadWav: inWavWorkspace((wavPath) => synth.loadWav(wavPath)),
             });
             patch.moduleIdRemaps = [];
 
@@ -986,9 +1061,11 @@ registerIPCHandler(
                     sourceLocationMap: sourceLocationRecord,
                     success: false,
                     updateId,
+                    videoPreviews,
                 };
             }
 
+            updateVideoShader(video, updateId);
             return {
                 appliedPatch: patch,
                 buttons,
@@ -1000,6 +1077,7 @@ registerIPCHandler(
                 sourceLocationMap: sourceLocationRecord,
                 success: true,
                 updateId,
+                videoPreviews,
             };
         } catch (error) {
             const errorMessage =
@@ -1011,6 +1089,41 @@ registerIPCHandler(
         }
     },
 );
+
+registerIPCHandler('VIDEO_GET_SHADER', () => getVideoShader());
+setVideoTapSource({
+    read: (tap, since) => synth.getVideoTapChunk(tap, since),
+    sampleRate: () => synth.sampleRate(),
+    isStopped: () => synth.isStopped(),
+    updates: () => {
+        const { lastAppliedUpdateId, lastCancelledUpdateId } =
+            synth.getTransportState();
+        return {
+            applied: lastAppliedUpdateId,
+            cancelled: lastCancelledUpdateId,
+        };
+    },
+});
+
+setVideoTarget(() =>
+    mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
+);
+
+registerIPCHandler('VIDEO_PULL', (fresh) => pullVideo(fresh));
+registerIPCHandler('VIDEO_REQUEST_CAMERA', () => requestCameraAccess());
+registerIPCHandler('VIDEO_SCREEN_SOURCE', (display) => screenSource(display));
+
+// Region averages computed by the video renderer drive audio signals.
+registerIPCHandler('VIDEO_CV_VALUES', (values) => {
+    for (const { id, value } of values) {
+        synth.setModuleParam(id, '$signal', { source: value });
+    }
+});
+
+registerIPCHandler('VIDEO_SET_OUTPUT_OPEN', (open) => {
+    performanceOutputOpen = open;
+    applySyphonRenderTuning();
+});
 
 registerIPCHandler('SYNTH_GET_SAMPLE_RATE', () => synth.sampleRate());
 
@@ -1081,6 +1194,10 @@ registerIPCHandler('SYNTH_IS_STOPPED', () => synth.isStopped());
 
 registerIPCHandler('SYNTH_SET_MODULE_PARAM', (moduleId, moduleType, params) => {
     synth.setModuleParam(moduleId, moduleType, params);
+    const { source } = params as { source?: unknown };
+    if (typeof source === 'number') {
+        setVideoControl(moduleId, source);
+    }
 });
 
 registerIPCHandler('SYNTH_GET_TRANSPORT_STATE', () =>
@@ -1893,6 +2010,29 @@ const createWindow = (): void => {
         width: 1500,
     });
 
+    // The editor window opens the performance window itself, so it can draw
+    // into that window's canvas.
+    trackPerformanceWindow(mainWindow, () => {
+        if (syphonTarget === 'performance' && syphonBridge?.isEnabled) {
+            syphonBridge.stop();
+            syncSyphonMenuItem();
+        }
+    });
+    setPerformanceAspect(configStore.load().performanceAspect ?? 'free');
+    mainWindow.webContents.setWindowOpenHandler(({ frameName }) =>
+        frameName === PERFORMANCE_WINDOW_NAME
+            ? {
+                  action: 'allow',
+                  overrideBrowserWindowOptions: {
+                      backgroundColor: '#000000',
+                      height: 720,
+                      title: 'Operator Performance',
+                      width: 1280,
+                  },
+              }
+            : { action: 'allow' },
+    );
+
     // Keep the app name as the title rather than index.html's static <title>.
     mainWindow.on('page-title-updated', (event) => event.preventDefault());
 
@@ -1993,6 +2133,13 @@ function menuShortcut(
 /**
  * Create the application menu
  */
+/** Asks the editor window to open or close the performance window, which it owns. */
+function togglePerformanceWindow(): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW);
+    }
+}
+
 const createMenu = (): void => {
     const isMac = process.platform === 'darwin';
 
@@ -2164,6 +2311,18 @@ const createMenu = (): void => {
                     label: 'Module Profile...',
                 },
                 {
+                    ...menuShortcut(
+                        'operator.togglePerformanceWindow',
+                        'Ctrl+Shift+V',
+                    ),
+                    click: togglePerformanceWindow,
+                    label: 'Toggle Performance Window',
+                },
+                {
+                    label: 'Performance Window Fullscreen',
+                    submenu: performanceFullscreenMenu(togglePerformanceWindow),
+                },
+                {
                     click: () => {
                         if (mainWindow && !mainWindow.isDestroyed()) {
                             mainWindow.webContents.send(
@@ -2191,6 +2350,15 @@ const createMenu = (): void => {
                               },
                               id: SYPHON_MENU_ITEM_ID,
                               label: 'Toggle Syphon Output',
+                              type: 'checkbox',
+                          },
+                          {
+                              checked: false,
+                              click: () => {
+                                  toggleSyphonPublish('performance');
+                              },
+                              id: SYPHON_PERFORMANCE_MENU_ITEM_ID,
+                              label: 'Toggle Syphon Output (Performance Window)',
                               type: 'checkbox',
                           },
                       ] as Electron.MenuItemConstructorOptions[])
@@ -2340,7 +2508,12 @@ registerIPCHandler('MENU_SET_ACCELERATORS', (accelerators) => {
 // This method will be called when Electron has finished
 // Initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
+// The scheme that serves workspace media must be declared before the app is ready.
+registerMediaScheme();
+
 app.on('ready', () => {
+    handleMediaProtocol(() => currentWorkspaceRoot);
+
     // In E2E test mode, use the workspace provided via env var
     if (process.env.E2E_WORKSPACE && fs.existsSync(process.env.E2E_WORKSPACE)) {
         currentWorkspaceRoot = process.env.E2E_WORKSPACE;
@@ -2364,6 +2537,14 @@ app.on('ready', () => {
 
     createWindow();
     createMenu();
+    // The fullscreen entries list the displays, so the menu follows them.
+    const rebuildMenu = () => {
+        createMenu();
+        syncSyphonMenuItem();
+    };
+    screen.on('display-added', rebuildMenu);
+    screen.on('display-removed', rebuildMenu);
+    screen.on('display-metrics-changed', rebuildMenu);
     setupSyphonBridge();
 
     if (app.isPackaged) {
