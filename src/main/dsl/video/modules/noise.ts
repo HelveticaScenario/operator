@@ -135,7 +135,7 @@ const FRAME_POINT = `fn video_frame_point(p: vec2f) -> vec2f {
 }`;
 
 /**
- * How a noise module reads `x` and `y`: `frame` takes them as the position in
+ * How a noise module reads `mapX` and `mapY`: `frame` takes them as the position in
  * the frame (0 to 1 across and up) and measures it from the center in frame
  * heights, so the noise keeps its proportions in any window; `given` uses them
  * as they are.
@@ -144,24 +144,24 @@ const COORDINATES = { values: ['given', 'frame'], default: 'given' };
 
 /** The WGSL point a noise module reads, `scale` times its coordinates. */
 const point = (
-    { x, y, scale }: Record<string, string>,
+    { mapX, mapY, scale }: Record<string, string>,
     coordinates: string,
 ): string =>
     coordinates === 'frame'
-        ? `video_frame_point(vec2f(${x}, ${y})) * ${scale}`
-        : `vec2f(${x}, ${y}) * ${scale}`;
+        ? `video_frame_point(vec2f(${mapX}, ${mapY})) * ${scale}`
+        : `vec2f(${mapX}, ${mapY}) * ${scale}`;
 
 const pointHelpers = (coordinates: string) =>
     coordinates === 'frame' ? [FRAME_POINT] : [];
 
 /**
  * Smooth noise between 0 and 1 of the algorithm `type` names, read at
- * (`x`, `y`) times `scale`: one unit of the scaled coordinates is about one
+ * (`mapX`, `mapY`) times `scale`: one unit of the scaled coordinates is about one
  * feature of the noise. `z` moves through the noise, which animates it when
  * fed `$v.time`.
  */
 export const noise: VideoModuleDef = {
-    inputs: { x: 'number', y: 'number', z: 'number', scale: 'number' },
+    inputs: { mapX: 'number', mapY: 'number', z: 'number', scale: 'number' },
     output: 'gray',
     params: {
         type: { values: Object.keys(NOISE_TYPES), default: 'simplex' },
@@ -177,11 +177,11 @@ export const noise: VideoModuleDef = {
 
 /**
  * Cellular noise: the distance to the nearest of a scatter of points, one per
- * unit cell of (`x`, `y`) times `scale`, between 0 (on a point) and about 1.
+ * unit cell of (`mapX`, `mapY`) times `scale`, between 0 (on a point) and about 1.
  * `z` moves the points, which animates the cells when fed `$v.time`.
  */
 export const voronoi: VideoModuleDef = {
-    inputs: { x: 'number', y: 'number', z: 'number', scale: 'number' },
+    inputs: { mapX: 'number', mapY: 'number', z: 'number', scale: 'number' },
     output: 'gray',
     params: { coordinates: COORDINATES },
     helpers: ({ coordinates }) => [

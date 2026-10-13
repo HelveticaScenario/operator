@@ -94,10 +94,10 @@ export interface VideoOscConfig {
 
 /** Where a generator is drawn: the coordinates it reads at each pixel. */
 export interface VideoPositionConfig {
-    /** Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame). */
-    x?: VideoSource;
-    /** Vertical coordinate (default the vertical ramp, 0 to 1 up the frame). */
-    y?: VideoSource;
+    /** Horizontal coordinate at each pixel (default the horizontal ramp, 0 to 1 across the frame). */
+    mapX?: VideoSource;
+    /** Vertical coordinate at each pixel (default the vertical ramp, 0 to 1 up the frame). */
+    mapY?: VideoSource;
 }
 
 export interface VideoRampConfig {

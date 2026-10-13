@@ -7,12 +7,17 @@ const SHAPE_EDGE = `fn shape_edge(d: f32, size: f32, softness: f32) -> f32 {
 
 /**
  * 1 inside a shape centered on the frame, 0 outside, with a linear edge
- * `softness` wide. `x` and `y` place the shape (0.5, 0.5 is the center);
+ * `softness` wide. `mapX` and `mapY` place the shape (0.5, 0.5 is the center);
  * `size` is the half-extent as a fraction of frame height. Distances are
  * aspect-corrected, so circles stay round.
  */
 export const shape: VideoModuleDef = {
-    inputs: { x: 'number', y: 'number', size: 'number', softness: 'number' },
+    inputs: {
+        mapX: 'number',
+        mapY: 'number',
+        size: 'number',
+        softness: 'number',
+    },
     output: 'gray',
     params: {
         shape: { values: ['circle', 'box', 'diamond'], default: 'circle' },
@@ -23,8 +28,8 @@ export const shape: VideoModuleDef = {
     return vec2f((x - 0.5) * u.resolution.x / u.resolution.y, y - 0.5);
 }`,
     ],
-    emit: ({ x, y, size, softness }, { shape: kind }) => {
-        const p = `shape_offset(${x}, ${y})`;
+    emit: ({ mapX, mapY, size, softness }, { shape: kind }) => {
+        const p = `shape_offset(${mapX}, ${mapY})`;
         const distance = {
             circle: `length(${p})`,
             box: `max(abs(${p}.x), abs(${p}.y))`,
@@ -35,15 +40,15 @@ export const shape: VideoModuleDef = {
 };
 
 /**
- * 1 inside a regular polygon centered on (x, y) with one point up, 0 outside,
- * with a linear edge `softness` wide. `size` is the distance from the center to
- * the middle of a side, as a fraction of the frame height; distances are
- * aspect-corrected.
+ * 1 inside a regular polygon centered where `mapX` and `mapY` are 0.5, with
+ * one point up, 0 outside, with a linear edge `softness` wide. `size` is the
+ * distance from the center to the middle of a side, as a fraction of the frame
+ * height; distances are aspect-corrected.
  */
 export const polygon: VideoModuleDef = {
     inputs: {
-        x: 'number',
-        y: 'number',
+        mapX: 'number',
+        mapY: 'number',
         sides: 'number',
         size: 'number',
         softness: 'number',
@@ -58,6 +63,6 @@ export const polygon: VideoModuleDef = {
     return cos(floor(0.5 + turn / wedge) * wedge - turn) * length(p);
 }`,
     ],
-    emit: ({ x, y, sides, size, softness }) =>
-        `shape_edge(polygon_distance(${x}, ${y}, ${sides}), ${size}, ${softness})`,
+    emit: ({ mapX, mapY, sides, size, softness }) =>
+        `shape_edge(polygon_distance(${mapX}, ${mapY}, ${sides}), ${size}, ${softness})`,
 };

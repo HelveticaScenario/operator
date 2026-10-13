@@ -170,12 +170,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'noise',
         group: 'Generators',
         description:
-            'Smooth gray noise between 0 and 1, simplex noise unless `config.type` names another algorithm, with about `scale` features up the frame. Its features keep their proportions in any window, and resizing the window shows more or less of the noise around the center rather than stretching it. `z` moves through the noise, which animates it when fed `$v.time`. With `config.x` or `config.y` it is read at those coordinates times `scale` instead.',
+            'Smooth gray noise between 0 and 1, simplex noise unless `config.type` names another algorithm, with about `scale` features up the frame. Its features keep their proportions in any window, and resizing the window shows more or less of the noise around the center rather than stretching it. `z` moves through the noise, which animates it when fed `$v.time`. With `config.mapX` or `config.mapY` it is read at those coordinates times `scale` instead.',
         params: [
             {
                 name: 'scale',
                 description:
-                    'Features up the frame, or per unit of `config.x` and `config.y` (default 5)',
+                    'Features up the frame, or per unit of `config.mapX` and `config.mapY` (default 5)',
             },
             {
                 name: 'z',
@@ -188,12 +188,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
                     "`'simplex'` (default) smooth gradient noise without grid artifacts, `'perlin'` classic gradient noise, `'value'` blended random values, blockier and aligned to the grid, `'fbm'` four octaves of simplex noise for detail at several scales, like clouds, `'ridged'` four octaves of sharp creases, like mountain ridges or marble veins",
             },
             {
-                name: 'config.x',
+                name: 'config.mapX',
                 description:
                     'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
             },
             {
-                name: 'config.y',
+                name: 'config.mapY',
                 description:
                     'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
             },
@@ -202,51 +202,51 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.out($v.hsv($v.noise(6, $v.mult($v.time, 0.5))))',
             "$v.out($v.noise(3, $v.mult($v.time, 0.2), { type: 'fbm' }))",
             "$v.out($v.hsv(0.08, 0.6, $v.noise(4, $v.mult($v.time, 0.1), { type: 'ridged' })))",
-            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise(1, $v.time, { x: $v.mult($v.ramp('radial'), 10), y: $v.mult($v.ramp('angular'), 6) }), 0.5, 0.05)))",
+            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise(1, $v.time, { mapX: $v.mult($v.ramp('radial'), 10), mapY: $v.mult($v.ramp('angular'), 6) }), 0.5, 0.05)))",
         ],
         declarations: [
-            "noise(\n    scale?: VideoValue,\n    z?: VideoValue,\n    config?: { type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged'; x?: VideoValue; y?: VideoValue },\n): VideoSignal;",
+            "noise(\n    scale?: VideoValue,\n    z?: VideoValue,\n    config?: { type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged'; mapX?: VideoValue; mapY?: VideoValue },\n): VideoSignal;",
         ],
     },
     {
         name: 'voronoi',
         group: 'Generators',
         description:
-            'Gray cellular noise: the distance to the nearest of a scatter of points, about `scale` cells up the frame, between 0 (on a point) and about 1. Its cells keep their proportions in any window, as for `$v.noise`. `z` moves the points, which animates the cells when fed `$v.time`. With `config.x` or `config.y` it is read at those coordinates times `scale` instead.',
+            'Gray cellular noise: the distance to the nearest of a scatter of points, about `scale` cells up the frame, between 0 (on a point) and about 1. Its cells keep their proportions in any window, as for `$v.noise`. `z` moves the points, which animates the cells when fed `$v.time`. With `config.mapX` or `config.mapY` it is read at those coordinates times `scale` instead.',
         params: [
             {
                 name: 'scale',
                 description:
-                    'Cells up the frame, or per unit of `config.x` and `config.y` (default 5)',
+                    'Cells up the frame, or per unit of `config.mapX` and `config.mapY` (default 5)',
             },
             {
                 name: 'z',
                 description: 'Moves the points, such as time (default 0)',
             },
             {
-                name: 'config.x',
+                name: 'config.mapX',
                 description:
                     'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
             },
             {
-                name: 'config.y',
+                name: 'config.mapY',
                 description:
                     'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.55, 0.8, $v.voronoi(1, $v.mult($v.time, 2), { x: $v.mult($v.ramp(), 8), y: $v.mult($v.ramp('vertical'), 5) })))",
+            "$v.out($v.hsv(0.55, 0.8, $v.voronoi(1, $v.mult($v.time, 2), { mapX: $v.mult($v.ramp(), 8), mapY: $v.mult($v.ramp('vertical'), 5) })))",
             '$v.voronoi(6, $v.time).$.invert().$.tint(0.1).out()',
         ],
         declarations: [
-            'voronoi(scale?: VideoValue, z?: VideoValue, config?: { x?: VideoValue; y?: VideoValue }): VideoSignal;',
+            'voronoi(scale?: VideoValue, z?: VideoValue, config?: { mapX?: VideoValue; mapY?: VideoValue }): VideoSignal;',
         ],
     },
     {
         name: 'polygon',
         group: 'Generators',
         description:
-            'A gray mask: 1 inside a regular polygon centered on the frame with one point up, 0 outside, with a soft edge. With `config.x` and `config.y` it is centered where they are both 0.5, so adding to a ramp moves it.',
+            'A gray mask: 1 inside a regular polygon centered on the frame with one point up, 0 outside, with a soft edge. With `config.mapX` and `config.mapY` it is centered where they are both 0.5, so adding to a ramp moves it.',
         params: [
             {
                 name: 'sides',
@@ -263,12 +263,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
                     'Width of the edge in the same units (default 0.01)',
             },
             {
-                name: 'config.x',
+                name: 'config.mapX',
                 description:
                     'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
             },
             {
-                name: 'config.y',
+                name: 'config.mapY',
                 description:
                     'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
             },
@@ -278,7 +278,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.polygon(6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.tint(0.6).out()',
         ],
         declarations: [
-            'polygon(sides?: VideoValue, size?: VideoValue, softness?: VideoValue, config?: { x?: VideoValue; y?: VideoValue }): VideoSignal;',
+            'polygon(sides?: VideoValue, size?: VideoValue, softness?: VideoValue, config?: { mapX?: VideoValue; mapY?: VideoValue }): VideoSignal;',
         ],
     },
     {
@@ -483,7 +483,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'shape',
         group: 'Generators',
         description:
-            'A gray mask: 1 inside a shape centered on the frame and 0 outside, with a soft edge. With `config.x` and `config.y` it is centered where they are both 0.5, so adding to a ramp moves it. Circles stay round at any window aspect.',
+            'A gray mask: 1 inside a shape centered on the frame and 0 outside, with a soft edge. With `config.mapX` and `config.mapY` it is centered where they are both 0.5, so adding to a ramp moves it. Circles stay round at any window aspect.',
         params: [
             {
                 name: 'size',
@@ -500,23 +500,23 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description: "`'circle'` (default), `'box'` or `'diamond'`",
             },
             {
-                name: 'config.x',
+                name: 'config.mapX',
                 description:
                     'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
             },
             {
-                name: 'config.y',
+                name: 'config.mapY',
                 description:
                     'Vertical coordinate (default the vertical ramp, 0 to 1 up the frame)',
             },
         ],
         examples: [
             '$v.out($v.hsv(0.6, 1, $v.shape(0.3, 0.05)))',
-            '$v.out($v.hsv(0.1, 1, $v.shape(0.15, 0.01, { x: $v.add($v.ramp(), $v.time.$.osc(0.25).range(-0.3, 0.3)) })))',
+            '$v.out($v.hsv(0.1, 1, $v.shape(0.15, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.25).range(-0.3, 0.3)) })))',
             "$v.out($v.hsv($v.time, 1, $v.shape(0.2, 0, { shape: 'diamond' })))",
         ],
         declarations: [
-            "shape(\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: { shape?: 'circle' | 'box' | 'diamond'; x?: VideoValue; y?: VideoValue },\n): VideoSignal;",
+            "shape(\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: { shape?: 'circle' | 'box' | 'diamond'; mapX?: VideoValue; mapY?: VideoValue },\n): VideoSignal;",
         ],
     },
     {
@@ -605,7 +605,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'The larger of each channel. With shapes this is their union.',
         params: [],
         examples: [
-            '$v.out($v.hsv(0.1, 1, $v.max($v.shape(0.2), $v.shape(0.2, 0.01, { x: $v.add($v.ramp(), 0.2) }))))',
+            '$v.out($v.hsv(0.1, 1, $v.max($v.shape(0.2), $v.shape(0.2, 0.01, { mapX: $v.add($v.ramp(), 0.2) }))))',
         ],
         declarations: ['max(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
@@ -616,7 +616,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'The smaller of each channel. With shapes this is their intersection.',
         params: [],
         examples: [
-            '$v.out($v.hsv(0.5, 1, $v.min($v.shape(0.3), $v.shape(0.3, 0.01, { x: $v.add($v.ramp(), 0.2) }))))',
+            '$v.out($v.hsv(0.5, 1, $v.min($v.shape(0.3), $v.shape(0.3, 0.01, { mapX: $v.add($v.ramp(), 0.2) }))))',
         ],
         declarations: ['min(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
@@ -815,7 +815,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.feedback((prev) => $v.mix($v.hsv($v.time, 1, $v.shape(0.1)), prev, 0.9), { zoom: 1.02, rotate: 0.004 }))',
-            '$v.out($v.feedback((prev) => $v.add($v.hsv($v.time.$.osc(0.2), 1, $v.shape(0.05, 0.01, { x: $v.add($v.ramp(), -0.2) })), $v.mult(prev, 0.96)), { rotate: 0.01 }))',
+            '$v.out($v.feedback((prev) => $v.add($v.hsv($v.time.$.osc(0.2), 1, $v.shape(0.05, 0.01, { mapX: $v.add($v.ramp(), -0.2) })), $v.mult(prev, 0.96)), { rotate: 0.01 }))',
         ],
         declarations: [
             "feedback(\n    update: (prev: VideoSignal) => VideoSignal,\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n        edge?: 'clamp' | 'repeat' | 'mirror';\n    },\n): VideoSignal;",
@@ -834,7 +834,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { x: $v.add($v.ramp(), $v.time.$.osc(0.5)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
+            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.5)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
         ],
         declarations: [
             'frameDelay(input: VideoValue, frames?: number): VideoSignal;',

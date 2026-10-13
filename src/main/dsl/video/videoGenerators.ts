@@ -15,17 +15,19 @@ import type {
  * so warps and feedback move it like any other signal.
  */
 export function generatorMethods(core: VideoCore) {
-    /** The `x` and `y` of `config`, or the ramps across and up the frame. */
+    /** The `mapX` and `mapY` of `config`, or the ramps across and up the frame. */
     const position = (config: VideoPositionConfig | undefined) => ({
-        x: config?.x ?? core.ramp('horizontal'),
-        y: config?.y ?? core.ramp('vertical'),
+        mapX: config?.mapX ?? core.ramp('horizontal'),
+        mapY: config?.mapY ?? core.ramp('vertical'),
     });
     /**
      * How a noise module reads its coordinates: as the position in the frame,
-     * kept in proportion, when the config gives neither `x` nor `y`.
+     * kept in proportion, when the config gives neither `mapX` nor `mapY`.
      */
     const coordinates = (config: VideoPositionConfig | undefined) =>
-        config?.x === undefined && config?.y === undefined ? 'frame' : 'given';
+        config?.mapX === undefined && config?.mapY === undefined
+            ? 'frame'
+            : 'given';
     /** The `params` of a node, holding `name` when the config chose one. */
     const option = (name: string, value: string | undefined) =>
         value === undefined ? undefined : { params: { [name]: value } };
@@ -74,7 +76,7 @@ export function generatorMethods(core: VideoCore) {
                 option('shape', config?.shape),
             ),
 
-        /** 1 inside a shape centered on the frame, or where `config.x` and `config.y` are 0.5; 0 outside. */
+        /** 1 inside a shape centered on the frame, or where `config.mapX` and `config.mapY` are 0.5; 0 outside. */
         shape: (
             size: VideoSource = 0.25,
             softness: VideoSource = 0.01,

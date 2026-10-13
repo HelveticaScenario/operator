@@ -50,7 +50,7 @@ describe('$v modules', () => {
         it('rejects an invalid shape option', () => {
             expect(() =>
                 exec(
-                    `$v.out($v.hsv($v.shape(0.2, 0, { shape: 'star', x: 0.5, y: 0.5 })));`,
+                    `$v.out($v.hsv($v.shape(0.2, 0, { shape: 'star', mapX: 0.5, mapY: 0.5 })));`,
                 ),
             ).toThrow(/param "shape" must be one of circle, box, diamond/);
         });
@@ -147,13 +147,14 @@ describe('$v modules', () => {
             );
             expect(wgsl).toContain('video_frame_point(vec2f(');
             expect(
-                exec(`$v.out($v.noise(5, 0, { x: $v.ramp() }));`).video!.wgsl,
+                exec(`$v.out($v.noise(5, 0, { mapX: $v.ramp() }));`).video!
+                    .wgsl,
             ).not.toContain('video_frame_point');
         });
 
         it('reads given coordinates times the scale, with z 0 by default', () => {
             const { video } = exec(
-                `$v.out($v.hsv($v.noise(2, 0, { x: 0.5, y: 0.25 })));`,
+                `$v.out($v.hsv($v.noise(2, 0, { mapX: 0.5, mapY: 0.25 })));`,
             );
             expect(video!.wgsl).toContain(
                 'noise_simplex(vec3f(vec2f(0.5, 0.25) * 2.0, 0.0))',
@@ -163,7 +164,7 @@ describe('$v modules', () => {
         it('compiles each type to its own algorithm and only the helpers it needs', () => {
             const wgslOf = (type: string) =>
                 exec(
-                    `$v.out($v.noise(1, 0, { type: '${type}', x: 0.5, y: 0.5 }));`,
+                    `$v.out($v.noise(1, 0, { type: '${type}', mapX: 0.5, mapY: 0.5 }));`,
                 ).video!.wgsl;
             expect(wgslOf('value')).toContain('noise_value(vec3f(');
             expect(wgslOf('value')).not.toContain('fn noise_grad(');
@@ -175,15 +176,17 @@ describe('$v modules', () => {
 
         it('rejects an unknown type', () => {
             expect(() =>
-                exec(`$v.out($v.noise(1, 0, { type: 'pink', x: 0, y: 0 }));`),
+                exec(
+                    `$v.out($v.noise(1, 0, { type: 'pink', mapX: 0, mapY: 0 }));`,
+                ),
             ).toThrow(
                 /param "type" must be one of simplex, perlin, value, fbm, ridged/,
             );
         });
 
         it('rejects a coordinate that is not a signal or a number', () => {
-            expect(() => exec(`$v.noise(1, 0, { x: 'left' });`)).toThrow(
-                /\$v\.noise: x must be a number, a video signal or an audio signal/,
+            expect(() => exec(`$v.noise(1, 0, { mapX: 'left' });`)).toThrow(
+                /\$v\.noise: mapX must be a number, a video signal or an audio signal/,
             );
         });
     });
