@@ -762,7 +762,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'layer',
         group: 'Compositing',
         description:
-            'Lays `top` over `base` by the alpha of `top`: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add.',
+            'Lays `top` over `base` by the alpha of `top`: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add. `luma` and `mask` clear the color of what they key out, so a keyed-out part of `base` adds no color under a translucent `top`.',
         params: [
             { name: 'base', description: 'The signal underneath' },
             { name: 'top', description: 'The signal laid over it' },
@@ -779,7 +779,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mask',
         group: 'Compositing',
         description:
-            '`input` seen through `mask`: its alpha is scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.',
+            '`input` seen through `mask`: its color and alpha are both scaled by the brightness of `mask`, as in Hydra, so it is opaque where the mask is white and transparent and black where it is black. What is masked out adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. Lay the result over another signal with `layer`.',
         params: [
             { name: 'mask', description: 'Where `input` shows, by brightness' },
         ],
@@ -794,7 +794,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'luma',
         group: 'Compositing',
         description:
-            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.',
+            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is scaled by the same key, as in Hydra, so what is keyed out is black as well as transparent and adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations; `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.',
         params: [
             {
                 name: 'threshold',
@@ -1677,13 +1677,13 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'mask',
         description:
-            'This seen through `mask`: its alpha scaled by the brightness of `mask`.',
+            'This seen through `mask`: its color and alpha scaled by the brightness of `mask`.',
         declarations: ['mask(mask: VideoValue): VideoSignal;'],
     },
     {
         name: 'luma',
         description:
-            'Keys this by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`; `config.invert` keeps the dark side.',
+            'Keys this by its own brightness: opaque from `threshold` up, transparent and black below `threshold - tolerance`; `config.invert` keeps the dark side.',
         declarations: [
             'luma(threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
         ],
