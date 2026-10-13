@@ -124,7 +124,12 @@ export function computeControlQuickFixes(
             }
             if (resolved.kind === 'sugar') {
                 if (argIndex === 0) {
-                    return wrapFixes(node, literal, resolved.name, resolved.spec);
+                    return wrapFixes(
+                        node,
+                        literal,
+                        resolved.name,
+                        resolved.spec,
+                    );
                 }
                 continue;
             }
@@ -133,7 +138,9 @@ export function computeControlQuickFixes(
             }
             const pi = resolved.argToPositional(argIndex);
             const name =
-                pi === null ? undefined : resolved.schema.positionalArgs[pi].name;
+                pi === null
+                    ? undefined
+                    : resolved.schema.positionalArgs[pi].name;
             const spec = name && paramSpec(resolved.schema, name);
             if (name && spec) {
                 return wrapFixes(node, literal, name, spec);
