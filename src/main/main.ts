@@ -1118,10 +1118,24 @@ registerIPCHandler('VIDEO_PULL', (fresh) => pullVideo(fresh));
 registerIPCHandler('VIDEO_REQUEST_CAMERA', () => requestCameraAccess());
 registerIPCHandler('VIDEO_SCREEN_SOURCE', (display) => screenSource(display));
 
+/**
+ * The value each region's signal holds, so a frame that repeats it constructs
+ * no module. Applying a patch update or rebuilding the audio streams rebuilds
+ * the signals at 0, which empties the record.
+ */
+const cvSent = { updateId: -1, values: new Map<string, number>() };
+
 // Region averages computed by the video renderer drive audio signals.
 registerIPCHandler('VIDEO_CV_VALUES', (values) => {
+    const applied = synth.getTransportState().lastAppliedUpdateId;
+    if (applied !== cvSent.updateId) {
+        cvSent.updateId = applied;
+        cvSent.values.clear();
+    }
     for (const { id, value } of values) {
+        if (cvSent.values.get(id) === value) continue;
         synth.setModuleParam(id, '$signal', { source: value });
+        cvSent.values.set(id, value);
     }
 });
 
@@ -1219,6 +1233,7 @@ registerIPCHandler('SYNTH_IS_AUDIO_THREAD_PANICKED', () =>
 
 registerIPCHandler('SYNTH_RESTART_AUDIO', () => {
     synth.restartAudio();
+    cvSent.values.clear();
 });
 
 registerIPCHandler('SYNTH_PANIC_LOG_DIR', () => synth.panicLogDir());
@@ -1260,6 +1275,7 @@ registerIPCHandler(
             bufferSize ?? undefined,
             inputDeviceId ?? undefined,
         );
+        cvSent.values.clear();
         fallbackWarnings.report(synth.getCurrentAudioState().fallbackWarning);
         saveAudioConfig();
     },
