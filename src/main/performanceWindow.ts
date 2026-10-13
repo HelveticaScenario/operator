@@ -31,6 +31,13 @@ let window: BrowserWindow | null = null;
 let aspect: PerformanceAspect = 'free';
 /** Where to put the window in fullscreen once the editor has opened it. */
 let pendingFullscreenDisplay: number | null = null;
+/**
+ * How long an asked-for open may take before it counts as failed. The editor
+ * may refuse to open the window, or never hear the request.
+ */
+const OPEN_TIMEOUT_MS = 2000;
+/** Runs out an asked-for open that has not produced a window yet. */
+let openTimeout: ReturnType<typeof setTimeout> | null = null;
 /** The window's bounds before it went fullscreen, to return to. */
 let restoreBounds: Electron.Rectangle | null = null;
 
@@ -85,19 +92,41 @@ export function exitPerformanceFullscreen(): void {
     applyAspect(win);
 }
 
+function settleOpen(): void {
+    if (openTimeout !== null) clearTimeout(openTimeout);
+    openTimeout = null;
+    pendingFullscreenDisplay = null;
+}
+
+/**
+ * Asks the editor to open the window through `toggle`, unless an open is
+ * already under way, so a second request in that time cannot close it again.
+ */
+function requestOpen(toggle: () => void): void {
+    if (openTimeout !== null) return;
+    openTimeout = setTimeout(settleOpen, OPEN_TIMEOUT_MS);
+    toggle();
+}
+
+/** Opens or closes the performance window through `toggle`, which asks the editor. */
+export function togglePerformanceWindow(toggle: () => void): void {
+    if (getPerformanceWindow() === null) requestOpen(toggle);
+    else toggle();
+}
+
 /**
  * Puts the performance window fullscreen on display `displayId`. When the
- * window is not open, `open` asks the editor to open it and the window goes
+ * window is not open, `toggle` asks the editor to open it and the window goes
  * fullscreen as soon as it exists.
  */
 export function fullscreenPerformanceWindow(
     displayId: number,
-    open: () => void,
+    toggle: () => void,
 ): void {
     const win = getPerformanceWindow();
     if (win === null) {
         pendingFullscreenDisplay = displayId;
-        open();
+        requestOpen(toggle);
         return;
     }
     enterFullscreen(win, displayId);
@@ -119,23 +148,21 @@ export function trackPerformanceWindow(
             restoreBounds = null;
             onClosed();
         });
-        if (pendingFullscreenDisplay !== null) {
-            enterFullscreen(created, pendingFullscreenDisplay);
-            pendingFullscreenDisplay = null;
-        } else {
-            applyAspect(created);
-        }
+        const displayId = pendingFullscreenDisplay;
+        settleOpen();
+        if (displayId !== null) enterFullscreen(created, displayId);
+        else applyAspect(created);
     });
 }
 
 /** View-menu entries that put the performance window fullscreen on each display. */
 export function performanceFullscreenMenu(
-    open: () => void,
+    toggle: () => void,
 ): MenuItemConstructorOptions[] {
     const displays = screen.getAllDisplays();
     return [
         ...displays.map((display, index) => ({
-            click: () => fullscreenPerformanceWindow(display.id, open),
+            click: () => fullscreenPerformanceWindow(display.id, toggle),
             label: `Fullscreen on ${index + 1}: ${display.label || 'Display'} (${display.size.width}×${display.size.height})`,
         })),
         { type: 'separator' as const },

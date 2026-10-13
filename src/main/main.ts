@@ -65,6 +65,7 @@ import {
     getPerformanceWindow,
     performanceFullscreenMenu,
     setPerformanceAspect,
+    togglePerformanceWindow,
     trackPerformanceWindow,
 } from './performanceWindow';
 import { executePatchScript } from './dsl/executor';
@@ -2155,16 +2156,16 @@ function menuShortcut(
     };
 }
 
-/**
- * Create the application menu
- */
 /** Asks the editor window to open or close the performance window, which it owns. */
-function togglePerformanceWindow(): void {
+function sendPerformanceWindowToggle(): void {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send(MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW);
     }
 }
 
+/**
+ * Create the application menu
+ */
 const createMenu = (): void => {
     const isMac = process.platform === 'darwin';
 
@@ -2338,14 +2339,17 @@ const createMenu = (): void => {
                 {
                     ...menuShortcut(
                         'operator.togglePerformanceWindow',
-                        'Ctrl+Shift+V',
+                        isMac ? 'Ctrl+Shift+V' : 'Ctrl+Shift+Y',
                     ),
-                    click: togglePerformanceWindow,
+                    click: () =>
+                        togglePerformanceWindow(sendPerformanceWindowToggle),
                     label: 'Toggle Performance Window',
                 },
                 {
                     label: 'Performance Window Fullscreen',
-                    submenu: performanceFullscreenMenu(togglePerformanceWindow),
+                    submenu: performanceFullscreenMenu(
+                        sendPerformanceWindowToggle,
+                    ),
                 },
                 {
                     click: () => {
