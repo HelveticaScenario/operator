@@ -288,6 +288,9 @@ export interface HostInfo {
   name: string
 }
 
+/** Number of video tap slots the engine publishes. */
+export const MAX_VIDEO_TAPS: number
+
 /** Information about a MIDI input port (for N-API) */
 export interface MidiInputInfo {
   name: string
@@ -400,10 +403,13 @@ export interface ValidationError {
   actualValue?: string
 }
 
+/** Samples of history each video tap keeps. */
+export const VIDEO_HISTORY_LEN: number
+
 /** New samples of a video tap, with the count to pass back as `since`. */
 export interface VideoTapChunk {
   head: number
-  samples: Array<number>
+  samples: Float32Array
 }
 
 export interface WavCuePointInfo {
