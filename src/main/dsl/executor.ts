@@ -39,6 +39,7 @@ import {
 } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
+import type { EqPanelDef } from '../../shared/dsl/eqPanelTypes';
 import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p, setActiveCycleFactory, type CycleFactory } from './miniNotation';
@@ -74,6 +75,8 @@ export interface DSLExecutionResult {
     buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
+    /** Inline panels requested by `ui: true` EQs */
+    eqPanels: EqPanelDef[];
     /** Shader for the video renderer; null when the patch has no `$v.out` or `$v.preview` */
     video: CompiledVideoShader | null;
     /** One entry per `$v.preview` call, in the order the shader draws them */
@@ -1094,6 +1097,7 @@ export function executePatchScript(
         return {
             buttons: controls.buttons,
             callSiteSpans,
+            eqPanels: resultBuilder.getEqPanels(),
             interpolationResolutions,
             patch,
             sliders: controls.sliders,

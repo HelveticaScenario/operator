@@ -1006,6 +1006,7 @@ registerIPCHandler(
                 sliders,
                 buttons,
                 callSiteSpans,
+                eqPanels,
                 video,
                 videoPreviews,
             } = executePatchScript(source, schemas, {
@@ -1057,6 +1058,7 @@ registerIPCHandler(
                     appliedPatch: patch,
                     buttons,
                     callSiteSpans: callSiteSpansRecord,
+                    eqPanels,
                     errors,
                     interpolationResolutions: interpolationResolutionsRecord,
                     moduleIdRemap,
@@ -1073,6 +1075,7 @@ registerIPCHandler(
                 appliedPatch: patch,
                 buttons,
                 callSiteSpans: callSiteSpansRecord,
+                eqPanels,
                 errors: [],
                 interpolationResolutions: interpolationResolutionsRecord,
                 moduleIdRemap,

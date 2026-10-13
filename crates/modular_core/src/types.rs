@@ -303,9 +303,9 @@ pub trait Sampleable: MessageHandler + Send {
     }
     /// Write the module's live editor state into `out` (its type-erased
     /// [`ModuleLiveState`](crate::module_state::ModuleLiveState); only modules
-    /// that publish state override this — today just `$cycle`). Runs on the audio
-    /// thread and **must not allocate**; `out` is reused, so the implementor
-    /// resets it first. Default: no-op.
+    /// that publish state override this: `$cycle` and `$eq`). Runs on
+    /// the audio thread and **must not allocate**; `out` is reused, so the
+    /// implementor resets it first. Default: no-op.
     fn write_module_state(&self, _out: &mut dyn crate::module_state::ModuleLiveState) {}
     /// Get a buffer output by port name. Only modules that own buffers (like `$buffer`)
     /// override this. Default: no buffer outputs.

@@ -23,6 +23,7 @@ import type {
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
+import type { EqPanelDef } from './dsl/eqPanelTypes';
 import type {
     VideoCvValue,
     VideoPreviewSite,
@@ -233,6 +234,8 @@ export interface DSLExecuteResult {
     updateId?: number;
     /** Full call expression spans for DSL methods, keyed by "line:column" */
     callSiteSpans?: Record<string, { startLine: number; endLine: number }>;
+    /** Inline panels requested by `ui: true` EQs */
+    eqPanels?: EqPanelDef[];
     /** One entry per `$v.preview` call, in the order the shader draws them */
     videoPreviews?: VideoPreviewSite[];
 }
