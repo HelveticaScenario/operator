@@ -440,6 +440,19 @@ impl MonoSignal {
         self.inner.channels.iter().map(|s| s.get_value()).sum()
     }
 
+    /// The summed value when every channel is a fixed voltage; None when any
+    /// channel is a cable.
+    pub fn constant_value(&self) -> Option<f32> {
+        let mut sum = 0.0;
+        for signal in &self.inner.channels {
+            match signal {
+                Signal::Volts(v) => sum += v,
+                _ => return None,
+            }
+        }
+        Some(sum)
+    }
+
     /// Get the summed value of all channels as f64
     pub fn get_value_f64(&self) -> f64 {
         self.inner

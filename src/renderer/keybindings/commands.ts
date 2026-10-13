@@ -96,7 +96,10 @@ export function executeCommand(id: string, ...args: unknown[]): unknown {
  * Snapshot of every registered command. Used to populate the cmdk
  * palette and the read-only "Keyboard Shortcuts" settings tab.
  */
-export function listCommands(): Array<{ id: string; metadata?: CommandMetadata }> {
+export function listCommands(): Array<{
+    id: string;
+    metadata?: CommandMetadata;
+}> {
     const out: Array<{ id: string; metadata?: CommandMetadata }> = [];
     for (const [id, entry] of commandRegistry) {
         out.push({ id, metadata: entry.metadata });

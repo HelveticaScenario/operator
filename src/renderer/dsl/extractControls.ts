@@ -200,9 +200,7 @@ function collapseTarget(args: readonly ts.Expression[]): CollapseTarget | null {
     if (args.length !== 2 || !ts.isObjectLiteralExpression(params)) {
         return null;
     }
-    const prop = params.properties.find(
-        (p) => propertyName(p) === 'collapsed',
-    );
+    const prop = params.properties.find((p) => propertyName(p) === 'collapsed');
     if (!prop) {
         return { kind: 'insert', params };
     }

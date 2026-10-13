@@ -659,12 +659,18 @@ describe('startModuleStatePolling interpolation resolution', () => {
                         {
                             evaluatedStart: 0,
                             evaluatedLength: 3,
-                            constLiteralSpan: { start: aStart, end: aStart + 5 },
+                            constLiteralSpan: {
+                                start: aStart,
+                                end: aStart + 5,
+                            },
                         },
                         {
                             evaluatedStart: 3,
                             evaluatedLength: 2,
-                            constLiteralSpan: { start: bStart, end: bStart + 4 },
+                            constLiteralSpan: {
+                                start: bStart,
+                                end: bStart + 4,
+                            },
                         },
                     ],
                 ],

@@ -1543,9 +1543,10 @@ impl AudioState {
         meta.promote_if_applied(&mut states, self.transport_meter.read_applied_update_id());
         match refreshed {
             Some((live, m)) => {
-                // Insert a fresh slot: new params may change geometry, so a blank frame
-                // beats pairing stale spans with the new metadata.
-                states.insert(id.clone(), live);
+                // Keep a slot the audio thread is already filling: the replacement
+                // module rewrites it on its first callback, and polls until then see
+                // the previous values rather than a blank frame.
+                states.entry(id.clone()).or_insert(live);
                 meta.live.insert(id, m);
             }
             None => {
