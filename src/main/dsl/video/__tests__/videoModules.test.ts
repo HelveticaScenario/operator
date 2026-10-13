@@ -125,7 +125,7 @@ describe('$v modules', () => {
             expect(() =>
                 exec(`$v.out($v.colorize($v.ramp('q'), 0, 0));`),
             ).toThrow(
-                /param "axis" must be one of horizontal, vertical, diagonal, radial, angular/,
+                /param "axis" must be one of horizontal, vertical, radial, angular/,
             );
         });
     });

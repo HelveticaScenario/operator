@@ -27,15 +27,13 @@ export function generatorMethods(core: VideoCore) {
     return {
         /**
          * Scan ramp over the frame, optionally zoomed, rotated and shifted.
-         * `horizontal` and `vertical` run 0 to 1 across and up, `diagonal`
-         * along the diagonal, `radial` is the distance from the center and
-         * `angular` the angle around it.
+         * `horizontal` and `vertical` run 0 to 1 across and up, `radial` is
+         * the distance from the center and `angular` the angle around it.
          */
         ramp: (
             axis:
                 | 'horizontal'
                 | 'vertical'
-                | 'diagonal'
                 | 'radial'
                 | 'angular' = 'horizontal',
             config?: VideoRampConfig,

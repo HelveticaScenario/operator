@@ -67,7 +67,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'axis',
                 description:
-                    "`'horizontal'` 0..1 across (default), `'vertical'` 0..1 up, `'diagonal'` along the diagonal, `'radial'` distance from the center (0.5 at the top and bottom edges), `'angular'` angle around the center, 0..1 once around",
+                    "`'horizontal'` 0..1 across (default), `'vertical'` 0..1 up, `'radial'` distance from the center (0.5 at the top and bottom edges), `'angular'` angle around the center, 0..1 once around",
             },
             {
                 name: 'config.zoom',
@@ -97,7 +97,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "$v.out($v.colorize($v.osc(8, 0, { input: $v.ramp('horizontal', { rotate: 0.125, zoom: 2 }) }), 0.2, 0.5))",
         ],
         declarations: [
-            "ramp(\n    axis?: 'horizontal' | 'vertical' | 'diagonal' | 'radial' | 'angular',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoSignal;",
+            "ramp(\n    axis?: 'horizontal' | 'vertical' | 'radial' | 'angular',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoSignal;",
         ],
     },
     {
