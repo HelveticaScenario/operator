@@ -40,7 +40,7 @@ describe('$v chaining', () => {
 
         it('chains through operations on whole signals', () => {
             const wgsl = wgslOf(`
-                $v.noise().$.hsv().$.mult($v.ramp('v')).$.invert().out();
+                $v.noise().$.hsv().$.mult($v.ramp('vertical')).$.invert().out();
             `);
             expect(wgsl).toMatch(/let v\d: vec4f = video_mult\(v\d, v\d\);/);
             expect(wgsl).toMatch(/video_invert\(v\d\)/);

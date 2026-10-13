@@ -174,8 +174,8 @@ export interface VideoCore {
         input: VideoOutput,
         which?: 'r' | 'g' | 'b' | 'a' | 'luma',
     ): VideoOutput;
-    /** A ramp across the frame: `h` 0 to 1 across, `v` 0 to 1 up. */
-    ramp(axis: 'h' | 'v'): VideoOutput;
+    /** A ramp across the frame: `horizontal` 0 to 1 across, `vertical` 0 to 1 up. */
+    ramp(axis: 'horizontal' | 'vertical'): VideoOutput;
 }
 
 export interface VideoMediaConfig {

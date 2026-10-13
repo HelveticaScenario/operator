@@ -17,8 +17,8 @@ import type {
 export function generatorMethods(core: VideoCore) {
     /** The `x` and `y` of `config`, or the ramps across and up the frame. */
     const position = (config: VideoPositionConfig | undefined) => ({
-        x: config?.x ?? core.ramp('h'),
-        y: config?.y ?? core.ramp('v'),
+        x: config?.x ?? core.ramp('horizontal'),
+        y: config?.y ?? core.ramp('vertical'),
     });
     /** The `params` of a node, holding `name` when the config chose one. */
     const option = (name: string, value: string | undefined) =>
@@ -26,12 +26,18 @@ export function generatorMethods(core: VideoCore) {
 
     return {
         /**
-         * Scan ramp over the frame, optionally zoomed, rotated and shifted. `h` and
-         * `v` run 0 to 1 across and up, `d` along the diagonal, `r` is the
-         * distance from the center and `a` the angle around it.
+         * Scan ramp over the frame, optionally zoomed, rotated and shifted.
+         * `horizontal` and `vertical` run 0 to 1 across and up, `diagonal`
+         * along the diagonal, `radial` is the distance from the center and
+         * `angular` the angle around it.
          */
         ramp: (
-            axis: 'h' | 'v' | 'd' | 'r' | 'a' = 'h',
+            axis:
+                | 'horizontal'
+                | 'vertical'
+                | 'diagonal'
+                | 'radial'
+                | 'angular' = 'horizontal',
             config?: VideoRampConfig,
         ): VideoOutput =>
             core.addNode(
@@ -57,7 +63,7 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'osc',
                 core.values('$v.osc', {
-                    input: config?.input ?? core.ramp('h'),
+                    input: config?.input ?? core.ramp('horizontal'),
                     freq,
                     phase,
                 }),

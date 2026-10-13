@@ -209,7 +209,7 @@ export class VideoGraphBuilder implements VideoCore {
      */
     fromAudio = (
         signal: ModuleOutput | BaseCollection<ModuleOutput>,
-        position: VideoSource = this.ramp('h'),
+        position: VideoSource = this.ramp('horizontal'),
         config?: VideoAudioConfig,
     ): VideoOutput => {
         const played = isPatternValue(signal)

@@ -159,7 +159,7 @@ describe('$v inputs from the audio graph', () => {
 
         it('plays a pattern given to a chained method or a config field', () => {
             const { video } = exec(`
-                $v.ramp('h', { zoom: $p('1 2') }).$.hsv($p('0 1')).out();
+                $v.ramp('horizontal', { zoom: $p('1 2') }).$.hsv($p('0 1')).out();
             `);
             expect(video!.uniforms).toHaveLength(2);
         });
@@ -208,7 +208,7 @@ describe('$v inputs from the audio graph', () => {
             const { video, patch } = exec(`
                 const lfo = $sine('2hz');
                 const a = $v.fromAudio(lfo);
-                const b = $v.fromAudio(lfo, $v.ramp('v'));
+                const b = $v.fromAudio(lfo, $v.ramp('vertical'));
                 $v.out($v.colorize(a, b, lfo));
             `);
             expect(video!.histories).toHaveLength(1);
@@ -284,7 +284,7 @@ describe('$v inputs from the audio graph', () => {
         it('numbers its preview slots among the editor previews', () => {
             const { video, videoPreviews } = exec(`
                 $v.preview($v.ramp());
-                $v.toCV($v.ramp('v'));
+                $v.toCV($v.ramp('vertical'));
                 $v.out($v.preview($v.hsv(0.5), { view: 'vectorscope' }));
             `);
             expect(videoPreviews.map((p) => p.index)).toEqual([0, 2]);

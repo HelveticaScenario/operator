@@ -8,9 +8,9 @@ describe('$v in the DSL executor', () => {
 
     it('compiles the graph reachable from $v.out', () => {
         const { video } = exec(`
-            const x = $v.ramp('h');
+            const x = $v.ramp('horizontal');
             const wave = $v.osc(4, $v.time, { shape: 'triangle', input: x });
-            $v.ramp('v');
+            $v.ramp('vertical');
             $v.out($v.colorize(wave, 0.5, 1));
         `);
         expect(video).not.toBeNull();
@@ -20,8 +20,9 @@ describe('$v in the DSL executor', () => {
 
     it('draws a generator at the position of each pixel unless told otherwise', () => {
         const implicit = exec(`$v.osc(4).out();`).video!.wgsl;
-        const explicit = exec(`$v.osc(4, 0, { input: $v.ramp('h') }).out();`)
-            .video!.wgsl;
+        const explicit = exec(
+            `$v.osc(4, 0, { input: $v.ramp('horizontal') }).out();`,
+        ).video!.wgsl;
         expect(implicit).toBe(explicit);
         expect(implicit).toContain('vec4f(vec3f(uv.x), 1.0)');
     });
@@ -73,7 +74,7 @@ describe('$v in the DSL executor', () => {
 
         it('maps each channel from 0 to 1 onto min to max', () => {
             const wgsl = wgslOf(`
-                $v.out($v.hsv($v.ramp('a', { zoom: $v.time.$.osc(1).range(1, 3) })));
+                $v.out($v.hsv($v.ramp('angular', { zoom: $v.time.$.osc(1).range(1, 3) })));
             `);
             expect(wgsl).toContain('return vec4f(lo + x * (hi - lo), c.a);');
             expect(wgsl).toMatch(/video_range\(v\d+, 1\.0, 3\.0\)/);

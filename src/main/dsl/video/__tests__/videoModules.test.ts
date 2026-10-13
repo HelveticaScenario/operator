@@ -8,7 +8,7 @@ describe('$v modules', () => {
         it('combines whole signals through one helper per operation', () => {
             const wgsl = wgslOf(`
                 const c = $v.hsv($v.ramp());
-                $v.out($v.add($v.mult(c, $v.ramp('v')), $v.mult($v.ramp(), 0.5)));
+                $v.out($v.add($v.mult(c, $v.ramp('vertical')), $v.mult($v.ramp(), 0.5)));
             `);
             expect(wgsl.match(/fn video_mult\(/g)).toHaveLength(1);
             expect(wgsl).toMatch(/let v\d: vec4f = video_mult\(v\d, v\d\);/);
@@ -37,7 +37,7 @@ describe('$v modules', () => {
 
         it('reads the brightness of a signal given where a number is wanted', () => {
             const wgsl = wgslOf(
-                `$v.out($v.mix($v.ramp(), $v.ramp('v'), $v.hsv(0.3)));`,
+                `$v.out($v.mix($v.ramp(), $v.ramp('vertical'), $v.hsv(0.3)));`,
             );
             expect(wgsl).toMatch(
                 /mix\(v\d, v\d, clamp\(video_luma\(v\d\), 0\.0, 1\.0\)\)/,
@@ -66,7 +66,7 @@ describe('$v modules', () => {
 
         it('routes a transformed ramp through video_transform', () => {
             const wgsl = wgslOf(
-                `$v.out($v.colorize($v.ramp('v', { rotate: 0.1, zoom: 2 }), 0, 0));`,
+                `$v.out($v.colorize($v.ramp('vertical', { rotate: 0.1, zoom: 2 }), 0, 0));`,
             );
             expect(wgsl).toContain(
                 'video_transform(uv, 2.0, 0.1, vec2f(0.0, 0.0)).y',
@@ -75,7 +75,7 @@ describe('$v modules', () => {
 
         it('offers radial and angular ramps', () => {
             const wgsl = wgslOf(
-                `$v.out($v.colorize($v.ramp('r'), $v.ramp('a'), 0));`,
+                `$v.out($v.colorize($v.ramp('radial'), $v.ramp('angular'), 0));`,
             );
             expect(wgsl).toContain('ramp_radius(uv)');
             expect(wgsl).toContain('ramp_angle(uv)');
@@ -83,7 +83,7 @@ describe('$v modules', () => {
 
         it('declares the shared transform once when ramps and feedback both use it', () => {
             const wgsl = wgslOf(`
-                const r = $v.ramp('h', { rotate: 0.1 });
+                const r = $v.ramp('horizontal', { rotate: 0.1 });
                 $v.out($v.feedback((prev) => $v.mix($v.hsv(r), prev, 0.9), { rotate: 0.01 }));
             `);
             expect(wgsl.match(/fn video_transform/g)).toHaveLength(1);
@@ -92,7 +92,7 @@ describe('$v modules', () => {
         it('lets a slider drive a ramp transform', () => {
             const { video } = exec(`
                 const spin = $slider('Spin', 0, -0.5, 0.5);
-                $v.out($v.hsv($v.ramp('a', { rotate: spin })));
+                $v.out($v.hsv($v.ramp('angular', { rotate: spin })));
             `);
             expect(video!.uniforms).toHaveLength(1);
         });
@@ -100,7 +100,7 @@ describe('$v modules', () => {
         it('compiles min, max, wrap and fold', () => {
             const wgsl = wgslOf(`
                 const x = $v.ramp();
-                const y = $v.ramp('v');
+                const y = $v.ramp('vertical');
                 $v.out($v.colorize(
                     $v.max($v.wrap(x, 3), $v.fold(y, 4)),
                     $v.min(x, y),
@@ -124,7 +124,9 @@ describe('$v modules', () => {
         it('rejects an unknown ramp axis', () => {
             expect(() =>
                 exec(`$v.out($v.colorize($v.ramp('q'), 0, 0));`),
-            ).toThrow(/param "axis" must be one of h, v, d, r, a/);
+            ).toThrow(
+                /param "axis" must be one of horizontal, vertical, diagonal, radial, angular/,
+            );
         });
     });
 

@@ -67,7 +67,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'axis',
                 description:
-                    "`'h'` horizontal 0..1 (default), `'v'` vertical 0..1, `'d'` diagonal, `'r'` distance from the center (0.5 at the top and bottom edges), `'a'` angle around the center, 0..1 once around",
+                    "`'horizontal'` 0..1 across (default), `'vertical'` 0..1 up, `'diagonal'` along the diagonal, `'radial'` distance from the center (0.5 at the top and bottom edges), `'angular'` angle around the center, 0..1 once around",
             },
             {
                 name: 'config.zoom',
@@ -91,13 +91,13 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.colorize($v.ramp(), $v.ramp('v'), 0.5))",
-            "$v.out($v.hsv($v.osc(6, $v.time, { input: $v.ramp('r') })))",
-            "$v.out($v.hsv($v.ramp('a', { rotate: $v.time.$.osc(0.1) })))",
-            "$v.out($v.colorize($v.osc(8, 0, { input: $v.ramp('h', { rotate: 0.125, zoom: 2 }) }), 0.2, 0.5))",
+            "$v.out($v.colorize($v.ramp(), $v.ramp('vertical'), 0.5))",
+            "$v.out($v.hsv($v.osc(6, $v.time, { input: $v.ramp('radial') })))",
+            "$v.out($v.hsv($v.ramp('angular', { rotate: $v.time.$.osc(0.1) })))",
+            "$v.out($v.colorize($v.osc(8, 0, { input: $v.ramp('horizontal', { rotate: 0.125, zoom: 2 }) }), 0.2, 0.5))",
         ],
         declarations: [
-            "ramp(\n    axis?: 'h' | 'v' | 'd' | 'r' | 'a',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoSignal;",
+            "ramp(\n    axis?: 'horizontal' | 'vertical' | 'diagonal' | 'radial' | 'angular',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoSignal;",
         ],
     },
     {
@@ -125,7 +125,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.colorize($v.osc(8), 0, 0))',
-            "$v.out($v.colorize($v.osc(3, $v.time, { shape: 'saw' }), $v.osc(5, 0, { input: $v.ramp('v') }), 0.3))",
+            "$v.out($v.colorize($v.osc(3, $v.time, { shape: 'saw' }), $v.osc(5, 0, { input: $v.ramp('vertical') }), 0.3))",
         ],
         declarations: [
             "osc(\n    freq?: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square'; input?: VideoValue },\n): VideoSignal;",
@@ -159,8 +159,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.35, 1, $v.invert($v.comparator($v.diff($v.ramp('v'), $v.add(0.5, $v.mult($v.fromAudio($sine('110hz')), 0.08))), 0.01, 0.01))))",
-            "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('r'), { samples: 1024 }), 1, 1))",
+            "$v.out($v.hsv(0.35, 1, $v.invert($v.comparator($v.diff($v.ramp('vertical'), $v.add(0.5, $v.mult($v.fromAudio($sine('110hz')), 0.08))), 0.01, 0.01))))",
+            "$v.out($v.hsv($v.fromAudio($saw('55hz'), $v.ramp('radial'), { samples: 1024 }), 1, 1))",
         ],
         declarations: [
             'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange | PatternSource, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoSignal;',
@@ -202,7 +202,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.out($v.hsv($v.noise(6, $v.mult($v.time, 0.5))))',
             "$v.out($v.noise(3, $v.mult($v.time, 0.2), { type: 'fbm' }))",
             "$v.out($v.hsv(0.08, 0.6, $v.noise(4, $v.mult($v.time, 0.1), { type: 'ridged' })))",
-            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise(1, $v.time, { x: $v.mult($v.ramp('r'), 10), y: $v.mult($v.ramp('a'), 6) }), 0.5, 0.05)))",
+            "$v.out($v.hsv(0.6, 1, $v.comparator($v.noise(1, $v.time, { x: $v.mult($v.ramp('radial'), 10), y: $v.mult($v.ramp('angular'), 6) }), 0.5, 0.05)))",
         ],
         declarations: [
             "noise(\n    scale?: VideoValue,\n    z?: VideoValue,\n    config?: { type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged'; x?: VideoValue; y?: VideoValue },\n): VideoSignal;",
@@ -235,7 +235,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.hsv(0.55, 0.8, $v.voronoi(1, $v.mult($v.time, 2), { x: $v.mult($v.ramp(), 8), y: $v.mult($v.ramp('v'), 5) })))",
+            "$v.out($v.hsv(0.55, 0.8, $v.voronoi(1, $v.mult($v.time, 2), { x: $v.mult($v.ramp(), 8), y: $v.mult($v.ramp('vertical'), 5) })))",
             '$v.voronoi(6, $v.time).$.invert().$.tint(0.1).out()',
         ],
         declarations: [
@@ -525,7 +525,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'A color from red, green, blue and alpha levels, each clipped to 0..1.',
         params: [{ name: 'a', description: 'Alpha (default 1, opaque)' }],
-        examples: ["$v.out($v.colorize($v.ramp(), $v.ramp('v'), 1))"],
+        examples: ["$v.out($v.colorize($v.ramp(), $v.ramp('vertical'), 1))"],
         declarations: [
             'colorize(r: VideoValue, g: VideoValue, b: VideoValue, a?: VideoValue): VideoSignal;',
         ],
@@ -538,7 +538,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         params: [],
         examples: [
             '$v.out($v.hsv($v.ramp(), 1, 1))',
-            "$v.out($v.hsv($v.osc(2, $v.time), 0.8, $v.ramp('v')))",
+            "$v.out($v.hsv($v.osc(2, $v.time), 0.8, $v.ramp('vertical')))",
         ],
         declarations: [
             'hsv(h: VideoValue, s?: VideoValue, v?: VideoValue): VideoSignal;',
@@ -576,7 +576,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             'Sum of each channel, clipped to 0..1. The alpha is the larger of the two.',
         params: [],
         examples: [
-            "$v.out($v.hsv($v.add($v.ramp(), $v.osc(3, 0, { input: $v.ramp('v') }))))",
+            "$v.out($v.hsv($v.add($v.ramp(), $v.osc(3, 0, { input: $v.ramp('vertical') }))))",
         ],
         declarations: ['add(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
@@ -586,7 +586,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Product of each channel, alpha included. Multiplying by a gray darkens.',
         params: [],
-        examples: ["$v.out($v.mult($v.hsv($v.ramp()), $v.ramp('v')))"],
+        examples: ["$v.out($v.mult($v.hsv($v.ramp()), $v.ramp('vertical')))"],
         declarations: ['mult(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
@@ -595,7 +595,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Absolute difference of each channel. The alpha is the larger of the two.',
         params: [],
-        examples: ["$v.out($v.hsv($v.diff($v.ramp(), $v.ramp('v'))))"],
+        examples: ["$v.out($v.hsv($v.diff($v.ramp(), $v.ramp('vertical'))))"],
         declarations: ['diff(a: VideoValue, b: VideoValue): VideoSignal;'],
     },
     {
@@ -639,7 +639,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('v')), $v.time.$.osc(0.25)))",
+            "$v.out($v.mix($v.hsv($v.ramp()), $v.hsv($v.ramp('vertical')), $v.time.$.osc(0.25)))",
         ],
         declarations: [
             'mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoSignal;',
@@ -655,7 +655,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'max', description: 'The value 1 becomes (default 1)' },
         ],
         examples: [
-            "$v.out($v.hsv($v.ramp('a', { zoom: $v.range($v.time.$.osc(0.1), 1, 3) })))",
+            "$v.out($v.hsv($v.ramp('angular', { zoom: $v.range($v.time.$.osc(0.1), 1, 3) })))",
             '$v.out($v.hsv($v.ramp().range(0, 0.5)))',
         ],
         declarations: [
@@ -854,8 +854,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.hsv($v.preview($v.osc(4))))',
-            "$v.out($v.preview($v.hsv($v.ramp('r')), { view: 'waveform' }))",
-            "$v.out($v.preview($v.hsv($v.ramp('a')), { view: 'vectorscope' }))",
+            "$v.out($v.preview($v.hsv($v.ramp('radial')), { view: 'waveform' }))",
+            "$v.out($v.preview($v.hsv($v.ramp('angular')), { view: 'vectorscope' }))",
         ],
         declarations: [
             "preview(signal: VideoSignal, config?: { view?: 'image' | 'waveform' | 'vectorscope' }): VideoSignal;",
@@ -970,7 +970,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.hsv($v.modulate($v.osc(10), $v.noise(3, $v.time), 0.3)))',
-            "$v.out($v.modulate($v.hsv($v.ramp('r')), $v.hsv($v.noise(4, 0)), 0.2))",
+            "$v.out($v.modulate($v.hsv($v.ramp('radial')), $v.hsv($v.noise(4, 0)), 0.2))",
         ],
         declarations: [
             'modulate(input: VideoSignal, modulator: VideoSignal, amount?: VideoValue): VideoSignal;',
@@ -998,7 +998,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateScale($v.hsv($v.osc(10, 0, { input: $v.ramp('r') })), $v.noise(3, $v.time), 1.5, 1))",
+            "$v.out($v.modulateScale($v.hsv($v.osc(10, 0, { input: $v.ramp('radial') })), $v.noise(3, $v.time), 1.5, 1))",
         ],
         declarations: [
             'modulateScale(input: VideoSignal, modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
@@ -1024,7 +1024,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateRotate($v.hsv($v.osc(8)), $v.osc(3, $v.time, { input: $v.ramp('r') }), 0.5))",
+            "$v.out($v.modulateRotate($v.hsv($v.osc(8)), $v.osc(3, $v.time, { input: $v.ramp('radial') }), 0.5))",
         ],
         declarations: [
             'modulateRotate(input: VideoSignal, modulator: VideoSignal, multiple?: VideoValue, offset?: VideoValue): VideoSignal;',
@@ -1069,7 +1069,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'sides', description: 'Number of wedges (default 4)' },
         ],
         examples: [
-            "$v.out($v.modulateKaleid($v.hsv($v.osc(6, $v.time)), $v.ramp('r'), 6))",
+            "$v.out($v.modulateKaleid($v.hsv($v.osc(6, $v.time)), $v.ramp('radial'), 6))",
         ],
         declarations: [
             'modulateKaleid(input: VideoSignal, modulator: VideoSignal, sides?: VideoValue): VideoSignal;',
@@ -1198,7 +1198,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateScrollX($v.hsv($v.osc(8)), $v.ramp('v'), 0.5, 0.1))",
+            "$v.out($v.modulateScrollX($v.hsv($v.osc(8)), $v.ramp('vertical'), 0.5, 0.1))",
         ],
         declarations: [
             'modulateScrollX(input: VideoSignal, modulator: VideoSignal, scroll?: VideoValue, speed?: VideoValue): VideoSignal;',
@@ -1226,7 +1226,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.modulateScrollY($v.hsv($v.osc(8, 0, { input: $v.ramp('v') })), $v.ramp(), 0.5, 0.1))",
+            "$v.out($v.modulateScrollY($v.hsv($v.osc(8, 0, { input: $v.ramp('vertical') })), $v.ramp(), 0.5, 0.1))",
         ],
         declarations: [
             'modulateScrollY(input: VideoSignal, modulator: VideoSignal, scroll?: VideoValue, speed?: VideoValue): VideoSignal;',
@@ -1303,7 +1303,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             { name: 'amount', description: 'Contrast factor (default 1.6)' },
         ],
         examples: [
-            "$v.out($v.contrast($v.hsv($v.ramp(), 0.6, $v.ramp('v')), 3))",
+            "$v.out($v.contrast($v.hsv($v.ramp(), 0.6, $v.ramp('vertical')), 3))",
         ],
         declarations: [
             'contrast(input: VideoValue, amount?: VideoValue): VideoSignal;',
@@ -1393,7 +1393,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'pattern',
                 description:
-                    "Three of `r`, `g` and `b`, such as `'rrr'` or `'gbr'`",
+                    "Three of `r`, `g`, `b` and `a`, such as `'rrr'`, `'gbr'` or `'aaa'`",
             },
         ],
         examples: [
@@ -1443,7 +1443,7 @@ export const VIDEO_CHAIN_EXAMPLES: string[] = [
     '$v.osc(10).$.modulate($v.noise(3, $v.time), 0.3).$.kaleid(6).$.hsv().out()',
     '$v.noise(4, $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(0.8).preview().out()',
     '$v.osc(8).$.hsv().$m.kaleid(0.5, 5).out()',
-    "$v.ramp().$.osc(8).$.mult($v.ramp('v').$.osc(4)).$.hsv().out()",
+    "$v.ramp().$.osc(8).$.mult($v.ramp('vertical').$.osc(4)).$.hsv().out()",
     '$v.osc(8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out()',
     '$v.osc(8).$.hsv().pipeMix((c) => c.$.invert(), $v.time.$.osc(0.2)).out()',
 ];

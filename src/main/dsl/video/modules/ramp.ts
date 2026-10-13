@@ -5,9 +5,9 @@ const IDENTITY = ['1.0', '0.0', '0.0', '0.0'];
 
 /**
  * Scan ramp over the frame, optionally zoomed, rotated and shifted:
- * `h` and `v` run 0 to 1 across and up, `d` along the diagonal, `r` is the
- * distance from the center (0.5 at the top and bottom edges), and `a` is the
- * angle around the center from 0 to 1.
+ * `horizontal` and `vertical` run 0 to 1 across and up, `diagonal` along the
+ * diagonal, `radial` is the distance from the center (0.5 at the top and
+ * bottom edges), and `angular` is the angle around the center from 0 to 1.
  */
 export const ramp: VideoModuleDef = {
     inputs: {
@@ -18,7 +18,10 @@ export const ramp: VideoModuleDef = {
     },
     output: 'gray',
     params: {
-        axis: { values: ['h', 'v', 'd', 'r', 'a'], default: 'h' },
+        axis: {
+            values: ['horizontal', 'vertical', 'diagonal', 'radial', 'angular'],
+            default: 'horizontal',
+        },
     },
     helpers: [
         TRANSFORM_HELPER,
@@ -38,11 +41,11 @@ export const ramp: VideoModuleDef = {
             ? 'uv'
             : `video_transform(uv, ${zoom}, ${rotate}, vec2f(${shiftX}, ${shiftY}))`;
         return {
-            h: `${q}.x`,
-            v: `${q}.y`,
-            d: `dot(${q}, vec2f(0.5))`,
-            r: `ramp_radius(${q})`,
-            a: `ramp_angle(${q})`,
+            horizontal: `${q}.x`,
+            vertical: `${q}.y`,
+            diagonal: `dot(${q}, vec2f(0.5))`,
+            radial: `ramp_radius(${q})`,
+            angular: `ramp_angle(${q})`,
         }[axis]!;
     },
 };
