@@ -172,6 +172,41 @@ describe('serving media', () => {
     it('does not find a file that is missing', async () => {
         expect((await get('clips/none.mp4')).status).toBe(404);
     });
+
+    it('serves only media files', async () => {
+        fs.writeFileSync(path.join(root, 'notes.txt'), 'x');
+        expect((await get('notes.txt')).status).toBe(404);
+        expect(mediaFileExists(root, 'notes.txt')).toBe(false);
+    });
+
+    it('does not find a folder, whatever its name', async () => {
+        fs.mkdirSync(path.join(root, 'folder.mp4'));
+        expect((await get('folder.mp4')).status).toBe(404);
+        expect(mediaFileExists(root, 'folder.mp4')).toBe(false);
+    });
+
+    it('follows a link inside the workspace', async () => {
+        fs.symlinkSync(
+            path.join(root, 'clips', 'a.mp4'),
+            path.join(root, 'inside.mp4'),
+        );
+        const response = await get('inside.mp4');
+        expect(response.status).toBe(200);
+        expect(await response.text()).toBe('0123456789');
+    });
+
+    it('does not follow a link out of the workspace', async () => {
+        const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'media-out-'));
+        fs.writeFileSync(path.join(outside, 'secret.mp4'), 'secret');
+        fs.symlinkSync(
+            path.join(outside, 'secret.mp4'),
+            path.join(root, 'escape.mp4'),
+        );
+        fs.symlinkSync(outside, path.join(root, 'escaped'));
+        expect((await get('escape.mp4')).status).toBe(404);
+        expect((await get('escaped/secret.mp4')).status).toBe(404);
+        expect(mediaFileExists(root, 'escape.mp4')).toBe(false);
+    });
 });
 
 describe('serving network media', () => {
