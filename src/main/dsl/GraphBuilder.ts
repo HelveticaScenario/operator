@@ -10,6 +10,11 @@ import type {
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
+    EQ_MODULE_TYPE,
+    EQ_SPECTRUM_MS_PER_FRAME,
+    type EqPanelDef,
+} from '../../shared/dsl/eqPanelTypes';
+import {
     DEFAULT_OUTPUT_GAIN,
     GAIN_CURVE_EXP,
     UNITY_OUT_GAIN,
@@ -38,6 +43,8 @@ export const PORT_MAX_CHANNELS = 64;
  */
 export type ScopeWithLocation = Scope & {
     sourceLocation?: { line: number; column: number };
+    /** Feeds an editor panel, never drawn as a scope view of its own. */
+    headless?: boolean;
 };
 
 /**
@@ -835,6 +842,8 @@ export class GraphBuilder {
         ) => ModuleOutput | BaseCollection<ModuleOutput>
     >();
     private scopes: ScopeWithLocation[] = [];
+    /** `ui: true` EQ panels, collected by `toPatch`. */
+    private eqPanels: EqPanelDef[] = [];
     /**
      * Latest call to `$scopeXY` — last-call-wins (only one global XY scope
      * at a time). Resolved during `toPatch` like deferred outputs in scopes.
@@ -1309,8 +1318,7 @@ export class GraphBuilder {
                         group.gain === undefined ||
                         typeof group.gain === 'number';
                     const gainValue = gainControllable
-                        ? ((group.gain as number | undefined) ??
-                          UNITY_OUT_GAIN)
+                        ? ((group.gain as number | undefined) ?? UNITY_OUT_GAIN)
                         : null;
                     const gainSource = gainControllable
                         ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
@@ -1339,10 +1347,7 @@ export class GraphBuilder {
                                   )[0],
                               ];
 
-                    const curvedAmp = curveFactory(
-                        gainSource,
-                        GAIN_CURVE_EXP,
-                    );
+                    const curvedAmp = curveFactory(gainSource, GAIN_CURVE_EXP);
                     let outputSignals: ModuleOutput[] = [
                         ...(scaleAndShiftFactory(
                             mixSignals,
@@ -1464,8 +1469,7 @@ export class GraphBuilder {
             // $setOutputGain. A signal-valued output gain renders as a
             // locked, live-tracking fader.
             this.processingEndOfChain = true;
-            const masterGainControllable =
-                typeof this.outputGain === 'number';
+            const masterGainControllable = typeof this.outputGain === 'number';
             const masterGainValue = masterGainControllable
                 ? (this.outputGain as number)
                 : null;
@@ -1474,9 +1478,8 @@ export class GraphBuilder {
                       id: '__vuGain_main',
                   }) as ModuleOutput)
                 : this.outputGain;
-            const gainedMix = this.endOfChainCb(finalMix).gain(
-                masterGainSignal,
-            );
+            const gainedMix =
+                this.endOfChainCb(finalMix).gain(masterGainSignal);
 
             // Create root signal module with the final mix
             signalFactory(gainedMix, { id: 'ROOT_OUTPUT' });
@@ -1524,6 +1527,9 @@ export class GraphBuilder {
             rootClock.params.tempoSet = this.tempoExplicitlySet;
         }
 
+        const { eqPanels, eqScopes } = this.collectEqPanels();
+        this.eqPanels = eqPanels;
+
         // Build a map of deferred output strings to their resolved output strings
         const deferredStringMap = new Map<string, string | null>();
         for (const deferred of this.deferredOutputs.values()) {
@@ -1566,15 +1572,18 @@ export class GraphBuilder {
                     ),
                 };
             }),
-            scopes: this.scopes.map(
-                (scope) =>
-                    ({
-                        ...scope,
-                        channels: scope.channels.map((ch) =>
-                            this.resolveScopeChannel(ch),
-                        ),
-                    }) as ScopeWithLocation,
-            ),
+            scopes: [
+                ...this.scopes.map(
+                    (scope) =>
+                        ({
+                            ...scope,
+                            channels: scope.channels.map((ch) =>
+                                this.resolveScopeChannel(ch),
+                            ),
+                        }) as ScopeWithLocation,
+                ),
+                ...eqScopes,
+            ],
             scopeXy: this.resolveScopeXY(),
             // Napi maps both null and undefined to None, so the renderer's
             // null-based VuMeterDef satisfies VuMeterSpec's optional fields.
@@ -1591,11 +1600,87 @@ export class GraphBuilder {
     }
 
     /**
+     * One panel per `$eq` with `ui: true`, plus the headless scopes
+     * feeding its spectrum. EQs sharing a call site (a loop or helper) keep
+     * their zone placement but carry no editable sourceLocation.
+     */
+    private collectEqPanels(): {
+        eqPanels: EqPanelDef[];
+        eqScopes: ScopeWithLocation[];
+    } {
+        const eqModules = [...this.modules.values()].filter(
+            (m) => m.moduleType === EQ_MODULE_TYPE && m.params.ui === true,
+        );
+        const siteKey = (id: string) => {
+            const loc = this.sourceLocationMap.get(id);
+            return loc ? `${loc.line}:${loc.column}` : null;
+        };
+        const perSite = new Map<string, number>();
+        for (const m of eqModules) {
+            const key = siteKey(m.id);
+            if (key) {
+                perSite.set(key, (perSite.get(key) ?? 0) + 1);
+            }
+        }
+
+        const eqPanels: EqPanelDef[] = [];
+        const eqScopes: ScopeWithLocation[] = [];
+        for (const m of eqModules) {
+            const loc = this.sourceLocationMap.get(m.id);
+            const zoneLocation = loc
+                ? { column: loc.column, line: loc.line }
+                : undefined;
+            const sections = m.params.sections;
+            const lists =
+                Array.isArray(sections) && Array.isArray(sections[0])
+                    ? sections.length
+                    : 1;
+            const spectrum = {
+                channels: Array.from({ length: lists }, (_, i) => i),
+                moduleId: m.id,
+                msPerFrame: EQ_SPECTRUM_MS_PER_FRAME,
+                portName: 'output',
+            };
+            eqPanels.push({
+                key: `eq:${m.id}`,
+                moduleId: m.id,
+                sourceLocation:
+                    zoneLocation && perSite.get(siteKey(m.id)!) === 1
+                        ? zoneLocation
+                        : undefined,
+                spectrum,
+                zoneLocation,
+            });
+            for (const channel of spectrum.channels) {
+                eqScopes.push({
+                    channels: [
+                        {
+                            channel,
+                            moduleId: m.id,
+                            portName: spectrum.portName,
+                        },
+                    ],
+                    headless: true,
+                    msPerFrame: spectrum.msPerFrame,
+                    range: [-5, 5],
+                    triggerThreshold: undefined,
+                });
+            }
+        }
+        return { eqPanels, eqScopes };
+    }
+
+    getEqPanels(): EqPanelDef[] {
+        return this.eqPanels;
+    }
+
+    /**
      * Reset the builder state
      */
     reset(): void {
         this.modules.clear();
         this.scopes = [];
+        this.eqPanels = [];
         this.scopeXY = null;
         this.counters.clear();
         this.outGroups.clear();

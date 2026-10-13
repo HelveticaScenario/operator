@@ -132,7 +132,8 @@ export function registerKeybindingsCompletionProvider(monaco: Monaco): {
                     startLineNumber: position.lineNumber,
                     endLineNumber: position.lineNumber,
                     startColumn,
-                    endColumn: position.column + (trailing ? trailing[0].length : 0),
+                    endColumn:
+                        position.column + (trailing ? trailing[0].length : 0),
                 },
             };
 

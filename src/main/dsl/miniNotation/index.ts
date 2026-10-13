@@ -451,7 +451,10 @@ export interface TimeModifiable {
     fast(factor: number | string): FastPattern & TimeModifiable;
     slow(factor: number | string): SlowPattern & TimeModifiable;
     struct(boolPattern: string): StructPattern & TimeModifiable;
-    beat(t: number | string, div: number | string): BeatPattern & TimeModifiable;
+    beat(
+        t: number | string,
+        div: number | string,
+    ): BeatPattern & TimeModifiable;
 }
 
 /**
@@ -666,7 +669,9 @@ function makeBeat(
     const loc = captureSourceLocation();
     const argument_spans = [...innerSpans];
     if (typeof t === 'string') {
-        argument_spans.push(lookupArgumentSpan(loc, 't') ?? { start: 0, end: 0 });
+        argument_spans.push(
+            lookupArgumentSpan(loc, 't') ?? { start: 0, end: 0 },
+        );
     }
     if (typeof div === 'string') {
         argument_spans.push(

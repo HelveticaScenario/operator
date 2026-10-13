@@ -144,7 +144,14 @@ export function addChoices(
             return [
                 add(
                     'note slider',
-                    unitSlider(q(label(name)), 'note', q(note), volts, spec, quote),
+                    unitSlider(
+                        q(label(name)),
+                        'note',
+                        q(note),
+                        volts,
+                        spec,
+                        quote,
+                    ),
                 ),
             ];
         }
