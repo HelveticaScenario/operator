@@ -26,7 +26,7 @@ function map3(
     c: Value,
     f: (x: number, y: number, z: number) => number,
 ): Value {
-    const n = [a, b, c].reduce(
+    const n = [a, b, c].reduce<number>(
         (m, v) => (typeof v === 'number' ? m : Math.max(m, v.length)),
         0,
     );
