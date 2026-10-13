@@ -63,11 +63,11 @@ export function mathMethods(core: VideoCore) {
         layer: (base: VideoSource, top: VideoSource): VideoOutput =>
             node('layer', { a: base, b: top }),
 
-        /** `input` seen through `mask`: its color and alpha scaled by the mask's brightness. */
+        /** `input` seen through `mask`: its alpha scaled by the mask's brightness. */
         mask: (input: VideoSource, mask: VideoSource): VideoOutput =>
             node('mask', { input, mask }),
 
-        /** Keys `input` by its own brightness, giving it an alpha. */
+        /** Keys `input` by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`. */
         luma: (
             input: VideoSource,
             threshold: VideoSource = 0.5,

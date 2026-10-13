@@ -101,22 +101,21 @@ export const layer = binary(
     'vec4f(mix(a.rgb, b.rgb, clamp(b.a, 0.0, 1.0)), clamp(a.a + b.a, 0.0, 1.0))',
 );
 
-/** `input` seen through `mask`: its color and alpha scaled by the mask's luma. */
+/** `input` seen through `mask`: its alpha scaled by the mask's luma. */
 export const mask: VideoModuleDef = {
     inputs: { input: 'rgba', mask: 'number' },
     output: 'rgba',
     helpers: [
         `fn video_mask(c: vec4f, m: f32) -> vec4f {
-    let a = clamp(m, 0.0, 1.0);
-    return vec4f(c.rgb * a, c.a * a);
+    return vec4f(c.rgb, c.a * clamp(m, 0.0, 1.0));
 }`,
     ],
     emit: ({ input, mask: m }) => `video_mask(${input}, ${m})`,
 };
 
 /**
- * Keys `input` by its own brightness: alpha rises from 0 to 1 as the luma
- * crosses `threshold`, over a band `tolerance` wide on either side.
+ * Keys `input` by its own brightness: alpha rises from 0 at `threshold -
+ * tolerance` to 1 at `threshold`, so a threshold of 1 keeps only white.
  */
 export const luma: VideoModuleDef = {
     inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
@@ -124,9 +123,8 @@ export const luma: VideoModuleDef = {
     helpers: [
         LUMA_HELPER,
         `fn video_luma_key(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
-    let band = max(tolerance, 0.00001);
-    let a = smoothstep(threshold - band, threshold + band, video_luma(c));
-    return vec4f(c.rgb * a, a);
+    let a = smoothstep(threshold - max(tolerance, 0.00001), threshold, video_luma(c));
+    return vec4f(c.rgb, c.a * a);
 }`,
     ],
     emit: ({ input, threshold, tolerance }) =>

@@ -761,7 +761,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mask',
         group: 'Compositing',
         description:
-            "`input` seen through `mask`, as Hydra's `mask` does: its color and alpha are scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.",
+            "`input` seen through `mask`, like Hydra's `mask`: its alpha is scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.",
         params: [
             { name: 'mask', description: 'Where `input` shows, by brightness' },
         ],
@@ -776,16 +776,17 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'luma',
         group: 'Compositing',
         description:
-            "Keys `input` by its own brightness, as Hydra's `luma` does: the alpha rises from 0 to 1 as the brightness crosses `threshold`, so dark parts turn transparent. Lay the result over another signal with `layer`.",
+            "Keys `input` by its own brightness, like Hydra's `luma`: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. Lay the result over another signal with `layer`.",
         params: [
             {
                 name: 'threshold',
-                description: 'Brightness where the alpha is 0.5 (default 0.5)',
+                description:
+                    'Brightness from which the signal is fully opaque (default 0.5)',
             },
             {
                 name: 'tolerance',
                 description:
-                    'Half the width of the band over which the alpha rises (default 0.1)',
+                    'Width of the band below `threshold` over which the alpha rises from 0 (default 0.1)',
             },
         ],
         examples: [
@@ -1652,13 +1653,13 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'mask',
         description:
-            'This seen through `mask`: its color and alpha scaled by the brightness of `mask`.',
+            'This seen through `mask`: its alpha scaled by the brightness of `mask`.',
         declarations: ['mask(mask: VideoValue): VideoSignal;'],
     },
     {
         name: 'luma',
         description:
-            'Keys this by its own brightness, so dark parts turn transparent.',
+            'Keys this by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`.',
         declarations: [
             'luma(threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
         ],

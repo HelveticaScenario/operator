@@ -37,16 +37,21 @@ describe('$v alpha and compositing', () => {
         );
     });
 
-    it('masks a signal by the brightness of another', () => {
+    it('masks a signal by the brightness of another, keeping its color', () => {
         const wgsl = wgslOf(`$v.osc(8).$.hsv().$.mask($v.shape(0.3)).out();`);
-        expect(wgsl).toContain('return vec4f(c.rgb * a, c.a * a);');
+        expect(wgsl).toContain(
+            'return vec4f(c.rgb, c.a * clamp(m, 0.0, 1.0));',
+        );
         expect(wgsl).toMatch(/video_mask\(v\d+, video_luma\(v\d+\)\)/);
     });
 
-    it('keys a signal by its own brightness', () => {
+    it('keys a signal by its own brightness, opaque from the threshold up', () => {
         const wgsl = wgslOf(`$v.noise().$.luma(0.4, 0.05).out();`);
         expect(wgsl).toMatch(/video_luma_key\(v\d+, 0\.4, 0\.05\)/);
-        expect(wgsl).toContain('return vec4f(c.rgb * a, a);');
+        expect(wgsl).toContain(
+            'smoothstep(threshold - max(tolerance, 0.00001), threshold, video_luma(c))',
+        );
+        expect(wgsl).toContain('return vec4f(c.rgb, c.a * a);');
     });
 
     it('stores the alpha in a frame buffer', () => {
