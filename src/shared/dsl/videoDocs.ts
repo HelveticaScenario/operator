@@ -38,7 +38,7 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Ctrl+Shift+V) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
+        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Control+Shift+V on macOS, Ctrl+Shift+Y elsewhere) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
     examples: [
         '$v.osc(10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
@@ -246,7 +246,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'polygon',
         group: 'Generators',
         description:
-            'A gray mask: 1 inside a regular polygon centered on the frame with one point up, 0 outside, with a soft edge. With `config.mapX` and `config.mapY` it is centered where they are both 0.5, so adding to a ramp moves it.',
+            'A gray mask: 1 inside a regular polygon centered on the frame, 0 outside, with a soft edge. With `config.mapX` and `config.mapY` it is centered where they are both 0.5, so adding to a ramp moves it. The bottom is always a flat side, so a polygon with an odd number of sides has a point up and one with an even number a flat side up.',
         params: [
             {
                 name: 'sides',
@@ -299,7 +299,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$v.out($v.hsv($v.blur($v.polygon(5, 0.2, 0.001), 0.04)))',
+            '$v.out($v.hsv(0.6, 1, $v.blur($v.polygon(5, 0.2, 0.001), 0.04)))',
             '$v.polygon(6, 0.18, 0.002).$.tint(0.12).pipe((c) => c.$.add(c.$.blur(0.04).$.mult(2))).out()',
         ],
         declarations: [
@@ -362,7 +362,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
         ],
         examples: [
@@ -378,7 +378,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'video',
         group: 'Generators',
         description:
-            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop. The picture is muted; the video's sound is its `.audio` property, an audio signal you route like any other, such as `$v.video('clips/loop.mp4').audio.out()`. The sound plays at the same `speed` between the same `loop` points, starting when the patch starts, and has no sound at speed 0. A file without sound has no `.audio`, and reading it is an error. Sound is read from AAC, MP3, Vorbis, FLAC and PCM tracks of up to ten minutes (Opus, common in `.webm`, is not read). For a video at a network address, use `$v.stream`, which has no sound. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
+            "A recording from the workspace folder (`.mp4`, `.webm`, `.mov`, `.m4v` or `.ogv`) as a color, played in a loop. The picture is muted; the video's sound is its `.audio` property, an audio signal you route like any other, such as `$v.video('clips/loop.mp4').audio.out()`. The sound plays at the same `speed` between the same `loop` points, starting when the patch starts, and has no sound at speed 0. Reading `.audio` of a file without sound is an error. Sound is read from AAC, ALAC, FLAC, MP3, Vorbis and PCM tracks of up to ten minutes; the sound of a file with Opus audio, as most `.webm` files have, does not play. For a video at a network address, use `$v.stream`, which has no sound. Like `$v.image`, it is read at the coordinate being drawn. It plays while the patch plays, holds its frame when the patch is stopped, and starts over from its loop start when the patch starts. Changing `speed` or `loop` and running the patch again keeps the video playing from where it is. Which formats play depends on the codecs the app's browser engine includes (H.264, HEVC, VP8/VP9 and AV1); `speed` and `loop` are fixed numbers, and video cannot play backwards.",
         params: [
             {
                 name: 'path',
@@ -387,7 +387,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
             {
                 name: 'config.speed',
@@ -424,7 +424,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
         ],
         examples: [
@@ -449,7 +449,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'config.fit',
                 description:
-                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves black bars, `'stretch'` ignores the aspect ratio",
+                    "How a picture of another shape fills the frame: `'cover'` (default) fills it and crops the overflow, `'contain'` fits the whole picture and leaves transparent bars, `'stretch'` ignores the aspect ratio",
             },
         ],
         examples: [
@@ -703,7 +703,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'fold',
         group: 'Shaping',
         description:
-            'Multiplies by `gain`, then reflects whatever passes 1 back down: a triangle of the input that matches it where it stays under 1 / gain.',
+            'Multiplies by `gain`, then reflects whatever passes 1 back down: a triangle of the input that matches `input × gain` where the input stays under 1 / gain.',
         params: [],
         examples: ['$v.out($v.hsv($v.fold($v.ramp(), 3)))'],
         declarations: [
@@ -716,6 +716,16 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Threshold of each channel: 0 below `threshold`, 1 above, with a linear ramp `softness` wide centered on it (a hard edge when 0). `config.invert` swaps the sides: 1 below and 0 above.',
         params: [
+            {
+                name: 'threshold',
+                description:
+                    'Level at which the output crosses 0.5 (default 0.5)',
+            },
+            {
+                name: 'softness',
+                description:
+                    'Width of the ramp centered on `threshold`; 0 is a hard edge (default 0)',
+            },
             {
                 name: 'config.invert',
                 description:
@@ -875,10 +885,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.5)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
+            'const dot = $v.hsv(0.3, 1, $v.shape(0.12, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.5).range(-0.3, 0.3)) })); $v.out($v.add(dot, $v.frameDelay(dot, 6).$.mult(0.5)))',
         ],
         declarations: [
-            'frameDelay(input: VideoValue, frames?: number): VideoSignal;',
+            'frameDelay(input: VideoSignal, frames?: number): VideoSignal;',
         ],
     },
     {
@@ -925,7 +935,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$sine($v.toCV($v.shape(0.3), { size: 0.1 }).range(110, 440)).out()',
+            '$sine($v.toCV($v.shape(0.3), { size: 0.1 }).range(-1, 1)).out()',
         ],
         declarations: [
             'toCV(signal: VideoSignal, config?: { x?: number; y?: number; size?: number }): CollectionWithRange;',
@@ -959,7 +969,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.hsv($v.warp($v.noise(4), { rotate: $v.mult($v.time, 0.05), zoom: 2 })))',
-            '$v.out($v.warp($v.hsv($v.shape(0.15)), { shiftX: $v.time.$.osc(0.25), rotate: 0.1 }))',
+            '$v.out($v.warp($v.hsv($v.shape(0.15)), { shiftX: $v.time.$.osc(0.25).range(-0.3, 0.3), rotate: 0.1 }))',
         ],
         declarations: [
             'warp(input: VideoSignal, config?: { zoom?: VideoValue; rotate?: VideoValue; shiftX?: VideoValue; shiftY?: VideoValue }): VideoSignal;',
@@ -969,12 +979,12 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'displace',
         group: 'Warping',
         description:
-            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 0.5 means no push in that direction.',
+            'Reads `input` at positions pushed by `dx` and `dy`, so a moving or noisy push wobbles whatever `input` draws. 0.5 means no push in that direction. The picture moves opposite to the push: pushing the read position right moves the picture left.',
         params: [
             {
                 name: 'dx',
                 description:
-                    'Horizontal push; below 0.5 pulls left, above pushes right',
+                    'Horizontal push of the read position; below 0.5 reads further left, above further right',
             },
             {
                 name: 'dy',
@@ -983,7 +993,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Largest push as a fraction of the frame (default 0.1)',
+                    'Push as a fraction of the frame for each unit `dx` or `dy` is away from 0.5, so a push of 0 or 1 moves by half of it (default 0.1)',
             },
         ],
         examples: [
@@ -997,7 +1007,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulate',
         group: 'Warping',
         description:
-            "Pushes `input` around by another signal: the modulator's red channel moves it across and its green up, `amount` of the frame for each unit of the channel. A black modulator leaves `input` in place, and a gray one moves it diagonally.",
+            "Pushes `input` around by another signal: `input` is read `amount` of the frame further right for each unit of the modulator's red channel and further up for each unit of its green, so the picture moves left and down. A black modulator leaves `input` in place, and a gray one moves it diagonally.",
         params: [
             {
                 name: 'modulator',
@@ -1293,7 +1303,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'pixelate',
         group: 'Warping',
         description:
-            'Holds `input` constant across a grid of `x` by `y` cells, giving it large square pixels.',
+            "Holds `input` constant across a grid of `x` by `y` cells, giving it large blocky pixels. Each cell is `1 / x` of the frame wide and `1 / y` high, so cells are square only when `x / y` matches the frame's aspect ratio.",
         params: [
             { name: 'x', description: 'Cells across (default 20)' },
             { name: 'y', description: 'Cells up (default the same as x)' },
