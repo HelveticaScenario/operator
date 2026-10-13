@@ -44,8 +44,7 @@ function wgslFloat(value: number): string {
 /**
  * Most node evaluations a pixel may cost. A warped input re-evaluates its whole
  * sub-patch per sample, so nesting multiplies: blurring an oscillator twice
- * costs about 570 and three times about 9000, which can stall the GPU long
- * enough for the system to reset it.
+ * costs about 570 evaluations, and three times about 9000.
  */
 const MAX_EVALUATIONS_PER_PIXEL = 2048;
 
