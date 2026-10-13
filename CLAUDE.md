@@ -40,6 +40,10 @@ yarn lint:fix              # oxlint --fix
 
 E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run `yarn start` once first.
 
+### Launching the app as an agent
+
+Always set `MODULAR_BACKGROUND_LAUNCH=1` when launching the app (`yarn start`, Playwright, or the built entry): the app never takes focus, its windows open behind the user's, and it runs on a throwaway profile so it never touches the user's running instance. Set `MODULAR_AUDIO_OUTPUT_DEVICE` / `MODULAR_AUDIO_INPUT_DEVICE` to a loopback device id (e.g. `coreaudio:BlackHole64ch_UID`) so test audio stays off the speakers and microphone. `yarn test:e2e` sets all three. See the `verify` skill for driving the app.
+
 ## Architecture
 
 ### Data Flow
