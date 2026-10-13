@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
+import { VideoBackdrop } from './app/video/VideoBackdrop';
+import { performanceOutput } from './video/PerformanceOutput';
 import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
 import { ErrorDisplay } from './components/ErrorDisplay';
@@ -49,6 +51,10 @@ import { ControlAnchors, createControlAnchors } from './app/controlAnchors';
 import { extractControls, resolveControls } from './dsl/extractControls';
 import type { ResolvedControls } from './dsl/extractControls';
 import { resolveScopeCallRange } from './app/scopeCallRange';
+import {
+    type VideoPreviewAnchors,
+    createVideoPreviewAnchors,
+} from './app/videoPreviewAnchors';
 import { transformErrorsWithSourceLocations } from './app/validationErrorLocations';
 import {
     computeOutNumericOptionEdit,
@@ -102,6 +108,8 @@ function App() {
         xyScopePersistence,
         xyScopeUpsample,
         xyScopeLineWidth,
+        codeBackdropOpacity,
+        performanceScale,
         prettierConfig,
     } = useTheme();
 
@@ -177,6 +185,11 @@ function App() {
     >(null);
 
     const [scopeViews, setScopeViews] = useState<ScopeView[]>([]);
+    const [videoPreviews, setVideoPreviews] = useState<VideoPreviewAnchors>({
+        decorations: null,
+        zones: [],
+    });
+    const videoPreviewsRef = useRef(videoPreviews);
     // Path-identity (getBufferId) of the buffer the running patch came from,
     // compared against activeBufferId by every consumer. Path identities
     // mutate on save/rename, so the stable EditorBuffer.id of the running
@@ -1776,6 +1789,21 @@ function App() {
 
                 const editorInstance = editorRef.current;
                 const model = editorInstance?.getModel();
+
+                // Previews follow the video renderer, which swaps its
+                // shader at once rather than at a queued update's beat.
+                const previewAnchors = editorInstance
+                    ? createVideoPreviewAnchors(
+                          editorInstance,
+                          result.videoPreviews ?? [],
+                          callSiteSpans,
+                          activeBufferId,
+                      )
+                    : { decorations: null, zones: [] };
+                videoPreviewsRef.current.decorations?.clear();
+                videoPreviewsRef.current = previewAnchors;
+                setVideoPreviews(previewAnchors);
+
                 const views: ScopeView[] = [];
                 const decorationDescs: editor.IModelDeltaDecoration[] = [];
 
@@ -2204,8 +2232,16 @@ function App() {
             },
             { label: 'Toggle VU Meters', category: 'View' },
         );
+        registerCommand(
+            'operator.togglePerformanceWindow',
+            () => {
+                performanceOutput.toggle();
+            },
+            { label: 'Toggle Performance Window', category: 'View' },
+        );
 
         return () => {
+            unregisterCommand('operator.togglePerformanceWindow');
             unregisterCommand('operator.toggleVuMeters');
             unregisterCommand('operator.updatePatch');
             unregisterCommand('operator.updatePatchNextBeat');
@@ -2289,6 +2325,10 @@ function App() {
         const cleanupToggleVuMeters = electronAPI.onMenuToggleVuMeters(() => {
             executeCommand('operator.toggleVuMeters');
         });
+        const cleanupTogglePerformanceWindow =
+            electronAPI.onMenuTogglePerformanceWindow(() => {
+                executeCommand('operator.togglePerformanceWindow');
+            });
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
@@ -2438,6 +2478,7 @@ function App() {
             cleanupCloseBuffer();
             cleanupToggleRecording();
             cleanupToggleVuMeters();
+            cleanupTogglePerformanceWindow();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
@@ -2628,6 +2669,10 @@ function App() {
                                 upsample={xyScopeUpsample}
                                 lineWidth={xyScopeLineWidth}
                             />
+                            <VideoBackdrop
+                                codeBackdropOpacity={codeBackdropOpacity}
+                                performanceScale={performanceScale}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}
@@ -2637,6 +2682,10 @@ function App() {
                                 editorRef={editorRef}
                                 onEditorChange={setPaletteEditor}
                                 scopeViews={scopeViews}
+                                videoPreviewDecorations={
+                                    videoPreviews.decorations
+                                }
+                                videoPreviewZones={videoPreviews.zones}
                                 // oxlint-disable-next-line react-hooks-js/refs -- intentional: live Monaco decoration collection mutated outside React
                                 scopeDecorations={scopeDecorationsRef.current}
                                 onRegisterScopeCanvas={registerScopeCanvas}
