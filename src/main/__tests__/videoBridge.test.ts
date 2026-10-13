@@ -74,7 +74,10 @@ describe('pullVideo', () => {
 });
 
 describe('across patch updates', () => {
-    it('serves the taps of the shader before the latest while the renderer may still draw it', () => {
+    const tapsRead = (read: ReturnType<typeof vi.fn>) =>
+        read.mock.calls.map(([tap]) => tap as number).sort((a, b) => a - b);
+
+    it('serves the taps of the live shader while the renderer may still draw it', () => {
         const read = vi.fn((_tap: number, _since?: number) => ({
             head: 1,
             samples: Float32Array.of(0.5),
@@ -87,11 +90,41 @@ describe('across patch updates', () => {
         });
         setVideoTarget(() => null);
         updateVideoShader(shaderReadingTap(0), 1);
+        pullVideo(true);
         updateVideoShader(shaderReadingTap(3), 2);
 
+        read.mockClear();
         pullVideo(true);
-        const taps = read.mock.calls.map(([tap]) => tap).sort((a, b) => a - b);
-        expect(taps).toEqual([0, 3]);
+        expect(tapsRead(read)).toEqual([0, 3]);
+    });
+
+    it('keeps serving the live shader when a queued update is submitted again before it applies', () => {
+        const read = vi.fn((_tap: number, _since?: number) => ({
+            head: 1,
+            samples: [0.5],
+        }));
+        let applied = 10;
+        setVideoTapSource({
+            isStopped: () => false,
+            read,
+            sampleRate: () => 48000,
+            updates: () => ({ applied, cancelled: 0 }),
+        });
+        setVideoTarget(() => null);
+        updateVideoShader(shaderReadingTap(1), 10);
+        pullVideo(true);
+        updateVideoShader(shaderReadingTap(2), 11);
+        updateVideoShader(shaderReadingTap(3), 12);
+
+        read.mockClear();
+        pullVideo(true);
+        expect(tapsRead(read)).toEqual([1, 3]);
+
+        applied = 12;
+        pullVideo(true);
+        read.mockClear();
+        pullVideo(true);
+        expect(tapsRead(read)).toEqual([3]);
     });
 
     it('reads which update the engine has applied after the samples, not before', () => {
@@ -179,12 +212,40 @@ describe('delivery to the editor window', () => {
         setVideoControl('slider-1', 0.75);
         expect(target.send).toHaveBeenCalledWith(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
-            [{ slot: 3, value: 0.75 }],
+            [{ moduleId: 'slider-1', value: 0.75 }],
         );
 
         target.send.mockClear();
         setVideoControl('other', 1);
         expect(target.send).not.toHaveBeenCalled();
+    });
+
+    it('sends a control that only the live shader reads while a queued shader waits', () => {
+        const target = window();
+        setVideoTarget(() => target as never);
+        setVideoTapSource({
+            isStopped: () => false,
+            read: () => ({ head: 0, samples: [] }),
+            sampleRate: () => 48000,
+            updates: () => ({ applied: 20, cancelled: 0 }),
+        });
+        const live = {
+            histories: [],
+            uniforms: [
+                { kind: 'control', moduleId: 'knob', slot: 5, value: 0 },
+            ],
+        };
+        updateVideoShader(live as never, 20);
+        pullVideo();
+        updateVideoShader({ histories: [], uniforms: [] } as never, 21);
+        target.send.mockClear();
+
+        setVideoControl('knob', 0.5);
+        expect(target.send).toHaveBeenCalledWith(
+            IPC_CHANNELS.VIDEO_ON_UNIFORM,
+            [{ moduleId: 'knob', value: 0.5 }],
+        );
+        expect(live.uniforms[0].value).toBe(0.5);
     });
 
     it('does nothing while there is no window to draw in', () => {
