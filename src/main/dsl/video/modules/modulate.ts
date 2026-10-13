@@ -20,14 +20,15 @@ export const modulate = modulator(
     ({ m, amount }) => `uv + ${m}.rg * ${amount}`,
 );
 
-/** Scales about the center by `offset + multiple * channel`, red across and green up. */
+/** Scales about the center by `offset + multiple * channel`, red across and green up; a negative factor mirrors. */
 export const modulateScale = modulator(
     ['multiple', 'offset'],
     ({ m, multiple, offset }) =>
         `video_mod_scale(uv, ${m}.rg, ${multiple}, ${offset})`,
     [
         `fn video_mod_scale(uv: vec2f, c: vec2f, multiple: f32, offset: f32) -> vec2f {
-    let factor = max(vec2f(offset) + c * multiple, vec2f(0.00001));
+    let raw = vec2f(offset) + c * multiple;
+    let factor = select(vec2f(-1.0), vec2f(1.0), raw >= vec2f(0.0)) * max(abs(raw), vec2f(0.00001));
     return (uv - vec2f(0.5)) / factor + vec2f(0.5);
 }`,
     ],

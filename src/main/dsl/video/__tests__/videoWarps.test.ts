@@ -129,6 +129,27 @@ describe('$v warps and modulators', () => {
             expect(wgsl).toMatch(/video_mod_scale\(uv, v\d+\.rg, 1\.0, 1\.0\)/);
         });
 
+        it('mirrors through the center for a negative scale and keeps it off zero', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulateScale($v.hsv($v.ramp()), $v.hsv(${noise})));`,
+            );
+            const scaled = (factor: number) =>
+                (
+                    callWgsl(
+                        wgsl,
+                        'video_mod_scale',
+                        [0.75, 0.5],
+                        [0, 0],
+                        1,
+                        factor,
+                    ) as number[]
+                ).map((x) => Number(x.toFixed(6)));
+            expect(scaled(2)).toEqual([0.625, 0.5]);
+            expect(scaled(-2)).toEqual([0.375, 0.5]);
+            expect(scaled(0)[0]).toBeGreaterThan(1000);
+            expect(scaled(-1e-9)[0]).toBeLessThan(-1000);
+        });
+
         it('chains the way the function is called', () => {
             const chained = wgslOf(`
                 $v.hsv($v.ramp()).$.modulateScale(${noise}, 2, 0.5).out();
