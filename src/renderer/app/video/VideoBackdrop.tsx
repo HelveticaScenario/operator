@@ -28,7 +28,10 @@ export function VideoBackdrop({
 }) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [renderer, setRenderer] = useState<VideoRenderer | null>(null);
+    /** Whether the live shader draws a picture. */
     const [shown, setShown] = useState(false);
+    /** Whether the latest shader draws one, once its update applies. */
+    const [wanted, setWanted] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [open, setOpen] = useState(performanceOutput.isOpen);
     const [size, setSize] = useState(performanceOutput.size);
@@ -40,6 +43,8 @@ export function VideoBackdrop({
         let created: VideoRenderer | null = null;
         let creating = false;
         let latest: VideoShaderUpdate | null = null;
+        /** Control values received since `latest`, which it does not carry. */
+        const controls = new Map<string, number>();
         let pushed = false;
 
         // The renderer is made when the first shader arrives, so a window
@@ -48,12 +53,17 @@ export function VideoBackdrop({
             if (abort.signal.aborted) return;
             const update = latest;
             if (update === null) return;
-            setShown(update.shader?.hasOutput ?? false);
+            setWanted(update.shader?.hasOutput ?? false);
             if (created !== null) {
                 created.setShader(update).then(
-                    () => setError(null),
+                    (current) => {
+                        if (current) setError(null);
+                    },
                     (e: unknown) => setError(errorText(e)),
                 );
+                for (const [moduleId, value] of controls) {
+                    created.setControl(moduleId, value);
+                }
                 return;
             }
             if (update.shader === null || creating) return;
@@ -66,6 +76,17 @@ export function VideoBackdrop({
                         electronAPI.video.pull(fresh),
                     );
                     made.setErrorSink(setError);
+                    made.setLiveSink(setShown);
+                    // A lost GPU device takes the renderer with it; a new
+                    // one starts over from the latest shader.
+                    made.setLostSink(() => {
+                        if (created !== made) return;
+                        made.dispose();
+                        created = null;
+                        setRenderer(null);
+                        setShown(false);
+                        apply();
+                    });
                     made.setCvSink((values) => {
                         void electronAPI.video.sendCvValues(values);
                     });
@@ -83,11 +104,13 @@ export function VideoBackdrop({
         const stopShader = electronAPI.video.onShader((update) => {
             pushed = true;
             latest = update;
+            controls.clear();
             apply();
         });
         const stopUniform = electronAPI.video.onUniform((updates) => {
-            for (const { slot, value } of updates) {
-                created?.setUniform(slot, value);
+            for (const { moduleId, value } of updates) {
+                controls.set(moduleId, value);
+                created?.setControl(moduleId, value);
             }
         });
         void electronAPI.video.getShader().then((update) => {
@@ -152,7 +175,7 @@ export function VideoBackdrop({
                     visibility: shown ? 'visible' : 'hidden',
                 }}
             />
-            {shown && error !== null && (
+            {(shown || wanted) && error !== null && (
                 <pre className="video-backdrop-error">{error}</pre>
             )}
         </>

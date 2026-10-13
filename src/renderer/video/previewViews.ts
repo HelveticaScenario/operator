@@ -26,7 +26,7 @@ const CHECKERBOARD =
  * least a quarter bright, and the busiest one is full, so a sparse trace is as
  * readable as a dense one.
  */
-function phosphor(counts: Float32Array): Uint8ClampedArray {
+function phosphor(counts: Float32Array): Uint8ClampedArray<ArrayBuffer> {
     let max = 0;
     for (const count of counts) max = Math.max(max, count);
     const pixels = new Uint8ClampedArray(counts.length * 4);
@@ -46,7 +46,9 @@ function phosphor(counts: Float32Array): Uint8ClampedArray {
  * pixels over black, with white at the top. Returns RGBA pixels of `frame.width` by
  * {@link WAVEFORM_HEIGHT}.
  */
-export function waveformPixels(frame: VideoPreviewFrame): Uint8ClampedArray {
+export function waveformPixels(
+    frame: VideoPreviewFrame,
+): Uint8ClampedArray<ArrayBuffer> {
     const { data, width, height } = frame;
     const counts = new Float32Array(width * WAVEFORM_HEIGHT);
     for (let y = 0; y < height; y++) {
@@ -65,7 +67,9 @@ export function waveformPixels(frame: VideoPreviewFrame): Uint8ClampedArray {
  * hue is the angle from the center and saturation the distance. Returns RGBA pixels of
  * {@link VECTORSCOPE_SIZE} squared.
  */
-export function vectorscopePixels(frame: VideoPreviewFrame): Uint8ClampedArray {
+export function vectorscopePixels(
+    frame: VideoPreviewFrame,
+): Uint8ClampedArray<ArrayBuffer> {
     const { data, width, height } = frame;
     const counts = new Float32Array(VECTORSCOPE_SIZE * VECTORSCOPE_SIZE);
     const last = VECTORSCOPE_SIZE - 1;
@@ -97,7 +101,7 @@ export function drawPreview(
     const ctx = canvas.getContext('2d');
     if (ctx === null) return;
 
-    let pixels: Uint8ClampedArray;
+    let pixels: Uint8ClampedArray<ArrayBuffer>;
     let width = frame.width;
     let height = frame.height;
     if (view === 'waveform') {
@@ -122,11 +126,7 @@ export function drawPreview(
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
     canvas.style.aspectRatio = `${width} / ${height}`;
-    ctx.putImageData(
-        new ImageData(new Uint8ClampedArray(pixels), width, height),
-        0,
-        0,
-    );
+    ctx.putImageData(new ImageData(pixels, width, height), 0, 0);
 
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
     ctx.lineWidth = 1;

@@ -20,7 +20,8 @@ export function gateVerdict(
 /**
  * Holds a newly built shader back until the engine applies the patch update
  * it belongs to, as {@link gateVerdict} decides. `P` is the built shader; null
- * stands for a patch without video.
+ * stands for a patch without video, or one whose shader failed to build, so
+ * no shader ever reads the signals of a patch it was not compiled with.
  */
 export class ShaderGate<P extends { destroy(): void }> {
     /** Counts requests, so a build that finishes after a newer request is dropped. */
@@ -50,19 +51,13 @@ export class ShaderGate<P extends { destroy(): void }> {
 
     /**
      * Starts waiting for the shader of `updateId`, dropping any shader built
-     * for an earlier one. Returns the token to hand to {@link offer} or
-     * {@link fail}.
+     * for an earlier one. Returns the token to hand to {@link offer}.
      */
     request(updateId: number): number {
         this.pending?.program?.destroy();
         this.pending = null;
         this.awaiting = updateId;
         return ++this.token;
-    }
-
-    /** Stops waiting when the shader of request `token` failed to build. */
-    fail(token: number): void {
-        if (token === this.token) this.awaiting = null;
     }
 
     /**

@@ -72,9 +72,12 @@ describe('ShaderGate', () => {
         expect(gate.settle(true)).toEqual({ program: built });
     });
 
-    it('stops waiting when the build fails', () => {
+    it('releases no shader for an update whose build failed, once the engine applies it', () => {
         const gate = new ShaderGate<ReturnType<typeof program>>();
-        gate.fail(gate.request(5));
-        expect(gate.swapping).toBe(false);
+        expect(gate.offer(gate.request(5), null)).toBe(true);
+        gate.report(4, 0);
+        expect(gate.settle(false)).toBeUndefined();
+        gate.report(5, 0);
+        expect(gate.settle(false)).toEqual({ program: null });
     });
 });

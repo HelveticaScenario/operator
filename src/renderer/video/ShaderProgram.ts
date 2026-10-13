@@ -73,6 +73,10 @@ export class ShaderProgram {
     readonly cvSamples: ReadonlyMap<number, VideoCvSample>;
     /** Uniform slots fed by an audio signal, with the engine tap that carries it. */
     readonly tapSlots: { slot: number; tap: number }[];
+    /** Uniform slots fed by each control, by the module id of its `$signal`. */
+    private readonly controlSlots: ReadonlyMap<string, number[]>;
+    /** True when the patch calls `$v.out`, so the picture is worth showing. */
+    readonly hasOutput: boolean;
     /** Rows of audio history the shader reads. */
     readonly histories: VideoHistory[];
     /** Media the shader samples, one texture each. */
@@ -97,6 +101,15 @@ export class ShaderProgram {
         this.tapSlots = compiled.uniforms.flatMap((u) =>
             u.kind === 'tap' ? [{ slot: u.slot, tap: u.tap }] : [],
         );
+        const controlSlots = new Map<string, number[]>();
+        for (const u of compiled.uniforms) {
+            if (u.kind !== 'control') continue;
+            const slots = controlSlots.get(u.moduleId) ?? [];
+            slots.push(u.slot);
+            controlSlots.set(u.moduleId, slots);
+        }
+        this.controlSlots = controlSlots;
+        this.hasOutput = compiled.hasOutput;
         this.cvSamples = new Map(
             compiled.cvSamples.map(({ index, ...sample }) => [index, sample]),
         );
@@ -187,10 +200,17 @@ export class ShaderProgram {
         );
     }
 
-    /** Sets a control-bound input of this shader. */
+    /** Sets one uniform slot of this shader. */
     setSlot(slot: number, value: number): void {
         const index = UNIFORM_SLOTS_OFFSET + slot;
         if (index < this.uniforms.length) this.uniforms[index] = value;
+    }
+
+    /** Sets every input of this shader bound to the control `moduleId`, if any. */
+    setControl(moduleId: string, value: number): void {
+        for (const slot of this.controlSlots.get(moduleId) ?? []) {
+            this.setSlot(slot, value);
+        }
     }
 
     /**

@@ -17,7 +17,7 @@ export type VideoValue =
     | { kind: 'const'; value: number }
     /** Index into the per-frame uniform slots. */
     | { kind: 'uniform'; slot: number }
-    /** Seconds since the output window started rendering. */
+    /** Seconds since the audio engine last started running. */
     | { kind: 'time' };
 
 export interface VideoNode {
@@ -90,7 +90,7 @@ export interface VideoPreviewFrame {
     index: number;
     width: number;
     height: number;
-    data: Uint8Array;
+    data: Uint8Array<ArrayBuffer>;
 }
 
 /** A tap's recent audio-rate samples that the shader reads along a scanline. */
@@ -132,9 +132,14 @@ export interface VideoPull {
     taps: VideoTapSamples[];
 }
 
-/** A new value for one uniform slot. */
+/**
+ * A new value for a control the video graph reads. Each shader binds the
+ * control to its own uniform slot, so the renderer looks the slot up in every
+ * program it holds.
+ */
 export interface VideoUniformUpdate {
-    slot: number;
+    /** Module id of the control's backing `$signal`. */
+    moduleId: string;
     value: number;
 }
 
