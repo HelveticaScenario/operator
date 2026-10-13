@@ -1,4 +1,7 @@
-use crate::dsp::utils::SchmittTrigger;
+use std::ops::Range;
+
+use crate::block_input::{InputScratch, OptionBlockInput};
+use crate::dsp::utils::{SchmittTrigger, sanitize};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -29,6 +32,9 @@ struct ChannelState {
     current_level: f32,
     trigger_schmitt: SchmittTrigger,
     in_attack: bool,
+    /// The decay time the cached coefficient was computed for, and the
+    /// coefficient.
+    decay_cache: Option<(f32, f32)>,
 }
 
 /// Simple envelope for percussive sounds.
@@ -43,52 +49,101 @@ struct ChannelState {
 /// // short percussive hit
 /// $noise("white").amplitude($perc($clock.beatTrigger, { decay: 0.1 })).out()
 /// ```
-#[module(name = "$perc", args(trigger))]
+#[module(name = "$perc", args(trigger), block)]
 pub struct PercussionEnvelope {
     outputs: PercussionEnvelopeOutputs,
     params: PercussionEnvelopeParams,
     channel_state: Box<[ChannelState]>,
 }
 
+impl ChannelState {
+    /// Advance one sample and return the envelope output. `decay` is the decay
+    /// time in seconds and `attack_step` the per-sample attack rise.
+    #[inline(always)]
+    fn step(&mut self, trigger: f32, decay: f32, attack_step: f32, sample_rate: f32) -> f32 {
+        // Detect rising edge of trigger using Schmitt trigger for noise immunity
+        if self.trigger_schmitt.process(trigger) {
+            // Trigger detected - start attack phase (continue from current level for smooth re-trigger)
+            self.in_attack = true;
+        }
+
+        if self.in_attack {
+            self.current_level += attack_step;
+            if self.current_level >= 1.0 {
+                self.current_level = 1.0;
+                self.in_attack = false;
+            }
+        } else if self.current_level > 0.00001 {
+            self.current_level *= self.decay_coeff(decay, sample_rate);
+        } else {
+            self.current_level = 0.0;
+        }
+        self.current_level * 5.0
+    }
+
+    /// Per-sample multiplier that decays the level to ~0.001 over `decay`
+    /// seconds: e^(-t/tau) with tau = decay / 6.9 (ln(1000) ≈ 6.9). Cached
+    /// until `decay` changes; the sample rate is fixed for the state's life.
+    #[inline(always)]
+    fn decay_coeff(&mut self, decay: f32, sample_rate: f32) -> f32 {
+        match self.decay_cache {
+            Some((cached, coeff)) if cached == decay => coeff,
+            _ => {
+                let tau = decay.max(0.001) / 6.9;
+                let coeff = (-1.0 / (tau * sample_rate)).exp();
+                self.decay_cache = Some((decay, coeff));
+                coeff
+            }
+        }
+    }
+}
+
+/// Per-sample linear rise of the 1 ms attack.
+#[inline(always)]
+fn attack_step(sample_rate: f32) -> f32 {
+    const ATTACK_TIME: f32 = 0.001;
+    1.0 / (ATTACK_TIME * sample_rate)
+}
+
 impl PercussionEnvelope {
     fn update(&mut self, sample_rate: f32) {
-        let num_channels = self.channel_count();
-
-        for ch in 0..num_channels {
-            let state = &mut self.channel_state[ch];
-
-            let decay_time = self.params.decay.value_or(ch, 0.1).max(0.001);
-
-            // Detect rising edge of trigger using Schmitt trigger for noise immunity
-            let trigger = self.params.trigger.get_value(ch);
-            if state.trigger_schmitt.process(trigger) {
-                // Trigger detected - start attack phase (continue from current level for smooth re-trigger)
-                state.in_attack = true;
-            }
-
-            // Attack phase: 1ms linear ramp to peak
-            if state.in_attack {
-                const ATTACK_TIME: f32 = 0.001; // 1ms
-                let step = 1.0 / (ATTACK_TIME * sample_rate);
-                state.current_level += step;
-                if state.current_level >= 1.0 {
-                    state.current_level = 1.0;
-                    state.in_attack = false;
-                }
-            } else if state.current_level > 0.00001 {
-                // Exponential decay
-                // Calculate decay coefficient for exponential decay
-                // Time constant tau = decay_time, we want level to reach ~0.001 after decay_time
-                // Using e^(-t/tau) where tau = decay_time / 6.9 (ln(1000) ≈ 6.9)
-                let tau = decay_time / 6.9;
-                let decay_coeff = (-1.0 / (tau * sample_rate)).exp();
-                state.current_level *= decay_coeff;
-            } else {
-                state.current_level = 0.0;
-            }
-
-            self.outputs.sample.set(ch, state.current_level * 5.0);
+        let p = &self.params;
+        let attack_step = attack_step(sample_rate);
+        for (ch, state) in self.channel_state.iter_mut().enumerate() {
+            let trigger = p.trigger.get_value(ch);
+            let decay = p.decay.value_or(ch, 0.1);
+            self.outputs
+                .sample
+                .set(ch, state.step(trigger, decay, attack_step, sample_rate));
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut PercussionEnvelopeBlockOutputs,
+        range: Range<usize>,
+        sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let p = &self.params;
+        let (mut s0, mut s1) = (InputScratch::new(), InputScratch::new());
+        let trigger = p.trigger.block_input(range.clone(), channels, &mut s0)?;
+        let decay = p
+            .decay
+            .block_input_or(range.clone(), channels, 0.1, &mut s1)?;
+        let attack_step = attack_step(sample_rate);
+        for i in range {
+            let (trigger, decay) = (trigger.row(i), decay.row(i));
+            let slots = outputs
+                .sample
+                .slot_mut(i)
+                .iter_mut()
+                .zip(self.channel_state.iter_mut());
+            for (ch, (out, state)) in slots.enumerate() {
+                *out = sanitize(state.step(trigger[ch], decay[ch], attack_step, sample_rate));
+            }
+        }
+        Some(())
     }
 }
 
