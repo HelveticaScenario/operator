@@ -1,9 +1,9 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering, fence};
 
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use crate::poly::MonoSignal;
+use crate::{param_errors::ModuleParamErrors, poly::MonoSignal};
 
 /// Number of tap slots the video renderer can read.
 pub const MAX_VIDEO_TAPS: usize = 64;
@@ -32,35 +32,64 @@ pub struct VideoTapChunk {
 /// Samples returned the first time a tap is read.
 const FIRST_READ_SAMPLES: usize = 1024;
 
+/// Most samples one read returns. The rest of the ring is headroom for the
+/// writer to advance into while a read is in progress.
+pub const MAX_READ_SAMPLES: usize = VIDEO_HISTORY_LEN - 1024;
+
 /// The samples tap `slot` has written since `since`, a `head` from an earlier
 /// read, or its latest few when `since` is `None`. At most
-/// [`VIDEO_HISTORY_LEN`] samples come back, so a reader that falls further
-/// behind than the ring loses the oldest. Main thread.
-pub fn read_video_since(slot: usize, since: Option<u32>) -> VideoTapChunk {
-    let slot = slot.min(MAX_VIDEO_TAPS - 1);
+/// [`MAX_READ_SAMPLES`] samples come back, so a reader that falls further
+/// behind loses the oldest. `None` when `slot` is not a tap slot. Main thread.
+pub fn read_video_since(slot: usize, since: Option<u32>) -> Option<VideoTapChunk> {
+    let ring = VIDEO_HISTORY.get(slot)?;
     let head = VIDEO_HEADS[slot].load(Ordering::Acquire);
-    let wanted = since.map_or(FIRST_READ_SAMPLES, |since| {
+    let wanted = since.map_or(FIRST_READ_SAMPLES.min(head as usize), |since| {
         head.wrapping_sub(since) as usize
     });
-    let count = wanted.min(VIDEO_HISTORY_LEN);
-    let samples = (0..count)
+    let count = wanted.min(MAX_READ_SAMPLES);
+    let first = head.wrapping_sub(count as u32);
+    let mut samples: Vec<f32> = (0..count as u32)
         .map(|i| {
-            let index =
-                (head as usize).wrapping_sub(count).wrapping_add(i) & (VIDEO_HISTORY_LEN - 1);
-            f32::from_bits(VIDEO_HISTORY[slot][index].load(Ordering::Relaxed))
+            let index = first.wrapping_add(i) as usize & (VIDEO_HISTORY_LEN - 1);
+            f32::from_bits(ring[index].load(Ordering::Relaxed))
         })
         .collect();
-    VideoTapChunk { head, samples }
+    // A slot the writer overwrote during the read shows a head past it here
+    // (the writer's Release stores pair with this fence), so those samples
+    // are dropped rather than returned out of order.
+    fence(Ordering::Acquire);
+    let after = VIDEO_HEADS[slot].load(Ordering::Relaxed);
+    let oldest_intact = after.wrapping_sub(VIDEO_HISTORY_LEN as u32 - 1);
+    let torn = oldest_intact.wrapping_sub(first) as i32;
+    if torn > 0 {
+        samples.drain(..(torn as usize).min(count));
+    }
+    Some(VideoTapChunk { head, samples })
 }
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
+#[deserr(rename_all = camelCase, deny_unknown_fields, validate = video_tap_validate_params -> ModuleParamErrors)]
 struct VideoTapParams {
     /// signal published to the video renderer
     input: MonoSignal,
     /// index of the tap slot the renderer reads (0–63)
     slot: usize,
+}
+
+fn video_tap_validate_params(
+    params: VideoTapParams,
+    _location: deserr::ValuePointerRef,
+) -> Result<VideoTapParams, ModuleParamErrors> {
+    if params.slot < MAX_VIDEO_TAPS {
+        return Ok(params);
+    }
+    let mut errors = ModuleParamErrors::default();
+    errors.add(
+        "slot".to_string(),
+        format!("slot must be below {MAX_VIDEO_TAPS}"),
+    );
+    Err(errors)
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -86,7 +115,7 @@ impl VideoTap {
         let slot = self.params.slot.min(MAX_VIDEO_TAPS - 1);
         let head = VIDEO_HEADS[slot].load(Ordering::Relaxed);
         VIDEO_HISTORY[slot][head as usize & (VIDEO_HISTORY_LEN - 1)]
-            .store(value.to_bits(), Ordering::Relaxed);
+            .store(value.to_bits(), Ordering::Release);
         VIDEO_HEADS[slot].store(head.wrapping_add(1), Ordering::Release);
     }
 }
@@ -115,6 +144,10 @@ mod tests {
         }
     }
 
+    fn read(slot: usize, since: Option<u32>) -> VideoTapChunk {
+        read_video_since(slot, since).unwrap()
+    }
+
     #[test]
     fn passes_its_input_through() {
         let mut tap = make(60, 2.5);
@@ -123,11 +156,18 @@ mod tests {
     }
 
     #[test]
-    fn slots_beyond_the_array_share_the_last_slot() {
-        let mut tap = make(MAX_VIDEO_TAPS + 5, -1.5);
-        tap.update(SR);
-        let chunk = read_video_since(MAX_VIDEO_TAPS - 1, Some(0));
-        assert_eq!(*chunk.samples.last().unwrap(), -1.5);
+    fn a_slot_beyond_the_taps_is_a_param_error() {
+        let deserializers = crate::dsp::get_params_deserializers();
+        let try_slot = |slot: usize| {
+            deserializers["_videoTap"](serde_json::json!({ "input": 0.0, "slot": slot }))
+        };
+        assert!(try_slot(MAX_VIDEO_TAPS - 1).is_ok());
+        assert!(try_slot(MAX_VIDEO_TAPS).is_err());
+    }
+
+    #[test]
+    fn reading_a_slot_beyond_the_taps_is_none() {
+        assert!(read_video_since(MAX_VIDEO_TAPS, None).is_none());
     }
 
     fn drive(tap: &mut VideoTap, values: impl Iterator<Item = f32>) {
@@ -141,44 +181,67 @@ mod tests {
     fn first_read_returns_the_latest_samples_oldest_first() {
         let mut tap = make(50, 0.0);
         drive(&mut tap, (0..2000).map(|v| v as f32));
-        let chunk = read_video_since(50, None);
+        let chunk = read(50, None);
         assert_eq!(chunk.samples.len(), FIRST_READ_SAMPLES);
         assert_eq!(*chunk.samples.last().unwrap(), 1999.0);
         assert_eq!(chunk.samples[0], 2000.0 - FIRST_READ_SAMPLES as f32);
     }
 
     #[test]
-    fn later_reads_continue_where_the_last_ended() {
-        let mut tap = make(52, 0.0);
+    fn first_read_returns_only_samples_the_tap_has_written() {
+        let mut tap = make(51, 0.0);
         drive(&mut tap, (0..10).map(|v| v as f32));
-        let first = read_video_since(52, None);
-        drive(&mut tap, (10..16).map(|v| v as f32));
-        let second = read_video_since(52, Some(first.head));
-        assert_eq!(second.samples, vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0]);
-        assert!(read_video_since(52, Some(second.head)).samples.is_empty());
+        let chunk = read(51, None);
+        assert_eq!(chunk.samples, (0..10).map(|v| v as f32).collect::<Vec<_>>());
     }
 
     #[test]
-    fn a_reader_that_falls_behind_the_ring_loses_the_oldest() {
+    fn later_reads_continue_where_the_last_ended() {
+        let mut tap = make(52, 0.0);
+        drive(&mut tap, (0..10).map(|v| v as f32));
+        let first = read(52, None);
+        drive(&mut tap, (10..16).map(|v| v as f32));
+        let second = read(52, Some(first.head));
+        assert_eq!(second.samples, vec![10.0, 11.0, 12.0, 13.0, 14.0, 15.0]);
+        assert!(read(52, Some(second.head)).samples.is_empty());
+    }
+
+    #[test]
+    fn a_reader_that_falls_behind_gets_the_newest_samples() {
         let mut tap = make(53, 0.0);
         let total = VIDEO_HISTORY_LEN + 500;
         drive(&mut tap, (0..total).map(|v| v as f32));
-        let chunk = read_video_since(53, Some(0));
-        assert_eq!(chunk.samples.len(), VIDEO_HISTORY_LEN);
+        let chunk = read(53, Some(0));
+        assert_eq!(chunk.samples.len(), MAX_READ_SAMPLES);
         assert_eq!(*chunk.samples.last().unwrap(), (total - 1) as f32);
-        assert_eq!(chunk.samples[0], (total - VIDEO_HISTORY_LEN) as f32);
+        assert_eq!(chunk.samples[0], (total - MAX_READ_SAMPLES) as f32);
     }
 
     #[test]
     fn reads_across_the_ring_boundary_stay_in_order() {
         let mut tap = make(54, 0.0);
         drive(&mut tap, (0..(VIDEO_HISTORY_LEN - 2)).map(|v| v as f32));
-        let before = read_video_since(54, None);
+        let before = read(54, None);
         drive(&mut tap, (0..6).map(|v| 100.0 + v as f32));
-        let across = read_video_since(54, Some(before.head));
+        let across = read(54, Some(before.head));
         assert_eq!(
             across.samples,
             vec![100.0, 101.0, 102.0, 103.0, 104.0, 105.0]
         );
+    }
+
+    #[test]
+    fn samples_a_concurrent_writer_overwrites_are_never_returned_out_of_order() {
+        let writer = std::thread::spawn(|| {
+            let mut tap = make(55, 0.0);
+            drive(&mut tap, (0..2_000_000).map(|v| v as f32));
+        });
+        while !writer.is_finished() {
+            let chunk = read(55, Some(0));
+            for pair in chunk.samples.windows(2) {
+                assert_eq!(pair[1], pair[0] + 1.0);
+            }
+        }
+        writer.join().unwrap();
     }
 }

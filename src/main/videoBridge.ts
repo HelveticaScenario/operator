@@ -20,7 +20,7 @@ const tapHeads = new Map<number, number>();
 /** Where the engine's audio-signal taps are read from. */
 export interface TapSource {
     /** The samples tap `tap` has written since `since`, or its latest few without it. */
-    read(tap: number, since?: number): { head: number; samples: number[] };
+    read(tap: number, since?: number): { head: number; samples: Float32Array };
     sampleRate(): number;
     isStopped(): boolean;
     /** Ids of the latest patch updates the engine applied and discarded. */
@@ -87,7 +87,7 @@ export function pullVideo(fresh = false): VideoPull {
         if (samples.length > 0) {
             chunks.push({
                 sampleRate,
-                samples: Float32Array.from(samples),
+                samples,
                 tap,
             });
         }
