@@ -26,11 +26,14 @@ export function colorMethods(core: VideoCore) {
 
         /** Color from hue (wraps every 1.0), saturation and value. */
         hsv: (
-            h: VideoSource,
-            s: VideoSource = 1,
-            v: VideoSource = 1,
+            hue: VideoSource,
+            saturation: VideoSource = 1,
+            value: VideoSource = 1,
         ): VideoOutput =>
-            core.addNode('hsv', core.values('$v.hsv', { h, s, v })),
+            core.addNode(
+                'hsv',
+                core.values('$v.hsv', { hue, saturation, value }),
+            ),
 
         /** Turns every hue of `input` by `amount` of a full circle. */
         hueShift: (

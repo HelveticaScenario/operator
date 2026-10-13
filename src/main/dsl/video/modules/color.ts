@@ -9,10 +9,11 @@ const HSV_TO_RGB = `fn hsv_to_rgb(h: f32, s: f32, v: f32) -> vec3f {
 
 /** An opaque color from hue (wraps every 1.0), saturation and value (both clipped to 0..1). */
 export const hsv: VideoModuleDef = {
-    inputs: { h: 'number', s: 'number', v: 'number' },
+    inputs: { hue: 'number', saturation: 'number', value: 'number' },
     output: 'rgba',
     helpers: [HSV_TO_RGB],
-    emit: ({ h, s, v }) => `vec4f(hsv_to_rgb(${h}, ${s}, ${v}), 1.0)`,
+    emit: ({ hue, saturation, value }) =>
+        `vec4f(hsv_to_rgb(${hue}, ${saturation}, ${value}), 1.0)`,
 };
 
 /** Saturation, then gain and bias, clipped to the displayable range; the alpha is kept. */

@@ -39,6 +39,12 @@ describe('$v in the DSL executor', () => {
         );
     });
 
+    it('names the spelled-out parameter of hsv that failed', () => {
+        expect(() => exec(`$v.hsv(0, 'full');`)).toThrow(
+            /\$v\.hsv: saturation must be a number, a video signal or an audio signal/,
+        );
+    });
+
     it('reports an invalid enumerated option', () => {
         expect(() => exec(`$v.out($v.colorize($v.ramp('z'), 0, 0));`)).toThrow(
             /param "axis" must be one of/,

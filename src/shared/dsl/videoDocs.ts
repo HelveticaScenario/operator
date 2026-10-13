@@ -533,15 +533,30 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'hsv',
         group: 'Color',
-        description:
-            'An opaque color from hue, saturation and value. Hue wraps every 1.0; saturation and value are clipped to 0..1.',
-        params: [],
+        description: 'An opaque color from hue, saturation and value.',
+        params: [
+            {
+                name: 'hue',
+                description:
+                    'Position round the color wheel, wrapping every 1: 0 red, 1/3 green, 2/3 blue',
+            },
+            {
+                name: 'saturation',
+                description:
+                    'From 0 gray to 1 the pure hue, clipped to 0..1 (default 1)',
+            },
+            {
+                name: 'value',
+                description:
+                    'Brightness, from 0 black to 1 full, clipped to 0..1 (default 1)',
+            },
+        ],
         examples: [
             '$v.out($v.hsv($v.ramp(), 1, 1))',
             "$v.out($v.hsv($v.osc(2, $v.time), 0.8, $v.ramp('vertical')))",
         ],
         declarations: [
-            'hsv(h: VideoValue, s?: VideoValue, v?: VideoValue): VideoSignal;',
+            'hsv(hue: VideoValue, saturation?: VideoValue, value?: VideoValue): VideoSignal;',
         ],
     },
     {
