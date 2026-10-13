@@ -39,7 +39,9 @@ function jsdoc(
         const [first, ...rest] = wrapText(`@param ${name} ${text}`, width);
         lines.push(first, ...rest.map((line) => `  ${line}`));
     }
-    for (const example of examples) lines.push(`@example ${example}`);
+    for (const example of examples) {
+        lines.push(...`@example ${example}`.split('\n'));
+    }
     return [
         `${indent}/**`,
         ...lines.map((line) =>
