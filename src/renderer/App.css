@@ -95,6 +95,12 @@
     box-shadow: 8px 0 0 0 var(--code-backing);
 }
 
+/* The line backing covers decorations drawn beneath the text, so an active
+ * pattern step is highlighted by its inline span, which sits above it. */
+.editor-panel.has-video-backdrop .monaco-editor .active-seq-step-text {
+    background-color: rgba(78, 201, 176, 0.35);
+}
+
 /* Only the digits are backed, from the top of the line to the bottom, not the
  * empty space to their left, and the backing carries on to the code. */
 .editor-panel.has-video-backdrop .monaco-editor .line-number-text {
