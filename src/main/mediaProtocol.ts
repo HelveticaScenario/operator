@@ -53,15 +53,6 @@ function workspaceFile(
     return file.startsWith(root + path.sep) ? file : null;
 }
 
-/** Whether `relative` names an existing file inside the workspace folder. */
-export function mediaFileExists(
-    workspaceRoot: string | null,
-    relative: string,
-): boolean {
-    const file = workspaceFile(workspaceRoot, relative);
-    return file !== null && fs.existsSync(file);
-}
-
 const CONTENT_TYPES: Record<string, string> = {
     avif: 'image/avif',
     bmp: 'image/bmp',
@@ -76,6 +67,45 @@ const CONTENT_TYPES: Record<string, string> = {
     webm: 'video/webm',
     webp: 'image/webp',
 };
+
+/** The media type a file is served as, or undefined when it is not media. */
+function contentType(file: string): string | undefined {
+    return CONTENT_TYPES[path.extname(file).slice(1).toLowerCase()];
+}
+
+/**
+ * The real path of the workspace file `file`, or null when it is not a media
+ * file inside the workspace folder. Links are followed before the containment
+ * check, so a link inside the workspace cannot reach a file outside it.
+ */
+function servableFile(
+    workspaceRoot: string | null,
+    file: string | null,
+): string | null {
+    if (file === null || workspaceRoot === null) return null;
+    try {
+        const real = fs.realpathSync(file);
+        const root = fs.realpathSync(workspaceRoot);
+        return real.startsWith(root + path.sep) &&
+            contentType(real) !== undefined &&
+            fs.statSync(real).isFile()
+            ? real
+            : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Whether `relative` names a media file inside the workspace folder. */
+export function mediaFileExists(
+    workspaceRoot: string | null,
+    relative: string,
+): boolean {
+    return (
+        servableFile(workspaceRoot, workspaceFile(workspaceRoot, relative)) !==
+        null
+    );
+}
 
 /**
  * The bytes a `Range` header asks of a file of `size` bytes, as an inclusive
@@ -103,6 +133,14 @@ export function parseByteRange(
 }
 
 /**
+ * The CORS origin media is served to. The renderer's page is another origin
+ * (the dev server, or a file in a packaged build), and a shader reads pixels
+ * only from media served with CORS. The scheme exists only inside this app's
+ * session, so no page beyond the app's own can request it.
+ */
+const ANY_ORIGIN = '*';
+
+/**
  * Fetches a network URL on the renderer's behalf and adds the CORS header the
  * response lacks, so a shader may read its pixels. Byte ranges go through for
  * seeking, and the body is streamed, so a live stream plays as it arrives.
@@ -121,7 +159,7 @@ async function proxyRemote(url: string, request: Request): Promise<Response> {
         );
     }
     const out = new Headers(upstream.headers);
-    out.set('Access-Control-Allow-Origin', '*');
+    out.set('Access-Control-Allow-Origin', ANY_ORIGIN);
     // The body is already decoded, so the encoding and length no longer describe it.
     out.delete('Content-Encoding');
     out.delete('Content-Length');
@@ -143,17 +181,14 @@ export function handleMediaProtocol(
     protocol.handle(MEDIA_SCHEME, async (request) => {
         const remote = parseRemoteMediaUrl(request.url);
         if (remote !== null) return proxyRemote(remote, request);
-        const file = resolveMediaFile(getWorkspaceRoot(), request.url);
-        if (file === null || !fs.existsSync(file)) {
-            return new Response('Not found', { status: 404 });
-        }
+        const root = getWorkspaceRoot();
+        const file = servableFile(root, resolveMediaFile(root, request.url));
+        if (file === null) return new Response('Not found', { status: 404 });
         const { size } = await fs.promises.stat(file);
         const headers: Record<string, string> = {
             'Accept-Ranges': 'bytes',
-            'Access-Control-Allow-Origin': '*',
-            'Content-Type':
-                CONTENT_TYPES[path.extname(file).slice(1).toLowerCase()] ??
-                'application/octet-stream',
+            'Access-Control-Allow-Origin': ANY_ORIGIN,
+            'Content-Type': contentType(file)!,
         };
         const range = parseByteRange(request.headers.get('Range'), size);
         if (range === 'unsatisfiable') {
