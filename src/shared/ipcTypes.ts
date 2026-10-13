@@ -23,6 +23,13 @@ import type {
 import type schemas from '@modular/core/schemas.json';
 import type { SliderDefinition } from './dsl/sliderTypes';
 import type { ButtonDefinition } from './dsl/buttonTypes';
+import type {
+    VideoCvValue,
+    VideoPreviewSite,
+    VideoPull,
+    VideoShaderUpdate,
+    VideoUniformUpdate,
+} from './video/videoGraph';
 
 export type {
     PatchGraph,
@@ -126,6 +133,12 @@ export interface AppConfig {
     xyScopeUpsample?: boolean;
     /** XY scope beam half-width in clip-space units. Default 0.012. */
     xyScopeLineWidth?: number;
+    /** Opacity (0..1) of the dark backing behind each line of code while video shows behind the code. Default 0.6. */
+    codeBackdropOpacity?: number;
+    /** Shape of the performance window: a fixed aspect ratio, or free. Default 'free'. */
+    performanceAspect?: 'free' | '16:9' | '4:3' | '1:1' | '9:16';
+    /** Fraction of the performance window's pixels the picture is drawn at (0.1..1). Default 1. */
+    performanceScale?: number;
     /** VU meter panel visibility. Default false. */
     vuPanelVisible?: boolean;
     /** VU meter panel height in px (84–480). Default 150. */
@@ -220,6 +233,8 @@ export interface DSLExecuteResult {
     updateId?: number;
     /** Full call expression spans for DSL methods, keyed by "line:column" */
     callSiteSpans?: Record<string, { startLine: number; endLine: number }>;
+    /** One entry per `$v.preview` call, in the order the shader draws them */
+    videoPreviews?: VideoPreviewSite[];
 }
 
 /**
@@ -406,6 +421,16 @@ export const IPC_CHANNELS = {
     KEYBINDINGS_READ_USER: 'modular:keybindings:read-user',
     KEYBINDINGS_ENSURE_FILE: 'modular:keybindings:ensure-file',
 
+    // Performance window
+    VIDEO_SET_OUTPUT_OPEN: 'modular:video:set-output-open',
+    VIDEO_GET_SHADER: 'modular:video:get-shader',
+    VIDEO_ON_SHADER: 'modular:video:on-shader',
+    VIDEO_ON_UNIFORM: 'modular:video:on-uniform',
+    VIDEO_PULL: 'modular:video:pull',
+    VIDEO_REQUEST_CAMERA: 'modular:video:request-camera',
+    VIDEO_SCREEN_SOURCE: 'modular:video:screen-source',
+    VIDEO_CV_VALUES: 'modular:video:cv-values',
+
     // Syphon window output (macOS)
     SYPHON_TOGGLE: 'modular:syphon:toggle',
     SYPHON_IS_SUPPORTED: 'modular:syphon:is-supported',
@@ -442,6 +467,7 @@ export const MENU_CHANNELS = {
     CANCEL_QUEUED_UPDATE: 'modular:menu:cancel-queued-update',
     TOGGLE_RECORDING: 'modular:menu:toggle-recording',
     TOGGLE_VU_METERS: 'modular:menu:toggle-vu-meters',
+    TOGGLE_PERFORMANCE_WINDOW: 'modular:menu:toggle-performance-window',
     UPDATE_PATCH: 'modular:menu:update-patch',
     UPDATE_PATCH_NEXT_BEAT: 'modular:menu:update-patch-next-beat',
 } as const;
@@ -602,6 +628,18 @@ export interface IPCHandlers {
     [IPC_CHANNELS.KEYBINDINGS_GET_PATH]: () => string;
     [IPC_CHANNELS.KEYBINDINGS_READ_USER]: () => KeybindingOverride[];
     [IPC_CHANNELS.KEYBINDINGS_ENSURE_FILE]: () => string;
+
+    // Performance window
+    [IPC_CHANNELS.VIDEO_SET_OUTPUT_OPEN]: (open: boolean) => void;
+    [IPC_CHANNELS.VIDEO_GET_SHADER]: () => VideoShaderUpdate;
+    [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
+    [IPC_CHANNELS.VIDEO_PULL]: (fresh: boolean) => VideoPull;
+    [IPC_CHANNELS.VIDEO_REQUEST_CAMERA]: () => Promise<boolean>;
+    [IPC_CHANNELS.VIDEO_SCREEN_SOURCE]: (
+        display: number,
+    ) => Promise<{ id: string } | { error: string }>;
+    [IPC_CHANNELS.VIDEO_ON_UNIFORM]: (updates: VideoUniformUpdate[]) => void;
+    [IPC_CHANNELS.VIDEO_ON_SHADER]: (update: VideoShaderUpdate) => void;
 
     // Syphon window output (macOS)
     [IPC_CHANNELS.SYPHON_TOGGLE]: () => SyphonToggleResult;
