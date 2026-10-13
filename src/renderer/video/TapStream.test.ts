@@ -269,6 +269,34 @@ describe('TapStream', () => {
         expect(afterStall).toBeLessThanOrEqual(47_999);
     });
 
+    it('keeps a short trail when batches resume after the engine stops', () => {
+        const stream = new TapStream();
+        const sampleRate = 48_000;
+        const block = Math.round(sampleRate * 0.016);
+        let written = 0;
+        let t = 0;
+        const run = (ms: number) => {
+            for (const end = t + ms; t < end; t += 16) {
+                const chunk = Float32Array.from(
+                    { length: block },
+                    () => written++,
+                );
+                stream.push(chunk, sampleRate, t);
+                stream.advance(t);
+            }
+        };
+        const trailMs = () =>
+            ((written - 1 - stream.value()) / sampleRate) * 1000;
+
+        run(5000);
+        const before = trailMs();
+        t += 10_000;
+        run(32);
+        expect(trailMs()).toBeLessThan(50);
+        run(1000);
+        expect(trailMs()).toBeLessThan(2 * before);
+    });
+
     it('returns the samples leading up to the cursor, oldest first', () => {
         const stream = new TapStream();
         stream.push(
