@@ -215,6 +215,28 @@ describe('$v modules', () => {
             );
         });
 
+        it('shapes the edge by the falloff curve, linear by default', () => {
+            const linear = wgslOf(`$v.out($v.shape(0.3, 0.2));`);
+            expect(linear).toMatch(
+                /let v\d: vec4f = vec4f\(vec3f\(shape_edge\(/,
+            );
+            expect(linear).not.toContain('shape_falloff_');
+            const smooth = wgslOf(
+                `$v.out($v.polygon(5, 0.3, 0.2, { falloff: 'smooth' }));`,
+            );
+            expect(smooth).toContain(
+                'fn shape_falloff_smooth(t: f32) -> f32 {\n    return t * t * (3.0 - 2.0 * t);',
+            );
+            expect(smooth).toContain(
+                'shape_falloff_smooth(shape_edge(polygon_distance(',
+            );
+            expect(() =>
+                exec(`$v.shape(0.3, 0.2, { falloff: 'cubic' }).out();`),
+            ).toThrow(
+                /param "falloff" must be one of linear, smooth, smoother, in, out/,
+            );
+        });
+
         it('shares the edge function between shape and polygon', () => {
             const wgsl = wgslOf(`
                 const a = $v.shape(0.2);

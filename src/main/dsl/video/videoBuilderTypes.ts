@@ -134,7 +134,12 @@ export interface VideoKeepConfig {
     invert?: boolean;
 }
 
-export interface VideoShapeConfig extends VideoPositionConfig {
+export interface VideoEdgeConfig extends VideoPositionConfig {
+    /** The curve the soft edge follows from inside to outside (default 'linear'). */
+    falloff?: 'linear' | 'smooth' | 'smoother' | 'in' | 'out';
+}
+
+export interface VideoShapeConfig extends VideoEdgeConfig {
     shape?: 'circle' | 'box' | 'diamond';
 }
 

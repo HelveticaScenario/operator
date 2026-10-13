@@ -1,6 +1,7 @@
 import type { VideoOutput } from './VideoOutput';
 import type {
     VideoCore,
+    VideoEdgeConfig,
     VideoNoiseConfig,
     VideoOscConfig,
     VideoPositionConfig,
@@ -28,9 +29,13 @@ export function generatorMethods(core: VideoCore) {
         config?.mapX === undefined && config?.mapY === undefined
             ? 'frame'
             : 'given';
-    /** The `params` of a node, holding `name` when the config chose one. */
-    const option = (name: string, value: string | undefined) =>
-        value === undefined ? undefined : { params: { [name]: value } };
+    /** The `params` of a node: those of `values` the config chose. */
+    const options = (values: Record<string, string | undefined>) => {
+        const params = Object.fromEntries(
+            Object.entries(values).filter(([, value]) => value !== undefined),
+        ) as Record<string, string>;
+        return Object.keys(params).length > 0 ? { params } : undefined;
+    };
 
     return {
         /**
@@ -73,7 +78,7 @@ export function generatorMethods(core: VideoCore) {
                     freq,
                     phase,
                 }),
-                option('shape', config?.shape),
+                options({ shape: config?.shape }),
             ),
 
         /** 1 inside a shape centered on the frame, or where `config.mapX` and `config.mapY` are 0.5; 0 outside. */
@@ -89,7 +94,7 @@ export function generatorMethods(core: VideoCore) {
                     size,
                     softness,
                 }),
-                option('shape', config?.shape),
+                options({ shape: config?.shape, falloff: config?.falloff }),
             ),
 
         /** 1 inside a regular polygon centered on the frame, 0 outside. */
@@ -97,7 +102,7 @@ export function generatorMethods(core: VideoCore) {
             sides: VideoSource = 3,
             size: VideoSource = 0.25,
             softness: VideoSource = 0.01,
-            config?: VideoPositionConfig,
+            config?: VideoEdgeConfig,
         ): VideoOutput =>
             core.addNode(
                 'polygon',
@@ -107,6 +112,7 @@ export function generatorMethods(core: VideoCore) {
                     size,
                     softness,
                 }),
+                options({ falloff: config?.falloff }),
             ),
 
         /** Smooth noise between 0 and 1, about `scale` features up the frame; `z` moves through it. */
@@ -118,14 +124,10 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'noise',
                 core.values('$v.noise', { ...position(config), z, scale }),
-                {
-                    params: {
-                        coordinates: coordinates(config),
-                        ...(config?.type !== undefined && {
-                            type: config.type,
-                        }),
-                    },
-                },
+                options({
+                    coordinates: coordinates(config),
+                    type: config?.type,
+                }),
             ),
 
         /** Cellular noise: the distance to the nearest of a scatter of points, about `scale` cells up the frame. */
@@ -137,7 +139,7 @@ export function generatorMethods(core: VideoCore) {
             core.addNode(
                 'voronoi',
                 core.values('$v.voronoi', { ...position(config), z, scale }),
-                { params: { coordinates: coordinates(config) } },
+                options({ coordinates: coordinates(config) }),
             ),
     };
 }

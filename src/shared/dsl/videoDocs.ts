@@ -263,6 +263,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
                     'Width of the edge in the same units (default 0.01)',
             },
             {
+                name: 'config.falloff',
+                description:
+                    "The curve the edge follows across `softness`: `'linear'` (default), `'smooth'` an S-curve that meets the inside and outside without a crease, `'smoother'` the same with flatter ends, `'in'` low for longer and rising sharply at the inside, `'out'` falling sharply at the outside",
+            },
+            {
                 name: 'config.mapX',
                 description:
                     'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
@@ -278,7 +283,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.polygon(6, 0.2).$.rotate($v.mult($v.time, 0.1)).$.tint(0.6).out()',
         ],
         declarations: [
-            'polygon(sides?: VideoValue, size?: VideoValue, softness?: VideoValue, config?: { mapX?: VideoValue; mapY?: VideoValue }): VideoSignal;',
+            "polygon(\n    sides?: VideoValue,\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: {\n        falloff?: 'linear' | 'smooth' | 'smoother' | 'in' | 'out';\n        mapX?: VideoValue;\n        mapY?: VideoValue;\n    },\n): VideoSignal;",
         ],
     },
     {
@@ -500,6 +505,11 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description: "`'circle'` (default), `'box'` or `'diamond'`",
             },
             {
+                name: 'config.falloff',
+                description:
+                    "The curve the edge follows across `softness`: `'linear'` (default), `'smooth'` an S-curve that meets the inside and outside without a crease, `'smoother'` the same with flatter ends, `'in'` low for longer and rising sharply at the inside, `'out'` falling sharply at the outside",
+            },
+            {
                 name: 'config.mapX',
                 description:
                     'Horizontal coordinate (default the horizontal ramp, 0 to 1 across the frame)',
@@ -514,9 +524,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             '$v.out($v.hsv(0.6, 1, $v.shape(0.3, 0.05)))',
             '$v.out($v.hsv(0.1, 1, $v.shape(0.15, 0.01, { mapX: $v.add($v.ramp(), $v.time.$.osc(0.25).range(-0.3, 0.3)) })))',
             "$v.out($v.hsv($v.time, 1, $v.shape(0.2, 0, { shape: 'diamond' })))",
+            "$v.out($v.shape(0.3, 0.3, { falloff: 'smooth' }))",
         ],
         declarations: [
-            "shape(\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: { shape?: 'circle' | 'box' | 'diamond'; mapX?: VideoValue; mapY?: VideoValue },\n): VideoSignal;",
+            "shape(\n    size?: VideoValue,\n    softness?: VideoValue,\n    config?: {\n        shape?: 'circle' | 'box' | 'diamond';\n        falloff?: 'linear' | 'smooth' | 'smoother' | 'in' | 'out';\n        mapX?: VideoValue;\n        mapY?: VideoValue;\n    },\n): VideoSignal;",
         ],
     },
     {
