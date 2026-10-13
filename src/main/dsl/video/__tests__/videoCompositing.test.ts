@@ -119,6 +119,79 @@ describe('$v alpha and compositing', () => {
         ).toEqual([0.5, 0.25, 0, 0.5]);
     });
 
+    it('scales only the alpha of a mask with keepColor', () => {
+        const chained = wgslOf(
+            `$v.osc(8).$.hsv().$.mask($v.shape(0.3), { keepColor: true }).out();`,
+        );
+        const called = wgslOf(
+            `$v.out($v.mask($v.osc(8).$.hsv(), $v.shape(0.3), { keepColor: true }));`,
+        );
+        expect(chained).toBe(called);
+        expect(called).toMatch(
+            /video_mask_keep_color\(v\d+, video_luma\(v\d+\)\)/,
+        );
+        expect(called).not.toContain('fn video_mask(');
+
+        const masked = (m: number) =>
+            callWgsl(called, 'video_mask_keep_color', [0.8, 0.4, 0.2, 1], m);
+        expect(masked(0)).toEqual([0.8, 0.4, 0.2, 0]);
+        expect(masked(0.5)).toEqual([0.8, 0.4, 0.2, 0.5]);
+    });
+
+    it('scales only the alpha of a luma key with keepColor, on either side', () => {
+        const above = wgslOf(
+            `$v.noise().$.luma(0.4, 0.05, { keepColor: true }).out();`,
+        );
+        expect(above).toMatch(/video_luma_key_keep_color\(v\d+, 0\.4, 0\.05\)/);
+        expect(
+            callWgsl(
+                above,
+                'video_luma_key_keep_color',
+                [0.3, 0.3, 0.3, 1],
+                0.4,
+                0.05,
+            ),
+        ).toEqual([0.3, 0.3, 0.3, 0]);
+
+        const below = wgslOf(
+            `$v.noise().$.luma(0.2, 0.1, { invert: true, keepColor: true }).out();`,
+        );
+        expect(
+            callWgsl(
+                below,
+                'video_luma_key_below_keep_color',
+                [0.5, 0.5, 0.5, 1],
+                0.2,
+                0.1,
+            ),
+        ).toEqual([0.5, 0.5, 0.5, 0]);
+    });
+
+    it('reads the masked-out color of a keepColor mask as a number', () => {
+        const wgsl = wgslOf(
+            `$v.hsv(0.6).$.hueShift($v.osc(8).$.mask(0, { keepColor: true })).out();`,
+        );
+        expect(wgsl).toMatch(
+            /let (v\d+): vec4f = video_mask_keep_color\(v\d+, 0\.0\);\s+let v\d+: vec4f = hue_shift\(v\d+, video_luma\(\1\)\);/,
+        );
+        const maskedOut = callWgsl(
+            wgsl,
+            'video_mask_keep_color',
+            [0.8, 0.8, 0.8, 1],
+            0,
+        );
+        expect(callWgsl(wgsl, 'video_luma', maskedOut)).toBeCloseTo(0.8);
+    });
+
+    it('rejects a keepColor that is not true or false', () => {
+        expect(() => exec(`$v.osc().$.mask(0.5, { keepColor: 1 });`)).toThrow(
+            /\$v\.mask: keepColor must be true or false/,
+        );
+        expect(() =>
+            exec(`$v.noise().$.luma(0.5, 0.1, { keepColor: 'yes' });`),
+        ).toThrow(/\$v\.luma: keepColor must be true or false/);
+    });
+
     it('rejects an invert that is not true or false', () => {
         expect(() =>
             exec(`$v.noise().$.luma(0.5, 0.1, { invert: 'yes' });`),

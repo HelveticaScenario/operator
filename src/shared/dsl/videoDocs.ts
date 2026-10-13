@@ -773,7 +773,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'layer',
         group: 'Compositing',
         description:
-            'Lays `top` over `base` by the alpha of `top`: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add. `luma` and `mask` clear the color of what they key out, so a keyed-out part of `base` adds no color under a translucent `top`.',
+            'Lays `top` over `base` by the alpha of `top`: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add. `luma` and `mask` clear the color of what they key out unless given `keepColor`, so a keyed-out part of `base` adds no color under a translucent `top`.',
         params: [
             { name: 'base', description: 'The signal underneath' },
             { name: 'top', description: 'The signal laid over it' },
@@ -790,22 +790,27 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mask',
         group: 'Compositing',
         description:
-            '`input` seen through `mask`: its color and alpha are both scaled by the brightness of `mask`, as in Hydra, so it is opaque where the mask is white and transparent and black where it is black. What is masked out adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. Lay the result over another signal with `layer`.',
+            '`input` seen through `mask`: its color and alpha are both scaled by the brightness of `mask`, as in Hydra, so it is opaque where the mask is white and transparent and black where it is black. What is masked out adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. `config.keepColor` scales only the alpha, so the masked-out color stays for whatever reads the signal as a number, such as the amount of `hueShift` or a modulator. Lay the result over another signal with `layer`.',
         params: [
             { name: 'mask', description: 'Where `input` shows, by brightness' },
+            {
+                name: 'config.keepColor',
+                description:
+                    'Scale only the alpha and keep the color (default false)',
+            },
         ],
         examples: [
             '$v.out($v.layer($v.hsv(0.6), $v.osc(10).$.hsv().$.mask($v.shape(0.3, 0.05))))',
         ],
         declarations: [
-            'mask(input: VideoValue, mask: VideoValue): VideoSignal;',
+            'mask(input: VideoValue, mask: VideoValue, config?: { keepColor?: boolean }): VideoSignal;',
         ],
     },
     {
         name: 'luma',
         group: 'Compositing',
         description:
-            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is scaled by the same key, as in Hydra, so what is keyed out is black as well as transparent and adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations; `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.',
+            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is scaled by the same key, as in Hydra, so what is keyed out is black as well as transparent and adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations; `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. `config.keepColor` scales only the alpha, as `mask` does. Lay the result over another signal with `layer`.',
         params: [
             {
                 name: 'threshold',
@@ -822,13 +827,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     'Keep the dark side instead: opaque up to `threshold`, transparent from `threshold + tolerance` (default false)',
             },
+            {
+                name: 'config.keepColor',
+                description:
+                    'Scale only the alpha and keep the color (default false)',
+            },
         ],
         examples: [
             '$v.out($v.layer($v.hsv(0.7, 0.6, 0.4), $v.voronoi(6, $v.time).$.luma(0.4, 0.02)))',
             '$v.out($v.layer($v.osc(8).$.hsv(), $v.noise(4, $v.time).$.luma(0.4, 0.05, { invert: true })))',
         ],
         declarations: [
-            'luma(input: VideoValue, threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
+            'luma(input: VideoValue, threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean; keepColor?: boolean }): VideoSignal;',
         ],
     },
     {
@@ -1688,15 +1698,17 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'mask',
         description:
-            'This seen through `mask`: its color and alpha scaled by the brightness of `mask`.',
-        declarations: ['mask(mask: VideoValue): VideoSignal;'],
+            'This seen through `mask`: its color and alpha scaled by the brightness of `mask`; `config.keepColor` scales only the alpha.',
+        declarations: [
+            'mask(mask: VideoValue, config?: { keepColor?: boolean }): VideoSignal;',
+        ],
     },
     {
         name: 'luma',
         description:
-            'Keys this by its own brightness: opaque from `threshold` up, transparent and black below `threshold - tolerance`; `config.invert` keeps the dark side.',
+            'Keys this by its own brightness: opaque from `threshold` up, transparent and black below `threshold - tolerance`; `config.invert` keeps the dark side, `config.keepColor` scales only the alpha.',
         declarations: [
-            'luma(threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
+            'luma(threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean; keepColor?: boolean }): VideoSignal;',
         ],
     },
     {

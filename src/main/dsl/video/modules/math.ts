@@ -1,5 +1,5 @@
 import { LUMA_HELPER } from './rgba';
-import type { VideoModuleDef } from './types';
+import type { VideoModuleDef, VideoParamSpec } from './types';
 
 const unit = (x: string) => `clamp(${x}, 0.0, 1.0)`;
 
@@ -124,57 +124,85 @@ export const layer = binary(
     'vec4f(mix(a.rgb, b.rgb, clamp(b.a, 0.0, 1.0)), clamp(a.a + b.a, 0.0, 1.0))',
 );
 
+/** Whether a key scales the color with the alpha (`scale`, the default) or keeps it (`keep`). */
+const KEY_COLOR: VideoParamSpec = {
+    values: ['scale', 'keep'],
+    default: 'scale',
+};
+
 /**
- * `input` seen through `mask`: its color and alpha both scaled by the mask's
- * luma, as in Hydra, so a masked-out color adds nothing when combined.
+ * The WGSL that keys color `c` by `k`. Scaling the color too, as in Hydra,
+ * makes a keyed-out color add nothing when combined; keeping it leaves that
+ * color for whatever reads the signal as a number.
+ */
+const applyKey = (color: string) =>
+    color === 'keep' ? 'vec4f(c.rgb, c.a * k)' : 'vec4f(c.rgb * k, c.a * k)';
+
+/** The suffix that names the `keep` variant of a key function. */
+const keySuffix = (color: string) => (color === 'keep' ? '_keep_color' : '');
+
+/**
+ * `input` seen through `mask`: its alpha scaled by the mask's luma, and its
+ * color too unless `color` is `keep`.
  */
 export const mask: VideoModuleDef = {
     inputs: { input: 'rgba', mask: 'number' },
     output: 'rgba',
-    helpers: [
-        `fn video_mask(c: vec4f, m: f32) -> vec4f {
+    params: { color: KEY_COLOR },
+    helpers: ({ color }) => [
+        `fn video_mask${keySuffix(color)}(c: vec4f, m: f32) -> vec4f {
     let k = clamp(m, 0.0, 1.0);
-    return vec4f(c.rgb * k, c.a * k);
+    return ${applyKey(color)};
 }`,
     ],
-    emit: ({ input, mask: m }) => `video_mask(${input}, ${m})`,
+    emit: ({ input, mask: m }, { color }) =>
+        `video_mask${keySuffix(color)}(${input}, ${m})`,
 };
 
 /**
- * Keys `input` by its own brightness through `fn video_<name>`, whose key is
- * the expression `alpha` of the brightness `l`, `threshold` and `band`. The
- * key scales the color as well as the alpha, as in Hydra, so a keyed-out
- * color adds nothing when combined.
+ * The function that keys `c` by its own brightness, named `video_<name>` plus
+ * the `color` suffix, whose key is the expression `alpha` of the brightness
+ * `l`, `threshold` and `band`.
  */
-const lumaKey = (name: string, alpha: string): VideoModuleDef => ({
-    inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
-    output: 'rgba',
-    helpers: [
-        LUMA_HELPER,
-        `fn video_${name}(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
+const lumaKey = (name: string, alpha: string, color: string) =>
+    `fn video_${name}${keySuffix(color)}(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
     let l = video_luma(c);
     let band = max(tolerance, 0.00001);
     let k = ${alpha};
-    return vec4f(c.rgb * k, c.a * k);
-}`,
-    ],
-    emit: ({ input, threshold, tolerance }) =>
-        `video_${name}(${input}, ${threshold}, ${tolerance})`,
-});
+    return ${applyKey(color)};
+}`;
 
 /**
  * Keys `input` by its own brightness: alpha rises from 0 at `threshold -
  * tolerance` to 1 at `threshold`, so a threshold of 1 keeps only white.
  * Keeping `below` is the mirror: opaque up to `threshold`, transparent from
- * `threshold + tolerance`.
+ * `threshold + tolerance`. The key scales the color too unless `color` is
+ * `keep`.
  */
-export const luma = keeping(
-    lumaKey('luma_key', 'smoothstep(threshold - band, threshold, l)'),
-    lumaKey(
-        'luma_key_below',
-        '(1.0 - smoothstep(threshold, threshold + band, l))',
-    ),
-);
+export const luma: VideoModuleDef = {
+    inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
+    output: 'rgba',
+    params: {
+        keep: { values: ['above', 'below'], default: 'above' },
+        color: KEY_COLOR,
+    },
+    helpers: ({ keep, color }) => [
+        LUMA_HELPER,
+        keep === 'below'
+            ? lumaKey(
+                  'luma_key_below',
+                  '(1.0 - smoothstep(threshold, threshold + band, l))',
+                  color,
+              )
+            : lumaKey(
+                  'luma_key',
+                  'smoothstep(threshold - band, threshold, l)',
+                  color,
+              ),
+    ],
+    emit: ({ input, threshold, tolerance }, { keep, color }) =>
+        `video_luma_key${keep === 'below' ? '_below' : ''}${keySuffix(color)}(${input}, ${threshold}, ${tolerance})`,
+};
 
 /** A color from four levels, each clipped to 0..1. */
 export const colorize: VideoModuleDef = {

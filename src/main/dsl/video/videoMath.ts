@@ -3,6 +3,8 @@ import {
     describe,
     type VideoCore,
     type VideoKeepConfig,
+    type VideoLumaConfig,
+    type VideoMaskConfig,
     type VideoSource,
 } from './videoBuilderTypes';
 
@@ -12,24 +14,30 @@ export function mathMethods(core: VideoCore) {
     const node = (kind: string, values: Record<string, unknown>) =>
         core.addNode(kind, core.values(`$v.${kind}`, values));
 
+    /** The boolean option `name` of a `$v.<kind>` config, false when absent. */
+    const flag = (kind: string, name: string, option: unknown): boolean => {
+        const value = option ?? false;
+        if (typeof value !== 'boolean') {
+            throw new Error(
+                `$v.${kind}: ${name} must be true or false, got ${describe(value)}`,
+            );
+        }
+        return value;
+    };
+
     /** A node of module `kind` that keeps the side of its threshold `config` asks for. */
     const keeping = (
         kind: string,
         values: Record<string, unknown>,
         config: VideoKeepConfig | undefined,
-    ) => {
-        const invert = config?.invert ?? false;
-        if (typeof invert !== 'boolean') {
-            throw new Error(
-                `$v.${kind}: invert must be true or false, got ${describe(invert)}`,
-            );
-        }
-        return core.addNode(
+    ) =>
+        core.addNode(
             kind,
             core.values(`$v.${kind}`, values),
-            invert ? { params: { keep: 'below' } } : undefined,
+            flag(kind, 'invert', config?.invert)
+                ? { params: { keep: 'below' } }
+                : undefined,
         );
-    };
 
     return {
         /** Sum, clipped to 0..1. */
@@ -89,18 +97,37 @@ export function mathMethods(core: VideoCore) {
         layer: (base: VideoSource, top: VideoSource): VideoOutput =>
             node('layer', { a: base, b: top }),
 
-        /** `input` seen through `mask`: its color and alpha scaled by the mask's brightness. */
-        mask: (input: VideoSource, mask: VideoSource): VideoOutput =>
-            node('mask', { input, mask }),
+        /** `input` seen through `mask`: its color and alpha scaled by the mask's brightness, or with `config.keepColor` only its alpha. */
+        mask: (
+            input: VideoSource,
+            mask: VideoSource,
+            config?: VideoMaskConfig,
+        ): VideoOutput =>
+            core.addNode(
+                'mask',
+                core.values('$v.mask', { input, mask }),
+                flag('mask', 'keepColor', config?.keepColor)
+                    ? { params: { color: 'keep' } }
+                    : undefined,
+            ),
 
-        /** Keys `input` by its own brightness, color and alpha alike: opaque from `threshold` up, or with `config.invert` from `threshold` down. */
+        /** Keys `input` by its own brightness, color and alpha alike (only alpha with `config.keepColor`): opaque from `threshold` up, or with `config.invert` from `threshold` down. */
         luma: (
             input: VideoSource,
             threshold: VideoSource = 0.5,
             tolerance: VideoSource = 0.1,
-            config?: VideoKeepConfig,
-        ): VideoOutput =>
-            keeping('luma', { input, threshold, tolerance }, config),
+            config?: VideoLumaConfig,
+        ): VideoOutput => {
+            const params: Record<string, string> = {};
+            if (flag('luma', 'invert', config?.invert)) params.keep = 'below';
+            if (flag('luma', 'keepColor', config?.keepColor))
+                params.color = 'keep';
+            return core.addNode(
+                'luma',
+                core.values('$v.luma', { input, threshold, tolerance }),
+                Object.keys(params).length > 0 ? { params } : undefined,
+            );
+        },
 
         /** Quantizes each channel to `levels` values between 0 and 1. */
         posterize: (input: VideoSource, levels: VideoSource = 4): VideoOutput =>

@@ -134,6 +134,13 @@ export interface VideoKeepConfig {
     invert?: boolean;
 }
 
+export interface VideoMaskConfig {
+    /** Scale only the alpha, leaving the color for what reads this as a number (default false). */
+    keepColor?: boolean;
+}
+
+export interface VideoLumaConfig extends VideoKeepConfig, VideoMaskConfig {}
+
 export interface VideoEdgeConfig extends VideoPositionConfig {
     /** The curve the soft edge follows from inside to outside (default 'linear'). */
     falloff?: 'linear' | 'smooth' | 'smoother' | 'in' | 'out';
