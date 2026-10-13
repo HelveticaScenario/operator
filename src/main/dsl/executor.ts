@@ -1084,11 +1084,12 @@ export function executePatchScript(
             ...controls.groups,
         ]);
 
-        // Build and return the patch with source locations
+        // The video graph goes first: building it publishes the audio taps
+        // it reads into the patch.
+        const videoGraph = videoBuilder.build();
         const resultBuilder = context.getBuilder();
         const patch = resultBuilder.toPatch();
         const sourceLocationMap = resultBuilder.getSourceLocationMap();
-        const videoGraph = videoBuilder.build();
 
         return {
             buttons: controls.buttons,

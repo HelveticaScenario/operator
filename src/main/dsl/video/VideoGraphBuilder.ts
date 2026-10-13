@@ -48,6 +48,9 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown
 
 const PREVIEW_VIEWS: readonly string[] = ['image', 'waveform', 'vectorscope'];
 
+/** WebGPU's default `maxSampledTexturesPerShaderStage`, which the renderer does not raise. */
+const MAX_SAMPLED_TEXTURES = 16;
+
 /**
  * Collects `$v.*` calls into a {@link VideoGraph}. The functions that only
  * build nodes live in the `video*.ts` files beside it and are mixed in; this
@@ -83,7 +86,10 @@ export class VideoGraphBuilder implements VideoCore {
     private tapIndexes = new Map<string, number>();
     private histories: VideoHistory[] = [];
     private sources: VideoSourceDef[] = [];
-    private tapCount = 0;
+    /** The audio signal each tap carries, published once `build` knows which taps are live. */
+    private tapSignals: AudioSignal[] = [];
+    /** The signal each pattern plays as, so a pattern used twice shares one `$cycle`. */
+    private played = new Map<object, AudioSignal>();
 
     constructor(private readonly host: VideoGraphHost) {
         Object.assign(
@@ -152,7 +158,7 @@ export class VideoGraphBuilder implements VideoCore {
         return { kind: 'uniform', slot: uniform.slot };
     }
 
-    /** The engine tap carrying `signal`, summed to one channel, publishing it on first use. */
+    /** The engine tap carrying `signal`, summed to one channel, adding it on first use. */
     private tapFor(fn: string, name: string, signal: AudioSignal): number {
         if (signal instanceof BaseCollection && signal.length === 0) {
             throw new Error(`${fn}: ${name} has no channels`);
@@ -162,20 +168,38 @@ export class VideoGraphBuilder implements VideoCore {
             .join('\n');
         const known = this.tapIndexes.get(key);
         if (known !== undefined) return known;
-        if (this.tapCount >= MAX_VIDEO_TAPS) {
+        if (this.tapSignals.length >= MAX_VIDEO_TAPS) {
             throw new Error(
                 `${fn}: ${name} would be signal ${MAX_VIDEO_TAPS + 1}; a patch can read at most ${MAX_VIDEO_TAPS} audio signals into video`,
             );
         }
-        const tap = this.tapCount++;
-        this.host.publishTap(signal, tap);
+        const tap = this.tapSignals.push(signal) - 1;
         this.tapIndexes.set(key, tap);
         return tap;
     }
 
+    /** `value` as an audio signal when it is a pattern, playing each pattern once. */
+    private play(value: unknown): unknown {
+        if (!isPatternValue(value)) return value;
+        let signal = this.played.get(value);
+        if (signal === undefined) {
+            signal = this.host.playPattern(value);
+            this.played.set(value, signal);
+        }
+        return signal;
+    }
+
     value(fn: string, name: string, value: unknown): VideoValue {
-        const v = isPatternValue(value) ? this.host.playPattern(value) : value;
-        if (typeof v === 'number') return { kind: 'const', value: v };
+        const v = this.play(value);
+        if (typeof v === 'number') {
+            // The shader holds constants as f32, whose range ends near 3.4e38.
+            if (!Number.isFinite(Math.fround(v))) {
+                throw new Error(
+                    `${fn}: ${name} must be a finite number within ±3.4e38, got ${v}`,
+                );
+            }
+            return { kind: 'const', value: v };
+        }
         if (v instanceof VideoOutput) return v.value;
         if (v instanceof ModuleOutput || v instanceof BaseCollection) {
             return this.bindSignal(fn, name, v);
@@ -212,9 +236,7 @@ export class VideoGraphBuilder implements VideoCore {
         position: VideoSource = this.ramp('horizontal'),
         config?: VideoAudioConfig,
     ): VideoOutput => {
-        const played = isPatternValue(signal)
-            ? this.host.playPattern(signal)
-            : signal;
+        const played = this.play(signal);
         if (
             !(
                 played instanceof ModuleOutput ||
@@ -388,6 +410,8 @@ export class VideoGraphBuilder implements VideoCore {
     /**
      * The graph reachable from the output and the previews, or null when the
      * patch has neither. A patch with previews but no `$v.out` shows black.
+     * Only what that graph uses is kept: the media it opens, the audio it
+     * reads, and the taps the engine publishes for it.
      */
     build(): VideoGraph | null {
         const hasOutput = this.outputId !== null;
@@ -395,11 +419,76 @@ export class VideoGraphBuilder implements VideoCore {
             this.outputId = this.addOut({ kind: 'const', value: 0 });
         }
         if (this.outputId === null) return null;
+        const liveNodes = this.liveNodes(this.outputId);
+
+        // Each index the shader binds is renumbered over the live nodes, so
+        // what only pruned nodes used leaves no gaps.
+        const buffers = keptIndices(liveNodes.map((n) => n.buffer));
+        const histories = keptIndices(liveNodes.map((n) => n.history));
+        const sources = keptIndices(liveNodes.map((n) => n.source));
+        const slots = keptIndices(
+            [
+                ...liveNodes.flatMap((n) => Object.values(n.inputs)),
+                ...this.previews.map((p) => p.value),
+            ].map((v) => (v.kind === 'uniform' ? v.slot : undefined)),
+        );
+        const taps = keptIndices([
+            ...slots.map((slot) => {
+                const u = this.uniforms[slot];
+                return u.kind === 'tap' ? u.tap : undefined;
+            }),
+            ...histories.map((row) => this.histories[row].tap),
+        ]);
+        checkTextures(
+            buffers.length,
+            histories.length > 0 ? 1 : 0,
+            sources.length,
+        );
+        taps.forEach((tap, k) => this.host.publishTap(this.tapSignals[tap], k));
+
+        const remap = (v: VideoValue): VideoValue =>
+            v.kind === 'uniform' ? { ...v, slot: slots.indexOf(v.slot) } : v;
+        return {
+            nodes: liveNodes.map((n) => ({
+                ...n,
+                inputs: Object.fromEntries(
+                    Object.entries(n.inputs).map(([k, v]) => [k, remap(v)]),
+                ),
+                ...(n.buffer !== undefined && {
+                    buffer: buffers.indexOf(n.buffer),
+                }),
+                ...(n.history !== undefined && {
+                    history: histories.indexOf(n.history),
+                }),
+                ...(n.source !== undefined && {
+                    source: sources.indexOf(n.source),
+                }),
+            })),
+            output: this.outputId,
+            hasOutput,
+            histories: histories.map((row) => ({
+                ...this.histories[row],
+                tap: taps.indexOf(this.histories[row].tap),
+            })),
+            sources: sources.map((k) => this.sources[k]),
+            previews: this.previews.map((p) => ({
+                ...p,
+                value: remap(p.value),
+            })),
+            uniforms: slots.map((slot, k) => {
+                const u = this.uniforms[slot];
+                return u.kind === 'tap'
+                    ? { ...u, slot: k, tap: taps.indexOf(u.tap) }
+                    : { ...u, slot: k };
+            }),
+        };
+    }
+
+    /** The nodes the output, the previews and the buffer writes read, in graph order. */
+    private liveNodes(outputId: string): VideoNode[] {
         const live = new Set<string>(
             this.nodes
-                .filter(
-                    (n) => n.id === this.outputId || n.kind === 'feedbackWrite',
-                )
+                .filter((n) => n.id === outputId || n.kind === 'feedbackWrite')
                 .map((n) => n.id),
         );
         for (const preview of this.previews) {
@@ -413,27 +502,49 @@ export class VideoGraphBuilder implements VideoCore {
             }
         }
         const liveNodes = this.nodes.filter((n) => live.has(n.id));
-        // Buffers a patch allocated but never used, or whose reads were all
-        // pruned, must not leave gaps in the numbering the shader binds.
-        const used = [
-            ...new Set(
-                liveNodes.flatMap((n) =>
-                    n.buffer === undefined ? [] : [n.buffer],
-                ),
+        const written = new Set(
+            liveNodes.flatMap((n) =>
+                n.kind === 'feedbackWrite' ? [n.buffer] : [],
             ),
-        ].sort((a, b) => a - b);
-        return {
-            nodes: liveNodes.map((n) =>
-                n.buffer === undefined
-                    ? n
-                    : { ...n, buffer: used.indexOf(n.buffer) },
-            ),
-            output: this.outputId,
-            hasOutput,
-            histories: this.histories,
-            sources: this.sources,
-            previews: this.previews,
-            uniforms: this.uniforms,
-        };
+        );
+        if (
+            liveNodes.some(
+                (n) => n.kind === 'feedbackRead' && !written.has(n.buffer),
+            )
+        ) {
+            throw new Error(
+                '$v.buffer: a buffer is read but never written; give it a signal with .write(...)',
+            );
+        }
+        return liveNodes;
     }
+}
+
+/** The distinct indices in `indices`, ascending. */
+function keptIndices(indices: (number | undefined)[]): number[] {
+    return [
+        ...new Set(indices.filter((i): i is number => i !== undefined)),
+    ].sort((a, b) => a - b);
+}
+
+/** Rejects a graph that samples more textures than WebGPU guarantees a shader. */
+function checkTextures(
+    buffers: number,
+    histories: number,
+    sources: number,
+): void {
+    if (buffers + histories + sources <= MAX_SAMPLED_TEXTURES) return;
+    const used = (
+        [
+            [buffers, 'feedback buffer'],
+            [histories, 'audio history'],
+            [sources, 'source'],
+        ] as const
+    )
+        .filter(([count]) => count > 0)
+        .map(([count, what]) => `${count} ${what}${count === 1 ? '' : 's'}`);
+    const listed = `${used.slice(0, -1).join(', ')} and ${used[used.length - 1]}`;
+    throw new Error(
+        `$v: a patch can use at most ${MAX_SAMPLED_TEXTURES} textures, counting feedback buffers and frame delays, one for all of $v.fromAudio, and one per media source; this one uses ${listed}`,
+    );
 }
