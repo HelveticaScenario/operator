@@ -762,7 +762,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'layer',
         group: 'Compositing',
         description:
-            "Lays `top` over `base` by the alpha of `top`, as Hydra's `layer` does: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add.",
+            'Lays `top` over `base` by the alpha of `top`: where `top` is opaque it covers `base`, and where it is transparent `base` shows through. The alphas add.',
         params: [
             { name: 'base', description: 'The signal underneath' },
             { name: 'top', description: 'The signal laid over it' },
@@ -779,7 +779,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mask',
         group: 'Compositing',
         description:
-            "`input` seen through `mask`, like Hydra's `mask`: its alpha is scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.",
+            '`input` seen through `mask`: its alpha is scaled by the brightness of `mask`, so it is opaque where the mask is white and transparent where it is black. Lay the result over another signal with `layer`.',
         params: [
             { name: 'mask', description: 'Where `input` shows, by brightness' },
         ],
@@ -794,7 +794,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'luma',
         group: 'Compositing',
         description:
-            "Keys `input` by its own brightness, like Hydra's `luma`: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.",
+            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.',
         params: [
             {
                 name: 'threshold',
@@ -996,7 +996,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulate',
         group: 'Warping',
         description:
-            "Pushes `input` around by another signal, as Hydra's `modulate` does: the modulator's red channel moves it across and its green up, so a gray modulator moves it diagonally. It is `displace` with the push taken from a signal.",
+            "Pushes `input` around by another signal: the modulator's red channel moves it across and its green up, `amount` of the frame for each unit of the channel. A black modulator leaves `input` in place, and a gray one moves it diagonally.",
         params: [
             {
                 name: 'modulator',
@@ -1005,7 +1005,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Largest push as a fraction of the frame (default 0.1)',
+                    'Push as a fraction of the frame for each unit of the channel (default 0.1)',
             },
         ],
         examples: [
@@ -1020,7 +1020,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScale',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScale`: scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
+            "Scales `input` about the center by `offset + multiple * channel`, the modulator's red channel setting the horizontal factor and its green the vertical. Where the modulator is 0 the factor is `offset`, and where it is full it is `offset + multiple`.",
         params: [
             {
                 name: 'modulator',
@@ -1048,7 +1048,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRotate',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRotate`: turns `input` about the center by `offset + multiple * red`, so the brighter parts of the modulator turn the picture further. Angles are in turns: 1 is a full turn.",
+            'Turns `input` about the center by `offset + multiple * red`, so the brighter parts of the modulator turn the picture further. Angles are in turns: 1 is a full turn.',
         params: [
             {
                 name: 'modulator',
@@ -1074,7 +1074,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulatePixelate',
         group: 'Warping',
         description:
-            "As Hydra's `modulatePixelate`: holds `input` constant over a grid of `offset + multiple * channel` cells, red setting the cells across and green the cells up, so the pixels grow large where the modulator is dark.",
+            'Holds `input` constant over a grid of `offset + multiple * channel` cells, red setting the cells across and green the cells up, so the pixels grow large where the modulator is dark.',
         params: [
             {
                 name: 'modulator',
@@ -1100,7 +1100,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateKaleid',
         group: 'Warping',
         description:
-            "As Hydra's `modulateKaleid`: mirrors `input` around the center into `sides` wedges, with the distance from the center pushed out by the modulator's red channel, so the kaleidoscope swells where the modulator is bright.",
+            "Mirrors `input` around the center into `sides` wedges, with the distance from the center pushed out by the modulator's red channel, so the kaleidoscope swells where the modulator is bright.",
         params: [
             {
                 name: 'modulator',
@@ -1119,7 +1119,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateHue',
         group: 'Warping',
         description:
-            "As Hydra's `modulateHue`: pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A gray modulator has the same value in every channel, so it has no differences and does not move `input`.",
+            "Pushes `input` by the differences between the modulator's color channels, green minus red across and blue minus green up, by `amount` pixels where a difference is full scale. A gray modulator has the same value in every channel, so it has no differences and does not move `input`.",
         params: [
             {
                 name: 'modulator',
@@ -1128,7 +1128,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             {
                 name: 'amount',
                 description:
-                    'Pixels of push for a channel difference of full scale (default 50)',
+                    'Pixels of push for a channel difference of full scale (default 1)',
             },
         ],
         examples: [
@@ -1142,7 +1142,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeat',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRepeat`: tiles `input` `repeatX` by `repeatY` times with alternate rows and columns offset, the offsets growing with the modulator's red channel for x and green for y. 1 is a whole tile.",
+            "Tiles `input` `repeatX` by `repeatY` times with alternate rows and columns offset, the offsets growing with the modulator's red channel for x and green for y. 1 is a whole tile.",
         params: [
             {
                 name: 'modulator',
@@ -1172,7 +1172,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeatX',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRepeatX`: tiles `input` `reps` times across, shifting alternate columns up by `offset` times the modulator's red channel.",
+            "Tiles `input` `reps` times across, shifting alternate columns up by `offset` times the modulator's red channel.",
         params: [
             {
                 name: 'modulator',
@@ -1196,7 +1196,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateRepeatY',
         group: 'Warping',
         description:
-            "As Hydra's `modulateRepeatY`: tiles `input` `reps` times up, shifting alternate rows right by `offset` times the modulator's red channel.",
+            "Tiles `input` `reps` times up, shifting alternate rows right by `offset` times the modulator's red channel.",
         params: [
             {
                 name: 'modulator',
@@ -1220,7 +1220,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScrollX',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScrollX`: scrolls `input` across by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
+            "Scrolls `input` across by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
         params: [
             {
                 name: 'modulator',
@@ -1248,7 +1248,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'modulateScrollY',
         group: 'Warping',
         description:
-            "As Hydra's `modulateScrollY`: scrolls `input` up by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
+            "Scrolls `input` up by the modulator's red channel times `scroll`, plus `speed` of the frame every second, wrapping round the edges.",
         params: [
             {
                 name: 'modulator',
@@ -1448,7 +1448,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'buffer',
         group: 'Memory',
         description:
-            "A frame store that persists from one frame to the next, as Hydra's output buffers do. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
+            "A frame store that persists from one frame to the next. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
             'const trail = $v.buffer(); $v.osc(8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',

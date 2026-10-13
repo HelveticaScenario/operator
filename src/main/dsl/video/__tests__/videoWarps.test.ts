@@ -65,15 +65,6 @@ describe('$v warps and modulators', () => {
             expect(wgsl).toMatch(/let v\d: vec4f = f\d\(video_pixelate/);
         });
 
-        it('modulates by the red and green of the modulator', () => {
-            const wgsl = wgslOf(`
-                const m = $v.hsv($v.ramp());
-                $v.out($v.hsv($v.modulate($v.osc(4), m, 0.2)));
-            `);
-            expect(wgsl).toMatch(/vec4f\(vec3f\(v\d+\.r\), 1\.0\)/);
-            expect(wgsl).toMatch(/vec4f\(vec3f\(v\d+\.g\), 1\.0\)/);
-        });
-
         it('pulls a channel or the brightness out of a signal', () => {
             const wgsl = wgslOf(`
                 $v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'g'), $v.channel($v.hsv($v.ramp())), 0));
@@ -94,12 +85,13 @@ describe('$v warps and modulators', () => {
         });
     });
 
-    describe("Hydra's modulators", () => {
+    describe('modulators', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
         const names = [
+            ['modulate', 'uv + v'],
             ['modulateScale', 'video_mod_scale('],
             ['modulateRotate', 'video_transform(uv, 1.0,'],
-            ['modulatePixelate', 'video_mod_pixelate('],
+            ['modulatePixelate', 'video_pixelate(uv, vec2f('],
             ['modulateKaleid', 'video_kaleid('],
             ['modulateHue', 'video_mod_hue('],
             ['modulateRepeat', 'video_mod_repeat('],
@@ -157,8 +149,32 @@ describe('$v warps and modulators', () => {
                 `$v.out($v.modulatePixelate($v.hsv($v.ramp()), ${noise}, 12, 4));`,
             );
             expect(cells).toMatch(
-                /video_mod_pixelate\(uv, vec2f\(4\.0\) \+ v\d+\.rg \* 12\.0\)/,
+                /video_pixelate\(uv, vec2f\(4\.0\) \+ v\d+\.rg \* 12\.0\)/,
             );
+        });
+
+        it('pushes by the channels themselves, so black leaves the input in place', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulate($v.hsv($v.ramp()), $v.hsv(${noise}), 0.2));`,
+            );
+            expect(wgsl).toMatch(/f\d+\(uv \+ v\d+\.rg \* 0\.2\)/);
+        });
+
+        it('samples pixelated cells at their centers', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulatePixelate($v.hsv($v.ramp()), ${noise}));`,
+            );
+            expect(wgsl).toContain('(floor(uv * grid) + vec2f(0.5)) / grid');
+        });
+
+        it('alternates repeated rows and columns below zero too', () => {
+            const wgsl = wgslOf(
+                `$v.out($v.modulateRepeat($v.hsv($v.ramp()), $v.hsv(${noise})));`,
+            );
+            const repeat = wgsl.match(/fn video_mod_repeat\(.*?\n}/s)?.[0];
+            expect(repeat).toContain('video_mod(st.y, 2.0)');
+            expect(repeat).not.toContain('%');
+            expect(wgsl).toContain('x - m * floor(x / m)');
         });
 
         it('rejects a modulator that is not a video signal', () => {
