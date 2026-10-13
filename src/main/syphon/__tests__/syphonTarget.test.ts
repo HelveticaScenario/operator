@@ -17,3 +17,14 @@ describe('syphonAction', () => {
         expect(syphonAction(true, 'performance', 'editor')).toBe('switch');
     });
 });
+
+describe('syphonAction for a toggle that names no window', () => {
+    it('stops whichever window is published', () => {
+        expect(syphonAction(true, 'editor')).toBe('stop');
+        expect(syphonAction(true, 'performance')).toBe('stop');
+    });
+
+    it('starts when nothing is published', () => {
+        expect(syphonAction(false, 'performance')).toBe('start');
+    });
+});
