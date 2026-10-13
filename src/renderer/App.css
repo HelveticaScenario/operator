@@ -80,8 +80,8 @@
 }
 
 /* While a picture shows behind the code, each line of code gets a backing that
- * ends where its text ends. The shadow extends it to the right without moving
- * the text, which Monaco's cursor and selection depend on. */
+ * ends where its text ends. It is a decoration stacked beneath the selection
+ * and every other highlight; the shadow extends it to the right. */
 .editor-panel.has-video-backdrop {
     --code-backing: color-mix(
         in srgb,
@@ -90,15 +90,10 @@
     );
 }
 
-.editor-panel.has-video-backdrop .monaco-editor .view-line > span {
+.editor-panel.has-video-backdrop .monaco-editor .lines-content .code-backing {
+    z-index: -1;
     background: var(--code-backing);
     box-shadow: 8px 0 0 0 var(--code-backing);
-}
-
-/* The line backing covers decorations drawn beneath the text, so an active
- * pattern step is highlighted by its inline span, which sits above it. */
-.editor-panel.has-video-backdrop .monaco-editor .active-seq-step-text {
-    background-color: rgba(78, 201, 176, 0.35);
 }
 
 /* Only the digits are backed, from the top of the line to the bottom, not the

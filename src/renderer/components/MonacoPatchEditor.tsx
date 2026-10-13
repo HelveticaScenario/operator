@@ -24,6 +24,7 @@ import {
 } from './monaco/videoPreviewViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import { trackCodeBacking } from './monaco/codeBacking';
 import { registerControlQuickFixProvider } from './monaco/controlQuickFixProvider';
 import { codeStyleFromPrettier } from '../dsl/objectPropertyInsert';
 import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
@@ -397,6 +398,13 @@ export function MonacoPatchEditor({
         const disposable = editor.onDidChangeModel(apply);
         return () => disposable.dispose();
     }, [editor, prettierConfig.tabWidth]);
+
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        return trackCodeBacking(editor);
+    }, [editor]);
 
     // Register MIDI device autocomplete provider
     useEffect(() => {

@@ -463,14 +463,6 @@ export function startModuleStatePolling({
     activeClassName = 'active-seq-step',
     pollInterval = 50,
 }: ModuleStatePollingParams): () => void {
-    // The overlay class draws beneath the text; the inline class draws in the
-    // text layer, above the backing each line gets over a video picture.
-    const activeOptions: editor.IModelDecorationOptions = {
-        className: activeClassName,
-        inlineClassName: `${activeClassName}-text`,
-        isWholeLine: false,
-    };
-
     // The active-highlight collection is bound to a single editor instance,
     // and this session may target a recreated editor. Drop any collection
     // from a previous session so the first poll creates one on this editor.
@@ -779,7 +771,10 @@ export function startModuleStatePolling({
                                 }
 
                                 newDecorations.push({
-                                    options: activeOptions,
+                                    options: {
+                                        className: activeClassName,
+                                        isWholeLine: false,
+                                    },
                                     range,
                                 });
                             }
@@ -867,7 +862,10 @@ export function startModuleStatePolling({
                                 }
 
                                 newDecorations.push({
-                                    options: activeOptions,
+                                    options: {
+                                        className: activeClassName,
+                                        isWholeLine: false,
+                                    },
                                     range,
                                 });
                             }
