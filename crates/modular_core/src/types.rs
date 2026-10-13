@@ -231,12 +231,17 @@ pub trait Sampleable: MessageHandler + Send {
     /// from zero while staying locked to the peer timeline.
     fn reset_loop_index(&self) {}
 
-    /// Inject one block's worth of host audio input frames. Only
-    /// `HiddenAudioIn` overrides this; everyone else is a no-op. The audio
-    /// callback pulls one CPAL frame per slot into `block` and hands the
-    /// whole thing in once per internal block, so the inner module can
-    /// serve per-slot reads via `get_value_at(_, ch, slot)`.
-    fn inject_audio_in_block(&self, _block: &[[f32; crate::poly::PORT_MAX_CHANNELS]]) {}
+    /// Inject host audio input frames for the current block's slots from
+    /// `first_slot` on. Only `HiddenAudioIn` overrides this; everyone else is
+    /// a no-op. The audio callback pulls one CPAL frame per slot just before
+    /// rendering those slots, so the inner module can serve per-slot reads
+    /// via `get_value_at(_, ch, slot)`.
+    fn inject_audio_in(
+        &self,
+        _first_slot: usize,
+        _frames: &[[f32; crate::poly::PORT_MAX_CHANNELS]],
+    ) {
+    }
 
     /// Reset the per-block sample cursor to 0 at the start of an internal
     /// `block_size` block. Cache slots in `block_outputs` keep their

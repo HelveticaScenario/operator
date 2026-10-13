@@ -2016,8 +2016,8 @@ struct AudioProcessor {
     /// triggers block-level work immediately.
     block_pos: usize,
     /// Pre-allocated scratch buffer for one internal block's worth of host
-    /// audio input. Filled at the block boundary from `input_reader` and
-    /// injected into `HiddenAudioIn` via `inject_audio_in_block`. Sized to
+    /// audio input. Filled slot range by slot range from `input_reader` and
+    /// injected into `HiddenAudioIn` via `inject_audio_in`. Sized to
     /// `block_size` once in `new()` so the audio thread never allocates.
     input_block_scratch: Vec<[f32; PORT_MAX_CHANNELS]>,
     /// Ableton Link integration (audio-thread side). Owns the live
@@ -2438,13 +2438,17 @@ impl AudioProcessor {
         self.try_push_garbage_item(GarbageItem::PatchUpdate(update));
     }
 
-    /// Pull one full block of host audio input from `input_reader` into
-    /// `input_block_scratch` and hand it to `HiddenAudioIn` via
-    /// `inject_audio_in_block`. Called once per internal block at the
-    /// boundary from the cpal callback.
-    fn pull_input_block(&mut self, input_reader: &mut InputBufferReader) {
+    /// Pull one frame of host audio input per slot in `slots` from
+    /// `input_reader` and hand them to `HiddenAudioIn`. Called just before
+    /// those slots render, so the input is consumed one frame per emitted
+    /// frame whatever the block size.
+    fn pull_input_frames(
+        &mut self,
+        input_reader: &mut InputBufferReader,
+        slots: std::ops::Range<usize>,
+    ) {
         use modular_core::types::WellKnownModule;
-        for slot in self.input_block_scratch.iter_mut() {
+        for slot in &mut self.input_block_scratch[slots.clone()] {
             let frame = input_reader.read_frame();
             for ch in 0..PORT_MAX_CHANNELS {
                 slot[ch] = frame[ch] * AUDIO_INPUT_GAIN;
@@ -2455,7 +2459,7 @@ impl AudioProcessor {
             .sampleables
             .get(WellKnownModule::HiddenAudioIn.id())
         {
-            audio_in.inject_audio_in_block(&self.input_block_scratch);
+            audio_in.inject_audio_in(slots.start, &self.input_block_scratch[slots]);
         }
     }
 
@@ -2699,7 +2703,6 @@ where
                         for module in audio_processor.patch.sampleables.values() {
                             module.start_block();
                         }
-                        audio_processor.pull_input_block(&mut input_reader);
                         audio_processor.block_pos = 0;
                     }
 
@@ -2725,7 +2728,6 @@ where
                                 for module in audio_processor.patch.sampleables.values() {
                                     module.start_block();
                                 }
-                                audio_processor.pull_input_block(&mut input_reader);
                                 audio_processor.block_pos = 0;
                                 if audio_processor.queued_update.is_none() {
                                     let eager_end = block_size.min(num_frames - written);
@@ -2780,6 +2782,10 @@ where
                             // the drain below then become pure cache hits. Skipped while
                             // stopped so the patch freezes on stop — the drain still ramps
                             // connected modules out via the root pull during the fade.
+                            if end > audio_processor.block_pos {
+                                let slots = audio_processor.block_pos..end;
+                                audio_processor.pull_input_frames(&mut input_reader, slots);
+                            }
                             if end > audio_processor.block_pos && !audio_processor.is_stopped() {
                                 audio_processor.process_all_modules_to(end);
                             }
@@ -4296,7 +4302,7 @@ mod tests {
             .sampleables
             .get(WellKnownModule::HiddenAudioIn.id())
             .unwrap()
-            .inject_audio_in_block(&block);
+            .inject_audio_in(0, &block);
 
         // The swap installs a fresh HIDDEN_AUDIO_IN; `transfer_state_from` must
         // carry the injected frame across so consumers don't read silence for

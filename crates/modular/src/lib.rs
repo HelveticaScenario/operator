@@ -912,6 +912,25 @@ struct StreamSetupParams<'a> {
     midi_manager: Arc<MidiInputManager>,
 }
 
+/// Fewest frames per internal block: below this, each module's per-block work
+/// (resolving inputs, dispatch) costs more than a shorter callback saves.
+const MIN_BLOCK_SIZE: usize = 64;
+/// Most frames per internal block, bounding each block buffer's memory.
+const MAX_BLOCK_SIZE: usize = 1024;
+/// Frames per internal block when the host picks the device buffer size.
+const DEFAULT_BLOCK_SIZE: usize = 256;
+
+/// The audio callback renders in internal blocks of this many frames: one per
+/// callback when it matches the device buffer (`buffer_size` frames, None for
+/// the host's default). A callback shorter than a block renders only the
+/// frames it emits and the next continues the block, so a block longer than
+/// the device buffer adds no latency.
+fn block_size_for(buffer_size: Option<u32>) -> usize {
+    buffer_size
+        .map_or(DEFAULT_BLOCK_SIZE, |frames| frames as usize)
+        .clamp(MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+}
+
 /// Set up output and input streams with the given parameters.
 /// This is the shared core logic between `new` and `recreate_streams`.
 fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
@@ -933,18 +952,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
     let (command_tx, command_rx, error_tx, error_rx, garbage_tx, garbage_rx) =
         create_audio_channels();
 
-    // Internal block size. The audio callback drains `block_size` cpal
-    // frames per block-level pass (link sync, queued patch swap,
-    // force-processing every module in dependency order, transport-meter
-    // write). CPAL's own buffer size is independent — the callback handles
-    // any count of cpal frames per invocation, splitting them across
-    // internal blocks via `block_pos`.
-    //
-    // 64 samples @ 48 kHz = ~1.33 ms per block. Chosen as a balance
-    // between block-amortised CPU savings and per-bar-trigger jitter
-    // (triggers fire at block granularity until per-sample eager-fill of
-    // ROOT_CLOCK lands).
-    const BLOCK_SIZE: usize = 64;
+    let block_size = block_size_for(params.buffer_size);
 
     let state = Arc::new(AudioState::new_with_channels(
         command_tx,
@@ -953,7 +961,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
         params.sample_rate as f32,
         channels,
         params.midi_manager.clone(),
-        BLOCK_SIZE,
+        block_size,
     ));
 
     // Get shared state for audio processor
@@ -979,7 +987,7 @@ fn setup_streams(params: StreamSetupParams) -> Result<StreamSetupResult> {
         garbage_tx,
         shared,
         input_reader,
-        BLOCK_SIZE,
+        block_size,
     )?;
 
     output_stream
@@ -2024,6 +2032,20 @@ pub fn derive_channel_count(
 // ============================================================================
 // Tests
 // ============================================================================
+
+#[cfg(test)]
+mod block_size_tests {
+    use super::block_size_for;
+
+    #[test]
+    fn block_size_follows_the_device_buffer_within_bounds() {
+        assert_eq!(block_size_for(Some(128)), 128);
+        assert_eq!(block_size_for(Some(512)), 512);
+        assert_eq!(block_size_for(Some(32)), 64);
+        assert_eq!(block_size_for(Some(4096)), 1024);
+        assert_eq!(block_size_for(None), 256);
+    }
+}
 
 #[cfg(test)]
 mod detect_wavetable_tests {

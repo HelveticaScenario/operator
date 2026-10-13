@@ -11,12 +11,12 @@ use crate::{
 };
 
 /// Upper bound on per-block input frames the module can store. Pre-allocated
-/// once so the audio thread never touches the heap on `inject_audio_in_block`.
+/// once so the audio thread never touches the heap on `inject_audio_in`.
 const AUDIO_IN_MAX_BLOCK: usize = 4096;
 
 /// Hidden audio-input module. The audio callback pulls one CPAL frame per
-/// slot of the current internal block into `block` via
-/// `inject_audio_in_block`, and consumers read per-slot values via
+/// slot of the current internal block into `block` via `inject_audio_in`,
+/// and consumers read per-slot values via
 /// `get_value_at(_, ch, slot)`.
 pub struct AudioIn {
     /// Per-block input frames, one entry per slot, each holding all
@@ -30,12 +30,13 @@ pub struct AudioIn {
     /// # Safety
     ///
     /// Accessed only from the audio thread:
-    ///   - Written during `inject_audio_in_block` (block boundary, before
-    ///     any module processing).
+    ///   - Written during `inject_audio_in` (before the slots it fills are
+    ///     processed).
     ///   - Read during `get_value_at` (inside module processing).
     /// These phases are serialised on the same thread — no concurrent access.
     block: UnsafeCell<Box<[[f32; PORT_MAX_CHANNELS]]>>,
-    /// Number of valid samples in `block` (= current internal block size).
+    /// Number of valid samples in `block`: the slots of the current internal
+    /// block injected so far.
     block_len: UnsafeCell<usize>,
 }
 
@@ -72,14 +73,17 @@ impl Sampleable for AudioIn {
 
     fn ensure_processed(&self) {}
 
-    /// Store one block's worth of host input frames. `block.len()` is
-    /// clamped to `AUDIO_IN_MAX_BLOCK`.
-    fn inject_audio_in_block(&self, block: &[[f32; PORT_MAX_CHANNELS]]) {
-        let len = block.len().min(AUDIO_IN_MAX_BLOCK);
+    /// Store host input frames for slots `first_slot..`, clamped to
+    /// `AUDIO_IN_MAX_BLOCK`.
+    fn inject_audio_in(&self, first_slot: usize, frames: &[[f32; PORT_MAX_CHANNELS]]) {
+        let end = (first_slot + frames.len()).min(AUDIO_IN_MAX_BLOCK);
+        let Some(len) = end.checked_sub(first_slot) else {
+            return;
+        };
         unsafe {
             let stored = &mut *self.block.get();
-            stored[..len].copy_from_slice(&block[..len]);
-            *self.block_len.get() = len;
+            stored[first_slot..end].copy_from_slice(&frames[..len]);
+            *self.block_len.get() = end;
         }
     }
 
@@ -115,3 +119,22 @@ impl Sampleable for AudioIn {
 }
 
 impl MessageHandler for AudioIn {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn injected_ranges_fill_their_own_slots() {
+        let audio_in = AudioIn::default();
+        let frame = |v: f32| {
+            let mut f = [0.0; PORT_MAX_CHANNELS];
+            f[0] = v;
+            f
+        };
+        audio_in.inject_audio_in(0, &[frame(1.0), frame(2.0)]);
+        audio_in.inject_audio_in(2, &[frame(3.0)]);
+        let read = |slot| audio_in.get_value_at("output", 0, slot);
+        assert_eq!([read(0), read(1), read(2), read(3)], [1.0, 2.0, 3.0, 0.0]);
+    }
+}
