@@ -703,13 +703,20 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'comparator',
         group: 'Shaping',
         description:
-            'Threshold: 0 below `threshold`, 1 above, with a linear ramp `softness` wide centered on it (a hard edge when 0).',
-        params: [],
+            'Threshold of each channel: 0 below `threshold`, 1 above, with a linear ramp `softness` wide centered on it (a hard edge when 0). `config.invert` swaps the sides: 1 below and 0 above.',
+        params: [
+            {
+                name: 'config.invert',
+                description:
+                    'Give 1 below the threshold and 0 above (default false)',
+            },
+        ],
         examples: [
             '$v.out($v.hsv(0.1, 1, $v.comparator($v.osc(4), 0.5, 0.1)))',
+            '$v.out($v.hsv(0.6, 1, $v.comparator($v.ramp(), 0.3, 0, { invert: true })))',
         ],
         declarations: [
-            'comparator(\n    input: VideoValue,\n    threshold?: VideoValue,\n    softness?: VideoValue,\n): VideoSignal;',
+            'comparator(\n    input: VideoValue,\n    threshold?: VideoValue,\n    softness?: VideoValue,\n    config?: { invert?: boolean },\n): VideoSignal;',
         ],
     },
     {
@@ -776,7 +783,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'luma',
         group: 'Compositing',
         description:
-            "Keys `input` by its own brightness, like Hydra's `luma`: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. Lay the result over another signal with `layer`.",
+            "Keys `input` by its own brightness, like Hydra's `luma`: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is kept, so `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. Lay the result over another signal with `layer`.",
         params: [
             {
                 name: 'threshold',
@@ -788,12 +795,18 @@ export const VIDEO_DOCS: VideoDoc[] = [
                 description:
                     'Width of the band below `threshold` over which the alpha rises from 0 (default 0.1)',
             },
+            {
+                name: 'config.invert',
+                description:
+                    'Keep the dark side instead: opaque up to `threshold`, transparent from `threshold + tolerance` (default false)',
+            },
         ],
         examples: [
             '$v.out($v.layer($v.hsv(0.7, 0.6, 0.4), $v.voronoi(6, $v.time).$.luma(0.4, 0.02)))',
+            '$v.out($v.layer($v.osc(8).$.hsv(), $v.noise(4, $v.time).$.luma(0.4, 0.05, { invert: true })))',
         ],
         declarations: [
-            'luma(input: VideoValue, threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
+            'luma(input: VideoValue, threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
         ],
     },
     {
@@ -1544,7 +1557,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         name: 'comparator',
         description: 'Threshold with a soft edge.',
         declarations: [
-            'comparator(threshold?: VideoValue, softness?: VideoValue): VideoSignal;',
+            'comparator(threshold?: VideoValue, softness?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
         ],
     },
     {
@@ -1659,9 +1672,9 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'luma',
         description:
-            'Keys this by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`.',
+            'Keys this by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`; `config.invert` keeps the dark side.',
         declarations: [
-            'luma(threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
+            'luma(threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean }): VideoSignal;',
         ],
     },
     {

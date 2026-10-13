@@ -129,6 +129,11 @@ export interface VideoNoiseConfig extends VideoPositionConfig {
     type?: 'simplex' | 'perlin' | 'value' | 'fbm' | 'ridged';
 }
 
+export interface VideoKeepConfig {
+    /** Keep the side below the threshold instead of the side above (default false). */
+    invert?: boolean;
+}
+
 export interface VideoShapeConfig extends VideoPositionConfig {
     shape?: 'circle' | 'box' | 'diamond';
 }

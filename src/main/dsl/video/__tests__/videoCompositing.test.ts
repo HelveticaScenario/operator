@@ -49,9 +49,25 @@ describe('$v alpha and compositing', () => {
         const wgsl = wgslOf(`$v.noise().$.luma(0.4, 0.05).out();`);
         expect(wgsl).toMatch(/video_luma_key\(v\d+, 0\.4, 0\.05\)/);
         expect(wgsl).toContain(
-            'smoothstep(threshold - max(tolerance, 0.00001), threshold, video_luma(c))',
+            'return vec4f(c.rgb, c.a * smoothstep(threshold - band, threshold, l));',
         );
-        expect(wgsl).toContain('return vec4f(c.rgb, c.a * a);');
+    });
+
+    it('keeps the dark side with invert, opaque up to the threshold', () => {
+        const wgsl = wgslOf(
+            `$v.image('a.png').$.luma(0.2, 0.1, { invert: true }).out();`,
+        );
+        expect(wgsl).toMatch(/video_luma_key_below\(v\d+, 0\.2, 0\.1\)/);
+        expect(wgsl).toContain(
+            'return vec4f(c.rgb, c.a * (1.0 - smoothstep(threshold, threshold + band, l)));',
+        );
+        expect(wgsl).not.toContain('fn video_luma_key(');
+    });
+
+    it('rejects an invert that is not true or false', () => {
+        expect(() =>
+            exec(`$v.noise().$.luma(0.5, 0.1, { invert: 'yes' });`),
+        ).toThrow(/\$v\.luma: invert must be true or false/);
     });
 
     it('stores the alpha in a frame buffer', () => {

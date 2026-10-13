@@ -1,11 +1,35 @@
 import type { VideoOutput } from './VideoOutput';
-import type { VideoCore, VideoSource } from './videoBuilderTypes';
+import {
+    describe,
+    type VideoCore,
+    type VideoKeepConfig,
+    type VideoSource,
+} from './videoBuilderTypes';
 
 /** The `$v` functions that combine, shape and composite signals. */
 export function mathMethods(core: VideoCore) {
     /** A node of module `kind` whose inputs are `values`, named by their keys. */
     const node = (kind: string, values: Record<string, unknown>) =>
         core.addNode(kind, core.values(`$v.${kind}`, values));
+
+    /** A node of module `kind` that keeps the side of its threshold `config` asks for. */
+    const keeping = (
+        kind: string,
+        values: Record<string, unknown>,
+        config: VideoKeepConfig | undefined,
+    ) => {
+        const invert = config?.invert ?? false;
+        if (typeof invert !== 'boolean') {
+            throw new Error(
+                `$v.${kind}: invert must be true or false, got ${describe(invert)}`,
+            );
+        }
+        return core.addNode(
+            kind,
+            core.values(`$v.${kind}`, values),
+            invert ? { params: { keep: 'below' } } : undefined,
+        );
+    };
 
     return {
         /** Sum, clipped to 0..1. */
@@ -45,12 +69,14 @@ export function mathMethods(core: VideoCore) {
             amount: VideoSource = 0.5,
         ): VideoOutput => node('mix', { a, b, amount }),
 
-        /** Threshold per channel: 0 below `threshold`, 1 above, with a ramp `softness` wide. */
+        /** Threshold per channel: 0 below `threshold`, 1 above, with a ramp `softness` wide; `config.invert` swaps the sides. */
         comparator: (
             input: VideoSource,
             threshold: VideoSource = 0.5,
             softness: VideoSource = 0,
-        ): VideoOutput => node('comparator', { input, threshold, softness }),
+            config?: VideoKeepConfig,
+        ): VideoOutput =>
+            keeping('comparator', { input, threshold, softness }, config),
 
         /** Shows `fg` where `mask` is 1 and `bg` where it is 0. */
         key: (
@@ -67,12 +93,14 @@ export function mathMethods(core: VideoCore) {
         mask: (input: VideoSource, mask: VideoSource): VideoOutput =>
             node('mask', { input, mask }),
 
-        /** Keys `input` by its own brightness: opaque from `threshold` up, transparent below `threshold - tolerance`. */
+        /** Keys `input` by its own brightness: opaque from `threshold` up, or with `config.invert` from `threshold` down. */
         luma: (
             input: VideoSource,
             threshold: VideoSource = 0.5,
             tolerance: VideoSource = 0.1,
-        ): VideoOutput => node('luma', { input, threshold, tolerance }),
+            config?: VideoKeepConfig,
+        ): VideoOutput =>
+            keeping('luma', { input, threshold, tolerance }, config),
 
         /** Quantizes each channel to `levels` values between 0 and 1. */
         posterize: (input: VideoSource, levels: VideoSource = 4): VideoOutput =>

@@ -43,6 +43,21 @@ function perChannel(
     };
 }
 
+/**
+ * One module from two that differ in which side of a threshold they keep,
+ * chosen by its `keep` param: `above` (the default) or `below`.
+ */
+function keeping(above: VideoModuleDef, below: VideoModuleDef): VideoModuleDef {
+    const pick = (keep: string) => (keep === 'below' ? below : above);
+    return {
+        ...above,
+        params: { keep: { values: ['above', 'below'], default: 'above' } },
+        helpers: ({ keep }) => pick(keep).helpers as readonly string[],
+        emit: (args, params, indices) =>
+            pick(params.keep).emit(args, params, indices),
+    };
+}
+
 /** Sum, clipped to 0..1; the alpha is the larger of the two. */
 export const add = binary(
     'add',
@@ -80,12 +95,20 @@ export const range = perChannel('range', ['lo', 'hi'], 'lo + x * (hi - lo)');
 
 /**
  * Threshold per channel: 0 below `threshold`, 1 above, with a linear ramp
- * `softness` wide centered on it (a hard edge when softness is 0).
+ * `softness` wide centered on it (a hard edge when softness is 0). Keeping
+ * `below` gives 1 below and 0 above.
  */
-export const comparator = perChannel(
-    'comparator',
-    ['threshold', 'softness'],
-    'clamp((x - vec3f(threshold)) / max(softness, 0.00001) + vec3f(0.5), vec3f(0.0), vec3f(1.0))',
+export const comparator = keeping(
+    perChannel(
+        'comparator',
+        ['threshold', 'softness'],
+        'clamp((x - vec3f(threshold)) / max(softness, 0.00001) + vec3f(0.5), vec3f(0.0), vec3f(1.0))',
+    ),
+    perChannel(
+        'comparator_below',
+        ['threshold', 'softness'],
+        'clamp((vec3f(threshold) - x) / max(softness, 0.00001) + vec3f(0.5), vec3f(0.0), vec3f(1.0))',
+    ),
 );
 
 /** Shows `fg` where `mask` is 1 and `bg` where it is 0. */
@@ -114,22 +137,37 @@ export const mask: VideoModuleDef = {
 };
 
 /**
- * Keys `input` by its own brightness: alpha rises from 0 at `threshold -
- * tolerance` to 1 at `threshold`, so a threshold of 1 keeps only white.
+ * Keys `input` by its own brightness through `fn video_<name>`, whose alpha
+ * is the expression `alpha` of the brightness `l`, `threshold` and `band`.
  */
-export const luma: VideoModuleDef = {
+const lumaKey = (name: string, alpha: string): VideoModuleDef => ({
     inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
     output: 'rgba',
     helpers: [
         LUMA_HELPER,
-        `fn video_luma_key(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
-    let a = smoothstep(threshold - max(tolerance, 0.00001), threshold, video_luma(c));
-    return vec4f(c.rgb, c.a * a);
+        `fn video_${name}(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
+    let l = video_luma(c);
+    let band = max(tolerance, 0.00001);
+    return vec4f(c.rgb, c.a * ${alpha});
 }`,
     ],
     emit: ({ input, threshold, tolerance }) =>
-        `video_luma_key(${input}, ${threshold}, ${tolerance})`,
-};
+        `video_${name}(${input}, ${threshold}, ${tolerance})`,
+});
+
+/**
+ * Keys `input` by its own brightness: alpha rises from 0 at `threshold -
+ * tolerance` to 1 at `threshold`, so a threshold of 1 keeps only white.
+ * Keeping `below` is the mirror: opaque up to `threshold`, transparent from
+ * `threshold + tolerance`.
+ */
+export const luma = keeping(
+    lumaKey('luma_key', 'smoothstep(threshold - band, threshold, l)'),
+    lumaKey(
+        'luma_key_below',
+        '(1.0 - smoothstep(threshold, threshold + band, l))',
+    ),
+);
 
 /** A color from four levels, each clipped to 0..1. */
 export const colorize: VideoModuleDef = {

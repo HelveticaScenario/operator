@@ -121,6 +121,16 @@ describe('$v modules', () => {
             expect(wgsl).toContain('return vec4f(clamp((x - vec3f(threshold))');
         });
 
+        it('swaps the sides of comparator with invert', () => {
+            const above = wgslOf(`$v.ramp().$.comparator(0.3).out();`);
+            const below = wgslOf(
+                `$v.ramp().$.comparator(0.3, 0, { invert: true }).out();`,
+            );
+            expect(above).toContain('clamp((x - vec3f(threshold))');
+            expect(below).toContain('clamp((vec3f(threshold) - x)');
+            expect(below).toMatch(/video_comparator_below\(v\d, 0\.3, 0\.0\)/);
+        });
+
         it('rejects an unknown ramp axis', () => {
             expect(() =>
                 exec(`$v.out($v.colorize($v.ramp('q'), 0, 0));`),
