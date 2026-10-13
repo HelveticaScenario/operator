@@ -435,6 +435,11 @@ impl MonoSignal {
         Self { inner: poly }
     }
 
+    /// The channels this input sums.
+    pub fn poly(&self) -> &PolySignal {
+        &self.inner
+    }
+
     /// Get the summed value of all channels
     pub fn get_value(&self) -> f32 {
         self.inner.channels.iter().map(|s| s.get_value()).sum()
