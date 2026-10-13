@@ -2040,19 +2040,23 @@ const createWindow = (): void => {
         }
     });
     setPerformanceAspect(configStore.load().performanceAspect ?? 'free');
-    mainWindow.webContents.setWindowOpenHandler(({ frameName }) =>
-        frameName === PERFORMANCE_WINDOW_NAME
-            ? {
-                  action: 'allow',
-                  overrideBrowserWindowOptions: {
-                      backgroundColor: '#000000',
-                      height: 720,
-                      title: 'Operator Performance',
-                      width: 1280,
-                  },
-              }
-            : { action: 'allow' },
-    );
+    // The performance window is the app's only child window; any other open
+    // (such as a link in an editor hover) goes to the system browser.
+    mainWindow.webContents.setWindowOpenHandler(({ frameName, url }) => {
+        if (frameName === PERFORMANCE_WINDOW_NAME) {
+            return {
+                action: 'allow',
+                overrideBrowserWindowOptions: {
+                    backgroundColor: '#000000',
+                    height: 720,
+                    title: 'Operator Performance',
+                    width: 1280,
+                },
+            };
+        }
+        if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+        return { action: 'deny' };
+    });
 
     // Keep the app name as the title rather than index.html's static <title>.
     mainWindow.on('page-title-updated', (event) => event.preventDefault());
