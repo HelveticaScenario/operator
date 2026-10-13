@@ -113,11 +113,9 @@ const SYPHON_PERFORMANCE_MENU_ITEM_ID = 'syphon-toggle-performance';
 let syphonTarget: SyphonTarget = 'editor';
 
 /**
- * Whether the View-menu checkbox for `target` is checked. Driven by the
- * bridge's enabled intent, not by child-process presence — the helper exits
- * asynchronously and crash-restarts with the child momentarily absent, either
- * of which would make `isActive` misreport the box. Intent stays steady across
- * both.
+ * Whether the View-menu checkbox for `target` is checked. It follows the
+ * bridge's enabled intent, which holds steady while the helper process exits
+ * or crash-restarts.
  */
 function syphonPublishing(target: SyphonTarget): boolean {
     return (syphonBridge?.isEnabled ?? false) && syphonTarget === target;
@@ -201,11 +199,10 @@ function promptScreenRecordingPermission(): void {
 }
 
 /**
- * Toggle Syphon publishing. Single entry point shared by the View-menu item and
- * the `operator.toggleSyphon` command (dispatched from the palette/keymap via
- * IPC), so both surfaces behave identically — including the failure dialog.
- * `requested` names the window a menu checkbox stands for; the command names
- * none (see {@link syphonAction}).
+ * Toggles Syphon publishing for the View-menu checkboxes and the
+ * `operator.toggleSyphon` command, which share its failure dialog.
+ * `requested` names the window a checkbox stands for; the command names none
+ * (see {@link syphonAction}).
  */
 function toggleSyphonPublish(requested?: SyphonTarget): SyphonToggleResult {
     let result: SyphonToggleResult = {
