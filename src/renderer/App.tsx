@@ -190,6 +190,11 @@ function App() {
         zones: [],
     });
     const videoPreviewsRef = useRef(videoPreviews);
+    const commitVideoPreviews = useCallback((anchors: VideoPreviewAnchors) => {
+        videoPreviewsRef.current.decorations?.clear();
+        videoPreviewsRef.current = anchors;
+        setVideoPreviews(anchors);
+    }, []);
     // Path-identity (getBufferId) of the buffer the running patch came from,
     // compared against activeBufferId by every consumer. Path identities
     // mutate on save/rename, so the stable EditorBuffer.id of the running
@@ -279,6 +284,8 @@ function App() {
         vuDecorations: editor.IEditorDecorationsCollection | null;
         /** Anchors on the pending patch's control calls, committed with it. */
         controlAnchors: ControlAnchors | null;
+        /** The pending patch's `$v.preview` panels, committed with it. */
+        videoPreviews: VideoPreviewAnchors;
         /** Stable id of the buffer the pending patch was evaluated from. */
         controlsSource: string | null;
         /** The running buffer before this submit, restored if the queued
@@ -1587,6 +1594,7 @@ function App() {
                         vuDecorationsRef.current?.clear();
                         vuDecorationsRef.current = pending.vuDecorations;
                         commitControlAnchors(pending.controlAnchors);
+                        commitVideoPreviews(pending.videoPreviews);
                         setRunningControlsSource(pending.controlsSource);
                         setScopeViews(pending.scopeViews);
                         setSliderDefs(pending.sliderDefs);
@@ -1610,6 +1618,7 @@ function App() {
                         pending.scopeDecorations?.clear();
                         pending.vuDecorations?.clear();
                         pending.controlAnchors?.dispose();
+                        pending.videoPreviews.decorations?.clear();
                         runningSourceIdRef.current =
                             pending.previousRunning.sourceId;
                         setRunningBufferId(pending.previousRunning.bufferId);
@@ -1631,7 +1640,12 @@ function App() {
         return () => {
             cancelled = true;
         };
-    }, [isClockRunning, clearVuGhosts, commitControlAnchors]);
+    }, [
+        isClockRunning,
+        clearVuGhosts,
+        commitControlAnchors,
+        commitVideoPreviews,
+    ]);
 
     // Keep Link phase indicator live while Link is enabled but Operator is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
@@ -1790,8 +1804,6 @@ function App() {
                 const editorInstance = editorRef.current;
                 const model = editorInstance?.getModel();
 
-                // Previews follow the video renderer, which swaps its
-                // shader at once rather than at a queued update's beat.
                 const previewAnchors = editorInstance
                     ? createVideoPreviewAnchors(
                           editorInstance,
@@ -1800,9 +1812,6 @@ function App() {
                           activeBufferId,
                       )
                     : { decorations: null, zones: [] };
-                videoPreviewsRef.current.decorations?.clear();
-                videoPreviewsRef.current = previewAnchors;
-                setVideoPreviews(previewAnchors);
 
                 const views: ScopeView[] = [];
                 const decorationDescs: editor.IModelDeltaDecoration[] = [];
@@ -1955,6 +1964,7 @@ function App() {
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
                     pendingUIStateRef.current?.controlAnchors?.dispose();
+                    pendingUIStateRef.current?.videoPreviews.decorations?.clear();
                     pendingUIStateRef.current = {
                         buttonDefs: newButtonDefs,
                         controlAnchors: newControlAnchors,
@@ -1965,6 +1975,7 @@ function App() {
                         scopeViews: views,
                         sliderDefs: newSliderDefs,
                         updateId: result.updateId,
+                        videoPreviews: previewAnchors,
                         vuDecorations: newVuDecorations,
                         vuOutputs: newVuOutputs,
                     };
@@ -1974,7 +1985,9 @@ function App() {
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
                     pendingUIStateRef.current?.controlAnchors?.dispose();
+                    pendingUIStateRef.current?.videoPreviews.decorations?.clear();
                     pendingUIStateRef.current = null;
+                    commitVideoPreviews(previewAnchors);
                     commitControlAnchors(newControlAnchors);
                     setRunningControlsSource(submittedSourceId);
                     scopeDecorationsRef.current?.clear();
@@ -1997,7 +2010,12 @@ function App() {
                 setValidationErrors(null);
             }
         };
-    }, [activeBufferId, clearVuGhosts, commitControlAnchors]);
+    }, [
+        activeBufferId,
+        clearVuGhosts,
+        commitControlAnchors,
+        commitVideoPreviews,
+    ]);
 
     // Expose test API for E2E tests
     useEffect(() => {
