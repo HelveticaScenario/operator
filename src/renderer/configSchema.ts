@@ -37,6 +37,14 @@ export const configSchema = {
     description: 'Configuration file for the Operator synthesizer application',
     properties: {
         audioConfig: audioConfigSchema,
+        codeBackdropOpacity: {
+            default: 0.6,
+            description:
+                'Opacity of the backing behind the code while video plays (0–1)',
+            maximum: 1,
+            minimum: 0,
+            type: 'number',
+        },
         cursorStyle: {
             default: 'block',
             description: 'The cursor style in the editor',
@@ -101,6 +109,21 @@ export const configSchema = {
                 'Path to the last opened workspace folder (managed automatically)',
             type: 'string',
         },
+        performanceAspect: {
+            default: 'free',
+            description:
+                'Shape of the performance window; free lets it take any size',
+            enum: ['free', '16:9', '4:3', '1:1', '9:16'],
+            type: 'string',
+        },
+        performanceScale: {
+            default: 1,
+            description:
+                'Resolution of the performance window as a fraction of its size (0.1–1)',
+            maximum: 1,
+            minimum: 0.1,
+            type: 'number',
+        },
         prettier: {
             additionalProperties: true,
             description:
@@ -135,6 +158,11 @@ export const configSchema = {
             },
             type: 'object',
         },
+        skippedUpdateVersion: {
+            description:
+                'Release version whose update prompt was dismissed (managed automatically)',
+            type: 'string',
+        },
         vuPanelVisible: {
             default: false,
             description: 'Show the VU meter panel at the bottom of the window',
@@ -159,6 +187,32 @@ export const configSchema = {
                 'catppuccin-mocha',
             ],
             type: 'string',
+        },
+        xyScopeIntensity: {
+            default: 0.6,
+            description: 'Brightness of the XY scope beam (0–1)',
+            maximum: 1,
+            minimum: 0,
+            type: 'number',
+        },
+        xyScopeLineWidth: {
+            default: 0.012,
+            description: 'Width of the XY scope beam (0.002–0.06)',
+            maximum: 0.06,
+            minimum: 0.002,
+            type: 'number',
+        },
+        xyScopePersistence: {
+            default: 0.6,
+            description: 'How long the XY scope trace lingers (0–1)',
+            maximum: 1,
+            minimum: 0,
+            type: 'number',
+        },
+        xyScopeUpsample: {
+            default: true,
+            description: 'Smooth the XY scope trace between samples',
+            type: 'boolean',
         },
     },
     title: 'Operator Configuration',

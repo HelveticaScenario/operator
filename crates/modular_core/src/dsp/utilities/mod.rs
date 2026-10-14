@@ -27,6 +27,7 @@ pub mod scale_and_shift;
 pub mod scale_names;
 pub mod spread;
 pub mod unison;
+pub mod video_tap;
 pub mod wrap;
 
 // Re-export useful types
@@ -58,6 +59,7 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     scale_and_shift::ScaleAndShift::install_constructor(map);
     spread::Spread::install_constructor(map);
     unison::Unison::install_constructor(map);
+    video_tap::VideoTap::install_constructor(map);
     wrap::Wrap::install_constructor(map);
 }
 
@@ -86,6 +88,7 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     scale_and_shift::ScaleAndShift::install_params_deserializer(map);
     spread::Spread::install_params_deserializer(map);
     unison::Unison::install_params_deserializer(map);
+    video_tap::VideoTap::install_params_deserializer(map);
     wrap::Wrap::install_params_deserializer(map);
 }
 
@@ -115,6 +118,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         scale_and_shift::ScaleAndShift::get_schema(),
         spread::Spread::get_schema(),
         unison::Unison::get_schema(),
+        video_tap::VideoTap::get_schema(),
         wrap::Wrap::get_schema(),
     ]
 }

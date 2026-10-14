@@ -54,6 +54,13 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
     { key: 'F1', command: 'workbench.action.showCommands' },
     { key: '$mod+Shift+p', command: 'workbench.action.showCommands' },
     { key: '$mod+Shift+m', command: 'operator.toggleVuMeters' },
+    // Physical Control on macOS, clear of the Cmd chords. Elsewhere
+    // Control+Shift+V is paste as plain text, so the binding takes Y there.
+    {
+        key: 'Control+Shift+y',
+        mac: 'Control+Shift+v',
+        command: 'operator.togglePerformanceWindow',
+    },
 
     // VS Code editor command ids that mirror VS Code's own default keybindings
     // so the editor context menu can display the shortcut. Monaco handles the

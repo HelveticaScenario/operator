@@ -119,6 +119,7 @@ LoC removed.
 ### P2.4 Delete `Pattern::query_arc` + `Hap<T>` + `HapContext`
 
 Requires:
+
 - Migrate `modular/src/lib.rs:1753` NAPI binding to consume arena haps. JS-side
   expects a structured array of haps with f64 times and span tuples — the
   NAPI layer would project from `ArenaHap`s + `extract_pattern_spans_*` into
@@ -142,6 +143,7 @@ dispatch per outer hap (1 outer hap per cycle, K inner haps per outer).
 Constant factor means we know `K = N` ahead of time.
 
 New variant:
+
 ```
 PureFastConst(Arc<PureFastConstData<T>>)
 
@@ -166,11 +168,13 @@ style.
 ### P3.2 Voice dedup via `BitSet<MAX_CHANNELS>` keyed by `hap_index`
 
 Current Seq/IntervalSeq `already_assigned` is O(channels × onsets):
+
 ```
 let already_assigned = (0..num_channels).any(|i| voice[i].cached_hap matches ...);
 ```
 
 Replace with bitset of assigned hap_indices for current cycle:
+
 ```
 let mut assigned: u128 = 0;  // bits 0..MAX_CHANNELS=16
 for i in 0..num_channels {
@@ -206,6 +210,7 @@ in dev.
 Replace pest with recursive-descent parser. Pest is general-purpose and slow.
 
 Mini grammar is complex:
+
 - Atoms (numbers, notes, freq, voltage, MIDI, identifiers, strings)
 - Operators: `*N`, `/N`, `!N`, `?P`, `@W`, `(K,N[,R])`
 - Grouping: `[...]`, `<...>`, `(...)`
@@ -226,6 +231,7 @@ issue.
 `c*100` pattern uses ~16 MB param cache (1024 cycles × 150 haps × 48B + spans).
 
 Options:
+
 - Lower `PARAM_CACHE_CYCLES` adaptively based on observed `max_haps_per_cycle`.
 - Lazy population: eagerly populate cycles 0..256 only, lazily fill 256..1024
   on first audio-thread visit (but audio-thread caches now reuse — see Seq
@@ -242,6 +248,7 @@ Replace `f64` (8B) × 4 fields in `SeqCycleHap`/`CombinedHap` with fixed-point
 Halves hap size (48B → ~32B) and makes cycle comparisons integer.
 
 Risks:
+
 - Precision loss for non-integer-aligned patterns
 - Voice release timing edge cases (`playhead >= whole_end` becomes integer
   compare which is exact, may help in some cases)
@@ -294,15 +301,15 @@ consumers to deref through Arc).
 
 ## Total effort
 
-| Phase | Items | Effort |
-|-------|-------|--------|
-| 0 | Bench baseline | 1-2 hr |
-| 1 | P1.1-P1.4 | ~3 hr |
-| 2 (P2.1-P2.3) | Owned API cleanup | ~2 hr |
-| 3 (P3.1, P3.3) | Specializations | ~3 hr |
-| 5 | Investigations | ~2 hr |
-| 2.4 | NAPI migration | half-day |
-| 4 | Heavy items | 1-3 days each, defer |
+| Phase          | Items             | Effort               |
+| -------------- | ----------------- | -------------------- |
+| 0              | Bench baseline    | 1-2 hr               |
+| 1              | P1.1-P1.4         | ~3 hr                |
+| 2 (P2.1-P2.3)  | Owned API cleanup | ~2 hr                |
+| 3 (P3.1, P3.3) | Specializations   | ~3 hr                |
+| 5              | Investigations    | ~2 hr                |
+| 2.4            | NAPI migration    | half-day             |
+| 4              | Heavy items       | 1-3 days each, defer |
 
 Phases 0-3 + P5 ≈ one focused day. Expected hot-path improvement (speculative,
 needs P0 to confirm): 1.5-3× on `*N`-heavy patterns. Cheap wins compound;
