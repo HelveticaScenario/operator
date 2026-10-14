@@ -7,6 +7,7 @@ mod audio;
 mod commands;
 mod graph_analysis;
 mod link;
+mod media_audio;
 mod midi;
 mod panic_log;
 mod params_cache;
@@ -45,6 +46,7 @@ use crate::audio::{
 use crate::commands::{GraphCommand, QueuedTrigger, TransportMeta};
 use crate::midi::MidiInputManager;
 
+use modular_core::dsp::utilities::video_tap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -62,6 +64,14 @@ pub fn get_reserved_output_names() -> Vec<String> {
         .map(|s| s.to_string())
         .collect()
 }
+
+/// Number of video tap slots the engine publishes.
+#[napi]
+pub const MAX_VIDEO_TAPS: u32 = video_tap::MAX_VIDEO_TAPS as u32;
+
+/// Samples of history each video tap keeps.
+#[napi]
+pub const VIDEO_HISTORY_LEN: u32 = video_tap::VIDEO_HISTORY_LEN as u32;
 
 // ============================================================================
 // WAV Cache
@@ -296,6 +306,88 @@ impl WavCache {
             .collect()
     }
 
+    /// Decode the audio track of a workspace media file, returning cached data
+    /// if mtime hasn't changed. `None` means the file has no audio track. The
+    /// entry is keyed `media:<path>`, which is also the path of the returned
+    /// info, so a `Wav` built from it resolves to this entry.
+    fn load_media_audio(&mut self, rel_path: &str) -> Result<Option<WavLoadInfo>> {
+        let relative = std::path::Path::new(rel_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err(napi::Error::from_reason(format!(
+                "media path must stay inside the workspace: {rel_path}"
+            )));
+        }
+        let key = format!("media:{rel_path}");
+        let full_path = self.workspace_path.join(relative);
+        let metadata = std::fs::metadata(&full_path).map_err(|e| {
+            napi::Error::from_reason(format!(
+                "media file not found: {} ({e})",
+                full_path.display()
+            ))
+        })?;
+        let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+        if let Some(entry) = self.entries.get(&key) {
+            if entry.mtime == mtime {
+                return Ok(Some(build_wav_load_info(
+                    &key,
+                    entry.data.channel_count() as u32,
+                    entry.data.frame_count() as u32,
+                    &entry.metadata,
+                    mtime_to_epoch_millis(mtime),
+                )));
+            }
+        }
+
+        let Some(audio) =
+            media_audio::decode_audio(&full_path).map_err(napi::Error::from_reason)?
+        else {
+            self.entries.remove(&key);
+            return Ok(None);
+        };
+        let frame_count = audio.channels.first().map_or(0, Vec::len);
+        let channel_count = audio.channels.len();
+        let wav_metadata = wav_metadata::WavMetadata {
+            sample_rate: audio.sample_rate,
+            frame_count: frame_count as u64,
+            bit_depth: 32,
+            pitch: None,
+            playback: None,
+            bpm: None,
+            beats: None,
+            time_signature: None,
+            bar_count: None,
+            loops: Vec::new(),
+            cue_points: Vec::new(),
+        };
+        let info = build_wav_load_info(
+            &key,
+            channel_count as u32,
+            frame_count as u32,
+            &wav_metadata,
+            mtime_to_epoch_millis(mtime),
+        );
+        self.entries.insert(
+            key,
+            WavCacheEntry {
+                data: Arc::new(modular_core::types::WavData::new(
+                    modular_core::types::SampleBuffer::from_samples(
+                        audio.channels,
+                        audio.sample_rate as f32,
+                    ),
+                    None,
+                )),
+                mtime,
+                metadata: wav_metadata,
+            },
+        );
+        Ok(Some(info))
+    }
+
     /// Load a WAV file, returning cached data if mtime hasn't changed.
     fn load(&mut self, rel_path: &str, engine_sample_rate: f32) -> Result<WavLoadInfo> {
         let full_path = self
@@ -488,6 +580,13 @@ pub struct WavLoadInfo {
 pub struct MidiInputInfo {
     pub name: String,
     pub index: u32,
+}
+
+/// New samples of a video tap, with the count to pass back as `since`.
+#[napi(object, object_from_js = false)]
+pub struct VideoTapChunk {
+    pub head: u32,
+    pub samples: Float32Array,
 }
 
 /// A finished recording. `dropped_samples > 0` means the disk writer could
@@ -1123,6 +1222,22 @@ impl Synthesizer {
         self.state.get_vu_meter_frames()
     }
 
+    /// The samples video tap `tap` has written since `since` (a `head` from an
+    /// earlier call), or its latest few when `since` is omitted.
+    #[napi]
+    pub fn get_video_tap_chunk(&self, tap: u32, since: Option<u32>) -> Result<VideoTapChunk> {
+        let chunk = video_tap::read_video_since(tap as usize, since).ok_or_else(|| {
+            napi::Error::from_reason(format!(
+                "video tap {tap} is out of range (0-{})",
+                video_tap::MAX_VIDEO_TAPS - 1
+            ))
+        })?;
+        Ok(VideoTapChunk {
+            head: chunk.head,
+            samples: Float32Array::new(chunk.samples),
+        })
+    }
+
     /// Drain the per-module profiler snapshot accumulated since the last
     /// call. Returns one entry per module instance that did work in that
     /// window. No-op (returns empty) when profiling is disabled.
@@ -1271,6 +1386,14 @@ impl Synthesizer {
     #[napi]
     pub fn load_wav(&mut self, path: String) -> Result<WavLoadInfo> {
         self.wav_cache.load(&path, self.sample_rate)
+    }
+
+    /// Decode the audio track of a workspace media file into the cache. `None`
+    /// means the file has no audio track. The returned `path` is the key a `Wav`
+    /// parameter uses to refer to the decoded audio.
+    #[napi]
+    pub fn load_media_audio(&mut self, path: String) -> Result<Option<WavLoadInfo>> {
+        self.wav_cache.load_media_audio(&path)
     }
 
     /// Set the workspace root directory for WAV file loading.

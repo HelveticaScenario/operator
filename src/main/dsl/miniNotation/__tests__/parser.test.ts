@@ -400,7 +400,8 @@ describe('whitespace around modifiers', () => {
         if (!('Sequence' in r.ast)) return expect.fail('expected Sequence');
         expect(r.ast.Sequence).toHaveLength(2);
         const [first, second] = r.ast.Sequence;
-        if (!('Replicate' in first[0])) return expect.fail('expected Replicate');
+        if (!('Replicate' in first[0]))
+            return expect.fail('expected Replicate');
         expect(first[0].Replicate[1]).toBe(2);
         expect(firstPureAtom(second[0])).toEqual({
             Pure: { node: { Number: 2 }, span: { start: 3, end: 4 } },
