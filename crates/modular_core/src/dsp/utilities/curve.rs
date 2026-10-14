@@ -3,10 +3,10 @@ use schemars::JsonSchema;
 
 use std::ops::Range;
 
-use crate::block_input::{self, InputScratch};
+use crate::block_input;
 use crate::poly::{PolyOutput, PolySignal};
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct CurveParams {
@@ -65,19 +65,16 @@ impl Curve {
         range: Range<usize>,
         _sample_rate: f32,
     ) -> Option<()> {
-        let channels = self.channel_count();
-        let (mut s0, mut s1) = (InputScratch::new(), InputScratch::new());
-        let input = self
+        let mut scratch = Default::default();
+        let inputs = self
             .params
-            .input
-            .block_input(range.clone(), channels, &mut s0)?;
-        let exp = self
-            .params
-            .exp
-            .block_input(range.clone(), channels, &mut s1)?;
-        block_input::map(&mut outputs.sample, range, [input, exp], |[x, exp]| {
-            curve(x, exp)
-        });
+            .block_inputs(range.clone(), self.channel_count(), &mut scratch)?;
+        block_input::map(
+            &mut outputs.sample,
+            range,
+            [inputs.input, inputs.exp],
+            |[x, exp]| curve(x, exp),
+        );
         Some(())
     }
 }
