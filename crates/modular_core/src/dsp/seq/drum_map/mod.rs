@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use crate::MonoSignal;
 use crate::dsp::utils::rng::{LcgRng, seed_base};
 use crate::dsp::utils::{TempGate, TempGateState, min_gate_samples};
-use crate::poly::{MonoSignalExt, PolyOutput, PolySignal, PolySignalExt};
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use crate::types::ClockMessages;
 use crate::types::PatchUpdateHandler;
 
@@ -46,8 +46,8 @@ impl<E: DeserializeError> Deserr<E> for DrumMapResolution {
         match value {
             deserr::Value::Integer(16) => Ok(Self::Sixteenth),
             deserr::Value::Integer(32) => Ok(Self::ThirtySecond),
-            deserr::Value::Float(f) if f == 16.0 => Ok(Self::Sixteenth),
-            deserr::Value::Float(f) if f == 32.0 => Ok(Self::ThirtySecond),
+            deserr::Value::Float(16.0) => Ok(Self::Sixteenth),
+            deserr::Value::Float(32.0) => Ok(Self::ThirtySecond),
             _ => Err(deserr::take_cf_content(E::error::<V>(
                 None,
                 ErrorKind::Unexpected {
@@ -137,11 +137,25 @@ struct DrumMapOutputs {
     hh_accent: PolyOutput,
 }
 
+/// What the next update does with the step it lands on.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum Sync {
+    /// Record the step without firing: a fresh module or a stopped transport
+    /// stays silent until the next step boundary.
+    #[default]
+    Silent,
+    /// Fire the step and start a new cycle: the transport just started, so the
+    /// first sample lands in the downbeat.
+    Restart,
+    /// Fire on forward step changes, measured from `step`.
+    Tracking,
+}
+
 #[derive(Default)]
 struct DrumMapState {
-    /// Step fired most recently; `None` until the first update or after a
-    /// transport start, when only a step landed on exactly fires.
-    last_step: Option<usize>,
+    sync: Sync,
+    /// Most recent step passed within the cycle, 0–31.
+    step: usize,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -210,27 +224,49 @@ fn read_drum_map(step: usize, part: usize, x: u8, y: u8) -> u8 {
 
 impl DrumMap {
     fn on_clock_message(&mut self, m: &ClockMessages) -> Result<()> {
-        if let ClockMessages::Start = m {
-            self.state.last_step = None;
-        }
+        self.state.sync = match m {
+            ClockMessages::Start => Sync::Restart,
+            ClockMessages::Stop => Sync::Silent,
+        };
         Ok(())
     }
 
     fn update(&mut self, sample_rate: f32) {
-        let playhead = self.params.playhead.value_or_zero();
-        let position = (playhead - playhead.floor()) * STEPS_PER_PATTERN as f32;
-        let mut step = (position as usize).min(STEPS_PER_PATTERN - 1);
-        if self.params.resolution == DrumMapResolution::Sixteenth {
-            step &= !1;
-        }
-        let fire = match self.state.last_step {
-            Some(last) => last != step,
-            None => position == step as f32,
+        // Summed in f64: the clock's bar count grows without bound, and an f32
+        // sum would erode the fractional bar phase that selects the step.
+        let playhead = self
+            .params
+            .playhead
+            .as_ref()
+            .map_or(0.0, MonoSignal::get_value_f64);
+        let position = (playhead - playhead.floor()) * STEPS_PER_PATTERN as f64;
+        let stride = match self.params.resolution {
+            DrumMapResolution::Sixteenth => 2,
+            DrumMapResolution::ThirtySecond => 1,
         };
-        self.state.last_step = Some(step);
+        let step = (position as usize).min(STEPS_PER_PATTERN - 1) / stride * stride;
+
+        let last = self.state.step;
+        // A backward jump over more than half the cycle is a wrap into the next
+        // cycle (the clock's own bar-boundary rule). A rewind of at most one
+        // step is jitter, such as a Link resync or a resolution change, and
+        // keeps the previous step so it is not replayed; a longer rewind is a
+        // seek and re-syncs silently.
+        let (fire, new_cycle) = match self.state.sync {
+            Sync::Silent => (false, false),
+            Sync::Restart => (true, true),
+            Sync::Tracking if step > last => (true, false),
+            Sync::Tracking if last - step > STEPS_PER_PATTERN / 2 => (true, true),
+            Sync::Tracking => (false, false),
+        };
+        let jitter = self.state.sync == Sync::Tracking && step < last && last - step <= stride;
+        if !jitter {
+            self.state.step = step;
+        }
+        self.state.sync = Sync::Tracking;
 
         if fire {
-            self.evaluate(step, min_gate_samples(sample_rate));
+            self.evaluate(step, new_cycle, min_gate_samples(sample_rate));
         }
 
         for ch in 0..self.channel_count() {
@@ -244,11 +280,11 @@ impl DrumMap {
         }
     }
 
-    fn evaluate(&mut self, step: usize, hold: u32) {
+    fn evaluate(&mut self, step: usize, new_cycle: bool, hold: u32) {
         let p = &self.params;
         for ch in 0..self.channel_count() {
             let state = &mut self.channel_state[ch];
-            if step == 0 {
+            if new_cycle {
                 let randomness = knob(p.chaos.value_or(ch, 0.0)) >> 2;
                 for perturbation in state.perturbation.iter_mut() {
                     let byte = (state.rng.next_unit() * 256.0) as u8;

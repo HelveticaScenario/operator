@@ -22,7 +22,7 @@ fn params(x: f32, y: f32, density: f32, resolution: DrumMapResolution) -> DrumMa
 }
 
 /// Mirrors the production lifecycle: construction, then `on_patch_update`.
-fn make(params: DrumMapParams) -> DrumMap {
+fn make_fresh(params: DrumMapParams) -> DrumMap {
     let channels = 1;
     let mut outputs = DrumMapOutputs::default();
     outputs.set_all_channels(channels);
@@ -38,8 +38,37 @@ fn make(params: DrumMapParams) -> DrumMap {
     m
 }
 
-fn set_playhead(m: &mut DrumMap, p: f32) {
-    m.params.playhead = Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(p))));
+/// A module whose transport has just started.
+fn make(params: DrumMapParams) -> DrumMap {
+    let mut m = make_fresh(params);
+    m.on_clock_message(&ClockMessages::Start).unwrap();
+    m
+}
+
+/// Drives the playhead the way the root clock does: bar phase on channel 0,
+/// completed bar count on channel 1.
+fn set_playhead(m: &mut DrumMap, p: f64) {
+    let bars = p.floor();
+    m.params.playhead = Some(MonoSignal::from_poly(PolySignal::poly(&[
+        Signal::Volts((p - bars) as f32),
+        Signal::Volts(bars as f32),
+    ])));
+}
+
+/// Moves the playhead to `p` and reports whether the bass drum fired there.
+fn bd_fires_at(m: &mut DrumMap, p: f64) -> bool {
+    set_playhead(m, p);
+    m.update(SAMPLE_RATE);
+    let fired = m.outputs.bd.get(0) > 2.5;
+    for _ in 0..SAMPLE_RATE as usize / 100 {
+        m.update(SAMPLE_RATE);
+    }
+    fired
+}
+
+/// Playhead position of `step` within bar 0, nudged inside the step.
+fn at_step(step: usize) -> f64 {
+    (step as f64 + 0.25) / STEPS_PER_PATTERN as f64
 }
 
 /// Runs one cycle and returns, per output, the 32-step grid of which steps
@@ -49,7 +78,7 @@ fn run_cycle(m: &mut DrumMap, cycle: usize) -> [[bool; STEPS_PER_PATTERN]; 6] {
     let mut prev = [0.0f32; 6];
     let total = STEPS_PER_PATTERN * SAMPLES_PER_STEP;
     for i in 0..total {
-        set_playhead(m, cycle as f32 + i as f32 / total as f32);
+        set_playhead(m, cycle as f64 + i as f64 / total as f64);
         m.update(SAMPLE_RATE);
         let o = &m.outputs;
         let now = [
@@ -154,26 +183,10 @@ fn chaos_varies_cycles() {
 
 #[test]
 fn first_update_mid_step_does_not_fire() {
-    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
-    set_playhead(&mut m, 0.5 / STEPS_PER_PATTERN as f32);
+    let mut m = make_fresh(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    set_playhead(&mut m, at_step(0));
     m.update(SAMPLE_RATE);
     assert_eq!(m.outputs.bd.get(0), 0.0);
-}
-
-#[test]
-fn transport_start_refires_downbeat() {
-    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
-    set_playhead(&mut m, 0.0);
-    m.update(SAMPLE_RATE);
-    assert_eq!(m.outputs.bd.get(0), 5.0);
-    for _ in 0..SAMPLE_RATE as usize / 10 {
-        m.update(SAMPLE_RATE);
-    }
-    assert_eq!(m.outputs.bd.get(0), 0.0);
-
-    m.on_clock_message(&ClockMessages::Start).unwrap();
-    m.update(SAMPLE_RATE);
-    assert_eq!(m.outputs.bd.get(0), 5.0);
 }
 
 #[test]
@@ -192,4 +205,110 @@ fn resolution_accepts_only_16_or_32() {
     );
     assert!(parse(24.into()).is_err());
     assert!(parse("sixteenth".into()).is_err());
+}
+
+/// Every step of node 10 that plays at full density, for picking test steps.
+fn full_density_bd_steps() -> Vec<usize> {
+    (0..STEPS_PER_PATTERN)
+        .filter(|&s| read_drum_map(s, 0, 0, 0) > 0)
+        .collect()
+}
+
+#[test]
+fn transport_start_fires_downbeat_after_first_clock_tick() {
+    let mut m = make_fresh(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    assert!(!bd_fires_at(&mut m, 3.0 + at_step(17)));
+
+    m.on_clock_message(&ClockMessages::Stop).unwrap();
+    m.on_clock_message(&ClockMessages::Start).unwrap();
+    // The clock advances its phase before publishing the first playhead.
+    assert!(bd_fires_at(&mut m, 1e-5));
+}
+
+#[test]
+fn transport_stop_is_silent() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    assert!(bd_fires_at(&mut m, 2.0 + at_step(0)));
+    bd_fires_at(&mut m, 2.0 + at_step(17));
+
+    m.on_clock_message(&ClockMessages::Stop).unwrap();
+    assert!(!bd_fires_at(&mut m, 0.0));
+    assert!(!bd_fires_at(&mut m, 0.0));
+}
+
+#[test]
+fn rewind_within_one_step_does_not_replay() {
+    let b = full_density_bd_steps()[2];
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    bd_fires_at(&mut m, 0.0);
+    assert!(bd_fires_at(&mut m, at_step(b)));
+    // Back across the step boundary into the previous step, then forward again.
+    assert!(!bd_fires_at(&mut m, at_step(b - 1)));
+    assert!(!bd_fires_at(&mut m, at_step(b)));
+}
+
+#[test]
+fn resolution_change_on_odd_step_does_not_replay() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    bd_fires_at(&mut m, 0.0);
+    // Step 12 plays in node 10; the playhead sits on step 13 when the
+    // resolution drops to 16, which rounds it down to 12.
+    assert!(read_drum_map(12, 0, 0, 0) > 0);
+    bd_fires_at(&mut m, at_step(13));
+    m.params.resolution = DrumMapResolution::Sixteenth;
+    assert!(!bd_fires_at(&mut m, at_step(13)));
+}
+
+#[test]
+fn backward_seek_resyncs_silently() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    bd_fires_at(&mut m, 0.0);
+    bd_fires_at(&mut m, at_step(20));
+    // Seek back 8 steps: no hit where the playhead lands, the next step plays.
+    assert!(read_drum_map(12, 0, 0, 0) > 0);
+    assert!(!bd_fires_at(&mut m, at_step(12)));
+    assert!(bd_fires_at(&mut m, at_step(14)) == (read_drum_map(14, 0, 0, 0) > 0));
+}
+
+#[test]
+fn phasor_playhead_wraps_into_a_new_cycle() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    assert!(bd_fires_at(&mut m, 0.0));
+    bd_fires_at(&mut m, at_step(31));
+    // A 0–1 ramp wraps without the bar count advancing.
+    m.params.playhead = Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(
+        0.001,
+    ))));
+    m.update(SAMPLE_RATE);
+    assert_eq!(m.outputs.bd.get(0), 5.0);
+}
+
+#[test]
+fn chaos_rerolls_once_per_cycle() {
+    let mut p = params(2.0, 2.0, 2.0, DrumMapResolution::ThirtySecond);
+    p.chaos = volts(5.0);
+    let mut m = make(p);
+    let mut rolls = Vec::new();
+    for cycle in 0..4 {
+        for step in 0..STEPS_PER_PATTERN {
+            set_playhead(&mut m, cycle as f64 + at_step(step));
+            m.update(SAMPLE_RATE);
+            if step == 0 {
+                rolls.push(m.channel_state[0].perturbation);
+            } else {
+                assert_eq!(m.channel_state[0].perturbation, *rolls.last().unwrap());
+            }
+        }
+    }
+    assert!(rolls.windows(2).all(|w| w[0] != w[1]));
+}
+
+#[test]
+fn step_stays_exact_at_large_bar_counts() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    let bars = (1u32 << 20) as f64;
+    bd_fires_at(&mut m, bars);
+    set_playhead(&mut m, bars + at_step(13));
+    m.update(SAMPLE_RATE);
+    assert_eq!(m.state.step, 13);
 }
