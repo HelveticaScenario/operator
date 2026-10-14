@@ -4,7 +4,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    block_input::{InputScratch, OptionBlockInput},
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
         utils::{SchmittTrigger, sanitize, wrap_phase_f64},
@@ -13,7 +12,7 @@ use crate::{
     types::Clickless,
 };
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
@@ -34,6 +33,7 @@ struct SawOscillatorParams {
     fm_mode: FmMode,
     /// hard sync source — rising edges reset the oscillator phase
     #[deserr(default)]
+    #[block_input(optional)]
     sync: Option<PolySignal>,
     /// phase offset in [0, 1) added to the internal phase before sampling
     #[signal(default = 0.0, range = (0.0, 1.0))]
@@ -255,18 +255,14 @@ impl SawOscillator {
     ) -> Option<()> {
         let channels = self.channel_count();
         let p = &self.params;
-        let mut scratch: [InputScratch; 5] = std::array::from_fn(|_| InputScratch::new());
-        let [s0, s1, s2, s3, s4] = &mut scratch;
-        let freq = p.freq.block_input(range.clone(), channels, s0)?;
-        let fm = p.fm.block_input_or(range.clone(), channels, 0.0, s1)?;
-        let shape = p.shape.block_input_or(range.clone(), channels, 0.0, s2)?;
-        let offset = p
-            .phase_offset
-            .block_input_or(range.clone(), channels, 0.0, s3)?;
-        let sync = match &p.sync {
-            Some(sync) => Some(sync.block_input(range.clone(), channels, s4)?),
-            None => None,
-        };
+        let mut scratch = Default::default();
+        let SawOscillatorParamsBlockInputs {
+            freq,
+            shape,
+            fm,
+            sync,
+            phase_offset: offset,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
         // A pitch held for the whole range needs its exponential only once.
         let mut held_increments = [0.0f64; PORT_MAX_CHANNELS];
         let held = freq.is_constant() && fm.is_constant();
