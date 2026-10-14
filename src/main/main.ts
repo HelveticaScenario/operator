@@ -37,6 +37,8 @@ import {
     stripPatchVersionStamp,
 } from '../shared/patchVersionStamp';
 import { reconcilePatchBySimilarity } from './patchSimilarityRemap';
+import { VideoTapSlots } from './videoTapSlots';
+import type { CompiledVideoShader } from '../shared/video/videoGraph';
 import { AppliedPatchState } from './appliedPatchState';
 import { isBufferSwitch } from './bufferSwitch';
 import { createConfigStore, type AppConfig } from './appConfig';
@@ -921,6 +923,9 @@ registerIPCHandler('GET_DSL_LIB_SOURCE', () => {
 /** Rebuilds of a patch update whose baseline went stale while it was prepared. */
 const MAX_BASELINE_RETRIES = 2;
 
+/** Keeps each signal read into video on one tap slot across patch updates. */
+const videoTapSlots = new VideoTapSlots();
+
 /**
  * Reconcile `patch` against the patch the engine is playing and submit it. An
  * update the engine applies while this one is prepared or in flight changes
@@ -930,7 +935,12 @@ function submitPatchUpdate(
     patch: PatchGraph,
     sourceId: string | undefined,
     trigger: QueuedTrigger | undefined,
+    video: CompiledVideoShader | null = null,
 ) {
+    // The DSL's tap slots, which every attempt places afresh.
+    const dslSlots = patch.modules
+        .filter((m) => m.moduleType === '_videoTap')
+        .map((m) => [m, (m.params as { slot: number }).slot] as const);
     for (let attempt = 0; ; attempt++) {
         const transport = synth.getTransportState();
         appliedPatch.resolve(transport.lastCancelledUpdateId);
@@ -1001,13 +1011,22 @@ function submitPatchUpdate(
             continue;
         }
 
+        for (const [tap, slot] of dslSlots) {
+            tap.params = { ...(tap.params as object), slot };
+        }
+        const placedVideo = videoTapSlots.assign(
+            patch,
+            video,
+            baseline.patchGraph,
+            moduleIdRemap,
+        );
         const { errors, updateId } = synth.updatePatch(
             patch,
             trigger,
             resetClock,
         );
         if (errors.length > 0) {
-            return { errors, moduleIdRemap, updateId };
+            return { errors, moduleIdRemap, updateId, video: placedVideo };
         }
         appliedPatch.record(patch, sourceId ?? null, updateId);
 
@@ -1020,7 +1039,7 @@ function submitPatchUpdate(
         if (staleAfterSend && attempt < MAX_BASELINE_RETRIES) {
             continue;
         }
-        return { errors, moduleIdRemap, updateId };
+        return { errors, moduleIdRemap, updateId, video: placedVideo };
     }
 }
 
@@ -1085,11 +1104,12 @@ registerIPCHandler(
                 callSiteSpansRecord[key] = span;
             }
 
-            const { errors, moduleIdRemap, updateId } = submitPatchUpdate(
-                patch,
-                sourceId,
-                trigger,
-            );
+            const {
+                errors,
+                moduleIdRemap,
+                updateId,
+                video: placedVideo,
+            } = submitPatchUpdate(patch, sourceId, trigger, video);
 
             if (errors.length > 0) {
                 return {
@@ -1108,7 +1128,7 @@ registerIPCHandler(
                 };
             }
 
-            updateVideoShader(video, updateId);
+            updateVideoShader(placedVideo, updateId);
             return {
                 appliedPatch: patch,
                 buttons,
@@ -1153,7 +1173,7 @@ setVideoTarget(() =>
     mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null,
 );
 
-registerIPCHandler('VIDEO_PULL', (fresh) => pullVideo(fresh));
+registerIPCHandler('VIDEO_PULL', (restart) => pullVideo(restart));
 registerIPCHandler('VIDEO_REQUEST_CAMERA', () => requestCameraAccess());
 registerIPCHandler('VIDEO_SCREEN_SOURCE', (display) => screenSource(display));
 
@@ -1188,8 +1208,6 @@ registerIPCHandler('SYNTH_GET_SAMPLE_RATE', () => synth.sampleRate());
 registerIPCHandler('SYNTH_GET_CHANNELS', () => synth.channels());
 
 registerIPCHandler('SYNTH_GET_SCOPES', () => synth.getScopes());
-
-registerIPCHandler('SYNTH_GET_SCOPE_XY', () => synth.getScopeXy());
 
 registerIPCHandler('SYNTH_GET_VU_METERS', () => synth.getVuMeters());
 

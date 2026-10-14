@@ -61,6 +61,7 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
         mac: 'Control+Shift+v',
         command: 'operator.togglePerformanceWindow',
     },
+    { key: 'Control+Shift+h', command: 'operator.togglePerformanceCode' },
 
     // VS Code editor command ids that mirror VS Code's own default keybindings
     // so the editor context menu can display the shortcut. Monaco handles the

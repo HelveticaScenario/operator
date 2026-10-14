@@ -36,8 +36,8 @@ export function applyMonacoTheme(
         })
         .flat();
 
-    // Force editor chrome transparent so the $scopeXY background canvas
-    // shows through. Keep all other token colours from the theme intact.
+    // Force editor chrome transparent so the video backdrop shows
+    // through. Keep all other token colours from the theme intact.
     const TRANSPARENT = '#00000000';
     const lineHighlightAlpha = withHexAlpha(
         raw.colors?.['editor.lineHighlightBackground'] ?? '#000000',

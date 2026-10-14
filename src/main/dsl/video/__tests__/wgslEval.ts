@@ -59,6 +59,7 @@ const BUILTINS: Record<string, (...args: Value[]) => Value> = {
     fract: (v) => unary(v, (x) => x - Math.floor(x)),
     max: (a, b) => zip(a, b, Math.max),
     min: (a, b) => zip(a, b, Math.min),
+    pow: (a, b) => zip(a, b, Math.pow),
     step: (e, x) => zip(e, x, (ei, xi) => (xi >= ei ? 1 : 0)),
     clamp: (v, lo, hi) =>
         map3(v, lo, hi, (x, l, h) => Math.min(Math.max(x, l), h)),

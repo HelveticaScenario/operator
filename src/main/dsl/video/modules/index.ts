@@ -1,10 +1,21 @@
 import { audioHistory } from './audioHistory';
-import { channel, contrast, hsv, hueShift, procAmp } from './color';
+import {
+    brightness,
+    channel,
+    color,
+    colorama,
+    contrast,
+    hsv,
+    hue,
+    procAmp,
+    saturate,
+    shift,
+} from './color';
 import { feedbackRead, feedbackWrite } from './feedback';
 import { blur, edges } from './filter';
 import {
     add,
-    colorize,
+    blend,
     comparator,
     diff,
     fold,
@@ -20,6 +31,8 @@ import {
     out,
     posterize,
     range,
+    solid,
+    thresh,
     wrap,
 } from './math';
 import * as modulators from './modulate';
@@ -27,6 +40,7 @@ import { noise, voronoi } from './noise';
 import { osc } from './osc';
 import { grain, scanlines, vignette } from './post';
 import { ramp } from './ramp';
+import { scopeXY } from './scopeXY';
 import { polygon, shape } from './shape';
 import { source } from './source';
 import { swizzle } from './swizzle';
@@ -37,9 +51,12 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     ...modulators,
     add,
     audioHistory,
+    blend,
     blur,
+    brightness,
     channel,
-    colorize,
+    color,
+    colorama,
     comparator,
     contrast,
     diff,
@@ -50,7 +67,7 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     fold,
     grain,
     hsv,
-    hueShift,
+    hue,
     invert,
     kaleid,
     key,
@@ -71,10 +88,15 @@ export const VIDEO_MODULES: Record<string, VideoModuleDef> = {
     ramp,
     range,
     repeat,
+    saturate,
     scanlines,
+    scopeXY,
     shape,
+    shift,
+    solid,
     source,
     swizzle,
+    thresh,
     vignette,
     voronoi,
     warp,

@@ -72,8 +72,8 @@ export function VideoBackdrop({
                 (made) => {
                     creating = false;
                     created = made;
-                    made.setPullSource((fresh) =>
-                        electronAPI.video.pull(fresh),
+                    made.setPullSource((restart) =>
+                        electronAPI.video.pull(restart),
                     );
                     made.setErrorSink(setError);
                     made.setLiveSink(setShown);

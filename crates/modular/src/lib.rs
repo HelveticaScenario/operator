@@ -31,7 +31,7 @@ use std::{collections::HashMap, sync::Arc};
 use modular_core::{
     PatchGraph,
     dsp::schema,
-    types::{ROOT_CLOCK_ID, ScopeBufferKey, ScopeStats, ScopeXyBufferKey, ScopeXyRanges},
+    types::{ROOT_CLOCK_ID, ScopeBufferKey, ScopeStats},
 };
 use napi::Result;
 use napi_derive::napi;
@@ -1277,17 +1277,6 @@ impl Synthesizer {
     #[napi]
     pub fn set_module_profiling_sample_rate(&self, rate: u32) {
         self.state.set_module_profiling_sample_rate(rate);
-    }
-
-    /// Snapshot every active $scopeXY pair as (key, x samples, y samples,
-    /// ranges). Samples are chronological — element 0 is the oldest of the
-    /// window, the last element the newest — and `ranges` is the per-axis volt
-    /// window the renderer maps into clip space.
-    #[napi]
-    pub fn get_scope_xy(
-        &self,
-    ) -> Vec<(ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges)> {
-        self.state.get_scope_xy_buffers()
     }
 
     #[napi]
