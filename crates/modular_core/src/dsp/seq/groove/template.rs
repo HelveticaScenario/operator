@@ -1,19 +1,14 @@
-//! Groove: a periodic, monotonic time map applied to a playhead.
+//! Groove templates: a periodic, monotonic time map over a grid.
 //!
 //! A template places grid step `k` at `k + offset(k)` steps of straight time.
-//! Between those breakpoints time is interpolated linearly. Grooves reach
-//! sequencers as an offset (grooved minus straight position): a note starts
-//! when the grooved position reaches it, so grid-aligned notes start at their
-//! shifted times and off-grid notes slide proportionally inside their step,
-//! while note lengths stay measured in straight time.
+//! Between those breakpoints time is interpolated linearly.
 
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
     MonoSignal,
-    dsp::utils::{GATE_HIGH_VOLTAGE, TempGate, TempGateState, min_gate_samples},
-    param_errors::ModuleParamErrors,
+    dsp::utils::{GATE_HIGH_VOLTAGE, rng::hash_bipolar},
     poly::PolySignal,
     types::Signal,
 };
@@ -157,7 +152,8 @@ impl GrooveTemplate {
         if self.random == 0.0 {
             base
         } else {
-            base + self.random * jitter(self.seed, k)
+            // The salt keeps seed 0 from hashing step 0 to a fixed point.
+            base + self.random * hash_bipolar(u64::from(self.seed) << 32 | 0x5EED, k as u64)
         }
     }
 
@@ -193,7 +189,7 @@ impl GrooveTemplate {
     }
 
     /// Step index of a grooved position, in cycles.
-    fn step_of(&self, pos: f64) -> i64 {
+    pub(super) fn step_of(&self, pos: f64) -> i64 {
         (pos * self.grid + STEP_EPSILON).floor() as i64
     }
 }
@@ -216,176 +212,6 @@ pub fn fill_groove_inputs(
         *velocity = constant(GATE_HIGH_VOLTAGE);
     }
 }
-
-/// Deterministic per-step jitter in `[-1, 1)`.
-fn jitter(seed: u32, step: i64) -> f64 {
-    // SplitMix64 finalizer over (seed, step).
-    let mut z = (step as u64) ^ ((seed as u64) << 32 | 0x5EED);
-    z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    (z >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
-}
-
-/// One sample of groove output.
-pub struct GrooveFrame {
-    /// Grooved minus straight position, in cycles.
-    pub offset: f32,
-    /// Velocity of the current grooved step, 0–5 V.
-    pub velocity: f32,
-    /// Trigger at the start of each grooved step, 0 or 5 V.
-    pub trigger: f32,
-}
-
-/// Runtime state that turns a straight playhead into grooved outputs.
-pub struct GrooveFollower {
-    prev_straight: f64,
-    prev_grooved: f64,
-    prev_step: Option<i64>,
-    trigger: TempGate,
-}
-
-impl Default for GrooveFollower {
-    fn default() -> Self {
-        Self {
-            prev_straight: 0.0,
-            prev_grooved: 0.0,
-            prev_step: None,
-            trigger: TempGate::new_gate(TempGateState::Low),
-        }
-    }
-}
-
-impl GrooveFollower {
-    /// Forget the previous position, so the next frame re-anchors and fires
-    /// its step trigger.
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    /// Advance to straight position `straight` (cycles), exactly as the
-    /// sequencers reading the offset see it: the playhead's channels summed
-    /// in f64.
-    pub fn advance(
-        &mut self,
-        template: &GrooveTemplate,
-        straight: f64,
-        sample_rate: f32,
-    ) -> GrooveFrame {
-        let mut grooved = template.warp(straight);
-        // A live template edit can map the current position earlier; hold until
-        // the map catches up so sequencers never replay notes they already
-        // fired. Backward straight moves (transport reset, Link) pass through.
-        if straight >= self.prev_straight {
-            grooved = grooved.max(self.prev_grooved);
-        }
-        self.prev_straight = straight;
-        self.prev_grooved = grooved;
-
-        // Index the step from the sum sequencers compute, so velocity and the
-        // trigger change on exactly the sample a grid-aligned note fires.
-        // Sequencers clamp a negative position to zero.
-        let offset = (grooved - straight) as f32;
-        let step = template.step_of((straight + offset as f64).max(0.0));
-        if self.prev_step != Some(step) {
-            self.prev_step = Some(step);
-            self.trigger.set_state(
-                TempGateState::High,
-                TempGateState::Low,
-                min_gate_samples(sample_rate),
-            );
-        }
-
-        GrooveFrame {
-            offset,
-            velocity: template.velocity_at_step(step),
-            trigger: self.trigger.process(),
-        }
-    }
-}
-
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields, validate = validate_groove_params -> ModuleParamErrors)]
-struct GrooveParams {
-    /// groove template: timing offsets, velocities and grid
-    template: GrooveTemplate,
-    /// straight playhead to groove (defaults to the global clock, ignoring the global groove)
-    #[default_connection(module = RootClock, port = "playhead", channels = [0, 1])]
-    #[signal(range = (0.0, 1.0))]
-    #[deserr(default)]
-    playhead: Option<MonoSignal>,
-}
-
-fn validate_groove_params(
-    params: GrooveParams,
-    _location: deserr::ValuePointerRef,
-) -> Result<GrooveParams, ModuleParamErrors> {
-    if let Err(msg) = params.template.validate() {
-        let mut err = ModuleParamErrors::default();
-        err.add("template".to_string(), msg);
-        return Err(err);
-    }
-    Ok(params)
-}
-
-#[derive(Outputs, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct GrooveOutputs {
-    #[output(
-        "offset",
-        "grooved minus straight playhead position, in cycles",
-        default
-    )]
-    offset: f32,
-    #[output("velocity", "velocity of the current groove step (0-5V)", range = (0.0, 5.0))]
-    velocity: f32,
-    #[output("trigger", "5V trigger at the start of each grooved step", range = (0.0, 5.0))]
-    trigger: f32,
-}
-
-/// Groove a playhead with a timing and velocity template.
-///
-/// The template moves each grid step by its timing offset. A `$cycle` given
-/// this module's offset starts grid-aligned notes at the shifted times, slides
-/// notes between grid steps proportionally, and keeps every note's length.
-/// Every `$cycle` follows the global groove (see `$setGroove`) by default;
-/// pass this module's offset and velocity to give one its own groove.
-///
-/// Timing offsets are in grid steps: with `grid: 16`, an offset of `0.2` delays
-/// that sixteenth by a fifth of a sixteenth. The template repeats every
-/// `timing.length` steps.
-///
-/// ```js
-/// const g = $groove({ timing: [0, 0.3], velocity: [1, 0.6] })
-/// const seq = $cycle($p('c4*8'), { groove: g, velocity: g.velocity })
-/// $sine(seq).amp($adsr(seq.gate)).amp(seq.velocity).out()
-/// ```
-#[module(name = "$groove", args(template))]
-pub struct Groove {
-    outputs: GrooveOutputs,
-    params: GrooveParams,
-    state: GrooveFollower,
-}
-
-impl Groove {
-    fn update(&mut self, sample_rate: f32) {
-        let straight = self
-            .params
-            .playhead
-            .as_ref()
-            .map_or(0.0, MonoSignal::get_value_f64);
-        let frame = self
-            .state
-            .advance(&self.params.template, straight, sample_rate);
-        self.outputs.offset = frame.offset;
-        self.outputs.velocity = frame.velocity;
-        self.outputs.trigger = frame.trigger;
-    }
-}
-
-message_handlers!(impl Groove {});
 
 #[cfg(test)]
 mod tests {
@@ -461,41 +287,5 @@ mod tests {
         assert_eq!(t.velocity_at_step(3), 2.5);
         t.velocity_amount = 0.0;
         assert_eq!(t.velocity_at_step(3), 5.0);
-    }
-
-    #[test]
-    fn follower_triggers_once_per_grooved_step() {
-        let t = swing(0.5);
-        let mut f = GrooveFollower::default();
-        let sr = 48_000.0;
-        // One cycle at 0.5 cycles per second.
-        let samples = 96_000;
-        let mut rising = 0;
-        let mut was_high = false;
-        let mut trigger_samples = Vec::new();
-        for i in 0..samples {
-            let frame = f.advance(&t, i as f64 / samples as f64, sr);
-            let high = frame.trigger > 0.0;
-            if high && !was_high {
-                rising += 1;
-                trigger_samples.push(i);
-            }
-            was_high = high;
-        }
-        assert_eq!(rising, 16);
-        // Off-beat triggers are delayed by half a sixteenth.
-        let sixteenth = samples / 16;
-        assert_eq!(trigger_samples[1], sixteenth + sixteenth / 2);
-    }
-
-    #[test]
-    fn follower_holds_through_backward_template_edit() {
-        let late = swing(0.5);
-        let mut f = GrooveFollower::default();
-        let sr = 48_000.0;
-        let x = 1.9 / 16.0;
-        let before = f.advance(&GrooveTemplate::straight(), x, sr);
-        let after = f.advance(&late, x + 1e-6, sr);
-        assert!(x + 1e-6 + after.offset as f64 >= x + before.offset as f64);
     }
 }

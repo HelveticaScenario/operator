@@ -25,6 +25,11 @@ pub use highlight::{SeqHighlightMeta, SeqHighlightState, seq_state_builder};
 pub use interval_value::IntervalValue;
 pub use seq_value::{SeqPatternParam, SeqValue};
 
+/// A sequencer created at most this long after a step boundary plays that
+/// step. Quantized patch swaps land within a sample or two of the bar or beat
+/// line.
+pub(crate) const FRESH_WINDOW_SECS: f64 = 0.002;
+
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     seq::Seq::install_constructor(map);
     track::Track::install_constructor(map);

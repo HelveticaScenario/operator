@@ -22,7 +22,7 @@ use crate::{
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
-use super::groove::fill_groove_inputs;
+use super::groove::{GrooveHold, before_first_step, fill_groove_inputs};
 use super::seq_value::{SeqCycleStorage, SeqPatternParam, SeqValue};
 
 /// Cached hap copied into voice state as scalars. Voices can hold these
@@ -416,8 +416,11 @@ struct SeqState {
     /// edge check must fire even a hap whose part contained `prev_logical`
     /// (e.g. one covering the entire window).
     prev_raw: f64,
-    /// False until the first `update`. On the first frame there is no previous
-    /// position, so every in-window onset fires (a fresh `$cycle` starts playing
+    /// Keeps the grooved position from running backwards when the groove
+    /// changes mid-play.
+    groove_hold: GrooveHold,
+    /// False until the first `update` not waiting for a late first step. On
+    /// that frame there is no previous position, so every in-window onset fires (a fresh `$cycle` starts playing
     /// from the current position).
     started: bool,
     /// Scratch buffer for voice release — reused each frame to avoid heap alloc
@@ -434,6 +437,7 @@ impl Default for SeqState {
         Self {
             prev_logical: 0.0,
             prev_raw: 0.0,
+            groove_hold: GrooveHold::default(),
             started: false,
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
@@ -490,7 +494,11 @@ impl Seq {
             .playhead
             .as_ref()
             .map_or(0.0, MonoSignal::get_value_f64);
-        let raw = straight + self.params.groove.value_or_zero() as f64;
+        let raw = self.state.groove_hold.apply(
+            straight,
+            straight + self.params.groove.value_or_zero() as f64,
+        );
+        let waiting = before_first_step(straight, raw);
         let velocity = self.params.velocity.value_or(GATE_HIGH_VOLTAGE);
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
@@ -515,21 +523,24 @@ impl Seq {
         let storage_index = (current_cycle - base) as usize;
 
         // Window-membership edge detection baseline: capture last frame's folded
-        // position, then advance it for this frame (unconditionally, so the
-        // baseline stays correct even on the no-pattern early-return below). A
-        // hap fires only on an outside→inside transition (see the collection
-        // pass), so a mid-window pattern swap or scrub does not re-trigger it.
+        // position, then advance it for this frame (on every frame not waiting
+        // for a late first step, so the baseline stays correct even on the
+        // no-pattern early-return below). A hap fires only on an
+        // outside→inside transition (see the collection pass), so a mid-window
+        // pattern swap or scrub does not re-trigger it.
         let prev_logical = self.state.prev_logical;
         let started = self.state.started;
-        self.state.prev_logical = logical;
-        self.state.started = true;
+        let prev_raw = self.state.prev_raw;
+        if !waiting {
+            self.state.prev_logical = logical;
+            self.state.started = true;
+            self.state.prev_raw = raw_clamped;
+        }
 
         // Forward seam crossing: the raw playhead moved onto a new lap of the
         // window, so the whole window replays and in-window onsets fire again.
         // Both lap indices use the current `length`, so a ribbon edit cannot
         // fabricate a crossing on its own.
-        let prev_raw = self.state.prev_raw;
-        self.state.prev_raw = raw_clamped;
         let lap_wrapped = (raw_clamped / length).floor() > (prev_raw / length).floor();
 
         // Release voices whose notes have ended. A note's life is tracked in
@@ -565,6 +576,10 @@ impl Seq {
                     .trig
                     .set(ch, self.channel_state[ch].voice.trigger.process());
             }
+            return;
+        }
+        if waiting {
+            self.write_voice_outputs();
             return;
         }
 
@@ -711,9 +726,8 @@ impl Seq {
             }
 
             // Apply the chosen voice for each placed onset. Map the note's logical
-            // span onto the current absolute lap so release keys off the monotonic
-            // `raw` clock and the note plays its full length across the ribbon
-            // wrap. A stolen voice re-triggers (gate Low→High), cutting its old note.
+            // span onto the straight clock so release keys off monotonic straight
+            // time and the note plays its full length across the ribbon wrap. A stolen voice re-triggers (gate Low→High), cutting its old note.
             for ei in 0..n {
                 let Some(voice_idx) = assigned[ei] else {
                     continue;
@@ -741,7 +755,11 @@ impl Seq {
             }
         }
 
-        for ch in 0..num_channels {
+        self.write_voice_outputs();
+    }
+
+    fn write_voice_outputs(&mut self) {
+        for ch in 0..self.channel_count() {
             let channel = &mut self.channel_state[ch];
             if let Some(cached) = channel.voice.cached_hap
                 && let Some(cv) = cached.get_cv()

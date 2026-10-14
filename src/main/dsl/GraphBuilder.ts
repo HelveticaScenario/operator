@@ -88,10 +88,6 @@ interface DollarNamespaceNode {
     children: Map<string, DollarNamespaceNode>;
 }
 
-/**
- * A buffer output reference — returned by `$buffer()`, passed to readers
- * (like `$bufRead`, `$delayRead`) as their `buffer` param.
- */
 /** Groove template; mirrors Rust `GrooveTemplate` (camelCase). */
 export interface GrooveTemplate {
     timing: number[];
@@ -103,6 +99,10 @@ export interface GrooveTemplate {
     seed?: number;
 }
 
+/**
+ * A buffer output reference — returned by `$buffer()`, passed to readers
+ * (like `$bufRead`, `$delayRead`) as their `buffer` param.
+ */
 export type BufferOutputRef = {
     type: 'buffer_ref';
     module: string;

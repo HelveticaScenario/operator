@@ -156,7 +156,13 @@ impl Clock {
     pub fn reset_loop_index_impl(&mut self) {
         self.state.loop_index = 0;
         self.outputs.playhead.set(1, 0.0);
-        self.state.groove.reset();
+    }
+
+    /// Groove outputs for a transport parked at zero.
+    fn park_groove(&mut self) {
+        self.outputs.groove_offset = 0.0;
+        self.outputs.groove_velocity = self.params.groove.velocity_at_step(0);
+        self.outputs.groove_trigger = 0.0;
     }
 
     fn update_groove(&mut self, sample_rate: f32) {
@@ -377,9 +383,8 @@ impl Clock {
                 self.state
                     .beat_gate
                     .set_state(TempGateState::Low, TempGateState::Low, 0);
-                self.state.groove.reset();
-                self.outputs.groove_offset = 0.0;
-                self.outputs.groove_trigger = 0.0;
+                self.state.groove.restart();
+                self.park_groove();
             }
             ClockMessages::Stop => {
                 self.state.running = false;
@@ -391,9 +396,7 @@ impl Clock {
                 self.outputs.playhead.set(1, 0.0);
                 self.state.loop_index = 0;
                 self.outputs.beat_in_bar = 0.0;
-                self.state.groove.reset();
-                self.outputs.groove_offset = 0.0;
-                self.outputs.groove_trigger = 0.0;
+                self.park_groove();
             }
         }
         Ok(())

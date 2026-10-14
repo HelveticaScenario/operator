@@ -3064,3 +3064,136 @@ fn drum_map_follows_global_groove_and_zero_groove_opts_out() {
         );
     }
 }
+
+/// Apply `graph` to a running patch the way a live edit does: rebuild,
+/// transfer state, reconnect, then `on_patch_update`.
+fn live_edit(old: &Patch, graph: &PatchGraph) -> Patch {
+    let new = from_graph(graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    for (id, module) in &new.sampleables {
+        if let Some(old_module) = old.sampleables.get(id) {
+            module.transfer_state_from(old_module.as_ref());
+        }
+    }
+    for module in new.sampleables.values() {
+        module.connect(&new);
+    }
+    for module in new.sampleables.values() {
+        module.on_patch_update();
+    }
+    new
+}
+
+/// Rising-edge frames of `port` on module `id`, starting at frame `from`.
+fn rising_frames(patch: &Patch, id: &str, port: &str, from: usize, to: usize) -> Vec<usize> {
+    let module = patch.sampleables.get(id).unwrap();
+    let mut edges = Vec::new();
+    let mut prev = false;
+    for i in from..to {
+        process_frame(patch);
+        let hi = module.get_value_at(port, 0, 0) > 2.5;
+        if hi && !prev {
+            edges.push(i);
+        }
+        prev = hi;
+    }
+    edges
+}
+
+#[test]
+fn switching_to_a_later_groove_mid_play_never_replays_notes() {
+    // 2400 BPM: a sixteenth is 300 samples, and each note lasts a quarter of
+    // one. The global groove puts each off-beat sixteenth half a sixteenth
+    // late. At frame 420 the straight position is 1.4 sixteenths in;
+    // following the groove from there would map it back to 0.93, behind the
+    // note at 1 that has already played and ended.
+    let clock = (
+        "ROOT_CLOCK",
+        "_clock",
+        json!({
+            "tempo": 2400.0,
+            "numerator": 4,
+            "denominator": 4,
+            "groove": { "timing": [0.0, 0.5] },
+        }),
+    );
+    let straight = make_graph(vec![
+        clock.clone(),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[c4 ~ ~ ~]*16"), "channels": 1, "groove": 0.0 }),
+        ),
+    ]);
+    let grooved = make_graph(vec![
+        clock,
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[c4 ~ ~ ~]*16"), "channels": 1 }),
+        ),
+    ]);
+    let before = from_graph(&straight, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let mut onsets = rising_frames(&before, "seq", "trig", 0, 420);
+    let after = live_edit(&before, &grooved);
+    onsets.extend(rising_frames(&after, "seq", "trig", 420, 4790));
+    assert_eq!(onsets.len(), 16, "each note plays once: {onsets:?}");
+}
+
+#[test]
+fn late_first_step_waits_after_transport_start() {
+    // The first sixteenth of every bar is 0.3 of a sixteenth (90 samples)
+    // late, including the very first one.
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.3, 0.0] },
+            }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("c4*16"), "channels": 1 }),
+        ),
+        (
+            "drums",
+            "$drumMap",
+            json!({ "x": 0.0, "y": 0.0, "bdDensity": 5.0, "sdDensity": 5.0, "hhDensity": 5.0 }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let module = |id: &str| patch.sampleables.get(id).unwrap();
+    let mut seq_first: Option<usize> = None;
+    let mut drums_first: Option<usize> = None;
+    for i in 0..300 {
+        process_frame(&patch);
+        if seq_first.is_none() && module("seq").get_value_at("trig", 0, 0) > 2.5 {
+            seq_first = Some(i);
+        }
+        let drums = module("drums");
+        if drums_first.is_none()
+            && ["bd", "sd", "hh"]
+                .iter()
+                .any(|port| drums.get_value_at(port, 0, 0) > 2.5)
+        {
+            drums_first = Some(i);
+        }
+    }
+    let seq_first = seq_first.expect("seq never fired");
+    let drums_first = drums_first.expect("drums never fired");
+    assert!(
+        seq_first.abs_diff(90) <= 1,
+        "$cycle first note at {seq_first}"
+    );
+    assert!(
+        drums_first.abs_diff(90) <= 2,
+        "$drumMap first hit at {drums_first}"
+    );
+}
