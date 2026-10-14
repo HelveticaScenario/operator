@@ -814,6 +814,1834 @@
     "channels": 2
   },
   {
+    "name": "$clang",
+    "documentation": "Clang: a metallic cowbell from two squares an inharmonic interval apart,\nwith an optional clave.\n\nEach rising edge on **trigger** strikes two squares, the lower at **freq**\nand the upper 1.535× above it, mixed by **low** and **high**. **filter**\nsweeps a resonant high-pass over them and **noise** adds hiss; everything\nfalls to −60 dB over **decay** seconds. **clave** layers a bright click\nthat re-strikes in quick succession as **repeat** rises. **accent**,\nsampled at each strike, sets the hit's level.\n\nOutput range is **±5 V**.\n\n```js\n$clang($clock.beatTrigger, { freq: 'g4', clave: true }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ClangParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "clave": {
+          "description": "layer a clave click on top (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "decay": {
+          "description": "seconds for the hit to fall to −60 dB (default 0.33)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filter": {
+          "description": "resonant high-pass sweep, 0–5 V: thins the bell and brightens its top;\n0 leaves it unfiltered (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "pitch of the lower square in V/Oct; the upper one sits 1.535× above it\n(default ≈E4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "high": {
+          "description": "level of the upper square, 0–5 V (default 3.7)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "low": {
+          "description": "level of the lower square, 0–5 V (default 3.7)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noise": {
+          "description": "level of added noise, 0–5 V (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "repeat": {
+          "description": "clave re-strikes, 0–5 V: off at 0, then every 100 ms, quickening to\nevery 12 ms at full (default 1.8)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the bell",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "bell output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the bell",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the lower square in V/Oct; the upper one sits 1.535× above it\n(default ≈E4)",
+        "signalType": "pitch",
+        "defaultValue": 0.3,
+        "minValue": -1.3,
+        "maxValue": 2.1
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the hit to fall to −60 dB (default 0.33)",
+        "signalType": "control",
+        "defaultValue": 0.33,
+        "minValue": 0.0,
+        "maxValue": 3.0
+      },
+      {
+        "name": "high",
+        "description": "level of the upper square, 0–5 V (default 3.7)",
+        "signalType": "control",
+        "defaultValue": 3.7,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "low",
+        "description": "level of the lower square, 0–5 V (default 3.7)",
+        "signalType": "control",
+        "defaultValue": 3.7,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "filter",
+        "description": "resonant high-pass sweep, 0–5 V: thins the bell and brightens its top;\n0 leaves it unfiltered (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "noise",
+        "description": "level of added noise, 0–5 V (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "repeat",
+        "description": "clave re-strikes, 0–5 V: off at 0, then every 100 ms, quickening to\nevery 12 ms at full (default 1.8)",
+        "signalType": "control",
+        "defaultValue": 1.8,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$clap",
+    "documentation": "Hand clap: two claps over a flickering, reverberant noise tail, in stereo.\n\nEach rising edge on **trigger** starts a flickering noisy tail, then lands\ntwo claps, the first 12–99 ms later as **sloppy** rises and the second\ntwice as late, each ringing for **decay** seconds. The tail rings on under\nthem, lasting longer as **tail** rises. Everything is band-passed around **freq**, brightened by\n**tone** and widened by **spread**.\n\nOutput is stereo (left on channel 0, right on channel 1), range **±5 V**.\n\n```js\n$clap($clock.beatTrigger, { tail: 1.5 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ClapParams",
+      "type": "object",
+      "properties": {
+        "decay": {
+          "description": "seconds for each clap to fall to −60 dB (default 0.255)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "centre of the clap's band in V/Oct (default ≈D#6, 1.24 kHz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sloppy": {
+          "description": "how late the claps land, 0–5 V: the first at 12–99 ms, the second\ntwice as late (default 1.2)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "description": "stereo width, 0–5 V: how far each clap may land to either side; 0 is\nmono (default 3.8)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tail": {
+          "description": "length of the noisy tail around the claps, 0–5 V: 0.15 s up to 0.84 s\nto fall to −60 dB, and quieter near 0 (default 3.25)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "brightness, 0–5 V (default 1.6)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges start a clap",
+          "$ref": "#/$defs/MonoSignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "stereo clap output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges start a clap",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "centre of the clap's band in V/Oct (default ≈D#6, 1.24 kHz)",
+        "signalType": "pitch",
+        "defaultValue": 2.25,
+        "minValue": -0.5,
+        "maxValue": 3.6
+      },
+      {
+        "name": "decay",
+        "description": "seconds for each clap to fall to −60 dB (default 0.255)",
+        "signalType": "control",
+        "defaultValue": 0.255,
+        "minValue": 0.0,
+        "maxValue": 2.0
+      },
+      {
+        "name": "tail",
+        "description": "length of the noisy tail around the claps, 0–5 V: 0.15 s up to 0.84 s\nto fall to −60 dB, and quieter near 0 (default 3.25)",
+        "signalType": "control",
+        "defaultValue": 3.25,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "sloppy",
+        "description": "how late the claps land, 0–5 V: the first at 12–99 ms, the second\ntwice as late (default 1.2)",
+        "signalType": "control",
+        "defaultValue": 1.2,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "spread",
+        "description": "stereo width, 0–5 V: how far each clap may land to either side; 0 is\nmono (default 3.8)",
+        "signalType": "control",
+        "defaultValue": 3.8,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "brightness, 0–5 V (default 1.6)",
+        "signalType": "control",
+        "defaultValue": 1.6,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ],
+    "channels": 2
+  },
+  {
+    "name": "$cymbal",
+    "documentation": "Cymbal: a cluster of bell-like partials over bright hiss.\n\nEach rising edge on **trigger** strikes the cymbal: partials at the 7th–13th\nharmonics of **freq** over broadband hiss, high-passed by **tone** and\nfalling to −60 dB over **decay** seconds. **accent**, sampled at each\nstrike, sets the hit's level.\n\nOutput range is **±5 V**.\n\n```js\n$cymbal($clock.barTrigger, { decay: 3 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "CymbalParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "seconds for the hit to fall to −60 dB (default 1.7)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "fundamental of the cymbal's bell-like partials in V/Oct; they ring at\nits 7th–13th harmonics (default ≈F4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "high-pass cutoff, 0–5 V; higher thins out the body (default 1.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the cymbal",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "cymbal output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the cymbal",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "fundamental of the cymbal's bell-like partials in V/Oct; they ring at\nits 7th–13th harmonics (default ≈F4)",
+        "signalType": "pitch",
+        "defaultValue": 0.5,
+        "minValue": 0.4,
+        "maxValue": 1.6
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the hit to fall to −60 dB (default 1.7)",
+        "signalType": "control",
+        "defaultValue": 1.7,
+        "minValue": 0.0,
+        "maxValue": 6.0
+      },
+      {
+        "name": "tone",
+        "description": "high-pass cutoff, 0–5 V; higher thins out the body (default 1.5)",
+        "signalType": "control",
+        "defaultValue": 1.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$fmDrum",
+    "documentation": "FM drum: a two-operator FM voice with carrier feedback, for metallic toms,\nzaps and bells.\n\nEach rising edge on **trigger** strikes a sine carrier at **freq** whose\nfrequency is swung by a sine of up to 100 Hz (set by **modulation**) with\ndepth **amount**. **feedback** lets the carrier modulate itself, adding\nharmonics and then noise. **tone** low-passes the result, which falls to\n−60 dB over **decay** seconds. **accent**, sampled at each strike, sets the\nhit's level.\n\nOutput range is **±5 V**.\n\n```js\n$fmDrum($clock.beatTrigger, { freq: 'c3', amount: 1.5, decay: 0.4 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "FmDrumParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "amount": {
+          "description": "depth of frequency modulation, 0–5 V, rising steeply from a gentle\nwobble to swings of tens of kHz (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "seconds for the hit to fall to −60 dB; a closing low-pass ends it\nsooner (default 1.33)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "feedback": {
+          "description": "carrier self-modulation, 0–5 V: adds harmonics, then turns to noise\nabove about 2 V (default 2)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "carrier pitch in V/Oct (default D5, ≈587 Hz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modulation": {
+          "description": "rate of the frequency modulation, 0–5 V for 0–100 Hz (default 4.6)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "brightness, 0–5 V: a low-pass that opens and lets the raw carrier\nthrough (default 1.4)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "carrier pitch in V/Oct (default D5, ≈587 Hz)",
+        "signalType": "pitch",
+        "defaultValue": 1.167,
+        "minValue": -3.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the hit to fall to −60 dB; a closing low-pass ends it\nsooner (default 1.33)",
+        "signalType": "control",
+        "defaultValue": 1.33,
+        "minValue": 0.0,
+        "maxValue": 5.5
+      },
+      {
+        "name": "feedback",
+        "description": "carrier self-modulation, 0–5 V: adds harmonics, then turns to noise\nabove about 2 V (default 2)",
+        "signalType": "control",
+        "defaultValue": 2.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "amount",
+        "description": "depth of frequency modulation, 0–5 V, rising steeply from a gentle\nwobble to swings of tens of kHz (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "modulation",
+        "description": "rate of the frequency modulation, 0–5 V for 0–100 Hz (default 4.6)",
+        "signalType": "control",
+        "defaultValue": 4.6,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "brightness, 0–5 V: a low-pass that opens and lets the raw carrier\nthrough (default 1.4)",
+        "signalType": "control",
+        "defaultValue": 1.4,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$hihat",
+    "documentation": "Hi-hat: noise through a resonant high-pass.\n\nEach rising edge on **trigger** opens the hat, swelling over **attack**\nand falling to −60 dB over **decay** seconds: short for a closed hat, long\nfor an open one. **freq** sets the high-pass cutoff, which grows more\nresonant as it rises, and **tone** brightens or dulls it from there.\n**slope** picks the filter's steepness and **noise** the noise color.\n**accent**, sampled at each strike, sets the hit's level.\n\nOutput range is **±5 V**.\n\n```js\n$hihat($clock.beatTrigger, { decay: 0.08 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "HiHatParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attack": {
+          "description": "seconds to swell to full level; a slow swell also lengthens the fall\n(default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "seconds for the hit to fall to −60 dB; short for closed, long for open (default 0.3)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "resonant high-pass cutoff in V/Oct; higher is brighter and more\nresonant (default A8, ≈7 kHz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "noise": {
+          "description": "noise source (default white)",
+          "$ref": "#/$defs/HatNoise"
+        },
+        "slope": {
+          "description": "steepness of the high-pass (default db12)",
+          "$ref": "#/$defs/HatSlope"
+        },
+        "tone": {
+          "description": "brightness, 0–5 V: opens the cutoff around `freq` (default 4.53)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the hat",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "HatNoise": {
+          "description": "Noise source for the hat.",
+          "oneOf": [
+            {
+              "description": "bright and hissy",
+              "type": "string",
+              "const": "white"
+            },
+            {
+              "description": "darker and softer",
+              "type": "string",
+              "const": "pink"
+            }
+          ]
+        },
+        "HatSlope": {
+          "description": "Steepness of the hat's high-pass filter.",
+          "oneOf": [
+            {
+              "description": "12 dB/octave: more body below the cutoff",
+              "type": "string",
+              "const": "db12"
+            },
+            {
+              "description": "24 dB/octave: thinner and tighter",
+              "type": "string",
+              "const": "db24"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "hat output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the hat",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "resonant high-pass cutoff in V/Oct; higher is brighter and more\nresonant (default A8, ≈7 kHz)",
+        "signalType": "pitch",
+        "defaultValue": 4.75,
+        "minValue": 4.4,
+        "maxValue": 5.3
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the hit to fall to −60 dB; short for closed, long for open (default 0.3)",
+        "signalType": "control",
+        "defaultValue": 0.3,
+        "minValue": 0.0,
+        "maxValue": 3.0
+      },
+      {
+        "name": "attack",
+        "description": "seconds to swell to full level; a slow swell also lengthens the fall\n(default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 0.22
+      },
+      {
+        "name": "tone",
+        "description": "brightness, 0–5 V: opens the cutoff around `freq` (default 4.53)",
+        "signalType": "control",
+        "defaultValue": 4.53,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$kick",
+    "documentation": "Analog-style kick drum: a sine body with a pitch sweep, struck by `trigger`.\n\nEach rising edge on **trigger** restarts the envelope and sweeps the pitch\ndown from 4.76× **freq** with time constant **sweep**. The level then falls\nexponentially to −60 dB over **decay** seconds. **attack** rounds off the\nstart, **drive** soft-clips the body, **overtone** adds an inharmonic\npartial for a metallic edge, and **click** layers a short transient on top.\n**accent**, sampled at each strike, sets the hit's level.\n\nThe body oscillator runs freely between hits, so each hit starts at a\ndifferent point in its cycle. **phaseReset** restarts it on every hit\ninstead, adding a sharp pitch zap and making every hit identical.\n\nOutput range is **±5 V**.\n\n```js\n$kick($clock.beatTrigger, { decay: 0.6, click: 5 }).out()\n\n// accented hits: full level on beat 1, softer elsewhere\n$kick($clock.beatTrigger, { accent: $cycle($p('5 2.5 2.5 2.5')) }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "KickParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attack": {
+          "description": "seconds to swell to full level; softens the start of the hit (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "click": {
+          "description": "level of a short transient on the attack, 0–5 V (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "seconds for the hit to fall to −60 dB (default 1.2)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drive": {
+          "description": "soft-clipping amount, 0–5 V; thickens the body and lengthens the tail (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "resting pitch in V/Oct (default F1, ≈43.7 Hz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "overtone": {
+          "description": "level of an inharmonic partial 220 Hz above the body, 0–5 V (default 0)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phaseReset": {
+          "description": "restart the oscillator at zero phase on every hit, with a sharp upward\nzap, so each hit is identical; otherwise hits land wherever the\nfree-running body is (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "sweep": {
+          "description": "time constant in seconds of the fall from the sweep's starting pitch,\n4.76× `freq`, back to `freq`; 0 disables the sweep (default 0.024)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "resting pitch in V/Oct (default F1, ≈43.7 Hz)",
+        "signalType": "pitch",
+        "defaultValue": -2.583,
+        "minValue": -3.2,
+        "maxValue": -0.4
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the hit to fall to −60 dB (default 1.2)",
+        "signalType": "control",
+        "defaultValue": 1.2,
+        "minValue": 0.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "sweep",
+        "description": "time constant in seconds of the fall from the sweep's starting pitch,\n4.76× `freq`, back to `freq`; 0 disables the sweep (default 0.024)",
+        "signalType": "control",
+        "defaultValue": 0.024,
+        "minValue": 0.0,
+        "maxValue": 0.1
+      },
+      {
+        "name": "attack",
+        "description": "seconds to swell to full level; softens the start of the hit (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 0.4
+      },
+      {
+        "name": "drive",
+        "description": "soft-clipping amount, 0–5 V; thickens the body and lengthens the tail (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "overtone",
+        "description": "level of an inharmonic partial 220 Hz above the body, 0–5 V (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "click",
+        "description": "level of a short transient on the attack, 0–5 V (default 0)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit; it\nscales the output level only (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$snare",
+    "documentation": "Snare drum: a short pitched body, a ringing overtone, and filtered noise\nfor the wires.\n\nEach rising edge on **trigger** strikes the body at **freq**, a ringing\novertone whose pitch and level rise with **color**, and the wires: noise\nwhose level and brightness follow **tone**, shaped by **filter**. The wires\nfall to −60 dB over **decay** seconds, with the body and overtone fading\nsooner. **accent**, sampled at each strike, sets the hit's level.\n\nOutput range is **±5 V**.\n\n```js\n$snare($clock.beatTrigger, { tone: 4, filter: 'bandpass' }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SnareParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit;\nsofter hits are quieter with darker wires (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "description": "pitch and level of a ringing overtone, 0–5 V; higher is brighter and\nlouder (default 4.05)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "seconds for the snare wires to fall to −60 dB; the body and ring fade\nsooner in proportion (default 0.475)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "filter": {
+          "description": "response of the snare-wire filter (default highpass)",
+          "$ref": "#/$defs/SnareFilter"
+        },
+        "freq": {
+          "description": "pitch of the drum body in V/Oct (default C3, ≈131 Hz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "level and brightness of the snare wires, 0–5 V (default 2.55)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        },
+        "SnareFilter": {
+          "description": "Response of the snare-wire noise filter.",
+          "oneOf": [
+            {
+              "description": "dark, papery wires",
+              "type": "string",
+              "const": "lowpass"
+            },
+            {
+              "description": "bright, sizzling wires",
+              "type": "string",
+              "const": "highpass"
+            },
+            {
+              "description": "a narrower, mid-focused rattle",
+              "type": "string",
+              "const": "bandpass"
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "pitch of the drum body in V/Oct (default C3, ≈131 Hz)",
+        "signalType": "pitch",
+        "defaultValue": -1.0,
+        "minValue": -1.7,
+        "maxValue": 0.6
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the snare wires to fall to −60 dB; the body and ring fade\nsooner in proportion (default 0.475)",
+        "signalType": "control",
+        "defaultValue": 0.475,
+        "minValue": 0.0,
+        "maxValue": 2.0
+      },
+      {
+        "name": "color",
+        "description": "pitch and level of a ringing overtone, 0–5 V; higher is brighter and\nlouder (default 4.05)",
+        "signalType": "control",
+        "defaultValue": 4.05,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "level and brightness of the snare wires, 0–5 V (default 2.55)",
+        "signalType": "control",
+        "defaultValue": 2.55,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit;\nsofter hits are quieter with darker wires (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
+    "name": "$tom",
+    "documentation": "Tom drum: a pitched body that glides down from **bend**, over a band of\nnoisy membrane.\n\nEach rising edge on **trigger** starts the body **bend** octaves above\n**freq** and glides it down. **tone** sets the level of the membrane noise\naround the body and **color** its brightness. Everything falls to −60 dB\nover **decay** seconds. **accent**, sampled at each strike, sets the hit's\nlevel; softer hits are also darker.\n\nOutput range is **±5 V**.\n\n```js\n$tom($clock.beatTrigger, { freq: 'a2', bend: 1 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "TomParams",
+      "type": "object",
+      "properties": {
+        "accent": {
+          "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit;\nsofter hits are quieter and darker (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "bend": {
+          "description": "octaves above `freq` that the hit starts at, gliding back down (default 0.5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "color": {
+          "description": "brightness of the membrane noise, 0–5 V (default 2.1)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "seconds for the hit to fall to −60 dB (default 1.1)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freq": {
+          "description": "resting pitch in V/Oct (default E2, ≈82 Hz)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tone": {
+          "description": "membrane noise, 0–5 V: crossfades from a metallic wobble to full noise\nat 2.5 V and above (default 5)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "rising edges strike the drum",
+          "$ref": "#/$defs/PolySignal"
+        }
+      },
+      "required": [
+        "trigger"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "drum output",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "trigger",
+        "description": "rising edges strike the drum",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "freq",
+        "description": "resting pitch in V/Oct (default E2, ≈82 Hz)",
+        "signalType": "pitch",
+        "defaultValue": -1.667,
+        "minValue": -2.7,
+        "maxValue": 1.2
+      },
+      {
+        "name": "decay",
+        "description": "seconds for the hit to fall to −60 dB (default 1.1)",
+        "signalType": "control",
+        "defaultValue": 1.1,
+        "minValue": 0.0,
+        "maxValue": 4.0
+      },
+      {
+        "name": "bend",
+        "description": "octaves above `freq` that the hit starts at, gliding back down (default 0.5)",
+        "signalType": "control",
+        "defaultValue": 0.5,
+        "minValue": 0.0,
+        "maxValue": 2.0
+      },
+      {
+        "name": "color",
+        "description": "brightness of the membrane noise, 0–5 V (default 2.1)",
+        "signalType": "control",
+        "defaultValue": 2.1,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "tone",
+        "description": "membrane noise, 0–5 V: crossfades from a metallic wobble to full noise\nat 2.5 V and above (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "accent",
+        "description": "hit strength, 0–5 V, sampled on each trigger and held for the hit;\nsofter hits are quieter and darker (default 5)",
+        "signalType": "control",
+        "defaultValue": 5.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
     "name": "$comp",
     "documentation": "EXPERIMENTAL\n\nSingle-band feed-forward dynamics processor with peak envelope follower.\n\nTwo stages run in parallel:\n\n- **downward stage** acts on signal above `threshold`. `ratio > 1` =\n  compression, `ratio < 1` = upward expansion (boost loud), `ratio = 1` =\n  passthrough.\n- **upward stage** acts on signal below `upwardThreshold`. `upwardRatio > 1`\n  = upward compression (boost quiet), `upwardRatio < 1` = downward\n  expansion / gate-like attenuation of quiet signal, `upwardRatio = 1` =\n  passthrough.\n\nBoth ratios use textbook `X:1` notation (X = Δinput dB / Δoutput dB) and\nare lower-bounded at 1e-3 (≈ Ableton's 1:1000 display). The detected\nlevel is clamped to ±60 dB so expansion stays bounded at signal extremes.\n\nAn optional **side-chain** input lets the envelope follower track an\nexternal signal while the gain is applied to `input` — useful for\nducking, kick-triggered pumping, or building multiband effects like OTT.\n\n**Signal flow:** input → input gain → (detector: side-chain or input)\n  → up + down compression → output gain → dry/wet mix → output\n\n- **threshold** — downward stage threshold in volts (0–5, default 2.5).\n- **ratio** — downward stage ratio in textbook X:1 form. > 1 compresses,\n  < 1 expands (boosts loud signal), 1 = passthrough. Lower-bounded at\n  1e-3 (≈ 1:1000 expansion); upper bound is `f32::INFINITY` =\n  brick-wall limiter. Default 4.0 (= Ableton display 1:0.25).\n- **upwardThreshold** — upward stage threshold in volts (0–5, default 0).\n- **upwardRatio** — upward stage ratio in textbook X:1 form. > 1 boosts\n  quiet signal, < 1 gates quiet signal, 1 = passthrough. Same bounds as\n  `ratio`. Default 1 (passthrough).\n- **sidechain** — optional external detector signal.\n- **attack** / **release** — envelope follower time constants in seconds.\n- **makeup** — post-compression makeup gain as a dB-domain voltage\n  (-5V = -24dB, 0V = unity, +5V = +24dB, default 0).\n- **inputGain** — gain before the compressor (-5V = -24dB, 0V = unity,\n  5V = +24dB). Raising input gain drives more signal into the compressor.\n- **outputGain** — gain after compression (-5V = -24dB, 0V = unity,\n  5V = +24dB). Trims the final output level.\n- **mix** — dry/wet blend (0 = fully dry, 5 = fully wet, default 5.0).\n  The dry signal is the original input before any gain staging.\n\n```js\n// simple bus compressor\n$comp($saw('c2'), { threshold: 2.5, ratio: 4, attack: 0.01, release: 0.1 })\n```\n\n```js\n// side-chain ducking — a kick envelope ducks a sustained pad\n$comp($saw('c3'), {\n  sidechain: $perc($clock.beatTrigger, { decay: 0.2 }),\n  threshold: 1.0, ratio: 8, attack: 0.005, release: 0.2,\n})\n```\n\n```js\n// multiband compression using $xover + $comp\nlet bands = $xover($saw('c2'), { lowMidFreq: '200hz', midHighFreq: '2000hz' })\nlet low  = $comp(bands.low,  { threshold: 2.5, ratio: 4 })\nlet mid  = $comp(bands.mid,  { threshold: 3,   ratio: 3 })\nlet high = $comp(bands.high, { threshold: 2,   ratio: 6 })\n$mix([low, mid, high]).out()\n```",
     "paramsSchema": {
