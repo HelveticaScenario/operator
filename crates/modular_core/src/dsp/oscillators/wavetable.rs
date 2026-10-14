@@ -20,7 +20,6 @@ use std::sync::Arc;
 use std::ops::Range;
 
 use crate::{
-    block_input::{InputScratch, OptionBlockInput},
     dsp::{
         oscillators::{
             FmMode, apply_fm, sync_blep, sync_edge_fraction, wavetable_prep::PreparedWavetable,
@@ -31,7 +30,7 @@ use crate::{
     types::{Table, Wav, WavData},
 };
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
@@ -55,6 +54,7 @@ pub(crate) struct WavetableOscParams {
     pub(crate) fm_mode: FmMode,
     /// hard sync source — rising edges reset the oscillator phase.
     #[deserr(default)]
+    #[block_input(optional)]
     pub(crate) sync: Option<PolySignal>,
     /// Optional phase-warp table applied before sampling.
     #[deserr(default)]
@@ -306,20 +306,14 @@ impl WavetableOsc {
             return Some(());
         };
         let channels = self.channel_count();
-        let mut scratch: [InputScratch; 5] = std::array::from_fn(|_| InputScratch::new());
-        let [s0, s1, s2, s3, s4] = &mut scratch;
-        let pitch = p.pitch.block_input(range.clone(), channels, s0)?;
-        let fm = p.fm.block_input_or(range.clone(), channels, 0.0, s1)?;
-        let position = p
-            .position
-            .block_input_or(range.clone(), channels, 0.0, s2)?;
-        let offset = p
-            .phase_offset
-            .block_input_or(range.clone(), channels, 0.0, s3)?;
-        let sync = match &p.sync {
-            Some(sync) => Some(sync.block_input(range.clone(), channels, s4)?),
-            None => None,
-        };
+        let mut scratch = Default::default();
+        let WavetableOscParamsBlockInputs {
+            pitch,
+            position,
+            fm,
+            sync,
+            phase_offset: offset,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
         let inv_sr = 1.0 / sample_rate as f64;
         for i in range {
             let (pitch, fm, position, offset) =
