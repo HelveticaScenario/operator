@@ -5,7 +5,6 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    block_input::{InputScratch, OptionBlockInput},
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
         utils::{
@@ -21,7 +20,7 @@ fn default_voices() -> usize {
     5
 }
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
@@ -45,6 +44,7 @@ struct SupersawParams {
     fm_mode: FmMode,
     /// hard sync source — rising edges reset every detuned voice's phase
     #[deserr(default)]
+    #[block_input(optional)]
     sync: Option<PolySignal>,
     /// when true, each freshly started voice stays silent until its output
     /// first crosses zero. Because voices start at random phases, this prevents
@@ -287,18 +287,13 @@ impl Supersaw {
         let voices = self.state.voices;
         let input_channels = self.state.input_channels;
         let p = &self.params;
-        let mut scratch: [InputScratch; 4] = std::array::from_fn(|_| InputScratch::new());
-        let [s0, s1, s2, s3] = &mut scratch;
-        let freq = p.freq.block_input(range.clone(), input_channels, s0)?;
-        let fm =
-            p.fm.block_input_or(range.clone(), input_channels, 0.0, s1)?;
-        let detune = p
-            .detune
-            .block_input_or(range.clone(), input_channels, 0.18, s2)?;
-        let sync = match &p.sync {
-            Some(sync) => Some(sync.block_input(range.clone(), input_channels, s3)?),
-            None => None,
-        };
+        let mut scratch = Default::default();
+        let SupersawParamsBlockInputs {
+            freq,
+            detune,
+            fm,
+            sync,
+        } = p.block_inputs(range.clone(), input_channels, &mut scratch)?;
 
         // Each voice's phase increment, `[voice * input_channels + input_ch]`.
         // Held pitch, FM and detune fill it once for the whole range.
