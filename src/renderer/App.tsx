@@ -414,9 +414,14 @@ function App() {
     );
 
     // The performance window shows the playing buffer, from when its patch
-    // starts playing until another buffer's does, stop included. Before any
-    // patch has played it shows the visible buffer.
+    // starts playing until another buffer's does, stop included. It finds the
+    // buffer by id, which survives renames, and keeps the buffer's last model
+    // path once no tab holds that id: another tab can hold the same file.
+    // Before any patch has played it shows the visible buffer.
     const [performanceSourceId, setPerformanceSourceId] = useState<
+        string | null
+    >(null);
+    const [lastPerformancePath, setLastPerformancePath] = useState<
         string | null
     >(null);
     if (
@@ -424,14 +429,27 @@ function App() {
         runningControlsSource !== performanceSourceId
     ) {
         setPerformanceSourceId(runningControlsSource);
+        setLastPerformancePath(null);
     }
     const performanceBuffer =
         performanceSourceId === null
             ? undefined
             : buffers.find((b) => b.id === performanceSourceId);
+    const foundPerformancePath =
+        performanceBuffer === undefined
+            ? null
+            : formatPath(getBufferId(performanceBuffer));
+    if (
+        foundPerformancePath !== null &&
+        foundPerformancePath !== lastPerformancePath
+    ) {
+        setLastPerformancePath(foundPerformancePath);
+    }
+    const performanceBufferPath = foundPerformancePath ?? lastPerformancePath;
     const performanceShowsVisible =
-        performanceBuffer === undefined ||
-        performanceSourceId === visibleCode.bufferId;
+        performanceBufferPath === null ||
+        (!!activeBufferId &&
+            performanceBufferPath === formatPath(activeBufferId));
     const performanceCodeControls = useMemo(() => {
         const views =
             performanceShowsVisible || performanceSourceId === null
@@ -460,9 +478,7 @@ function App() {
     ]);
     const revealInPerformance = usePerformanceCode(
         paletteEditor,
-        performanceBuffer === undefined
-            ? null
-            : formatPath(getBufferId(performanceBuffer)),
+        performanceBufferPath,
         performanceView,
         performanceTheme,
         performanceCodeControls,
