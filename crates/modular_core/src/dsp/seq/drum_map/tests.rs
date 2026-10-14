@@ -312,3 +312,66 @@ fn step_stays_exact_at_large_bar_counts() {
     m.update(SAMPLE_RATE);
     assert_eq!(m.state.step, 13);
 }
+
+/// Playhead advance per sample at `bpm` in 4/4, in cycles.
+fn clock_rate(bpm: f64) -> f64 {
+    bpm / 60.0 / 4.0 / SAMPLE_RATE as f64
+}
+
+/// Creates a module whose first sample lands `delay_secs` after the start of
+/// `step` in bar 5, then reports whether its first two samples fire the bass
+/// drum.
+fn fresh_module_fires(step: usize, delay_secs: f64, bpm: f64) -> bool {
+    let mut m = make_fresh(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    let rate = clock_rate(bpm);
+    let start =
+        5.0 + step as f64 / STEPS_PER_PATTERN as f64 + delay_secs * SAMPLE_RATE as f64 * rate;
+    let mut fired = false;
+    for i in 0..2 {
+        set_playhead(&mut m, start + i as f64 * rate);
+        m.update(SAMPLE_RATE);
+        fired |= m.outputs.bd.get(0) > 2.5;
+    }
+    fired
+}
+
+#[test]
+fn module_created_on_bar_line_plays_downbeat() {
+    // A quantized swap lands one sample past the boundary.
+    assert!(fresh_module_fires(0, 1.0 / SAMPLE_RATE as f64, 120.0));
+}
+
+#[test]
+fn module_created_on_any_step_boundary_plays_it() {
+    let step = full_density_bd_steps()[3];
+    assert!(fresh_module_fires(step, 1.0 / SAMPLE_RATE as f64, 120.0));
+}
+
+#[test]
+fn module_created_after_the_window_stays_silent() {
+    assert!(fresh_module_fires(0, 0.001, 120.0));
+    assert!(!fresh_module_fires(0, 0.003, 120.0));
+    // Mid-step, as an immediate patch update usually lands.
+    assert!(!fresh_module_fires(0, 0.03, 120.0));
+}
+
+#[test]
+fn boundary_window_is_measured_in_time_at_any_tempo() {
+    assert!(fresh_module_fires(0, 0.001, 30.0));
+    assert!(!fresh_module_fires(0, 0.003, 30.0));
+    assert!(fresh_module_fires(0, 0.001, 300.0));
+    assert!(!fresh_module_fires(0, 0.003, 300.0));
+}
+
+#[test]
+fn module_created_at_downbeat_rolls_chaos() {
+    let mut p = params(2.0, 2.0, 2.0, DrumMapResolution::ThirtySecond);
+    p.chaos = volts(5.0);
+    let mut m = make_fresh(p);
+    let rate = clock_rate(120.0);
+    for i in 1..3 {
+        set_playhead(&mut m, 5.0 + i as f64 * rate);
+        m.update(SAMPLE_RATE);
+    }
+    assert_ne!(m.channel_state[0].perturbation, [0; NUM_PARTS]);
+}

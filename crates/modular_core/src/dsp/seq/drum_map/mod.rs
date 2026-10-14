@@ -20,6 +20,9 @@ const NUM_PARTS: usize = 3;
 const STEPS_PER_PATTERN: usize = 32;
 /// Map-level threshold above which a hit also fires its accent output.
 const ACCENT_LEVEL: u8 = 192;
+/// A module created at most this long after a step boundary plays that step.
+/// Quantized patch swaps land within a sample or two of the bar or beat line.
+const FRESH_WINDOW_SECS: f64 = 0.002;
 
 /// Node index at each corner of the 5×5 map, indexed `[x][y]`.
 const DRUM_MAP: [[usize; 5]; 5] = [
@@ -138,11 +141,20 @@ struct DrumMapOutputs {
 }
 
 /// What the next update does with the step it lands on.
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Clone, Copy, PartialEq)]
 enum Sync {
-    /// Record the step without firing: a fresh module or a stopped transport
-    /// stays silent until the next step boundary.
+    /// A fresh module's first sample: record the step and its position.
     #[default]
+    Fresh,
+    /// A fresh module's second sample: the playhead's speed reveals how long
+    /// before creation the recorded step began, and the step plays one sample
+    /// late if that is within [`FRESH_WINDOW_SECS`].
+    Probing {
+        /// Position within the cycle, in steps, on the first sample.
+        position: f64,
+    },
+    /// Record the step without firing: a stopped transport stays silent until
+    /// the next step boundary.
     Silent,
     /// Fire the step and start a new cycle: the transport just started, so the
     /// first sample lands in the downbeat.
@@ -247,23 +259,33 @@ impl DrumMap {
         let step = (position as usize).min(STEPS_PER_PATTERN - 1) / stride * stride;
 
         let last = self.state.step;
+        let tracking = matches!(self.state.sync, Sync::Tracking | Sync::Probing { .. });
         // A backward jump over more than half the cycle is a wrap into the next
         // cycle (the clock's own bar-boundary rule). A rewind of at most one
         // step is jitter, such as a Link resync or a resolution change, and
         // keeps the previous step so it is not replayed; a longer rewind is a
         // seek and re-syncs silently.
         let (fire, new_cycle) = match self.state.sync {
-            Sync::Silent => (false, false),
+            Sync::Fresh | Sync::Silent => (false, false),
             Sync::Restart => (true, true),
-            Sync::Tracking if step > last => (true, false),
-            Sync::Tracking if last - step > STEPS_PER_PATTERN / 2 => (true, true),
-            Sync::Tracking => (false, false),
+            Sync::Probing { position: first } if step == last => {
+                let steps_per_sample = (position - first).rem_euclid(STEPS_PER_PATTERN as f64);
+                let window = steps_per_sample * FRESH_WINDOW_SECS * sample_rate as f64;
+                let on_boundary = steps_per_sample > 0.0 && first - last as f64 <= window;
+                (on_boundary, on_boundary && step == 0)
+            }
+            _ if tracking && step > last => (true, false),
+            _ if tracking && last - step > STEPS_PER_PATTERN / 2 => (true, true),
+            _ => (false, false),
         };
-        let jitter = self.state.sync == Sync::Tracking && step < last && last - step <= stride;
+        let jitter = tracking && step < last && last - step <= stride;
         if !jitter {
             self.state.step = step;
         }
-        self.state.sync = Sync::Tracking;
+        self.state.sync = match self.state.sync {
+            Sync::Fresh => Sync::Probing { position },
+            _ => Sync::Tracking,
+        };
 
         if fire {
             self.evaluate(step, new_cycle, min_gate_samples(sample_rate));
