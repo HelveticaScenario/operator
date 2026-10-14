@@ -160,7 +160,6 @@ export class ScopeBeams {
         );
     }
 
-    /** Draws every scope, ahead of the passes that sample them. */
     /**
      * Draws every scope, ahead of the passes that sample them. `slots` are
      * the shader's uniforms, where settings bound to a signal read its value

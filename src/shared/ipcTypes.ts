@@ -5,6 +5,7 @@
  * Shared between main and renderer processes.
  */
 
+import type { MonospaceFont } from './fonts';
 import type {
     ApplyPatchError,
     AudioConfigOptions,
@@ -56,36 +57,7 @@ export interface AudioConfig {
     bufferSize?: number;
 }
 
-/** Bundled fonts (shipped with the app) */
-export type BundledFont =
-    | 'Fira Code'
-    | 'JetBrains Mono'
-    | 'Cascadia Code'
-    | 'Source Code Pro'
-    | 'IBM Plex Mono'
-    | 'Hack'
-    | 'Inconsolata'
-    | 'Monaspace Neon'
-    | 'Monaspace Argon'
-    | 'Monaspace Xenon'
-    | 'Monaspace Krypton'
-    | 'Monaspace Radon'
-    | 'Geist Mono'
-    | 'Iosevka'
-    | 'Victor Mono'
-    | 'Roboto Mono'
-    | 'Maple Mono'
-    | 'Commit Mono'
-    | '0xProto'
-    | 'Intel One Mono'
-    | 'Mononoki'
-    | 'Anonymous Pro'
-    | 'Recursive';
-
-/** System fonts (available only if installed on the OS) */
-export type SystemFont = 'SF Mono' | 'Monaco' | 'Menlo' | 'Consolas';
-
-export type MonospaceFont = BundledFont | SystemFont;
+export type { BundledFont, MonospaceFont, SystemFont } from './fonts';
 
 export interface PrettierConfig {
     singleQuote?: boolean;

@@ -250,13 +250,14 @@ export const out: VideoModuleDef = {
 /**
  * Hydra's `posterize`: each channel is raised to `gamma`, cut into `bins`
  * steps, and raised back, so the steps crowd toward whichever end `gamma`
- * favors and never quite reach 1. Negative channels count as 0. The alpha is
- * kept.
+ * favors and never quite reach 1. Negative channels count as 0, and `bins`
+ * and `gamma` are kept just above 0, so a modulated value passing through 0
+ * darkens the picture instead of breaking it. The alpha is kept.
  */
 export const posterize = perChannel(
     'posterize',
     ['bins', 'gamma'],
-    'pow(floor(pow(max(x, vec3f(0.0)), vec3f(gamma)) * bins) / bins, vec3f(1.0 / gamma))',
+    'pow(floor(pow(max(x, vec3f(0.0)), vec3f(max(gamma, 0.00001))) * max(bins, 0.00001)) / max(bins, 0.00001), vec3f(1.0 / max(gamma, 0.00001)))',
 );
 
 /** Multiplies each channel by `gain`, then keeps the fractional part: a sawtooth of the input. */

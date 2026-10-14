@@ -4,7 +4,9 @@ import electronAPI from '../electronAPI';
 
 /**
  * The config file while `active`, kept current with outside edits, and a
- * function that merges a change into it and saves it at once.
+ * function that merges a change into it and saves it at once. Only the changed
+ * fields are written, so a copy that has not yet caught up with another edit
+ * never writes that edit back over.
  */
 export function useEditableConfig(
     active: boolean,
@@ -18,11 +20,8 @@ export function useEditableConfig(
     }, [active]);
 
     const change = useCallback((partial: Partial<AppConfig>) => {
-        setConfig((prev) => {
-            const updated = { ...prev, ...partial };
-            electronAPI.config.write(updated).catch(console.error);
-            return updated;
-        });
+        setConfig((prev) => ({ ...prev, ...partial }));
+        electronAPI.config.write(partial).catch(console.error);
     }, []);
 
     return [config, change];

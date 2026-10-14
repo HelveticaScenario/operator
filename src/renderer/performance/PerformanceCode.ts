@@ -37,7 +37,9 @@ export class PerformanceCode {
     private editor: Editor | null = null;
     private subscriptions: MonacoNamespace.IDisposable[] = [];
     private lines: string[] = [];
-    private tokens: CodeToken[][] | null = null;
+    private linesStale = true;
+    /** The tokens of the first `tokens.length` lines. */
+    private tokens: CodeToken[][] = [];
     private tokensStale = true;
     private dirty = true;
     private topLine = 0;
@@ -64,11 +66,7 @@ export class PerformanceCode {
         };
         this.subscriptions = [
             editor.onDidChangeModel(() => this.readModel()),
-            editor.onDidChangeModelContent(() => {
-                this.lines = editor.getModel()?.getLinesContent() ?? [];
-                this.tokensStale = true;
-                this.dirty = true;
-            }),
+            editor.onDidChangeModelContent(() => this.readModel()),
             editor.onDidChangeCursorSelection(changed),
             editor.onDidScrollChange(changed),
             editor.onDidLayoutChange(changed),
@@ -140,6 +138,10 @@ export class PerformanceCode {
             lineNumbers: settings.lineNumbers,
             theme,
         };
+        if (this.linesStale) {
+            this.lines = this.editor?.getModel()?.getLinesContent() ?? [];
+            this.linesStale = false;
+        }
         const layout = codeLayout(look, this.lines.length, width, height);
         const frame = this.frame(layout.visibleLines, layout.visibleColumns);
         const ease = 1 - Math.exp(-elapsedMs / SCROLL_EASE_MS);
@@ -166,8 +168,12 @@ export class PerformanceCode {
         this.attach(null);
     }
 
+    /**
+     * Marks the text out of date. It is read again on the next draw, so edits
+     * cost nothing while the code is not drawn.
+     */
     private readModel(): void {
-        this.lines = this.editor?.getModel()?.getLinesContent() ?? [];
+        this.linesStale = true;
         this.tokensStale = true;
         this.dirty = true;
     }
@@ -190,13 +196,6 @@ export class PerformanceCode {
                 tokens: null,
                 topLine: 0,
             };
-        }
-        if (this.tokensStale) {
-            this.tokens = monaco.editor.tokenize(
-                model.getValue(),
-                model.getLanguageId(),
-            );
-            this.tokensStale = false;
         }
         const tabSize = model.getOptions().tabSize;
         const selections: CodeSelection[] = (editor.getSelections() ?? []).map(
@@ -251,6 +250,17 @@ export class PerformanceCode {
             model.getLineCount(),
             Math.ceil(topLine + visibleLines) + 1,
         );
+        // A line's tokens depend on every line before it, so the text is
+        // tokenized from the top through the last line in view.
+        if (this.tokensStale || last > this.tokens.length) {
+            this.tokens = monaco.editor.tokenize(
+                model.getValueInRange(
+                    new monaco.Range(1, 1, last, model.getLineMaxColumn(last)),
+                ),
+                model.getLanguageId(),
+            );
+            this.tokensStale = false;
+        }
         const highlights: CodeRange[] = model
             .getDecorationsInRange(
                 new monaco.Range(first, 1, last, model.getLineMaxColumn(last)),

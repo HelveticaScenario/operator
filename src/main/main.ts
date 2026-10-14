@@ -923,14 +923,14 @@ registerIPCHandler('GET_DSL_LIB_SOURCE', () => {
 /** Rebuilds of a patch update whose baseline went stale while it was prepared. */
 const MAX_BASELINE_RETRIES = 2;
 
+/** Keeps each signal read into video on one tap slot across patch updates. */
+const videoTapSlots = new VideoTapSlots();
+
 /**
  * Reconcile `patch` against the patch the engine is playing and submit it. An
  * update the engine applies while this one is prepared or in flight changes
  * what is playing, so the reconciliation is redone against it.
  */
-/** Keeps each signal read into video on one tap slot across patch updates. */
-const videoTapSlots = new VideoTapSlots();
-
 function submitPatchUpdate(
     patch: PatchGraph,
     sourceId: string | undefined,
@@ -1014,7 +1014,12 @@ function submitPatchUpdate(
         for (const [tap, slot] of dslSlots) {
             tap.params = { ...(tap.params as object), slot };
         }
-        const placedVideo = videoTapSlots.assign(patch, video, moduleIdRemap);
+        const placedVideo = videoTapSlots.assign(
+            patch,
+            video,
+            baseline.patchGraph,
+            moduleIdRemap,
+        );
         const { errors, updateId } = synth.updatePatch(
             patch,
             trigger,

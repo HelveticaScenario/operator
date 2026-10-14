@@ -1,3 +1,5 @@
+import { MONOSPACE_FONTS } from '../shared/fonts';
+
 /**
  * JSON Schema for the Modular app configuration file.
  * Used by Monaco editor for validation and autocomplete.
@@ -30,36 +32,6 @@ const audioConfigSchema = {
     },
     type: 'object',
 };
-
-const MONOSPACE_FONTS = [
-    'Fira Code',
-    'JetBrains Mono',
-    'Cascadia Code',
-    'Source Code Pro',
-    'IBM Plex Mono',
-    'Hack',
-    'Inconsolata',
-    'Monaspace Neon',
-    'Monaspace Argon',
-    'Monaspace Xenon',
-    'Monaspace Krypton',
-    'Monaspace Radon',
-    'Geist Mono',
-    'Iosevka',
-    'Victor Mono',
-    'Roboto Mono',
-    'Maple Mono',
-    'Commit Mono',
-    '0xProto',
-    'Intel One Mono',
-    'Mononoki',
-    'Anonymous Pro',
-    'Recursive',
-    'SF Mono',
-    'Monaco',
-    'Menlo',
-    'Consolas',
-];
 
 const THEMES = [
     'modular-dark',
@@ -100,7 +72,7 @@ export const configSchema = {
         font: {
             default: 'Fira Code',
             description: 'The monospace font family used in the editor',
-            enum: MONOSPACE_FONTS,
+            enum: [...MONOSPACE_FONTS],
             type: 'string',
         },
         fontLigatures: {
@@ -161,7 +133,7 @@ export const configSchema = {
             default: 'Fira Code',
             description:
                 'The monospace font family of the code in the performance window',
-            enum: MONOSPACE_FONTS,
+            enum: [...MONOSPACE_FONTS],
             type: 'string',
         },
         performanceFontLigatures: {

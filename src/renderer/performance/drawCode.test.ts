@@ -9,6 +9,15 @@ describe('expandTabs', () => {
         });
     });
 
+    it('indexes columns by UTF-16 offset, an emoji spanning two', () => {
+        const line = '\t🎛 x';
+        const { columns, text } = expandTabs(line, 2);
+        expect(text).toBe('  🎛 x');
+        expect(columns).toHaveLength(line.length + 1);
+        expect(columns).toEqual([0, 2, 3, 4, 5, 6]);
+        expect(text.slice(columns[1], columns[3])).toBe('🎛');
+    });
+
     it('leaves a line without tabs as it is', () => {
         expect(expandTabs('abc', 2)).toEqual({
             columns: [0, 1, 2, 3],

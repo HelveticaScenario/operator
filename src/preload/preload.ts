@@ -251,7 +251,7 @@ export interface ElectronAPI {
         onUniform: (
             callback: (updates: VideoUniformUpdate[]) => void,
         ) => () => void;
-        /** `fresh` restarts every tap from the engine's newest samples. */
+        /** Reads the taps that `restart` names from the engine's newest samples, the rest from where the last pull left off. */
         pull: (restart: VideoRestart) => Promise<VideoPull>;
         /** Asks the system for camera access when it has not been asked; whether it is allowed. */
         requestCameraAccess: () => Promise<boolean>;

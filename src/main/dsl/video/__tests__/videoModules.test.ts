@@ -131,6 +131,26 @@ describe('$v modules', () => {
             expect(wgsl).toContain('return vec4f(clamp((x - vec3f(threshold))');
         });
 
+        it('posterizes to finite levels at bins or gamma 0', () => {
+            const wgsl = wgslOf(`$v.ramp().$.posterize().out();`);
+            for (const [bins, gamma] of [
+                [0, 0.6],
+                [3, 0],
+                [0, 0],
+            ]) {
+                for (const x of [0, 0.5, 1]) {
+                    const out = callWgsl(
+                        wgsl,
+                        'video_posterize',
+                        [x, x, x, 1],
+                        bins,
+                        gamma,
+                    ) as number[];
+                    expect(out.every(Number.isFinite)).toBe(true);
+                }
+            }
+        });
+
         it("posterizes along a gamma curve, as Hydra's posterize does", () => {
             const wgsl = wgslOf(`$v.ramp().$.posterize().out();`);
             const level = (x: number, bins: number, gamma: number) =>

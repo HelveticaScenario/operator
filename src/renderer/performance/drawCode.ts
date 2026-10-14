@@ -96,8 +96,10 @@ export function codeLayout(
 }
 
 /**
- * A line with its tabs expanded to spaces, and the column each character
- * index starts at; `columns[text.length]` is the line's width in columns.
+ * A line with its tabs expanded to spaces, and the column each UTF-16 index of
+ * the line starts at, which is also its index in `text`; `columns[line.length]`
+ * is the line's width in columns. A character outside the Basic Multilingual
+ * Plane, such as an emoji, spans two columns, as it does in `text`.
  */
 export function expandTabs(
     line: string,
@@ -105,12 +107,12 @@ export function expandTabs(
 ): { text: string; columns: number[] } {
     const columns: number[] = [];
     let text = '';
-    for (const char of line) {
+    for (let i = 0; i < line.length; i++) {
         columns.push(text.length);
         text +=
-            char === '\t'
+            line[i] === '\t'
                 ? ' '.repeat(tabSize - (text.length % tabSize))
-                : char;
+                : line[i];
     }
     columns.push(text.length);
     return { columns, text };
@@ -283,8 +285,10 @@ export function drawCode(
             if (look.ligatures) {
                 ctx.fillText(piece, xOf(columns[run.from]), textY);
             } else {
-                for (let k = 0; k < piece.length; k++) {
-                    ctx.fillText(piece[k], xOf(columns[run.from] + k), textY);
+                let k = 0;
+                for (const char of piece) {
+                    ctx.fillText(char, xOf(columns[run.from] + k), textY);
+                    k += char.length;
                 }
             }
         }

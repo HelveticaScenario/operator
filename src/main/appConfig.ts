@@ -1,38 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
+import { MONOSPACE_FONTS } from '../shared/fonts';
 
-const MonospaceFontSchema = z.enum([
-    // Bundled fonts
-    'Fira Code',
-    'JetBrains Mono',
-    'Cascadia Code',
-    'Source Code Pro',
-    'IBM Plex Mono',
-    'Hack',
-    'Inconsolata',
-    'Monaspace Neon',
-    'Monaspace Argon',
-    'Monaspace Xenon',
-    'Monaspace Krypton',
-    'Monaspace Radon',
-    'Geist Mono',
-    'Iosevka',
-    'Victor Mono',
-    'Roboto Mono',
-    'Maple Mono',
-    'Commit Mono',
-    '0xProto',
-    'Intel One Mono',
-    'Mononoki',
-    'Anonymous Pro',
-    'Recursive',
-    // System fonts (available only if installed)
-    'SF Mono',
-    'Monaco',
-    'Menlo',
-    'Consolas',
-]);
+const MonospaceFontSchema = z.enum(MONOSPACE_FONTS);
 
 export const AppConfigSchema = z.object({
     audioConfig: z

@@ -1,7 +1,8 @@
 import React from 'react';
 import type { AppConfig, MonospaceFont } from '../../shared/ipcTypes';
 import type { AppTheme } from '../themes/types';
-import { BUNDLED_FONTS, useInstalledSystemFonts } from './fonts';
+import { BUNDLED_FONTS } from '../../shared/fonts';
+import { useInstalledSystemFonts } from './fonts';
 
 type CursorStyle =
     | 'line'

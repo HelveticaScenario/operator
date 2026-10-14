@@ -142,7 +142,7 @@
     height: 100%;
 }
 
-/* Let the $scopeXY background canvas show through. The theme override at
+/* Let the video backdrop show through. The theme override at
  * `components/monaco/theme.ts` already zeroes editor.background in Monaco's
  * colour map; this catches any inline background Monaco paints on chrome. */
 .editor-panel .monaco-editor,
