@@ -3,10 +3,10 @@ use schemars::JsonSchema;
 
 use std::ops::Range;
 
-use crate::block_input::{self, InputScratch};
+use crate::block_input;
 use crate::poly::{PolyOutput, PolySignal};
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct ClampParams {
@@ -14,9 +14,11 @@ struct ClampParams {
     input: PolySignal,
     /// lower bound — if omitted the signal is unclamped below
     #[deserr(default)]
+    #[block_input(optional)]
     min: Option<PolySignal>,
     /// upper bound — if omitted the signal is unclamped above
     #[deserr(default)]
+    #[block_input(optional)]
     max: Option<PolySignal>,
 }
 
@@ -77,31 +79,23 @@ impl Clamp {
         range: Range<usize>,
         _sample_rate: f32,
     ) -> Option<()> {
-        let channels = self.channel_count();
-        let p = &self.params;
-        let (mut s0, mut s1, mut s2) = (
-            InputScratch::new(),
-            InputScratch::new(),
-            InputScratch::new(),
-        );
-        let input = p.input.block_input(range.clone(), channels, &mut s0)?;
-        let out = &mut outputs.sample;
-        match (&p.min, &p.max) {
+        let mut scratch = Default::default();
+        let inputs = self
+            .params
+            .block_inputs(range.clone(), self.channel_count(), &mut scratch)?;
+        let (input, out) = (inputs.input, &mut outputs.sample);
+        match (inputs.min, inputs.max) {
             (Some(min), Some(max)) => {
-                let min = min.block_input(range.clone(), channels, &mut s1)?;
-                let max = max.block_input(range.clone(), channels, &mut s2)?;
                 block_input::map(out, range, [input, min, max], |[x, min, max]| {
                     clamp(x, Some(min), Some(max))
                 });
             }
             (Some(min), None) => {
-                let min = min.block_input(range.clone(), channels, &mut s1)?;
                 block_input::map(out, range, [input, min], |[x, min]| {
                     clamp(x, Some(min), None)
                 });
             }
             (None, Some(max)) => {
-                let max = max.block_input(range.clone(), channels, &mut s2)?;
                 block_input::map(out, range, [input, max], |[x, max]| {
                     clamp(x, None, Some(max))
                 });
