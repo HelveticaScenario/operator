@@ -415,13 +415,17 @@ function App() {
 
     // The performance window shows the playing buffer, from when its patch
     // starts playing until another buffer's does, stop included. It finds the
-    // buffer by id, which survives renames, and keeps the buffer's last model
-    // path once no tab holds that id: another tab can hold the same file.
-    // Before any patch has played it shows the visible buffer.
+    // buffer by id, which survives renames. Once no tab holds that id, it
+    // shows the buffer's file while another tab has it open, and otherwise the
+    // visible buffer; a closed untitled buffer is gone for good, since a new
+    // one reuses its id. Before any patch has played it shows the visible
+    // buffer.
     const [performanceSourceId, setPerformanceSourceId] = useState<
         string | null
     >(null);
-    const [lastPerformancePath, setLastPerformancePath] = useState<
+    const [performanceSourceClosed, setPerformanceSourceClosed] =
+        useState(false);
+    const [lastPerformanceFile, setLastPerformanceFile] = useState<
         string | null
     >(null);
     if (
@@ -429,23 +433,36 @@ function App() {
         runningControlsSource !== performanceSourceId
     ) {
         setPerformanceSourceId(runningControlsSource);
-        setLastPerformancePath(null);
+        setPerformanceSourceClosed(false);
+        setLastPerformanceFile(null);
     }
     const performanceBuffer =
-        performanceSourceId === null
+        performanceSourceId === null || performanceSourceClosed
             ? undefined
             : buffers.find((b) => b.id === performanceSourceId);
-    const foundPerformancePath =
-        performanceBuffer === undefined
-            ? null
-            : formatPath(getBufferId(performanceBuffer));
     if (
-        foundPerformancePath !== null &&
-        foundPerformancePath !== lastPerformancePath
+        performanceSourceId !== null &&
+        (runningControlsSource === null ||
+            runningControlsSource === performanceSourceId) &&
+        !performanceSourceClosed &&
+        performanceBuffer === undefined
     ) {
-        setLastPerformancePath(foundPerformancePath);
+        setPerformanceSourceClosed(true);
     }
-    const performanceBufferPath = foundPerformancePath ?? lastPerformancePath;
+    const performanceFile =
+        performanceBuffer?.kind === 'file'
+            ? formatPath(performanceBuffer.filePath)
+            : null;
+    if (performanceFile !== null && performanceFile !== lastPerformanceFile) {
+        setLastPerformanceFile(performanceFile);
+    }
+    const performanceBufferPath =
+        performanceBuffer === undefined
+            ? lastPerformanceFile !== null &&
+              openBufferIds.some((id) => formatPath(id) === lastPerformanceFile)
+                ? lastPerformanceFile
+                : null
+            : formatPath(getBufferId(performanceBuffer));
     const performanceShowsVisible =
         performanceBufferPath === null ||
         (!!activeBufferId &&
@@ -1506,10 +1523,17 @@ function App() {
         patchCodeRef.current = patchCode;
     }, [patchCode]);
 
+    const runningBufferIdRef = useRef(runningBufferId);
+    useEffect(() => {
+        runningBufferIdRef.current = runningBufferId;
+    }, [runningBufferId]);
+
     // Keep runningBufferId pointing at the running buffer's current path
     // identity: saving an untitled buffer or renaming a file changes
     // getBufferId, and comparisons against activeBufferId (slider source
-    // rewriting, running indicators) must keep matching afterwards.
+    // rewriting, running indicators) must keep matching afterwards. An untitled
+    // buffer's path identity is its id, which a new untitled buffer reuses, so
+    // once the running one closes no buffer holds the running patch.
     useEffect(() => {
         const sourceId = runningSourceIdRef.current;
         if (sourceId === null) {
@@ -1518,13 +1542,11 @@ function App() {
         const running = buffers.find((b) => b.id === sourceId);
         if (running) {
             setRunningBufferId(getBufferId(running));
+        } else if (runningBufferIdRef.current === sourceId) {
+            runningSourceIdRef.current = null;
+            setRunningBufferId(null);
         }
     }, [buffers]);
-
-    const runningBufferIdRef = useRef(runningBufferId);
-    useEffect(() => {
-        runningBufferIdRef.current = runningBufferId;
-    }, [runningBufferId]);
 
     const isClockRunningRef = useRef(isClockRunning);
     useEffect(() => {
