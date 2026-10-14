@@ -30,7 +30,11 @@ const SUGAR_METHODS: Record<
     exp: { module: '$curve', param: 'exp' },
     // gain's level is perceptual: 5 = unity, 0 = silence — narrower than
     // scale's schema range.
-    gain: { module: '$scaleAndShift', param: 'scale', range: { max: 5, min: 0 } },
+    gain: {
+        module: '$scaleAndShift',
+        param: 'scale',
+        range: { max: 5, min: 0 },
+    },
     mulHz: { module: '$mulHz', param: 'factor' },
     shift: { module: '$scaleAndShift', param: 'shift' },
 };
