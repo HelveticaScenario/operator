@@ -1,0 +1,195 @@
+use super::*;
+use crate::types::{OutputStruct, Signal};
+
+const SAMPLE_RATE: f32 = 48000.0;
+const SAMPLES_PER_STEP: usize = 64;
+
+fn volts(v: f32) -> Option<PolySignal> {
+    Some(PolySignal::mono(Signal::Volts(v)))
+}
+
+fn params(x: f32, y: f32, density: f32, resolution: DrumMapResolution) -> DrumMapParams {
+    DrumMapParams {
+        playhead: None,
+        x: volts(x),
+        y: volts(y),
+        chaos: None,
+        bd_density: volts(density),
+        sd_density: volts(density),
+        hh_density: volts(density),
+        resolution,
+    }
+}
+
+/// Mirrors the production lifecycle: construction, then `on_patch_update`.
+fn make(params: DrumMapParams) -> DrumMap {
+    let channels = 1;
+    let mut outputs = DrumMapOutputs::default();
+    outputs.set_all_channels(channels);
+    let mut m = DrumMap {
+        params,
+        outputs,
+        _channel_count: channels,
+        _block_index: Default::default(),
+        state: DrumMapState::default(),
+        channel_state: vec![ChannelState::default(); channels].into_boxed_slice(),
+    };
+    m.on_patch_update();
+    m
+}
+
+fn set_playhead(m: &mut DrumMap, p: f32) {
+    m.params.playhead = Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(p))));
+}
+
+/// Runs one cycle and returns, per output, the 32-step grid of which steps
+/// produced a rising edge.
+fn run_cycle(m: &mut DrumMap, cycle: usize) -> [[bool; STEPS_PER_PATTERN]; 6] {
+    let mut hits = [[false; STEPS_PER_PATTERN]; 6];
+    let mut prev = [0.0f32; 6];
+    let total = STEPS_PER_PATTERN * SAMPLES_PER_STEP;
+    for i in 0..total {
+        set_playhead(m, cycle as f32 + i as f32 / total as f32);
+        m.update(SAMPLE_RATE);
+        let o = &m.outputs;
+        let now = [
+            o.bd.get(0),
+            o.sd.get(0),
+            o.hh.get(0),
+            o.bd_accent.get(0),
+            o.sd_accent.get(0),
+            o.hh_accent.get(0),
+        ];
+        for k in 0..6 {
+            if now[k] > 2.5 && prev[k] <= 2.5 {
+                hits[k][i / SAMPLES_PER_STEP] = true;
+            }
+        }
+        prev = now;
+    }
+    hits
+}
+
+/// At a node corner both mix stages run at balance 0, which scales by
+/// 255/256 each (avrlib `U8Mix`).
+#[test]
+fn map_corner_reads_node() {
+    let attenuate = |v: u8| ((v as u16 * 255) >> 8) as u8;
+    for step in 0..STEPS_PER_PATTERN {
+        for part in 0..NUM_PARTS {
+            let node = NODES[10][part * STEPS_PER_PATTERN + step];
+            assert_eq!(read_drum_map(step, part, 0, 0), attenuate(attenuate(node)));
+        }
+    }
+}
+
+#[test]
+fn hits_match_map_threshold() {
+    let mut m = make(params(1.3, 3.7, 3.0, DrumMapResolution::ThirtySecond));
+    let hits = run_cycle(&mut m, 0);
+    let (x, y, density) = (knob(1.3), knob(3.7), knob(3.0));
+    for part in 0..NUM_PARTS {
+        for step in 0..STEPS_PER_PATTERN {
+            let level = read_drum_map(step, part, x, y);
+            assert_eq!(
+                hits[part][step],
+                level > !density,
+                "part {part} step {step}"
+            );
+            assert_eq!(
+                hits[part + 3][step],
+                level > !density && level > ACCENT_LEVEL,
+                "accent part {part} step {step}"
+            );
+        }
+    }
+}
+
+#[test]
+fn zero_density_is_silent() {
+    let mut m = make(params(2.5, 2.5, 0.0, DrumMapResolution::ThirtySecond));
+    let hits = run_cycle(&mut m, 0);
+    assert!(hits.iter().flatten().all(|&h| !h));
+}
+
+#[test]
+fn full_density_plays_every_nonzero_step() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    let hits = run_cycle(&mut m, 0);
+    for part in 0..NUM_PARTS {
+        for step in 0..STEPS_PER_PATTERN {
+            assert_eq!(hits[part][step], read_drum_map(step, part, 0, 0) > 0);
+        }
+    }
+}
+
+#[test]
+fn sixteenth_resolution_skips_odd_steps() {
+    let mut m = make(params(4.0, 1.0, 5.0, DrumMapResolution::Sixteenth));
+    let hits = run_cycle(&mut m, 0);
+    assert!(hits[0][0], "downbeat bass drum plays");
+    for part in 0..NUM_PARTS {
+        for step in (1..STEPS_PER_PATTERN).step_by(2) {
+            assert!(!hits[part][step], "part {part} odd step {step}");
+        }
+    }
+}
+
+#[test]
+fn every_cycle_repeats_without_chaos() {
+    let mut m = make(params(2.0, 2.0, 3.5, DrumMapResolution::ThirtySecond));
+    let first = run_cycle(&mut m, 0);
+    assert_eq!(run_cycle(&mut m, 1), first);
+    assert_eq!(run_cycle(&mut m, 2), first);
+}
+
+#[test]
+fn chaos_varies_cycles() {
+    let mut p = params(2.0, 2.0, 2.0, DrumMapResolution::ThirtySecond);
+    p.chaos = volts(5.0);
+    let mut m = make(p);
+    let first = run_cycle(&mut m, 0);
+    assert!((1..8).any(|c| run_cycle(&mut m, c) != first));
+}
+
+#[test]
+fn first_update_mid_step_does_not_fire() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    set_playhead(&mut m, 0.5 / STEPS_PER_PATTERN as f32);
+    m.update(SAMPLE_RATE);
+    assert_eq!(m.outputs.bd.get(0), 0.0);
+}
+
+#[test]
+fn transport_start_refires_downbeat() {
+    let mut m = make(params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond));
+    set_playhead(&mut m, 0.0);
+    m.update(SAMPLE_RATE);
+    assert_eq!(m.outputs.bd.get(0), 5.0);
+    for _ in 0..SAMPLE_RATE as usize / 10 {
+        m.update(SAMPLE_RATE);
+    }
+    assert_eq!(m.outputs.bd.get(0), 0.0);
+
+    m.on_clock_message(&ClockMessages::Start).unwrap();
+    m.update(SAMPLE_RATE);
+    assert_eq!(m.outputs.bd.get(0), 5.0);
+}
+
+#[test]
+fn resolution_accepts_only_16_or_32() {
+    let parse = |v: serde_json::Value| {
+        deserr::deserialize::<DrumMapParams, _, crate::param_errors::ModuleParamErrors>(
+            serde_json::json!({ "resolution": v }),
+        )
+        .map(|p| p.resolution)
+    };
+    assert_eq!(parse(16.into()).ok(), Some(DrumMapResolution::Sixteenth));
+    assert_eq!(parse(32.into()).ok(), Some(DrumMapResolution::ThirtySecond));
+    assert_eq!(
+        parse(32.0.into()).ok(),
+        Some(DrumMapResolution::ThirtySecond)
+    );
+    assert!(parse(24.into()).is_err());
+    assert!(parse("sixteenth".into()).is_err());
+}

@@ -12,6 +12,7 @@ use crate::params::ParamsDeserializer;
 use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub(crate) mod cache;
+pub mod drum_map;
 pub mod highlight;
 pub mod interval_value;
 pub mod seq;
@@ -27,12 +28,14 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     seq::Seq::install_constructor(map);
     track::Track::install_constructor(map);
     step::Step::install_constructor(map);
+    drum_map::DrumMap::install_constructor(map);
 }
 
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
     seq::Seq::install_params_deserializer(map);
     track::Track::install_params_deserializer(map);
     step::Step::install_params_deserializer(map);
+    drum_map::DrumMap::install_params_deserializer(map);
 }
 
 /// Register the per-module editor-state builders for this category.
@@ -48,5 +51,6 @@ pub fn schemas() -> Vec<ModuleSchema> {
         seq::Seq::get_schema(),
         track::Track::get_schema(),
         step::Step::get_schema(),
+        drum_map::DrumMap::get_schema(),
     ]
 }

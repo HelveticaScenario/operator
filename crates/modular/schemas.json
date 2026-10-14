@@ -17543,6 +17543,292 @@
     ]
   },
   {
+    "name": "$drumMap",
+    "documentation": "Topographic drum sequencer: a port of Mutable Instruments Grids.\n\nThree trigger streams — bass drum, snare and hi-hat — are read from a\n5×5 map of drum patterns. **x** and **y** (0–5 V) move smoothly through\nthe map, interpolating between neighbouring patterns. Each part's\n**density** sets how many of its possible hits play, from silence at 0 V\nto every hit at 5 V. **chaos** adds random variation, re-rolled each\ncycle. Strong hits also fire the matching accent output.\n\nOne cycle of the **playhead** plays the 32-step pattern once.\n\n```js\nconst drums = $drumMap({ x: 1, y: 3, chaos: 0.5 })\n// the bass drum is the default output\n$sine('c1').amplitude($perc(drums, { decay: 0.3 })).out()\n$noise('white').amplitude($perc(drums.hh, { decay: 0.05 })).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "DrumMapParams",
+      "type": "object",
+      "properties": {
+        "bdDensity": {
+          "description": "bass drum fill density",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chaos": {
+          "description": "random perturbation of hit levels, re-rolled at the start of each cycle",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "hhDensity": {
+          "description": "hi-hat fill density",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "playhead": {
+          "description": "playhead position; one cycle plays the 32-step pattern once",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolution": {
+          "description": "step resolution",
+          "$ref": "#/$defs/DrumMapResolution"
+        },
+        "sdDensity": {
+          "description": "snare drum fill density",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "x": {
+          "description": "horizontal position in the pattern map",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "y": {
+          "description": "vertical position in the pattern map",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "$defs": {
+        "DrumMapResolution": {
+          "oneOf": [
+            {
+              "description": "16 steps per cycle, playing the map's even steps (Grids at 4 ppqn)",
+              "const": 16
+            },
+            {
+              "description": "all 32 steps per cycle, including the map's ghost notes (Grids at 8 or 24 ppqn)",
+              "const": 32
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "bd",
+        "description": "bass drum trigger",
+        "polyphonic": true,
+        "default": true,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "sd",
+        "description": "snare drum trigger",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "hh",
+        "description": "hi-hat trigger",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bdAccent",
+        "description": "bass drum accent trigger",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "sdAccent",
+        "description": "snare drum accent trigger",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "hhAccent",
+        "description": "hi-hat accent trigger",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "playhead",
+        "description": "playhead position; one cycle plays the 32-step pattern once",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
+      },
+      {
+        "name": "x",
+        "description": "horizontal position in the pattern map",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "y",
+        "description": "vertical position in the pattern map",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "chaos",
+        "description": "random perturbation of hit levels, re-rolled at the start of each cycle",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "bdDensity",
+        "description": "bass drum fill density",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "sdDensity",
+        "description": "snare drum fill density",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "hhDensity",
+        "description": "hi-hat fill density",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": []
+  },
+  {
     "name": "$midiCV",
     "documentation": "Converts MIDI note input into control voltages for driving synthesizer modules.\nSupports polyphonic voice allocation with up to 64 voices.\n\n## Outputs\n\n| Output | Signal | Range |\n|---|---|---|\n| `pitch` | V/Oct pitch (0V = C4), includes pitch bend | — |\n| `gate` | High while a note is held | 0–5V |\n| `velocity` | Note-on velocity | 0–5V |\n| `aftertouch` | Channel or polyphonic aftertouch | 0–5V |\n| `retrigger` | 5V pulse for 1ms on each new note | 0–5V |\n| `pitchWheel` | Pitch bend wheel position | -5V–+5V |\n| `modWheel` | Mod wheel (CC 1) | 0–5V |\n\n## Polyphonic modes (`polyMode`)\n\n- `\"rotate\"` — cycles through voices round-robin\n- `\"reuse\"` — reuses the voice that last played the same note\n- `\"reset\"` — always starts allocation from voice 1\n- `\"mpe\"` — one voice per MIDI channel (for MPE controllers)\n\n## Monophonic modes (`monoMode`, when `channels: 1`)\n\n- `\"last\"` — most recently pressed note wins\n- `\"first\"` — first pressed note wins\n- `\"lowest\"` — lowest held note wins\n- `\"highest\"` — highest held note wins\n\n## Example\n\n```js\n// 4-voice polyphonic MIDI synth\nconst midi = $midiCV({ channels: 4 });\n$sine(midi).amplitude($adsr(midi.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n\n// Mono lead with pitch bend\nconst lead = $midiCV({ channels: 1, pitchBendRange: 12 });\n$saw(lead).amplitude($adsr(lead.gate,{attack: 0.01, decay: 0.1, sustain: 0.8, release: 0.5})).out();\n```",
     "paramsSchema": {
