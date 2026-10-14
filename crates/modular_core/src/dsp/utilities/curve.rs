@@ -1,9 +1,12 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use std::ops::Range;
+
+use crate::block_input;
 use crate::poly::{PolyOutput, PolySignal};
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct CurveParams {
@@ -34,25 +37,45 @@ struct CurveOutputs {
 /// $curve($sine('1hz'), 2)   // quadratic curve
 /// $curve($saw('c3'), 3)     // cubic curve (audio taper)
 /// ```
-#[module(name = "$curve", args(input, exp))]
+#[module(name = "$curve", args(input, exp), block)]
 pub struct Curve {
     outputs: CurveOutputs,
     params: CurveParams,
 }
 
+/// `x` bent by `exp` across ±5 V, keeping its sign; a negative exponent
+/// counts as 0.
+#[inline(always)]
+fn curve(x: f32, exp: f32) -> f32 {
+    let normalized = (x.abs() / 5.0).max(0.0);
+    x.signum() * 5.0 * normalized.powf(exp.max(0.0))
+}
+
 impl Curve {
     fn update(&mut self, _sample_rate: f32) {
-        let channels = self.channel_count();
-
-        for i in 0..channels as usize {
-            let x = self.params.input.get_value(i);
-            let exp = self.params.exp.get_value(i).max(0.0);
-
-            let normalized = (x.abs() / 5.0).max(0.0);
-            let curved = x.signum() * 5.0 * normalized.powf(exp);
-
-            self.outputs.sample.set(i, curved);
+        for i in 0..self.channel_count() {
+            let value = curve(self.params.input.get_value(i), self.params.exp.get_value(i));
+            self.outputs.sample.set(i, value);
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut CurveBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let mut scratch = Default::default();
+        let inputs = self
+            .params
+            .block_inputs(range.clone(), self.channel_count(), &mut scratch)?;
+        block_input::map(
+            &mut outputs.sample,
+            range,
+            [inputs.input, inputs.exp],
+            |[x, exp]| curve(x, exp),
+        );
+        Some(())
     }
 }
 
