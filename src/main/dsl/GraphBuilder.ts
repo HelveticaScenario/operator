@@ -28,7 +28,9 @@ import { isPatternValue, type PatternValue } from './patternKinds';
 import {
     assertSignalGroupsTopLevelOnly,
     expandSignalGroups,
+    isSignalGroupLike,
 } from './signalGroups';
+import type { OutLaneControl, OutLaneTap } from './outLane';
 
 import z from 'zod';
 
@@ -236,8 +238,8 @@ function resolveMonoOutArgs(
 /**
  * Live-display tap for a locked VU control: the (module, port, channel)
  * address the engine samples so the panel can track the signal. Collections
- * and arrays tap their first channel; deferred outputs still hold
- * placeholder ids here, so they get no tap.
+ * and arrays tap their first channel. A deferred output's placeholder id is
+ * resolved once every deferred is set (see `resolveControlTap`).
  */
 function controlSourceTap(
     value: PolySignal | undefined,
@@ -258,10 +260,7 @@ function controlSourceTap(
     ) {
         single = [...(value as Iterable<unknown>)][0];
     }
-    if (
-        single instanceof ModuleOutput &&
-        !(single instanceof DeferredModuleOutput)
-    ) {
+    if (single instanceof ModuleOutput) {
         return {
             channel: single.channel ?? 0,
             moduleId: single.moduleId,
@@ -842,7 +841,11 @@ export class GraphBuilder {
     /** Track all deferred outputs for string replacement during toPatch */
     private deferredOutputs = new Map<string, DeferredModuleOutput>();
     /** `$outLane` taps, resolved against their labeled out in toPatch */
-    private outLaneTaps: { label: string; lane: OutLane }[] = [];
+    private outLaneTaps: {
+        label: string;
+        tap: OutLaneTap;
+        sourceLocation?: { line: number; column: number };
+    }[] = [];
     /** Global tempo for ROOT_CLOCK in BPM (default: 120) */
     private tempo: number = 120;
     /** Whether $setTempo was explicitly called in the DSL */
@@ -1203,8 +1206,18 @@ export class GraphBuilder {
         // sorted into source order before emission.
         const vuMeters: (VuMeterDef & { ordinal: number })[] = [];
 
-        // Each labeled lane's signals, for `$outLane` taps.
-        const lanesByLabel = new Map<string, OutLaneSources>();
+        // Each labeled lane's compiled stages, for `$outLane` taps.
+        const lanesByLabel = new Map<
+            string,
+            {
+                audio: ModuleOutput[];
+                active: ModuleOutput;
+                gainStageId: string;
+                gain: PolySignal | undefined;
+                panMixId?: string;
+                pan: PolySignal | undefined;
+            }
+        >();
 
         // Process output groups and build channel collections
         if (this.outGroups.size > 0) {
@@ -1311,21 +1324,17 @@ export class GraphBuilder {
                         ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
                         : group.gain!;
 
-                    // Mono outs have no pan; their lane taps read center.
-                    const panSource: PolySignal =
-                        group.type !== 'stereo'
-                            ? 0
-                            : panControllable
-                              ? signalFactory(panValue, { id: `__vuPan_${sk}` })
-                              : group.pan!;
-
                     // Group mix, then the gain stage — the tap: the meter
                     // reads post-gain, pre-mute like a post-fader DAW meter.
                     const mixSignals: ModuleOutput[] =
                         group.type === 'stereo'
                             ? [
                                   ...(stereoMixerFactory(group.outputs, {
-                                      pan: panSource,
+                                      pan: panControllable
+                                          ? signalFactory(panValue, {
+                                                id: `__vuPan_${sk}`,
+                                            })
+                                          : group.pan,
                                       width: group.width ?? 0,
                                   }) as Collection),
                               ]
@@ -1381,8 +1390,14 @@ export class GraphBuilder {
                         lanesByLabel.set(group.label, {
                             active: muteSig[0],
                             audio: outputSignals,
-                            level: gainSource,
-                            pan: panSource,
+                            gain: group.gain,
+                            gainStageId: this.$c(curvedAmp)[0].moduleId,
+                            pan:
+                                group.type === 'stereo' ? group.pan : undefined,
+                            panMixId:
+                                group.type === 'stereo'
+                                    ? mixSignals[0].moduleId
+                                    : undefined,
                         });
                     }
 
@@ -1515,8 +1530,70 @@ export class GraphBuilder {
             signalFactory(0, { id: 'ROOT_OUTPUT' });
         }
 
-        for (const tap of this.outLaneTaps) {
-            tap.lane.resolve(this, lanesByLabel.get(tap.label));
+        // Lane taps read the gain stage's and stereo mix's processed params,
+        // so a pattern-valued gain or pan plays through the one $cycle the
+        // lane itself uses. Processed params are serialized cables, so the
+        // declared range comes from the out's own option value.
+        const constants = new Map<number, ModuleOutput>();
+        const toOutput = (value: Signal): ModuleOutput => {
+            if (value instanceof ModuleOutput) {
+                return value;
+            }
+            if (typeof value === 'number') {
+                let constant = constants.get(value);
+                if (!constant) {
+                    constant = this.$c(value)[0];
+                    constants.set(value, constant);
+                }
+                return constant;
+            }
+            return this.$c(value)[0];
+        };
+        const control = (
+            processed: unknown,
+            option: PolySignal | undefined,
+            defaultMin: number,
+            defaultMax: number,
+        ): OutLaneControl => {
+            const ranged = firstChannel(this, option);
+            const hasRange = ranged instanceof ModuleOutputWithRange;
+            return {
+                max: toOutput(hasRange ? ranged.maxValue : defaultMax),
+                min: toOutput(hasRange ? ranged.minValue : defaultMin),
+                output: toOutput(firstChannel(this, processed)),
+            };
+        };
+        for (const { label, tap, sourceLocation } of this.outLaneTaps) {
+            const lane = lanesByLabel.get(label);
+            if (!lane) {
+                const at = sourceLocation
+                    ? ` (line ${sourceLocation.line})`
+                    : '';
+                throw new Error(`$outLane: no out is labeled "${label}"${at}`);
+            }
+            tap.resolve({
+                active: lane.active,
+                audio: lane.audio,
+                level: control(
+                    this.modules.get(lane.gainStageId)!.params.input,
+                    lane.gain,
+                    0,
+                    10,
+                ),
+                pan: control(
+                    lane.panMixId === undefined
+                        ? 0
+                        : this.modules.get(lane.panMixId)!.params.pan,
+                    lane.pan,
+                    -5,
+                    5,
+                ),
+            });
+        }
+
+        for (const meter of vuMeters) {
+            meter.panSource = this.resolveControlTap(meter.panSource);
+            meter.gainSource = this.resolveControlTap(meter.gainSource);
         }
 
         // The VU panel lists meters in source order, not channel order.
@@ -1820,16 +1897,15 @@ export class GraphBuilder {
     }
 
     /**
-     * Tap a labeled out lane's audio, mute/solo gate, gain, and pan. Resolved
-     * in toPatch, so the out may be declared after the tap.
+     * Register an `$outLane` tap. It resolves in toPatch, so the out may be
+     * declared after the tap; a label no out declares throws there.
      */
-    outLane(label: string): OutLane {
-        if (typeof label !== 'string' || label.length === 0) {
-            throw new Error('$outLane: label must be a non-empty string');
-        }
-        const lane = new OutLane(this);
-        this.outLaneTaps.push({ label, lane });
-        return lane;
+    addOutLaneTap(
+        label: string,
+        tap: OutLaneTap,
+        sourceLocation?: { line: number; column: number },
+    ): void {
+        this.outLaneTaps.push({ label, sourceLocation, tap });
     }
 
     /**
@@ -1878,6 +1954,27 @@ export class GraphBuilder {
             sourceLocation,
             triggerThreshold: thresh,
         });
+    }
+
+    /**
+     * Resolve a VU control tap naming a deferred output to the output it was
+     * set to. An unset deferred has nothing to sample, so it gets no tap.
+     */
+    private resolveControlTap(
+        tap: VuMeterDef['panSource'],
+    ): VuMeterDef['panSource'] {
+        const deferred = tap && this.deferredOutputs.get(tap.moduleId);
+        if (!deferred) {
+            return tap;
+        }
+        const resolved = deferred.resolve();
+        return resolved
+            ? {
+                  channel: resolved.channel ?? 0,
+                  moduleId: resolved.moduleId,
+                  portName: resolved.portName,
+              }
+            : undefined;
     }
 
     /**
@@ -2615,6 +2712,43 @@ function replaceDeferred(
     });
 }
 
+/**
+ * First channel of a signal param value, raw or serialized: the value itself
+ * for a scalar or ModuleOutput, a ModuleOutput for a serialized cable, else
+ * the first element of an array, Collection, or `$gN` group. An empty or
+ * absent value reads as 0.
+ */
+function firstChannel(builder: GraphBuilder, value: unknown): Signal {
+    if (isSignalGroupLike(value)) {
+        return firstChannel(builder, value.signals);
+    }
+    const cable = ResolvedModuleOutput.safeParse(value);
+    if (cable.success) {
+        return new ModuleOutput(
+            builder,
+            cable.data.module,
+            cable.data.port,
+            cable.data.channel,
+        );
+    }
+    if (
+        value instanceof ModuleOutput ||
+        typeof value === 'number' ||
+        typeof value === 'string'
+    ) {
+        return value;
+    }
+    if (
+        typeof value === 'object' &&
+        value !== null &&
+        Symbol.iterator in value
+    ) {
+        const [first] = value as Iterable<unknown>;
+        return first === undefined ? 0 : firstChannel(builder, first);
+    }
+    return 0;
+}
+
 function valueToSignal(value: unknown): unknown {
     if (value instanceof ModuleOutput) {
         return {
@@ -2629,69 +2763,4 @@ function valueToSignal(value: unknown): unknown {
     }
     // It's a number
     return value;
-}
-
-/** A labeled out lane's signals, as compiled in toPatch. */
-interface OutLaneSources {
-    /** Post-gain, post-mute audio: two channels for stereo outs, one for mono. */
-    audio: ModuleOutput[];
-    /** Mute/solo gate $signal (5 audible, 0 silenced). */
-    active: ModuleOutput;
-    /** Gain in DSL units (5 = unity). */
-    level: PolySignal;
-    /** Pan position (-5 left … +5 right); 0 for mono outs. */
-    pan: PolySignal;
-}
-
-/**
- * `$outLane` tap: a stereo Collection of the lane's audio, with its mute/solo
- * gate, gain, and pan as ranged properties. Every channel is a deferred
- * output, since the out may be declared after the tap; its width is fixed at
- * two so consumers can derive channel counts at call time.
- */
-export class OutLane extends Collection {
-    /** 5 V while the lane is audible, 0 V while muted or soloed out. */
-    readonly active: ModuleOutputWithRange;
-    /** The lane's gain in DSL units (0–10, 5 = unity). */
-    readonly level: ModuleOutputWithRange;
-    /** The lane's pan (-5 left … +5 right). */
-    readonly pan: ModuleOutputWithRange;
-    private readonly deferredActive: DeferredModuleOutput;
-    private readonly deferredLevel: DeferredModuleOutput;
-    private readonly deferredPan: DeferredModuleOutput;
-
-    constructor(builder: GraphBuilder) {
-        super(
-            new DeferredModuleOutput(builder),
-            new DeferredModuleOutput(builder),
-        );
-        this.deferredActive = new DeferredModuleOutput(builder);
-        this.deferredLevel = new DeferredModuleOutput(builder);
-        this.deferredPan = new DeferredModuleOutput(builder);
-        this.active = this.deferredActive.withRange(0, 5);
-        this.level = this.deferredLevel.withRange(0, 10);
-        this.pan = this.deferredPan.withRange(-5, 5);
-    }
-
-    /**
-     * Point every channel at the lane's signals. A label no out declares
-     * reads as a silent, inactive lane. Mono audio fills both channels;
-     * signal-valued gain and pan tap their first channel.
-     */
-    resolve(builder: GraphBuilder, sources: OutLaneSources | undefined): void {
-        const [left, right] = this.items as DeferredModuleOutput[];
-        if (sources === undefined) {
-            left.set(0);
-            right.set(0);
-            this.deferredActive.set(0);
-            this.deferredLevel.set(0);
-            this.deferredPan.set(0);
-            return;
-        }
-        left.set(sources.audio[0]);
-        right.set(sources.audio[sources.audio.length - 1]);
-        this.deferredActive.set(sources.active);
-        this.deferredLevel.set(builder.$c(sources.level)[0]);
-        this.deferredPan.set(builder.$c(sources.pan)[0]);
-    }
 }
