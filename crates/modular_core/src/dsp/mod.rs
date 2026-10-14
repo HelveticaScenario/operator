@@ -40,10 +40,11 @@ pub fn get_constructors() -> HashMap<String, SampleableConstructor> {
 ///
 /// A builder turns a module's raw params JSON into its pre-allocated live slot
 /// plus immutable metadata (see [`crate::module_state`]). Only modules that
-/// publish per-module editor state register one — currently just `$cycle`.
+/// publish per-module editor state register one: `$cycle` and `$eq`.
 pub fn get_module_state_builders() -> HashMap<String, crate::module_state::ModuleStateBuilder> {
     let mut map = HashMap::new();
     seq::install_module_state_builders(&mut map);
+    filters::install_module_state_builders(&mut map);
     map
 }
 
