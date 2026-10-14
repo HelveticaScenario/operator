@@ -62,10 +62,14 @@ export function insertObjectProperty(
                 ? { end: close, start: open + 1 }
                 : { end: close, start: close };
         const pad = layout.bracketSpacing ? ' ' : '';
-        const edit = { newText: `${pad}${prop}${pad}`, propOffset: pad.length, span };
+        const edit = {
+            newText: `${pad}${prop}${pad}`,
+            propOffset: pad.length,
+            span,
+        };
         return fitsOnLine(source, edit, layout)
             ? edit
-            : expandObject(sourceFile, obj, prop, layout) ?? edit;
+            : (expandObject(sourceFile, obj, prop, layout) ?? edit);
     }
 
     const last = props[props.length - 1];
@@ -114,7 +118,7 @@ export function insertObjectProperty(
           };
     return fitsOnLine(source, edit, layout)
         ? edit
-        : expandObject(sourceFile, obj, prop, layout) ?? edit;
+        : (expandObject(sourceFile, obj, prop, layout) ?? edit);
 }
 
 /**
@@ -132,8 +136,7 @@ export function appendObjectArgument(
     const closeParen = call.getEnd() - 1;
     const args = call.arguments;
     // After a trailing comma the separator is already in place.
-    const lead =
-        args.length === 0 ? '' : args.hasTrailingComma ? ' ' : ', ';
+    const lead = args.length === 0 ? '' : args.hasTrailingComma ? ' ' : ', ';
     const pad = layout.bracketSpacing ? ' ' : '';
     const span = { end: closeParen, start: closeParen };
     const inline = {
@@ -190,7 +193,7 @@ function expandObject(
 }
 
 /** Whether the line holding a single-line edit stays within printWidth. */
-function fitsOnLine(
+export function fitsOnLine(
     source: string,
     edit: PropertyEdit,
     layout: CodeStyle,
@@ -202,7 +205,7 @@ function fitsOnLine(
     return visualWidth(line, layout.tabWidth) <= layout.printWidth;
 }
 
-function indentUnit(layout: CodeStyle): string {
+export function indentUnit(layout: CodeStyle): string {
     return layout.useTabs ? '\t' : ' '.repeat(layout.tabWidth);
 }
 
@@ -212,7 +215,7 @@ function lineStart(source: string, pos: number): number {
 
 /** Offset of the line break ending the line at `pos` (the `\r` of a
  *  `\r\n`), or the source length on the last line. */
-function lineEnd(source: string, pos: number): number {
+export function lineEnd(source: string, pos: number): number {
     const end = source.indexOf('\n', pos);
     if (end === -1) {
         return source.length;
@@ -224,12 +227,12 @@ function lineEnd(source: string, pos: number): number {
  * The source's line break. Inserted text uses it verbatim so an editor
  * model normalizes nothing and offsets into the inserted text stay exact.
  */
-function eolOf(source: string): string {
+export function eolOf(source: string): string {
     return source.includes('\r\n') ? '\r\n' : '\n';
 }
 
 /** Leading whitespace of the line containing `pos`. */
-function indentAt(source: string, pos: number): string {
+export function indentAt(source: string, pos: number): string {
     const start = lineStart(source, pos);
     return /^[ \t]*/.exec(source.slice(start, lineEnd(source, start)))![0];
 }

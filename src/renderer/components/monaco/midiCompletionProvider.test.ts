@@ -33,7 +33,11 @@ function makeProvider(): languages.CompletionItemProvider {
 async function complete(
     lineContent: string,
     column: number,
-    wordAtPosition: { word: string; startColumn: number; endColumn: number } | null = null,
+    wordAtPosition: {
+        word: string;
+        startColumn: number;
+        endColumn: number;
+    } | null = null,
 ): Promise<languages.CompletionList | undefined> {
     const provider = makeProvider();
     const model = {

@@ -1,12 +1,12 @@
 ---
 name: comment-audit
 description: >
-  Audit the comments on changed/added lines in the working tree against the project's
-  comment guidelines (present-tense artifact: no history, no roads-not-taken; short,
-  why-only, no over-commenting). Judges comment text alone — fast and cheap, no code
-  reading. Use when the user asks to audit/check comments, before committing, or says
-  "/comment-audit". Does NOT judge whether a comment accurately describes its code
-  (that needs the code — use a full review for logic-narration).
+    Audit the comments on changed/added lines in the working tree against the project's
+    comment guidelines (present-tense artifact: no history, no roads-not-taken; short,
+    why-only, no over-commenting). Judges comment text alone — fast and cheap, no code
+    reading. Use when the user asks to audit/check comments, before committing, or says
+    "/comment-audit". Does NOT judge whether a comment accurately describes its code
+    (that needs the code — use a full review for logic-narration).
 ---
 
 Audit only the **comments on lines that changed in the working tree**, against the
@@ -21,15 +21,15 @@ adjacent logic too closely. That requires reading the code and belongs in a full
 
 1. **Extract.** Run the deterministic extractor from the repo root:
 
-   ```bash
-   node .claude/skills/comment-audit/extract-changed-comments.mjs
-   ```
+    ```bash
+    node .claude/skills/comment-audit/extract-changed-comments.mjs
+    ```
 
-   It prints a JSON array of comment units `{ file, start, end, type, text }` (`type`
-   is `standalone` or `trailing`; consecutive comment lines are grouped into one unit;
-   only comment text is emitted, never the code). Pass `--base <ref>` to audit against a
-   ref other than `HEAD`. If the array is empty, report "No changed comments to audit."
-   and stop.
+    It prints a JSON array of comment units `{ file, start, end, type, text }` (`type`
+    is `standalone` or `trailing`; consecutive comment lines are grouped into one unit;
+    only comment text is emitted, never the code). Pass `--base <ref>` to audit against a
+    ref other than `HEAD`. If the array is empty, report "No changed comments to audit."
+    and stop.
 
 2. **Judge — on Haiku.** Spawn **one** agent with `model: haiku` (the task is bounded
    text classification; Haiku is fast, cheap, and sufficient). Give it the JSON array and
@@ -80,7 +80,7 @@ from names and structure (pure restatement of an obvious construct, e.g. "constr
 above a constructor). Fix: delete.
 
 Do not flag a unit just because it is a doc comment, is technical, or explains a real
-non-obvious *why* — those are the comments worth keeping.
+non-obvious _why_ — those are the comments worth keeping.
 
 **Never fabricate a rationale in a `fix`.** You only see the comment text, not the code or
 the real reason. If a present-tense rewrite is recoverable from the text itself, propose
@@ -91,13 +91,14 @@ tense"` — never a plausible-sounding why you cannot actually know.
 
 ```json
 [
-  {
-    "file": "src/main/foo.ts",
-    "start": 12, "end": 14,
-    "rule": "history",
-    "severity": "must-fix",
-    "text": "<the offending comment text>",
-    "fix": "<concrete rewrite, or \"delete\">"
-  }
+    {
+        "file": "src/main/foo.ts",
+        "start": 12,
+        "end": 14,
+        "rule": "history",
+        "severity": "must-fix",
+        "text": "<the offending comment text>",
+        "fix": "<concrete rewrite, or \"delete\">"
+    }
 ]
 ```

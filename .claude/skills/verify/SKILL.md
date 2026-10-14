@@ -12,11 +12,11 @@ The app is Electron + Vite (`@electron-forge/plugin-vite`). The built entry is `
 1. Build once: `npx electron-forge start` (then let it exit or kill it). If another dev instance is running, the launched app quits via the single-instance lock — the build artifacts still land in `.vite/build/`.
 2. Serve the renderer on the baked port: `npx vite --config vite.renderer.config.ts --port <baked-port> --strictPort` (index.html at repo root).
 3. The single-instance lock is keyed on the userData dir. Launch through a wrapper CJS that redirects it, so a concurrently running dev instance is untouched:
-   ```js
-   const { app } = require('electron');
-   app.setPath('userData', process.env.QF_USER_DATA);
-   require('<repo>/.vite/build/main.js');
-   ```
+    ```js
+    const { app } = require('electron');
+    app.setPath('userData', process.env.QF_USER_DATA);
+    require('<repo>/.vite/build/main.js');
+    ```
 4. Playwright: `_electron.launch({ args: [wrapper.cjs], executablePath: '<repo>/node_modules/.bin/electron', cwd: repo, env: { E2E_TEST: '1', E2E_WORKSPACE: tmpDir, QF_USER_DATA: tmpDir2, ELECTRON_DISABLE_GPU: '1', NODE_ENV: 'test' } })`. `main.ts` honors `E2E_WORKSPACE` directly.
 5. After `firstWindow()`: `domcontentloaded` → `reload()` → `networkidle` (mirrors e2e/fixtures.ts).
 

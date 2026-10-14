@@ -13,23 +13,24 @@
 ## File Map
 
 - Modify: `crates/modular_core/src/pattern_system/mini/ast.rs`
-  - Remove the `AtomValue::ModuleRef` variant and associated comments/helpers
+    - Remove the `AtomValue::ModuleRef` variant and associated comments/helpers
 - Modify: `crates/modular_core/src/pattern_system/mini/parser.rs`
-  - Remove parser success for `module(...)` and replace it with a direct unsupported-syntax parse error
+    - Remove parser success for `module(...)` and replace it with a direct unsupported-syntax parse error
 - Modify: `crates/modular_core/src/dsp/seq/seq_value.rs`
-  - Remove `SeqValue::Signal`, `sample_and_hold`, module-ref parsing helpers, and dead signal-collection fields
+    - Remove `SeqValue::Signal`, `sample_and_hold`, module-ref parsing helpers, and dead signal-collection fields
 - Modify: `crates/modular_core/src/dsp/seq/seq.rs`
-  - Remove signal-backed pattern-value handling from cached seq haps
+    - Remove signal-backed pattern-value handling from cached seq haps
 - Modify: `crates/modular_core/tests/dsp_fresh_tests.rs`
-  - Flip the new seq regression from success to explicit failure
+    - Flip the new seq regression from success to explicit failure
 - Modify: `src/main/dsl/GraphBuilder.ts`
-  - Change `ModuleOutput::toString()` to a non-mini debug string
+    - Change `ModuleOutput::toString()` to a non-mini debug string
 - Modify: mini parser / seq tests that currently expect `module(...)` success
-  - Update them to expect failure or delete them if they only existed for the removed feature
+    - Update them to expect failure or delete them if they only existed for the removed feature
 
 ### Task 1: Remove parser-level `module(...)` syntax
 
 **Files:**
+
 - Modify: `crates/modular_core/src/pattern_system/mini/parser.rs:1870-1911`
 - Test: `cargo test -p modular_core test_parse_module_ref -- --nocapture`
 - Test: `cargo test -p modular_core test_parse_module_ref_sample_and_hold -- --nocapture`
@@ -111,6 +112,7 @@ Do not commit in this session. Use the passing parser tests as the checkpoint.
 ### Task 2: Remove seq support for signal-backed pattern values
 
 **Files:**
+
 - Modify: `crates/modular_core/src/pattern_system/mini/ast.rs:224-264`
 - Modify: `crates/modular_core/src/pattern_system/mini/convert.rs:941-975`
 - Modify: `crates/modular_core/src/dsp/seq/seq_value.rs:27-399`
@@ -247,6 +249,7 @@ Do not commit in this session. Use the passing focused seq tests as the checkpoi
 ### Task 3: Make DSL stringification explicitly non-mini
 
 **Files:**
+
 - Modify: `src/main/dsl/GraphBuilder.ts:1272-1274`
 - Test: `yarn typecheck`
 
@@ -280,6 +283,7 @@ Do not commit in this session. Use the passing typecheck as the checkpoint.
 ### Task 4: Run full verification and remove stale assumptions
 
 **Files:**
+
 - Modify: any now-stale parser or seq tests that still mention `module(...)` success
 - Test: `cargo test -p modular_core`
 - Test: `cargo test -p modular --no-run`
