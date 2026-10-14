@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use crate::{
-    block_input::{InputScratch, OptionBlockInput},
     dsp::{
         consts::{LUT_SINE, LUT_SINE_SIZE},
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
@@ -12,7 +11,7 @@ use crate::{
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase)]
 #[deserr(deny_unknown_fields)]
@@ -29,6 +28,7 @@ struct SineOscillatorParams {
     fm_mode: FmMode,
     /// hard sync source — rising edges reset the oscillator phase
     #[deserr(default)]
+    #[block_input(optional)]
     sync: Option<PolySignal>,
     /// phase offset in [0, 1) added to the internal phase before sampling
     #[signal(default = 0.0, range = (0.0, 1.0))]
@@ -128,17 +128,13 @@ impl SineOscillator {
     ) -> Option<()> {
         let channels = self.channel_count();
         let p = &self.params;
-        let mut scratch: [InputScratch; 4] = std::array::from_fn(|_| InputScratch::new());
-        let [s0, s1, s2, s3] = &mut scratch;
-        let freq = p.freq.block_input(range.clone(), channels, s0)?;
-        let fm = p.fm.block_input_or(range.clone(), channels, 0.0, s1)?;
-        let offset = p
-            .phase_offset
-            .block_input_or(range.clone(), channels, 0.0, s2)?;
-        let sync = match &p.sync {
-            Some(sync) => Some(sync.block_input(range.clone(), channels, s3)?),
-            None => None,
-        };
+        let mut scratch = Default::default();
+        let SineOscillatorParamsBlockInputs {
+            freq,
+            fm,
+            sync,
+            phase_offset: offset,
+        } = p.block_inputs(range.clone(), channels, &mut scratch)?;
         // A pitch held for the whole range needs its exponential only once.
         let mut held_increments = [0.0f32; PORT_MAX_CHANNELS];
         let held = freq.is_constant() && fm.is_constant();
