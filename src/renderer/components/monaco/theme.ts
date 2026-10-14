@@ -1,3 +1,4 @@
+import type * as MonacoNamespace from 'monaco-editor';
 import type { AppTheme } from '../../themes/types';
 import type { Monaco } from '../../hooks/useCustomMonaco';
 
@@ -15,11 +16,13 @@ function withHexAlpha(hex: string, alpha: number): string {
     return hex;
 }
 
-export function applyMonacoTheme(
-    monaco: Monaco,
+/**
+ * The Monaco theme data the editor is given for `appTheme`. The performance
+ * view resolves token colors from the same data, so both color code alike.
+ */
+export function monacoThemeData(
     appTheme: AppTheme,
-    monacoThemeId: string,
-) {
+): MonacoNamespace.editor.IStandaloneThemeData {
     const { raw } = appTheme;
 
     const rules = raw.tokenColors
@@ -43,7 +46,7 @@ export function applyMonacoTheme(
         raw.colors?.['editor.lineHighlightBackground'] ?? '#000000',
         0.4,
     );
-    monaco.editor.defineTheme(monacoThemeId, {
+    return {
         base: appTheme.type === 'light' ? 'vs' : 'vs-dark',
         colors: {
             ...raw.colors,
@@ -60,7 +63,14 @@ export function applyMonacoTheme(
         },
         inherit: true,
         rules,
-    });
+    };
+}
 
+export function applyMonacoTheme(
+    monaco: Monaco,
+    appTheme: AppTheme,
+    monacoThemeId: string,
+) {
+    monaco.editor.defineTheme(monacoThemeId, monacoThemeData(appTheme));
     monaco.editor.setTheme(monacoThemeId);
 }

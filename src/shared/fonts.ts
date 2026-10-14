@@ -34,3 +34,14 @@ export const MONOSPACE_FONTS = [...BUNDLED_FONTS, ...SYSTEM_FONTS] as const;
 export type BundledFont = (typeof BUNDLED_FONTS)[number];
 export type SystemFont = (typeof SYSTEM_FONTS)[number];
 export type MonospaceFont = (typeof MONOSPACE_FONTS)[number];
+
+/**
+ * The fonts with an italic face. Bundled fonts load only their upright faces,
+ * and Monaco has none; nothing slants a face that is not italic
+ * (font-synthesis: none).
+ */
+export const ITALIC_FONTS: ReadonlySet<MonospaceFont> = new Set<MonospaceFont>([
+    'SF Mono',
+    'Menlo',
+    'Consolas',
+]);

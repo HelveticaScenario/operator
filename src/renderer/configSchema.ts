@@ -157,6 +157,14 @@ export const configSchema = {
             minimum: 1,
             type: 'number',
         },
+        performanceScrollSpeed: {
+            default: 0.5,
+            description:
+                'How quickly the code in the performance window scrolls to follow the editor (0–1); 1 jumps',
+            maximum: 1,
+            minimum: 0,
+            type: 'number',
+        },
         performanceTheme: {
             description:
                 "The color theme of the code in the performance window; absent follows the editor's theme",

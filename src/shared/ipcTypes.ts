@@ -121,6 +121,8 @@ export interface AppConfig {
     performanceFontLigatures?: boolean;
     /** Line numbers in the performance window. Default false. */
     performanceLineNumbers?: boolean;
+    /** How quickly (0..1) the performance window's code scrolls to follow the editor; 1 jumps. Default 0.5. */
+    performanceScrollSpeed?: number;
     /** Theme id for the code's colors in the performance window; absent follows the editor's theme. */
     performanceTheme?: string;
     /** VU meter panel visibility. Default false. */

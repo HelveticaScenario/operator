@@ -1,3 +1,25 @@
+import { Color } from 'monaco-editor/esm/vs/base/common/color.js';
+import {
+    editorBracketHighlightingForeground1,
+    editorBracketHighlightingForeground2,
+    editorBracketHighlightingForeground3,
+    editorBracketHighlightingForeground4,
+    editorBracketHighlightingForeground5,
+    editorBracketHighlightingForeground6,
+    editorBracketHighlightingUnexpectedBracketForeground,
+} from 'monaco-editor/esm/vs/editor/common/core/editorColorRegistry.js';
+import { TokenMetadata } from 'monaco-editor/esm/vs/editor/common/encodedTokenAttributes.js';
+import {
+    TokenTheme,
+    type ITokenThemeRule,
+} from 'monaco-editor/esm/vs/editor/common/languages/supports/tokenization.js';
+import * as builtinThemes from 'monaco-editor/esm/vs/editor/standalone/common/themes.js';
+import {
+    Registry,
+    type ColorTheme,
+} from 'monaco-editor/esm/vs/platform/registry/common/platform.js';
+import { Extensions } from 'monaco-editor/esm/vs/platform/theme/common/colorUtils.js';
+import { monacoThemeData } from '../components/monaco/theme';
 import type { AppTheme } from '../themes/types';
 
 /** How a token is drawn: its color and whether it is bold or italic. */
@@ -7,98 +29,96 @@ export interface TokenStyle {
     italic: boolean;
 }
 
-/**
- * The TextMate scopes, most preferred first, that a theme colors each of
- * Monaco's JavaScript token types by. A `$` function is a DSL module call.
- */
-const SCOPES: Record<string, readonly string[]> = {
-    comment: ['comment'],
-    'comment.doc': ['comment.block.documentation', 'comment'],
-    function: ['entity.name.function', 'support.function'],
-    keyword: ['keyword', 'storage.type', 'keyword.control'],
-    number: ['constant.numeric', 'constant'],
-    regexp: ['string.regexp', 'string'],
-    string: ['string'],
-    'string.escape': ['constant.character.escape', 'string'],
-    'string.invalid': ['invalid', 'string'],
-    'type.identifier': ['entity.name.type', 'support.type', 'storage.type'],
-};
+/** Monaco's FontStyle bits. */
+const ITALIC = 1;
+const BOLD = 2;
 
-/** Whether the TextMate selector `rule` applies to `scope`: equal, or a parent of it. */
-const covers = (rule: string, scope: string) =>
-    scope === rule || scope.startsWith(`${rule}.`);
+const BRACKET_LEVEL_COLORS = [
+    editorBracketHighlightingForeground1,
+    editorBracketHighlightingForeground2,
+    editorBracketHighlightingForeground3,
+    editorBracketHighlightingForeground4,
+    editorBracketHighlightingForeground5,
+    editorBracketHighlightingForeground6,
+];
 
 /**
- * The style a theme gives a TextMate `scope`: the most specific rule that
- * covers it, or null when none does.
- */
-function scopeStyle(theme: AppTheme, scope: string): TokenStyle | null {
-    let best: { length: number; style: TokenStyle } | null = null;
-    for (const { scope: selectors, settings } of theme.raw.tokenColors) {
-        if (settings.foreground === undefined) continue;
-        const list = Array.isArray(selectors)
-            ? selectors
-            : (selectors ?? '').split(',');
-        for (const raw of list) {
-            const rule = raw.trim();
-            if (rule === '' || rule.includes(' ') || !covers(rule, scope)) {
-                continue;
-            }
-            if (best !== null && rule.length <= best.length) continue;
-            const fontStyle = settings.fontStyle ?? '';
-            best = {
-                length: rule.length,
-                style: {
-                    bold: fontStyle.includes('bold'),
-                    color: settings.foreground,
-                    italic: fontStyle.includes('italic'),
-                },
-            };
-        }
-    }
-    return best?.style ?? null;
-}
-
-/**
- * Resolves Monaco token types (`keyword.js`, `identifier.js`, ...) to the
- * colors a theme gives them. Results are cached per type.
+ * Resolves Monaco token types (`keyword.js`, `identifier.js`, ...) and
+ * bracket pair levels to the colors the editor gives them in a theme. The
+ * token theme and colors are built as Monaco's StandaloneTheme builds them,
+ * from the same theme data as the editor.
  */
 export class TokenColors {
     private readonly cache = new Map<string, TokenStyle>();
-    private readonly plain: TokenStyle;
+    private readonly tokenTheme: TokenTheme;
+    private readonly colorMap: string[];
+    private readonly brackets: string[];
+    private readonly unexpectedBracket: string | undefined;
 
-    constructor(private readonly theme: AppTheme) {
-        this.plain = {
-            bold: false,
-            color: theme.colors.editorForeground,
-            italic: false,
+    constructor(theme: AppTheme) {
+        const data = monacoThemeData(theme);
+        const base =
+            data.base === 'vs' ? builtinThemes.vs : builtinThemes.vs_dark;
+        const rules: ITokenThemeRule[] = [...base.rules];
+        const foreground = data.colors['editor.foreground'];
+        const background = data.colors['editor.background'];
+        if (foreground || background) {
+            rules.push({ background, foreground, token: '' });
+        }
+        rules.push(...data.rules);
+        this.tokenTheme = TokenTheme.createFromRawTokenTheme(
+            rules,
+            base.encodedTokensColors ?? [],
+        );
+        this.colorMap = this.tokenTheme
+            .getColorMap()
+            .map((color) => color?.toString() ?? '');
+
+        const registry = Registry.as(Extensions.ColorContribution);
+        const colorTheme: ColorTheme = {
+            getColor: (id) => {
+                const hex = data.colors[id];
+                return hex
+                    ? Color.fromHex(hex)
+                    : registry.resolveDefaultColor(id, colorTheme);
+            },
+            type: theme.type,
         };
+        this.brackets = BRACKET_LEVEL_COLORS.flatMap((id) => {
+            const color = colorTheme.getColor(id);
+            return color === undefined || color.isTransparent()
+                ? []
+                : [color.toString()];
+        });
+        this.unexpectedBracket = colorTheme
+            .getColor(editorBracketHighlightingUnexpectedBracketForeground)
+            ?.toString();
     }
 
-    /** The style of a token of `type` whose text is `text`. */
-    style(type: string, text: string): TokenStyle {
-        const base = type.replace(/\.js$/, '');
-        const key =
-            base === 'identifier' && text.startsWith('$') ? 'function' : base;
-        let style = this.cache.get(key);
+    /** The style of a token of `type`. */
+    style(type: string): TokenStyle {
+        let style = this.cache.get(type);
         if (style === undefined) {
-            style = this.resolve(key);
-            this.cache.set(key, style);
+            const metadata = this.tokenTheme.match(0, type);
+            const fontStyle = TokenMetadata.getFontStyle(metadata);
+            style = {
+                bold: (fontStyle & BOLD) !== 0,
+                color: this.colorMap[TokenMetadata.getForeground(metadata)],
+                italic: (fontStyle & ITALIC) !== 0,
+            };
+            this.cache.set(type, style);
         }
         return style;
     }
 
-    private resolve(type: string): TokenStyle {
-        // A dotted type such as `delimiter.bracket` falls back to its parent.
-        let t = type;
-        for (;;) {
-            for (const scope of SCOPES[t] ?? []) {
-                const style = scopeStyle(this.theme, scope);
-                if (style !== null) return style;
-            }
-            const dot = t.lastIndexOf('.');
-            if (dot < 0) return this.plain;
-            t = t.slice(0, dot);
-        }
+    /**
+     * The color of a bracket at nesting `level`, or of an unmatched closing
+     * bracket for null; undefined when the theme gives it none.
+     */
+    bracket(level: number | null): string | undefined {
+        if (level === null) return this.unexpectedBracket;
+        return this.brackets.length === 0
+            ? undefined
+            : this.brackets[level % this.brackets.length];
     }
 }
