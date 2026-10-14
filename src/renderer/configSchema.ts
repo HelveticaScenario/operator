@@ -31,6 +31,45 @@ const audioConfigSchema = {
     type: 'object',
 };
 
+const MONOSPACE_FONTS = [
+    'Fira Code',
+    'JetBrains Mono',
+    'Cascadia Code',
+    'Source Code Pro',
+    'IBM Plex Mono',
+    'Hack',
+    'Inconsolata',
+    'Monaspace Neon',
+    'Monaspace Argon',
+    'Monaspace Xenon',
+    'Monaspace Krypton',
+    'Monaspace Radon',
+    'Geist Mono',
+    'Iosevka',
+    'Victor Mono',
+    'Roboto Mono',
+    'Maple Mono',
+    'Commit Mono',
+    '0xProto',
+    'Intel One Mono',
+    'Mononoki',
+    'Anonymous Pro',
+    'Recursive',
+    'SF Mono',
+    'Monaco',
+    'Menlo',
+    'Consolas',
+];
+
+const THEMES = [
+    'modular-dark',
+    'one-dark-pro',
+    'dracula',
+    'gruvbox-dark',
+    'tokyo-night',
+    'catppuccin-mocha',
+];
+
 export const configSchema = {
     $schema: 'http://json-schema.org/draft-07/schema#',
     additionalProperties: false,
@@ -61,35 +100,7 @@ export const configSchema = {
         font: {
             default: 'Fira Code',
             description: 'The monospace font family used in the editor',
-            enum: [
-                'Fira Code',
-                'JetBrains Mono',
-                'Cascadia Code',
-                'Source Code Pro',
-                'IBM Plex Mono',
-                'Hack',
-                'Inconsolata',
-                'Monaspace Neon',
-                'Monaspace Argon',
-                'Monaspace Xenon',
-                'Monaspace Krypton',
-                'Monaspace Radon',
-                'Geist Mono',
-                'Iosevka',
-                'Victor Mono',
-                'Roboto Mono',
-                'Maple Mono',
-                'Commit Mono',
-                '0xProto',
-                'Intel One Mono',
-                'Mononoki',
-                'Anonymous Pro',
-                'Recursive',
-                'SF Mono',
-                'Monaco',
-                'Menlo',
-                'Consolas',
-            ],
+            enum: MONOSPACE_FONTS,
             type: 'string',
         },
         fontLigatures: {
@@ -123,6 +134,67 @@ export const configSchema = {
             maximum: 1,
             minimum: 0.1,
             type: 'number',
+        },
+        performanceCodeBacking: {
+            default: 0.6,
+            description:
+                'Opacity of the backing behind each line of code in the performance window (0–1)',
+            maximum: 1,
+            minimum: 0,
+            type: 'number',
+        },
+        performanceCodeOpacity: {
+            default: 1,
+            description:
+                'Opacity of the code in the performance window while it shows (0–1)',
+            maximum: 1,
+            minimum: 0,
+            type: 'number',
+        },
+        performanceCodeVisible: {
+            default: true,
+            description:
+                'Show the code in the performance window; View, Toggle Performance Code fades it in and out',
+            type: 'boolean',
+        },
+        performanceFont: {
+            default: 'Fira Code',
+            description:
+                'The monospace font family of the code in the performance window',
+            enum: MONOSPACE_FONTS,
+            type: 'string',
+        },
+        performanceFontLigatures: {
+            default: true,
+            description: 'Enable font ligatures in the performance window',
+            type: 'boolean',
+        },
+        performanceFontSize: {
+            default: 28,
+            description:
+                'The font size of the code in the performance window (8–160)',
+            maximum: 160,
+            minimum: 8,
+            type: 'number',
+        },
+        performanceLineHeight: {
+            default: 1.4,
+            description:
+                'Line height of the code in the performance window, as a multiple of its font size (1–3)',
+            maximum: 3,
+            minimum: 1,
+            type: 'number',
+        },
+        performanceTheme: {
+            description:
+                "The color theme of the code in the performance window; absent follows the editor's theme",
+            enum: THEMES,
+            type: 'string',
+        },
+        performanceLineNumbers: {
+            default: false,
+            description: 'Show line numbers in the performance window',
+            type: 'boolean',
         },
         prettier: {
             additionalProperties: true,
@@ -178,41 +250,8 @@ export const configSchema = {
         theme: {
             default: 'modular-dark',
             description: 'The color theme for the application and editor',
-            enum: [
-                'modular-dark',
-                'one-dark-pro',
-                'dracula',
-                'gruvbox-dark',
-                'tokyo-night',
-                'catppuccin-mocha',
-            ],
+            enum: THEMES,
             type: 'string',
-        },
-        xyScopeIntensity: {
-            default: 0.6,
-            description: 'Brightness of the XY scope beam (0–1)',
-            maximum: 1,
-            minimum: 0,
-            type: 'number',
-        },
-        xyScopeLineWidth: {
-            default: 0.012,
-            description: 'Width of the XY scope beam (0.002–0.06)',
-            maximum: 0.06,
-            minimum: 0.002,
-            type: 'number',
-        },
-        xyScopePersistence: {
-            default: 0.6,
-            description: 'How long the XY scope trace lingers (0–1)',
-            maximum: 1,
-            minimum: 0,
-            type: 'number',
-        },
-        xyScopeUpsample: {
-            default: true,
-            description: 'Smooth the XY scope trace between samples',
-            type: 'boolean',
         },
     },
     title: 'Operator Configuration',

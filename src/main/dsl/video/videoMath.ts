@@ -60,8 +60,9 @@ export function mathMethods(core: VideoCore) {
         min: (a: VideoSource, b: VideoSource): VideoOutput =>
             node('min', { a, b }),
 
-        /** Complement: 1 minus each of red, green and blue. */
-        invert: (input: VideoSource): VideoOutput => node('invert', { input }),
+        /** Crossfades red, green and blue toward 1 minus each by `amount`. */
+        invert: (input: VideoSource, amount: VideoSource = 1): VideoOutput =>
+            node('invert', { input, amount }),
 
         /** Maps each channel's 0 to 1 onto `min` to `max`. */
         range: (
@@ -76,6 +77,13 @@ export function mathMethods(core: VideoCore) {
             b: VideoSource,
             amount: VideoSource = 0.5,
         ): VideoOutput => node('mix', { a, b, amount }),
+
+        /** Hydra's crossfade from `a` (amount 0) to `b` (amount 1), with `amount` unclipped. */
+        blend: (
+            a: VideoSource,
+            b: VideoSource,
+            amount: VideoSource = 0.5,
+        ): VideoOutput => node('blend', { a, b, amount }),
 
         /** Threshold per channel: 0 below `threshold`, 1 above, with a ramp `softness` wide; `config.invert` swaps the sides. */
         comparator: (
@@ -111,7 +119,7 @@ export function mathMethods(core: VideoCore) {
                     : undefined,
             ),
 
-        /** Keys `input` by its own brightness, color and alpha alike (only alpha with `config.keepColor`): opaque from `threshold` up, or with `config.invert` from `threshold` down. */
+        /** Keys `input` by its own brightness, color and alpha alike (only alpha with `config.keepColor`): opaque above `threshold`, or with `config.invert` below it, with a smooth edge `tolerance` wide on each side. */
         luma: (
             input: VideoSource,
             threshold: VideoSource = 0.5,
@@ -129,9 +137,19 @@ export function mathMethods(core: VideoCore) {
             );
         },
 
-        /** Quantizes each channel to `levels` values between 0 and 1. */
-        posterize: (input: VideoSource, levels: VideoSource = 4): VideoOutput =>
-            node('posterize', { input, levels }),
+        /** Cuts each channel into `bins` steps, spaced along a `gamma` curve. */
+        posterize: (
+            input: VideoSource,
+            bins: VideoSource = 3,
+            gamma: VideoSource = 0.6,
+        ): VideoOutput => node('posterize', { input, bins, gamma }),
+
+        /** The brightness of `input` as a gray, stepped at `threshold` with a smooth edge. */
+        thresh: (
+            input: VideoSource,
+            threshold: VideoSource = 0.5,
+            tolerance: VideoSource = 0.04,
+        ): VideoOutput => node('thresh', { input, threshold, tolerance }),
 
         /** Multiplies each channel by `gain`, then keeps the fractional part. */
         wrap: (input: VideoSource, gain: VideoSource = 1): VideoOutput =>

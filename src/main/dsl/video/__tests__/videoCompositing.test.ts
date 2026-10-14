@@ -6,19 +6,19 @@ const wgslOf = (source: string) => exec(source).video!.wgsl;
 
 describe('$v alpha and compositing', () => {
     it('lays the output over black by its alpha', () => {
-        const wgsl = wgslOf(`$v.colorize(1, 0, 0, 0.5).out();`);
-        expect(wgsl).toContain('clamp(vec4f(1.0, 0.0, 0.0, 0.5)');
+        const wgsl = wgslOf(`$v.solid(1, 0, 0, 0.5).out();`);
+        expect(wgsl).toContain('vec4f(1.0, 0.0, 0.0, 0.5)');
         expect(wgsl).toContain('return vec4f(clipped.rgb * clipped.a, 1.0);');
     });
 
-    it('gives colorize an opaque alpha by default', () => {
-        expect(wgslOf(`$v.colorize(1, 0, 0).out();`)).toContain(
+    it('gives solid an opaque alpha by default', () => {
+        expect(wgslOf(`$v.solid(1, 0, 0).out();`)).toContain(
             'vec4f(1.0, 0.0, 0.0, 1.0)',
         );
     });
 
     it('keeps the alpha of a picture through color adjustments', () => {
-        const wgsl = wgslOf(`$v.image('a.png').$.hueShift(0.2).out();`);
+        const wgsl = wgslOf(`$v.image('a.png').$.hue(0.2).out();`);
         expect(wgsl).toContain(
             'return vec4f(hsv_to_rgb(hsv.x + amount, hsv.y, hsv.z), c.a);',
         );
@@ -54,11 +54,11 @@ describe('$v alpha and compositing', () => {
         ]);
     });
 
-    it('keys a signal by its own brightness, opaque from the threshold up', () => {
+    it('keys a signal by its own brightness, with an edge centered on the threshold', () => {
         const wgsl = wgslOf(`$v.noise().$.luma(0.4, 0.05).out();`);
         expect(wgsl).toMatch(/video_luma_key\(v\d+, 0\.4, 0\.05\)/);
         expect(wgsl).toContain(
-            'let k = smoothstep(threshold - band, threshold, l);',
+            'let k = smoothstep(threshold - band, threshold + band, l);',
         );
 
         const keyed = (level: number) =>
@@ -69,21 +69,23 @@ describe('$v alpha and compositing', () => {
                 0.4,
                 0.05,
             );
-        expect(keyed(0.8)).toEqual([0.8, 0.8, 0.8, 1]);
-        expect(keyed(0.4)).toEqual([0.4, 0.4, 0.4, 1]);
-        expect(keyed(0.3)).toEqual([0, 0, 0, 0]);
-        const [r, , , a] = keyed(0.375) as number[];
-        expect(a).toBeCloseTo(0.5);
-        expect(r).toBeCloseTo(0.375 * 0.5);
+        const near = (actual: unknown, expected: number[]) =>
+            (actual as number[]).forEach((v, k) =>
+                expect(v).toBeCloseTo(expected[k], 5),
+            );
+        near(keyed(0.8), [0.8, 0.8, 0.8, 1]);
+        near(keyed(0.45), [0.45, 0.45, 0.45, 1]);
+        near(keyed(0.35), [0, 0, 0, 0]);
+        near(keyed(0.4), [0.2, 0.2, 0.2, 0.5]);
     });
 
-    it('keeps the dark side with invert, opaque up to the threshold', () => {
+    it('keeps the dark side with invert, mirroring the edge', () => {
         const wgsl = wgslOf(
             `$v.image('a.png').$.luma(0.2, 0.1, { invert: true }).out();`,
         );
         expect(wgsl).toMatch(/video_luma_key_below\(v\d+, 0\.2, 0\.1\)/);
         expect(wgsl).toContain(
-            'let k = (1.0 - smoothstep(threshold, threshold + band, l));',
+            'let k = (1.0 - smoothstep(threshold - band, threshold + band, l));',
         );
         expect(wgsl).not.toContain('fn video_luma_key(');
 
@@ -95,8 +97,11 @@ describe('$v alpha and compositing', () => {
                 0.2,
                 0.1,
             );
-        expect(keyed(0.1, 0.5)).toEqual([0.1, 0.1, 0.1, 0.5]);
-        expect(keyed(0.5)).toEqual([0, 0, 0, 0]);
+        const [r, , , a] = keyed(0.05, 0.5) as number[];
+        expect(r).toBeCloseTo(0.05);
+        expect(a).toBeCloseTo(0.5);
+        expect((keyed(0.5) as number[])[3]).toBeCloseTo(0);
+        expect((keyed(0.2) as number[])[3]).toBeCloseTo(0.5);
     });
 
     it('adds nothing of what a key or mask removes', () => {
@@ -169,10 +174,10 @@ describe('$v alpha and compositing', () => {
 
     it('reads the masked-out color of a keepColor mask as a number', () => {
         const wgsl = wgslOf(
-            `$v.hsv(0.6).$.hueShift($v.osc(8).$.mask(0, { keepColor: true })).out();`,
+            `$v.hsv(0.6).$.hue($v.osc(8).$.mask(0, { keepColor: true })).out();`,
         );
         expect(wgsl).toMatch(
-            /let (v\d+): vec4f = video_mask_keep_color\(v\d+, 0\.0\);\s+let v\d+: vec4f = hue_shift\(v\d+, video_luma\(\1\)\);/,
+            /let (v\d+): vec4f = video_mask_keep_color\(v\d+, 0\.0\);\s+let v\d+: vec4f = video_hue\(v\d+, video_luma\(\1\)\);/,
         );
         const maskedOut = callWgsl(
             wgsl,
@@ -200,8 +205,10 @@ describe('$v alpha and compositing', () => {
 
     it('stores the alpha in a frame buffer', () => {
         const wgsl = wgslOf(`
-            $v.out($v.feedback((prev) => $v.layer(prev, $v.colorize(1, 0, 0, 0.1))));
+            $v.out($v.feedback((prev) => $v.layer(prev, $v.solid(1, 0, 0, 0.1))));
         `);
-        expect(wgsl).toMatch(/return FragOut\(video_display\(v\d+\), v\d+\);/);
+        expect(wgsl).toMatch(
+            /return FragOut\(video_display\(v\d+\), clamp\(v\d+, vec4f\(0\.0\), vec4f\(1\.0\)\)\);/,
+        );
     });
 });

@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
 import { VideoBackdrop } from './app/video/VideoBackdrop';
+import { PerformancePreview } from './app/video/PerformancePreview';
+import { PerformancePanel } from './components/PerformancePanel';
+import { usePerformanceCode } from './performance/usePerformanceCode';
 import { performanceOutput } from './video/PerformanceOutput';
 import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
@@ -21,7 +24,6 @@ import { migrateWavetableArgs } from './dsl/migrateWavetableArgs';
 import type { UpdateNotificationState } from './components/UpdateNotification';
 import { UpdateNotification } from './components/UpdateNotification';
 import { CommandPalette } from './components/CommandPalette';
-import { ScopeXYBackground } from './app/scopexy/ScopeXYBackground';
 import './App.css';
 import { editor } from 'monaco-editor';
 import { getErrorMessage } from './utils/errorUtils';
@@ -106,13 +108,12 @@ import { useTheme } from './themes/ThemeContext';
 
 function App() {
     const {
-        xyScopeIntensity,
-        xyScopePersistence,
-        xyScopeUpsample,
-        xyScopeLineWidth,
         codeBackdropOpacity,
         performanceScale,
+        performanceView,
         prettierConfig,
+        theme,
+        themes,
     } = useTheme();
 
     // Workspace & filesystem
@@ -232,6 +233,11 @@ function App() {
     // editor actions) can subscribe instead of reading the ref during render.
     const [paletteEditor, setPaletteEditor] =
         useState<editor.IStandaloneCodeEditor | null>(null);
+    const performanceTheme = useMemo(
+        () => themes.find((t) => t.id === performanceView.themeId) ?? theme,
+        [themes, theme, performanceView.themeId],
+    );
+    usePerformanceCode(paletteEditor, performanceView, performanceTheme);
     const scopeCanvasMapRef = useRef(new Map<string, HTMLCanvasElement>());
     const vuCanvasMapRef = useRef(new Map<string, HTMLCanvasElement>());
     /** Peak-readout pills, updated imperatively from the RAF loop. */
@@ -2312,9 +2318,23 @@ function App() {
             },
             { label: 'Toggle Performance Window', category: 'View' },
         );
+        registerCommand(
+            'operator.togglePerformanceCode',
+            () => {
+                void electronAPI.config.read().then((config) =>
+                    electronAPI.config.write({
+                        performanceCodeVisible: !(
+                            config.performanceCodeVisible ?? true
+                        ),
+                    }),
+                );
+            },
+            { label: 'Toggle Performance Code', category: 'View' },
+        );
 
         return () => {
             unregisterCommand('operator.togglePerformanceWindow');
+            unregisterCommand('operator.togglePerformanceCode');
             unregisterCommand('operator.toggleVuMeters');
             unregisterCommand('operator.updatePatch');
             unregisterCommand('operator.updatePatchNextBeat');
@@ -2732,16 +2752,6 @@ function App() {
                 ) : (
                     <>
                         <div className="editor-panel">
-                            {/* One shared canvas behind the editor. $scopeXY is
-                                global, so every buffer would render identical
-                                content; a single canvas (one WebGL context)
-                                avoids exhausting the browser's context budget. */}
-                            <ScopeXYBackground
-                                intensity={xyScopeIntensity}
-                                persistence={xyScopePersistence}
-                                upsample={xyScopeUpsample}
-                                lineWidth={xyScopeLineWidth}
-                            />
                             <VideoBackdrop
                                 codeBackdropOpacity={codeBackdropOpacity}
                                 performanceScale={performanceScale}
@@ -2764,6 +2774,7 @@ function App() {
                                 onRegisterScopeCanvas={registerScopeCanvas}
                                 onUnregisterScopeCanvas={unregisterScopeCanvas}
                             />
+                            <PerformancePreview />
                         </div>
 
                         <Sidebar
@@ -2790,6 +2801,7 @@ function App() {
                                     onKeepBuffer={keepBuffer}
                                 />
                             }
+                            performContent={<PerformancePanel />}
                             controlContent={
                                 <ControlPanel
                                     sliders={controlViews.sliders}

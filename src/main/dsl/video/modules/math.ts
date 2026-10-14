@@ -58,11 +58,8 @@ function keeping(above: VideoModuleDef, below: VideoModuleDef): VideoModuleDef {
     };
 }
 
-/** Sum, clipped to 0..1; the alpha is the larger of the two. */
-export const add = binary(
-    'add',
-    'vec4f(clamp(a.rgb + b.rgb, vec3f(0.0), vec3f(1.0)), max(a.a, b.a))',
-);
+/** Sum of every channel, alpha included, unclipped as in Hydra. */
+export const add = binary('add', 'a + b');
 
 /** Product: multiplying by a 0..1 signal darkens, and alphas multiply too. */
 export const mult = binary('mult', 'a * b');
@@ -76,11 +73,14 @@ export const max = binary('max', 'max(a, b)');
 /** The smaller of each channel; with masks this is an intersection of shapes. */
 export const min = binary('min', 'min(a, b)');
 
-/** Complement of red, green and blue: 1 minus each; the alpha is kept. */
+/**
+ * Crossfades red, green and blue toward their complement, 1 minus each, by
+ * `amount`, as Hydra's `invert` does; the alpha is kept.
+ */
 export const invert = perChannel(
     'invert',
-    [],
-    'vec3f(1.0) - clamp(x, vec3f(0.0), vec3f(1.0))',
+    ['amount'],
+    '(vec3f(1.0) - x) * amount + x * (1.0 - amount)',
 );
 
 /** Crossfade from `a` (amount 0) to `b` (amount 1), alpha included. */
@@ -88,6 +88,16 @@ export const mix: VideoModuleDef = {
     inputs: { a: 'rgba', b: 'rgba', amount: 'number' },
     output: 'rgba',
     emit: ({ a, b, amount }) => `mix(${a}, ${b}, ${unit(amount)})`,
+};
+
+/**
+ * Hydra's `blend`: `a` times `1 - amount` plus `b` times `amount`, alpha
+ * included, with `amount` unclipped, so past 1 it pushes beyond `b`.
+ */
+export const blend: VideoModuleDef = {
+    inputs: { a: 'rgba', b: 'rgba', amount: 'number' },
+    output: 'rgba',
+    emit: ({ a, b, amount }) => `mix(${a}, ${b}, ${amount})`,
 };
 
 /** Maps each channel's 0..1 onto `lo`..`hi`; the alpha is kept. */
@@ -167,17 +177,16 @@ export const mask: VideoModuleDef = {
 const lumaKey = (name: string, alpha: string, color: string) =>
     `fn video_${name}${keySuffix(color)}(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
     let l = video_luma(c);
-    let band = max(tolerance, 0.00001);
+    let band = max(tolerance, 0.0) + 0.0000001;
     let k = ${alpha};
     return ${applyKey(color)};
 }`;
 
 /**
- * Keys `input` by its own brightness: alpha rises from 0 at `threshold -
- * tolerance` to 1 at `threshold`, so a threshold of 1 keeps only white.
- * Keeping `below` is the mirror: opaque up to `threshold`, transparent from
- * `threshold + tolerance`. The key scales the color too unless `color` is
- * `keep`.
+ * Keys `input` by its own brightness, as Hydra's `luma` does: alpha rises
+ * smoothly from 0 at `threshold - tolerance` to 1 at `threshold + tolerance`.
+ * Keeping `below` is the mirror. The key scales the color too unless `color`
+ * is `keep`.
  */
 export const luma: VideoModuleDef = {
     inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
@@ -191,12 +200,12 @@ export const luma: VideoModuleDef = {
         keep === 'below'
             ? lumaKey(
                   'luma_key_below',
-                  '(1.0 - smoothstep(threshold, threshold + band, l))',
+                  '(1.0 - smoothstep(threshold - band, threshold + band, l))',
                   color,
               )
             : lumaKey(
                   'luma_key',
-                  'smoothstep(threshold - band, threshold, l)',
+                  'smoothstep(threshold - band, threshold + band, l)',
                   color,
               ),
     ],
@@ -204,12 +213,31 @@ export const luma: VideoModuleDef = {
         `video_luma_key${keep === 'below' ? '_below' : ''}${keySuffix(color)}(${input}, ${threshold}, ${tolerance})`,
 };
 
-/** A color from four levels, each clipped to 0..1. */
-export const colorize: VideoModuleDef = {
+/**
+ * The brightness of `input` as a gray, stepped at `threshold` with a smooth
+ * edge `tolerance` wide on each side, as Hydra's `thresh` does; the alpha is
+ * kept.
+ */
+export const thresh: VideoModuleDef = {
+    inputs: { input: 'rgba', threshold: 'number', tolerance: 'number' },
+    output: 'rgba',
+    helpers: [
+        LUMA_HELPER,
+        `fn video_thresh(c: vec4f, threshold: f32, tolerance: f32) -> vec4f {
+    let band = max(tolerance, 0.0) + 0.0000001;
+    let level = smoothstep(threshold - band, threshold + band, video_luma(c));
+    return vec4f(vec3f(level), c.a);
+}`,
+    ],
+    emit: ({ input, threshold, tolerance }) =>
+        `video_thresh(${input}, ${threshold}, ${tolerance})`,
+};
+
+/** A color from four levels, unclipped as in Hydra. */
+export const solid: VideoModuleDef = {
     inputs: { r: 'number', g: 'number', b: 'number', a: 'number' },
     output: 'rgba',
-    emit: ({ r, g, b, a }) =>
-        `clamp(vec4f(${r}, ${g}, ${b}, ${a}), vec4f(0.0), vec4f(1.0))`,
+    emit: ({ r, g, b, a }) => `vec4f(${r}, ${g}, ${b}, ${a})`,
 };
 
 /** Final stage before the display. */
@@ -219,13 +247,16 @@ export const out: VideoModuleDef = {
     emit: ({ input }) => input,
 };
 
-const POSTERIZE_LEVELS = 'max(floor(levels), 2.0)';
-
-/** Quantizes each channel to `levels` (rounded down, minimum 2) evenly spaced values between 0 and 1. */
+/**
+ * Hydra's `posterize`: each channel is raised to `gamma`, cut into `bins`
+ * steps, and raised back, so the steps crowd toward whichever end `gamma`
+ * favors and never quite reach 1. Negative channels count as 0. The alpha is
+ * kept.
+ */
 export const posterize = perChannel(
     'posterize',
-    ['levels'],
-    `min(floor(clamp(x, vec3f(0.0), vec3f(1.0)) * ${POSTERIZE_LEVELS}), vec3f(${POSTERIZE_LEVELS} - 1.0)) / (${POSTERIZE_LEVELS} - 1.0)`,
+    ['bins', 'gamma'],
+    'pow(floor(pow(max(x, vec3f(0.0)), vec3f(gamma)) * bins) / bins, vec3f(1.0 / gamma))',
 );
 
 /** Multiplies each channel by `gain`, then keeps the fractional part: a sawtooth of the input. */

@@ -93,11 +93,11 @@ describe('across patch updates', () => {
         });
         setVideoTarget(() => null);
         updateVideoShader(shaderReadingTap(0), 1);
-        pullVideo(true);
+        pullVideo('all');
         updateVideoShader(shaderReadingTap(3), 2);
 
         read.mockClear();
-        pullVideo(true);
+        pullVideo('all');
         expect(tapsRead(read)).toEqual([0, 3]);
     });
 
@@ -115,18 +115,18 @@ describe('across patch updates', () => {
         });
         setVideoTarget(() => null);
         updateVideoShader(shaderReadingTap(1), 10);
-        pullVideo(true);
+        pullVideo('all');
         updateVideoShader(shaderReadingTap(2), 11);
         updateVideoShader(shaderReadingTap(3), 12);
 
         read.mockClear();
-        pullVideo(true);
+        pullVideo('all');
         expect(tapsRead(read)).toEqual([1, 3]);
 
         applied = 12;
-        pullVideo(true);
+        pullVideo('all');
         read.mockClear();
-        pullVideo(true);
+        pullVideo('all');
         expect(tapsRead(read)).toEqual([3]);
     });
 
@@ -148,7 +148,7 @@ describe('across patch updates', () => {
         updateVideoShader(shaderReadingTap(0), 2);
         order.length = 0;
 
-        pullVideo(true);
+        pullVideo('all');
         expect(order.at(-1)).toBe('updates');
         expect(order.slice(0, -1).every((step) => step === 'read')).toBe(true);
     });
@@ -169,12 +169,12 @@ describe('a fresh pull', () => {
         setVideoTarget(() => null);
         updateVideoShader(shaderReadingTap(0), 1);
 
-        pullVideo(true);
+        pullVideo('all');
         expect(read).toHaveBeenLastCalledWith(0, undefined);
         pullVideo();
         expect(read).toHaveBeenLastCalledWith(0, 110);
 
-        pullVideo(true);
+        pullVideo('all');
         expect(read).toHaveBeenLastCalledWith(0, undefined);
         pullVideo();
         expect(read).toHaveBeenLastCalledWith(0, 110);

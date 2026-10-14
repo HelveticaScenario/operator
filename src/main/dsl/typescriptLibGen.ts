@@ -267,6 +267,12 @@ type Signal = number | Note | HZ | ModuleOutput;
 type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup | PatternSource;
 
 /**
+ * An axis of an XY scope: signals, collections and patterns, or an array mixing
+ * them. Every channel is its own trace.
+ */
+type ScopeAxis = OrArray<Signal | Iterable<ModuleOutput> | PatternSource>;
+
+/**
  * A param value tagged into a cartesian signal group by {@link $g1}, {@link $g2},
  * or {@link $g3}. Params in different groups multiply within a module — its
  * channel count becomes the product of the group widths — while params in the
@@ -1437,23 +1443,20 @@ function $setTempo(tempo: number): void;
 function $setOutputGain(gain: Mono<Signal>): void;
 
 /**
- * Render a Lissajous-style XY oscilloscope as the editor background.
- * Each axis is cycled to the longer arity, producing one trace per pair.
- * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
- * $signal modules, matching $c.
- * Last call wins; only one global XY scope can be active at a time.
- * @param x Horizontal channel(s)
- * @param y Vertical channel(s)
- * @param config.xRange Horizontal voltage window (default [-5, 5])
- * @param config.yRange Vertical voltage window (default [-5, 5])
+ * An XY oscilloscope as the patch's picture: shorthand for
+ * \`$v.scopeXY(x, y, config).out()\`. Each channel of \`x\` and \`y\` is its own
+ * signal, paired off in order with the shorter side cycling, one trace per pair.
+ * @param x Horizontal signal(s)
+ * @param y Vertical signal(s)
+ * @param config See \`$v.scopeXY\`
  * @example $scopeXY($sine($hz(440)), $sine($hz(311)))
  * @example $scopeXY($c($sine('c3'), $sine('e3')), $sine('g3')) // 2 traces, both share the same Y
  */
 function $scopeXY(
-  x: Poly<Signal>,
-  y: Poly<Signal>,
-  config?: { xRange?: [number, number]; yRange?: [number, number] },
-): void;
+  x: ScopeAxis,
+  y: ScopeAxis,
+  config?: { xRange?: [number, number]; yRange?: [number, number]; samples?: number; intensity?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; persistence?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; lineWidth?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; upsample?: boolean },
+): VideoSignal;
 
 /**
  * Set the time signature for the root clock.
@@ -1801,7 +1804,7 @@ declare const $table: {
 /**
  * A video signal: a color with an alpha at every pixel, each channel in the
  * range 0..1. Generators such as \`$v.osc\`, \`$v.noise\` and \`$v.shape\`
- * make gray signals; \`$v.hsv\`, \`$v.colorize\`, \`$v.image\` and others
+ * make gray signals; \`$v.hsv\`, \`$v.solid\`, \`$v.image\` and others
  * make colors. Display one with \`$v.out\`. Where a module wants a number,
  * a signal gives its brightness.
  */

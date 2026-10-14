@@ -53,7 +53,7 @@ describe('compileVideoGraph', () => {
               let uv = vec2f(frag.x / u.resolution.x, 1.0 - frag.y / u.resolution.y);
               let v0: vec4f = vec4f(vec3f(uv.x), 1.0);
               let v1: vec4f = vec4f(vec3f(abs(2.0 * fract(video_luma(v0) * u.slots[0][0] + u.time) - 1.0)), 1.0);
-              let v2: vec4f = clamp(vec4f(video_luma(v1), 0.5, 1.0, 1.0), vec4f(0.0), vec4f(1.0));
+              let v2: vec4f = vec4f(video_luma(v1), 0.5, 1.0, 1.0);
               let v3: vec4f = v2;
               return video_display(v3);
           }
@@ -234,6 +234,7 @@ describe('compileVideoGraph', () => {
         const graph = {
             histories: [],
             sources: [],
+            scopes: [],
             previews: [],
             uniforms: [],
             ...partial,

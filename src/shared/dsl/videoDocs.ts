@@ -38,7 +38,7 @@ export const VIDEO_GROUPS = [
 
 export const VIDEO_INTRO = {
     description:
-        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Control+Shift+V on macOS, Ctrl+Shift+Y elsewhere) opens a second window that shows the same picture for an audience; while it is open, the picture behind the code takes the shape and resolution of that window. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
+        'Video synthesis. Patches build a graph of signals that is drawn per pixel behind the code in the editor when a patch calls `$v.out`. View, Toggle Performance Window (Control+Shift+V on macOS, Ctrl+Shift+Y elsewhere) opens a second window for an audience that shows the same picture with the code laid over it, in a font, size, theme and opacity of its own, set in the Perform tab of the sidebar; View, Toggle Performance Code (Control+Shift+H) fades that code in and out. While the window is open, the picture behind the code takes the shape and resolution of that window, and a copy of the window shows in the corner of the editor. Video signals cannot be connected to audio inputs.\n\nEvery video signal is a color with an alpha at each pixel. A number, such as the frequency of an oscillator or a mix amount, can be given a signal too, and reads its brightness; a gray signal, such as an oscillator or a ramp, gives the same value in every channel. The generators draw at the position of each pixel, so `$v.osc(10)` already varies across the frame; their config takes other coordinates when you want them. The picture shows a signal laid over black by its alpha. As in Hydra, channels may go below 0 or above 1 from one function to the next; they are clipped to 0..1 only where the picture is shown and where a frame is stored for feedback.\n\nSliders, buttons and audio signals can be passed anywhere a number is accepted, and the picture follows them live. So can patterns from `$p(...)`, `$p.s(...)` and `$p.arrange(...)`, which play through their own `$cycle` as they do for any audio parameter; their values are used as they are, so `$p("0 0.25 0.5 0.75")` steps through four hues a cycle. Audio signals are sampled about 60 times a second and used in volts as the audio graph produces them, so scale them to the range an input expects, for example `.range(0, 1)`; `.range(min, max)` on a video signal sets any other range, such as `.range(1, 3)` for a zoom of one to three times. A signal of several channels, such as a chord or a stereo pair, is summed to one.',
     examples: [
         '$v.osc(10).$.kaleid(6).$.hsv().out()',
         "$v.out($v.hsv($slider('Hue', 0.3, 0, 1), 1, $slider('Level', 1, 0, 1)))",
@@ -55,7 +55,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Seconds since the patch started. It stands still while the patch is stopped and starts again from 0 when the patch is restarted. Use it as a phase to animate an oscillator.',
         params: [],
-        examples: ['$v.out($v.colorize($v.osc(4, $v.time), 0, 0))'],
+        examples: ['$v.out($v.solid($v.osc(4, $v.time), 0, 0))'],
         declarations: ['readonly time: VideoSignal;'],
     },
     {
@@ -91,10 +91,10 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            "$v.out($v.colorize($v.ramp(), $v.ramp('vertical'), 0.5))",
+            "$v.out($v.solid($v.ramp(), $v.ramp('vertical'), 0.5))",
             "$v.out($v.hsv($v.osc(6, $v.time, { input: $v.ramp('radial') })))",
             "$v.out($v.hsv($v.ramp('angular', { rotate: $v.time.$.osc(0.1) })))",
-            "$v.out($v.colorize($v.osc(8, 0, { input: $v.ramp('horizontal', { rotate: 0.125, zoom: 2 }) }), 0.2, 0.5))",
+            "$v.out($v.solid($v.osc(8, 0, { input: $v.ramp('horizontal', { rotate: 0.125, zoom: 2 }) }), 0.2, 0.5))",
         ],
         declarations: [
             "ramp(\n    axis?: 'horizontal' | 'vertical' | 'radial' | 'angular',\n    config?: {\n        zoom?: VideoValue;\n        rotate?: VideoValue;\n        shiftX?: VideoValue;\n        shiftY?: VideoValue;\n    },\n): VideoSignal;",
@@ -124,8 +124,8 @@ export const VIDEO_DOCS: VideoDoc[] = [
             },
         ],
         examples: [
-            '$v.out($v.colorize($v.osc(8), 0, 0))',
-            "$v.out($v.colorize($v.osc(3, $v.time, { shape: 'saw' }), $v.osc(5, 0, { input: $v.ramp('vertical') }), 0.3))",
+            '$v.out($v.solid($v.osc(8), 0, 0))',
+            "$v.out($v.solid($v.osc(3, $v.time, { shape: 'saw' }), $v.osc(5, 0, { input: $v.ramp('vertical') }), 0.3))",
         ],
         declarations: [
             "osc(\n    freq?: VideoValue,\n    phase?: VideoValue,\n    config?: { shape?: 'sine' | 'triangle' | 'saw' | 'square'; input?: VideoValue },\n): VideoSignal;",
@@ -164,6 +164,67 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         declarations: [
             'fromAudio(signal: ModuleOutput | Collection | CollectionWithRange | PatternSource, position?: VideoValue, config?: { samples?: number; trigger?: boolean }): VideoSignal;',
+        ],
+    },
+    {
+        name: 'scopeXY',
+        group: 'Generators',
+        description:
+            'An XY oscilloscope: `x` moves a glowing beam across the frame and `y` moves it up, drawn from every audio sample, so two sines a fifth apart trace a Lissajous figure. The beam is white, its opacity its brightness, on a transparent background, so laid over black it shows as a gray beam with a soft glow, laid over other signals it adds light, multiplying it by a color tints it, and `.a` reads its brightness as a gray. It can be warped and blurred like any video signal. Each frame the trail fades by `persistence` and the newest samples are drawn over it. `intensity`, `persistence` and `lineWidth` take sliders, patterns and audio signals as well as numbers, read once a frame and held within their ranges; they have one value for the whole beam, so they do not take video signals.\n\nEach channel is its own signal: the channels of `x` and `y` are paired off in order, the shorter side cycling, and each pair draws one trace. `$scopeXY(x, y, config)` is a shorthand for `$v.scopeXY(x, y, config).out()`.',
+        params: [
+            {
+                name: 'x',
+                description:
+                    'Horizontal signal: an audio signal, a pattern from `$p(...)`, a number, or an array of them; each channel is a trace',
+            },
+            {
+                name: 'y',
+                description: 'Vertical signal, given the same way as `x`',
+            },
+            {
+                name: 'config.xRange',
+                description:
+                    'Volts at the left and right edges, `[min, max]` (default [-5, 5])',
+            },
+            {
+                name: 'config.yRange',
+                description:
+                    'Volts at the bottom and top edges, `[min, max]` (default [-5, 5])',
+            },
+            {
+                name: 'config.samples',
+                description:
+                    'Samples of each signal drawn per frame, 2 to 4096 (default 2048)',
+            },
+            {
+                name: 'config.intensity',
+                description:
+                    'Brightness of the beam, 0 to 1 (default 0.6); a number, slider, pattern or audio signal',
+            },
+            {
+                name: 'config.persistence',
+                description:
+                    'How much of the trail survives each frame, 0 to 1 (default 0.6); a number, slider, pattern or audio signal',
+            },
+            {
+                name: 'config.lineWidth',
+                description:
+                    'Thickness of the beam: 1 is the standard width, 2 twice as thick, 0.5 half as thick; 0.1 to 5 (default 1); a number, slider, pattern or audio signal. The width is measured against the frame height, so the beam looks the same at any resolution',
+            },
+            {
+                name: 'config.upsample',
+                description:
+                    'Draw a smooth curve between samples instead of straight segments (default false)',
+            },
+        ],
+        examples: [
+            "$v.scopeXY($sine('c3'), $sine('g3')).out()",
+            "$v.out($v.mult($v.scopeXY($sine(['c3', 'e3']), $sine('g2'), { persistence: 0.9 }), $v.hsv(0.4, 0.8, 1)))",
+            "$scopeXY($sine('110hz'), $sine('165hz'), { lineWidth: 1.5 })",
+            "$scopeXY($sine('c3'), $sine('g3'), { intensity: $slider('Beam', 0.6, 0, 1), lineWidth: $sine('0.25hz').range(0.5, 3) })",
+        ],
+        declarations: [
+            'scopeXY(x: ScopeAxis, y: ScopeAxis, config?: { xRange?: [number, number]; yRange?: [number, number]; samples?: number; intensity?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; persistence?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; lineWidth?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; upsample?: boolean }): VideoSignal;',
         ],
     },
     {
@@ -368,7 +429,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         examples: [
             "$v.out($v.image('pictures/photo.png'))",
             "$v.out($v.image('https://example.com/photo.jpg'))",
-            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hueShift($v.time.$.osc(0.05)).out()",
+            "$v.image('pictures/photo.png', { fit: 'contain' }).$.kaleid(6).$.hue($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
             "image(path: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
@@ -429,7 +490,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             "$v.out($v.stream('https://example.com/live/stream.m3u8'))",
-            "$v.stream('https://example.com/clip.mp4', { fit: 'contain' }).$.hueShift($v.time.$.osc(0.05)).out()",
+            "$v.stream('https://example.com/clip.mp4', { fit: 'contain' }).$.hue($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
             "stream(url: string, config?: { fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
@@ -454,7 +515,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.camera())',
-            "$v.camera({ fit: 'contain' }).$.kaleid(6).$.hueShift($v.time.$.osc(0.05)).out()",
+            "$v.camera({ fit: 'contain' }).$.kaleid(6).$.hue($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
             "camera(config?: { device?: string; fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
@@ -478,7 +539,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         examples: [
             '$v.out($v.screen())',
-            "$v.screen({ display: 2, fit: 'contain' }).$.hueShift($v.time.$.osc(0.05)).out()",
+            "$v.screen({ display: 2, fit: 'contain' }).$.hue($v.time.$.osc(0.05)).out()",
         ],
         declarations: [
             "screen(config?: { display?: number; fit?: 'cover' | 'contain' | 'stretch' }): VideoSignal;",
@@ -531,14 +592,19 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
-        name: 'colorize',
+        name: 'solid',
         group: 'Color',
         description:
-            'A color from red, green, blue and alpha levels, each clipped to 0..1.',
-        params: [{ name: 'a', description: 'Alpha (default 1, opaque)' }],
-        examples: ["$v.out($v.colorize($v.ramp(), $v.ramp('vertical'), 1))"],
+            "A color from red, green, blue and alpha levels, as Hydra's `solid`. Levels outside 0..1 are kept until the color is shown or stored in a frame. With no arguments it is opaque black.",
+        params: [
+            { name: 'r', description: 'Red (default 0)' },
+            { name: 'g', description: 'Green (default 0)' },
+            { name: 'b', description: 'Blue (default 0)' },
+            { name: 'a', description: 'Alpha (default 1, opaque)' },
+        ],
+        examples: ["$v.out($v.solid($v.ramp(), $v.ramp('vertical'), 1))"],
         declarations: [
-            'colorize(r: VideoValue, g: VideoValue, b: VideoValue, a?: VideoValue): VideoSignal;',
+            'solid(r?: VideoValue, g?: VideoValue, b?: VideoValue, a?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -599,7 +665,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'add',
         group: 'Math',
         description:
-            'Sum of each channel, clipped to 0..1. The alpha is the larger of the two.',
+            "Sum of each channel, alpha included, as Hydra's `add`. Nothing is clipped until it is shown or stored in a frame, so a sum past 1 still counts in whatever reads it next.",
         params: [],
         examples: [
             "$v.out($v.hsv($v.add($v.ramp(), $v.osc(3, 0, { input: $v.ramp('vertical') }))))",
@@ -649,10 +715,21 @@ export const VIDEO_DOCS: VideoDoc[] = [
     {
         name: 'invert',
         group: 'Math',
-        description: 'Complement, 1 minus the input.',
-        params: [],
-        examples: ['$v.out($v.invert($v.hsv($v.ramp())))'],
-        declarations: ['invert(input: VideoValue): VideoSignal;'],
+        description:
+            "Crossfades the red, green and blue of `input` toward their complement, 1 minus each, by `amount`, as Hydra's `invert` does: 1 inverts fully and 0.5 meets at gray. The alpha is kept, and nothing is clipped until it is shown.",
+        params: [
+            {
+                name: 'amount',
+                description: 'How far to invert, 0 to 1 (default 1)',
+            },
+        ],
+        examples: [
+            '$v.out($v.invert($v.hsv($v.ramp())))',
+            "$v.out($v.invert($v.hsv($v.ramp()), $sine('0.25hz').range(0, 1)))",
+        ],
+        declarations: [
+            'invert(input: VideoValue, amount?: VideoValue): VideoSignal;',
+        ],
     },
     {
         name: 'mix',
@@ -669,6 +746,25 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
         declarations: [
             'mix(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'blend',
+        group: 'Math',
+        description:
+            "Hydra's `blend`: a crossfade from `a` (amount 0) to `b` (amount 1), alpha included. Unlike `mix`, `amount` is not clipped, so an amount above 1 pushes past `b` away from `a`, and below 0 past `a` away from `b`.",
+        params: [
+            {
+                name: 'amount',
+                description: 'Mix position, unclipped (default 0.5)',
+            },
+        ],
+        examples: [
+            "$v.out($v.blend($v.hsv($v.ramp()), $v.hsv($v.ramp('vertical')), $v.time.$.osc(0.25).range(-0.5, 1.5)))",
+            '$v.out($v.feedback((prev) => $v.blend($v.hsv($v.time.$.osc(0.1), 1, $v.shape(0.1)), prev, 0.9)))',
+        ],
+        declarations: [
+            'blend(a: VideoValue, b: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -741,20 +837,46 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
+        name: 'thresh',
+        group: 'Shaping',
+        description:
+            "Hydra's `thresh`: the brightness of `input` as a gray, 0 below `threshold` and 1 above, with a smooth edge `tolerance` wide on each side. Unlike `comparator`, which thresholds each channel, it reads the overall brightness. The alpha is kept.",
+        params: [
+            {
+                name: 'threshold',
+                description:
+                    'Brightness at the middle of the edge (default 0.5)',
+            },
+            {
+                name: 'tolerance',
+                description:
+                    'Half the width of the edge, on each side of `threshold` (default 0.04)',
+            },
+        ],
+        examples: ['$v.out($v.thresh($v.noise(4, $v.time), 0.5, 0.1))'],
+        declarations: [
+            'thresh(input: VideoValue, threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
         name: 'posterize',
         group: 'Shaping',
         description:
-            'Quantizes to `levels` evenly spaced values between 0 and 1.',
+            "Hydra's `posterize`: each channel is raised to the power `gamma`, cut into `bins` equal steps, and raised back by `1 / gamma`, so the steps are spaced along that curve and never quite reach 1. Negative channels count as 0, and the alpha is kept.",
         params: [
             {
-                name: 'levels',
+                name: 'bins',
+                description: 'Number of steps (default 3)',
+            },
+            {
+                name: 'gamma',
                 description:
-                    'Number of steps, rounded down to a whole number, at least 2 (default 4)',
+                    'The curve the steps are spaced along; below 1 crowds them toward the bright end (default 0.6)',
             },
         ],
-        examples: ['$v.out($v.hsv($v.posterize($v.ramp(), 5)))'],
+        examples: ['$v.out($v.hsv($v.posterize($v.ramp(), 5, 1)))'],
         declarations: [
-            'posterize(input: VideoValue, levels?: VideoValue): VideoSignal;',
+            'posterize(input: VideoValue, bins?: VideoValue, gamma?: VideoValue): VideoSignal;',
         ],
     },
     {
@@ -790,7 +912,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'mask',
         group: 'Compositing',
         description:
-            '`input` seen through `mask`: its color and alpha are both scaled by the brightness of `mask`, as in Hydra, so it is opaque where the mask is white and transparent and black where it is black. What is masked out adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. `config.keepColor` scales only the alpha, so the masked-out color stays for whatever reads the signal as a number, such as the amount of `hueShift` or a modulator. Lay the result over another signal with `layer`.',
+            '`input` seen through `mask`: its color and alpha are both scaled by the brightness of `mask`, as in Hydra, so it is opaque where the mask is white and transparent and black where it is black. What is masked out adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. `config.keepColor` scales only the alpha, so the masked-out color stays for whatever reads the signal as a number, such as the amount of `hue` or a modulator. Lay the result over another signal with `layer`.',
         params: [
             { name: 'mask', description: 'Where `input` shows, by brightness' },
             {
@@ -810,22 +932,22 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'luma',
         group: 'Compositing',
         description:
-            'Keys `input` by its own brightness: parts at least `threshold` bright stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between. The color is scaled by the same key, as in Hydra, so what is keyed out is black as well as transparent and adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations; `luma(1)` keeps only what is pure white. `config.invert` keeps the dark side instead, so `luma(0, 0.05, { invert: true })` keeps only black. `config.keepColor` scales only the alpha, as `mask` does. Lay the result over another signal with `layer`.',
+            "Keys `input` by its own brightness, as Hydra's `luma` does: parts brighter than `threshold + tolerance` stay opaque, parts darker than `threshold - tolerance` turn transparent, and the alpha rises smoothly in between, crossing half at `threshold`. The color is scaled by the same key, as in Hydra, so what is keyed out is black as well as transparent and adds nothing to `add`, `diff`, `mix`, `blur` and the other combinations. `config.invert` keeps the dark side instead. `config.keepColor` scales only the alpha, as `mask` does. Lay the result over another signal with `layer`.",
         params: [
             {
                 name: 'threshold',
                 description:
-                    'Brightness from which the signal is fully opaque (default 0.5)',
+                    'Brightness at the middle of the edge, where the alpha is half (default 0.5)',
             },
             {
                 name: 'tolerance',
                 description:
-                    'Width of the band below `threshold` over which the alpha rises from 0 (default 0.1)',
+                    'Half the width of the edge, on each side of `threshold` (default 0.1)',
             },
             {
                 name: 'config.invert',
                 description:
-                    'Keep the dark side instead: opaque up to `threshold`, transparent from `threshold + tolerance` (default false)',
+                    'Keep the dark side instead: opaque below `threshold - tolerance`, transparent above `threshold + tolerance` (default false)',
             },
             {
                 name: 'config.keepColor',
@@ -845,7 +967,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'feedback',
         group: 'Memory',
         description:
-            "Feeds a frame back into itself. `update` receives the previous frame's result as `prev`, resampled through the transform in `config`, and returns this frame's color; `feedback` returns that color. The first frame's `prev` is transparent black. Re-running a patch keeps the loops' pictures, so edits take effect without wiping the trails.",
+            "Feeds a frame back into itself. `update` receives the previous frame's result as `prev`, resampled through the transform in `config`, and returns this frame's color; `feedback` returns that color. The first frame's `prev` is transparent black. Each frame is stored with every channel clipped to 0..1, as in Hydra, so `prev` is always within 0..1 and a loop cannot run away. Re-running a patch keeps the loops' pictures, so edits take effect without wiping the trails.",
         params: [
             { name: 'update', description: 'Builds this frame from `prev`' },
             {
@@ -1337,29 +1459,115 @@ export const VIDEO_DOCS: VideoDoc[] = [
         ],
     },
     {
-        name: 'hueShift',
+        name: 'hue',
         group: 'Color',
         description:
-            'Turns every hue of `input` by `amount` of a full circle, keeping its saturation, brightness and alpha.',
+            "Turns every hue of `input` by `amount` of a full circle, keeping its saturation, brightness and alpha, as Hydra's `hue` does.",
         params: [
             {
                 name: 'amount',
                 description:
-                    'Fraction of the hue circle to turn by; 0.5 is the opposite hue (default 0.5)',
+                    'Fraction of the hue circle to turn by; 0.5 is the opposite hue (default 0.4, as in Hydra)',
+            },
+        ],
+        examples: ['$v.out($v.hue($v.hsv($v.ramp()), $v.time.$.osc(0.1)))'],
+        declarations: [
+            'hue(input: VideoValue, amount?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'color',
+        group: 'Color',
+        description:
+            "Hydra's `color`: tints `input` by multiplying each channel, alpha included, by its amount, so `color(1, 0.5, 0)` keeps red, halves green and drops blue. A negative amount multiplies the channel's complement by the amount's size instead, so `color(-1, 1, 1)` inverts only the red. Nothing is clipped until it is shown.",
+        params: [
+            { name: 'r', description: 'Red multiplier (default 1)' },
+            { name: 'g', description: 'Green multiplier (default 1)' },
+            { name: 'b', description: 'Blue multiplier (default 1)' },
+            { name: 'a', description: 'Alpha multiplier (default 1)' },
+        ],
+        examples: [
+            '$v.out($v.color($v.osc(8), 1, 0.4, 0.1))',
+            '$v.out($v.osc(6).$.hsv().$.color(-1, 1, 1))',
+        ],
+        declarations: [
+            'color(input: VideoValue, r?: VideoValue, g?: VideoValue, b?: VideoValue, a?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'shift',
+        group: 'Color',
+        description:
+            "Hydra's `shift`: adds the fractional part of each amount to its channel of `input`, alpha included. The result is not wrapped, so a shifted channel can pass 1 and show as full until something wraps it, such as `$v.wrap`.",
+        params: [
+            { name: 'r', description: 'Added to red (default 0.5)' },
+            { name: 'g', description: 'Added to green (default 0)' },
+            { name: 'b', description: 'Added to blue (default 0)' },
+            { name: 'a', description: 'Added to alpha (default 0)' },
+        ],
+        examples: ['$v.out($v.osc(5).$.hsv().$.shift(0.2, 0.4, 0).$.wrap())'],
+        declarations: [
+            'shift(input: VideoValue, r?: VideoValue, g?: VideoValue, b?: VideoValue, a?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'brightness',
+        group: 'Color',
+        description:
+            "Adds `amount` to the red, green and blue of `input`, as Hydra's `brightness` does; a negative amount darkens. The alpha is kept, and the result is not clipped until it is shown.",
+        params: [
+            {
+                name: 'amount',
+                description: 'Added to each channel (default 0.4)',
+            },
+        ],
+        examples: ['$v.out($v.brightness($v.osc(6), -0.3))'],
+        declarations: [
+            'brightness(input: VideoValue, amount?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'saturate',
+        group: 'Color',
+        description:
+            "Scales the distance of each channel from the color's gray by `amount`, as Hydra's `saturate` does: 0 is gray, 1 unchanged, and above 1 more vivid. The alpha is kept, and the result is not clipped until it is shown.",
+        params: [
+            {
+                name: 'amount',
+                description: 'Saturation factor (default 2)',
             },
         ],
         examples: [
-            '$v.out($v.hueShift($v.hsv($v.ramp()), $v.time.$.osc(0.1)))',
+            "$v.out($v.saturate($v.hsv($v.ramp(), 0.4), $sine('0.2hz').range(0, 3)))",
         ],
         declarations: [
-            'hueShift(input: VideoValue, amount?: VideoValue): VideoSignal;',
+            'saturate(input: VideoValue, amount?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'colorama',
+        group: 'Color',
+        description:
+            "Hydra's `colorama`: adds `amount` to the hue, saturation and value of `input`, turns that back into a color without clipping, and wraps each channel into 0..1, so smooth gradients break into cycling bands of color. Small amounts shift gently; animating the amount makes the bands crawl. The alpha is kept.",
+        params: [
+            {
+                name: 'amount',
+                description:
+                    'Added to hue, saturation and value (default 0.005)',
+            },
+        ],
+        examples: [
+            '$v.out($v.colorama($v.osc(4).$.kaleid(5).$.hsv(), $v.time.$.osc(0.05).range(0, 0.5)))',
+        ],
+        declarations: [
+            'colorama(input: VideoValue, amount?: VideoValue): VideoSignal;',
         ],
     },
     {
         name: 'contrast',
         group: 'Color',
         description:
-            "Scales each channel's distance from mid-gray by `amount`: above 1 pushes colors apart, below 1 pulls them toward gray.",
+            "Scales each channel's distance from mid-gray by `amount`, as Hydra's `contrast` does: above 1 pushes colors apart, below 1 pulls them toward gray. The alpha is kept, and the result is not clipped until it is shown.",
         params: [
             { name: 'amount', description: 'Contrast factor (default 1.6)' },
         ],
@@ -1439,7 +1647,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
             "One channel of a signal as an opaque gray: `'r'`, `'g'`, `'b'`, `'a'` for the alpha, or `'luma'` for brightness (the default). The channels are also every signal's `.r`, `.g`, `.b` and `.a` properties.",
         params: [{ name: 'which', description: 'Which channel to take' }],
         examples: [
-            "$v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'r'), 0, 0))",
+            "$v.out($v.solid($v.channel($v.hsv($v.ramp()), 'r'), 0, 0))",
         ],
         declarations: [
             "channel(input: VideoValue, which?: 'r' | 'g' | 'b' | 'a' | 'luma'): VideoSignal;",
@@ -1469,7 +1677,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         name: 'buffer',
         group: 'Memory',
         description:
-            "A frame store that persists from one frame to the next. `write` stores a color; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
+            "A frame store that persists from one frame to the next. `write` stores a color, each channel clipped to 0..1; `read` returns what the buffer held on the previous frame, resampled through a zoom, rotation, shift and edge mode (see `$v.feedback`). Any number of signals can read a buffer, and buffers can read each other, which `$v.feedback`'s single loop cannot express. A buffer that is read must be written, and can be written once. A patch can use seven buffers and feedback loops together.",
         params: [],
         examples: [
             'const trail = $v.buffer(); $v.osc(8, $v.time).$.hsv().$.mult(0.2).$.add(trail.read({ zoom: 1.01, rotate: 0.002 }).$.mult(0.96)).write(trail).out()',
@@ -1483,7 +1691,7 @@ export const VIDEO_DOCS: VideoDoc[] = [
         description:
             'Shows a signal behind the code, and in the performance window when it is open, laid over black by its alpha. Last call wins. It returns its input unchanged, so it can sit in the middle of a chain.',
         params: [],
-        examples: ['$v.out($v.colorize(1, 0, 0))'],
+        examples: ['$v.out($v.solid(1, 0, 0))'],
         declarations: ['out<T extends VideoSignal>(input: T): T;'],
     },
 ];
@@ -1505,14 +1713,14 @@ export const VIDEO_CHAIN_EXAMPLES: string[] = [
     '$v.noise(4, $v.time).$.rotate(0.1).$.pixelate(32, 18).$.hsv(0.8).preview().out()',
     '$v.osc(8).$.hsv().$m.kaleid(0.5, 5).out()',
     "$v.ramp().$.osc(8).$.mult($v.ramp('vertical').$.osc(4)).$.hsv().out()",
-    '$v.osc(8).$.hsv().pipe((c) => c.$.kaleid(5).$.hueShift(0.3)).out()',
+    '$v.osc(8).$.hsv().pipe((c) => c.$.kaleid(5).$.hue(0.3)).out()',
     '$v.osc(8).$.hsv().pipeMix((c) => c.$.invert(), $v.time.$.osc(0.2)).out()',
 ];
 
 export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'add',
-        description: 'Sum with `b`, clipped to 0..1.',
+        description: 'Sum with `b`, alpha included, unclipped.',
         declarations: ['add(b: VideoValue): VideoSignal;'],
     },
     {
@@ -1541,9 +1749,18 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         declarations: ['mix(b: VideoValue, amount?: VideoValue): VideoSignal;'],
     },
     {
+        name: 'blend',
+        description:
+            "Crossfade from this to `b`, as Hydra's `blend` does: `amount` is not clipped, so past 1 it pushes beyond `b`.",
+        declarations: [
+            'blend(b: VideoValue, amount?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
         name: 'invert',
-        description: 'The complement, 1 minus this.',
-        declarations: ['invert(): VideoSignal;'],
+        description:
+            'Crossfades this toward its complement, 1 minus it, by `amount`.',
+        declarations: ['invert(amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'range',
@@ -1556,8 +1773,11 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     },
     {
         name: 'posterize',
-        description: 'Quantizes to `levels` steps.',
-        declarations: ['posterize(levels?: VideoValue): VideoSignal;'],
+        description:
+            'Cuts this into `bins` steps spaced along a `gamma` curve.',
+        declarations: [
+            'posterize(bins?: VideoValue, gamma?: VideoValue): VideoSignal;',
+        ],
     },
     {
         name: 'write',
@@ -1616,9 +1836,49 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
         ],
     },
     {
-        name: 'hueShift',
+        name: 'hue',
         description: 'Turns every hue of this by `amount` of a full circle.',
-        declarations: ['hueShift(amount?: VideoValue): VideoSignal;'],
+        declarations: ['hue(amount?: VideoValue): VideoSignal;'],
+    },
+    {
+        name: 'color',
+        description:
+            'Tints this by a multiplier per channel; a negative one inverts its channel.',
+        declarations: [
+            'color(r?: VideoValue, g?: VideoValue, b?: VideoValue, a?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'shift',
+        description:
+            'Adds the fractional part of each amount to its channel of this.',
+        declarations: [
+            'shift(r?: VideoValue, g?: VideoValue, b?: VideoValue, a?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'thresh',
+        description:
+            'The brightness of this as a gray, stepped at `threshold` with a smooth edge.',
+        declarations: [
+            'thresh(threshold?: VideoValue, tolerance?: VideoValue): VideoSignal;',
+        ],
+    },
+    {
+        name: 'brightness',
+        description: 'Adds `amount` to the red, green and blue of this.',
+        declarations: ['brightness(amount?: VideoValue): VideoSignal;'],
+    },
+    {
+        name: 'saturate',
+        description: "Scales this signal's distance from its gray by `amount`.",
+        declarations: ['saturate(amount?: VideoValue): VideoSignal;'],
+    },
+    {
+        name: 'colorama',
+        description:
+            'Shifts the hue, saturation and value of this by `amount` and wraps each channel, so colors cycle through bands.',
+        declarations: ['colorama(amount?: VideoValue): VideoSignal;'],
     },
     {
         name: 'contrast',
@@ -1706,7 +1966,7 @@ export const VIDEO_CHAIN: VideoChainDoc[] = [
     {
         name: 'luma',
         description:
-            'Keys this by its own brightness: opaque from `threshold` up, transparent and black below `threshold - tolerance`; `config.invert` keeps the dark side, `config.keepColor` scales only the alpha.',
+            'Keys this by its own brightness, with a smooth edge `tolerance` wide on each side of `threshold`; `config.invert` keeps the dark side, `config.keepColor` scales only the alpha.',
         declarations: [
             'luma(threshold?: VideoValue, tolerance?: VideoValue, config?: { invert?: boolean; keepColor?: boolean }): VideoSignal;',
         ],

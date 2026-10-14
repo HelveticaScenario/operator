@@ -5,8 +5,6 @@ import type {
     Scope,
     ScopeChannel,
     ScopeMode,
-    ScopeXy,
-    ScopeXyPair,
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
@@ -45,17 +43,6 @@ export type ScopeWithLocation = Scope & {
     sourceLocation?: { line: number; column: number };
     /** Feeds an editor panel, never drawn as a scope view of its own. */
     headless?: boolean;
-};
-
-/**
- * Per-call $scopeXY state with an optional source location. Lives on
- * GraphBuilder until `toPatch` resolves the deferred outputs.
- */
-export type ScopeXYWithLocation = {
-    pairs: ScopeXyPair[];
-    xRange: [number, number];
-    yRange: [number, number];
-    sourceLocation?: { line: number; column: number };
 };
 
 // Extended OutputSchema interface that includes optional range
@@ -844,11 +831,6 @@ export class GraphBuilder {
     private scopes: ScopeWithLocation[] = [];
     /** `ui: true` EQ panels, collected by `toPatch`. */
     private eqPanels: EqPanelDef[] = [];
-    /**
-     * Latest call to `$scopeXY` — last-call-wins (only one global XY scope
-     * at a time). Resolved during `toPatch` like deferred outputs in scopes.
-     */
-    private scopeXY: ScopeXYWithLocation | null = null;
     /** Output groups keyed by baseChannel */
     private outGroups = new Map<number, OutGroup[]>();
     /** Monotonic source-order counter for out groups */
@@ -1584,7 +1566,6 @@ export class GraphBuilder {
                 ),
                 ...eqScopes,
             ],
-            scopeXy: this.resolveScopeXY(),
             // Napi maps both null and undefined to None, so the renderer's
             // null-based VuMeterDef satisfies VuMeterSpec's optional fields.
             vuMeters: vuMeters as unknown as PatchGraph['vuMeters'],
@@ -1681,7 +1662,6 @@ export class GraphBuilder {
         this.modules.clear();
         this.scopes = [];
         this.eqPanels = [];
-        this.scopeXY = null;
         this.counters.clear();
         this.outGroups.clear();
         this.outGroupOrdinal = 0;
@@ -1867,8 +1847,7 @@ export class GraphBuilder {
     /**
      * Resolve a scope channel ref against the $deferred outputs: a channel
      * naming a deferred module is replaced by the module it was set to.
-     * Throws if the $deferred was never set. Shared by the per-scope and
-     * $scopeXY resolution in `toPatch`.
+     * Throws if the $deferred was never set.
      */
     private resolveScopeChannel(ch: ScopeChannel): ScopeChannel {
         const deferred = this.deferredOutputs.get(ch.moduleId);
@@ -1883,57 +1862,6 @@ export class GraphBuilder {
             channel: ch.channel,
             moduleId: resolved.moduleId,
             portName: resolved.portName,
-        };
-    }
-
-    /**
-     * Resolve the current $scopeXY's channel refs against deferred outputs.
-     * Returns undefined when no scope is registered; throws if a referenced
-     * $deferred was never set, mirroring the per-scope resolution path.
-     */
-    private resolveScopeXY(): ScopeXy | undefined {
-        if (this.scopeXY === null) return undefined;
-        const resolvedPairs: ScopeXyPair[] = [];
-        for (const pair of this.scopeXY.pairs) {
-            resolvedPairs.push({
-                x: this.resolveScopeChannel(pair.x),
-                y: this.resolveScopeChannel(pair.y),
-            });
-        }
-        return {
-            pairs: resolvedPairs,
-            xRange: this.scopeXY.xRange,
-            yRange: this.scopeXY.yRange,
-        };
-    }
-
-    /**
-     * Replace the current $scopeXY (last-call-wins). Pairs are already
-     * cycled to a common arity by the caller; this just records the channel
-     * refs and per-axis display range. Resolved in `toPatch`.
-     */
-    setScopeXY(
-        pairs: { x: ModuleOutput; y: ModuleOutput }[],
-        xRange: [number, number],
-        yRange: [number, number],
-        sourceLocation?: { line: number; column: number },
-    ) {
-        this.scopeXY = {
-            pairs: pairs.map((p) => ({
-                x: {
-                    channel: p.x.channel,
-                    moduleId: p.x.moduleId,
-                    portName: p.x.portName,
-                },
-                y: {
-                    channel: p.y.channel,
-                    moduleId: p.y.moduleId,
-                    portName: p.y.portName,
-                },
-            })),
-            xRange,
-            yRange,
-            sourceLocation,
         };
     }
 }

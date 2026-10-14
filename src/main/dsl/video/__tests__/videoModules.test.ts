@@ -18,9 +18,18 @@ describe('$v modules', () => {
             );
         });
 
+        it('blends with an unclipped amount, half way by default', () => {
+            expect(
+                wgslOf(`$v.out($v.blend($v.ramp(), $v.solid(1, 0, 0), 1.5));`),
+            ).toMatch(/let v\d: vec4f = mix\(v\d, v\d, 1\.5\);/);
+            expect(
+                wgslOf(`$v.ramp().$.blend($v.solid(1, 0, 0)).out();`),
+            ).toMatch(/let v\d: vec4f = mix\(v\d, v\d, 0\.5\);/);
+        });
+
         it('gives a number to a signal operand as an opaque gray', () => {
             const wgsl = wgslOf(`
-                $v.out($v.add($v.colorize(1, 0, 0), 0.25));
+                $v.out($v.add($v.solid(1, 0, 0), 0.25));
             `);
             expect(wgsl).toContain('vec4f(vec3f(0.25), 1.0)');
         });
@@ -61,13 +70,13 @@ describe('$v modules', () => {
         const wgslOf = (source: string) => exec(source).video!.wgsl;
 
         it('compiles an untransformed ramp to the bare frame coordinate', () => {
-            const wgsl = wgslOf(`$v.out($v.colorize($v.ramp(), 0, 0));`);
+            const wgsl = wgslOf(`$v.out($v.solid($v.ramp(), 0, 0));`);
             expect(wgsl).toContain('let v0: vec4f = vec4f(vec3f(uv.x), 1.0);');
         });
 
         it('routes a transformed ramp through video_transform', () => {
             const wgsl = wgslOf(
-                `$v.out($v.colorize($v.ramp('vertical', { rotate: 0.1, zoom: 2 }), 0, 0));`,
+                `$v.out($v.solid($v.ramp('vertical', { rotate: 0.1, zoom: 2 }), 0, 0));`,
             );
             expect(wgsl).toContain(
                 'video_transform(uv, 2.0, 0.1, vec2f(0.0, 0.0)).y',
@@ -76,7 +85,7 @@ describe('$v modules', () => {
 
         it('offers radial and angular ramps', () => {
             const wgsl = wgslOf(
-                `$v.out($v.colorize($v.ramp('radial'), $v.ramp('angular'), 0));`,
+                `$v.out($v.solid($v.ramp('radial'), $v.ramp('angular'), 0));`,
             );
             expect(wgsl).toContain('ramp_radius(uv)');
             expect(wgsl).toContain('ramp_angle(uv)');
@@ -102,7 +111,7 @@ describe('$v modules', () => {
             const wgsl = wgslOf(`
                 const x = $v.ramp();
                 const y = $v.ramp('vertical');
-                $v.out($v.colorize(
+                $v.out($v.solid(
                     $v.max($v.wrap(x, 3), $v.fold(y, 4)),
                     $v.min(x, y),
                     0,
@@ -117,27 +126,50 @@ describe('$v modules', () => {
             const wgsl = wgslOf(
                 `$v.hsv($v.ramp()).$.posterize(3).$.comparator(0.4).out();`,
             );
-            expect(wgsl).toMatch(/video_posterize\(v\d, 3\.0\)/);
+            expect(wgsl).toMatch(/video_posterize\(v\d, 3\.0, 0\.6\)/);
             expect(wgsl).toMatch(/video_comparator\(v\d, 0\.4, 0\.0\)/);
             expect(wgsl).toContain('return vec4f(clamp((x - vec3f(threshold))');
         });
 
-        it('posterizes to a whole number of evenly spaced levels', () => {
-            const wgsl = wgslOf(`$v.ramp().$.posterize(3.7).out();`);
-            const level = (x: number, levels: number) =>
+        it("posterizes along a gamma curve, as Hydra's posterize does", () => {
+            const wgsl = wgslOf(`$v.ramp().$.posterize().out();`);
+            const level = (x: number, bins: number, gamma: number) =>
                 (
                     callWgsl(
                         wgsl,
                         'video_posterize',
-                        [x, x, x, 1],
-                        levels,
+                        [x, x, x, 0.7],
+                        bins,
+                        gamma,
                     ) as number[]
                 )[0];
-            const outputs = (levels: number) =>
-                [0, 0.2, 0.4, 0.6, 0.8, 1].map((x) => level(x, levels));
-            expect(outputs(3.7)).toEqual(outputs(3));
-            expect(outputs(3)).toEqual([0, 0, 0.5, 0.5, 1, 1]);
-            expect(outputs(1)).toEqual([0, 0, 0, 1, 1, 1]);
+            const hydra = (x: number, bins: number, gamma: number) =>
+                Math.pow(
+                    Math.floor(Math.pow(x, gamma) * bins) / bins,
+                    1 / gamma,
+                );
+            for (const x of [0, 0.1, 0.3, 0.5, 0.75, 0.99, 1]) {
+                expect(level(x, 3, 0.6)).toBeCloseTo(hydra(x, 3, 0.6), 6);
+            }
+            expect([0, 0.2, 0.4, 0.6, 0.8].map((x) => level(x, 3, 1))).toEqual([
+                0,
+                0,
+                1 / 3,
+                1 / 3,
+                2 / 3,
+            ]);
+            expect(level(-0.5, 3, 0.6)).toBe(0);
+            expect(
+                (
+                    callWgsl(
+                        wgsl,
+                        'video_posterize',
+                        [0.5, 0.5, 0.5, 0.7],
+                        3,
+                        0.6,
+                    ) as number[]
+                )[3],
+            ).toBe(0.7);
         });
 
         it('folds to match the input times the gain below 1 / gain', () => {
@@ -160,9 +192,7 @@ describe('$v modules', () => {
         });
 
         it('rejects an unknown ramp axis', () => {
-            expect(() =>
-                exec(`$v.out($v.colorize($v.ramp('q'), 0, 0));`),
-            ).toThrow(
+            expect(() => exec(`$v.out($v.solid($v.ramp('q'), 0, 0));`)).toThrow(
                 /param "axis" must be one of horizontal, vertical, radial, angular/,
             );
         });
@@ -277,18 +307,16 @@ describe('$v modules', () => {
 
         it('turns hue with the shared hsv helper', () => {
             const wgsl = wgslOf(`
-                $v.hsv($v.ramp()).$.hueShift(0.25).$.contrast(2).out();
+                $v.hsv($v.ramp()).$.hue(0.25).$.contrast(2).out();
             `);
             expect(wgsl.match(/fn hsv_to_rgb\(/g)).toHaveLength(1);
             expect(wgsl).toContain('fn rgb_to_hsv(');
-            expect(wgsl).toContain('hue_shift(');
+            expect(wgsl).toContain('video_hue(');
             expect(wgsl).toMatch(/video_contrast\(v\d, 2\.0\)/);
         });
 
         it('adjusts a gray signal or a number like any color', () => {
-            expect(() =>
-                exec(`$v.out($v.hueShift($v.ramp(), 0.3));`),
-            ).not.toThrow();
+            expect(() => exec(`$v.out($v.hue($v.ramp(), 0.3));`)).not.toThrow();
             expect(wgslOf(`$v.out($v.contrast(0.4, 2));`)).toContain(
                 'video_contrast(vec4f(vec3f(0.4), 1.0), 2.0)',
             );
@@ -305,8 +333,10 @@ describe('$v modules', () => {
             const wgsl = wgslOf(`
                 $v.out($v.hsv($v.blur($v.noise(1), 0.02)));
             `);
-            expect(wgsl).toMatch(/let v\d+: vec4f = \(f\d+\(uv/);
-            expect(wgsl.match(/f\d+\(uv \+ blur_offset\(/g)).toHaveLength(16);
+            expect(wgsl).toMatch(/let v\d+: vec4f = \(node\d+\(uv/);
+            expect(wgsl.match(/node\d+\(uv \+ blur_offset\(/g)).toHaveLength(
+                16,
+            );
             expect(wgsl).toContain('fn blur_offset(');
         });
 
@@ -314,7 +344,7 @@ describe('$v modules', () => {
             const wgsl = wgslOf(`
                 $v.out($v.hsv($v.edges($v.hsv($v.ramp()), 3)));
             `);
-            expect(wgsl).toContain('video_luma(f');
+            expect(wgsl).toContain('video_luma(node');
             expect(wgsl).toMatch(
                 /let v\d+: vec4f = vec4f\(vec3f\(clamp\(sobel_magnitude\(/,
             );
@@ -411,5 +441,157 @@ describe('$v modules', () => {
                 /\$v\.bloom: input must be a video signal/,
             );
         });
+    });
+});
+
+describe('Hydra color adjustments', () => {
+    const wgslOf = (source: string) => exec(source).video!.wgsl;
+    const near = (actual: unknown, expected: number[]) => {
+        (actual as number[]).forEach((v, k) =>
+            expect(v).toBeCloseTo(expected[k], 5),
+        );
+    };
+
+    it('brightness adds to every color channel without clipping', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.brightness().out()`);
+        expect(wgsl).toMatch(/video_brightness\(v\d, 0\.4\)/);
+        near(
+            callWgsl(wgsl, 'video_brightness', [0.2, 0.5, 0.9, 0.7], 0.4),
+            [0.6, 0.9, 1.3, 0.7],
+        );
+    });
+
+    it("saturate mixes away from the gray with Hydra's weights", () => {
+        const wgsl = wgslOf(`$v.osc(4).$.saturate().out()`);
+        expect(wgsl).toMatch(/video_saturate\(v\d, 2\.0\)/);
+        const gray = 0.2125 * 0.8 + 0.7154 * 0.4 + 0.0721 * 0.2;
+        near(callWgsl(wgsl, 'video_saturate', [0.8, 0.4, 0.2, 1], 0), [
+            gray,
+            gray,
+            gray,
+            1,
+        ]);
+        near(callWgsl(wgsl, 'video_saturate', [0.8, 0.4, 0.2, 0.5], 2), [
+            2 * 0.8 - gray,
+            2 * 0.4 - gray,
+            2 * 0.2 - gray,
+            0.5,
+        ]);
+    });
+
+    it('colorama shifts hue, saturation and value and wraps each channel', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.hsv().$.colorama().out()`);
+        expect(wgsl).toMatch(/video_colorama\(v\d, 0\.005\)/);
+        // Pure red is hue 0, saturation 1, value 1; adding 0.5 gives hue 0.5
+        // (cyan), saturation 1.5 and value 1.5: (-0.75, 1.5, 1.5) before
+        // wrapping.
+        near(
+            callWgsl(wgsl, 'video_colorama', [1, 0, 0, 0.8], 0.5),
+            [0.25, 0.5, 0.5, 0.8],
+        );
+        near(callWgsl(wgsl, 'video_colorama', [1, 0, 0, 1], 0), [0, 0, 0, 1]);
+    });
+
+    it('chains under .$ and .$m', () => {
+        expect(() =>
+            exec(
+                `$v.osc(4).$.brightness(0.1).$.saturate(1.5).$m.colorama(0.5, 0.1).out()`,
+            ),
+        ).not.toThrow();
+    });
+});
+
+describe('Hydra color functions', () => {
+    const wgslOf = (source: string) => exec(source).video!.wgsl;
+    const near = (actual: unknown, expected: number[]) => {
+        (actual as number[]).forEach((v, k) =>
+            expect(v).toBeCloseTo(expected[k], 5),
+        );
+    };
+
+    it('add sums every channel, alpha included, past 1', () => {
+        const wgsl = wgslOf(`$v.add($v.osc(4), $v.osc(2)).out()`);
+        near(
+            callWgsl(wgsl, 'video_add', [0.8, 0.6, 0.4, 1], [0.5, 0, 0.2, 1]),
+            [1.3, 0.6, 0.6, 2],
+        );
+    });
+
+    it('contrast scales the distance from mid-gray past 0 and 1', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.contrast(3).out()`);
+        near(
+            callWgsl(wgsl, 'video_contrast', [0.9, 0.1, 0.5, 0.7], 3),
+            [1.7, -0.7, 0.5, 0.7],
+        );
+    });
+
+    it('color multiplies each channel, and a negative amount inverts it', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.color(1, 0.5, 0).out()`);
+        expect(wgsl).toMatch(
+            /video_color\(v\d, vec4f\(1\.0, 0\.5, 0\.0, 1\.0\)\)/,
+        );
+        near(
+            callWgsl(wgsl, 'video_color', [0.8, 0.6, 0.4, 1], [1, 0.5, 0, 1]),
+            [0.8, 0.3, 0, 1],
+        );
+        near(
+            callWgsl(wgsl, 'video_color', [0.8, 0.6, 0.4, 1], [-1, 1, -0.5, 1]),
+            [0.2, 0.6, 0.3, 1],
+        );
+    });
+
+    it('shift adds the fractional part of each amount without wrapping', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.shift().out()`);
+        expect(wgsl).toMatch(
+            /video_shift\(v\d, vec4f\(0\.5, 0\.0, 0\.0, 0\.0\)\)/,
+        );
+        near(
+            callWgsl(
+                wgsl,
+                'video_shift',
+                [0.8, 0.2, 0.1, 1],
+                [0.5, 1.25, 0, 0],
+            ),
+            [1.3, 0.45, 0.1, 1],
+        );
+    });
+
+    it('thresh steps the brightness into a gray and keeps the alpha', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.thresh().out()`);
+        expect(wgsl).toMatch(/video_thresh\(v\d, 0\.5, 0\.04\)/);
+        near(
+            callWgsl(wgsl, 'video_thresh', [0.6, 0.6, 0.6, 0.5], 0.5, 0.04),
+            [1, 1, 1, 0.5],
+        );
+        near(
+            callWgsl(wgsl, 'video_thresh', [0.4, 0.4, 0.4, 1], 0.5, 0.04),
+            [0, 0, 0, 1],
+        );
+        near(
+            callWgsl(wgsl, 'video_thresh', [0.5, 0.5, 0.5, 1], 0.5, 0.04),
+            [0.5, 0.5, 0.5, 1],
+        );
+    });
+
+    it('invert crossfades toward the complement by amount, unclipped', () => {
+        const wgsl = wgslOf(`$v.osc(4).$.invert(0.25).out()`);
+        expect(wgsl).toMatch(/video_invert\(v\d, 0\.25\)/);
+        near(
+            callWgsl(wgsl, 'video_invert', [0.8, 0.2, 1.5, 0.6], 1),
+            [0.2, 0.8, -0.5, 0.6],
+        );
+        near(
+            callWgsl(wgsl, 'video_invert', [0.8, 0.2, 0, 1], 0.5),
+            [0.5, 0.5, 0.5, 1],
+        );
+    });
+
+    it("takes Hydra's defaults for hue and solid", () => {
+        expect(wgslOf(`$v.osc(4).$.hsv().$.hue().out()`)).toMatch(
+            /video_hue\(v\d, 0\.4\)/,
+        );
+        expect(wgslOf(`$v.solid().out()`)).toContain(
+            'vec4f(0.0, 0.0, 0.0, 1.0)',
+        );
     });
 });
