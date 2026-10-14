@@ -772,6 +772,26 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     },
     {
         description:
+            'Tap the out labeled `label`: a 2-channel Collection of its audio after gain and mute/solo, ' +
+            'with `.active` (0–5V gate), `.level` (gain, 0–10), and `.pan` (-5–5) as ranged signals. ' +
+            'Follows live VU-panel changes. The out may be declared after the tap; an undeclared label is an error.',
+        examples: [
+            "$saw('c2').out({ label: 'bass' });\nconst bass = $outLane('bass');\n$sine('c5').gain(bass.level).out({ pan: bass.pan });\n$sine('g5').gain(bass.active).out();",
+        ],
+        group: 'Advanced',
+        name: '$outLane',
+        params: [
+            {
+                name: 'label',
+                type: 'string',
+                description: 'Label of the out lane to follow',
+            },
+        ],
+        returns: 'OutLane',
+        signature: '$outLane(label: string): OutLane',
+    },
+    {
+        description:
             'Set a custom processor applied to the final mix just before the global output gain. ' +
             'The callback receives the fully mixed Collection and should return a processed signal.',
         examples: [

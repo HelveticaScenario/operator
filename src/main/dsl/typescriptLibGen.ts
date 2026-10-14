@@ -1373,6 +1373,27 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
   set(polySignal: Poly<Signal>): void;
 }
 
+/**
+ * A tap on a labeled out lane, returned by {@link $outLane}. As a
+ * {@link Collection} it is the lane's audio after its gain and mute/solo gate:
+ * two channels, with a mono lane's signal on both.
+ */
+class OutLane extends Collection {
+  private constructor();
+  /** 5V while the lane is audible, 0V while it is muted or silenced by another out's solo. */
+  readonly active: ModuleOutputWithRange;
+  /**
+   * The lane's gain in out-gain units (5 = unity), as the VU fader shows it.
+   * Ranged 0 to 10, or the gain signal's own range when it declares one.
+   */
+  readonly level: ModuleOutputWithRange;
+  /**
+   * The lane's pan (-5 left to +5 right); 0 for mono outs. Ranged -5 to 5, or
+   * the pan signal's own range when it declares one.
+   */
+  readonly pan: ModuleOutputWithRange;
+}
+
 
 // Helper functions exposed by the DSL runtime
 
@@ -1618,6 +1639,25 @@ class Bus {
  * $sine('a2').send(reverb, 0.4);
  */
 function $bus(cb: (mixed: Collection) => unknown): Bus;
+
+/**
+ * Tap the out labeled \`label\`: its audio after gain and mute/solo, plus its
+ * \`.active\` gate, \`.level\` gain, and \`.pan\` as ranged signals. Follows
+ * live VU-panel changes. The out may be declared before or after the tap; a
+ * label no out declares is an error.
+ *
+ * @param label Label of the out lane to follow
+ * @returns An {@link OutLane}
+ *
+ * @example
+ * $saw('c2').out({ label: 'bass' });
+ * const bass = $outLane('bass');
+ * // Follows the bass fader and pan
+ * $sine('c5').gain(bass.level).out({ pan: bass.pan });
+ * // Silent while bass is muted or soloed out
+ * $sine('g5').gain(bass.active).out();
+ */
+function $outLane(label: string): OutLane;
 
 /**
  * Set a custom end-of-chain processor applied to the final mix before output gain.

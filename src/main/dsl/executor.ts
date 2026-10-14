@@ -30,6 +30,7 @@ import {
     PORT_MAX_CHANNELS,
 } from './GraphBuilder';
 import { $g1, $g2, $g3 } from './signalGroups';
+import { createOutLane, type OutLane } from './outLane';
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
@@ -278,6 +279,8 @@ export function executePatchScript(
         }
         return new DeferredCollection(...items);
     };
+
+    const $outLane = (label: string): OutLane => createOutLane(builder, label);
 
     const $bus = (cb: (mixed: Collection) => unknown): Bus =>
         new Bus(builder, cb);
@@ -915,6 +918,7 @@ export function executePatchScript(
         $cGroup: controls.$cGroup,
         // Bus
         $bus,
+        $outLane,
         // Global settings
         $setTempo,
         $setOutputGain,
