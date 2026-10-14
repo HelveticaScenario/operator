@@ -3,12 +3,11 @@ use schemars::JsonSchema;
 
 use std::ops::Range;
 
-use crate::block_input::InputScratch;
 use crate::dsp::utils::{map_range, sanitize};
 use crate::poly::{PolyOutput, PolySignal};
 use crate::types::Clickless;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct RemapParams {
@@ -97,28 +96,19 @@ impl Remap {
         range: Range<usize>,
         _sample_rate: f32,
     ) -> Option<()> {
-        let channels = self.channel_count();
-        let p = &self.params;
-        let (mut s0, mut s1, mut s2, mut s3, mut s4) = (
-            InputScratch::new(),
-            InputScratch::new(),
-            InputScratch::new(),
-            InputScratch::new(),
-            InputScratch::new(),
-        );
-        let input = p.input.block_input(range.clone(), channels, &mut s0)?;
-        let in_min = p.in_min.block_input(range.clone(), channels, &mut s1)?;
-        let in_max = p.in_max.block_input(range.clone(), channels, &mut s2)?;
-        let out_min = p.out_min.block_input(range.clone(), channels, &mut s3)?;
-        let out_max = p.out_max.block_input(range.clone(), channels, &mut s4)?;
+        let mut scratch = Default::default();
+        let inputs = self
+            .params
+            .block_inputs(range.clone(), self.channel_count(), &mut scratch)?;
         for i in range {
-            let rows = input
+            let rows = inputs
+                .input
                 .row(i)
                 .iter()
-                .zip(in_min.row(i))
-                .zip(in_max.row(i))
-                .zip(out_min.row(i))
-                .zip(out_max.row(i));
+                .zip(inputs.in_min.row(i))
+                .zip(inputs.in_max.row(i))
+                .zip(inputs.out_min.row(i))
+                .zip(inputs.out_max.row(i));
             let slots = outputs
                 .sample
                 .slot_mut(i)
