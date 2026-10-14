@@ -92,6 +92,17 @@ interface DollarNamespaceNode {
  * A buffer output reference — returned by `$buffer()`, passed to readers
  * (like `$bufRead`, `$delayRead`) as their `buffer` param.
  */
+/** Groove template; mirrors Rust `GrooveTemplate` (camelCase). */
+export interface GrooveTemplate {
+    timing: number[];
+    velocity?: number[];
+    grid?: number;
+    amount?: number;
+    velocityAmount?: number;
+    random?: number;
+    seed?: number;
+}
+
 export type BufferOutputRef = {
     type: 'buffer_ref';
     module: string;
@@ -851,6 +862,8 @@ export class GraphBuilder {
     private timeSignatureNumerator: number = 4;
     /** Time signature denominator (beat value) for ROOT_CLOCK */
     private timeSignatureDenominator: number = 4;
+    /** Global groove template for ROOT_CLOCK; straight when unset */
+    private groove: GrooveTemplate | undefined = undefined;
     private busses: Bus[] = [];
     private endOfChainCb: (
         mixed: Collection,
@@ -1103,6 +1116,13 @@ export class GraphBuilder {
     setTimeSignature(numerator: number, denominator: number): void {
         this.timeSignatureNumerator = numerator;
         this.timeSignatureDenominator = denominator;
+    }
+
+    /**
+     * Set the global groove ROOT_CLOCK reports to every $cycle and $drumMap
+     */
+    setGroove(template: GrooveTemplate): void {
+        this.groove = template;
     }
 
     setEndOfChainCb(
@@ -1507,6 +1527,9 @@ export class GraphBuilder {
             rootClock.params.numerator = this.timeSignatureNumerator;
             rootClock.params.denominator = this.timeSignatureDenominator;
             rootClock.params.tempoSet = this.tempoExplicitlySet;
+            if (this.groove !== undefined) {
+                rootClock.params.groove = this.groove;
+            }
         }
 
         const { eqPanels, eqScopes } = this.collectEqPanels();
@@ -1672,6 +1695,7 @@ export class GraphBuilder {
         this.outputGain = DEFAULT_OUTPUT_GAIN;
         this.timeSignatureNumerator = 4;
         this.timeSignatureDenominator = 4;
+        this.groove = undefined;
     }
 
     /**

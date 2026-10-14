@@ -411,6 +411,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$eq" => json!({ "input": 0.0 }),
         "$filterDC" => json!({ "input": 0.0 }),
         "$quantNoise" => json!({ "input": 0.0, "amount": 1.0 }),
+        "$groove" => json!({ "template": { "timing": [0.0, 0.2] } }),
         "$step" => json!({ "steps": [0.0], "next": 0.0 }),
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
@@ -2782,4 +2783,284 @@ fn eq_sections_accept_shared_and_per_channel_forms() {
     assert!(de(json!({ "input": 0.0, "sections": [[{ "freq": 0.0 }], []] })).is_ok());
     assert!(de(json!({ "input": 0.0, "sections": [[{ "bogus": 0.0 }]] })).is_err());
     assert!(de(json!({ "input": 0.0, "sections": { "freq": 0.0 } })).is_err());
+}
+
+// ─── Groove ───────────────────────────────────────────────────────────────────
+
+/// Rising-edge sample indices of `port` channel 0 on module `id`, plus the
+/// velocity output read on each of those frames.
+fn groove_onsets(patch: &Patch, id: &str, frames: usize) -> Vec<(usize, f32)> {
+    let module = patch.sampleables.get(id).unwrap();
+    let mut onsets = Vec::new();
+    let mut prev_hi = false;
+    for i in 0..frames {
+        process_frame(patch);
+        let hi = module.get_value_at("trig", 0, 0) > 2.5;
+        if hi && !prev_hi {
+            onsets.push((i, module.get_value_at("velocity", 0, 0)));
+        }
+        prev_hi = hi;
+    }
+    onsets
+}
+
+#[test]
+fn cycle_follows_global_groove_and_zero_groove_opts_out() {
+    // 2400 BPM in 4/4 → one bar every 4800 samples, so a sixteenth is 300.
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5], "velocity": [1.0, 0.4] },
+            }),
+        ),
+        (
+            "swung",
+            "$cycle",
+            json!({ "pattern": mini_payload("c4*16"), "channels": 1 }),
+        ),
+        (
+            "straight",
+            "$cycle",
+            json!({
+                "pattern": mini_payload("c4*16"),
+                "channels": 1,
+                "groove": 0.0,
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    let mut swung: Vec<(usize, f32)> = Vec::new();
+    let mut straight: Vec<(usize, f32)> = Vec::new();
+    let mut prev = [false; 2];
+    // One bar, stopping short of the next bar's downbeat.
+    for i in 0..4790 {
+        process_frame(&patch);
+        for (slot, (id, out)) in [("swung", &mut swung), ("straight", &mut straight)]
+            .into_iter()
+            .enumerate()
+        {
+            let m = patch.sampleables.get(id).unwrap();
+            let hi = m.get_value_at("trig", 0, 0) > 2.5;
+            if hi && !prev[slot] {
+                out.push((i, m.get_value_at("velocity", 0, 0)));
+            }
+            prev[slot] = hi;
+        }
+    }
+
+    assert_eq!(swung.len(), 16, "swung onsets: {swung:?}");
+    assert_eq!(straight.len(), 16, "straight onsets: {straight:?}");
+    for k in 0..16 {
+        let expected = k * 300 + if k % 2 == 1 { 150 } else { 0 };
+        let (at, velocity) = swung[k];
+        assert!(
+            at.abs_diff(expected) <= 1,
+            "swung step {k} at {at}, expected {expected}"
+        );
+        let expected_velocity = if k % 2 == 1 { 2.0 } else { 5.0 };
+        assert!(
+            (velocity - expected_velocity).abs() < 1e-4,
+            "swung step {k} velocity {velocity}, expected {expected_velocity}"
+        );
+        let (at, velocity) = straight[k];
+        assert!(
+            at.abs_diff(k * 300) <= 1,
+            "straight step {k} at {at}, expected {}",
+            k * 300
+        );
+        assert_eq!(velocity, 5.0, "a zero groove plays at full velocity");
+    }
+}
+
+#[test]
+fn groove_module_overrides_global_groove() {
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5] },
+            }),
+        ),
+        (
+            "g",
+            "$groove",
+            json!({ "template": { "timing": [0.0, 0.0, 0.0, -0.5], "velocity": [1.0, 1.0, 1.0, 0.2] } }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({
+                "pattern": mini_payload("c4*16"),
+                "channels": 1,
+                "groove": { "type": "cable", "module": "g", "port": "offset", "channel": 0 },
+                "velocity": { "type": "cable", "module": "g", "port": "velocity", "channel": 0 },
+            }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let onsets = groove_onsets(&patch, "seq", 4790);
+    assert_eq!(onsets.len(), 16, "onsets: {onsets:?}");
+    for (k, (at, velocity)) in onsets.into_iter().enumerate() {
+        let early = k % 4 == 3;
+        let expected = k * 300 - if early { 150 } else { 0 };
+        assert!(
+            at.abs_diff(expected) <= 1,
+            "step {k} at {at}, expected {expected}"
+        );
+        let expected_velocity = if early { 1.0 } else { 5.0 };
+        assert!(
+            (velocity - expected_velocity).abs() < 1e-4,
+            "step {k} velocity {velocity}, expected {expected_velocity}"
+        );
+    }
+}
+
+#[test]
+fn grooved_notes_keep_their_length() {
+    // Sixteenth notes on the swung off-beats: each starts half a sixteenth
+    // late and still lasts a full sixteenth (300 samples).
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5] },
+            }),
+        ),
+        (
+            "seq",
+            "$cycle",
+            json!({ "pattern": mini_payload("[~ c4]*8"), "channels": 1 }),
+        ),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+    let module = patch.sampleables.get("seq").unwrap();
+    // A note runs from its trigger to the gate's fall; the next bar's first
+    // note starts after frame 5000.
+    let mut notes: Vec<(usize, usize)> = Vec::new();
+    let mut open: Option<usize> = None;
+    let mut prev_trig = false;
+    let mut prev_gate = false;
+    for i in 0..5000 {
+        process_frame(&patch);
+        let trig = module.get_value_at("trig", 0, 0) > 2.5;
+        let gate = module.get_value_at("gate", 0, 0) > 2.5;
+        if trig && !prev_trig {
+            open = Some(i);
+        }
+        if !gate
+            && prev_gate
+            && let Some(start) = open.take()
+        {
+            notes.push((start, i - start));
+        }
+        prev_trig = trig;
+        prev_gate = gate;
+    }
+    assert_eq!(notes.len(), 8, "notes: {notes:?}");
+    for (k, (start, len)) in notes.into_iter().enumerate() {
+        let expected = (2 * k + 1) * 300 + 150;
+        assert!(
+            start.abs_diff(expected) <= 1,
+            "note {k} at {start}, expected {expected}"
+        );
+        assert!(
+            len.abs_diff(300) <= 1,
+            "note {k} lasted {len}, expected 300"
+        );
+    }
+}
+
+#[test]
+fn clock_rejects_groove_whose_steps_cross() {
+    let deserializers = get_params_deserializers();
+    let result = deserializers.get("_clock").unwrap()(json!({
+        "tempo": 120.0,
+        "numerator": 4,
+        "denominator": 4,
+        "groove": { "timing": [0.0, 0.9], "random": 0.2 },
+    }));
+    assert!(result.is_err());
+}
+
+#[test]
+fn drum_map_follows_global_groove_and_zero_groove_opts_out() {
+    // 2400 BPM in 4/4: a sixteenth is 300 samples. Full density at the map
+    // corner plays a hit on many sixteenths; every swung off-beat lands 150
+    // samples late.
+    let drums = |groove: Option<f64>| {
+        let mut params =
+            json!({ "x": 0.0, "y": 0.0, "bdDensity": 5.0, "sdDensity": 5.0, "hhDensity": 5.0 });
+        if let Some(g) = groove {
+            params["groove"] = json!(g);
+        }
+        params
+    };
+    let graph = make_graph(vec![
+        (
+            "ROOT_CLOCK",
+            "_clock",
+            json!({
+                "tempo": 2400.0,
+                "numerator": 4,
+                "denominator": 4,
+                "groove": { "timing": [0.0, 0.5] },
+            }),
+        ),
+        ("swung", "$drumMap", drums(None)),
+        ("straight", "$drumMap", drums(Some(0.0))),
+    ]);
+    let patch = from_graph(&graph, SAMPLE_RATE, TEST_BLOCK_SIZE, &HashMap::new())
+        .expect("from_graph failed");
+
+    let any_hit = |id: &str| {
+        let m = patch.sampleables.get(id).unwrap();
+        ["bd", "sd", "hh"]
+            .iter()
+            .any(|port| m.get_value_at(port, 0, 0) > 2.5)
+    };
+    let mut hits: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+    let mut prev = [false; 2];
+    for i in 0..4790 {
+        process_frame(&patch);
+        for (slot, id) in ["swung", "straight"].into_iter().enumerate() {
+            let hi = any_hit(id);
+            if hi && !prev[slot] {
+                hits[slot].push(i);
+            }
+            prev[slot] = hi;
+        }
+    }
+    let [swung, straight] = hits;
+    assert!(
+        swung.iter().any(|at| (149..=151).contains(&(at % 300))),
+        "no swung off-beats: {swung:?}"
+    );
+    assert_eq!(swung.len(), straight.len());
+    for (s_at, t_at) in swung.iter().zip(&straight) {
+        let k = (t_at + 1) / 300;
+        assert!(t_at.abs_diff(k * 300) <= 1, "straight hit at {t_at}");
+        let late = if k % 2 == 1 { 150 } else { 0 };
+        assert!(
+            s_at.abs_diff(k * 300 + late) <= 1,
+            "swung hit for sixteenth {k} at {s_at}, expected {}",
+            k * 300 + late
+        );
+    }
 }

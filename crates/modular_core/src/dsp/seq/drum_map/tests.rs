@@ -11,6 +11,8 @@ fn volts(v: f32) -> Option<PolySignal> {
 fn params(x: f32, y: f32, density: f32, resolution: DrumMapResolution) -> DrumMapParams {
     DrumMapParams {
         playhead: None,
+        groove: None,
+        velocity: None,
         x: volts(x),
         y: volts(y),
         chaos: None,
@@ -150,6 +152,31 @@ fn full_density_plays_every_nonzero_step() {
             assert_eq!(hits[part][step], read_drum_map(step, part, 0, 0) > 0);
         }
     }
+}
+
+#[test]
+fn velocity_scales_accents_but_not_hits() {
+    let mut accents_at_full = 0;
+    for volts in [5.0, 3.0, 0.0] {
+        let mut p = params(0.0, 0.0, 5.0, DrumMapResolution::ThirtySecond);
+        p.velocity = Some(MonoSignal::from_poly(PolySignal::mono(Signal::Volts(
+            volts,
+        ))));
+        let mut m = make(p);
+        let hits = run_cycle(&mut m, 0);
+        for part in 0..NUM_PARTS {
+            for step in 0..STEPS_PER_PATTERN {
+                let level = read_drum_map(step, part, 0, 0);
+                assert_eq!(hits[part][step], level > 0);
+                let accent = level as f32 * volts / 5.0 > ACCENT_LEVEL as f32;
+                assert_eq!(hits[NUM_PARTS + part][step], accent);
+                if volts == 5.0 && accent {
+                    accents_at_full += 1;
+                }
+            }
+        }
+    }
+    assert!(accents_at_full > 0);
 }
 
 #[test]

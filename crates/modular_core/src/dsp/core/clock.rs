@@ -3,12 +3,14 @@ use napi::Result;
 use schemars::JsonSchema;
 
 use crate::PolyOutput;
+use crate::dsp::seq::groove::{GrooveFollower, GrooveTemplate};
 use crate::dsp::utils::{SchmittTrigger, TempGate, TempGateState, min_gate_samples};
+use crate::param_errors::ModuleParamErrors;
 use crate::types::{ClockMessages, ExternalClockState};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
+#[deserr(rename_all = camelCase, deny_unknown_fields, validate = validate_clock_params -> ModuleParamErrors)]
 struct ClockParams {
     /// Tempo in BPM.
     tempo: f64,
@@ -16,6 +18,22 @@ struct ClockParams {
     numerator: u32,
     /// Time signature denominator (beat value). Must be a positive integer.
     denominator: u32,
+    /// Global groove reported by `grooveOffset`, `grooveVelocity` and `grooveTrigger`.
+    #[serde(default = "GrooveTemplate::straight")]
+    #[deserr(default = GrooveTemplate::straight())]
+    groove: GrooveTemplate,
+}
+
+fn validate_clock_params(
+    params: ClockParams,
+    _location: deserr::ValuePointerRef,
+) -> std::result::Result<ClockParams, ModuleParamErrors> {
+    if let Err(msg) = params.groove.validate() {
+        let mut err = ModuleParamErrors::default();
+        err.add("groove".to_string(), msg);
+        return Err(err);
+    }
+    Ok(params)
 }
 
 #[derive(Clone, Copy)]
@@ -43,6 +61,7 @@ struct ClockState {
     running: bool,
     loop_index: u64,
     external_sync: Option<ExternalClockSync>,
+    groove: GrooveFollower,
 }
 
 impl Default for ClockState {
@@ -60,6 +79,7 @@ impl Default for ClockState {
             running: true,
             loop_index: 0,
             external_sync: None,
+            groove: GrooveFollower::default(),
         }
     }
 }
@@ -99,6 +119,12 @@ struct ClockOutputs {
     beat_in_bar: f32,
     #[output("tempo", "Current tempo in beats per minute")]
     tempo: f32,
+    #[output("grooveOffset", "Global groove position minus the playhead, in bars")]
+    groove_offset: f32,
+    #[output("grooveVelocity", "Velocity of the current global groove step (0-5V)", range = (0.0, 5.0))]
+    groove_velocity: f32,
+    #[output("grooveTrigger", "5V trigger at the start of each global groove step", range = (0.0, 5.0))]
+    groove_trigger: f32,
 }
 
 message_handlers!(impl Clock {
@@ -130,6 +156,18 @@ impl Clock {
     pub fn reset_loop_index_impl(&mut self) {
         self.state.loop_index = 0;
         self.outputs.playhead.set(1, 0.0);
+        self.state.groove.reset();
+    }
+
+    fn update_groove(&mut self, sample_rate: f32) {
+        let straight = self.outputs.playhead.get(0) as f64 + self.outputs.playhead.get(1) as f64;
+        let frame = self
+            .state
+            .groove
+            .advance(&self.params.groove, straight, sample_rate);
+        self.outputs.groove_offset = frame.offset;
+        self.outputs.groove_velocity = frame.velocity;
+        self.outputs.groove_trigger = frame.trigger;
     }
 
     fn update(&mut self, sample_rate: f32) {
@@ -205,6 +243,7 @@ impl Clock {
             self.outputs.playhead.set(1, self.state.loop_index as f32);
             self.outputs.ramp = sync.bar_phase as f32 * 5.0;
 
+            self.update_groove(sample_rate);
             return;
         }
 
@@ -310,6 +349,8 @@ impl Clock {
                 .set_state(TempGateState::High, TempGateState::Low, hold);
         }
         self.outputs.ppq_trigger = self.state.ppq_gate.process();
+
+        self.update_groove(sample_rate);
     }
 
     fn on_clock_message(&mut self, m: &ClockMessages) -> Result<()> {
@@ -336,6 +377,9 @@ impl Clock {
                 self.state
                     .beat_gate
                     .set_state(TempGateState::Low, TempGateState::Low, 0);
+                self.state.groove.reset();
+                self.outputs.groove_offset = 0.0;
+                self.outputs.groove_trigger = 0.0;
             }
             ClockMessages::Stop => {
                 self.state.running = false;
@@ -347,6 +391,9 @@ impl Clock {
                 self.outputs.playhead.set(1, 0.0);
                 self.state.loop_index = 0;
                 self.outputs.beat_in_bar = 0.0;
+                self.state.groove.reset();
+                self.outputs.groove_offset = 0.0;
+                self.outputs.groove_trigger = 0.0;
             }
         }
         Ok(())
@@ -375,6 +422,7 @@ impl Default for ClockParams {
             tempo: 120.0,
             numerator: 4,
             denominator: 4,
+            groove: GrooveTemplate::straight(),
         }
     }
 }

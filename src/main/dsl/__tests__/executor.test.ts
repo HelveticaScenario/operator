@@ -1674,6 +1674,40 @@ describe('global settings', () => {
         expect(() => execPatch('$setTempo(0)')).toThrow(/\$setTempo/);
         expect(() => execPatch('$setTempo(-120)')).toThrow(/\$setTempo/);
     });
+
+    test('$setGroove puts the template on ROOT_CLOCK', () => {
+        const patch = execPatch('$setGroove($swing(0.75, { grid: 8 }))');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toEqual({ grid: 8, timing: [0, 0.5] });
+    });
+
+    test('ROOT_CLOCK has no groove param without $setGroove', () => {
+        const patch = execPatch('$setTempo(120)');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toBeUndefined();
+    });
+
+    test('$setGroove rejects a value without a timing array', () => {
+        expect(() => execPatch('$setGroove(0.6)')).toThrow(/\$setGroove/);
+    });
+
+    test('$swing humanize sets the random timing offset', () => {
+        const patch = execPatch('$setGroove($swing(0.6, { humanize: 0.05 }))');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toMatchObject({
+            grid: 16,
+            random: 0.05,
+        });
+        expect(() => execPatch('$swing(0.6, { humanize: -0.1 })')).toThrow(
+            /\$swing/,
+        );
+        expect(() => execPatch('$swing(0.6, 8)')).toThrow(/config object/);
+    });
+
+    test('$swing rejects a ratio outside (0, 1)', () => {
+        expect(() => execPatch('$swing(1)')).toThrow(/\$swing/);
+        expect(() => execPatch('$swing(0)')).toThrow(/\$swing/);
+    });
 });
 
 // ─── Built-in modules ────────────────────────────────────────────────────────

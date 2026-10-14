@@ -728,6 +728,10 @@
           "format": "uint32",
           "minimum": 0
         },
+        "groove": {
+          "description": "Global groove reported by `grooveOffset`, `grooveVelocity` and `grooveTrigger`.",
+          "$ref": "#/$defs/GrooveTemplate"
+        },
         "numerator": {
           "description": "Time signature numerator (beats per bar). Must be a positive integer.",
           "type": "integer",
@@ -744,7 +748,66 @@
         "tempo",
         "numerator",
         "denominator"
-      ]
+      ],
+      "$defs": {
+        "GrooveTemplate": {
+          "description": "Groove template: per-step timing offsets and velocities over a grid.",
+          "type": "object",
+          "properties": {
+            "amount": {
+              "description": "timing strength: scales every offset (0 = straight, 1 = as written)",
+              "type": "number",
+              "format": "double",
+              "default": 1.0
+            },
+            "grid": {
+              "description": "grid steps per cycle (16 = sixteenth notes in a 4/4 bar)",
+              "type": "number",
+              "format": "double",
+              "default": 16.0
+            },
+            "random": {
+              "description": "largest random timing offset per step, in grid steps",
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "seed": {
+              "description": "seed for the per-step random offsets",
+              "type": "integer",
+              "format": "uint32",
+              "default": 0,
+              "minimum": 0
+            },
+            "timing": {
+              "description": "per-step timing offset in grid steps (positive = late); the template\nrepeats every `timing.length` steps",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "velocity": {
+              "description": "per-step velocity (0–1), one per `timing` entry; every step is 1 when empty",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "velocityAmount": {
+              "description": "velocity strength (0 = every step full, 1 = as written)",
+              "type": "number",
+              "format": "double",
+              "default": 1.0
+            }
+          },
+          "required": [
+            "timing"
+          ]
+        }
+      }
     },
     "outputs": [
       {
@@ -796,6 +859,28 @@
         "description": "Current tempo in beats per minute",
         "polyphonic": false,
         "default": false
+      },
+      {
+        "name": "grooveOffset",
+        "description": "Global groove position minus the playhead, in bars",
+        "polyphonic": false,
+        "default": false
+      },
+      {
+        "name": "grooveVelocity",
+        "description": "Velocity of the current global groove step (0-5V)",
+        "polyphonic": false,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "grooveTrigger",
+        "description": "5V trigger at the start of each global groove step",
+        "polyphonic": false,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "bufferOutputs": [],
@@ -15047,7 +15132,7 @@
   },
   {
     "name": "$cycle",
-    "documentation": "Pattern sequencer using mini-notation strings.\n\nWrite rhythmic and melodic patterns using a compact text syntax ported\nfrom TidalCycles/Strudel. The pattern loops each **cycle** and supports\npolyphony — overlapping notes are automatically allocated to separate\noutput channels.\n\n## Cycles\n\nA **cycle** is one full traversal of the pattern. The playhead position\ndetermines timing: its integer part selects the current cycle number and\nthe fractional part selects the position within that cycle. Space-separated\nvalues divide the cycle into equal time slots.\n\n## Values\n\n| Syntax | Meaning | Example |\n|--------|---------|---------|\n| Note name | Pitch (octave defaults to 3) | `'c4'`, `'a#3'`, `'db5'` |\n| Bare number | MIDI note number | `60`, `72` |\n| `Xhz` | Frequency | `'440hz'` |\n| `Xv` | Explicit voltage | `'0v'`, `'1v'`, `'-0.5v'` |\n| `~` | Rest (gate low, no change in CV) | `'c4 ~ e4 ~'` |\n\nBare numbers are MIDI note numbers (A0 = MIDI 33 = 0 V).\n\n## Grouping\n\n- **`[a b c]`** — fast subsequence: subdivides the parent time slot so all\n  elements play within it.\n- **`<a b c>`** — slow / alternating: plays one element per cycle,\n  advancing each time the pattern loops.\n\n```js\n$cycle($p(\"c4 [d4 e4]\"))   // c4 for half the cycle, d4 & e4 share the other half\n$cycle($p(\"<c4 g4> e4\"))   // cycle 1: c4 e4, cycle 2: g4 e4, …\n```\n\n## Stacks\n\n**`a b, c d`** — comma-separated patterns play **simultaneously** (layered).\nEach sub-pattern has its own independent timing.\n\n```js\n$cycle($p(\"c4 e4, g4 b4\"))   // two patterns layered on top of each other\n$cycle($p(\"c4 d4 e4, g3\"))   // three-note melody over a pedal tone\n```\n\n## Random choice\n\n**`a|b|c`** — randomly selects one option each time the slot is reached.\n\n```js\n$cycle($p(\"c4|d4|e4 g4\"))  // first slot is a random pick each cycle\n```\n\n## Nesting\n\nGrouping, stacks, and random choice nest arbitrarily:\n\n```js\n$cycle($p(\"<c4 [d4 e4]> [f4|g4 a4]\"))  // slow + fast + random combined\n$cycle($p(\"[c4 e4, g4] a4\"))           // stack inside a fast subsequence\n```\n\n## Per-element modifiers\n\nModifiers attach directly to an element (no spaces). Multiple modifiers\ncan be chained in any order.\n\n| Modifier | Syntax | Meaning |\n|----------|--------|---------|\n| Weight | `@n` | Relative duration within a sequence (default 1). `c4@2 e4` gives c4 twice the time. |\n| Speed up | `*n` | Repeat/subdivide `n` times within the slot. `c4*3` plays c4 three times. |\n| Slow down | `/n` | Stretch over `n` cycles. `c4/2` plays every other cycle. |\n| Replicate | `!n` | Duplicate the element `n` times (default 2). `c4!3` is equivalent to `c4 c4 c4`. |\n| Degrade | `?` or `?n` | Randomly drop the element. `c4?` drops ~50 % of the time; `c4?0.8` drops 80 %. |\n| Euclidean | `(k,n)` or `(k,n,offset)` | Distribute `k` pulses over `n` steps using the Bjorklund algorithm. Optional `offset` rotates the pattern. |\n\n```js\n$cycle($p(\"c4*2 e4 g4\"))        // c4 plays twice in its slot\n$cycle($p(\"c4@3 e4 g4\"))        // c4 gets 3/5 of the cycle, e4 and g4 get 1/5 each\n$cycle($p(\"c4? e4 g4\"))         // c4 randomly drops out ~50 % of the time\n$cycle($p(\"c4(3,8) e4\"))        // Euclidean: 3 hits spread over 8 steps\n$cycle($p(\"[c4 d4 e4 f4](3,8)\")) // Euclidean applied to a subpattern\n```\n\nModifier operands can also be subpatterns: `c4*[2 3]` alternates between\ndoubling and tripling each slot.\n\n## Outputs\n\n- **cv** — V/Oct pitch (C4 = 0 V).\n- **gate** — 5 V while a note is active, 0 V otherwise.\n- **trig** — single-sample 5 V pulse at each note onset.",
+    "documentation": "Pattern sequencer using mini-notation strings.\n\nWrite rhythmic and melodic patterns using a compact text syntax ported\nfrom TidalCycles/Strudel. The pattern loops each **cycle** and supports\npolyphony — overlapping notes are automatically allocated to separate\noutput channels.\n\n## Cycles\n\nA **cycle** is one full traversal of the pattern. The playhead position\ndetermines timing: its integer part selects the current cycle number and\nthe fractional part selects the position within that cycle. Space-separated\nvalues divide the cycle into equal time slots.\n\n## Values\n\n| Syntax | Meaning | Example |\n|--------|---------|---------|\n| Note name | Pitch (octave defaults to 3) | `'c4'`, `'a#3'`, `'db5'` |\n| Bare number | MIDI note number | `60`, `72` |\n| `Xhz` | Frequency | `'440hz'` |\n| `Xv` | Explicit voltage | `'0v'`, `'1v'`, `'-0.5v'` |\n| `~` | Rest (gate low, no change in CV) | `'c4 ~ e4 ~'` |\n\nBare numbers are MIDI note numbers (A0 = MIDI 33 = 0 V).\n\n## Grouping\n\n- **`[a b c]`** — fast subsequence: subdivides the parent time slot so all\n  elements play within it.\n- **`<a b c>`** — slow / alternating: plays one element per cycle,\n  advancing each time the pattern loops.\n\n```js\n$cycle($p(\"c4 [d4 e4]\"))   // c4 for half the cycle, d4 & e4 share the other half\n$cycle($p(\"<c4 g4> e4\"))   // cycle 1: c4 e4, cycle 2: g4 e4, …\n```\n\n## Stacks\n\n**`a b, c d`** — comma-separated patterns play **simultaneously** (layered).\nEach sub-pattern has its own independent timing.\n\n```js\n$cycle($p(\"c4 e4, g4 b4\"))   // two patterns layered on top of each other\n$cycle($p(\"c4 d4 e4, g3\"))   // three-note melody over a pedal tone\n```\n\n## Random choice\n\n**`a|b|c`** — randomly selects one option each time the slot is reached.\n\n```js\n$cycle($p(\"c4|d4|e4 g4\"))  // first slot is a random pick each cycle\n```\n\n## Nesting\n\nGrouping, stacks, and random choice nest arbitrarily:\n\n```js\n$cycle($p(\"<c4 [d4 e4]> [f4|g4 a4]\"))  // slow + fast + random combined\n$cycle($p(\"[c4 e4, g4] a4\"))           // stack inside a fast subsequence\n```\n\n## Per-element modifiers\n\nModifiers attach directly to an element (no spaces). Multiple modifiers\ncan be chained in any order.\n\n| Modifier | Syntax | Meaning |\n|----------|--------|---------|\n| Weight | `@n` | Relative duration within a sequence (default 1). `c4@2 e4` gives c4 twice the time. |\n| Speed up | `*n` | Repeat/subdivide `n` times within the slot. `c4*3` plays c4 three times. |\n| Slow down | `/n` | Stretch over `n` cycles. `c4/2` plays every other cycle. |\n| Replicate | `!n` | Duplicate the element `n` times (default 2). `c4!3` is equivalent to `c4 c4 c4`. |\n| Degrade | `?` or `?n` | Randomly drop the element. `c4?` drops ~50 % of the time; `c4?0.8` drops 80 %. |\n| Euclidean | `(k,n)` or `(k,n,offset)` | Distribute `k` pulses over `n` steps using the Bjorklund algorithm. Optional `offset` rotates the pattern. |\n\n```js\n$cycle($p(\"c4*2 e4 g4\"))        // c4 plays twice in its slot\n$cycle($p(\"c4@3 e4 g4\"))        // c4 gets 3/5 of the cycle, e4 and g4 get 1/5 each\n$cycle($p(\"c4? e4 g4\"))         // c4 randomly drops out ~50 % of the time\n$cycle($p(\"c4(3,8) e4\"))        // Euclidean: 3 hits spread over 8 steps\n$cycle($p(\"[c4 d4 e4 f4](3,8)\")) // Euclidean applied to a subpattern\n```\n\nModifier operands can also be subpatterns: `c4*[2 3]` alternates between\ndoubling and tripling each slot.\n\n## Outputs\n\n- **cv** — V/Oct pitch (C4 = 0 V).\n- **gate** — 5 V while a note is active, 0 V otherwise.\n- **trig** — single-sample 5 V pulse at each note onset.\n- **velocity** — groove velocity (0–5 V) sampled at each note onset.\n\n## Groove\n\nBy default notes start on the global groove set with `$setGroove`, and\n`velocity` reports that groove's step velocity. The groove moves when each\nnote starts; every note keeps its written length. Pass a `$groove` as\n`groove` (with its `velocity`) to use a different groove, or `groove: 0` to\nplay straight.\n\n```js\n$setGroove($swing(0.6))\nconst hats = $cycle($p('c5*8'))\nconst bass = $cycle($p('c2*4'), { groove: 0 })\n$sine(hats).amp($adsr(hats.gate)).amp(hats.velocity).out()\n$sine(bass).amp($adsr(bass.gate)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SeqParams",
@@ -15061,6 +15146,17 @@
           ],
           "format": "uint",
           "minimum": 0
+        },
+        "groove": {
+          "description": "groove offset added to the playhead to time note onsets; follows the\nglobal groove by default, and is 0 when `playhead` is set without it",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pattern": {
           "description": "pattern string in mini-notation",
@@ -15094,6 +15190,17 @@
             {
               "type": "number",
               "format": "double"
+            }
+          ]
+        },
+        "velocity": {
+          "description": "groove velocity (0-5V), sampled at each note onset; follows the global\ngroove by default, and is full (5V) when `playhead` or `groove` is set\nwithout it",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
             }
           ]
         }
@@ -17204,6 +17311,14 @@
         "default": false,
         "minValue": 0.0,
         "maxValue": 5.0
+      },
+      {
+        "name": "velocity",
+        "description": "groove velocity (0-5 V) of the current or last note",
+        "polyphonic": true,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "bufferOutputs": [],
@@ -17215,6 +17330,22 @@
         "defaultValue": 0.0,
         "minValue": 0.0,
         "maxValue": 1.0
+      },
+      {
+        "name": "groove",
+        "description": "groove offset added to the playhead to time note onsets; follows the\nglobal groove by default, and is 0 when `playhead` is set without it",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "velocity",
+        "description": "groove velocity (0-5V), sampled at each note onset; follows the global\ngroove by default, and is full (5V) when `playhead` or `groove` is set\nwithout it",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
       }
     ],
     "positionalArgs": [
@@ -17544,7 +17675,7 @@
   },
   {
     "name": "$drumMap",
-    "documentation": "Topographic drum sequencer: a port of Mutable Instruments Grids.\n\nThree trigger streams — bass drum, snare and hi-hat — are read from a\n5×5 map of drum patterns. **x** and **y** (0–5 V) move smoothly through\nthe map, interpolating between neighbouring patterns. Each part's\n**density** sets how many of its possible hits play, from silence at 0 V\nto every hit at 5 V. **chaos** adds random variation, re-rolled each\ncycle. Strong hits also fire the matching accent output.\n\nOne cycle of the **playhead** plays the 32-step pattern once.\n\n```js\nconst drums = $drumMap({ x: 1, y: 3, chaos: 0.5 })\n// the bass drum is the default output\n$sine('c1').amplitude($perc(drums, { decay: 0.3 })).out()\n$noise('white').amplitude($perc(drums.hh, { decay: 0.05 })).out()\n```",
+    "documentation": "Topographic drum sequencer: a port of Mutable Instruments Grids.\n\nThree trigger streams — bass drum, snare and hi-hat — are read from a\n5×5 map of drum patterns. **x** and **y** (0–5 V) move smoothly through\nthe map, interpolating between neighbouring patterns. Each part's\n**density** sets how many of its possible hits play, from silence at 0 V\nto every hit at 5 V. **chaos** adds random variation, re-rolled each\ncycle. Strong hits also fire the matching accent output.\n\nOne cycle of the **playhead** plays the 32-step pattern once.\n\nSteps follow the global groove set with `$setGroove`, and the groove's\nstep **velocity** decides how readily each hit accents: at full velocity\naccents are as in Grids, and quieter steps accent only their strongest\nhits. Pass a `$groove` as `groove` (with its `velocity`) to use a\ndifferent groove, or `groove: 0` to play straight.\n\n```js\nconst drums = $drumMap({ x: 1, y: 3, chaos: 0.5 })\n// the bass drum is the default output\n$sine('c1').amplitude($perc(drums, { decay: 0.3 })).out()\n$noise('white').amplitude($perc(drums.hh, { decay: 0.05 })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "DrumMapParams",
@@ -17566,6 +17697,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "groove": {
+          "description": "groove offset added to the playhead to time each step; follows the\nglobal groove by default, and is 0 when `playhead` is set without it",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
             },
             {
               "type": "null"
@@ -17603,6 +17745,17 @@
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "velocity": {
+          "description": "groove velocity (0-5V), sampled at each step: scales each hit's level\nfor the accent threshold only, so lower velocities accent less; follows\nthe global groove by default, and is full (5V) when `playhead` or\n`groove` is set without it",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
             },
             {
               "type": "null"
@@ -17778,6 +17931,22 @@
         "maxValue": 1.0
       },
       {
+        "name": "groove",
+        "description": "groove offset added to the playhead to time each step; follows the\nglobal groove by default, and is 0 when `playhead` is set without it",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "velocity",
+        "description": "groove velocity (0-5V), sampled at each step: scales each hit's level\nfor the accent threshold only, so lower velocities accent less; follows\nthe global groove by default, and is full (5V) when `playhead` or\n`groove` is set without it",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
         "name": "x",
         "description": "horizontal position in the pattern map",
         "signalType": "control",
@@ -17827,6 +17996,191 @@
       }
     ],
     "positionalArgs": []
+  },
+  {
+    "name": "$groove",
+    "documentation": "Groove a playhead with a timing and velocity template.\n\nThe template moves each grid step by its timing offset. A `$cycle` given\nthis module's offset starts grid-aligned notes at the shifted times, slides\nnotes between grid steps proportionally, and keeps every note's length.\nEvery `$cycle` follows the global groove (see `$setGroove`) by default;\npass this module's offset and velocity to give one its own groove.\n\nTiming offsets are in grid steps: with `grid: 16`, an offset of `0.2` delays\nthat sixteenth by a fifth of a sixteenth. The template repeats every\n`timing.length` steps.\n\n```js\nconst g = $groove({ timing: [0, 0.3], velocity: [1, 0.6] })\nconst seq = $cycle($p('c4*8'), { groove: g, velocity: g.velocity })\n$sine(seq).amp($adsr(seq.gate)).amp(seq.velocity).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "GrooveParams",
+      "type": "object",
+      "properties": {
+        "playhead": {
+          "description": "straight playhead to groove (defaults to the global clock, ignoring the global groove)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MonoSignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "template": {
+          "description": "groove template: timing offsets, velocities and grid",
+          "$ref": "#/$defs/GrooveTemplate"
+        }
+      },
+      "required": [
+        "template"
+      ],
+      "$defs": {
+        "GrooveTemplate": {
+          "description": "Groove template: per-step timing offsets and velocities over a grid.",
+          "type": "object",
+          "properties": {
+            "amount": {
+              "description": "timing strength: scales every offset (0 = straight, 1 = as written)",
+              "type": "number",
+              "format": "double",
+              "default": 1.0
+            },
+            "grid": {
+              "description": "grid steps per cycle (16 = sixteenth notes in a 4/4 bar)",
+              "type": "number",
+              "format": "double",
+              "default": 16.0
+            },
+            "random": {
+              "description": "largest random timing offset per step, in grid steps",
+              "type": "number",
+              "format": "double",
+              "default": 0.0
+            },
+            "seed": {
+              "description": "seed for the per-step random offsets",
+              "type": "integer",
+              "format": "uint32",
+              "default": 0,
+              "minimum": 0
+            },
+            "timing": {
+              "description": "per-step timing offset in grid steps (positive = late); the template\nrepeats every `timing.length` steps",
+              "type": "array",
+              "items": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "velocity": {
+              "description": "per-step velocity (0–1), one per `timing` entry; every step is 1 when empty",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "number",
+                "format": "double"
+              }
+            },
+            "velocityAmount": {
+              "description": "velocity strength (0 = every step full, 1 = as written)",
+              "type": "number",
+              "format": "double",
+              "default": 1.0
+            }
+          },
+          "required": [
+            "timing"
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "offset",
+        "description": "grooved minus straight playhead position, in cycles",
+        "polyphonic": false,
+        "default": true
+      },
+      {
+        "name": "velocity",
+        "description": "velocity of the current groove step (0-5V)",
+        "polyphonic": false,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "5V trigger at the start of each grooved step",
+        "polyphonic": false,
+        "default": false,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "playhead",
+        "description": "straight playhead to groove (defaults to the global clock, ignoring the global groove)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 1.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "template"
+      }
+    ]
   },
   {
     "name": "$midiCV",
