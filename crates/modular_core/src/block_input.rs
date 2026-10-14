@@ -72,6 +72,13 @@ pub struct BlockInput<'a> {
 }
 
 impl BlockInput<'_> {
+    /// Whether every slot reads the same row, so per-row work done on it can
+    /// be hoisted out of the slot loop.
+    #[inline(always)]
+    pub fn is_constant(&self) -> bool {
+        self.stride == 0
+    }
+
     /// Slot `i`'s values. `i` must lie in the range the input was resolved for.
     #[inline(always)]
     pub fn row(&self, i: usize) -> &[f32] {
