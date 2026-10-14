@@ -6,11 +6,14 @@ import {
     expandTabs,
     type CodeFrame,
     type CodeLook,
+    type ColoredRange,
+    type CodePosition,
     type CodeRange,
     type CodeSelection,
     type CodeToken,
 } from './drawCode';
-import type { PerformanceViewSettings } from './settings';
+import type { ControlWidget, InlineControl } from './drawControls';
+import { scrollEaseMs, type PerformanceViewSettings } from './settings';
 import { TokenColors } from './tokenColors';
 
 type Monaco = typeof MonacoNamespace;
@@ -18,10 +21,25 @@ type Editor = MonacoNamespace.editor.IStandaloneCodeEditor;
 
 /** The decoration class the editor gives a pattern step while it plays. */
 const PATTERN_STEP_CLASS = 'active-seq-step';
-/** Time constant, in milliseconds, of the view easing toward where it should scroll. */
-const SCROLL_EASE_MS = 90;
+/** The decoration classes of the editor's bracket pair colorization. */
+const BRACKET_LEVEL_CLASS = /^bracket-highlighting-(\d+)$/;
+const UNEXPECTED_BRACKET_CLASS = 'unexpected-closing-bracket';
 /** Columns kept clear between the cursor and the edge of the view. */
 const CURSOR_MARGIN_COLUMNS = 2;
+
+/** A control call's widget, placed by the offset of its callee name in the editor's text. */
+export type PlacedControl = ControlWidget & { offset: number };
+
+/**
+ * The fonts with an italic face. The editor never slants a face that is not
+ * italic (font-synthesis: none), so neither does this view: bundled fonts load
+ * only their upright faces, and Monaco has no italic.
+ */
+const ITALIC_FONTS: ReadonlySet<string> = new Set([
+    'SF Mono',
+    'Menlo',
+    'Consolas',
+]);
 
 const clamp = (value: number, min: number, max: number) =>
     Math.min(max, Math.max(min, value));
@@ -45,6 +63,12 @@ export class PerformanceCode {
     private topLine = 0;
     private leftColumn = 0;
     private lastMs = -1;
+    private controls: readonly PlacedControl[] = [];
+    /**
+     * A place the view keeps in sight in place of the cursor, until the
+     * editor's cursor or scroll moves.
+     */
+    private revealed: CodePosition | null = null;
     private settings: PerformanceViewSettings | null = null;
     private theme: AppTheme | null = null;
     private colors: TokenColors | null = null;
@@ -64,14 +88,49 @@ export class PerformanceCode {
         const changed = () => {
             this.dirty = true;
         };
+        const moved = () => {
+            this.revealed = null;
+            this.dirty = true;
+        };
+        const { RecoverFromMarkers } = this.monaco.editor.CursorChangeReason;
         this.subscriptions = [
-            editor.onDidChangeModel(() => this.readModel()),
+            editor.onDidChangeModel(() => {
+                this.revealed = null;
+                this.readModel();
+            }),
             editor.onDidChangeModelContent(() => this.readModel()),
-            editor.onDidChangeCursorSelection(changed),
-            editor.onDidScrollChange(changed),
+            // An edit elsewhere in the text shifts the cursor without the
+            // user moving it.
+            editor.onDidChangeCursorSelection((e) =>
+                e.reason === RecoverFromMarkers ? changed() : moved(),
+            ),
+            editor.onDidScrollChange((e) =>
+                e.scrollTopChanged || e.scrollLeftChanged ? moved() : changed(),
+            ),
             editor.onDidLayoutChange(changed),
             editor.onDidChangeModelDecorations(changed),
         ];
+    }
+
+    /** Sets the control widgets, which follow the text of the editor's model. */
+    setControls(controls: readonly PlacedControl[]): void {
+        this.controls = controls;
+        this.dirty = true;
+    }
+
+    /**
+     * Scrolls the view to `offset` in the editor's text as it would to the
+     * cursor there, leaving the editor as it is. The view goes back to
+     * following the cursor when the editor's cursor or scroll moves.
+     */
+    reveal(offset: number): void {
+        const position = this.editor?.getModel()?.getPositionAt(offset);
+        if (!position) return;
+        this.revealed = {
+            column: position.column - 1,
+            line: position.lineNumber - 1,
+        };
+        this.dirty = true;
     }
 
     /** Sets the look; `theme` gives the colors. */
@@ -133,6 +192,7 @@ export class PerformanceCode {
             colors: colors!,
             font: settings.font,
             fontPx,
+            italicFace: ITALIC_FONTS.has(settings.font),
             ligatures: settings.ligatures,
             lineHeightPx: Math.round(fontPx * settings.lineHeight),
             lineNumbers: settings.lineNumbers,
@@ -144,7 +204,8 @@ export class PerformanceCode {
         }
         const layout = codeLayout(look, this.lines.length, width, height);
         const frame = this.frame(layout.visibleLines, layout.visibleColumns);
-        const ease = 1 - Math.exp(-elapsedMs / SCROLL_EASE_MS);
+        const easeMs = scrollEaseMs(settings.scrollSpeed);
+        const ease = easeMs === 0 ? 1 : 1 - Math.exp(-elapsedMs / easeMs);
         this.topLine += (frame.topLine - this.topLine) * ease;
         this.leftColumn += (frame.leftColumn - this.leftColumn) * ease;
         const settled =
@@ -168,6 +229,20 @@ export class PerformanceCode {
         this.attach(null);
     }
 
+    /** The color of a bracket the editor decorates with `className`, if it is one. */
+    private bracketColor(
+        className: string | null | undefined,
+    ): string | undefined {
+        if (this.colors === null || !className) return undefined;
+        if (className === UNEXPECTED_BRACKET_CLASS) {
+            return this.colors.bracket(null);
+        }
+        const level = BRACKET_LEVEL_CLASS.exec(className);
+        return level === null
+            ? undefined
+            : this.colors.bracket(Number(level[1]));
+    }
+
     /**
      * Marks the text out of date. It is read again on the next draw, so edits
      * cost nothing while the code is not drawn.
@@ -188,9 +263,11 @@ export class PerformanceCode {
         const model = editor?.getModel() ?? null;
         if (editor === null || model === null) {
             return {
+                brackets: [],
                 highlights: [],
                 leftColumn: 0,
                 lines: [],
+                controls: [],
                 selections: [],
                 tabSize: 4,
                 tokens: null,
@@ -227,7 +304,7 @@ export class PerformanceCode {
         let leftColumn =
             editor.getScrollLeft() / typicalHalfwidthCharacterWidth;
 
-        const cursor = selections[0]?.active;
+        const cursor = this.revealed ?? selections[0]?.active;
         if (cursor !== undefined) {
             const fullLines = Math.max(1, Math.floor(visibleLines));
             topLine = clamp(topLine, cursor.line + 1 - fullLines, cursor.line);
@@ -261,12 +338,12 @@ export class PerformanceCode {
             );
             this.tokensStale = false;
         }
-        const highlights: CodeRange[] = model
-            .getDecorationsInRange(
-                new monaco.Range(first, 1, last, model.getLineMaxColumn(last)),
-            )
-            .filter((d) => d.options.className === PATTERN_STEP_CLASS)
-            .map(({ range }) => ({
+        const highlights: CodeRange[] = [];
+        const brackets: ColoredRange[] = [];
+        for (const { options, range } of model.getDecorationsInRange(
+            new monaco.Range(first, 1, last, model.getLineMaxColumn(last)),
+        )) {
+            const codeRange = {
                 end: {
                     column: range.endColumn - 1,
                     line: range.endLineNumber - 1,
@@ -275,9 +352,25 @@ export class PerformanceCode {
                     column: range.startColumn - 1,
                     line: range.startLineNumber - 1,
                 },
-            }));
+            };
+            if (options.className === PATTERN_STEP_CLASS) {
+                highlights.push(codeRange);
+                continue;
+            }
+            const color = this.bracketColor(options.inlineClassName);
+            if (color !== undefined) brackets.push({ ...codeRange, color });
+        }
+
+        const controls = this.controls.map(
+            ({ offset, ...widget }): InlineControl => ({
+                ...widget,
+                line: model.getPositionAt(offset).lineNumber - 1,
+            }),
+        );
 
         return {
+            brackets,
+            controls,
             highlights,
             leftColumn,
             lines: this.lines,

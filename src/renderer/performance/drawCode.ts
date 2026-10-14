@@ -1,4 +1,5 @@
 import type { AppTheme } from '../themes/types';
+import { drawLineControls, type InlineControl } from './drawControls';
 import type { TokenColors, TokenStyle } from './tokenColors';
 
 /** A token from Monaco's tokenizer: where it starts in its line, and its type. */
@@ -16,6 +17,11 @@ export interface CodePosition {
 export interface CodeRange {
     start: CodePosition;
     end: CodePosition;
+}
+
+/** A range drawn in a color of its own. */
+export interface ColoredRange extends CodeRange {
+    color: string;
 }
 
 /** A selection, with `active` the end the cursor is at. */
@@ -36,6 +42,10 @@ export interface CodeFrame {
     selections: readonly CodeSelection[];
     /** Pattern steps playing now. */
     highlights: readonly CodeRange[];
+    /** Brackets the editor colors by nesting level, each on one line, with their colors. */
+    brackets: readonly ColoredRange[];
+    /** Widgets of the control calls, in the order of the calls. */
+    controls: readonly InlineControl[];
 }
 
 /** How the code is drawn, in canvas pixels. */
@@ -46,6 +56,8 @@ export interface CodeLook {
     /** Width of one column of the monospace font. */
     charWidth: number;
     ligatures: boolean;
+    /** Whether the font has an italic face; without one, italic tokens draw upright. */
+    italicFace: boolean;
     lineNumbers: boolean;
     /** Opacity of the backing behind each line, and of the cursor line's highlight. */
     backing: number;
@@ -134,15 +146,25 @@ export function spansOnLine(
     return spans;
 }
 
-/** Runs of a line that share one style: token boundaries split by highlight edges. */
+/**
+ * Runs of a line that share one style: token boundaries split by highlight and
+ * bracket edges. A run inside a bracket carries the bracket's color.
+ */
 export function styledRuns(
     length: number,
     tokens: readonly CodeToken[],
     highlights: readonly [number, number][],
-): { from: number; to: number; token: number; highlighted: boolean }[] {
+    brackets: readonly [number, number, string][] = [],
+): {
+    from: number;
+    to: number;
+    token: number;
+    highlighted: boolean;
+    bracket: string | null;
+}[] {
     const cuts = new Set<number>([0, length]);
     for (const { offset } of tokens) cuts.add(Math.min(offset, length));
-    for (const [from, to] of highlights) {
+    for (const [from, to] of [...highlights, ...brackets]) {
         cuts.add(Math.min(from, length));
         cuts.add(Math.min(to, length));
     }
@@ -156,6 +178,8 @@ export function styledRuns(
             token++;
         }
         runs.push({
+            bracket:
+                brackets.find(([a, b]) => from >= a && to <= b)?.[2] ?? null,
             from,
             highlighted: highlights.some(([a, b]) => from >= a && to <= b),
             to,
@@ -166,7 +190,7 @@ export function styledRuns(
 }
 
 const fontOf = (look: CodeLook, style: Pick<TokenStyle, 'bold' | 'italic'>) =>
-    `${style.italic ? 'italic ' : ''}${style.bold ? 'bold ' : ''}${look.fontPx}px "${look.font}", monospace`;
+    `${style.italic && look.italicFace ? 'italic ' : ''}${style.bold ? 'bold ' : ''}${look.fontPx}px "${look.font}", monospace`;
 
 /** Draws `frame` onto a cleared, transparent canvas. */
 export function drawCode(
@@ -190,6 +214,24 @@ export function drawCode(
     const xOf = (column: number) =>
         layout.textX + (column - frame.leftColumn) * charWidth;
     const cursorLines = new Set(frame.selections.map((s) => s.active.line));
+    // A bracket is a single character, so it never spans lines.
+    const bracketsByLine = new Map<number, [number, number, string][]>();
+    for (const { start, end, color } of frame.brackets) {
+        const span: [number, number, string] = [
+            start.column,
+            end.column,
+            color,
+        ];
+        const onLine = bracketsByLine.get(start.line);
+        if (onLine) onLine.push(span);
+        else bracketsByLine.set(start.line, [span]);
+    }
+    const controlsByLine = new Map<number, InlineControl[]>();
+    for (const control of frame.controls) {
+        const onLine = controlsByLine.get(control.line);
+        if (onLine) onLine.push(control);
+        else controlsByLine.set(control.line, [control]);
+    }
 
     for (let line = first; line <= last; line++) {
         const y = yOf(line);
@@ -268,16 +310,20 @@ export function drawCode(
         ctx.globalAlpha = 1;
 
         const tokens = frame.tokens?.[line] ?? [];
+        const brackets = bracketsByLine.get(line) ?? [];
         for (const run of styledRuns(
             frame.lines[line].length,
             tokens,
             highlights,
+            brackets,
         )) {
             const token = tokens[run.token];
-            const raw = frame.lines[line].slice(run.from, run.to);
+            const tokenStyle = look.colors.style(token?.type ?? '');
             const style = run.highlighted
                 ? { bold: true, color: theme.accentSecondary, italic: false }
-                : look.colors.style(token?.type ?? '', raw);
+                : run.bracket === null
+                  ? tokenStyle
+                  : { ...tokenStyle, color: run.bracket };
             ctx.font = fontOf(look, style);
             ctx.fillStyle = style.color;
             const textY = y + lineHeightPx / 2;
@@ -291,6 +337,10 @@ export function drawCode(
                     k += char.length;
                 }
             }
+        }
+        const controls = controlsByLine.get(line);
+        if (controls) {
+            drawLineControls(ctx, controls, xOf(width), y, look);
         }
         ctx.restore();
     }

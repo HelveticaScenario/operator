@@ -49,6 +49,7 @@ import { applyButtonChange, applyGroupCollapse } from './app/buttonChange';
 import { resolvePrettierOptions } from './components/monaco/formattingProvider';
 import { codeStyleFromPrettier } from './dsl/objectPropertyInsert';
 import { bindControls } from './app/controlBinding';
+import { performanceControls } from './app/performanceControls';
 import { ControlAnchors, createControlAnchors } from './app/controlAnchors';
 import { extractControls, resolveControls } from './dsl/extractControls';
 import type { ResolvedControls } from './dsl/extractControls';
@@ -237,7 +238,6 @@ function App() {
         () => themes.find((t) => t.id === performanceView.themeId) ?? theme,
         [themes, theme, performanceView.themeId],
     );
-    usePerformanceCode(paletteEditor, performanceView, performanceTheme);
     const scopeCanvasMapRef = useRef(new Map<string, HTMLCanvasElement>());
     const vuCanvasMapRef = useRef(new Map<string, HTMLCanvasElement>());
     /** Peak-readout pills, updated imperatively from the RAF loop. */
@@ -412,6 +412,33 @@ function App() {
         ],
     );
 
+    const performanceCodeControls = useMemo(
+        () =>
+            performanceControls(
+                controlViews.sliders,
+                controlViews.buttons,
+                buttonDefs,
+            ),
+        [controlViews, buttonDefs],
+    );
+    const revealInPerformance = usePerformanceCode(
+        paletteEditor,
+        performanceView,
+        performanceTheme,
+        performanceCodeControls,
+    );
+
+    // Using a control scrolls the performance window to its call, so the
+    // audience sees which control is being played.
+    const revealControlForPerformance = useCallback(
+        (offset: number) => {
+            if (performanceOutput.isOpen) {
+                revealInPerformance(offset);
+            }
+        },
+        [revealInPerformance],
+    );
+
     const setModuleParam = useCallback(
         (
             moduleId: string,
@@ -435,6 +462,7 @@ function App() {
             if (!slider) {
                 return;
             }
+            revealControlForPerformance(slider.argsStart);
             const written = applySliderChange(
                 slider,
                 newValue,
@@ -451,7 +479,7 @@ function App() {
                 );
             }
         },
-        [controlViews, setModuleParam],
+        [controlViews, setModuleParam, revealControlForPerformance],
     );
 
     const handleGroupToggle = useCallback(
@@ -488,6 +516,9 @@ function App() {
             if (!button) {
                 return;
             }
+            if (pressed || button.mode === 'toggle') {
+                revealControlForPerformance(button.argsStart);
+            }
             applyButtonChange(
                 button,
                 pressed,
@@ -504,7 +535,7 @@ function App() {
                 );
             }
         },
-        [controlViews, setModuleParam],
+        [controlViews, setModuleParam, revealControlForPerformance],
     );
 
     useEffect(() => {

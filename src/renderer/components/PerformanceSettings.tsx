@@ -1,5 +1,8 @@
 import type { AppConfig, MonospaceFont } from '../../shared/ipcTypes';
-import { DEFAULT_PERFORMANCE_VIEW } from '../performance/settings';
+import {
+    DEFAULT_PERFORMANCE_VIEW,
+    scrollEaseMs,
+} from '../performance/settings';
 import type { AppTheme } from '../themes/types';
 
 interface PerformanceSettingsProps {
@@ -232,6 +235,21 @@ export function PerformanceSettings({
                 checked={config.performanceLineNumbers ?? d.lineNumbers}
                 onChange={(performanceLineNumbers) =>
                     onConfigChange({ performanceLineNumbers })
+                }
+            />
+            <RangeSetting
+                label="Scroll Speed"
+                min={0}
+                max={1}
+                step={0.01}
+                value={config.performanceScrollSpeed ?? d.scrollSpeed}
+                format={(value) =>
+                    value >= 1
+                        ? 'Instant'
+                        : `${Math.round(scrollEaseMs(value))} ms`
+                }
+                onChange={(performanceScrollSpeed) =>
+                    onConfigChange({ performanceScrollSpeed })
                 }
             />
         </>

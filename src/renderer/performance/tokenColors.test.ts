@@ -2,58 +2,48 @@ import { describe, expect, it } from 'vitest';
 import { mapVSCodeTheme, type VSCodeTheme } from '../themes/types';
 import { TokenColors } from './tokenColors';
 
-const theme = (tokenColors: VSCodeTheme['tokenColors']) =>
+const theme = (
+    tokenColors: VSCodeTheme['tokenColors'],
+    colors: Record<string, string> = {},
+) =>
     mapVSCodeTheme({
-        colors: { 'editor.foreground': '#cccccc' },
+        colors: { 'editor.foreground': '#cccccc', ...colors },
         name: 'Test',
         tokenColors,
         type: 'dark',
     });
 
 describe('TokenColors', () => {
-    it('colors a token by the theme rule for its scope', () => {
-        const colors = new TokenColors(
-            theme([{ scope: 'string', settings: { foreground: '#00ff00' } }]),
-        );
-        expect(colors.style('string.js', "'c4'").color).toBe('#00ff00');
-    });
-
-    it('prefers the most specific rule that covers the scope', () => {
+    it('colors a token by the theme rule for its type', () => {
         const colors = new TokenColors(
             theme([
-                { scope: 'constant', settings: { foreground: '#111111' } },
                 {
-                    scope: ['constant.numeric'],
-                    settings: { fontStyle: 'bold', foreground: '#222222' },
+                    scope: 'string',
+                    settings: { fontStyle: 'bold', foreground: '#00ff00' },
                 },
             ]),
         );
-        expect(colors.style('number.js', '440')).toEqual({
+        expect(colors.style('string.js')).toEqual({
             bold: true,
-            color: '#222222',
+            color: '#00ff00',
             italic: false,
         });
     });
 
-    it('ignores a rule more specific than the scope', () => {
+    it('falls back from a dotted type to its parent', () => {
         const colors = new TokenColors(
-            theme([
-                {
-                    scope: 'keyword.control',
-                    settings: { foreground: '#ff0000' },
-                },
-            ]),
+            theme([{ scope: 'comment', settings: { foreground: '#777777' } }]),
         );
-        expect(colors.style('keyword.js', 'const').color).toBe('#ff0000');
-        const plain = new TokenColors(
-            theme([
-                { scope: 'string.quoted', settings: { foreground: '#ff0000' } },
-            ]),
-        );
-        expect(plain.style('string.js', "'a'").color).toBe('#cccccc');
+        expect(colors.style('comment.doc.js').color).toBe('#777777');
     });
 
-    it('colors a $ identifier as a function call', () => {
+    it("takes the base theme's color for a type the theme leaves out", () => {
+        const colors = new TokenColors(theme([]));
+        expect(colors.style('number.js').color).toBe('#b5cea8');
+        expect(colors.style('identifier.js').color).toBe('#cccccc');
+    });
+
+    it('ignores a dotted TextMate scope, as the editor does', () => {
         const colors = new TokenColors(
             theme([
                 {
@@ -62,16 +52,28 @@ describe('TokenColors', () => {
                 },
             ]),
         );
-        expect(colors.style('identifier.js', '$sine').color).toBe('#61afef');
-        expect(colors.style('identifier.js', 'osc').color).toBe('#cccccc');
+        expect(colors.style('identifier.js').color).toBe('#cccccc');
     });
 
-    it('falls back from a dotted type to its parent', () => {
+    it('cycles bracket colors by nesting level, skipping transparent ones', () => {
         const colors = new TokenColors(
-            theme([{ scope: 'comment', settings: { foreground: '#777777' } }]),
+            theme([], {
+                'editorBracketHighlight.foreground1': '#111111',
+                'editorBracketHighlight.foreground2': '#22222200',
+                'editorBracketHighlight.foreground3': '#333333',
+            }),
         );
-        expect(colors.style('comment.doc.js', '/** x */').color).toBe(
-            '#777777',
-        );
+        expect([0, 1, 2].map((level) => colors.bracket(level))).toEqual([
+            '#111111',
+            '#333333',
+            '#111111',
+        ]);
+    });
+
+    it("takes Monaco's bracket colors where the theme sets none", () => {
+        const colors = new TokenColors(theme([]));
+        expect(colors.bracket(0)).toBe('#FFD700');
+        expect(colors.bracket(3)).toBe('#FFD700');
+        expect(colors.bracket(null)).toBe('rgba(255, 18, 18, 0.8)');
     });
 });

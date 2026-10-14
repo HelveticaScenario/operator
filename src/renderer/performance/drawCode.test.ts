@@ -58,19 +58,33 @@ describe('styledRuns', () => {
 
     it('splits a line at token boundaries', () => {
         expect(styledRuns(10, tokens, [])).toEqual([
-            { from: 0, highlighted: false, to: 5, token: 0 },
-            { from: 5, highlighted: false, to: 6, token: 1 },
-            { from: 6, highlighted: false, to: 10, token: 2 },
+            { bracket: null, from: 0, highlighted: false, to: 5, token: 0 },
+            { bracket: null, from: 5, highlighted: false, to: 6, token: 1 },
+            { bracket: null, from: 6, highlighted: false, to: 10, token: 2 },
         ]);
     });
 
     it('splits a token where a highlight starts and ends', () => {
         expect(styledRuns(10, tokens, [[7, 9]])).toEqual([
-            { from: 0, highlighted: false, to: 5, token: 0 },
-            { from: 5, highlighted: false, to: 6, token: 1 },
-            { from: 6, highlighted: false, to: 7, token: 2 },
-            { from: 7, highlighted: true, to: 9, token: 2 },
-            { from: 9, highlighted: false, to: 10, token: 2 },
+            { bracket: null, from: 0, highlighted: false, to: 5, token: 0 },
+            { bracket: null, from: 5, highlighted: false, to: 6, token: 1 },
+            { bracket: null, from: 6, highlighted: false, to: 7, token: 2 },
+            { bracket: null, from: 7, highlighted: true, to: 9, token: 2 },
+            { bracket: null, from: 9, highlighted: false, to: 10, token: 2 },
+        ]);
+    });
+
+    it('splits a token around a bracket and gives the bracket its color', () => {
+        expect(styledRuns(10, tokens, [], [[5, 6, '#ffd700']])).toEqual([
+            { bracket: null, from: 0, highlighted: false, to: 5, token: 0 },
+            {
+                bracket: '#ffd700',
+                from: 5,
+                highlighted: false,
+                to: 6,
+                token: 1,
+            },
+            { bracket: null, from: 6, highlighted: false, to: 10, token: 2 },
         ]);
     });
 });

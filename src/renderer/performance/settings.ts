@@ -17,6 +17,8 @@ export interface PerformanceViewSettings {
     lineNumbers: boolean;
     /** Theme id for the code's colors; null follows the editor's theme. */
     themeId: string | null;
+    /** How quickly the view scrolls to where it should be, 0 to 1; see {@link scrollEaseMs}. */
+    scrollSpeed: number;
 }
 
 export const DEFAULT_PERFORMANCE_VIEW: PerformanceViewSettings = {
@@ -28,8 +30,25 @@ export const DEFAULT_PERFORMANCE_VIEW: PerformanceViewSettings = {
     ligatures: true,
     lineHeight: 1.4,
     lineNumbers: false,
+    scrollSpeed: 0.5,
     themeId: null,
 };
+
+/** Scroll easing time constants, in milliseconds, at the slowest and fastest speeds short of instant. */
+const SLOWEST_SCROLL_MS = 1000;
+const FASTEST_SCROLL_MS = 10;
+
+/**
+ * Time constant, in milliseconds, of the view easing toward where it should
+ * scroll at `scrollSpeed`: from 1 s at 0 to 10 ms just below 1, evenly on a
+ * log scale, and 0 (a jump) at 1.
+ */
+export function scrollEaseMs(scrollSpeed: number): number {
+    return scrollSpeed >= 1
+        ? 0
+        : SLOWEST_SCROLL_MS *
+              (FASTEST_SCROLL_MS / SLOWEST_SCROLL_MS) ** scrollSpeed;
+}
 
 /** The performance view settings in `config`, with defaults for the rest. */
 export function performanceViewSettings(
@@ -45,6 +64,7 @@ export function performanceViewSettings(
         ligatures: config.performanceFontLigatures ?? d.ligatures,
         lineHeight: config.performanceLineHeight ?? d.lineHeight,
         lineNumbers: config.performanceLineNumbers ?? d.lineNumbers,
+        scrollSpeed: config.performanceScrollSpeed ?? d.scrollSpeed,
         themeId: config.performanceTheme ?? d.themeId,
     };
 }
