@@ -26,6 +26,17 @@ type Model = MonacoNamespace.editor.ITextModel;
 
 /** The decoration class the editor gives a pattern step while it plays. */
 const PATTERN_STEP_CLASS = 'active-seq-step';
+
+/** The background the editor's stylesheet gives a playing pattern step. */
+function stepBackground(): string {
+    const probe = document.createElement('div');
+    probe.className = PATTERN_STEP_CLASS;
+    probe.style.display = 'none';
+    document.body.append(probe);
+    const { backgroundColor } = getComputedStyle(probe);
+    probe.remove();
+    return backgroundColor;
+}
 /** The decoration classes of the editor's bracket pair colorization. */
 const BRACKET_LEVEL_CLASS = /^bracket-highlighting-(\d+)$/;
 const UNEXPECTED_BRACKET_CLASS = 'unexpected-closing-bracket';
@@ -93,6 +104,7 @@ export class PerformanceCode {
     private settings: PerformanceViewSettings | null = null;
     private theme: AppTheme | null = null;
     private colors: TokenColors | null = null;
+    private stepBackground = '';
     private pixelRatio = 0;
     private charWidth = 0;
 
@@ -192,6 +204,7 @@ export class PerformanceCode {
             this.colors = new TokenColors(theme);
         }
         this.settings = settings;
+        this.stepBackground = stepBackground();
         this.charWidth = 0;
         this.dirty = true;
     }
@@ -248,6 +261,7 @@ export class PerformanceCode {
             ligatures: settings.ligatures,
             lineHeightPx: Math.round(fontPx * settings.lineHeight),
             lineNumbers: settings.lineNumbers,
+            stepBackground: this.stepBackground,
             theme,
         };
         if (this.linesStale) {

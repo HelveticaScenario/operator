@@ -61,6 +61,8 @@ export interface CodeLook {
     lineNumbers: boolean;
     /** Opacity of the backing behind each line, and of the cursor line's highlight. */
     backing: number;
+    /** The background of a playing pattern step, as CSS. */
+    stepBackground: string;
     theme: AppTheme;
     colors: TokenColors;
 }
@@ -80,9 +82,6 @@ export interface CodeLayout {
     /** Columns of text that fit. */
     visibleColumns: number;
 }
-
-/** Opacity of the background behind a playing pattern step. */
-const HIGHLIGHT_ALPHA = 0.25;
 
 export function codeLayout(
     look: CodeLook,
@@ -147,24 +146,22 @@ export function spansOnLine(
 }
 
 /**
- * Runs of a line that share one style: token boundaries split by highlight and
- * bracket edges. A run inside a bracket carries the bracket's color.
+ * Runs of a line that share one style: token boundaries split by bracket
+ * edges. A run inside a bracket carries the bracket's color.
  */
 export function styledRuns(
     length: number,
     tokens: readonly CodeToken[],
-    highlights: readonly [number, number][],
     brackets: readonly [number, number, string][] = [],
 ): {
     from: number;
     to: number;
     token: number;
-    highlighted: boolean;
     bracket: string | null;
 }[] {
     const cuts = new Set<number>([0, length]);
     for (const { offset } of tokens) cuts.add(Math.min(offset, length));
-    for (const [from, to] of [...highlights, ...brackets]) {
+    for (const [from, to] of brackets) {
         cuts.add(Math.min(from, length));
         cuts.add(Math.min(to, length));
     }
@@ -181,7 +178,6 @@ export function styledRuns(
             bracket:
                 brackets.find(([a, b]) => from >= a && to <= b)?.[2] ?? null,
             from,
-            highlighted: highlights.some(([a, b]) => from >= a && to <= b),
             to,
             token,
         });
@@ -292,14 +288,14 @@ export function drawCode(
                 );
             }
         }
-        const highlights = spansOnLine(
+        // A playing step is a box behind the text, as the editor draws its
+        // step decoration; the text keeps its own style.
+        ctx.fillStyle = look.stepBackground;
+        for (const [from, to] of spansOnLine(
             frame.highlights,
             line,
             frame.lines[line].length,
-        );
-        ctx.globalAlpha = HIGHLIGHT_ALPHA;
-        ctx.fillStyle = theme.accentSecondary;
-        for (const [from, to] of highlights) {
+        )) {
             ctx.fillRect(
                 xOf(columns[from]),
                 y,
@@ -307,23 +303,20 @@ export function drawCode(
                 lineHeightPx,
             );
         }
-        ctx.globalAlpha = 1;
 
         const tokens = frame.tokens?.[line] ?? [];
         const brackets = bracketsByLine.get(line) ?? [];
         for (const run of styledRuns(
             frame.lines[line].length,
             tokens,
-            highlights,
             brackets,
         )) {
             const token = tokens[run.token];
             const tokenStyle = look.colors.style(token?.type ?? '');
-            const style = run.highlighted
-                ? { bold: true, color: theme.accentSecondary, italic: false }
-                : run.bracket === null
-                  ? tokenStyle
-                  : { ...tokenStyle, color: run.bracket };
+            const style =
+                run.bracket === null
+                    ? tokenStyle
+                    : { ...tokenStyle, color: run.bracket };
             ctx.font = fontOf(look, style);
             ctx.fillStyle = style.color;
             const textY = y + lineHeightPx / 2;
