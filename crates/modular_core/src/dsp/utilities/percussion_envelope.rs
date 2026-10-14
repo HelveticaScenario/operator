@@ -1,12 +1,11 @@
 use std::ops::Range;
 
-use crate::block_input::{InputScratch, OptionBlockInput};
 use crate::dsp::utils::{SchmittTrigger, sanitize};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct PercussionEnvelopeParams {
@@ -126,11 +125,9 @@ impl PercussionEnvelope {
     ) -> Option<()> {
         let channels = self.channel_count();
         let p = &self.params;
-        let (mut s0, mut s1) = (InputScratch::new(), InputScratch::new());
-        let trigger = p.trigger.block_input(range.clone(), channels, &mut s0)?;
-        let decay = p
-            .decay
-            .block_input_or(range.clone(), channels, 0.1, &mut s1)?;
+        let mut scratch = Default::default();
+        let PercussionEnvelopeParamsBlockInputs { trigger, decay } =
+            p.block_inputs(range.clone(), channels, &mut scratch)?;
         let attack_step = attack_step(sample_rate);
         for i in range {
             let (trigger, decay) = (trigger.row(i), decay.row(i));
