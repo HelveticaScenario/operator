@@ -103,6 +103,9 @@ struct ChannelState {
     glide: f32,
     onset: f32,
     rng: LcgRng,
+    /// Whether `rng` has been seeded; channels added by a patch update start
+    /// unseeded.
+    seeded: bool,
     band: Svf,
     color: [Svf; 2],
 }
@@ -112,7 +115,6 @@ struct TomState {
     /// Per-sample decay multipliers; they depend only on the sample rate.
     glide_mul: f32,
     onset_mul: f32,
-    seeded: bool,
 }
 
 /// Parabolic approximation of a sine of `phase` in cycles: its overtones are
@@ -231,16 +233,17 @@ impl Tom {
 }
 
 impl crate::types::PatchUpdateHandler for Tom {
-    /// Seeds each channel's noise off this module's stable heap address once,
-    /// so the stream carries over unchanged across patch updates.
+    /// Seeds each channel's noise off this module's stable heap address the
+    /// first time it is seen, so streams carry over unchanged across patch
+    /// updates and channels added later get their own.
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            if !cs.seeded {
                 cs.rng.seed(base, ch);
                 cs.wobble_phase = cs.rng.next_unit();
+                cs.seeded = true;
             }
-            self.state.seeded = true;
         }
     }
 }

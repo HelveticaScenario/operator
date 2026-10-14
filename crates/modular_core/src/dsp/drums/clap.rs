@@ -144,11 +144,6 @@ impl Clap {
     fn init(&mut self, sample_rate: f32) {
         self.state.sample_period = 1.0 / sample_rate;
         self.state.landed = 2;
-        // Distinct streams from the start; `on_patch_update` reseeds them once
-        // the module sits at its stable heap address.
-        let base = seed_base(self);
-        self.state.rng.seed(base, 0);
-        self.state.jitter.seed(base, 1);
         self.state.pan = [1.0, 1.0];
     }
 

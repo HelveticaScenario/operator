@@ -17,6 +17,9 @@ const DEFAULT_TONE: f32 = 1.5;
 const PARTIALS: [f32; 8] = [1.0, 2.0, 3.0, 7.0, 9.0, 10.0, 11.0, 13.0];
 const PARTIAL_LEVELS: [f32; 8] = [0.08, 0.1, 0.1, 0.26, 0.54, 1.0, 0.75, 0.46];
 const SUB_LEVEL: f32 = 0.2;
+/// A partial fades out over the top `NYQUIST_FADE` of the band below Nyquist,
+/// so pitch sweeps never switch one on or off abruptly.
+const NYQUIST_FADE: f32 = 0.1;
 const PARTIAL_GAIN: f32 = 0.018;
 /// The hiss is white noise rising 6 dB/octave up to `HISS_CORNER_HZ` and flat
 /// above it.
@@ -79,6 +82,9 @@ struct ChannelState {
     /// Strike burst level, decaying from 1 at the strike.
     burst: f32,
     rng: LcgRng,
+    /// Whether `rng` has been seeded; channels added by a patch update start
+    /// unseeded.
+    seeded: bool,
     tilt: OnePole,
     highpass: Svf,
 }
@@ -89,7 +95,6 @@ struct CymbalState {
     /// both depend only on the sample rate.
     burst_mul: f32,
     tilt_coeff: f32,
-    seeded: bool,
 }
 
 /// Cymbal: a cluster of bell-like partials over bright hiss.
@@ -147,8 +152,9 @@ impl Cymbal {
             let nyquist = 0.5 * sample_rate;
             let mut bell = SUB_LEVEL * sine(cs.sub_phase);
             for (harmonic, amp) in PARTIALS.iter().zip(PARTIAL_LEVELS) {
-                if hz * harmonic < nyquist {
-                    bell += amp * sine(wrap_phase(cs.phase * harmonic));
+                let fade = ((nyquist - hz * harmonic) / (NYQUIST_FADE * nyquist)).clamp(0.0, 1.0);
+                if fade > 0.0 {
+                    bell += fade * amp * sine(wrap_phase(cs.phase * harmonic));
                 }
             }
             let white = cs.rng.next_bipolar();
@@ -169,15 +175,16 @@ impl Cymbal {
 }
 
 impl crate::types::PatchUpdateHandler for Cymbal {
-    /// Seeds each channel's noise off this module's stable heap address once,
-    /// so the stream carries over unchanged across patch updates.
+    /// Seeds each channel's noise off this module's stable heap address the
+    /// first time it is seen, so streams carry over unchanged across patch
+    /// updates and channels added later get their own.
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            if !cs.seeded {
                 cs.rng.seed(base, ch);
+                cs.seeded = true;
             }
-            self.state.seeded = true;
         }
     }
 }

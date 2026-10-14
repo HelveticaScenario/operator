@@ -238,7 +238,8 @@ impl Kick {
 
             let click = p.click.value_or(ch, 0.0).clamp(0.0, 5.0) / 5.0;
             if click > 0.0 && cs.elapsed < CLICK_END {
-                x += click * click_shape(cs.elapsed);
+                // The click lands after the drive, so it is clamped to full scale here.
+                x = (x + click * click_shape(cs.elapsed)).clamp(-1.0, 1.0);
             }
             cs.elapsed += state.sample_period;
 
@@ -434,10 +435,12 @@ mod tests {
     }
 
     #[test]
-    fn drive_and_overtone_stay_within_full_scale() {
+    fn drive_overtone_and_click_stay_within_full_scale() {
         let mut kick = make_kick(|p| {
             p.drive = volts(5.0);
             p.overtone = volts(5.0);
+            p.click = volts(5.0);
+            p.phase_reset = true;
         });
         let out = strike(&mut kick, 0.3);
         assert!(peak(&out) <= 5.0 + 1e-4, "peak {}", peak(&out));

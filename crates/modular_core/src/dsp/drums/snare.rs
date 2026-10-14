@@ -125,6 +125,9 @@ struct ChannelState {
     /// Seconds since the strike.
     elapsed: f32,
     rng: LcgRng,
+    /// Whether `rng` has been seeded; channels added by a patch update start
+    /// unseeded.
+    seeded: bool,
     filter: Svf,
     top: Svf,
 }
@@ -132,7 +135,6 @@ struct ChannelState {
 #[derive(Default)]
 struct SnareState {
     sample_period: f32,
-    seeded: bool,
 }
 
 /// Snare drum: a short pitched body, a ringing overtone, and filtered noise
@@ -238,15 +240,16 @@ impl Snare {
 }
 
 impl crate::types::PatchUpdateHandler for Snare {
-    /// Seeds each channel's noise off this module's stable heap address once,
-    /// so the stream carries over unchanged across patch updates.
+    /// Seeds each channel's noise off this module's stable heap address the
+    /// first time it is seen, so streams carry over unchanged across patch
+    /// updates and channels added later get their own.
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            if !cs.seeded {
                 cs.rng.seed(base, ch);
+                cs.seeded = true;
             }
-            self.state.seeded = true;
         }
     }
 }

@@ -111,6 +111,9 @@ struct ChannelState {
     strike: Strike,
     env: AttackDecay,
     rng: LcgRng,
+    /// Whether `rng` has been seeded; channels added by a patch update start
+    /// unseeded.
+    seeded: bool,
     pink: OnePole,
     pre: Svf,
     first: Svf,
@@ -121,7 +124,6 @@ struct ChannelState {
 struct HiHatState {
     /// One-pole coefficient of the pink-noise low-pass; depends only on the sample rate.
     pink_coeff: f32,
-    seeded: bool,
 }
 
 /// Hi-hat: noise through a resonant high-pass.
@@ -200,15 +202,16 @@ impl HiHat {
 }
 
 impl crate::types::PatchUpdateHandler for HiHat {
-    /// Seeds each channel's noise off this module's stable heap address once,
-    /// so the stream carries over unchanged across patch updates.
+    /// Seeds each channel's noise off this module's stable heap address the
+    /// first time it is seen, so streams carry over unchanged across patch
+    /// updates and channels added later get their own.
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            if !cs.seeded {
                 cs.rng.seed(base, ch);
+                cs.seeded = true;
             }
-            self.state.seeded = true;
         }
     }
 }

@@ -283,3 +283,105 @@ fn clap_spread_widens_the_stereo_image() {
             .any(|(l, r)| (l - r).abs() > 0.01)
     );
 }
+
+#[test]
+fn channels_added_by_a_patch_update_get_their_own_noise() {
+    for name in ["$snare", "$hihat", "$cymbal", "$tom", "$clang"] {
+        let mut params = json!({ "trigger": [0.0] });
+        if name == "$clang" {
+            params["noise"] = json!(5.0);
+        }
+        let old = make(name, params.clone());
+        old.on_patch_update();
+        params["trigger"] = json!([5.0, 5.0, 5.0, 5.0]);
+        let new = make(name, params);
+        new.transfer_state_from(old.as_ref());
+        new.on_patch_update();
+        let mut channels = vec![Vec::new(); 4];
+        for _ in 0..2400 {
+            new.start_block();
+            new.ensure_processed();
+            for (ch, out) in channels.iter_mut().enumerate() {
+                out.push(new.get_value_at("output", ch, 0));
+            }
+        }
+        for a in 1..4 {
+            for b in (a + 1)..4 {
+                assert_ne!(
+                    channels[a], channels[b],
+                    "{name} channels {a} and {b} match"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn clang_filter_has_no_jump_at_zero() {
+    let off = render("$clang", json!({ "filter": 0.0 }), 0.1);
+    let barely = render("$clang", json!({ "filter": 0.005 }), 0.1);
+    let ratio = rms(&barely) / rms(&off);
+    assert!((ratio - 1.0).abs() < 0.05, "level ratio {ratio}");
+}
+
+#[test]
+fn clang_strike_without_clave_stops_the_clave() {
+    // Strike with the clave and fast re-strikes, then strike again with the
+    // clave off: past the old clave's own decay, nothing re-strikes it.
+    let first = make(
+        "$clang",
+        json!({ "trigger": 5.0, "clave": true, "repeat": 5.0, "high": 0.0, "low": 0.0, "decay": 1.0 }),
+    );
+    first.on_patch_update();
+    for _ in 0..480 {
+        first.start_block();
+        first.ensure_processed();
+    }
+    let rearm = make(
+        "$clang",
+        json!({ "trigger": 0.0, "clave": false, "repeat": 5.0, "high": 0.0, "low": 0.0, "decay": 1.0 }),
+    );
+    rearm.transfer_state_from(first.as_ref());
+    rearm.on_patch_update();
+    for _ in 0..48 {
+        rearm.start_block();
+        rearm.ensure_processed();
+    }
+    let second = make(
+        "$clang",
+        json!({ "trigger": 5.0, "clave": false, "repeat": 5.0, "high": 0.0, "low": 0.0, "decay": 1.0 }),
+    );
+    second.transfer_state_from(rearm.as_ref());
+    second.on_patch_update();
+    let out: Vec<f32> = (0..(0.6 * SR) as usize)
+        .map(|_| {
+            second.start_block();
+            second.ensure_processed();
+            second.get_value_at("output", 0, 0)
+        })
+        .collect();
+    let late = rms(&out[(0.4 * SR) as usize..]);
+    assert!(late < 1e-3, "clave still sounding: {late} V");
+}
+
+/// Amplitude of the `hz` component of `x`.
+fn tone_level(x: &[f32], hz: f32) -> f32 {
+    let w = std::f32::consts::TAU * hz / SR;
+    let (mut re, mut im) = (0.0f32, 0.0f32);
+    for (i, v) in x.iter().enumerate() {
+        re += v * (w * i as f32).cos();
+        im += v * (w * i as f32).sin();
+    }
+    (re * re + im * im).sqrt()
+}
+
+#[test]
+fn cymbal_partials_fade_out_just_below_nyquist() {
+    // At this pitch the 13th harmonic sits just under Nyquist and the 11th
+    // well below it, so only the 13th is faded.
+    let volts = 2.81;
+    let hz = 261.6256 * 2f32.powf(volts);
+    let out = render("$cymbal", json!({ "freq": volts, "tone": 0.0 }), 0.05);
+    let ratio = tone_level(&out, 13.0 * hz) / tone_level(&out, 11.0 * hz);
+    assert!(ratio < 0.2, "13th/11th partial ratio {ratio}");
+}

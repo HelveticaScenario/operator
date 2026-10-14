@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 
 use super::common::{Decay, Strike, Svf, sine};
 use crate::dsp::utils::rng::{LcgRng, seed_base};
-use crate::dsp::utils::{one_pole::OnePole, voct_to_hz, wrap_phase};
+use crate::dsp::utils::{one_pole::OnePole, poly_blep, voct_to_hz, wrap_phase};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
 /// ≈E4 (322 Hz) in V/Oct.
@@ -33,7 +33,10 @@ const NOISE_DECAY: f32 = 0.6;
 /// `filter` f (0–1) sweeps a high-pass up towards `FILTER_MAX_HZ`, at
 /// `FILTER_MAX_HZ · (1 − e^(−f / FILTER_SWEEP))`, lifted by
 /// `FILTER_GAIN · (1 + FILTER_BOOST · f)`, over a dry signal that falls from
-/// `FILTER_FLOOR + FILTER_DRY` at f = 0.1 towards `FILTER_FLOOR`.
+/// `FILTER_FLOOR + FILTER_DRY` at f = 0.1 towards `FILTER_FLOOR`. Below
+/// `FILTER_ENGAGE` the filtered sound fades in from the unfiltered bell, so
+/// the sweep has no jump at 0.
+const FILTER_ENGAGE: f32 = 0.1;
 const FILTER_MAX_HZ: f32 = 13_000.0;
 const FILTER_SWEEP: f32 = 0.45;
 const FILTER_Q: f32 = 0.6;
@@ -46,8 +49,8 @@ const FILTER_DRY_FALL: f32 = 0.15;
 /// struck again `FLAM_SECS` later at `FLAM_LEVEL`. With any `repeat` r
 /// (0–1) it keeps re-striking every `REPEAT_MAX_SECS`, or every
 /// `REPEAT_BASE_SECS − REPEAT_SPAN_SECS · r` once that is shorter, starting
-/// at `REPEAT_LEVEL` and fading `REPEAT_FADE_DB` per second until the bell
-/// stops ringing.
+/// at `REPEAT_LEVEL` and fading `REPEAT_FADE_DB` per second. Re-strikes stop
+/// at `RING_STRETCH` times `decay`, a little after the bell is cut off.
 const CLAVE_HZ: f32 = 3130.0;
 const CLAVE_DECAY: f32 = 0.19;
 const CLAVE_LEVEL: f32 = 0.8;
@@ -135,6 +138,9 @@ struct ChannelState {
     repeat_wait: f32,
     flammed: bool,
     rng: LcgRng,
+    /// Whether `rng` has been seeded; channels added by a patch update start
+    /// unseeded.
+    seeded: bool,
     noise_low: OnePole,
     sweep: Svf,
 }
@@ -144,7 +150,6 @@ struct ClangState {
     sample_period: f32,
     /// One-pole coefficient of the noise high-pass; depends only on the sample rate.
     noise_coeff: f32,
-    seeded: bool,
 }
 
 /// Seconds between clave re-strikes for `repeat` in volts, or `None` when off.
@@ -158,21 +163,7 @@ fn repeat_period(repeat: f32) -> Option<f32> {
 #[inline]
 fn square(phase: f32, dt: f32) -> f32 {
     let naive = if phase < 0.5 { 1.0 } else { -1.0 };
-    naive + blep(phase, dt) - blep(wrap_phase(phase + 0.5), dt)
-}
-
-/// PolyBLEP residual for a unit rising step at phase 0.
-#[inline]
-fn blep(phase: f32, dt: f32) -> f32 {
-    if phase < dt {
-        let t = phase / dt;
-        2.0 * t - t * t - 1.0
-    } else if phase > 1.0 - dt {
-        let t = (phase - 1.0) / dt;
-        t * t + 2.0 * t + 1.0
-    } else {
-        0.0
-    }
+    naive + poly_blep(phase, dt) - poly_blep(wrap_phase(phase + 0.5), dt)
 }
 
 /// Clang: a metallic cowbell from two squares an inharmonic interval apart,
@@ -223,6 +214,10 @@ impl Clang {
                     cs.flammed = false;
                     cs.repeat_wait = repeat_period(p.repeat.value_or(ch, DEFAULT_REPEAT))
                         .unwrap_or(f32::INFINITY);
+                } else {
+                    // A clave left ringing from an earlier hit fades out untouched.
+                    cs.flammed = true;
+                    cs.repeat_wait = f32::INFINITY;
                 }
             }
             if !cs.env.active() && !cs.clave_env.active() {
@@ -264,12 +259,12 @@ impl Clang {
                 level * (low * lower + high * upper) + noise_level * NOISE_LEVEL * noise * hiss;
 
             let sweep = p.filter.value_or(ch, 0.0).clamp(0.0, 5.0) / 5.0;
-            if sweep > 0.0 {
-                let cutoff = FILTER_MAX_HZ * (1.0 - (-sweep / FILTER_SWEEP).exp());
-                let high = cs.sweep.process(x, cutoff, FILTER_Q, sample_rate).hp;
-                let dry = FILTER_FLOOR + FILTER_DRY * (-(sweep - 0.1) / FILTER_DRY_FALL).exp();
-                x = dry * x + FILTER_GAIN * (1.0 + FILTER_BOOST * sweep) * high;
-            }
+            let cutoff = FILTER_MAX_HZ * (1.0 - (-sweep / FILTER_SWEEP).exp());
+            let high = cs.sweep.process(x, cutoff, FILTER_Q, sample_rate).hp;
+            let dry = FILTER_FLOOR + FILTER_DRY * (-(sweep - 0.1) / FILTER_DRY_FALL).exp();
+            let filtered = dry * x + FILTER_GAIN * (1.0 + FILTER_BOOST * sweep) * high;
+            let engage = (sweep / FILTER_ENGAGE).min(1.0);
+            x += engage * (filtered - x);
 
             if cs.clave_env.active() {
                 if !cs.flammed && cs.elapsed >= FLAM_SECS {
@@ -298,15 +293,16 @@ impl Clang {
 }
 
 impl crate::types::PatchUpdateHandler for Clang {
-    /// Seeds each channel's noise off this module's stable heap address once,
-    /// so the stream carries over unchanged across patch updates.
+    /// Seeds each channel's noise off this module's stable heap address the
+    /// first time it is seen, so streams carry over unchanged across patch
+    /// updates and channels added later get their own.
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            if !cs.seeded {
                 cs.rng.seed(base, ch);
+                cs.seeded = true;
             }
-            self.state.seeded = true;
         }
     }
 }
