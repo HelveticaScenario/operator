@@ -15,6 +15,11 @@ import {
     qualifiesForDollarChain,
 } from './paramsSchema';
 import type { WavsFolderNode } from './executor';
+import {
+    generateVideoChainInterfaces,
+    generateVideoChainMembers,
+    generateVideoNamespace,
+} from './videoLibGen';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -1792,6 +1797,71 @@ declare const $table: {
     /** Pulse-width modulation warp with duty cycle \`width\` (0..1). */
     pwm(width: Poly<Signal>, next?: Table): Table;
 };
+
+/**
+ * A video signal: a color with an alpha at every pixel, each channel in the
+ * range 0..1. Generators such as \`$v.osc\`, \`$v.noise\` and \`$v.shape\`
+ * make gray signals; \`$v.hsv\`, \`$v.colorize\`, \`$v.image\` and others
+ * make colors. Display one with \`$v.out\`. Where a module wants a number,
+ * a signal gives its brightness.
+ */
+interface VideoSignal {
+    readonly __videoSignal: true;
+    /** The red channel as a gray signal. */
+    readonly r: VideoSignal;
+    /** The green channel as a gray signal. */
+    readonly g: VideoSignal;
+    /** The blue channel as a gray signal. */
+    readonly b: VideoSignal;
+    /** The alpha as a gray signal. */
+    readonly a: VideoSignal;
+${generateVideoChainMembers()}
+}
+
+/**
+ * A video file's picture from \`$v.video\`: a {@link VideoSignal} that also
+ * has the file's sound as \`audio\`, an audio signal. Chaining from it, such
+ * as \`.$.hsv()\`, gives a plain {@link VideoSignal}; \`out\` and
+ * \`preview\` return the file itself.
+ */
+interface VideoFile extends VideoSignal {
+    /** The sound of the file, playing at its speed between its loop points. */
+    readonly audio: Collection;
+}
+
+/**
+ * A constant, a {@link VideoSignal}, or an audio signal whose live value drives
+ * the input: a \`$slider\` / \`$btn\` / \`$toggleBtn\`, or any module output
+ * such as an LFO or envelope, with several channels summed to one. A pattern
+ * from \`$p(...)\`, \`$p.s(...)\` or \`$p.arrange(...)\` also works: it plays
+ * through a \`$cycle\` and its values are used as they are, so
+ * \`$p('0 0.5 1')\` steps from 0 to 1.
+ */
+type VideoValue = number | VideoSignal | ModuleOutput | Collection | CollectionWithRange | PatternSource;
+
+${generateVideoChainInterfaces()}
+
+/**
+ * A frame store from \`$v.buffer\`: \`write\` a signal into it, and \`read\`
+ * what it held on the previous frame.
+ */
+interface VideoBuffer {
+    /**
+     * The previous frame of the buffer, resampled through a zoom, rotation,
+     * shift and edge mode, as for \`$v.feedback\`.
+     */
+    read(config?: {
+        zoom?: VideoValue;
+        rotate?: VideoValue;
+        shiftX?: VideoValue;
+        shiftY?: VideoValue;
+        edge?: 'clamp' | 'repeat' | 'mirror';
+    }): VideoSignal;
+    /** Stores a signal for the next frame to read, and returns it. */
+    write(signal: VideoSignal): VideoSignal;
+}
+
+${generateVideoNamespace()}
 `;
 
 function generateWavsTypeDeclaration(tree: WavsFolderNode | null): string {
@@ -2335,9 +2405,10 @@ function renderTree(node: NamespaceNode, indentLevel: number = 0): string[] {
 }
 
 export function generateDSL(schemas: Schemas): string {
-    // Filter out _clock (internal only) and $buffer (has a custom declaration below)
+    // Modules named with a leading `_` are internal, and $buffer has a custom
+    // declaration below.
     const userFacingSchemas = schemas.filter(
-        (s) => s.name !== '_clock' && s.name !== '$buffer',
+        (s) => !s.name.startsWith('_') && s.name !== '$buffer',
     );
     const tree = buildTreeFromSchemas(userFacingSchemas);
     const lines = renderTree(tree, 0);
