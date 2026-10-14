@@ -202,6 +202,69 @@ export function EditorSettingsTab({
                 </select>
             </div>
 
+            {/* Code Backdrop Opacity */}
+            <div className="settings-section">
+                <h3>Code Backing Over Video</h3>
+                <div className="settings-row">
+                    <input
+                        type="range"
+                        className="settings-range"
+                        min={0}
+                        max={1}
+                        step={0.01}
+                        value={config.codeBackdropOpacity ?? 0.6}
+                        onChange={(e) =>
+                            onConfigChange({
+                                codeBackdropOpacity: Number(e.target.value),
+                            })
+                        }
+                    />
+                    <span className="settings-range-value">
+                        {(config.codeBackdropOpacity ?? 0.6).toFixed(2)}
+                    </span>
+                </div>
+            </div>
+
+            {/* Performance window */}
+            <div className="settings-section">
+                <h3>Performance Window Shape</h3>
+                <select
+                    className="device-select"
+                    value={config.performanceAspect ?? 'free'}
+                    onChange={(e) =>
+                        onConfigChange({
+                            performanceAspect: e.target.value as NonNullable<
+                                AppConfig['performanceAspect']
+                            >,
+                        })
+                    }
+                >
+                    <option value="free">Free</option>
+                    <option value="16:9">16:9</option>
+                    <option value="4:3">4:3</option>
+                    <option value="1:1">1:1</option>
+                    <option value="9:16">9:16</option>
+                </select>
+            </div>
+
+            <div className="settings-section">
+                <h3>Performance Window Resolution</h3>
+                <select
+                    className="device-select"
+                    value={String(config.performanceScale ?? 1)}
+                    onChange={(e) =>
+                        onConfigChange({
+                            performanceScale: Number(e.target.value),
+                        })
+                    }
+                >
+                    <option value="1">100%</option>
+                    <option value="0.75">75%</option>
+                    <option value="0.5">50%</option>
+                    <option value="0.25">25%</option>
+                </select>
+            </div>
+
             {/* XY Scope Intensity */}
             <div className="settings-section">
                 <h3>XY Scope Beam Intensity</h3>

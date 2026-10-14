@@ -5670,6 +5670,227 @@
     ]
   },
   {
+    "name": "$eq",
+    "documentation": "Parametric EQ: shape the tone of a sound with up to 8 bands.\n\nEach band in **sections** has a **type**:\n\n- `'peak'` (default): boost or cut around a frequency.\n- `'lowShelf'` / `'highShelf'`: boost or cut everything below / above a\n  frequency.\n- `'lowpass'` / `'highpass'`: remove everything above / below a frequency.\n- `'notch'`: remove a narrow band around a frequency.\n\nand sets:\n\n- **freq**: where the band sits, like `'1000hz'` or `'c4'`.\n- **gain**: how much to boost or cut, in dB (-24 to 24). Peaks and shelves\n  only.\n- **q**: how narrow the band is (0.1 to 20, default 0.707). On shelves and\n  lowpass/highpass, values above 0.707 add a resonant bump at the\n  frequency; on shelves, lower values make a gentler slope.\n\nAny of them can be modulated. With no sections, the sound passes through\nunchanged.\n\nTo EQ channels differently, give **sections** one list of bands per\nchannel, like one for left and one for right.\n\n**adaptiveQ** makes peaks narrower the more you boost or cut them, like\nmany classic analog EQs.\n\n**ui: true** shows an editor under the call. Drag a band's dot to move it,\nscroll over it or drag its handles to change q, and double-click to add a\nband. Changes play right away and are written into your code. Hold\nCtrl/Cmd to change only the code, and right-click a control to reset it.\n\n```js\n// Warm up the lows, sweep a dip through the mids, clear out rumble\n$eq($saw('c2'), {\n  sections: [\n    { type: 'lowShelf', freq: '150hz', gain: 3 },\n    { type: 'peak', freq: $sine('0.5hz').range('400hz', '2000hz'), gain: -6, q: 2 },\n    { type: 'highpass', freq: '40hz' },\n  ],\n  adaptiveQ: true,\n})\n\n// A darker left channel, a brighter right one\n$eq($saw(['c2', 'g2']), {\n  sections: [\n    [{ type: 'highShelf', freq: '3000hz', gain: -6 }],\n    [{ type: 'highShelf', freq: '3000hz', gain: 4 }],\n  ],\n})\n\n// Start empty and build the EQ in the editor\n$eq($saw('c2'), { ui: true })\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "ParametricEqParams",
+      "type": "object",
+      "properties": {
+        "adaptiveQ": {
+          "description": "make peaks narrower the more they boost or cut (default false)",
+          "type": "boolean",
+          "default": false
+        },
+        "input": {
+          "description": "sound to EQ",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "sections": {
+          "description": "up to 8 bands, or one list of bands per channel (default none: the sound\npasses through unchanged)",
+          "$ref": "#/$defs/EqSections"
+        },
+        "ui": {
+          "description": "show an EQ editor under the call (default false)",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "EqSection": {
+          "description": "One EQ band. `freq`, `gain`, and `q` can all be modulated.",
+          "type": "object",
+          "properties": {
+            "freq": {
+              "description": "where the band sits, like '1000hz' or 'c4'",
+              "$ref": "#/$defs/MonoSignal"
+            },
+            "gain": {
+              "description": "boost or cut in dB, -24 to 24 (peaks and shelves only, default 0)",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MonoSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "q": {
+              "description": "how narrow the band is, 0.1 to 20 (default 0.707); above 0.707, shelves\nand lowpass/highpass get a resonant bump",
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MonoSignal"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "description": "kind of band (default peak)",
+              "$ref": "#/$defs/EqSectionType"
+            }
+          },
+          "required": [
+            "freq"
+          ]
+        },
+        "EqSectionType": {
+          "description": "The kind of EQ band.",
+          "oneOf": [
+            {
+              "description": "boost or cut around freq",
+              "type": "string",
+              "const": "peak"
+            },
+            {
+              "description": "boost or cut everything below freq",
+              "type": "string",
+              "const": "lowShelf"
+            },
+            {
+              "description": "boost or cut everything above freq",
+              "type": "string",
+              "const": "highShelf"
+            },
+            {
+              "description": "remove everything above freq",
+              "type": "string",
+              "const": "lowpass"
+            },
+            {
+              "description": "remove everything below freq",
+              "type": "string",
+              "const": "highpass"
+            },
+            {
+              "description": "remove a narrow band around freq",
+              "type": "string",
+              "const": "notch"
+            }
+          ]
+        },
+        "EqSections": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EqSection"
+              }
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/EqSection"
+                }
+              }
+            }
+          ]
+        },
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "equalized signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "sound to EQ",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      }
+    ]
+  },
+  {
     "name": "$unstable.filter.lp",
     "documentation": "Surge multimode lowpass (the \"12 dB\" / \"24 dB\" vember filter).\n\n- **cutoff** — V/Oct (0 V = C4). Accepts modulation.\n- **resonance** — 0–5; near the top the filter rings and self-oscillates.\n- **slope** — `'db12'` or `'db24'`.\n- **drive** — `'standard'`, `'driven'`, or `'clean'`.\n\n```js\n$unstable.filter.lp($saw('c2'), 'c4', 2, { slope: 'db24', drive: 'driven' })\n```",
     "paramsSchema": {
@@ -14576,6 +14797,117 @@
     ]
   },
   {
+    "name": "_videoTap",
+    "documentation": "Publishes its input to the video renderer, which polls the latest value\nand the recent samples of each tap slot. The DSL inserts one per audio\nsignal a `$v` input reads.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "VideoTapParams",
+      "type": "object",
+      "properties": {
+        "input": {
+          "description": "signal published to the video renderer",
+          "$ref": "#/$defs/MonoSignal"
+        },
+        "slot": {
+          "description": "index of the tap slot the renderer reads (0–63)",
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "input",
+        "slot"
+      ],
+      "$defs": {
+        "MonoSignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "input signal passthrough",
+        "polyphonic": false,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal published to the video renderer",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "slot"
+      }
+    ]
+  },
+  {
     "name": "$wrap",
     "documentation": "Folds a signal into a range by wrapping values that exceed the boundaries\nback from the opposite side — like a phase accumulator.\n\nBoth **min** and **max** accept polyphonic signals. If **max** < **min**\nthe bounds are swapped automatically.\n\nSet **octave** to `true` to shift by whole integers instead, preserving the\nfractional part (pitch class in V/Oct signals). Always exact when\n`max − min ≥ 1`; makes the closest-octave attempt otherwise.\n\n```js\n// wrap a saw into 0–5 V\n$wrap($saw('c3'), 0, 5)\n// keep pitch class, clamp to octave range 0–2 V\n$wrap($cycle($p('c2 c5 c3')), 0, 2, { octave: true })\n```",
     "paramsSchema": {
@@ -17713,6 +18045,85 @@
       },
       {
         "name": "gate"
+      }
+    ]
+  },
+  {
+    "name": "_mediaAudio",
+    "documentation": "Plays the audio track of a media file in a loop, at a fixed speed, from\nthe loop start when the patch starts. The DSL creates one for each\n`$v.video(...).audio`.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MediaAudioParams",
+      "type": "object",
+      "properties": {
+        "loopEnd": {
+          "description": "Loop end in seconds; the end of the file by default.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "loopStart": {
+          "description": "Loop start in seconds (default 0).",
+          "type": "number",
+          "format": "double",
+          "default": 0.0
+        },
+        "speed": {
+          "description": "Playback rate: 1 is normal speed, 0 is silent (default 1).",
+          "type": "number",
+          "format": "double",
+          "default": 1.0
+        },
+        "wav": {
+          "$ref": "#/$defs/Wav"
+        }
+      },
+      "required": [
+        "wav"
+      ],
+      "$defs": {
+        "Wav": {
+          "type": "object",
+          "properties": {
+            "channels": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "mtime": {
+              "type": "number"
+            },
+            "path": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "wav_ref"
+            }
+          },
+          "required": [
+            "type",
+            "path",
+            "channels"
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "audio of the media file",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [],
+    "positionalArgs": [
+      {
+        "name": "wav"
       }
     ]
   },

@@ -4,7 +4,10 @@
  * neither, and what partial token to complete.
  */
 import { describe, expect, test } from 'vitest';
-import { detectKeybindingCompletion, knownCommands } from './keybindingsCompletion';
+import {
+    detectKeybindingCompletion,
+    knownCommands,
+} from './keybindingsCompletion';
 import { registerCommand, unregisterCommand } from '../../keybindings/commands';
 
 describe('detectKeybindingCompletion', () => {
@@ -22,10 +25,12 @@ describe('detectKeybindingCompletion', () => {
     });
 
     test('ignores the leading - removal marker in the command word', () => {
-        expect(detectKeybindingCompletion('  "command": "-operator.s')).toEqual({
-            kind: 'command',
-            word: 'operator.s',
-        });
+        expect(detectKeybindingCompletion('  "command": "-operator.s')).toEqual(
+            {
+                kind: 'command',
+                word: 'operator.s',
+            },
+        );
     });
 
     test('detects an empty when value', () => {
@@ -37,7 +42,9 @@ describe('detectKeybindingCompletion', () => {
 
     test('detects the trailing identifier of a when expression', () => {
         expect(
-            detectKeybindingCompletion('  "when": "editorTextFocus && !editorR'),
+            detectKeybindingCompletion(
+                '  "when": "editorTextFocus && !editorR',
+            ),
         ).toEqual({ kind: 'when', word: 'editorR' });
     });
 
@@ -80,12 +87,12 @@ describe('knownCommands', () => {
     test('rewrites a catalog id VS Code names differently, leaves shared ids', () => {
         const commands = knownCommands();
         // editor.action.quickOutline -> workbench.action.gotoSymbol.
-        expect(commands.some((c) => c.id === 'workbench.action.gotoSymbol')).toBe(
-            true,
-        );
-        expect(commands.some((c) => c.id === 'editor.action.quickOutline')).toBe(
-            false,
-        );
+        expect(
+            commands.some((c) => c.id === 'workbench.action.gotoSymbol'),
+        ).toBe(true);
+        expect(
+            commands.some((c) => c.id === 'editor.action.quickOutline'),
+        ).toBe(false);
         // A shared editor id keeps its VS Code-identical id.
         expect(
             commands.some((c) => c.id === 'editor.action.revealDefinition'),

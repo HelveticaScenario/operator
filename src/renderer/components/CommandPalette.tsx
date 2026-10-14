@@ -10,7 +10,10 @@ import { useMemo, useRef } from 'react';
 import { Command } from 'cmdk';
 import type { editor } from 'monaco-editor';
 
-import { buildPaletteItems, type PaletteItem } from '../keybindings/paletteItems';
+import {
+    buildPaletteItems,
+    type PaletteItem,
+} from '../keybindings/paletteItems';
 import { toKeyChipGroups } from '../../shared/keybindings/accelerator';
 import electronAPI from '../electronAPI';
 import './CommandPalette.css';

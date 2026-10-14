@@ -1,0 +1,221 @@
+.eq-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-sizing: border-box;
+    padding: 0 14px 4px 0;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    outline: none;
+    user-select: none;
+}
+
+/* Monaco outlines every focused element inside the editor. The panel takes
+   focus only so Delete reaches it, and buttons keep a ring for keyboard
+   focus alone. */
+.monaco-editor .eq-view-zone .eq-panel:focus,
+.monaco-editor .eq-view-zone .eq-panel button:focus:not(:focus-visible) {
+    outline: none;
+}
+
+.eq-panel-graph {
+    position: relative;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.eq-canvas {
+    display: block;
+    width: 100%;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+.eq-canvas-node {
+    cursor: grab;
+}
+
+.eq-canvas-handle {
+    cursor: ew-resize;
+}
+
+.eq-canvas-node:active {
+    cursor: grabbing;
+}
+
+.eq-panel-badges {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: flex;
+    gap: 6px;
+    pointer-events: none;
+}
+
+.eq-badge {
+    padding: 1px 6px;
+    border-radius: 3px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    pointer-events: auto;
+}
+
+.eq-badge-warn {
+    color: var(--color-warning);
+}
+
+.eq-panel-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    height: 30px;
+    flex-shrink: 0;
+}
+
+.eq-channels,
+.eq-chips,
+.eq-types {
+    display: flex;
+    gap: 3px;
+}
+
+.eq-panel button {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    cursor: pointer;
+    padding: 0;
+}
+
+.eq-panel button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+.eq-chip {
+    width: 20px;
+    height: 20px;
+    color: var(--chip-color, var(--text-muted)) !important;
+    border-color: var(--chip-color, var(--border-subtle)) !important;
+    font-weight: bold;
+}
+
+.eq-chip-selected {
+    background: var(--chip-color) !important;
+    color: #111111 !important;
+}
+
+.eq-chip-add {
+    color: var(--text-muted) !important;
+    border-color: var(--border-subtle) !important;
+}
+
+.eq-type {
+    width: 28px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.eq-type svg path {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+}
+
+.eq-type-active {
+    color: var(--text-primary) !important;
+    background: var(--bg-secondary) !important;
+    border-color: var(--text-muted) !important;
+}
+
+.eq-type-ghost {
+    border-style: dashed !important;
+    border-color: var(--text-muted) !important;
+}
+
+.eq-readouts {
+    display: flex;
+    gap: 12px;
+    color: var(--text-primary);
+    white-space: nowrap;
+}
+
+.eq-remove {
+    width: 20px;
+    height: 20px;
+    margin-left: auto;
+}
+
+.eq-hint {
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.eq-channel {
+    min-width: 20px;
+    height: 20px;
+    padding: 0 4px !important;
+}
+
+.eq-channel-active {
+    color: var(--text-primary) !important;
+    background: var(--bg-secondary) !important;
+    border-color: var(--text-muted) !important;
+}
+
+.eq-driven {
+    color: var(--accent-primary);
+}
+
+.eq-scrub {
+    cursor: ew-resize;
+    border-bottom: 1px dotted var(--text-muted);
+}
+
+.eq-value-input {
+    width: 48px;
+    font: inherit;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--text-muted);
+    border-radius: 3px;
+    padding: 0 4px;
+}
+
+.eq-ghost-value {
+    color: var(--text-muted);
+    border-bottom: 1px dashed var(--text-muted);
+}
+
+/* A chip or tab with a remove button revealed on hover. */
+.eq-removable {
+    position: relative;
+    display: inline-flex;
+}
+
+.eq-panel .eq-remove-x {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 13px;
+    height: 13px;
+    font-size: 10px;
+    line-height: 11px;
+    border-radius: 50%;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    display: none;
+    z-index: 1;
+}
+
+.eq-removable:hover .eq-remove-x {
+    display: block;
+}
