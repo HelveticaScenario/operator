@@ -20,8 +20,18 @@ const BUTTON_COLUMNS = 2;
 const GAP_COLUMNS = 1;
 
 /** Width of `control`'s widget, in columns. */
-function columnsOf(control: InlineControl): number {
+function columnsOf(control: ControlWidget): number {
     return control.kind === 'slider' ? SLIDER_COLUMNS : BUTTON_COLUMNS;
+}
+
+/** Columns the widgets of one line take after the end of its text. */
+export function lineControlsColumns(
+    controls: readonly ControlWidget[],
+): number {
+    return controls.reduce(
+        (total, control) => total + GAP_COLUMNS + columnsOf(control),
+        0,
+    );
 }
 
 /**

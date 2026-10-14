@@ -1,4 +1,4 @@
-import type { AppConfig } from '../../shared/ipcTypes';
+import type { AppConfig, MonospaceFont } from '../../shared/ipcTypes';
 
 /** How the performance window shows the code, set apart from the editor's own look. */
 export interface PerformanceViewSettings {
@@ -8,7 +8,7 @@ export interface PerformanceViewSettings {
     codeOpacity: number;
     /** Opacity of the backing behind each line of code and of the cursor line's highlight, 0 to 1. */
     backing: number;
-    font: string;
+    font: MonospaceFont;
     /** Font size in points of the performance window. */
     fontSize: number;
     /** Line height as a multiple of the font size. */

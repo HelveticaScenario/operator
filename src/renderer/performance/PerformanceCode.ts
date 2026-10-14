@@ -1,4 +1,5 @@
 import type * as MonacoNamespace from 'monaco-editor';
+import { ITALIC_FONTS } from '../../shared/fonts';
 import type { AppTheme } from '../themes/types';
 import {
     codeLayout,
@@ -7,17 +8,21 @@ import {
     type CodeFrame,
     type CodeLook,
     type ColoredRange,
-    type CodePosition,
     type CodeRange,
     type CodeSelection,
     type CodeToken,
 } from './drawCode';
-import type { ControlWidget, InlineControl } from './drawControls';
+import {
+    lineControlsColumns,
+    type ControlWidget,
+    type InlineControl,
+} from './drawControls';
 import { scrollEaseMs, type PerformanceViewSettings } from './settings';
 import { TokenColors } from './tokenColors';
 
 type Monaco = typeof MonacoNamespace;
 type Editor = MonacoNamespace.editor.IStandaloneCodeEditor;
+type Model = MonacoNamespace.editor.ITextModel;
 
 /** The decoration class the editor gives a pattern step while it plays. */
 const PATTERN_STEP_CLASS = 'active-seq-step';
@@ -26,34 +31,50 @@ const BRACKET_LEVEL_CLASS = /^bracket-highlighting-(\d+)$/;
 const UNEXPECTED_BRACKET_CLASS = 'unexpected-closing-bracket';
 /** Columns kept clear between the cursor and the edge of the view. */
 const CURSOR_MARGIN_COLUMNS = 2;
+/** Monaco's TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges. */
+const NEVER_GROWS_WHEN_TYPING_AT_EDGES = 1;
 
-/** A control call's widget, placed by the offset of its callee name in the editor's text. */
+/** A control call's widget, placed by the offset of its callee name in the code. */
 export type PlacedControl = ControlWidget & { offset: number };
 
-/**
- * The fonts with an italic face. The editor never slants a face that is not
- * italic (font-synthesis: none), so neither does this view: bundled fonts load
- * only their upright faces, and Monaco has no italic.
- */
-const ITALIC_FONTS: ReadonlySet<string> = new Set([
-    'SF Mono',
-    'Menlo',
-    'Consolas',
-]);
+/** Where the editor has the code scrolled, and its selections there. */
+interface EditorView {
+    selections: CodeSelection[];
+    topLine: number;
+    leftColumn: number;
+}
+
+/** Calls `listener` on each wheel event over `editor`. */
+function onWheel(
+    editor: Editor,
+    listener: () => void,
+): MonacoNamespace.IDisposable {
+    const node = editor.getDomNode();
+    node?.addEventListener('wheel', listener, { passive: true });
+    return { dispose: () => node?.removeEventListener('wheel', listener) };
+}
 
 const clamp = (value: number, min: number, max: number) =>
     Math.min(max, Math.max(min, value));
 
 /**
- * The editor's code drawn for an audience: the same text, cursors, selections
- * and playing pattern steps, kept scrolled to what the editor shows, in a look
- * of its own. It draws into a canvas of the performance picture's size.
+ * A buffer's code drawn for an audience: its text, playing pattern steps and
+ * control widgets, with the editor's cursors, selections and scroll while the
+ * editor shows it, in a look of its own. It draws into a canvas of the
+ * performance picture's size.
  */
 export class PerformanceCode {
     readonly canvas = document.createElement('canvas');
     private readonly context = this.canvas.getContext('2d');
     private editor: Editor | null = null;
-    private subscriptions: MonacoNamespace.IDisposable[] = [];
+    private editorSubscriptions: MonacoNamespace.IDisposable[] = [];
+    /** The model path of the buffer shown, or null to show the editor's. */
+    private bufferPath: string | null = null;
+    private model: Model | null = null;
+    private modelSubscriptions: MonacoNamespace.IDisposable[] = [];
+    private readonly createdModel: MonacoNamespace.IDisposable;
+    /** The editor's view of the model, kept from when it last showed it. */
+    private editorView: EditorView | null = null;
     private lines: string[] = [];
     private linesStale = true;
     /** The tokens of the first `tokens.length` lines. */
@@ -65,71 +86,102 @@ export class PerformanceCode {
     private lastMs = -1;
     private controls: readonly PlacedControl[] = [];
     /**
-     * A place the view keeps in sight in place of the cursor, until the
-     * editor's cursor or scroll moves.
+     * A tracked decoration on the model at a control call the view keeps in
+     * sight in place of the cursor, until the user moves the editor.
      */
-    private revealed: CodePosition | null = null;
+    private revealed: string | null = null;
     private settings: PerformanceViewSettings | null = null;
     private theme: AppTheme | null = null;
     private colors: TokenColors | null = null;
     private pixelRatio = 0;
     private charWidth = 0;
 
-    constructor(private readonly monaco: Monaco) {}
+    constructor(private readonly monaco: Monaco) {
+        // A buffer's model is created when the editor first shows it.
+        this.createdModel = monaco.editor.onDidCreateModel(() =>
+            this.syncModel(),
+        );
+    }
 
-    /** Follows `editor`, or shows nothing for null. */
+    /** Takes the cursors, selections and scroll from `editor` while it shows the code. */
     attach(editor: Editor | null): void {
         if (editor === this.editor) return;
-        for (const subscription of this.subscriptions) subscription.dispose();
-        this.subscriptions = [];
+        for (const subscription of this.editorSubscriptions) {
+            subscription.dispose();
+        }
+        this.editorSubscriptions = [];
         this.editor = editor;
-        this.readModel();
+        this.syncModel();
+        this.dirty = true;
         if (editor === null) return;
         const changed = () => {
-            this.dirty = true;
+            if (this.showsModel()) this.dirty = true;
         };
         const moved = () => {
-            this.revealed = null;
+            if (!this.showsModel()) return;
+            this.clearReveal();
             this.dirty = true;
         };
         const { RecoverFromMarkers } = this.monaco.editor.CursorChangeReason;
-        this.subscriptions = [
+        this.editorSubscriptions = [
             editor.onDidChangeModel(() => {
-                this.revealed = null;
-                this.readModel();
+                this.syncModel();
+                this.dirty = true;
             }),
-            editor.onDidChangeModelContent(() => this.readModel()),
             // An edit elsewhere in the text shifts the cursor without the
             // user moving it.
             editor.onDidChangeCursorSelection((e) =>
                 e.reason === RecoverFromMarkers ? changed() : moved(),
             ),
-            editor.onDidScrollChange((e) =>
-                e.scrollTopChanged || e.scrollLeftChanged ? moved() : changed(),
-            ),
+            // The editor scrolls itself on a resize or as view zones change
+            // height, so only the user's wheel and clicks count as moves.
+            onWheel(editor, moved),
+            editor.onMouseDown(moved),
+            editor.onDidScrollChange(changed),
             editor.onDidLayoutChange(changed),
-            editor.onDidChangeModelDecorations(changed),
         ];
     }
 
-    /** Sets the control widgets, which follow the text of the editor's model. */
+    /**
+     * Shows the buffer whose model is at `path`, or the editor's buffer for
+     * null. A buffer the editor has not shown yet appears once it does.
+     */
+    showBuffer(path: string | null): void {
+        if (path === this.bufferPath) return;
+        this.bufferPath = path;
+        this.syncModel();
+    }
+
+    /** Sets the control widgets, placed in the text of the buffer shown. */
     setControls(controls: readonly PlacedControl[]): void {
         this.controls = controls;
         this.dirty = true;
     }
 
     /**
-     * Scrolls the view to `offset` in the editor's text as it would to the
-     * cursor there, leaving the editor as it is. The view goes back to
-     * following the cursor when the editor's cursor or scroll moves.
+     * Scrolls the view to the control call at `offset` in the buffer shown,
+     * keeping the call and its widget in sight as it would the cursor,
+     * leaving the editor as it is. The view goes back to following the
+     * cursor when the user moves the editor.
      */
     reveal(offset: number): void {
-        const position = this.editor?.getModel()?.getPositionAt(offset);
-        if (!position) return;
-        this.revealed = {
-            column: position.column - 1,
-            line: position.lineNumber - 1,
-        };
+        const { model } = this;
+        if (model === null) return;
+        const position = model.getPositionAt(offset);
+        [this.revealed] = model.deltaDecorations(
+            this.revealed === null ? [] : [this.revealed],
+            [
+                {
+                    options: { stickiness: NEVER_GROWS_WHEN_TYPING_AT_EDGES },
+                    range: new this.monaco.Range(
+                        position.lineNumber,
+                        position.column,
+                        position.lineNumber,
+                        position.column,
+                    ),
+                },
+            ],
+        );
         this.dirty = true;
     }
 
@@ -199,7 +251,7 @@ export class PerformanceCode {
             theme,
         };
         if (this.linesStale) {
-            this.lines = this.editor?.getModel()?.getLinesContent() ?? [];
+            this.lines = this.model?.getLinesContent() ?? [];
             this.linesStale = false;
         }
         const layout = codeLayout(look, this.lines.length, width, height);
@@ -226,7 +278,54 @@ export class PerformanceCode {
     }
 
     dispose(): void {
+        this.createdModel.dispose();
         this.attach(null);
+        this.setModel(null);
+    }
+
+    /** Whether the editor shows the code drawn. */
+    private showsModel(): boolean {
+        return this.model !== null && this.editor?.getModel() === this.model;
+    }
+
+    /** Follows the model of the buffer shown. */
+    private syncModel(): void {
+        const model =
+            this.bufferPath === null
+                ? (this.editor?.getModel() ?? null)
+                : this.monaco.editor.getModel(
+                      this.monaco.Uri.parse(this.bufferPath),
+                  );
+        this.setModel(model);
+    }
+
+    private setModel(model: Model | null): void {
+        if (model === this.model) return;
+        this.clearReveal();
+        for (const subscription of this.modelSubscriptions) {
+            subscription.dispose();
+        }
+        this.model = model;
+        this.editorView = null;
+        this.readModel();
+        this.modelSubscriptions =
+            model === null
+                ? []
+                : [
+                      model.onDidChangeContent(() => this.readModel()),
+                      model.onDidChangeDecorations(() => {
+                          this.dirty = true;
+                      }),
+                      model.onWillDispose(() => this.setModel(null)),
+                  ];
+    }
+
+    private clearReveal(): void {
+        if (this.revealed === null) return;
+        if (this.model !== null && !this.model.isDisposed()) {
+            this.model.deltaDecorations([this.revealed], []);
+        }
+        this.revealed = null;
     }
 
     /** The color of a bracket the editor decorates with `className`, if it is one. */
@@ -253,28 +352,8 @@ export class PerformanceCode {
         this.dirty = true;
     }
 
-    /**
-     * What to draw, with the scroll the view should reach: the editor's,
-     * moved just enough to keep the cursor in a view of `visibleLines` by
-     * `visibleColumns`.
-     */
-    private frame(visibleLines: number, visibleColumns: number): CodeFrame {
-        const { editor, monaco } = this;
-        const model = editor?.getModel() ?? null;
-        if (editor === null || model === null) {
-            return {
-                brackets: [],
-                highlights: [],
-                leftColumn: 0,
-                lines: [],
-                controls: [],
-                selections: [],
-                tabSize: 4,
-                tokens: null,
-                topLine: 0,
-            };
-        }
-        const tabSize = model.getOptions().tabSize;
+    /** The editor's selections and scroll, while it shows the code. */
+    private readEditorView(editor: Editor): EditorView {
         const selections: CodeSelection[] = (editor.getSelections() ?? []).map(
             (s) => ({
                 active: {
@@ -288,35 +367,99 @@ export class PerformanceCode {
                 },
             }),
         );
-
         const firstVisible = editor.getVisibleRanges()[0]?.startLineNumber ?? 1;
         const top = editor.getTopForLineNumber(firstVisible);
         const next = editor.getTopForLineNumber(firstVisible + 1);
-        let topLine =
+        const topLine =
             firstVisible -
             1 +
             (next > top
                 ? clamp((editor.getScrollTop() - top) / (next - top), 0, 1)
                 : 0);
         const { typicalHalfwidthCharacterWidth } = editor.getOption(
-            monaco.editor.EditorOption.fontInfo,
+            this.monaco.editor.EditorOption.fontInfo,
         );
-        let leftColumn =
+        const leftColumn =
             editor.getScrollLeft() / typicalHalfwidthCharacterWidth;
+        return { leftColumn, selections, topLine };
+    }
 
-        const cursor = this.revealed ?? selections[0]?.active;
-        if (cursor !== undefined) {
+    /**
+     * What to draw, with the scroll the view should reach: the editor's,
+     * moved just enough to keep the cursor, or a revealed control call and
+     * its widget, in a view of `visibleLines` by `visibleColumns`.
+     */
+    private frame(visibleLines: number, visibleColumns: number): CodeFrame {
+        const { editor, model, monaco } = this;
+        if (model === null) {
+            return {
+                brackets: [],
+                controls: [],
+                highlights: [],
+                leftColumn: 0,
+                lines: [],
+                selections: [],
+                tabSize: 4,
+                tokens: null,
+                topLine: 0,
+            };
+        }
+        const tabSize = model.getOptions().tabSize;
+        if (editor !== null && this.showsModel()) {
+            this.editorView = this.readEditorView(editor);
+        }
+        const { selections, ...scroll } = this.editorView ?? {
+            leftColumn: 0,
+            selections: [],
+            topLine: 0,
+        };
+        let { leftColumn, topLine } = scroll;
+
+        const controls = this.controls.map(
+            ({ offset, ...widget }): InlineControl => ({
+                ...widget,
+                line: model.getPositionAt(offset).lineNumber - 1,
+            }),
+        );
+
+        // The place to keep in sight: a line, and columns from `start` to
+        // `end` with tabs expanded.
+        let focus: { line: number; start: number; end: number } | null = null;
+        const revealed =
+            this.revealed === null
+                ? null
+                : model.getDecorationRange(this.revealed);
+        if (revealed !== null) {
+            const line = revealed.startLineNumber - 1;
+            const { columns } = expandTabs(this.lines[line] ?? '', tabSize);
+            focus = {
+                end:
+                    columns[columns.length - 1] +
+                    lineControlsColumns(
+                        controls.filter((c) => c.line === line),
+                    ),
+                line,
+                start: columns[
+                    Math.min(revealed.startColumn - 1, columns.length - 1)
+                ],
+            };
+        } else if (selections[0] !== undefined) {
+            const { line, column } = selections[0].active;
+            const { columns } = expandTabs(this.lines[line] ?? '', tabSize);
+            const at = columns[Math.min(column, columns.length - 1)];
+            focus = { end: at, line, start: at };
+        }
+        if (focus !== null) {
             const fullLines = Math.max(1, Math.floor(visibleLines));
-            topLine = clamp(topLine, cursor.line + 1 - fullLines, cursor.line);
-            const { columns } = expandTabs(
-                this.lines[cursor.line] ?? '',
-                tabSize,
-            );
-            const column = columns[Math.min(cursor.column, columns.length - 1)];
-            leftColumn = clamp(
+            topLine = clamp(topLine, focus.line + 1 - fullLines, focus.line);
+            leftColumn = Math.min(
                 leftColumn,
-                column + CURSOR_MARGIN_COLUMNS - visibleColumns,
-                Math.max(0, column - CURSOR_MARGIN_COLUMNS),
+                Math.max(0, focus.start - CURSOR_MARGIN_COLUMNS),
+            );
+            // Past the width of the view, the end of the focus stays in sight.
+            leftColumn = Math.max(
+                leftColumn,
+                focus.end + CURSOR_MARGIN_COLUMNS - visibleColumns,
             );
         }
         topLine = clamp(topLine, 0, Math.max(0, this.lines.length - 1));
@@ -360,13 +503,6 @@ export class PerformanceCode {
             const color = this.bracketColor(options.inlineClassName);
             if (color !== undefined) brackets.push({ ...codeRange, color });
         }
-
-        const controls = this.controls.map(
-            ({ offset, ...widget }): InlineControl => ({
-                ...widget,
-                line: model.getPositionAt(offset).lineNumber - 1,
-            }),
-        );
 
         return {
             brackets,

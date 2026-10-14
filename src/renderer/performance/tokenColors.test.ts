@@ -72,8 +72,8 @@ describe('TokenColors', () => {
 
     it("takes Monaco's bracket colors where the theme sets none", () => {
         const colors = new TokenColors(theme([]));
-        expect(colors.bracket(0)).toBe('#FFD700');
-        expect(colors.bracket(3)).toBe('#FFD700');
+        expect(colors.bracket(0)).toBe('#ffd700');
+        expect(colors.bracket(3)).toBe('#ffd700');
         expect(colors.bracket(null)).toBe('rgba(255, 18, 18, 0.8)');
     });
 });
