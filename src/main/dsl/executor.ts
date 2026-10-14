@@ -25,6 +25,7 @@ import {
     DeferredCollection,
     Bus,
     ModuleOutput,
+    type OutLane,
     cycleToChannels,
     replaceSignals,
     PORT_MAX_CHANNELS,
@@ -278,6 +279,8 @@ export function executePatchScript(
         }
         return new DeferredCollection(...items);
     };
+
+    const $outLane = (label: string): OutLane => builder.outLane(label);
 
     const $bus = (cb: (mixed: Collection) => unknown): Bus =>
         new Bus(builder, cb);
@@ -915,6 +918,7 @@ export function executePatchScript(
         $cGroup: controls.$cGroup,
         // Bus
         $bus,
+        $outLane,
         // Global settings
         $setTempo,
         $setOutputGain,

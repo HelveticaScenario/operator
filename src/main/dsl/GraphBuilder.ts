@@ -841,6 +841,8 @@ export class GraphBuilder {
     private sourceLocationMap = new Map<string, SourceLocation>();
     /** Track all deferred outputs for string replacement during toPatch */
     private deferredOutputs = new Map<string, DeferredModuleOutput>();
+    /** `$outLane` taps, resolved against their labeled out in toPatch */
+    private outLaneTaps: { label: string; lane: OutLane }[] = [];
     /** Global tempo for ROOT_CLOCK in BPM (default: 120) */
     private tempo: number = 120;
     /** Whether $setTempo was explicitly called in the DSL */
@@ -1201,6 +1203,9 @@ export class GraphBuilder {
         // sorted into source order before emission.
         const vuMeters: (VuMeterDef & { ordinal: number })[] = [];
 
+        // Each labeled lane's signals, for `$outLane` taps.
+        const lanesByLabel = new Map<string, OutLaneSources>();
+
         // Process output groups and build channel collections
         if (this.outGroups.size > 0) {
             // Collect all channel collections to mix together
@@ -1306,17 +1311,21 @@ export class GraphBuilder {
                         ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
                         : group.gain!;
 
+                    // Mono outs have no pan; their lane taps read center.
+                    const panSource: PolySignal =
+                        group.type !== 'stereo'
+                            ? 0
+                            : panControllable
+                              ? signalFactory(panValue, { id: `__vuPan_${sk}` })
+                              : group.pan!;
+
                     // Group mix, then the gain stage — the tap: the meter
                     // reads post-gain, pre-mute like a post-fader DAW meter.
                     const mixSignals: ModuleOutput[] =
                         group.type === 'stereo'
                             ? [
                                   ...(stereoMixerFactory(group.outputs, {
-                                      pan: panControllable
-                                          ? signalFactory(panValue, {
-                                                id: `__vuPan_${sk}`,
-                                            })
-                                          : group.pan,
+                                      pan: panSource,
                                       width: group.width ?? 0,
                                   }) as Collection),
                               ]
@@ -1346,7 +1355,7 @@ export class GraphBuilder {
                     const gate = (anySolo ? group.solo : !group.mute) ? 5 : 0;
                     const muteSig = signalFactory(gate, {
                         id: `__vuMute_${sk}`,
-                    });
+                    }) as Collection;
                     const smoothed = slewFactory(muteSig, {
                         fall: 0.002,
                         id: `__vuSlew_${sk}`,
@@ -1367,6 +1376,15 @@ export class GraphBuilder {
                         smoothed,
                     ) as Collection;
                     outputSignals = [...gated];
+
+                    if (group.label !== undefined) {
+                        lanesByLabel.set(group.label, {
+                            active: muteSig[0],
+                            audio: outputSignals,
+                            level: gainSource,
+                            pan: panSource,
+                        });
+                    }
 
                     // Unlabeled outs' id suffix comes from a positional
                     // counter that shifts when outs elsewhere are added or
@@ -1495,6 +1513,10 @@ export class GraphBuilder {
         } else {
             // No outputs registered - create silent root signal (0V)
             signalFactory(0, { id: 'ROOT_OUTPUT' });
+        }
+
+        for (const tap of this.outLaneTaps) {
+            tap.lane.resolve(this, lanesByLabel.get(tap.label));
         }
 
         // The VU panel lists meters in source order, not channel order.
@@ -1668,6 +1690,7 @@ export class GraphBuilder {
         this.outLabels.clear();
         this.sourceLocationMap.clear();
         this.deferredOutputs.clear();
+        this.outLaneTaps = [];
         this.tempo = 120;
         this.outputGain = DEFAULT_OUTPUT_GAIN;
         this.timeSignatureNumerator = 4;
@@ -1794,6 +1817,19 @@ export class GraphBuilder {
             throw new Error('`$bus` is not allowed in other $bus callbacks');
         }
         this.busses.push(bus);
+    }
+
+    /**
+     * Tap a labeled out lane's audio, mute/solo gate, gain, and pan. Resolved
+     * in toPatch, so the out may be declared after the tap.
+     */
+    outLane(label: string): OutLane {
+        if (typeof label !== 'string' || label.length === 0) {
+            throw new Error('$outLane: label must be a non-empty string');
+        }
+        const lane = new OutLane(this);
+        this.outLaneTaps.push({ label, lane });
+        return lane;
     }
 
     /**
@@ -2593,4 +2629,69 @@ function valueToSignal(value: unknown): unknown {
     }
     // It's a number
     return value;
+}
+
+/** A labeled out lane's signals, as compiled in toPatch. */
+interface OutLaneSources {
+    /** Post-gain, post-mute audio: two channels for stereo outs, one for mono. */
+    audio: ModuleOutput[];
+    /** Mute/solo gate $signal (5 audible, 0 silenced). */
+    active: ModuleOutput;
+    /** Gain in DSL units (5 = unity). */
+    level: PolySignal;
+    /** Pan position (-5 left … +5 right); 0 for mono outs. */
+    pan: PolySignal;
+}
+
+/**
+ * `$outLane` tap: a stereo Collection of the lane's audio, with its mute/solo
+ * gate, gain, and pan as ranged properties. Every channel is a deferred
+ * output, since the out may be declared after the tap; its width is fixed at
+ * two so consumers can derive channel counts at call time.
+ */
+export class OutLane extends Collection {
+    /** 5 V while the lane is audible, 0 V while muted or soloed out. */
+    readonly active: ModuleOutputWithRange;
+    /** The lane's gain in DSL units (0–10, 5 = unity). */
+    readonly level: ModuleOutputWithRange;
+    /** The lane's pan (-5 left … +5 right). */
+    readonly pan: ModuleOutputWithRange;
+    private readonly deferredActive: DeferredModuleOutput;
+    private readonly deferredLevel: DeferredModuleOutput;
+    private readonly deferredPan: DeferredModuleOutput;
+
+    constructor(builder: GraphBuilder) {
+        super(
+            new DeferredModuleOutput(builder),
+            new DeferredModuleOutput(builder),
+        );
+        this.deferredActive = new DeferredModuleOutput(builder);
+        this.deferredLevel = new DeferredModuleOutput(builder);
+        this.deferredPan = new DeferredModuleOutput(builder);
+        this.active = this.deferredActive.withRange(0, 5);
+        this.level = this.deferredLevel.withRange(0, 10);
+        this.pan = this.deferredPan.withRange(-5, 5);
+    }
+
+    /**
+     * Point every channel at the lane's signals. A label no out declares
+     * reads as a silent, inactive lane. Mono audio fills both channels;
+     * signal-valued gain and pan tap their first channel.
+     */
+    resolve(builder: GraphBuilder, sources: OutLaneSources | undefined): void {
+        const [left, right] = this.items as DeferredModuleOutput[];
+        if (sources === undefined) {
+            left.set(0);
+            right.set(0);
+            this.deferredActive.set(0);
+            this.deferredLevel.set(0);
+            this.deferredPan.set(0);
+            return;
+        }
+        left.set(sources.audio[0]);
+        right.set(sources.audio[sources.audio.length - 1]);
+        this.deferredActive.set(sources.active);
+        this.deferredLevel.set(builder.$c(sources.level)[0]);
+        this.deferredPan.set(builder.$c(sources.pan)[0]);
+    }
 }

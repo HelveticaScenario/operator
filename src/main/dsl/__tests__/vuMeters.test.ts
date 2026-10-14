@@ -494,3 +494,127 @@ describe('gate chain compilation', () => {
         expect(vuMeters(third)[0].key).toBe('out 1');
     });
 });
+
+describe('$outLane', () => {
+    /** The cable(s) feeding the `probe` $signal's source. */
+    function probe(
+        patch: PatchGraph,
+    ): { channel: number; module: string; port: string }[] {
+        const source = moduleById(patch, 'probe').params.source;
+        return (Array.isArray(source) ? source : [source]) as {
+            channel: number;
+            module: string;
+            port: string;
+        }[];
+    }
+
+    test('the lane is its post-gate stereo audio', () => {
+        const patch = execPatch(`
+            $signal($outLane('bass'), { id: 'probe' })
+            $saw('c2').out({ label: 'bass' })
+        `);
+        expect(probe(patch)).toHaveLength(2);
+        const [left, right] = probe(patch);
+        expect(left).toMatchObject({ channel: 0 });
+        expect(right).toMatchObject({ channel: 1, module: left.module });
+        const gate = moduleById(patch, left.module);
+        expect(gate.moduleType).toBe('$scaleAndShift');
+        expect(gate.params.scale).toMatchObject([{ module: '__vuSlew_bass' }]);
+    });
+
+    test('a mono lane fills both channels', () => {
+        const patch = execPatch(`
+            $saw('c2').outMono(0, { label: 'bass' })
+            $signal($outLane('bass'), { id: 'probe' })
+        `);
+        const [left, right] = probe(patch);
+        expect(right).toEqual(left);
+    });
+
+    test('.active taps the mute/solo gate', () => {
+        const patch = execPatch(`
+            $signal($outLane('bass').active, { id: 'probe' })
+            $saw('c2').out({ label: 'bass' })
+            $sine('c4').out({ label: 'lead', solo: true })
+        `);
+        expect(probe(patch)[0]).toMatchObject({
+            module: '__vuMute_bass',
+            port: 'output',
+        });
+        expect(moduleById(patch, '__vuMute_bass').params.source).toBe(0);
+    });
+
+    test('.level and .pan tap the lifted controls', () => {
+        const patch = execPatch(`
+            const bass = $outLane('bass')
+            $saw('c2').out({ label: 'bass', gain: 3, pan: -2 })
+            $signal(bass.level, { id: 'probe' })
+            $signal(bass.pan, { id: 'panProbe' })
+        `);
+        expect(probe(patch)[0]).toMatchObject({ module: '__vuGain_bass' });
+        expect(moduleById(patch, 'panProbe').params.source).toMatchObject({
+            module: '__vuPan_bass',
+        });
+    });
+
+    test('signal-valued gain and pan are tapped directly', () => {
+        const patch = execPatch(`
+            const g = $signal(4, { id: 'g' })
+            const p = $signal(1, { id: 'p' })
+            $saw('c2').out({ label: 'bass', gain: g, pan: p })
+            $signal($outLane('bass').level, { id: 'probe' })
+            $signal($outLane('bass').pan, { id: 'panProbe' })
+        `);
+        expect(probe(patch)[0]).toMatchObject({ module: 'g' });
+        expect(moduleById(patch, 'panProbe').params.source).toMatchObject({
+            module: 'p',
+        });
+    });
+
+    test('a mono lane pans center', () => {
+        const patch = execPatch(`
+            $saw('c2').outMono(0, { label: 'bass' })
+            $signal($outLane('bass').pan, { id: 'probe' })
+        `);
+        expect(moduleById(patch, probe(patch)[0].module).params.source).toBe(0);
+    });
+
+    test('properties declare their ranges', () => {
+        const patch = execPatch(`
+            const bass = $outLane('bass')
+            $saw('c2').out({ label: 'bass' })
+            $signal(bass.active.range(-1, 1), { id: 'active' })
+            $signal(bass.level.range(-1, 1), { id: 'level' })
+            $signal(bass.pan.range(-1, 1), { id: 'pan' })
+        `);
+        const remapOf = (id: string) => {
+            const [cable] = moduleById(patch, id).params.source as {
+                module: string;
+            }[];
+            return moduleById(patch, cable.module).params;
+        };
+        expect(remapOf('active')).toMatchObject({ inMax: 5, inMin: 0 });
+        expect(remapOf('level')).toMatchObject({ inMax: 10, inMin: 0 });
+        expect(remapOf('pan')).toMatchObject({ inMax: 5, inMin: -5 });
+    });
+
+    test('an undeclared label reads as a silent, inactive lane', () => {
+        const patch = execPatch(`
+            const drums = $outLane('drums')
+            $sine('c4').out({ label: 'lead' })
+            $signal(drums, { id: 'probe' })
+            $signal(drums.active, { id: 'activeProbe' })
+        `);
+        for (const cable of probe(patch)) {
+            expect(moduleById(patch, cable.module).params.source).toBe(0);
+        }
+        const active = moduleById(patch, 'activeProbe').params.source as {
+            module: string;
+        };
+        expect(moduleById(patch, active.module).params.source).toBe(0);
+    });
+
+    test('an empty label throws', () => {
+        expect(() => exec(`$outLane('')`)).toThrow(/non-empty string/);
+    });
+});
