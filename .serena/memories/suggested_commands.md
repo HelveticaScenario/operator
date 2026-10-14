@@ -1,4 +1,5 @@
 Commands:
+
 - Run app: yarn start
 - Build native N-API module: (cd crates/modular && yarn build) or yarn build-native
 - Lint: yarn lint

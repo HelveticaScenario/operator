@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
+import { VideoBackdrop } from './app/video/VideoBackdrop';
+import { performanceOutput } from './video/PerformanceOutput';
 import { AudioControls } from './components/AudioControls';
 import { TransportDisplay } from './components/TransportDisplay';
 import { ErrorDisplay } from './components/ErrorDisplay';
@@ -49,6 +51,10 @@ import { ControlAnchors, createControlAnchors } from './app/controlAnchors';
 import { extractControls, resolveControls } from './dsl/extractControls';
 import type { ResolvedControls } from './dsl/extractControls';
 import { resolveScopeCallRange } from './app/scopeCallRange';
+import {
+    type VideoPreviewAnchors,
+    createVideoPreviewAnchors,
+} from './app/videoPreviewAnchors';
 import { transformErrorsWithSourceLocations } from './app/validationErrorLocations';
 import {
     computeOutNumericOptionEdit,
@@ -70,6 +76,8 @@ import {
     voltsToDb,
 } from './app/vuMeter';
 import type { ScopeView } from './types/editor';
+import { EqPanelController } from './eq/eqPanelController';
+import { type EqPanelSetup, disposeEqPanelSetup } from './eq/eqPanelSetup';
 import {
     FIRST_LINE_COLUMN_OFFSET,
     setActiveInterpolationResolutions,
@@ -102,6 +110,8 @@ function App() {
         xyScopePersistence,
         xyScopeUpsample,
         xyScopeLineWidth,
+        codeBackdropOpacity,
+        performanceScale,
         prettierConfig,
     } = useTheme();
 
@@ -177,6 +187,16 @@ function App() {
     >(null);
 
     const [scopeViews, setScopeViews] = useState<ScopeView[]>([]);
+    const [videoPreviews, setVideoPreviews] = useState<VideoPreviewAnchors>({
+        decorations: null,
+        zones: [],
+    });
+    const videoPreviewsRef = useRef(videoPreviews);
+    const commitVideoPreviews = useCallback((anchors: VideoPreviewAnchors) => {
+        videoPreviewsRef.current.decorations?.clear();
+        videoPreviewsRef.current = anchors;
+        setVideoPreviews(anchors);
+    }, []);
     // Path-identity (getBufferId) of the buffer the running patch came from,
     // compared against activeBufferId by every consumer. Path identities
     // mutate on save/rename, so the stable EditorBuffer.id of the running
@@ -238,6 +258,21 @@ function App() {
         new Map<string, { rmsDb: number; fastDb: number; peakDb: number }[]>(),
     );
     const lastPatchResultRef = useRef<any>(null);
+    /** Inline `ui: true` EQ panels of the running patch. */
+    const [eqController] = useState(
+        () =>
+            new EqPanelController({
+                getModuleStates: () =>
+                    electronAPI.synthesizer.getModuleStates(),
+                getSampleRate: () => electronAPI.synthesizer.getSampleRate(),
+                setModuleParam: (moduleId, moduleType, params) =>
+                    electronAPI.synthesizer.setModuleParam(
+                        moduleId,
+                        moduleType,
+                        params as object,
+                    ),
+            }),
+    );
 
     /** Long-lived invisible tracked decorations spanning each scope() call.
      *  Monaco automatically adjusts these ranges as the document is edited,
@@ -264,8 +299,12 @@ function App() {
         scopeDecorations: editor.IEditorDecorationsCollection | null;
         /** Same contract as scopeDecorations, for vuDecorationsRef. */
         vuDecorations: editor.IEditorDecorationsCollection | null;
+        /** EQ panels of the pending patch, committed with it. */
+        eqPanels: EqPanelSetup;
         /** Anchors on the pending patch's control calls, committed with it. */
         controlAnchors: ControlAnchors | null;
+        /** The pending patch's `$v.preview` panels, committed with it. */
+        videoPreviews: VideoPreviewAnchors;
         /** Stable id of the buffer the pending patch was evaluated from. */
         controlsSource: string | null;
         /** The running buffer before this submit, restored if the queued
@@ -461,6 +500,21 @@ function App() {
         },
         [controlViews, setModuleParam],
     );
+
+    useEffect(() => {
+        eqController.attachEditor(paletteEditor);
+    }, [eqController, paletteEditor]);
+    useEffect(() => {
+        eqController.setCodeStyle(
+            codeStyleFromPrettier(resolvePrettierOptions(prettierConfig)),
+        );
+    }, [eqController, prettierConfig]);
+    useEffect(() => {
+        if (!isClockRunning) {
+            eqController.onStopped();
+        }
+    }, [eqController, isClockRunning]);
+    useEffect(() => () => eqController.dispose(), [eqController]);
 
     // Mirrors for the RAF loop and the M/S click handler, which must read
     // current values without re-subscribing.
@@ -1418,6 +1472,8 @@ function App() {
                         bufferMap.set(key, { data, stats });
                     }
 
+                    eqController.onScopeFrames(bufferMap, performance.now());
+
                     const scopeColors = readScopeColors();
 
                     // For each scope canvas, collect its channels' data and draw
@@ -1573,7 +1629,9 @@ function App() {
                         scopeDecorationsRef.current = pending.scopeDecorations;
                         vuDecorationsRef.current?.clear();
                         vuDecorationsRef.current = pending.vuDecorations;
+                        eqController.commit(pending.eqPanels);
                         commitControlAnchors(pending.controlAnchors);
+                        commitVideoPreviews(pending.videoPreviews);
                         setRunningControlsSource(pending.controlsSource);
                         setScopeViews(pending.scopeViews);
                         setSliderDefs(pending.sliderDefs);
@@ -1596,7 +1654,9 @@ function App() {
                         pendingUIStateRef.current = null;
                         pending.scopeDecorations?.clear();
                         pending.vuDecorations?.clear();
+                        disposeEqPanelSetup(pending.eqPanels);
                         pending.controlAnchors?.dispose();
+                        pending.videoPreviews.decorations?.clear();
                         runningSourceIdRef.current =
                             pending.previousRunning.sourceId;
                         setRunningBufferId(pending.previousRunning.bufferId);
@@ -1618,7 +1678,13 @@ function App() {
         return () => {
             cancelled = true;
         };
-    }, [isClockRunning, clearVuGhosts, commitControlAnchors]);
+    }, [
+        isClockRunning,
+        clearVuGhosts,
+        commitControlAnchors,
+        commitVideoPreviews,
+        eqController,
+    ]);
 
     // Keep Link phase indicator live while Link is enabled but Operator is stopped.
     // The main tick loop only runs when isClockRunning; this fills the gap so
@@ -1776,11 +1842,25 @@ function App() {
 
                 const editorInstance = editorRef.current;
                 const model = editorInstance?.getModel();
+
+                const previewAnchors = editorInstance
+                    ? createVideoPreviewAnchors(
+                          editorInstance,
+                          result.videoPreviews ?? [],
+                          callSiteSpans,
+                          activeBufferId,
+                      )
+                    : { decorations: null, zones: [] };
+
                 const views: ScopeView[] = [];
                 const decorationDescs: editor.IModelDeltaDecoration[] = [];
 
                 for (let i = 0; i < scopes.length; i++) {
                     const scope = scopes[i];
+                    // Panel feeds (the EQ spectrum) have no view of their own.
+                    if ((scope as { headless?: boolean }).headless) {
+                        continue;
+                    }
 
                     // Derive buffer keys for each channel in this scope
                     const channelKeys = scope.channels.map((ch: any) =>
@@ -1897,6 +1977,8 @@ function App() {
                         );
                 }
 
+                const newEqPanels = eqController.stage(result, editorInstance);
+
                 const newSliderDefs = result.sliders ?? [];
                 const newButtonDefs = result.buttons ?? [];
                 const newControlAnchors = model
@@ -1926,17 +2008,23 @@ function App() {
                     // Are cleaned up before storing the new pending state.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
+                    disposeEqPanelSetup(
+                        pendingUIStateRef.current?.eqPanels ?? null,
+                    );
                     pendingUIStateRef.current?.controlAnchors?.dispose();
+                    pendingUIStateRef.current?.videoPreviews.decorations?.clear();
                     pendingUIStateRef.current = {
                         buttonDefs: newButtonDefs,
                         controlAnchors: newControlAnchors,
                         controlsSource: submittedSourceId,
+                        eqPanels: newEqPanels,
                         interpolationResolutions: interpolationMap,
                         previousRunning,
                         scopeDecorations: newScopeDecorations,
                         scopeViews: views,
                         sliderDefs: newSliderDefs,
                         updateId: result.updateId,
+                        videoPreviews: previewAnchors,
                         vuDecorations: newVuDecorations,
                         vuOutputs: newVuOutputs,
                     };
@@ -1945,8 +2033,14 @@ function App() {
                     // And apply UI state right away.
                     pendingUIStateRef.current?.scopeDecorations?.clear();
                     pendingUIStateRef.current?.vuDecorations?.clear();
+                    disposeEqPanelSetup(
+                        pendingUIStateRef.current?.eqPanels ?? null,
+                    );
                     pendingUIStateRef.current?.controlAnchors?.dispose();
+                    pendingUIStateRef.current?.videoPreviews.decorations?.clear();
                     pendingUIStateRef.current = null;
+                    eqController.commit(newEqPanels);
+                    commitVideoPreviews(previewAnchors);
                     commitControlAnchors(newControlAnchors);
                     setRunningControlsSource(submittedSourceId);
                     scopeDecorationsRef.current?.clear();
@@ -1969,7 +2063,13 @@ function App() {
                 setValidationErrors(null);
             }
         };
-    }, [activeBufferId, clearVuGhosts, commitControlAnchors]);
+    }, [
+        activeBufferId,
+        clearVuGhosts,
+        commitControlAnchors,
+        commitVideoPreviews,
+        eqController,
+    ]);
 
     // Expose test API for E2E tests
     useEffect(() => {
@@ -1983,6 +2083,7 @@ function App() {
             getScopeData: () => electronAPI.synthesizer.getScopes(),
             getVuMeterData: () => electronAPI.synthesizer.getVuMeters(),
             getVuOutputs: () => vuOutputsRef.current,
+            getEqPanels: () => eqController.snapshot(),
             isClockRunning: () => isClockRunningRef.current,
             newUntitledFile: () => executeCommand('operator.newFile'),
             openEngineHealth: () => setIsEngineHealthOpen(true),
@@ -1998,7 +2099,7 @@ function App() {
         return () => {
             delete window.__TEST_API__;
         };
-    }, [handleVuToggle]);
+    }, [eqController, handleVuToggle]);
 
     const handleStopRef = useRef(() => {});
     useEffect(() => {
@@ -2204,8 +2305,16 @@ function App() {
             },
             { label: 'Toggle VU Meters', category: 'View' },
         );
+        registerCommand(
+            'operator.togglePerformanceWindow',
+            () => {
+                performanceOutput.toggle();
+            },
+            { label: 'Toggle Performance Window', category: 'View' },
+        );
 
         return () => {
+            unregisterCommand('operator.togglePerformanceWindow');
             unregisterCommand('operator.toggleVuMeters');
             unregisterCommand('operator.updatePatch');
             unregisterCommand('operator.updatePatchNextBeat');
@@ -2289,6 +2398,10 @@ function App() {
         const cleanupToggleVuMeters = electronAPI.onMenuToggleVuMeters(() => {
             executeCommand('operator.toggleVuMeters');
         });
+        const cleanupTogglePerformanceWindow =
+            electronAPI.onMenuTogglePerformanceWindow(() => {
+                executeCommand('operator.togglePerformanceWindow');
+            });
 
         // Handle opening settings from menu (Cmd+,)
         const cleanupOpenSettings = electronAPI.onMenuOpenSettings(() => {
@@ -2438,6 +2551,7 @@ function App() {
             cleanupCloseBuffer();
             cleanupToggleRecording();
             cleanupToggleVuMeters();
+            cleanupTogglePerformanceWindow();
             cleanupOpenSettings();
             cleanupOpenEngineHealth();
             cleanupOpenModuleProfile();
@@ -2628,6 +2742,10 @@ function App() {
                                 upsample={xyScopeUpsample}
                                 lineWidth={xyScopeLineWidth}
                             />
+                            <VideoBackdrop
+                                codeBackdropOpacity={codeBackdropOpacity}
+                                performanceScale={performanceScale}
+                            />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}
@@ -2637,6 +2755,10 @@ function App() {
                                 editorRef={editorRef}
                                 onEditorChange={setPaletteEditor}
                                 scopeViews={scopeViews}
+                                videoPreviewDecorations={
+                                    videoPreviews.decorations
+                                }
+                                videoPreviewZones={videoPreviews.zones}
                                 // oxlint-disable-next-line react-hooks-js/refs -- intentional: live Monaco decoration collection mutated outside React
                                 scopeDecorations={scopeDecorationsRef.current}
                                 onRegisterScopeCanvas={registerScopeCanvas}
