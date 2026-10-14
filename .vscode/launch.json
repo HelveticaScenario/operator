@@ -1,45 +1,48 @@
 {
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "Attach to Electron (JS)",
-      "type": "node",
-      "request": "attach",
-      "port": 9229,
-      "restart": true
-    },
-    {
-      "name": "Attach LLDB to Electron (Rust)",
-      "type": "lldb",
-      "request": "attach",
-      "program": "${workspaceFolder}/node_modules/.bin/electron",
-      "pid": "${command:pickProcess}"
-    },
-    {
-      "type": "swift",
-      "request": "launch",
-      "args": [],
-      "cwd": "${workspaceFolder:modular}/native/syphon-bridge",
-      "name": "Debug operator-syphon (native/syphon-bridge)",
-      "target": "operator-syphon",
-      "configuration": "debug",
-      "preLaunchTask": "swift: Build Debug operator-syphon (native/syphon-bridge)"
-    },
-    {
-      "type": "swift",
-      "request": "launch",
-      "args": [],
-      "cwd": "${workspaceFolder:modular}/native/syphon-bridge",
-      "name": "Release operator-syphon (native/syphon-bridge)",
-      "target": "operator-syphon",
-      "configuration": "release",
-      "preLaunchTask": "swift: Build Release operator-syphon (native/syphon-bridge)"
-    }
-  ],
-  "compounds": [
-    {
-      "name": "Debug Electron + Rust",
-      "configurations": ["Attach to Electron (JS)", "Attach LLDB to Electron (Rust)"]
-    }
-  ]
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Attach to Electron (JS)",
+            "type": "node",
+            "request": "attach",
+            "port": 9229,
+            "restart": true
+        },
+        {
+            "name": "Attach LLDB to Electron (Rust)",
+            "type": "lldb",
+            "request": "attach",
+            "program": "${workspaceFolder}/node_modules/.bin/electron",
+            "pid": "${command:pickProcess}"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:modular}/native/syphon-bridge",
+            "name": "Debug operator-syphon (native/syphon-bridge)",
+            "target": "operator-syphon",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug operator-syphon (native/syphon-bridge)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:modular}/native/syphon-bridge",
+            "name": "Release operator-syphon (native/syphon-bridge)",
+            "target": "operator-syphon",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release operator-syphon (native/syphon-bridge)"
+        }
+    ],
+    "compounds": [
+        {
+            "name": "Debug Electron + Rust",
+            "configurations": [
+                "Attach to Electron (JS)",
+                "Attach LLDB to Electron (Rust)"
+            ]
+        }
+    ]
 }
