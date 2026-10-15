@@ -11,6 +11,7 @@ import {
 } from './factories';
 import type {
     BufferOutputRef,
+    GrooveTemplate,
     Signal,
     PolySignal,
     SourceLocation,
@@ -260,6 +261,52 @@ export function executePatchScript(
             );
         }
         builder.setTimeSignature(numerator, denominator);
+    };
+
+    // Shape is checked here; step ordering and ranges are validated in Rust.
+    const $setGroove = (template: GrooveTemplate) => {
+        if (
+            typeof template !== 'object' ||
+            template === null ||
+            !Array.isArray(template.timing)
+        ) {
+            throw new Error(
+                '$setGroove: expected a groove template with a `timing` array, e.g. $setGroove($swing(0.6))',
+            );
+        }
+        builder.setGroove(template);
+    };
+
+    const $swing = (
+        ratio: number,
+        config: { grid?: number; humanize?: number } = {},
+    ): GrooveTemplate => {
+        if (typeof ratio !== 'number' || !(ratio > 0 && ratio < 1)) {
+            throw new Error(
+                `$swing: ratio must be a number between 0 and 1 (0.5 is straight), got ${ratio}`,
+            );
+        }
+        if (
+            typeof config !== 'object' ||
+            config === null ||
+            Array.isArray(config)
+        ) {
+            throw new Error(
+                '$swing: expected a config object as the second argument, e.g. $swing(0.66, { grid: 8 })',
+            );
+        }
+        const { grid = 16, humanize = 0 } = config;
+        if (typeof humanize !== 'number' || !(humanize >= 0)) {
+            throw new Error(
+                `$swing: humanize must be a number 0 or greater, got ${humanize}`,
+            );
+        }
+        // The pair spans two grid steps; the second starts `2 * ratio` steps in.
+        const template: GrooveTemplate = { grid, timing: [0, 2 * ratio - 1] };
+        if (humanize > 0) {
+            template.random = humanize;
+        }
+        return template;
     };
 
     /**
@@ -923,6 +970,8 @@ export function executePatchScript(
         $setTempo,
         $setOutputGain,
         $setTimeSignature,
+        $setGroove,
+        $swing,
         $setEndOfChainCb,
         // XY background oscilloscope
         $scopeXY,

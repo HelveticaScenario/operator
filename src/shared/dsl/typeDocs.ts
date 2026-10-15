@@ -579,6 +579,52 @@ export const GLOBAL_DOCS: GlobalFunctionDoc[] = [
     },
     {
         description:
+            'Set the global groove. Every $cycle and $drumMap starts its notes on it, keeping their lengths, unless given its own groove or playhead.',
+        examples: [
+            '$setGroove($swing(0.6))  // 60% sixteenth swing',
+            '$setGroove({ timing: [0, 0.2, 0, 0.15], velocity: [1, 0.6, 0.8, 0.5] })',
+        ],
+        group: 'Global Settings',
+        name: '$setGroove',
+        params: [
+            {
+                name: 'template',
+                type: 'GrooveTemplate',
+                description:
+                    'Per-step timing offsets (grid steps) and velocities (0-1), plus grid, amount, velocityAmount, random and seed',
+            },
+        ],
+        signature: '$setGroove(template: GrooveTemplate): void',
+    },
+    {
+        description:
+            'Swing groove template: each pair of grid steps is split ratio : (1 - ratio).',
+        examples: [
+            '$setGroove($swing(0.58))  // light sixteenth swing',
+            '$setGroove($swing(0.66, { grid: 8 }))  // triplet-feel eighths',
+            '$setGroove($swing(0.6, { humanize: 0.05 }))  // swing with a little looseness',
+        ],
+        group: 'Global Settings',
+        name: '$swing',
+        params: [
+            {
+                name: 'ratio',
+                type: 'number',
+                description:
+                    'Share of each pair given to its first step (0.5 = straight)',
+            },
+            {
+                name: 'config',
+                type: '{ grid?: number; humanize?: number }',
+                description:
+                    'grid: grid steps per cycle (default 16); humanize: largest random timing offset per step, in grid steps (default 0)',
+            },
+        ],
+        signature:
+            '$swing(ratio: number, config?: { grid?: number; humanize?: number }): GrooveTemplate',
+    },
+    {
+        description:
             'Set the global output gain applied to the final mix. 2.5 is the default (50%); 5.0 is unity gain.',
         examples: [
             '$setOutputGain(2.5) // 50% gain (default)',

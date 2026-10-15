@@ -8,9 +8,12 @@ use napi::Result;
 use schemars::JsonSchema;
 
 use crate::MonoSignal;
+use crate::dsp::seq::FRESH_WINDOW_SECS;
+use crate::dsp::seq::groove::{GrooveHold, before_first_step, fill_groove_inputs};
 use crate::dsp::utils::rng::{LcgRng, seed_base};
-use crate::dsp::utils::{TempGate, TempGateState, min_gate_samples};
-use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+use crate::dsp::utils::{GATE_HIGH_VOLTAGE, TempGate, TempGateState, min_gate_samples};
+use crate::param_errors::ModuleParamErrors;
+use crate::poly::{MonoSignalExt, PolyOutput, PolySignal, PolySignalExt};
 use crate::types::ClockMessages;
 use crate::types::PatchUpdateHandler;
 
@@ -20,9 +23,6 @@ const NUM_PARTS: usize = 3;
 const STEPS_PER_PATTERN: usize = 32;
 /// Map-level threshold above which a hit also fires its accent output.
 const ACCENT_LEVEL: u8 = 192;
-/// A module created at most this long after a step boundary plays that step.
-/// Quantized patch swaps land within a sample or two of the bar or beat line.
-const FRESH_WINDOW_SECS: f64 = 0.002;
 
 /// Node index at each corner of the 5×5 map, indexed `[x][y]`.
 const DRUM_MAP: [[usize; 5]; 5] = [
@@ -86,13 +86,26 @@ impl JsonSchema for DrumMapResolution {
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
+#[deserr(rename_all = camelCase, deny_unknown_fields, validate = drum_map_fill_groove -> ModuleParamErrors)]
 struct DrumMapParams {
     /// playhead position; one cycle plays the 32-step pattern once
     #[default_connection(module = RootClock, port = "playhead", channels = [0, 1])]
     #[signal(range = (0.0, 1.0))]
     #[deserr(default)]
     playhead: Option<MonoSignal>,
+    /// groove offset added to the playhead to time each step; follows the
+    /// global groove by default, and is 0 when `playhead` is set without it
+    #[default_connection(module = RootClock, port = "grooveOffset", channel = 0)]
+    #[deserr(default)]
+    groove: Option<MonoSignal>,
+    /// groove velocity (0-5V), sampled at each step: scales each hit's level
+    /// for the accent threshold only, so lower velocities accent less; follows
+    /// the global groove by default, and is full (5V) when `playhead` or
+    /// `groove` is set without it
+    #[default_connection(module = RootClock, port = "grooveVelocity", channel = 0)]
+    #[signal(range = (0.0, 5.0))]
+    #[deserr(default)]
+    velocity: Option<MonoSignal>,
     /// horizontal position in the pattern map
     #[signal(default = 2.5, range = (0.0, 5.0))]
     #[deserr(default)]
@@ -121,6 +134,14 @@ struct DrumMapParams {
     #[serde(default)]
     #[deserr(default)]
     resolution: DrumMapResolution,
+}
+
+fn drum_map_fill_groove(
+    mut params: DrumMapParams,
+    _location: ValuePointerRef,
+) -> std::result::Result<DrumMapParams, ModuleParamErrors> {
+    fill_groove_inputs(&params.playhead, &mut params.groove, &mut params.velocity);
+    Ok(params)
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -168,6 +189,9 @@ struct DrumMapState {
     sync: Sync,
     /// Most recent step passed within the cycle, 0–31.
     step: usize,
+    /// Keeps the grooved position from running backwards when the groove
+    /// changes mid-play.
+    groove_hold: GrooveHold,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -189,6 +213,12 @@ struct ChannelState {
 /// cycle. Strong hits also fire the matching accent output.
 ///
 /// One cycle of the **playhead** plays the 32-step pattern once.
+///
+/// Steps follow the global groove set with `$setGroove`, and the groove's
+/// step **velocity** decides how readily each hit accents: at full velocity
+/// accents are as in Grids, and quieter steps accent only their strongest
+/// hits. Pass a `$groove` as `groove` (with its `velocity`) to use a
+/// different groove, or `groove: 0` to play straight.
 ///
 /// ```js
 /// const drums = $drumMap({ x: 1, y: 3, chaos: 0.5 })
@@ -246,11 +276,35 @@ impl DrumMap {
     fn update(&mut self, sample_rate: f32) {
         // Summed in f64: the clock's bar count grows without bound, and an f32
         // sum would erode the fractional bar phase that selects the step.
-        let playhead = self
+        let straight = self
             .params
             .playhead
             .as_ref()
             .map_or(0.0, MonoSignal::get_value_f64);
+        let playhead = self.state.groove_hold.apply(
+            straight,
+            straight + self.params.groove.value_or_zero() as f64,
+        );
+        // Before a late first step nothing plays, and a pending transport
+        // start fires once that step arrives.
+        if !before_first_step(straight, playhead) {
+            self.advance_to(playhead, sample_rate);
+        }
+
+        for ch in 0..self.channel_count() {
+            let state = &mut self.channel_state[ch];
+            self.outputs.bd.set(ch, state.triggers[0].process());
+            self.outputs.sd.set(ch, state.triggers[1].process());
+            self.outputs.hh.set(ch, state.triggers[2].process());
+            self.outputs.bd_accent.set(ch, state.accents[0].process());
+            self.outputs.sd_accent.set(ch, state.accents[1].process());
+            self.outputs.hh_accent.set(ch, state.accents[2].process());
+        }
+    }
+
+    /// Move to grooved position `playhead` (cycles), playing the step it
+    /// reaches when that step fires.
+    fn advance_to(&mut self, playhead: f64, sample_rate: f32) {
         let position = (playhead - playhead.floor()) * STEPS_PER_PATTERN as f64;
         let stride = match self.params.resolution {
             DrumMapResolution::Sixteenth => 2,
@@ -288,21 +342,14 @@ impl DrumMap {
         };
 
         if fire {
-            self.evaluate(step, new_cycle, min_gate_samples(sample_rate));
-        }
-
-        for ch in 0..self.channel_count() {
-            let state = &mut self.channel_state[ch];
-            self.outputs.bd.set(ch, state.triggers[0].process());
-            self.outputs.sd.set(ch, state.triggers[1].process());
-            self.outputs.hh.set(ch, state.triggers[2].process());
-            self.outputs.bd_accent.set(ch, state.accents[0].process());
-            self.outputs.sd_accent.set(ch, state.accents[1].process());
-            self.outputs.hh_accent.set(ch, state.accents[2].process());
+            let velocity = self.params.velocity.value_or(GATE_HIGH_VOLTAGE) / GATE_HIGH_VOLTAGE;
+            self.evaluate(step, new_cycle, velocity, min_gate_samples(sample_rate));
         }
     }
 
-    fn evaluate(&mut self, step: usize, new_cycle: bool, hold: u32) {
+    /// Play `step`. `velocity` (0–1) scales each hit's level against the
+    /// accent threshold.
+    fn evaluate(&mut self, step: usize, new_cycle: bool, velocity: f32, hold: u32) {
         let p = &self.params;
         for ch in 0..self.channel_count() {
             let state = &mut self.channel_state[ch];
@@ -326,7 +373,7 @@ impl DrumMap {
                     read_drum_map(step, part, x, y).saturating_add(state.perturbation[part]);
                 if level > !densities[part] {
                     state.triggers[part].set_state(TempGateState::High, TempGateState::Low, hold);
-                    if level > ACCENT_LEVEL {
+                    if level as f32 * velocity > ACCENT_LEVEL as f32 {
                         state.accents[part].set_state(
                             TempGateState::High,
                             TempGateState::Low,

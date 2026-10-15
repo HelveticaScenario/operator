@@ -1493,6 +1493,52 @@ function $scopeXY(
 function $setTimeSignature(numerator: number, denominator: number): void;
 
 /**
+ * Groove template: per-step timing offsets and velocities over a grid. Step
+ * offsets are in grid steps (positive = late), and the template repeats every
+ * timing.length steps.
+ */
+interface GrooveTemplate {
+  /** Per-step timing offset in grid steps (positive = late). */
+  timing: number[];
+  /** Per-step velocity (0-1), one per timing entry; every step is 1 when omitted. */
+  velocity?: number[];
+  /** Grid steps per cycle (default 16 = sixteenth notes in a 4/4 bar). */
+  grid?: number;
+  /** Timing strength: scales every offset (0 = straight, default 1 = as written). */
+  amount?: number;
+  /** Velocity strength (0 = every step full, default 1 = as written). */
+  velocityAmount?: number;
+  /** Largest random timing offset per step, in grid steps (default 0). */
+  random?: number;
+  /** Seed for the per-step random offsets. */
+  seed?: number;
+}
+
+/**
+ * Set the global groove. Every $cycle and $drumMap starts its notes on it,
+ * keeping their lengths, unless given its own groove or playhead; $clock.grooveOffset,
+ * $clock.grooveVelocity and $clock.grooveTrigger expose it directly.
+ * @param template Groove template, e.g. from $swing
+ * @example $setGroove($swing(0.6))  // MPC-style 60% sixteenth swing
+ * @example $setGroove({ timing: [0, 0.2, 0, 0.15], velocity: [1, 0.6, 0.8, 0.5] })
+ */
+function $setGroove(template: GrooveTemplate): void;
+
+/**
+ * Swing template: each pair of grid steps is split ratio : (1 - ratio).
+ * @param ratio Share of each pair given to its first step (0.5 = straight, 0.66 = triplet feel)
+ * @param config.grid Grid steps per cycle (default 16 = sixteenth swing; 8 = eighth swing)
+ * @param config.humanize Largest random timing offset per step, in grid steps (default 0)
+ * @example $setGroove($swing(0.58))
+ * @example $setGroove($swing(0.66, { grid: 8 }))
+ * @example $setGroove($swing(0.6, { humanize: 0.05 }))  // swing with a little looseness
+ */
+function $swing(
+  ratio: number,
+  config?: { grid?: number; humanize?: number },
+): GrooveTemplate;
+
+/**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
  * Useful for feedback loops and forward references.
  * @param channels Number of deferred outputs (1-64, default 1)
