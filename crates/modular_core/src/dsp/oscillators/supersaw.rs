@@ -5,7 +5,7 @@ use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
         utils::{
-            SchmittTrigger,
+            SchmittTrigger, poly_blep,
             rng::{LcgRng, seed_base},
             wrap_phase,
         },
@@ -155,22 +155,6 @@ impl Default for SupersawState {
     }
 }
 
-/// PolyBLEP correction for sawtooth wave discontinuity at phase wrap.
-#[inline(always)]
-fn poly_blep_saw(phase: f32, dt: f32) -> f32 {
-    // Near phase = 0 (just after wrap)
-    if phase < dt {
-        let t = phase / dt;
-        return t + t - t * t - 1.0;
-    }
-    // Near phase = 1 (just before wrap)
-    if phase > 1.0 - dt {
-        let t = (phase - 1.0) / dt;
-        return t * t + t + t + 1.0;
-    }
-    0.0
-}
-
 impl Supersaw {
     fn init(&mut self, sample_rate: f32) {
         // Sample-rate-derived: safe in init because the rate never changes across
@@ -284,7 +268,7 @@ impl Supersaw {
                 // (below) lands in the upcoming interval, so this operates on the
                 // real, pre-reset phase.
                 let mut saw = 2.0 * phase - 1.0;
-                saw -= poly_blep_saw(phase, dt.abs());
+                saw -= poly_blep(phase, dt.abs());
                 saw += self.channel_state[state_idx].blep_carry;
                 self.channel_state[state_idx].blep_carry = 0.0;
 

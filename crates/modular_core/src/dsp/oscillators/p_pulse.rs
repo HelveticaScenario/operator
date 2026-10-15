@@ -1,5 +1,5 @@
 use crate::{
-    dsp::utils::wrap,
+    dsp::utils::{poly_blep, wrap},
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
 };
@@ -101,24 +101,6 @@ impl PPulseOscillator {
             self.outputs.sample.set(ch, pulse * 5.0);
         }
     }
-}
-
-/// PolyBLEP (Polynomial Band-Limited Step) correction.
-/// Smooths step discontinuities by replacing the hard edge with a
-/// polynomial residual within one sample of the transition.
-#[inline(always)]
-fn poly_blep(phase: f32, phase_increment: f32) -> f32 {
-    if phase_increment < 1.0e-7 {
-        return 0.0;
-    }
-    if phase < phase_increment {
-        let t = phase / phase_increment;
-        return t + t - t * t - 1.0;
-    } else if phase > 1.0 - phase_increment {
-        let t = (phase - 1.0) / phase_increment;
-        return t * t + t + t + 1.0;
-    }
-    0.0
 }
 
 message_handlers!(impl PPulseOscillator {});
