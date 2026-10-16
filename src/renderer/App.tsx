@@ -774,7 +774,7 @@ function App() {
                     void electronAPI.synthesizer.setModuleParam(
                         muteModuleId,
                         '$signal',
-                        { source: gateAfter },
+                        { value: gateAfter },
                     );
                 }
             }

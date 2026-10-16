@@ -2870,7 +2870,7 @@ pub struct VuMeterSpec {
     pub port_name: String,
     /// 1 (mono) or 2 (stereo).
     pub channels: u32,
-    /// `$signal` module driving the mute gate (source 5 = audible, 0 =
+    /// `$signal` module driving the mute gate (value 5 = audible, 0 =
     /// silenced). None for the end-of-chain master meter, which has no gate.
     pub mute_module_id: Option<String>,
     /// When the out's pan is signal-driven, the output to sample so the

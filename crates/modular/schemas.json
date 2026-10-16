@@ -183,13 +183,13 @@
       "title": "SignalParams",
       "type": "object",
       "properties": {
-        "source": {
+        "value": {
           "description": "Input signal to forward.",
           "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
-        "source"
+        "value"
       ],
       "$defs": {
         "PolySignal": {
@@ -262,7 +262,7 @@
     "bufferOutputs": [],
     "signalParams": [
       {
-        "name": "source",
+        "name": "value",
         "description": "Input signal to forward.",
         "signalType": "control",
         "defaultValue": 0.0,
@@ -272,7 +272,7 @@
     ],
     "positionalArgs": [
       {
-        "name": "source"
+        "name": "value"
       }
     ]
   },

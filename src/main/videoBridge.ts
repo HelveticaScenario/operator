@@ -130,18 +130,13 @@ export function updateVideoShader(
 }
 
 /**
- * The value a single-module param update sets on a control: a slider's
- * `_smoothControl` `value` or a button's `$signal` `source`. Undefined for
- * any other update.
+ * The value a single-module param update sets on a control: the constant
+ * `value` of a slider's `_smoothControl` or a button's `$signal`. Undefined
+ * for any other update.
  */
 export function controlParamValue(params: unknown): number | undefined {
-    const { value, source } = (params ?? {}) as {
-        value?: unknown;
-        source?: unknown;
-    };
-    if (typeof value === 'number') return value;
-    if (typeof source === 'number') return source;
-    return undefined;
+    const { value } = (params ?? {}) as { value?: unknown };
+    return typeof value === 'number' ? value : undefined;
 }
 
 /**

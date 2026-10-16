@@ -1194,7 +1194,7 @@ registerIPCHandler('VIDEO_CV_VALUES', (values) => {
     }
     for (const { id, value } of values) {
         if (cvSent.values.get(id) === value) continue;
-        synth.setModuleParam(id, '$signal', { source: value });
+        synth.setModuleParam(id, '$signal', { value });
         cvSent.values.set(id, value);
     }
 });
