@@ -3,6 +3,7 @@
 
 use schemars::JsonSchema;
 
+use crate::dsp::filters::svf_core;
 use crate::dsp::utils::sanitize;
 use crate::poly::PolyOutput;
 
@@ -45,7 +46,7 @@ impl Default for ParametricEqChannel {
 struct ParametricEqState {
     /// Coefficients of the shared section list, used by every channel.
     mono: [SectionRuntime; MAX_EQ_SECTIONS],
-    /// The runtimes that ran last; the others hold smoothing from an older
+    /// The runtimes that ran last; the others hold glide state from an older
     /// form. None before the first patch update.
     active: Option<ActiveRuntimes>,
 }
@@ -145,7 +146,7 @@ impl ParametricEq {
                     let cs = &mut self.channel_state[ch];
                     let mut x = sanitize(self.params.input.get_value(ch));
                     for s in 0..n {
-                        x = svf::process(
+                        x = svf_core::process(
                             &self.state.mono[s].coeffs,
                             &mut cs.ic1[s],
                             &mut cs.ic2[s],
@@ -173,7 +174,7 @@ impl ParametricEq {
                     for s in 0..n {
                         let c = self.channel_state[l].per[s].coeffs;
                         let cs = &mut self.channel_state[ch];
-                        x = svf::process(&c, &mut cs.ic1[s], &mut cs.ic2[s], x);
+                        x = svf_core::process(&c, &mut cs.ic1[s], &mut cs.ic2[s], x);
                     }
                     self.outputs.sample.set(ch, x);
                 }
@@ -189,7 +190,7 @@ impl crate::types::PatchUpdateHandler for ParametricEq {
     /// sample.
     ///
     /// Runtimes coming back into use after another form ran hold stale
-    /// smoothing, so they start fresh and snap to the new values.
+    /// glide state, so they start fresh and snap to the new values.
     fn on_patch_update(&mut self) {
         let now = match &self.params.sections {
             EqSections::Shared(_) => ActiveRuntimes::Shared,
@@ -212,11 +213,11 @@ impl crate::types::PatchUpdateHandler for ParametricEq {
         self.state.active = Some(now);
 
         for rt in self.state.mono.iter_mut() {
-            rt.invalidate();
+            rt.arm();
         }
         for cs in self.channel_state.iter_mut() {
             for rt in cs.per.iter_mut() {
-                rt.invalidate();
+                rt.arm();
             }
         }
     }
@@ -287,7 +288,7 @@ mod tests {
     }
 
     /// RMS of the module output for a unit sine at `freq_hz`, skipping the
-    /// first 1000 samples of smoothing/filter transient.
+    /// first 1000 samples of filter transient.
     fn sine_rms(m: &mut ParametricEq, freq_hz: f32, n: usize) -> f32 {
         let mut acc = 0.0f64;
         let mut count = 0usize;
@@ -504,7 +505,7 @@ mod tests {
     fn settled_section_takes_a_changed_value_after_patch_update() {
         use crate::types::PatchUpdateHandler;
         let mut m = make(vec![section(EqSectionType::Peak, 0.0, 1.0)]);
-        // Long enough for the smoothers to reach their targets and settle.
+        // Long enough for the filter to settle.
         sine_rms(&mut m, C4_HZ, 20_000);
         let EqSections::Shared(list) = &mut m.params.sections else {
             unreachable!()

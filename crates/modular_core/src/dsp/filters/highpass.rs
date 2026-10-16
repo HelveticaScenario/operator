@@ -2,9 +2,8 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
-    dsp::utils::{changed, sanitize, voct_to_hz},
-    poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    dsp::filters::resonant_svf::{self, Response, SvfChannel, SvfFilterState},
+    poly::{PolyOutput, PolySignal},
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -29,52 +28,6 @@ struct HighpassFilterOutputs {
     sample: PolyOutput,
 }
 
-#[derive(Clone, Copy, Default)]
-struct BiquadCoeffs {
-    b0: f32,
-    b1: f32,
-    b2: f32,
-    a1: f32,
-    a2: f32,
-}
-
-#[derive(Default, Clone, Copy)]
-struct HpfChannelState {
-    z1: f32,
-    z2: f32,
-    coeffs: BiquadCoeffs,
-    last_cutoff: f32,
-    last_resonance: f32,
-    smooth_cutoff: Clickless,
-    smooth_resonance: Clickless,
-}
-
-fn compute_hpf_biquad(cutoff: f32, resonance: f32, sample_rate: f32) -> BiquadCoeffs {
-    let freq = voct_to_hz(cutoff);
-    let freq = freq.min(sample_rate * 0.45).max(20.0);
-
-    let omega = 2.0 * std::f32::consts::PI * freq / sample_rate;
-    let sin_omega = omega.sin();
-    let cos_omega = omega.cos();
-    let q = (resonance / 5.0 * 9.0 + 0.5).max(0.5);
-    let alpha = sin_omega / (2.0 * q);
-
-    let b0 = (1.0 + cos_omega) / 2.0;
-    let b1 = -(1.0 + cos_omega);
-    let b2 = (1.0 + cos_omega) / 2.0;
-    let a0 = 1.0 + alpha;
-    let a1 = -2.0 * cos_omega;
-    let a2 = 1.0 - alpha;
-
-    BiquadCoeffs {
-        b0: b0 / a0,
-        b1: b1 / a0,
-        b2: b2 / a0,
-        a1: a1 / a0,
-        a2: a2 / a0,
-    }
-}
-
 /// Highpass filter that attenuates frequencies below the cutoff point.
 ///
 /// Use it to remove low-end rumble, thin out a sound, or create rising
@@ -89,103 +42,40 @@ fn compute_hpf_biquad(cutoff: f32, resonance: f32, sample_rate: f32) -> BiquadCo
 /// // remove low end from a noise source
 /// $hpf($noise("white"), 'a3', 1)
 /// ```
-#[module(name = "$hpf", args(input, cutoff, resonance))]
+#[module(name = "$hpf", patch_update, args(input, cutoff, resonance))]
 pub struct HighpassFilter {
     outputs: HighpassFilterOutputs,
-    state: HighpassFilterState,
-    channel_state: Box<[HpfChannelState]>,
+    state: SvfFilterState,
+    channel_state: Box<[SvfChannel]>,
     params: HighpassFilterParams,
-}
-
-/// State for the HighpassFilter module.
-struct HighpassFilterState {
-    /// Mono optimization
-    coeffs_mono: BiquadCoeffs,
-    last_cutoff_mono: f32,
-    last_resonance_mono: f32,
-    smooth_cutoff_mono: Clickless,
-    smooth_resonance_mono: Clickless,
-}
-
-impl Default for HighpassFilterState {
-    fn default() -> Self {
-        Self {
-            coeffs_mono: BiquadCoeffs::default(),
-            last_cutoff_mono: f32::NAN,
-            last_resonance_mono: f32::NAN,
-            smooth_cutoff_mono: Clickless::default(),
-            smooth_resonance_mono: Clickless::default(),
-        }
-    }
 }
 
 impl HighpassFilter {
     fn update(&mut self, sample_rate: f32) {
-        let num_channels = self.channel_count();
-        let state = &mut self.state;
+        let channels = self.channel_count();
+        resonant_svf::run(
+            Response::Highpass,
+            channels,
+            &self.params.input,
+            &self.params.cutoff,
+            &self.params.resonance,
+            0.0,
+            sample_rate,
+            &mut self.state,
+            &mut self.channel_state,
+            &mut self.outputs.sample,
+        );
+    }
+}
 
-        let cutoff_mono = self.params.cutoff.is_monophonic();
-        let resonance_mono = self
-            .params
-            .resonance
-            .as_ref()
-            .is_some_and(|s| s.is_monophonic());
-
-        // Update coefficients with smoothed params to prevent clicks
-        if cutoff_mono && resonance_mono {
-            state
-                .smooth_cutoff_mono
-                .update(self.params.cutoff.get_value(0));
-            state
-                .smooth_resonance_mono
-                .update(self.params.resonance.value_or(0, 0.0));
-            let c = *state.smooth_cutoff_mono;
-            let r = *state.smooth_resonance_mono;
-
-            if changed(c, state.last_cutoff_mono) || changed(r, state.last_resonance_mono) {
-                state.coeffs_mono = compute_hpf_biquad(c, r, sample_rate);
-                state.last_cutoff_mono = c;
-                state.last_resonance_mono = r;
-            }
-        } else {
-            for i in 0..num_channels {
-                self.channel_state[i]
-                    .smooth_cutoff
-                    .update(self.params.cutoff.get_value(i));
-                self.channel_state[i]
-                    .smooth_resonance
-                    .update(self.params.resonance.value_or(i, 0.0));
-                let c = *self.channel_state[i].smooth_cutoff;
-                let r = *self.channel_state[i].smooth_resonance;
-
-                if changed(c, self.channel_state[i].last_cutoff)
-                    || changed(r, self.channel_state[i].last_resonance)
-                {
-                    self.channel_state[i].coeffs = compute_hpf_biquad(c, r, sample_rate);
-                    self.channel_state[i].last_cutoff = c;
-                    self.channel_state[i].last_resonance = r;
-                }
-            }
-        }
-
-        for i in 0..num_channels {
-            let input = self.params.input.get_value(i);
-
-            let c = if cutoff_mono && resonance_mono {
-                state.coeffs_mono
-            } else {
-                self.channel_state[i].coeffs
-            };
-
-            let ch_state = &mut self.channel_state[i];
-            let w = input - c.a1 * ch_state.z1 - c.a2 * ch_state.z2;
-            let w = sanitize(w);
-            let y = c.b0 * w + c.b1 * ch_state.z1 + c.b2 * ch_state.z2;
-
-            ch_state.z2 = ch_state.z1;
-            ch_state.z1 = w;
-            self.outputs.sample.set(i, y);
-        }
+impl crate::types::PatchUpdateHandler for HighpassFilter {
+    fn on_patch_update(&mut self) {
+        resonant_svf::on_patch_update(
+            &self.params.cutoff,
+            &self.params.resonance,
+            &mut self.state,
+            &mut self.channel_state,
+        );
     }
 }
 

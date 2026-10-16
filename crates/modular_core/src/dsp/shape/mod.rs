@@ -53,7 +53,7 @@ macro_rules! shape_module {
             }
 
             $(#[$doc])*
-            #[module(name = $name, args(input, mode, drive), has_init)]
+            #[module(name = $name, patch_update, args(input, mode, drive), has_init)]
             pub struct $Struct {
                 outputs: [<$Struct Outputs>],
                 state: crate::dsp::shape::shape_core::ShapeModuleState,
@@ -67,7 +67,7 @@ macro_rules! shape_module {
                     <$Shaper as crate::dsp::shape::shape_core::Shaper>::prime();
                 }
 
-                fn update(&mut self, _sample_rate: f32) {
+                fn update(&mut self, sample_rate: f32) {
                     let channels = self.channel_count();
                     crate::dsp::shape::shape_core::run(
                         channels,
@@ -77,7 +77,14 @@ macro_rules! shape_module {
                         &self.state,
                         &mut self.channel_state,
                         &mut self.outputs.sample,
+                        sample_rate,
                     );
+                }
+            }
+
+            impl crate::types::PatchUpdateHandler for $Struct {
+                fn on_patch_update(&mut self) {
+                    crate::dsp::shape::shape_core::on_patch_update(&mut self.channel_state);
                 }
             }
 
@@ -111,7 +118,7 @@ macro_rules! shape_module {
             }
 
             $(#[$doc])*
-            #[module(name = $name, args(input, drive), has_init)]
+            #[module(name = $name, patch_update, args(input, drive), has_init)]
             pub struct $Struct {
                 outputs: [<$Struct Outputs>],
                 state: crate::dsp::shape::shape_core::ShapeModuleState,
@@ -125,7 +132,7 @@ macro_rules! shape_module {
                     <$Shaper as crate::dsp::shape::shape_core::Shaper>::prime();
                 }
 
-                fn update(&mut self, _sample_rate: f32) {
+                fn update(&mut self, sample_rate: f32) {
                     let channels = self.channel_count();
                     crate::dsp::shape::shape_core::run(
                         channels,
@@ -135,7 +142,14 @@ macro_rules! shape_module {
                         &self.state,
                         &mut self.channel_state,
                         &mut self.outputs.sample,
+                        sample_rate,
                     );
+                }
+            }
+
+            impl crate::types::PatchUpdateHandler for $Struct {
+                fn on_patch_update(&mut self) {
+                    crate::dsp::shape::shape_core::on_patch_update(&mut self.channel_state);
                 }
             }
 

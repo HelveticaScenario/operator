@@ -1,7 +1,7 @@
 use crate::{
     dsp::utils::wrap,
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 use deserr::Deserr;
 use schemars::JsonSchema;
@@ -30,10 +30,10 @@ struct PPulseOscillatorOutputs {
     sample: PolyOutput,
 }
 
-/// Per-channel state for width smoothing and phase tracking
+/// Per-channel state for width glide and phase tracking
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    width: Clickless,
+    width: SwapGlide,
     prev_phase: f32,
 }
 
@@ -48,7 +48,7 @@ struct ChannelState {
 /// `pwm` is added to `width` for modulation.
 ///
 /// Output range is **±5V**.
-#[module(name = "$pPulse", args(phase))]
+#[module(name = "$pPulse", patch_update, args(phase))]
 pub struct PPulseOscillator {
     outputs: PPulseOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
@@ -56,7 +56,7 @@ pub struct PPulseOscillator {
 }
 
 impl PPulseOscillator {
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
@@ -64,7 +64,9 @@ impl PPulseOscillator {
 
             let base_width = self.params.width.value_or(ch, 2.5);
             let pwm = self.params.pwm.value_or(ch, 0.0);
-            state.width.update((base_width + pwm).clamp(0.0, 5.0));
+            state
+                .width
+                .update((base_width + pwm).clamp(0.0, 5.0), sample_rate);
 
             let phase = wrap(0.0..1.0, self.params.phase.get_value(ch));
 
@@ -119,6 +121,14 @@ fn poly_blep(phase: f32, phase_increment: f32) -> f32 {
         return t * t + t + t + 1.0;
     }
     0.0
+}
+
+impl crate::types::PatchUpdateHandler for PPulseOscillator {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.width.arm();
+        }
+    }
 }
 
 message_handlers!(impl PPulseOscillator {});

@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use crate::dsp::fx::enosc_tables::aa_feedback;
 use crate::dsp::utils::{sanitize, voct_to_hz};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +39,7 @@ struct FeedbackOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
     lp_state: f32, // One-pole LP filter state (matches IOnePoleLp<s1_15, 2>)
 }
 
@@ -57,7 +57,7 @@ struct ChannelState {
 /// // Apply feedback distortion to a ramp phase and convert to audio
 /// $pSine($feedback($ramp('c3'), 3)).out()
 /// ```
-#[module(name = "$feedback", args(input, amount))]
+#[module(name = "$feedback", patch_update, args(input, amount))]
 pub struct Feedback {
     outputs: FeedbackOutputs,
     channel_state: Box<[ChannelState]>,
@@ -75,8 +75,7 @@ impl Feedback {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state.amount.update(amount_raw, sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1]
@@ -119,6 +118,14 @@ impl Feedback {
 
             // Output the distorted phase
             self.outputs.sample.set(ch, phase);
+        }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Feedback {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.amount.arm();
         }
     }
 }
