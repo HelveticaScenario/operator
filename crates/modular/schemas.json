@@ -5756,7 +5756,7 @@
   },
   {
     "name": "$lpg",
-    "documentation": "Vactrol low pass gate modeled on the one built into Mutable Instruments Plaits.\n\nThe gate is a filter and VCA driven together by a simulated vactrol: as it\nopens, the signal gets both louder and brighter, and it closes with the\nslow, non-linear tail that gives plucked and struck sounds their bounce.\n\n- **trigger** — each rising edge pings the vactrol fully open, then it\n  decays back to **level**.\n- **level** — the floor the vactrol rests at (0–5 V, 5 V fully open). With\n  no trigger it works as a CV-controlled gate; at half open, a ping swings\n  the gate from half open to fully open and back.\n- **color** — low values close the filter as the gate closes (mellow,\n  woody); high values let highs through, approaching a plain VCA.\n- **decay** — length of the vactrol's release.\n\nWith neither **trigger** nor **level** patched the gate is bypassed and\nthe input passes through unchanged.\n\n```js\n// plucked saw pinged on every beat\n$lpg($saw('c3'), $clock.beatTrigger, { color: 1.5, decay: 2 }).out()\n```",
+    "documentation": "Vactrol low pass gate modeled on the one built into Mutable Instruments Plaits.\n\nThe gate is a filter and VCA driven together by a simulated vactrol: as it\nopens, the signal gets both louder and brighter, and it closes with the\nslow, non-linear tail that gives plucked and struck sounds their bounce.\n\n- **trigger** — each rising edge pings the vactrol fully open, then it\n  decays back to **level**.\n- **level** — the floor the vactrol rests at, 0–5 V on Plaits' compressing\n  curve: about 0.9 V opens it halfway, 2.5 V about 80%, 5 V fully. With no\n  trigger it works as a CV-controlled gate; with a trigger, each ping\n  swings the gate from the floor to fully open and back.\n- **color** — low values close the filter as the gate closes (mellow,\n  woody); high values let highs through, approaching a plain VCA.\n- **decay** — length of the vactrol's release.\n\nWith neither **trigger** nor **level** patched the gate is bypassed and\nthe input passes through unchanged; patching or unpatching them\ncrossfades over 5 ms.\n\n```js\n// plucked saw pinged on every beat\n$lpg($saw('c3'), $clock.beatTrigger, { color: 1.5, decay: 2 }).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "LpgParams",
@@ -5789,7 +5789,7 @@
           "$ref": "#/$defs/PolySignal"
         },
         "level": {
-          "description": "level CV (0-5V) - the floor pings rise from and decay back to; 5V fully open",
+          "description": "level CV (0-5V) - the floor pings rise from and decay back to, on Plaits' compressing curve; 5V fully open",
           "anyOf": [
             {
               "$ref": "#/$defs/PolySignal"
@@ -5902,7 +5902,7 @@
       },
       {
         "name": "level",
-        "description": "level CV (0-5V) - the floor pings rise from and decay back to; 5V fully open",
+        "description": "level CV (0-5V) - the floor pings rise from and decay back to, on Plaits' compressing curve; 5V fully open",
         "signalType": "control",
         "defaultValue": 0.0,
         "minValue": 0.0,

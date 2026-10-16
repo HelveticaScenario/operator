@@ -3306,3 +3306,64 @@ fn lpg_color_brightens_a_half_open_gate() {
         "high color should pass far more highs: bright {bright}, dark {dark}"
     );
 }
+
+/// Largest sample-to-sample step over `n` samples of `channel`.
+fn max_step(module: &dyn Sampleable, channel: usize, n: usize, mut prev: f32) -> f32 {
+    let mut s = Stepper::new();
+    let mut step: f32 = 0.0;
+    for _ in 0..n {
+        let slot = s.tick(module);
+        let v = module.get_value_at(DEFAULT_PORT, channel, slot);
+        step = step.max((v - prev).abs());
+        prev = v;
+    }
+    step
+}
+
+#[test]
+fn lpg_crossfades_into_and_out_of_bypass() {
+    let bypassed = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
+    assert!(approx_eq(
+        settle_and_read(bypassed.as_ref(), 480),
+        1.0,
+        1e-6
+    ));
+
+    let gated = make_module("$lpg", "lpg", json!({ "input": 1.0, "level": 0.0 }));
+    gated.transfer_state_from(bypassed.as_ref());
+    let step = max_step(gated.as_ref(), 0, 480, 1.0);
+    assert!(step < 0.01, "entering the gate jumped by {step}");
+    assert!(settle_and_read(gated.as_ref(), 480).abs() < 1e-3);
+
+    let reopened = make_module("$lpg", "lpg", json!({ "input": 1.0 }));
+    reopened.transfer_state_from(gated.as_ref());
+    let step = max_step(reopened.as_ref(), 0, 480, 0.0);
+    assert!(step < 0.01, "leaving the gate jumped by {step}");
+    assert!(approx_eq(
+        settle_and_read(reopened.as_ref(), 480),
+        1.0,
+        1e-6
+    ));
+}
+
+#[test]
+fn lpg_added_channels_do_not_ping_on_a_held_trigger() {
+    let old = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": [1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
+    );
+    let _ = collect_samples(old.as_ref(), 48000);
+
+    let new = make_module(
+        "$lpg",
+        "lpg",
+        json!({ "input": [1.0, 1.0, 1.0], "trigger": 5.0, "decay": 0.0 }),
+    );
+    new.transfer_state_from(old.as_ref());
+    let (_, peak) = min_max(&collect_channel(new.as_ref(), 2, 4800));
+    assert!(
+        peak < 1e-3,
+        "added channel pinged on a held trigger, peak {peak}"
+    );
+}
