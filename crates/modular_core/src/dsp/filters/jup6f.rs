@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use crate::{
     dsp::utils::{changed, sanitize, voct_to_hz},
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -44,10 +44,10 @@ struct LadderState {
     last_cutoff: f32,
     /// Cached resonance for change detection
     last_resonance: f32,
-    /// Smoothed cutoff
-    smooth_cutoff: Clickless,
-    /// Smoothed resonance
-    smooth_resonance: Clickless,
+    /// Glided cutoff
+    smooth_cutoff: SwapGlide,
+    /// Glided resonance
+    smooth_resonance: SwapGlide,
     /// Cached tuning coefficient (g)
     g: f32,
     /// Cached resonance coefficient (k)
@@ -74,7 +74,7 @@ struct LadderState {
 /// let env = $adsr($pPulse($clock[0]), { attack: 0.4, decay: 0.6, sustain: 0.3, release: 1.0 })
 /// $jup6f($saw('c2'), env.range('200hz', '4000hz'), 2.5)
 /// ```
-#[module(name = "$jup6f", args(input, cutoff, resonance))]
+#[module(name = "$jup6f", patch_update, args(input, cutoff, resonance))]
 pub struct Jup6f {
     outputs: Jup6fOutputs,
     state: Jup6fState,
@@ -89,8 +89,10 @@ struct Jup6fState {
     mono_k: f32,
     last_cutoff_mono: f32,
     last_resonance_mono: f32,
-    smooth_cutoff_mono: Clickless,
-    smooth_resonance_mono: Clickless,
+    smooth_cutoff_mono: SwapGlide,
+    smooth_resonance_mono: SwapGlide,
+    /// Which coefficient path the previous patch used.
+    was_mono: bool,
 }
 
 impl Default for Jup6fState {
@@ -100,8 +102,9 @@ impl Default for Jup6fState {
             mono_k: 0.0,
             last_cutoff_mono: f32::NAN, // Indicate that coefficients have never been calculated
             last_resonance_mono: f32::NAN, // Indicate that coefficients have never been calculated
-            smooth_cutoff_mono: Clickless::default(),
-            smooth_resonance_mono: Clickless::default(),
+            smooth_cutoff_mono: SwapGlide::default(),
+            smooth_resonance_mono: SwapGlide::default(),
+            was_mono: false,
         }
     }
 }
@@ -193,24 +196,18 @@ fn tanh_approx(x: f32) -> f32 {
 impl Jup6f {
     fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
+        let is_mono = self.params_mono();
         let state = &mut self.state;
         let channel_state = &mut self.channel_state;
-        let cutoff_mono = self.params.cutoff.is_monophonic();
-        let resonance_mono = self
-            .params
-            .resonance
-            .as_ref()
-            .is_some_and(|s| s.is_monophonic());
-        let is_mono = cutoff_mono && resonance_mono;
 
         // Update coefficients
         if is_mono {
             state
                 .smooth_cutoff_mono
-                .update(self.params.cutoff.get_value(0));
+                .update(self.params.cutoff.get_value(0), sample_rate);
             state
                 .smooth_resonance_mono
-                .update(self.params.resonance.value_or(0, 0.0));
+                .update(self.params.resonance.value_or(0, 0.0), sample_rate);
             let c = *state.smooth_cutoff_mono;
             let r = *state.smooth_resonance_mono;
 
@@ -225,10 +222,10 @@ impl Jup6f {
             for i in 0..num_channels {
                 channel_state[i]
                     .smooth_cutoff
-                    .update(self.params.cutoff.get_value(i));
+                    .update(self.params.cutoff.get_value(i), sample_rate);
                 channel_state[i]
                     .smooth_resonance
-                    .update(self.params.resonance.value_or(i, 0.0));
+                    .update(self.params.resonance.value_or(i, 0.0), sample_rate);
                 let c = *channel_state[i].smooth_cutoff;
                 let r = *channel_state[i].smooth_resonance;
 
@@ -260,6 +257,47 @@ impl Jup6f {
             self.outputs.bp.set(i, bp * 5.0);
             self.outputs.hp.set(i, hp * 5.0);
         }
+    }
+}
+
+impl Jup6f {
+    fn params_mono(&self) -> bool {
+        self.params.cutoff.is_monophonic()
+            && self
+                .params
+                .resonance
+                .as_ref()
+                .is_some_and(|s| s.is_monophonic())
+    }
+}
+
+/// Arms the glides the coming samples will read. When an edit switches between
+/// the shared and per-channel coefficient paths, the newly active path inherits
+/// the other's glide state, so it continues from what was actually playing.
+impl crate::types::PatchUpdateHandler for Jup6f {
+    fn on_patch_update(&mut self) {
+        let mono = self.params_mono();
+        let state = &mut self.state;
+        if mono {
+            if !state.was_mono {
+                if let Some(first) = self.channel_state.first() {
+                    state.smooth_cutoff_mono = first.smooth_cutoff;
+                    state.smooth_resonance_mono = first.smooth_resonance;
+                }
+            }
+            state.smooth_cutoff_mono.arm();
+            state.smooth_resonance_mono.arm();
+        } else {
+            for cs in self.channel_state.iter_mut() {
+                if state.was_mono {
+                    cs.smooth_cutoff = state.smooth_cutoff_mono;
+                    cs.smooth_resonance = state.smooth_resonance_mono;
+                }
+                cs.smooth_cutoff.arm();
+                cs.smooth_resonance.arm();
+            }
+        }
+        state.was_mono = mono;
     }
 }
 

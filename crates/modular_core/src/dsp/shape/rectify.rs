@@ -112,6 +112,7 @@ mod tests {
                 &state,
                 &mut ch,
                 &mut out,
+                sr,
             );
         }
         for i in 0..256 {
@@ -124,6 +125,7 @@ mod tests {
                 &state,
                 &mut ch,
                 &mut out,
+                sr,
             );
             let y = out.get(0);
             assert!(

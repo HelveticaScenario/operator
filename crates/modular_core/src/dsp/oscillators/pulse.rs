@@ -7,7 +7,7 @@ use crate::{
         utils::{SchmittTrigger, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -51,7 +51,7 @@ struct PulseOscillatorOutputs {
 #[derive(Default, Clone, Copy)]
 struct PulseChannelState {
     phase: f32,
-    width: Clickless,
+    width: SwapGlide,
     /// Edge detector for the sync input.
     sync_schmitt: SchmittTrigger,
     /// Previous sync-input sample, for subsample edge interpolation.
@@ -74,7 +74,7 @@ struct PulseChannelState {
 /// ```js
 /// $pulse('c3', { width: 2.5 }).out()
 /// ```
-#[module(name = "$pulse", args(freq))]
+#[module(name = "$pulse", patch_update, args(freq))]
 pub struct PulseOscillator {
     outputs: PulseOscillatorOutputs,
     channel_state: Box<[PulseChannelState]>,
@@ -90,7 +90,9 @@ impl PulseOscillator {
 
             let base_width = self.params.width.value_or(ch, 2.5);
             let pwm = self.params.pwm.value_or(ch, 0.0);
-            state.width.update((base_width + pwm).clamp(0.0, 5.0));
+            state
+                .width
+                .update((base_width + pwm).clamp(0.0, 5.0), sample_rate);
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
@@ -164,6 +166,14 @@ fn poly_blep_pulse(phase: f32, phase_increment: f32) -> f32 {
         return t * t + t + t + 1.0;
     }
     0.0
+}
+
+impl crate::types::PatchUpdateHandler for PulseOscillator {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.width.arm();
+        }
+    }
 }
 
 message_handlers!(impl PulseOscillator {});

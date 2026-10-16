@@ -7,7 +7,7 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -31,7 +31,7 @@ struct CrushOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
 }
 
 /// Phase effect: digital bit-crush distortion.
@@ -48,7 +48,7 @@ struct ChannelState {
 /// // Bit-crush a ramp phase and convert to audio with $pSine
 /// $pSine($crush($ramp('c3'), 2)).out()
 /// ```
-#[module(name = "$crush", args(input, amount))]
+#[module(name = "$crush", patch_update, args(input, amount))]
 pub struct Crush {
     outputs: CrushOutputs,
     channel_state: Box<[ChannelState]>,
@@ -56,7 +56,7 @@ pub struct Crush {
 }
 
 impl Crush {
-    fn update(&mut self, _sample_rate: f32) {
+    fn update(&mut self, sample_rate: f32) {
         let num_channels = self.channel_count();
 
         for ch in 0..num_channels {
@@ -65,8 +65,7 @@ impl Crush {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.value_or(ch, 0.0);
 
-            // Smooth amount parameter
-            state.amount.update(amount_raw);
+            state.amount.update(amount_raw, sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1]
@@ -97,6 +96,14 @@ impl Crush {
 
             // Output the distorted phase
             self.outputs.sample.set(ch, crushed_phase);
+        }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Crush {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.amount.arm();
         }
     }
 }
