@@ -5755,6 +5755,236 @@
     ]
   },
   {
+    "name": "$multimode",
+    "documentation": "Mutable Instruments Blades–style multimode filter with drive and wavefolder.\n\nA circuit model of one channel of Blades: a 2164 VCA state-variable filter\nthat morphs continuously from lowpass through bandpass to highpass, preceded\nby a drive VCA into a zener soft clipper and a two-stage diode wavefolder.\nThe signal path is DC-coupled, so it can process CVs too.\n\n- **cutoff** — V/Oct. Tracks exactly at low cutoffs and runs progressively\n  flat in the top octaves (−25 cents at 1 kHz, about a semitone at 5 kHz),\n  topping out near 18.6 kHz, as the hardware does. Responds at audio rate, so\n  an oscillator patched in gives exponential FM.\n- **resonance** — 0–5. Self-oscillates above ~4.3; the bandpass is then\n  clamped near ±5.5 V by the integrator's zeners. With no input, `mode`\n  shifts the phase of the sine.\n- **mode** — 0 lowpass, 2.5 bandpass, 5 highpass; values between crossfade.\n- **drive** — input gain ahead of everything else: 0 is unity, 5 is about\n  +18 dB. A ±5 V input starts to clip just above 0.\n- **fold** — 0 soft clipping only, 5 the two-stage wavefolder.\n- **highRes** — on by default. Off runs the circuit at the engine rate for\n  half the CPU, with more aliasing from hot drive, folding and\n  self-oscillation, and a highpass that attenuates more below the cutoff\n  once the cutoff is above ~8 kHz (about 2 dB more at 15 kHz).\n\nPassband gain in lowpass mode is about +2.9 dB at unity drive, rolling off\nabove ~14 kHz at the output amp.\n\n```js\n// resonant sweep that morphs from lowpass to highpass\n$multimode($saw('c2'), $sine('0.1hz').range(-1, 2), 3.8, $sine('0.07hz').range(0, 5)).out()\n// wavefolded sine through a gentle lowpass\n$multimode($sine('c3'), 'c6', 1, 0, { drive: 3, fold: 3 }).out()\n// no input: a self-oscillating sine at A3\n$multimode(0, 'a3', 5).out()\n// without oversampling, for half the CPU\n$multimode($saw('c2'), 'c5', 2, 0, { highRes: false }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "MultimodeParams",
+      "type": "object",
+      "properties": {
+        "cutoff": {
+          "description": "cutoff frequency in V/Oct (0V = C4), capped at ~18.6 kHz",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "drive": {
+          "description": "input drive (0 = unity, 5 = +18 dB), cubic response",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fold": {
+          "description": "drive response (0 = soft clipping, 5 = two-stage wavefolder)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "highRes": {
+          "description": "when true (default), the drive stage and filter run at twice the\nengine rate, which reduces aliasing from the clipper, wavefolder and\nself-oscillation and keeps the highpass accurate at high cutoffs;\nfalse halves the CPU cost",
+          "type": "boolean",
+          "default": true
+        },
+        "input": {
+          "description": "signal input (DC-coupled)",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "mode": {
+          "description": "response: 0 = lowpass, 2.5 = bandpass, 5 = highpass, crossfading between",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resonance": {
+          "description": "resonance (0-5). Self-oscillates from ~4.3.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input",
+        "cutoff"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "response selected by mode",
+        "polyphonic": true,
+        "default": true,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "lp",
+        "description": "lowpass (the output at mode 0)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "bp",
+        "description": "bandpass (the output at mode 2.5)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      },
+      {
+        "name": "hp",
+        "description": "highpass (the output at mode 5)",
+        "polyphonic": true,
+        "default": false,
+        "minValue": -10.0,
+        "maxValue": 10.0
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input (DC-coupled)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "cutoff",
+        "description": "cutoff frequency in V/Oct (0V = C4), capped at ~18.6 kHz",
+        "signalType": "frequency",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "resonance",
+        "description": "resonance (0-5). Self-oscillates from ~4.3.",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "mode",
+        "description": "response: 0 = lowpass, 2.5 = bandpass, 5 = highpass, crossfading between",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "drive",
+        "description": "input drive (0 = unity, 5 = +18 dB), cubic response",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "fold",
+        "description": "drive response (0 = soft clipping, 5 = two-stage wavefolder)",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "cutoff"
+      },
+      {
+        "name": "resonance"
+      },
+      {
+        "name": "mode"
+      }
+    ]
+  },
+  {
     "name": "$eq",
     "documentation": "Parametric EQ: shape the tone of a sound with up to 8 bands.\n\nEach band in **sections** has a **type**:\n\n- `'peak'` (default): boost or cut around a frequency.\n- `'lowShelf'` / `'highShelf'`: boost or cut everything below / above a\n  frequency.\n- `'lowpass'` / `'highpass'`: remove everything above / below a frequency.\n- `'notch'`: remove a narrow band around a frequency.\n\nand sets:\n\n- **freq**: where the band sits, like `'1000hz'` or `'c4'`.\n- **gain**: how much to boost or cut, in dB (-24 to 24). Peaks and shelves\n  only.\n- **q**: how narrow the band is (0.1 to 20, default 0.707). On shelves and\n  lowpass/highpass, values above 0.707 add a resonant bump at the\n  frequency; on shelves, lower values make a gentler slope.\n\nAny of them can be modulated. With no sections, the sound passes through\nunchanged.\n\nTo EQ channels differently, give **sections** one list of bands per\nchannel, like one for left and one for right.\n\n**adaptiveQ** makes peaks narrower the more you boost or cut them, like\nmany classic analog EQs.\n\n**ui: true** shows an editor under the call. Drag a band's dot to move it,\nscroll over it or drag its handles to change q, and double-click to add a\nband. Changes play right away and are written into your code. Hold\nCtrl/Cmd to change only the code, and right-click a control to reset it.\n\n```js\n// Warm up the lows, sweep a dip through the mids, clear out rumble\n$eq($saw('c2'), {\n  sections: [\n    { type: 'lowShelf', freq: '150hz', gain: 3 },\n    { type: 'peak', freq: $sine('0.5hz').range('400hz', '2000hz'), gain: -6, q: 2 },\n    { type: 'highpass', freq: '40hz' },\n  ],\n  adaptiveQ: true,\n})\n\n// A darker left channel, a brighter right one\n$eq($saw(['c2', 'g2']), {\n  sections: [\n    [{ type: 'highShelf', freq: '3000hz', gain: -6 }],\n    [{ type: 'highShelf', freq: '3000hz', gain: 4 }],\n  ],\n})\n\n// Start empty and build the EQ in the editor\n$eq($saw('c2'), { ui: true })\n```",
     "paramsSchema": {
