@@ -670,11 +670,12 @@ export function executePatchScript(
     }
 
     // Control factories; their collectors fill as the patch calls them.
+    const controlFactories = { $signal: signal, _smoothControl };
     const controls = createControls({
-        rangedSignal: (value, id, min, max) =>
-            builder.$c(signal(value, { id })).withRange(min, max),
-        smoothedSignal: (value, id, min, max) =>
-            builder.$c(_smoothControl(value, { id })).withRange(min, max),
+        rangedSignal: (moduleType, value, id, min, max) =>
+            builder
+                .$c(controlFactories[moduleType](value, { id }))
+                .withRange(min, max),
     });
 
     if (typeof _videoTap !== 'function') {

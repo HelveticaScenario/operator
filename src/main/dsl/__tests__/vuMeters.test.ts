@@ -1,7 +1,7 @@
 /**
  * Tests for the VU meter output stage: `.out()` / `.outMono()` label, mute,
- * and solo options, the compiled gate chain (__vuTap → gate $scaleAndShift
- * driven by a __vuMute _smoothControl), and the `patch.vuMeters`
+ * and solo options, the compiled gate chain (__vuTap → __vuSlew → gate
+ * $scaleAndShift driven by a __vuMute $signal), and the `patch.vuMeters`
  * entries the renderer panel consumes.
  */
 
@@ -133,6 +133,26 @@ describe('vuMeters emission', () => {
         // label-derived ids stay explicit.
         expect(moduleById(patch, '__vuTap_out_1').idIsExplicit).toBe(false);
         expect(moduleById(patch, '__vuMute_out_2').idIsExplicit).toBe(false);
+    });
+
+    test('only unlabeled outs start their gain and pan fresh on a swap', () => {
+        const patch = execPatch(`
+            $sine('c4').out()
+            $saw('c2').out({ label: 'bass' })
+        `);
+        // A structural match could pair an unlabeled out's controls with
+        // another out's, so they skip state transfer; label-derived ids
+        // match their own predecessor and keep their ramp.
+        expect(moduleById(patch, '__vuGain_out_1').skipStateTransfer).toBe(
+            true,
+        );
+        expect(moduleById(patch, '__vuPan_out_1').skipStateTransfer).toBe(true);
+        expect(
+            moduleById(patch, '__vuGain_bass').skipStateTransfer,
+        ).toBeUndefined();
+        expect(
+            moduleById(patch, '__vuGain_main').skipStateTransfer,
+        ).toBeUndefined();
     });
 
     test('a label claiming a positional name shifts auto keys past it', () => {
@@ -419,23 +439,31 @@ describe('gate chain compilation', () => {
         );
     });
 
-    test('gate chain: _smoothControl → $scaleAndShift fed by the tap', () => {
+    test('gate chain: $signal → $slew → $scaleAndShift fed by the tap', () => {
         const patch = execPatch(`$sine('c4').out({ label: 'lead' })`);
 
         const mute = moduleById(patch, '__vuMute_lead');
-        expect(mute.moduleType).toBe('_smoothControl');
-        expect(mute.params.value).toBe(5);
+        expect(mute.moduleType).toBe('$signal');
+        expect(mute.params.source).toBe(5);
+
+        const slew = moduleById(patch, '__vuSlew_lead');
+        expect(slew.moduleType).toBe('$slew');
+        expect(slew.params.rise).toBe(0.002);
+        expect(slew.params.fall).toBe(0.002);
+        expect(slew.params.input).toMatchObject([
+            { module: '__vuMute_lead', type: 'cable' },
+        ]);
         // The gate must sit at this patch's mute state from a swap's first
-        // sample; carrying the old gate level across would leak audio
+        // sample; carrying the old slew level across would leak audio
         // through a still-closing gate.
-        expect(mute.skipStateTransfer).toBe(true);
+        expect(slew.skipStateTransfer).toBe(true);
 
         // The gate stage is a $scaleAndShift whose input cables come from the
-        // tap and whose scale comes from the gate.
+        // tap and whose scale comes from the slewed gate.
         const gates = patch.modules.filter(
             (m) =>
                 m.moduleType === '$scaleAndShift' &&
-                JSON.stringify(m.params.scale ?? '').includes('__vuMute_lead'),
+                JSON.stringify(m.params.scale ?? '').includes('__vuSlew_lead'),
         );
         expect(gates).toHaveLength(1);
         expect(JSON.stringify(gates[0].params.input)).toContain('__vuTap_lead');
@@ -445,7 +473,7 @@ describe('gate chain compilation', () => {
         const patch = execPatch(
             `$sine('c4').out({ label: 'lead', mute: true })`,
         );
-        expect(moduleById(patch, '__vuMute_lead').params.value).toBe(0);
+        expect(moduleById(patch, '__vuMute_lead').params.source).toBe(0);
         expect(vuMeters(patch)[0].mute).toBe(true);
     });
 
@@ -454,15 +482,15 @@ describe('gate chain compilation', () => {
             $sine('c4').out({ label: 'a' })
             $saw('c2').out({ label: 'b', solo: true })
         `);
-        expect(moduleById(patch, '__vuMute_a').params.value).toBe(0);
-        expect(moduleById(patch, '__vuMute_b').params.value).toBe(5);
+        expect(moduleById(patch, '__vuMute_a').params.source).toBe(0);
+        expect(moduleById(patch, '__vuMute_b').params.source).toBe(5);
     });
 
     test('solo wins over mute on the same output', () => {
         const patch = execPatch(
             `$sine('c4').out({ label: 'a', mute: true, solo: true })`,
         );
-        expect(moduleById(patch, '__vuMute_a').params.value).toBe(5);
+        expect(moduleById(patch, '__vuMute_a').params.source).toBe(5);
     });
 
     test('mute composes with a user gain (both stages present)', () => {
@@ -473,7 +501,7 @@ describe('gate chain compilation', () => {
         expect(moduleById(patch, '__vuTap_lead').moduleType).toBe(
             '$scaleAndShift',
         );
-        expect(moduleById(patch, '__vuMute_lead').params.value).toBe(0);
+        expect(moduleById(patch, '__vuMute_lead').params.source).toBe(0);
         expect(patch.modules.some((m) => m.moduleType === '$curve')).toBe(true);
     });
 
@@ -513,7 +541,7 @@ describe('$outLane', () => {
         expect(right).toMatchObject({ channel: 1, module: left.module });
         const gate = moduleById(patch, left.module);
         expect(gate.moduleType).toBe('$scaleAndShift');
-        expect(gate.params.scale).toMatchObject({ module: '__vuMute_bass' });
+        expect(gate.params.scale).toMatchObject([{ module: '__vuSlew_bass' }]);
     });
 
     test('a mono lane fills both channels', () => {
@@ -535,7 +563,7 @@ describe('$outLane', () => {
             module: '__vuMute_bass',
             port: 'output',
         });
-        expect(moduleById(patch, '__vuMute_bass').params.value).toBe(0);
+        expect(moduleById(patch, '__vuMute_bass').params.source).toBe(0);
     });
 
     test('.level and .pan tap the lifted controls', () => {

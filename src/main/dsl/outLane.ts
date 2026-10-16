@@ -19,7 +19,7 @@ export interface OutLaneControl {
 export interface OutLaneSources {
     /** Post-gain, post-mute audio: two channels for stereo outs, one for mono. */
     audio: ModuleOutput[];
-    /** Mute/solo gate _smoothControl (5 audible, 0 silenced). */
+    /** Mute/solo gate $signal (5 audible, 0 silenced). */
     active: ModuleOutput;
     level: OutLaneControl;
     /** Center (0) for mono outs. */

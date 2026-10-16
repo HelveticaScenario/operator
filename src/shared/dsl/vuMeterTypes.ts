@@ -18,7 +18,7 @@ export interface VuMeterDef {
     /** 1 (mono) or 2 (stereo). */
     channels: number;
     /**
-     * `_smoothControl` driving the mute gate: value 5 = audible, 0 = silenced.
+     * `$signal` driving the mute gate: source 5 = audible, 0 = silenced.
      * Absent for the end-of-chain master meter, which has no mute/solo
      * (undefined rather than null: napi's Option only accepts undefined).
      */

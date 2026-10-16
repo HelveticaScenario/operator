@@ -773,8 +773,8 @@ function App() {
                 if (gateBefore !== gateAfter) {
                     void electronAPI.synthesizer.setModuleParam(
                         muteModuleId,
-                        '_smoothControl',
-                        { value: gateAfter },
+                        '$signal',
+                        { source: gateAfter },
                     );
                 }
             }

@@ -50,6 +50,7 @@ import {
     registerMediaScheme,
 } from './mediaProtocol';
 import {
+    controlParamValue,
     getVideoShader,
     pullVideo,
     setVideoControl,
@@ -1270,9 +1271,9 @@ registerIPCHandler('SYNTH_IS_STOPPED', () => synth.isStopped());
 
 registerIPCHandler('SYNTH_SET_MODULE_PARAM', (moduleId, moduleType, params) => {
     synth.setModuleParam(moduleId, moduleType, params);
-    const { source } = params as { source?: unknown };
-    if (typeof source === 'number') {
-        setVideoControl(moduleId, source);
+    const value = controlParamValue(params);
+    if (value !== undefined) {
+        setVideoControl(moduleId, value);
     }
 });
 

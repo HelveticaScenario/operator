@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { IPC_CHANNELS } from '../../shared/ipcTypes';
 
 const {
+    controlParamValue,
     pullVideo,
     setVideoControl,
     setVideoTapSource,
@@ -16,6 +17,21 @@ const shaderReadingTap = (tap: number) =>
     }) as never;
 
 const window = () => ({ isDestroyed: () => false, send: vi.fn() });
+
+describe('controlParamValue', () => {
+    it('reads a slider value and a button source', () => {
+        expect(controlParamValue({ value: 0.7 })).toBe(0.7);
+        expect(controlParamValue({ source: 5 })).toBe(5);
+    });
+
+    it('is undefined for an update that sets no control value', () => {
+        expect(controlParamValue({ source: [{ type: 'cable' }] })).toBe(
+            undefined,
+        );
+        expect(controlParamValue({ input: 1 })).toBe(undefined);
+        expect(controlParamValue(null)).toBe(undefined);
+    });
+});
 
 describe('pullVideo', () => {
     it('reports stopped, with no samples, before an engine is attached', () => {

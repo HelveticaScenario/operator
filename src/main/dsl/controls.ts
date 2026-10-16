@@ -21,20 +21,12 @@ import type { CollectionWithRange } from './GraphBuilder';
 
 export interface ControlDeps {
     /**
-     * Create a constant `$signal` module with an explicit id, wrapped as a
-     * collection carrying `[min, max]`.
+     * Create a control module with an explicit id, wrapped as a collection
+     * carrying `[min, max]`: a `$signal` that steps to each value the UI
+     * sets, or a `_smoothControl` that ramps to it.
      */
     rangedSignal(
-        value: number,
-        id: string,
-        min: number,
-        max: number,
-    ): CollectionWithRange;
-    /**
-     * Create a `_smoothControl` module with an explicit id, wrapped as a collection
-     * carrying `[min, max]`. Its output ramps to each value the UI sets.
-     */
-    smoothedSignal(
+        moduleType: '$signal' | '_smoothControl',
         value: number,
         id: string,
         min: number,
@@ -227,7 +219,8 @@ export function createControls(deps: ControlDeps): Controls & {
                 unit: parsedValue.unit,
                 value: parsedValue.volts,
             });
-            return deps.smoothedSignal(
+            return deps.rangedSignal(
+                '_smoothControl',
                 parsedValue.volts,
                 moduleId,
                 parsedMin.volts,
@@ -255,7 +248,13 @@ export function createControls(deps: ControlDeps): Controls & {
                 sourceLocation: captureSourceLocation(),
                 value: false,
             });
-            return deps.rangedSignal(0, moduleId, 0, GATE_HIGH_VOLTAGE);
+            return deps.rangedSignal(
+                '$signal',
+                0,
+                moduleId,
+                0,
+                GATE_HIGH_VOLTAGE,
+            );
         },
 
         /**
@@ -286,6 +285,7 @@ export function createControls(deps: ControlDeps): Controls & {
                 value: initial,
             });
             return deps.rangedSignal(
+                '$signal',
                 initial ? GATE_HIGH_VOLTAGE : 0,
                 moduleId,
                 0,

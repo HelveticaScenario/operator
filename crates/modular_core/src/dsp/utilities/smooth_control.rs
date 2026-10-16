@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use crate::dsp::utils::sanitize;
 
 /// Seconds the output takes to reach each new value. Longer than the interval
-/// between UI drag events, so consecutive ramps join into one continuous line
-/// instead of a staircase.
+/// between UI drag events, so consecutive ramps join into one continuous
+/// line.
 const RAMP_SECONDS: f32 = 0.03;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]

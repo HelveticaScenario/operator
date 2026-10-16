@@ -42,13 +42,13 @@ fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
             },
             ModuleSpec {
                 id: "mute-1".to_string(),
-                module_type: "_smoothControl".to_string(),
+                module_type: "$signal".to_string(),
                 id_is_explicit: Some(true),
                 skip_state_transfer: None,
-                params: json!({ "value": 5.0 }),
+                params: json!({ "source": 5.0 }),
             },
             ModuleSpec {
-                id: "not-smooth-control".to_string(),
+                id: "not-signal".to_string(),
                 module_type: "$sine".to_string(),
                 id_is_explicit: Some(true),
                 skip_state_transfer: None,
@@ -131,15 +131,15 @@ fn test_vu_meter_missing_mute_module() {
 }
 
 #[test]
-fn test_vu_meter_mute_module_not_smooth_control() {
+fn test_vu_meter_mute_module_not_signal() {
     let schemas = schemas();
     let mut spec = vu_spec();
-    spec.mute_module_id = Some("not-smooth-control".to_string());
+    spec.mute_module_id = Some("not-signal".to_string());
     let errors = validate_patch(&patch_with_vu_meter(spec), &schemas).unwrap_err();
     assert!(
         errors
             .iter()
-            .any(|e| e.field == "vuMeters" && e.message.contains("must be a _smoothControl")),
+            .any(|e| e.field == "vuMeters" && e.message.contains("must be a $signal")),
         "expected a mute-module-type vuMeters error, got {errors:?}"
     );
 }
