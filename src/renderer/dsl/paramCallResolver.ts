@@ -10,6 +10,7 @@
 import { Node, SyntaxKind, ts } from 'ts-morph';
 import type { CallExpression, Expression, SourceFile } from 'ts-morph';
 
+import { dottedCalleeName } from '../../shared/dsl/calleeName';
 import type { Schemas } from '../../shared/dsl/schemaTypeResolver';
 import type { ParamLiteral, ParamSpec } from './paramControls';
 
@@ -105,9 +106,10 @@ export function createCallResolver(
     return (call) => {
         const expr = call.getExpression();
 
-        // Direct factory: the callee text is the schema name verbatim
-        // ($saw, $unstable.filter.lp).
-        const direct = byName.get(expr.getText());
+        // Direct factory: the callee names the schema ($saw,
+        // $unstable.filter.lp), however it is spread across lines.
+        const calleeName = dottedCalleeName(expr);
+        const direct = calleeName === null ? undefined : byName.get(calleeName);
         if (direct) {
             const count = direct.positionalArgs?.length ?? 0;
             return {
