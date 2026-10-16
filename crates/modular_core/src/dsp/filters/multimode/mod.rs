@@ -27,7 +27,7 @@ use crate::{
 };
 
 use components::ZENER_CAPACITANCE;
-use drive::DriveState;
+use drive::{DriveState, PreEmphasis};
 use svf::{DAMPING_PER_GAIN, NEGATIVE_DAMPING, SvfCore, integrator_gains};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -57,7 +57,8 @@ struct MultimodeParams {
     fold: Option<PolySignal>,
     /// when true, the drive stage and filter run at twice the engine rate,
     /// which reduces aliasing from the clipper, wavefolder and
-    /// self-oscillation at about twice the CPU cost (default false)
+    /// self-oscillation and keeps the highpass accurate at high cutoffs, at
+    /// about twice the CPU cost (default false)
     #[serde(default)]
     #[deserr(default)]
     high_res: bool,
@@ -151,6 +152,7 @@ struct ChannelState {
     drive: DriveState,
     core: SvfCore,
     noise: LcgRng,
+    pre_emphasis: PreEmphasis,
 }
 
 impl ChannelState {
@@ -166,6 +168,7 @@ impl ChannelState {
         self.down_lp = Halfband2xDown::default();
         self.down_bp = Halfband2xDown::default();
         self.down_hp = Halfband2xDown::default();
+        self.pre_emphasis = PreEmphasis::default();
         let coeff = |hz: f32| 1.0 - (-std::f32::consts::TAU * hz / rate).exp();
         self.drive_pole.set_coeff(coeff(DRIVE_POLE_HZ));
         for pole in &mut self.output_poles {
@@ -215,7 +218,8 @@ impl ChannelState {
 /// - **fold** — 0 soft clipping only, 5 the two-stage wavefolder.
 /// - **highRes** — off by default. On runs the circuit at twice the engine
 ///   rate for about twice the CPU, reducing aliasing from hot drive, folding
-///   and self-oscillation at high cutoffs.
+///   and self-oscillation. Off, highpass attenuates more below the cutoff
+///   once the cutoff is above ~8 kHz (about 2 dB more at 15 kHz).
 ///
 /// Passband gain in lowpass mode is about +2.9 dB at unity drive, rolling off
 /// above ~14 kHz at the output amp.
@@ -332,6 +336,7 @@ impl Multimode {
                     state.down_hp.process(even.2, odd.2),
                 )
             } else {
+                let x = state.pre_emphasis.process(x);
                 state.tick(x, fold, integrators, damping)
             };
 
