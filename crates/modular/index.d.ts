@@ -583,7 +583,7 @@ export interface VuMeterSpec {
   /** 1 (mono) or 2 (stereo). */
   channels: number
   /**
-   * `$signal` module driving the mute gate (source 5 = audible, 0 =
+   * `$signal` module driving the mute gate (value 5 = audible, 0 =
    * silenced). None for the end-of-chain master meter, which has no gate.
    */
   muteModuleId?: string

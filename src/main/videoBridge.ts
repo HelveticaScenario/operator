@@ -130,6 +130,16 @@ export function updateVideoShader(
 }
 
 /**
+ * The value a single-module param update sets on a control: the constant
+ * `value` of a slider's `_smoothControl` or a button's `$signal`. Undefined
+ * for any other update.
+ */
+export function controlParamValue(params: unknown): number | undefined {
+    const { value } = (params ?? {}) as { value?: unknown };
+    return typeof value === 'number' ? value : undefined;
+}
+
+/**
  * Applies a control's new value to every shader that reads it: the live one
  * and the latest, which may still be waiting for its update. The renderer
  * finds the input bound to the control in each of its programs, since each
