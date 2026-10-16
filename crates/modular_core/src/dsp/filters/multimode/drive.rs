@@ -161,6 +161,30 @@ impl CurveAdaa {
     }
 }
 
+/// Treble boost of [`PreEmphasis`] per unit of `1 − cos ω`. At 1/8 the FIR
+/// inverts ADAA's `cos(ω/2)` to second order in ω.
+const PRE_EMPHASIS: f32 = 0.125;
+
+/// First-order ADAA averages adjacent samples, a `cos(ω/2)` roll-off that at
+/// the engine rate takes audible treble off everything through the drive
+/// stage. This symmetric three-tap FIR, `1 + 2k(1 − cos ω)`, restores it ahead
+/// of the curves at the cost of one sample of delay.
+#[derive(Clone, Copy, Default)]
+pub(super) struct PreEmphasis {
+    x1: f32,
+    x2: f32,
+}
+
+impl PreEmphasis {
+    #[inline]
+    pub(super) fn process(&mut self, x: f32) -> f32 {
+        let y = self.x1 + PRE_EMPHASIS * (2.0 * self.x1 - x - self.x2);
+        self.x2 = self.x1;
+        self.x1 = x;
+        y
+    }
+}
+
 /// Per-channel drive-stage memory.
 #[derive(Clone, Copy, Default)]
 pub(super) struct DriveState {
