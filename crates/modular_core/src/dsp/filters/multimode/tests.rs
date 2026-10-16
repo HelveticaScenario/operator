@@ -263,3 +263,33 @@ fn switching_resolution_keeps_oscillating_at_the_same_pitch() {
         "self-oscillation at {hz} Hz"
     );
 }
+
+#[test]
+fn non_finite_signals_never_reach_the_state() {
+    let mut m = make(1000.0, 3.0, 2.5);
+    for n in 0..4800 {
+        let bad = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY][n % 3];
+        let t = n as f32 / SR;
+        let hit = |k: usize| n % 7 == k;
+        m.params.input = volts(if hit(0) {
+            bad
+        } else {
+            5.0 * (2.0 * PI * 220.0 * t).sin()
+        });
+        m.params.cutoff = volts(if hit(1) { bad } else { 1.0 });
+        m.params.fold = Some(volts(if hit(2) { bad } else { 2.0 }));
+        m.params.drive = Some(volts(if hit(3) { bad } else { 2.0 }));
+        m.params.resonance = Some(volts(if hit(4) { bad } else { 4.8 }));
+        m.params.mode = Some(volts(if hit(5) { bad } else { 2.5 }));
+        m.update(SR);
+        let v = m.outputs.sample.get(0);
+        assert!(v.is_finite(), "sample {n}: {v}");
+    }
+    // After the bad values stop, the filter still passes signal.
+    m.params.cutoff = volts(1.0);
+    m.params.fold = Some(volts(0.0));
+    m.params.drive = Some(volts(0.0));
+    m.params.resonance = Some(volts(0.0));
+    m.params.mode = Some(volts(0.0));
+    assert!(sine_peak(&mut m, 100.0, 1.0) > 1.0);
+}

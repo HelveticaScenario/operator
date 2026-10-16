@@ -88,7 +88,9 @@ const ZENER_SEED_LN_I: f64 = -13.815_510_557_964_274;
 /// Newton starts next to the root.
 fn solve_clamped(rhs: f32, g: f32, denom: f32, ln_i: &mut f64) -> f32 {
     let linear = rhs / denom;
-    if linear.abs() < BP_CLAMP_ONSET_V {
+    // Written so a NaN takes the linear path, where the integrator state's
+    // sanitize clears it.
+    if !(linear.abs() >= BP_CLAMP_ONSET_V) {
         return linear;
     }
     let (target, denom, gr) = (rhs.abs() as f64, denom as f64, g as f64 * R_INTEGRATOR);

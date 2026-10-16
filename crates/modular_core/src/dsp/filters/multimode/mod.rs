@@ -17,10 +17,11 @@ use schemars::JsonSchema;
 
 use crate::{
     dsp::utils::{
+        cached::Cached,
         halfband::{Halfband2xDown, Halfband2xUp},
         one_pole::OnePole,
         rng::{LcgRng, seed_base},
-        voct_to_hz,
+        sanitize, voct_to_hz,
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
@@ -55,8 +56,8 @@ struct MultimodeParams {
     #[deserr(default)]
     fold: Option<PolySignal>,
     /// when true (default), the drive stage and filter run at twice the engine
-    /// rate, which keeps the clipper, wavefolder and self-oscillation from
-    /// aliasing; false halves the CPU cost
+    /// rate, which reduces aliasing from the clipper, wavefolder and
+    /// self-oscillation; false halves the CPU cost
     #[serde(default = "default_true")]
     #[deserr(default = default_true())]
     high_res: bool,
@@ -126,33 +127,6 @@ const OUTPUT_POLE_HZ: f32 =
 /// Circuit noise at the filter's summing node (~10 µV). Self-oscillation grows
 /// from it, so the filter starts ringing without any input, as the hardware does.
 const NOISE_FLOOR_V: f32 = 1.0e-5;
-
-/// A control-derived value, recomputed only when its input voltage changes.
-#[derive(Clone, Copy)]
-struct Cached<T> {
-    input: f32,
-    value: T,
-}
-
-impl<T: Copy + Default> Default for Cached<T> {
-    fn default() -> Self {
-        Self {
-            input: f32::NAN,
-            value: T::default(),
-        }
-    }
-}
-
-impl<T: Copy> Cached<T> {
-    #[inline]
-    fn get(&mut self, input: f32, derive: impl FnOnce(f32) -> T) -> T {
-        if input.to_bits() != self.input.to_bits() {
-            self.input = input;
-            self.value = derive(input);
-        }
-        self.value
-    }
-}
 
 /// Per-channel caches of the control laws. The integrator gains also depend on
 /// the core rate; [`ChannelState::configure`] clears them when it changes.
@@ -244,7 +218,7 @@ impl ChannelState {
 ///   +18 dB. A ±5 V input starts to clip just above 0.
 /// - **fold** — 0 soft clipping only, 5 the two-stage wavefolder.
 /// - **highRes** — on by default. Off runs the circuit at the engine rate for
-///   half the CPU, at the cost of aliasing from hot drive, folding and
+///   half the CPU, at the cost of more aliasing from hot drive, folding and
 ///   self-oscillation at high cutoffs.
 ///
 /// Passband gain in lowpass mode is about +2.9 dB at unity drive, rolling off
@@ -329,27 +303,29 @@ impl Multimode {
             let state = &mut self.channel_state[ch];
 
             let controls = &mut state.controls;
+            // Each control law sanitizes its input, so a non-finite control acts
+            // as 0 V rather than reaching the filter state.
             let drive_gain = controls.drive_gain.get(p.drive.value_or(ch, 0.0), |drive| {
-                let servo = (1.0 + drive * DRIVE_SERVO_SCALE).max(0.0);
+                let servo = (1.0 + sanitize(drive) * DRIVE_SERVO_SCALE).max(0.0);
                 servo.powf(DRIVE_EXPONENT).min(DRIVE_MAX_GAIN)
             });
             let fold = controls
                 .fold_gains
-                .get(p.fold.value_or(ch, 0.0), fold_gains);
+                .get(p.fold.value_or(ch, 0.0), |fold| fold_gains(sanitize(fold)));
             let integrators = controls
                 .integrator_gains
                 .get(p.cutoff.get_value(ch), |voct| {
-                    let fc = voct_to_hz(voct).clamp(FC_MIN_HZ, FC_MAX_HZ);
+                    let fc = voct_to_hz(sanitize(voct)).clamp(FC_MIN_HZ, FC_MAX_HZ);
                     integrator_gains(fc, fc / FC_MAX_HZ, rate)
                 });
             let damping = controls
                 .damping
                 .get(p.resonance.value_or(ch, 0.0), |resonance| {
-                    let res_control = (resonance * RES_CONTROL_SCALE).max(0.0);
+                    let res_control = (sanitize(resonance) * RES_CONTROL_SCALE).max(0.0);
                     DAMPING_PER_GAIN * vca_gain(res_control) - NEGATIVE_DAMPING
                 });
 
-            let x = drive_gain * p.input.get_value(ch);
+            let x = sanitize(drive_gain * p.input.get_value(ch));
             let (lp, bp, hp) = if p.high_res {
                 let (even, odd) = state.up.process(x);
                 let even = state.tick(even, fold, integrators, damping);
@@ -363,7 +339,7 @@ impl Multimode {
                 state.tick(x, fold, integrators, damping)
             };
 
-            let mode = p.mode.value_or(ch, 0.0);
+            let mode = sanitize(p.mode.value_or(ch, 0.0));
             let gain_a = (mode * MODE_SCALE - MODE_OFFSET_A).clamp(0.0, 1.0);
             let gain_b = (mode * MODE_SCALE - MODE_OFFSET_B).clamp(0.0, 1.0);
             let morph = lp * (1.0 - gain_b) + gain_b * (gain_a * (bp + hp) - bp);
