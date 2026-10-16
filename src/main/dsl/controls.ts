@@ -30,6 +30,16 @@ export interface ControlDeps {
         min: number,
         max: number,
     ): CollectionWithRange;
+    /**
+     * Create a `_smoothControl` module with an explicit id, wrapped as a collection
+     * carrying `[min, max]`. Its output ramps to each value the UI sets.
+     */
+    smoothedSignal(
+        value: number,
+        id: string,
+        min: number,
+        max: number,
+    ): CollectionWithRange;
 }
 
 /**
@@ -217,7 +227,7 @@ export function createControls(deps: ControlDeps): Controls & {
                 unit: parsedValue.unit,
                 value: parsedValue.volts,
             });
-            return deps.rangedSignal(
+            return deps.smoothedSignal(
                 parsedValue.volts,
                 moduleId,
                 parsedMin.volts,

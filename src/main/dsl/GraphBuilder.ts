@@ -1220,7 +1220,7 @@ export class GraphBuilder {
         const stereoMixerFactory = this.getFactory('$stereoMix');
         const scaleAndShiftFactory = this.getFactory('$scaleAndShift');
         const curveFactory = this.getFactory('$curve');
-        const slewFactory = this.getFactory('$slew');
+        const smoothControlFactory = this.getFactory('_smoothControl');
 
         // VU meter entries, one per out group, collected in compile order and
         // sorted into source order before emission.
@@ -1316,7 +1316,7 @@ export class GraphBuilder {
                     const tapId = `__vuTap_${sk}`;
 
                     // A numeric (or absent) stereo pan is lifted into a
-                    // $signal so the VU panel's knob can drive it live via
+                    // _smoothControl so the VU panel's knob can drive it live via
                     // the single-module update path; a signal-valued pan
                     // stays wired as given and renders as a locked knob that
                     // tracks the signal.
@@ -1331,7 +1331,7 @@ export class GraphBuilder {
                         group.type === 'stereo' && !panControllable;
 
                     // Likewise a numeric (or absent) gain is lifted into a
-                    // $signal so the VU panel's fader triangle can drive it;
+                    // _smoothControl so the VU panel's fader triangle can drive it;
                     // the gain stage always compiles so the fader has a
                     // target (absent gain seeds unity).
                     const gainControllable =
@@ -1341,7 +1341,9 @@ export class GraphBuilder {
                         ? ((group.gain as number | undefined) ?? UNITY_OUT_GAIN)
                         : null;
                     const gainSource = gainControllable
-                        ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
+                        ? smoothControlFactory(gainValue, {
+                              id: `__vuGain_${sk}`,
+                          })
                         : group.gain!;
 
                     // Group mix, then the gain stage — the tap: the meter
@@ -1351,7 +1353,7 @@ export class GraphBuilder {
                             ? [
                                   ...(stereoMixerFactory(group.outputs, {
                                       pan: panControllable
-                                          ? signalFactory(panValue, {
+                                          ? smoothControlFactory(panValue, {
                                                 id: `__vuPan_${sk}`,
                                             })
                                           : group.pan,
@@ -1377,38 +1379,33 @@ export class GraphBuilder {
                         ) as Collection),
                     ];
 
-                    // Mute/solo gate stage. The gate $signal holds 5 (unity in
-                    // $scaleAndShift scale terms) or 0 (silence); the VU panel
-                    // flips it live via the single-module update path, and the
-                    // $slew declicks the 5 V swing over ~10 ms.
+                    // Mute/solo gate stage. The gate _smoothControl holds 5 (unity
+                    // in $scaleAndShift scale terms) or 0 (silence); the VU
+                    // panel flips it live via the single-module update path,
+                    // which ramps the swing.
                     const gate = (anySolo ? group.solo : !group.mute) ? 5 : 0;
-                    const muteSig = signalFactory(gate, {
+                    const muteSig = smoothControlFactory(gate, {
                         id: `__vuMute_${sk}`,
-                    }) as Collection;
-                    const smoothed = slewFactory(muteSig, {
-                        fall: 0.002,
-                        id: `__vuSlew_${sk}`,
-                        rise: 0.002,
-                    });
+                    }) as ModuleOutput;
                     // The gate must sit at this patch's mute state from a
                     // swap's first sample — a carried-over open gate would
                     // leak an on-bar attack while still closing. Live M/S
-                    // toggles replace only the $signal, so they still ramp
-                    // through this slew; the engine's swap declick smooths
-                    // the snap for sustained tones.
-                    const slewSpec = this.modules.get(`__vuSlew_${sk}`);
-                    if (slewSpec) {
-                        slewSpec.skipStateTransfer = true;
+                    // toggles are single-module updates, which always carry
+                    // state, so they still ramp; the engine's swap declick
+                    // smooths the snap for sustained tones.
+                    const muteSpec = this.modules.get(`__vuMute_${sk}`);
+                    if (muteSpec) {
+                        muteSpec.skipStateTransfer = true;
                     }
                     const gated = scaleAndShiftFactory(
                         outputSignals,
-                        smoothed,
+                        muteSig,
                     ) as Collection;
                     outputSignals = [...gated];
 
                     if (group.label !== undefined) {
                         lanesByLabel.set(group.label, {
-                            active: muteSig[0],
+                            active: muteSig,
                             audio: outputSignals,
                             gain: group.gain,
                             gainStageId: this.$c(curvedAmp)[0].moduleId,
@@ -1432,7 +1429,6 @@ export class GraphBuilder {
                         for (const hiddenId of [
                             tapId,
                             `__vuMute_${sk}`,
-                            `__vuSlew_${sk}`,
                             `__vuGain_${sk}`,
                             `__vuPan_${sk}`,
                         ]) {
@@ -1499,7 +1495,7 @@ export class GraphBuilder {
             const finalMix = mixFactory(allChannelCollections) as Collection;
 
             // Apply end of chain processing and global output gain. A
-            // numeric output gain is lifted into a $signal so the master
+            // numeric output gain is lifted into a _smoothControl so the master
             // fader can drive it live; the fader's source edits go through
             // $setOutputGain. A signal-valued output gain renders as a
             // locked, live-tracking fader.
@@ -1509,7 +1505,7 @@ export class GraphBuilder {
                 ? (this.outputGain as number)
                 : null;
             const masterGainSignal = masterGainControllable
-                ? (signalFactory(this.outputGain, {
+                ? (smoothControlFactory(this.outputGain, {
                       id: '__vuGain_main',
                   }) as ModuleOutput)
                 : this.outputGain;

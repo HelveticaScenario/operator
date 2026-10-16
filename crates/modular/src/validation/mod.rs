@@ -277,15 +277,15 @@ pub fn validate_patch(
             });
         }
 
-        // A mute gate, when present, must be a live $signal so the renderer
+        // A mute gate, when present, must be a live _smoothControl so the renderer
         // can flip it via the single-module update path.
         if let Some(mute_module_id) = &vu.mute_module_id {
             match module_by_id.get(mute_module_id.as_str()).copied() {
-                Some(mute_module) if mute_module.module_type != "$signal" => {
+                Some(mute_module) if mute_module.module_type != "_smoothControl" => {
                     errors.push(ValidationError {
                         field: "vuMeters".to_string(),
                         message: format!(
-                            "VU meter '{}' mute module '{}' must be a $signal, got '{}'",
+                            "VU meter '{}' mute module '{}' must be a _smoothControl, got '{}'",
                             vu.key, mute_module_id, mute_module.module_type
                         ),
                         location: None,

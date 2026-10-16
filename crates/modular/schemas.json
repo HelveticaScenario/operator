@@ -14602,6 +14602,40 @@
     ]
   },
   {
+    "name": "_smoothControl",
+    "documentation": "A UI-driven constant: the editor sets `value` through the single-module\nupdate path, and the output ramps linearly to it over [`RAMP_SECONDS`] so\na drag's stepped values move without zipper noise. A freshly built control\nstarts at its value; one that replaces another continues from the old\noutput. Backs `$slider`, the out gain/pan faders, and the mute/solo gate.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SmoothControlParams",
+      "type": "object",
+      "properties": {
+        "value": {
+          "description": "value the output ramps to",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "smoothed control value",
+        "polyphonic": false,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [],
+    "positionalArgs": [
+      {
+        "name": "value"
+      }
+    ]
+  },
+  {
     "name": "$spread",
     "documentation": "Produces a multi-channel output by linearly interpolating between a\nminimum and maximum value, with an optional bias to skew the\ndistribution.\n\nEach output channel gets an evenly spaced value between **min** and\n**max**. The **bias** control reshapes the distribution: positive\nvalues push channels toward **max**, negative values toward **min**.\n\n| count | behaviour |\n|-------|-----------|\n| 1     | single value between min and max, positioned by bias |\n| 2     | channel 0 = min, channel 1 = max (with bias = 0) |\n| N     | N evenly spaced values from min to max (with bias = 0) |\n\n```js\n// spread 4 oscillators across a frequency range\n$sine($spread(0, 5, 4))\n\n// 8 channels biased toward the minimum\n$spread(0, 5, 8, { bias: -3 })\n```",
     "paramsSchema": {

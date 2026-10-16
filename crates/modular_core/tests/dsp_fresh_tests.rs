@@ -416,6 +416,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
         "_videoTap" => json!({ "input": 0.0, "slot": 0 }),
+        "_smoothControl" => json!({ "value": 0.0 }),
         _ => json!({}),
     }
 }
