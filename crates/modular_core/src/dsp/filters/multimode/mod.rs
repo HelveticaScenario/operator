@@ -55,16 +55,12 @@ struct MultimodeParams {
     #[signal(type = control, default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     fold: Option<PolySignal>,
-    /// when true (default), the drive stage and filter run at twice the engine
-    /// rate, which reduces aliasing from the clipper, wavefolder and
-    /// self-oscillation; false halves the CPU cost
-    #[serde(default = "default_true")]
-    #[deserr(default = default_true())]
+    /// when true, the drive stage and filter run at twice the engine rate,
+    /// which reduces aliasing from the clipper, wavefolder and
+    /// self-oscillation at about twice the CPU cost (default false)
+    #[serde(default)]
+    #[deserr(default)]
     high_res: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -217,9 +213,9 @@ impl ChannelState {
 /// - **drive** — input gain ahead of everything else: 0 is unity, 5 is about
 ///   +18 dB. A ±5 V input starts to clip just above 0.
 /// - **fold** — 0 soft clipping only, 5 the two-stage wavefolder.
-/// - **highRes** — on by default. Off runs the circuit at the engine rate for
-///   half the CPU, at the cost of more aliasing from hot drive, folding and
-///   self-oscillation at high cutoffs.
+/// - **highRes** — off by default. On runs the circuit at twice the engine
+///   rate for about twice the CPU, reducing aliasing from hot drive, folding
+///   and self-oscillation at high cutoffs.
 ///
 /// Passband gain in lowpass mode is about +2.9 dB at unity drive, rolling off
 /// above ~14 kHz at the output amp.
@@ -231,8 +227,8 @@ impl ChannelState {
 /// $multimode($sine('c3'), 'c6', 1, 0, { drive: 3, fold: 3 }).out()
 /// // no input: a self-oscillating sine at A3
 /// $multimode(0, 'a3', 5).out()
-/// // without oversampling, for half the CPU
-/// $multimode($saw('c2'), 'c5', 2, 0, { highRes: false }).out()
+/// // oversampled, for less aliasing from a hot wavefolder
+/// $multimode($saw('c2'), 'c5', 2, 0, { drive: 5, fold: 4, highRes: true }).out()
 /// ```
 #[module(
     name = "$multimode",
