@@ -53,6 +53,7 @@ pub struct ModuleAttrArgs {
     has_init: bool,
     has_prepare_resources: bool,
     clock_sync: bool,
+    block: bool,
 }
 
 impl syn::parse::Parse for ModuleAttrArgs {
@@ -68,6 +69,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
         let mut has_init = false;
         let mut has_prepare_resources = false;
         let mut clock_sync = false;
+        let mut block = false;
 
         while !input.is_empty() {
             let ident: Ident = input.parse()?;
@@ -125,6 +127,9 @@ impl syn::parse::Parse for ModuleAttrArgs {
                 "clock_sync" => {
                     clock_sync = true;
                 }
+                "block" => {
+                    block = true;
+                }
                 other => {
                     return Err(syn::Error::new(
                         ident.span(),
@@ -132,7 +137,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
                             "Unknown module attribute '{other}'. Expected one of: \
                              name, channels, channels_param, \
                              channels_param_default, channels_derive, args, \
-                             stateful, patch_update, has_init, has_prepare_resources, clock_sync"
+                             stateful, patch_update, has_init, has_prepare_resources, clock_sync, block"
                         ),
                     ));
                 }
@@ -163,6 +168,7 @@ impl syn::parse::Parse for ModuleAttrArgs {
             has_init,
             has_prepare_resources,
             clock_sync,
+            block,
         })
     }
 }
@@ -188,6 +194,9 @@ impl syn::parse::Parse for ModuleAttrArgs {
 ///     // stateful,      // implements StatefulModule
 ///     // patch_update,  // implements PatchUpdateHandler
 ///     // has_init,      // has fn init(&mut self, sample_rate: f32)
+///     // block,         // also has fn process_block(&mut self, outputs, range,
+///     //                // sample_rate: f32) -> Option<()>, run in Block mode
+///     //                // (see crate::block_input)
 /// )]
 /// pub struct MyModule { ... }
 /// ```
@@ -661,6 +670,71 @@ fn impl_module_macro_attr(
         }
     };
 
+    // Runs `update` for every slot up to `target`.
+    let sample_loop = quote! {
+        while self.index.get() < target {
+            let i = self.index.get();
+            unsafe {
+                let module = &mut *self.module.get();
+                // Expose the current slot index to the inner DSP
+                // via `self.current_block_index()` before running
+                // the per-sample update. Used by modules that
+                // need slot-aware reads/writes against shared
+                // resources (BufferWrite / DelayRead's circular
+                // buffer cursor, etc).
+                module._block_index.set(i);
+                module.update(self.sample_rate);
+                (*self.block_outputs.get()).copy_from_inner(&module.outputs, i);
+            }
+            self.index.set(i + 1);
+        }
+    };
+    let process_loop = if attr_args.block {
+        quote! {
+            if self.mode == crate::types::ProcessingMode::Block {
+                // SAFETY: Audio thread has exclusive access. See crate::types
+                // module documentation. Each call's borrows end with the call.
+                let process = |range: std::ops::Range<usize>| unsafe {
+                    (*self.module.get()).process_block(
+                        &mut *self.block_outputs.get(),
+                        range,
+                        self.sample_rate,
+                    )
+                };
+                if process(start_index..target).is_none() {
+                    // Retry in sub-ranges short enough for every input to
+                    // resolve (see crate::block_input), halving the length
+                    // while a sub-range is declined; a single slot that is
+                    // still declined runs `update`.
+                    let channels = unsafe { (*self.module.get())._channel_count.max(1) };
+                    let mut step = (crate::block_input::SCRATCH_LEN / channels).max(1);
+                    let mut start = start_index;
+                    while start < target {
+                        let end = (start + step).min(target);
+                        self.index.set(start);
+                        if process(start..end).is_none() {
+                            if end - start > 1 {
+                                step = (end - start) / 2;
+                                continue;
+                            }
+                            self.index.set(start);
+                            let target = end;
+                            #sample_loop
+                        }
+                        start = end;
+                    }
+                }
+                self.index.set(target);
+            } else {
+                // Feedback cycles (Sample mode) run `update` one slot at a time,
+                // so each read sees the cycle's previous slot.
+                #sample_loop
+            }
+        }
+    } else {
+        sample_loop
+    };
+
     let generated = quote! {
         // Generated core channel count function (used by derive_channel_count and initial default)
         // IMPORTANT: This function should never be called within the audio thread.
@@ -783,22 +857,7 @@ fn impl_module_macro_attr(
                 // added between this read and the loop would corrupt the
                 // sample count without a compiler diagnostic.
                 let start_index = self.index.get();
-                while self.index.get() < target {
-                    let i = self.index.get();
-                    unsafe {
-                        let module = &mut *self.module.get();
-                        // Expose the current slot index to the inner DSP
-                        // via `self.current_block_index()` before running
-                        // the per-sample update. Used by modules that
-                        // need slot-aware reads/writes against shared
-                        // resources (BufferWrite / DelayRead's circular
-                        // buffer cursor, etc).
-                        module._block_index.set(i);
-                        module.update(self.sample_rate);
-                        (*self.block_outputs.get()).copy_from_inner(&module.outputs, i);
-                    }
-                    self.index.set(i + 1);
-                }
+                #process_loop
                 self.computing.set(false);
                 if _prof_active {
                     crate::profiling::pop_frame((target - start_index) as u32);

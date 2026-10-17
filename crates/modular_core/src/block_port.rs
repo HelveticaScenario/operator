@@ -48,6 +48,13 @@ impl BlockPort {
         self.channels
     }
 
+    /// Slots `range`, flattened: slot `i`, channel `ch` is element
+    /// `(i - range.start) * channels + ch`. Panics if `range` is out of range.
+    #[inline]
+    pub fn slots_mut(&mut self, range: std::ops::Range<usize>) -> &mut [f32] {
+        &mut self.data[range.start * self.channels..range.end * self.channels]
+    }
+
     /// Read value at `(index, ch)`, returning `0.0` for out-of-range sample
     /// indices or a zero-channel port. The channel index cycles modulo the
     /// port width, so a consumer reading a higher channel than the producer
@@ -58,6 +65,13 @@ impl BlockPort {
             return 0.0;
         }
         self.data[index * self.channels + ch % self.channels]
+    }
+
+    /// All channels of sample slot `index`. Panics if `index` is out of range.
+    #[inline]
+    pub fn slot_mut(&mut self, index: usize) -> &mut [f32] {
+        let start = index * self.channels;
+        &mut self.data[start..start + self.channels]
     }
 
     /// Write value at `(index, ch)`. Silently ignored if out of range. The
