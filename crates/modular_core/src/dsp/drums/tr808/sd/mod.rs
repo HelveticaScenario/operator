@@ -13,13 +13,17 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    Arms, Biquad, BiquadState, BridgedT, PULSE_SECS, SILENCE, T60_TO_RATE, WhiteNoise, pulse_volts,
+    Arms, Biquad, BiquadState, BridgedT, SILENCE, T60_TO_RATE, Timing, WhiteNoise, pulse_volts,
 };
 use crate::dsp::drums::analog::{high_pass, low_pass, one_pole_coeff, rc_hz};
-use crate::dsp::drums::voice::{CHOKE_SECS, Pulse, Strike, samples};
+use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+
+mod module;
+
+pub use module::Sd808;
 
 // Low resonator: the pulse reaches IC14a's input through R189 ∥ C57 against
 // R190, a spike a few microseconds long; C58, C59, R196 and R197 form the T.
@@ -98,49 +102,6 @@ const DEFAULT_SNAPPY: f32 = 2.5;
 /// The low resonator's frequency, ≈ 250 Hz, in V/Oct.
 const DEFAULT_FREQ: f32 = -0.0678;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct Sd808Params {
-    /// rising edges strike the drum
-    #[signal(type = trig, range = (0.0, 5.0))]
-    trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse from 4 V to 8 V, for a hit up to twice as loud
-    /// (default 0)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    accent: Option<PolySignal>,
-    /// tone control, 0–5 V: crossfades from the low resonator to the high
-    /// one (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
-    #[deserr(default)]
-    tone: Option<PolySignal>,
-    /// snappy control, 0–5 V: how hard each hit charges the noise envelope
-    /// (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
-    #[deserr(default)]
-    snappy: Option<PolySignal>,
-    /// pitch of the low resonator in V/Oct, scaling both; stock is ≈250 Hz
-    /// (default -0.0678)
-    #[signal(type = pitch, default = -0.0678, range = (-1.5, 1.5))]
-    #[deserr(default)]
-    freq: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on the
-    /// hardware (default false)
-    #[serde(default)]
-    #[deserr(default)]
-    choke: bool,
-}
-
-#[derive(Outputs, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct Sd808Outputs {
-    #[output("output", "drum output", default, range = (-10.0, 10.0))]
-    sample: PolyOutput,
-}
-
 /// The circuit's state for one hit sequence.
 #[derive(Clone, Copy, Default)]
 struct Voice {
@@ -163,7 +124,15 @@ struct Voice {
     out_lp: f32,
 }
 
-impl Voice {
+impl Circuit for Voice {
+    type Shared = Sd808State;
+    type Controls = Controls;
+
+    fn fire(&mut self, accent: f32, st: &Sd808State) {
+        self.pulse
+            .fire(pulse_volts(accent), st.timing.pulse_samples);
+    }
+
     fn settled(&self) -> bool {
         !self.pulse.active()
             && self.low.settled()
@@ -181,13 +150,21 @@ impl Voice {
             .iter()
             .all(|v| v.abs() < SILENCE)
     }
+
+    fn step(&mut self, st: &Sd808State, c: &Controls) -> f32 {
+        self.advance(st, c)
+    }
 }
 
 #[derive(Default)]
 struct Sd808State {
-    pulse_samples: u32,
-    choke_samples: u32,
+    timing: Timing,
     dt: f32,
+    /// The low resonator's resting frequency, Hz, and both resonators'
+    /// stock ring times, seconds.
+    rest_hz: f32,
+    low_decay: f32,
+    high_decay: f32,
     noise_scale: f32,
     /// C57's per-sample decay toward its resting share of the pulse, and the
     /// mean of that decay over one sample.
@@ -199,113 +176,43 @@ struct Sd808State {
     snap_hp: Biquad,
     snap_couple_coeff: f32,
     out_lp_coeff: f32,
-    seeded: bool,
 }
 
-#[derive(Clone, Copy, Default)]
-struct ChannelState {
-    strike: Strike,
-    noise: WhiteNoise,
-    voice: Voice,
-    tail: Voice,
-    tail_left: u32,
+/// Both resonators tuned for one `freq`. `freq` scales both Ts and keeps
+/// their stock ring times.
+#[derive(Clone, Copy)]
+struct Tuning {
+    freq: f32,
+    low: BridgedT,
+    high: BridgedT,
 }
 
-/// TR-808 snare drum.
-///
-/// Each rising edge on **trigger** fires the 808's 1 ms trigger pulse into a
-/// circuit model of its snare: two bridged-T resonators near 250 and 500 Hz,
-/// blended by **tone**, over a burst of chopped white noise whose strength
-/// **snappy** sets. **accent**, sampled at each strike, drives the circuit
-/// harder.
-///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**.
-///
-/// ```js
-/// $tr808.sd($clock.beatTrigger, { snappy: 4 }).out()
-/// ```
-#[module(name = "$tr808.sd", has_init, patch_update, args(trigger))]
-pub struct Sd808 {
-    outputs: Sd808Outputs,
-    params: Sd808Params,
-    state: Sd808State,
-    channel_state: Box<[ChannelState]>,
-}
-
-impl Sd808 {
-    fn init(&mut self, sample_rate: f32) {
-        let st = &mut self.state;
-        let dt = 1.0 / sample_rate;
-        st.dt = dt;
-        st.pulse_samples = samples(PULSE_SECS, sample_rate);
-        st.choke_samples = samples(CHOKE_SECS, sample_rate);
-        st.noise_scale = WhiteNoise::scale(sample_rate);
-        let tau = C57 * R189 * R190 / (R189 + R190);
-        st.c57_mul = (-dt / tau).exp();
-        st.c57_avg = tau / dt * (1.0 - st.c57_mul);
-        // A one-pole low-pass `y += c·(x − y)` passes c / (2 − c) of white
-        // noise's power; the generator's uniform samples have rms 1/√3.
-        st.chop_coeff = 1.0 - (-std::f32::consts::TAU * CHOP_HZ * dt).exp();
-        let scale = WhiteNoise::scale(sample_rate);
-        st.chop_norm = 3f32.sqrt() / scale * ((2.0 - st.chop_coeff) / st.chop_coeff).sqrt();
-        st.snap_hp = Biquad::sallen_key_high(C66, C67, R201, R202, sample_rate);
-        st.snap_couple_coeff = one_pole_coeff(rc_hz(R205, C69), sample_rate);
-        st.out_lp_coeff = one_pole_coeff(rc_hz(R_LEVEL, C70), sample_rate);
-    }
-
-    fn update(&mut self, _sample_rate: f32) {
-        let st = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-
-            if let Some(volts) = cs
-                .strike
-                .process(p.trigger.get_value(ch), &p.accent, ch)
-                .map(pulse_volts)
-            {
-                if p.choke && !cs.voice.settled() {
-                    cs.tail = cs.voice;
-                    cs.tail_left = st.choke_samples;
-                    cs.voice = Voice::default();
-                }
-                cs.voice.pulse.fire(volts, st.pulse_samples);
-            }
-            let controls = Controls {
-                r: voct_to_hz(p.freq.value_or(ch, DEFAULT_FREQ)) / LOW.rest_hz(1.0 / R196),
-                tone: p.tone.value_or(ch, DEFAULT_TONE).clamp(0.0, 5.0) / 5.0,
-                snappy: p.snappy.value_or(ch, DEFAULT_SNAPPY).clamp(0.0, 5.0) / 5.0,
-            };
-            let white = cs.noise.next(st.noise_scale);
-            let mut out = if cs.voice.settled() {
-                0.0
-            } else {
-                cs.voice.step(st, &controls, white)
-            };
-            if cs.tail_left > 0 {
-                let fade = cs.tail_left as f32 / st.choke_samples as f32;
-                cs.tail_left -= 1;
-                out += fade * cs.tail.step(st, &controls, white);
-            }
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
+impl Tuning {
+    fn new(st: &Sd808State, freq: f32) -> Self {
+        let r = voct_to_hz(freq) / st.rest_hz;
+        Self {
+            freq,
+            low: LOW.tuned(r, st.low_decay),
+            high: HIGH.tuned(r, st.high_decay),
         }
     }
 }
 
 /// The front-panel settings for one sample.
 struct Controls {
-    /// Frequency ratio from the stock resonators.
-    r: f32,
+    low: BridgedT,
+    high: BridgedT,
     /// Tone and snappy pot positions, 0–1.
     tone: f32,
     snappy: f32,
+    /// The white noise generator's voltage.
+    white: f32,
 }
 
 impl Voice {
-    /// Advances the circuit one sample with white noise `white`, returning
-    /// IC13's output.
-    fn step(&mut self, st: &Sd808State, c: &Controls, white: f32) -> f32 {
+    /// Advances the circuit one sample, returning IC13's output.
+    #[inline]
+    fn advance(&mut self, st: &Sd808State, c: &Controls) -> f32 {
         let dt = st.dt;
         let vtrig = self.pulse.next();
 
@@ -315,14 +222,11 @@ impl Voice {
         let c57_rest = vtrig * R189 / (R189 + R190);
         let vp_low = vtrig - (c57_rest + (self.c57 - c57_rest) * st.c57_avg);
         self.c57 = c57_rest + (self.c57 - c57_rest) * st.c57_mul;
-        // `freq` scales both Ts and keeps their stock decay times.
-        let low_t = LOW.tuned(c.r, T60_TO_RATE / LOW.decay_rate());
-        let (low, arms) = low_t.step(self.low, vp_low, 1.0 / R196, 0.0, dt);
+        let (low, arms) = c.low.step(self.low, vp_low, 1.0 / R196, 0.0, dt);
         self.low = arms;
 
         let vp_high = vtrig * R192 / (R191 + R192);
-        let high_t = HIGH.tuned(c.r, T60_TO_RATE / HIGH.decay_rate());
-        let (high, arms) = high_t.step(self.high, vp_high, 1.0 / R195, 0.0, dt);
+        let (high, arms) = c.high.step(self.high, vp_high, 1.0 / R195, 0.0, dt);
         self.high = arms;
 
         let tone_current = self.tone(c.tone, low, high, dt);
@@ -348,7 +252,7 @@ impl Voice {
         self.c51 = (a22 * b1 - a12 * b2) / det;
         self.c52 = (a11 * b2 - a21 * b1) / det;
 
-        self.chop += st.chop_coeff * (white * st.chop_norm - self.chop);
+        self.chop += st.chop_coeff * (c.white * st.chop_norm - self.chop);
         let span = (self.c52 - CHOP_V0).max(0.0);
         let collector = self.c52.min(CHOP_V0) + span * (CHOP_MEAN + CHOP_RMS * self.chop);
         let thinned = st.snap_hp.process(&mut self.snap_hp, collector);
@@ -385,17 +289,3 @@ impl Voice {
         wiper / R204
     }
 }
-
-impl crate::types::PatchUpdateHandler for Sd808 {
-    fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-                cs.noise.seed(base, ch);
-            }
-            self.state.seeded = true;
-        }
-    }
-}
-
-message_handlers!(impl Sd808 {});

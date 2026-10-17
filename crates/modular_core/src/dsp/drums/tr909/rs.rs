@@ -151,6 +151,8 @@ struct RimShared {
     dt: f32,
     res: Mna<RES_UNKNOWNS, RES_CAPS, 0, 1>,
     out: Mna<OUT_UNKNOWNS, OUT_CAPS, 0, 1>,
+    /// C119's per-sample approach to the accent through R401.
+    env_charge: f32,
 }
 
 impl Circuit for Rim {
@@ -173,7 +175,7 @@ impl Circuit for Rim {
         // C119 charges from the gated accent, then feeds Q65's base.
         if trig > 0.0 {
             let top = self.accent - DIODE_DROP;
-            self.env = top + (self.env - top) * (-dt / (R401 * C119)).exp();
+            self.env = top + (self.env - top) * sh.env_charge;
         }
         let ib = VCA.base_current(self.env, R403, &mut self.vbe);
         self.env -= ib as f32 * dt / C119;
@@ -199,7 +201,7 @@ impl Circuit for Rim {
         injected[OUT_IN] = level * STIFF;
         let x = sh.out.step(&mut self.out, 0, &injected);
         let out = x[OUT].clamp(-VSAT, VSAT);
-        self.quiet.track(out);
+        self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
@@ -259,6 +261,7 @@ impl Rs909 {
         sh.dt = dt;
         sh.res = resonator_network(dt);
         sh.out = output_network(dt);
+        sh.env_charge = (-dt / (R401 * C119)).exp();
     }
 
     fn update(&mut self, _sample_rate: f32) {

@@ -15,7 +15,7 @@ use schemars::JsonSchema;
 use super::circuit::{PULSE_V, Timing, WhiteNoise, pulse_volts};
 use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Level, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -158,7 +158,7 @@ struct Shake {
     /// C130's high-pass on the noise.
     c130: f32,
     /// Output scale for the hit's accent.
-    level: f32,
+    level: Level,
     primed: bool,
     quiet: Quiet,
 }
@@ -234,11 +234,13 @@ impl Circuit for Shake {
 
     fn fire(&mut self, accent: f32, shared: &ShakeShared) {
         let volts = pulse_volts(accent);
+        let sounding = self.primed && !self.settled();
         if !self.primed {
             *self = shared.rest;
             self.primed = true;
         }
-        self.level = volts / PULSE_V;
+        self.level
+            .set(volts / PULSE_V, sounding, shared.timing.choke_samples);
         self.pulse.fire(volts, shared.timing.pulse_samples);
     }
 
@@ -248,8 +250,8 @@ impl Circuit for Shake {
 
     fn step(&mut self, sh: &ShakeShared, &white: &f32) -> f32 {
         let line = self.pulse.next();
-        let out = self.advance(sh, line, white) * self.level;
-        self.quiet.track(out);
+        let out = self.advance(sh, line, white) * self.level.next();
+        self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
@@ -304,7 +306,6 @@ pub struct Ma808 {
 #[derive(Default)]
 struct MaState {
     shared: ShakeShared,
-    seeded: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -363,12 +364,9 @@ impl Ma808 {
 
 impl crate::types::PatchUpdateHandler for Ma808 {
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-                cs.noise.seed(base, ch);
-            }
-            self.state.seeded = true;
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            cs.noise.seed(base, ch);
         }
     }
 }

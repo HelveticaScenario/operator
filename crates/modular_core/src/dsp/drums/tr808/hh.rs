@@ -293,7 +293,7 @@ impl Circuit for Closed {
         self.node = x[CH_NODE];
         self.q23 = base_current(self.e63, R173, &mut self.q23_vbe);
         let out = x[CH_OUT];
-        self.quiet.track(out);
+        self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
@@ -430,7 +430,7 @@ impl Circuit for Open {
             0.0
         };
         let out = x[OH_OUT];
-        self.quiet.track(out);
+        self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }

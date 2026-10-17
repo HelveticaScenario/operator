@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use super::circuit::{DIODE_DROP, Noise, RAIL, TRIG_V, Timing, VCA, VSAT, accent_volts, vca_port};
 use crate::dsp::drums::clap::{Envelope, EnvelopeNetwork, ota_current};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
-use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
+use crate::dsp::drums::voice::{Circuit, Level, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal};
 
@@ -121,7 +121,7 @@ fn output_network(dt: f32) -> Mna<OUT_UNKNOWNS, OUT_CAPS, 0, 1> {
 struct Clap {
     trigger: Pulse,
     accent: f32,
-    level: f32,
+    level: Level,
     envelope: Envelope,
     noise: MnaState<NOISE_CAPS>,
     output: MnaState<OUT_CAPS>,
@@ -203,12 +203,14 @@ impl Circuit for Clap {
     type Controls = f32;
 
     fn fire(&mut self, accent: f32, shared: &ClapShared) {
+        let sounding = self.primed && !self.settled();
         if !self.primed {
             *self = shared.rest;
             self.primed = true;
         }
         self.accent = (ACCENT_GAIN * accent_volts(ACCENT_LOW, accent)).min(VSAT);
-        self.level = 1.0 + accent;
+        self.level
+            .set(1.0 + accent, sounding, shared.timing.choke_samples);
         self.trigger.fire(TRIG_V, shared.timing.trig_samples);
     }
 
@@ -220,8 +222,8 @@ impl Circuit for Clap {
     }
 
     fn step(&mut self, sh: &ClapShared, &noise: &f32) -> f32 {
-        let out = self.advance(sh, noise) * self.level;
-        self.quiet.track(out);
+        let out = self.advance(sh, noise) * self.level.next();
+        self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
@@ -277,7 +279,6 @@ pub struct Cp909 {
 #[derive(Default)]
 struct CpState {
     shared: ClapShared,
-    seeded: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -335,12 +336,9 @@ impl Cp909 {
 
 impl crate::types::PatchUpdateHandler for Cp909 {
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-                cs.noise.seed(base, ch);
-            }
-            self.state.seeded = true;
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            cs.noise.seed(base, ch);
         }
     }
 }

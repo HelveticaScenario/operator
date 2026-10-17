@@ -82,7 +82,6 @@ pub struct Oh808 {
 struct OhState {
     shared: HatShared,
     filters: MetalFilters,
-    seeded: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -110,7 +109,9 @@ impl Oh808 {
             if let Some(accent) = cs.close.process(p.close.value_or(ch, 0.0), &p.accent, ch) {
                 cs.closed.fire(accent, sh);
             }
-            if !cs.closed.settled() {
+            // C63 can hold Q23 on after the closed hat falls silent, so its
+            // circuit runs until Q23 lets go of the open hat.
+            if !cs.closed.settled() || cs.closed.q23() > 0.0 {
                 cs.closed.step(sh, &band);
             }
             let decay = p.decay.value_or(ch, DEFAULT_DECAY).clamp(0.0, 5.0) / 5.0;
@@ -135,13 +136,9 @@ impl Oh808 {
 
 impl crate::types::PatchUpdateHandler for Oh808 {
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-                cs.bank
-                    .seed(base ^ (ch as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-            }
-            self.state.seeded = true;
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            cs.bank.seed(base, ch);
         }
     }
 }

@@ -66,7 +66,6 @@ pub struct Ch808 {
 struct ChState {
     shared: HatShared,
     filters: MetalFilters,
-    seeded: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -103,13 +102,9 @@ impl Ch808 {
 
 impl crate::types::PatchUpdateHandler for Ch808 {
     fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-                cs.bank
-                    .seed(base ^ (ch as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
-            }
-            self.state.seeded = true;
+        let base = seed_base(self);
+        for (ch, cs) in self.channel_state.iter_mut().enumerate() {
+            cs.bank.seed(base, ch);
         }
     }
 }

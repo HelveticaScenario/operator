@@ -269,3 +269,28 @@ fn cp_claps_several_times() {
         assert!(ms.abs_diff(want) <= 2, "{onsets:?}");
     }
 }
+
+#[test]
+fn channels_added_by_a_patch_update_get_their_own_noise() {
+    for voice in [BD, SD, LT, MT, HT, CP] {
+        let old = make(voice, json!({ "trigger": 5.0 }), SR);
+        old.on_patch_update();
+        for _ in 0..480 {
+            old.start_block();
+            old.ensure_processed();
+        }
+        let new = make(voice, json!({ "trigger": [5.0, 5.0, 5.0] }), SR);
+        new.transfer_state_from(old.as_ref());
+        new.on_patch_update();
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for _ in 0..(0.2 * SR) as usize {
+            new.start_block();
+            new.ensure_processed();
+            a.push(new.get_value_at("output", 1, 0));
+            b.push(new.get_value_at("output", 2, 0));
+        }
+        assert!(peak(&a) > 0.1, "{voice}");
+        let diff: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
+        assert!(peak(&diff) > 1.0e-3 * peak(&a), "{voice} {}", peak(&diff));
+    }
+}

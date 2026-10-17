@@ -8,6 +8,7 @@
 
 use super::circuit::{ACCENT_V, PULSE_V};
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState};
+use crate::dsp::utils::rng::LcgRng;
 
 // The metal voices' trigger buffer, IC2a, puts out 0.824·V + 3.29 for a
 // common trigger pulse of V, 7–14 V over the 808's accent range. The
@@ -92,6 +93,7 @@ impl MetalFilters {
 pub struct MetalBank {
     phases: [f32; 6],
     net: MnaState<CAPS>,
+    seeded: bool,
 }
 
 /// Time an oscillator has spent high, in periods, from phase 0 to `x`.
@@ -101,14 +103,19 @@ fn high_time(x: f32) -> f32 {
 }
 
 impl MetalBank {
-    /// Starts the oscillators at phases spread by `seed`, as the 808's run
-    /// freely from power-on.
-    pub fn seed(&mut self, seed: u64) {
-        for (k, phase) in self.phases.iter_mut().enumerate() {
-            let h = seed
-                .wrapping_add(k as u64)
-                .wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            *phase = (h >> 40) as f32 / (1u64 << 24) as f32;
+    /// Starts the oscillators at random phases, as the 808's run freely from
+    /// power-on, unless they already are. The bank rides patch updates with
+    /// its channel, so a carried-over channel keeps its phases and a channel
+    /// added by an update gets its own.
+    pub fn seed(&mut self, base: u64, stream: usize) {
+        if self.seeded {
+            return;
+        }
+        self.seeded = true;
+        let mut rng = LcgRng::default();
+        rng.seed(base, stream);
+        for phase in self.phases.iter_mut() {
+            *phase = rng.next_unit();
         }
     }
 

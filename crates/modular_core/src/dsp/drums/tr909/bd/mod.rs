@@ -16,12 +16,16 @@ use deserr::Deserr;
 use schemars::JsonSchema;
 
 use super::circuit::{
-    DIODE_DROP, Noise, RAIL, Shaper, TRIG_V, Timing, VCA, VSAT, accent_volts, log_taper, vca_port,
+    DIODE_DROP, Noise, RAIL, Shaper, TRIG_V, TaperedPot, Timing, VCA, VSAT, accent_volts, vca_port,
 };
 use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
 use crate::dsp::drums::voice::{Circuit, Pulse, Quiet, Voices};
 use crate::dsp::utils::rng::seed_base;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+
+mod module;
+
+pub use module::Bd909;
 
 // The pitch envelope: R21 from the trigger through D7 into C9, drained by
 // R57 and the tune pot VR2 to ground and by R26 into IC12a's virtual
@@ -245,6 +249,14 @@ struct DrumShared {
     /// The attack network at rest, Q8 on and the noise at its mean.
     attack_rest: MnaState<ATTACK_CAPS>,
     sync_coeff: f32,
+    /// C7's per-sample approach to the trigger through R20, and its bleed
+    /// through R18.
+    c7_charge: f32,
+    c7_bleed: f32,
+    /// C12's per-sample approach to its target while the trigger charges it
+    /// through R41, and with only R493 draining it.
+    c12_charge: f32,
+    c12_bleed: f32,
 }
 
 struct DrumControls {
@@ -325,9 +337,9 @@ impl Circuit for Drum {
         // Q3 keeps the decay gate open while C7 holds up.
         if triggered {
             let top = trig - DIODE_DROP;
-            self.c7 = top + (self.c7 - top) * (-dt / (R20 * C7)).exp();
+            self.c7 = top + (self.c7 - top) * sh.c7_charge;
         } else if self.c7 > VBE {
-            self.c7 = VBE + (self.c7 - VBE) * (-dt / (R18 * C7)).exp();
+            self.c7 = VBE + (self.c7 - VBE) * sh.c7_bleed;
         }
         let gate = triggered || self.c7 > self.gate_threshold();
 
@@ -358,14 +370,14 @@ impl Circuit for Drum {
         self.q12_base = ib12 as f32;
 
         // The attack envelope.
-        let (g_charge, target) = if triggered {
-            (1.0 / R41, self.accent)
+        let (g_charge, target, mul) = if triggered {
+            (1.0 / R41, self.accent, sh.c12_charge)
         } else {
-            (0.0, 0.0)
+            (0.0, 0.0, sh.c12_bleed)
         };
         let g = g_charge + 1.0 / R493;
         let settle = (g_charge * target - self.q6_base) / g;
-        self.c12 = settle + (self.c12 - settle) * (-g * dt / C12).exp();
+        self.c12 = settle + (self.c12 - settle) * mul;
         let ib6 = VCA.base_current(self.c12, R42, &mut self.q6_vbe);
         self.q6_base = ib6 as f32;
 
@@ -388,7 +400,7 @@ impl Circuit for Drum {
 
         let ie12 = SHAPER.solve(&mut self.d, &mut self.c12_node, self.tri as f64, ib12);
         let out = (-(R_LEVEL * (ie12 + ie6)) as f32).clamp(-VSAT, VSAT);
-        self.quiet.track(out);
+        self.quiet.track(out, sh.timing.quiet_fall);
         out
     }
 }
@@ -400,142 +412,3 @@ impl Drum {
         VBE + R18 * (need + VBE / R17)
     }
 }
-
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct Bd909Params {
-    /// rising edges strike the drum
-    #[signal(type = trig, range = (0.0, 5.0))]
-    trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the accent voltage, for a hit up to twice as loud (default 0)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    accent: Option<PolySignal>,
-    /// tune control, 0–5 V: how long the pitch takes to fall to rest
-    /// (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
-    #[deserr(default)]
-    tune: Option<PolySignal>,
-    /// attack control, 0–5 V: the level of the click (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
-    #[deserr(default)]
-    attack: Option<PolySignal>,
-    /// decay control, 0–5 V: how long the drum rings (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
-    #[deserr(default)]
-    decay: Option<PolySignal>,
-    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the envelopes, as
-    /// on the hardware (default false)
-    #[serde(default)]
-    #[deserr(default)]
-    choke: bool,
-}
-
-#[derive(Outputs, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct Bd909Outputs {
-    #[output("output", "drum output", default, range = (-10.0, 10.0))]
-    sample: PolyOutput,
-}
-
-/// TR-909 bass drum.
-///
-/// Each rising edge on **trigger** fires the 909's trigger into a circuit
-/// model of its bass drum: a triangle VCO rounded toward a sine, its pitch
-/// swept down from about 300 Hz to rest near 56 Hz, with a click and a
-/// burst of noise at the attack. **tune** sets how long the sweep takes,
-/// **attack** the click's level, **decay** how long the drum rings, and
-/// **accent**, sampled at each strike, drives it harder.
-///
-/// An unaccented hit peaks near **±5 V**.
-///
-/// ```js
-/// $tr909.bd($clock.beatTrigger).out()
-/// ```
-#[module(name = "$tr909.bd", has_init, patch_update, args(trigger))]
-pub struct Bd909 {
-    outputs: Bd909Outputs,
-    params: Bd909Params,
-    state: BdState,
-    channel_state: Box<[Channel]>,
-}
-
-#[derive(Default)]
-struct BdState {
-    shared: DrumShared,
-    seeded: bool,
-}
-
-#[derive(Clone, Copy, Default)]
-struct Channel {
-    voices: Voices<Drum>,
-    noise: Noise,
-}
-
-impl Bd909 {
-    fn init(&mut self, sample_rate: f32) {
-        let dt = 1.0 / sample_rate;
-        let sh = &mut self.state.shared;
-        sh.timing = Timing::new(sample_rate);
-        sh.dt = dt;
-        sh.noise_rate = Noise::rate(sample_rate);
-        sh.envelope = envelope_network(dt);
-        // The attack network at DC: discretised at a step long enough that
-        // its capacitors carry no current.
-        let dc = attack_network(DC_STEP);
-        let mut injected = [0.0f32; ATTACK_UNKNOWNS];
-        injected[NOISE_IN] = NOISE_MEAN * STIFF;
-        injected[PE] = -RAIL / 10.0e3;
-        let mut rest = MnaState::default();
-        for _ in 0..DC_ITERATIONS {
-            dc.step(&mut rest, 1 << Q8_ON, &injected);
-        }
-        sh.attack_rest = rest;
-        sh.attack = attack_network(dt);
-        sh.sync_coeff = (-dt / (R51 * C14)).exp();
-    }
-
-    fn update(&mut self, _sample_rate: f32) {
-        let sh = &self.state.shared;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-            let knob = |s: &Option<PolySignal>, default: f32| {
-                s.value_or(ch, default).clamp(0.0, 5.0) / 5.0
-            };
-            let controls = DrumControls {
-                tune: 1.0 / (R57 + VR2 * log_taper(knob(&p.tune, DEFAULT_TUNE))),
-                decay: 1.0 / (R58 + VR5 * log_taper(knob(&p.decay, DEFAULT_DECAY))),
-                attack: VR3 * (1.0 - knob(&p.attack, DEFAULT_ATTACK)),
-                noise: cs.noise.next(sh.noise_rate),
-            };
-            let out = cs.voices.process(
-                p.trigger.get_value(ch),
-                &p.accent,
-                ch,
-                p.choke,
-                sh.timing.choke_samples,
-                sh,
-                &controls,
-            );
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
-    }
-}
-
-impl crate::types::PatchUpdateHandler for Bd909 {
-    fn on_patch_update(&mut self) {
-        if !self.state.seeded {
-            let base = seed_base(self);
-            for (ch, cs) in self.channel_state.iter_mut().enumerate() {
-                cs.noise.seed(base, ch);
-            }
-            self.state.seeded = true;
-        }
-    }
-}
-
-message_handlers!(impl Bd909 {});

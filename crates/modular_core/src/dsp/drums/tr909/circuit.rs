@@ -3,7 +3,7 @@
 //! transistor VCAs the voices are built around.
 
 use crate::dsp::drums::analog::VT;
-use crate::dsp::drums::voice::{CHOKE_SECS, samples};
+use crate::dsp::drums::voice::{CHOKE_SECS, quiet_fall, samples};
 use crate::dsp::utils::rng::LcgRng;
 
 /// The 909's trigger: a 5 V pulse 2 ms long, which each voice turns into a
@@ -33,6 +33,8 @@ pub fn accent_volts(low: f32, accent: f32) -> f32 {
 pub struct Timing {
     pub trig_samples: u32,
     pub choke_samples: u32,
+    /// [`quiet_fall`] at the sample rate.
+    pub quiet_fall: f32,
 }
 
 impl Timing {
@@ -40,6 +42,7 @@ impl Timing {
         Self {
             trig_samples: samples(TRIG_SECS, sample_rate),
             choke_samples: samples(CHOKE_SECS, sample_rate),
+            quiet_fall: quiet_fall(sample_rate),
         }
     }
 }
@@ -52,6 +55,7 @@ pub struct Noise {
     register: u32,
     /// Clock phase, in clock periods.
     phase: f32,
+    seeded: bool,
 }
 
 impl Default for Noise {
@@ -59,6 +63,7 @@ impl Default for Noise {
         Self {
             register: TOP,
             phase: 0.0,
+            seeded: false,
         }
     }
 }
@@ -72,7 +77,14 @@ const TOP: u32 = 1 << 30;
 const NOISE_CLOCK_HZ: f32 = 1.0 / (2.2 * 33.0e3 * 100.0e-12);
 
 impl Noise {
+    /// Seeds the register unless it already is. The register rides patch
+    /// updates with its channel, so a carried-over channel keeps its
+    /// sequence and a channel added by an update gets its own.
     pub fn seed(&mut self, base: u64, stream: usize) {
+        if self.seeded {
+            return;
+        }
+        self.seeded = true;
         let mut rng = LcgRng::default();
         rng.seed(base, stream);
         // Any state but all zeros runs; the top bit keeps it off zero.
@@ -194,9 +206,38 @@ pub const VCA: TransistorVca = TransistorVca {
 
 /// Fraction of a log-taper ("A") pot's resistance at `position`, 0–1: a
 /// tenth of it at mid travel.
-pub fn log_taper(position: f32) -> f32 {
+fn log_taper(position: f32) -> f32 {
     const K: f32 = 4.394;
     ((K * position.clamp(0.0, 1.0)).exp() - 1.0) / (K.exp() - 1.0)
+}
+
+/// A log-taper pot of `pot` ohms in series with `fixed` ohms, as a
+/// conductance, computed only when its position moves.
+#[derive(Clone, Copy)]
+pub struct TaperedPot {
+    position: f32,
+    conductance: f32,
+}
+
+impl Default for TaperedPot {
+    fn default() -> Self {
+        // NaN never compares equal, so the first read always computes.
+        Self {
+            position: f32::NAN,
+            conductance: 0.0,
+        }
+    }
+}
+
+impl TaperedPot {
+    #[inline]
+    pub fn conductance(&mut self, position: f32, fixed: f32, pot: f32) -> f32 {
+        if position != self.position {
+            self.position = position;
+            self.conductance = 1.0 / (fixed + pot * log_taper(position));
+        }
+        self.conductance
+    }
 }
 
 /// Two diodes back to back to ground, rounding a triangle toward a sine:

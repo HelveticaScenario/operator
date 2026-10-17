@@ -59,46 +59,67 @@ fn render_retriggered(
 /// the input `port`, and return it with the sample index of each clock edge.
 fn render_clocked(
     module_type: &str,
-    mut params: Value,
+    params: Value,
     port: &str,
     hz: f32,
     secs: f32,
 ) -> (Vec<f32>, Vec<usize>) {
+    render_clocks(module_type, params, &[(port, hz)], secs)
+}
+
+/// Render `secs` of output with `params` and a `$pulse` clock on each
+/// `(port, hz)`, and return it with the sample index of each edge of the
+/// first clock.
+fn render_clocks(
+    module_type: &str,
+    mut params: Value,
+    clocks: &[(&str, f32)],
+    secs: f32,
+) -> (Vec<f32>, Vec<usize>) {
     const BLOCK: usize = 64;
-    params[port] = json!({ "type": "cable", "module": "clock", "port": "output", "channel": 0 });
-    let clock = json!({ "freq": (hz / 261.625_58f32).log2() });
+    let mut modules = Vec::new();
+    for (k, &(port, hz)) in clocks.iter().enumerate() {
+        let id = format!("clock{k}");
+        params[port] = json!({ "type": "cable", "module": id, "port": "output", "channel": 0 });
+        modules.push((id, "$pulse", json!({ "freq": (hz / 261.625_58f32).log2() })));
+    }
+    modules.push(("drum".to_string(), module_type, params));
     let deserializers = get_params_deserializers();
     let mut patch = Patch::new();
     patch
         .insert_modules(
-            [("clock", "$pulse", clock), ("drum", module_type, params)]
-                .into_iter()
-                .map(|(id, module_type, params)| {
-                    let cached = deserializers[module_type](params).unwrap();
-                    (
-                        id.to_string(),
-                        module_type.to_string(),
-                        DeserializedParams {
-                            params: cached.params,
-                            channel_count: cached.channel_count,
-                        },
-                        ProcessingMode::Block,
-                    )
-                }),
+            modules.into_iter().map(|(id, module_type, params)| {
+                let cached = deserializers[module_type](params).unwrap();
+                (
+                    id,
+                    module_type.to_string(),
+                    DeserializedParams {
+                        params: cached.params,
+                        channel_count: cached.channel_count,
+                    },
+                    ProcessingMode::Block,
+                )
+            }),
             SR,
             BLOCK,
         )
         .unwrap();
     patch.connect_all();
-    let (clock, drum) = (&patch.sampleables["clock"], &patch.sampleables["drum"]);
+    let ids: Vec<String> = (0..clocks.len()).map(|k| format!("clock{k}")).collect();
+    let drum = &patch.sampleables["drum"];
     let (mut x, mut strikes, mut prev) = (Vec::new(), Vec::new(), 0.0);
     for _ in 0..(secs * SR) as usize / BLOCK {
-        clock.start_block();
+        for id in &ids {
+            patch.sampleables[id].start_block();
+        }
         drum.start_block();
-        clock.ensure_processed_to(BLOCK);
+        for id in &ids {
+            patch.sampleables[id].ensure_processed_to(BLOCK);
+        }
         drum.ensure_processed_to(BLOCK);
+        let first = &patch.sampleables[&ids[0]];
         for i in 0..BLOCK {
-            let gate = clock.get_value_at("output", 0, i);
+            let gate = first.get_value_at("output", 0, i);
             if prev < 1.0 && gate >= 1.0 {
                 strikes.push(x.len());
             }
@@ -916,6 +937,22 @@ fn oh_close_chokes_the_hat() {
 }
 
 #[test]
+fn oh_close_lets_go_of_later_hits() {
+    // A close edge at 0 s chokes that hit; by the open hit at 0.5 s, C63 has
+    // emptied below Q23's turn-on and the hat rings as if never closed.
+    let hits = |clocks: &[(&str, f32)]| {
+        let (x, edges) = render_clocks(OH, json!({ "decay": 5.0 }), clocks, 0.95);
+        assert!(edges[0] == 0 && edges[1].abs_diff((0.5 * SR) as usize) <= 1);
+        x[edges[1]..].to_vec()
+    };
+    let open = hits(&[("trigger", 2.0)]);
+    let closed = hits(&[("trigger", 2.0), ("close", 1.0)]);
+    let ring = |x: &[f32]| rms(&x[(0.1 * SR) as usize..(0.4 * SR) as usize]);
+    let (open, closed) = (ring(&open), ring(&closed));
+    assert!((closed / open - 1.0).abs() < 0.1, "{closed} {open}");
+}
+
+#[test]
 fn hats_settle_to_silence() {
     for (voice, params) in [(OH, json!({ "decay": 5.0 })), (CH, json!({}))] {
         let x = render(voice, params, 2.0);
@@ -1040,5 +1077,31 @@ fn cp_and_ma_match_across_sample_rates() {
                 "{voice} {sample_rate}: {r} vs {at48}"
             );
         }
+    }
+}
+
+#[test]
+fn channels_added_by_a_patch_update_get_their_own_noise() {
+    let toms = TOMS.map(|(voice, _)| voice);
+    for voice in [SD, CP, MA, CY, OH, CH].into_iter().chain(toms) {
+        let old = make(voice, json!({ "trigger": 5.0 }), SR);
+        old.on_patch_update();
+        for _ in 0..480 {
+            old.start_block();
+            old.ensure_processed();
+        }
+        let new = make(voice, json!({ "trigger": [5.0, 5.0, 5.0] }), SR);
+        new.transfer_state_from(old.as_ref());
+        new.on_patch_update();
+        let (mut a, mut b) = (Vec::new(), Vec::new());
+        for _ in 0..(0.2 * SR) as usize {
+            new.start_block();
+            new.ensure_processed();
+            a.push(new.get_value_at("output", 1, 0));
+            b.push(new.get_value_at("output", 2, 0));
+        }
+        assert!(peak(&a) > 0.1, "{voice}");
+        let diff: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x - y).collect();
+        assert!(peak(&diff) > 0.01 * peak(&a), "{voice} {}", peak(&diff));
     }
 }

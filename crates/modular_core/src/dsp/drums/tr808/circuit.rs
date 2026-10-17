@@ -1,7 +1,7 @@
 //! Building blocks shared by the TR-808 voice models: the common trigger
 //! pulse, the noise generator, and discretised analog filters.
 
-use crate::dsp::drums::voice::{CHOKE_SECS, samples};
+use crate::dsp::drums::voice::{CHOKE_SECS, quiet_fall, samples};
 use crate::dsp::utils::rng::LcgRng;
 use crate::dsp::utils::sanitize;
 
@@ -33,6 +33,7 @@ pub const SILENCE: f32 = 1.0e-6;
 #[derive(Clone, Copy, Default)]
 pub struct WhiteNoise {
     rng: LcgRng,
+    seeded: bool,
 }
 
 /// Noise bandwidth the 130 mV rms level is specified over, Hz.
@@ -40,8 +41,14 @@ const NOISE_BAND_HZ: f32 = 20_000.0;
 const NOISE_RMS: f32 = 0.13;
 
 impl WhiteNoise {
+    /// Seeds the generator unless it already is. The generator rides patch
+    /// updates with its channel, so a carried-over channel keeps its
+    /// sequence and a channel added by an update gets its own.
     pub fn seed(&mut self, base: u64, stream: usize) {
-        self.rng.seed(base, stream);
+        if !self.seeded {
+            self.rng.seed(base, stream);
+            self.seeded = true;
+        }
     }
 
     /// Scale from a uniform `[-1, 1)` sample to the generator's voltage, so
@@ -288,6 +295,8 @@ impl DiodeCoupler {
 pub struct Timing {
     pub pulse_samples: u32,
     pub choke_samples: u32,
+    /// [`quiet_fall`] at the sample rate.
+    pub quiet_fall: f32,
 }
 
 impl Timing {
@@ -295,6 +304,7 @@ impl Timing {
         Self {
             pulse_samples: samples(PULSE_SECS, sample_rate),
             choke_samples: samples(CHOKE_SECS, sample_rate),
+            quiet_fall: quiet_fall(sample_rate),
         }
     }
 }

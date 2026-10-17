@@ -123,24 +123,93 @@ impl<C: Circuit> Voices<C> {
     }
 }
 
-/// A running peak of a voice's output, falling by `QUIET_FALL` each sample,
-/// so silence means silent for a while rather than a zero crossing.
+/// A running peak of a voice's output, falling 60 dB in `QUIET_SECS`, so
+/// silence means silent for a while rather than a zero crossing.
 #[derive(Clone, Copy, Default)]
 pub struct Quiet {
     level: f32,
 }
 
-/// Per-sample fall of [`Quiet`]'s peak: about −60 dB in 30 ms at 48 kHz.
-const QUIET_FALL: f32 = 0.9952;
+const QUIET_SECS: f32 = 0.03;
+
+/// Per-sample fall of [`Quiet`]'s peak at `sample_rate`.
+pub fn quiet_fall(sample_rate: f32) -> f32 {
+    (-std::f32::consts::LN_10 * 3.0 / (QUIET_SECS * sample_rate)).exp()
+}
 
 impl Quiet {
+    /// Takes in a sample, with the peak falling by `fall` from
+    /// [`quiet_fall`].
     #[inline]
-    pub fn track(&mut self, out: f32) {
-        self.level = (self.level * QUIET_FALL).max(out.abs());
+    pub fn track(&mut self, out: f32, fall: f32) {
+        self.level = (self.level * fall).max(out.abs());
     }
 
     /// True once the peak has fallen below `threshold`.
     pub fn below(&self, threshold: f32) -> bool {
         self.level < threshold
+    }
+}
+
+/// A voice's output scale, set by each hit's accent. A hit on a sounding
+/// voice ramps it to the new scale, so the tail it rescales does not click.
+#[derive(Clone, Copy, Default)]
+pub struct Level {
+    now: f32,
+    step: f32,
+    left: u32,
+}
+
+impl Level {
+    /// Moves to `target`, over `samples` while `sounding`, at once otherwise.
+    pub fn set(&mut self, target: f32, sounding: bool, samples: u32) {
+        if sounding {
+            self.step = (target - self.now) / samples as f32;
+            self.left = samples;
+        } else {
+            self.now = target;
+            self.left = 0;
+        }
+    }
+
+    #[inline]
+    pub fn next(&mut self) -> f32 {
+        if self.left > 0 {
+            self.left -= 1;
+            self.now += self.step;
+        }
+        self.now
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn level_ramps_only_while_sounding() {
+        let mut level = Level::default();
+        level.set(2.0, false, 96);
+        assert_eq!(level.next(), 2.0);
+        level.set(1.0, true, 96);
+        let ramp: Vec<f32> = (0..100).map(|_| level.next()).collect();
+        assert!(ramp.windows(2).all(|w| (w[0] - w[1]).abs() < 1.1 / 96.0));
+        assert!((ramp[95] - 1.0).abs() < 1.0e-5 && ramp[99] == ramp[95]);
+    }
+
+    #[test]
+    fn quiet_falls_60_db_in_its_window_at_any_rate() {
+        for sample_rate in [24_000.0f32, 48_000.0, 96_000.0] {
+            let mut quiet = Quiet::default();
+            let fall = quiet_fall(sample_rate);
+            quiet.track(1.0, fall);
+            for _ in 0..(QUIET_SECS * sample_rate) as usize - 1 {
+                quiet.track(0.0, fall);
+            }
+            assert!(
+                !quiet.below(0.99e-3) && quiet.below(1.01e-3),
+                "{sample_rate}"
+            );
+        }
     }
 }

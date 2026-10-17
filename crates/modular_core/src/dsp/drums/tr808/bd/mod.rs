@@ -14,11 +14,15 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
-use super::circuit::{DIODE_DROP, PULSE_SECS, SILENCE, T60_TO_RATE, VSAT, pulse_volts, trapezoid};
+use super::circuit::{DIODE_DROP, SILENCE, T60_TO_RATE, Timing, VSAT, pulse_volts, trapezoid};
 use crate::dsp::drums::analog::{high_pass, low_pass, one_pole_coeff};
-use crate::dsp::drums::voice::{CHOKE_SECS, Pulse, Strike, samples};
+use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
 use crate::dsp::utils::{sanitize, voct_to_hz};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+
+mod module;
+
+pub use module::Bd808;
 
 // Pulse shaper: C40 ∥ R163 in series, R162 to ground, D53 clamping negatives.
 const R162: f32 = 4.7e3;
@@ -80,50 +84,6 @@ const DEFAULT_FREQ: f32 = -2.4035;
 /// peaks near 5 V.
 const OUTPUT_GAIN: f32 = 1.23;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
-#[serde(rename_all = "camelCase")]
-#[deserr(rename_all = camelCase, deny_unknown_fields)]
-struct Bd808Params {
-    /// rising edges strike the drum
-    #[signal(type = trig, range = (0.0, 5.0))]
-    trigger: PolySignal,
-    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
-    /// the trigger pulse from 4 V to 8 V, for a hit up to twice as loud with
-    /// more pitch sigh (default 0)
-    #[signal(default = 0.0, range = (0.0, 5.0))]
-    #[deserr(default)]
-    accent: Option<PolySignal>,
-    /// tone control, 0–5 V: opens the output low-pass from ≈300 Hz to ≈7 kHz,
-    /// letting through more of the attack click (default 2.5)
-    #[signal(default = 2.5, range = (0.0, 5.0))]
-    #[deserr(default)]
-    tone: Option<PolySignal>,
-    /// seconds for the ring to fall 60 dB; the stock decay knob spans
-    /// ≈0.09–3.8 s, and the circuit can ring no shorter than ≈0.09 s at stock
-    /// pitch (default 1)
-    #[signal(default = 1.0, range = (0.1, 4.0))]
-    #[deserr(default)]
-    decay: Option<PolySignal>,
-    /// resting pitch of the bridged-T in V/Oct, scaling the whole circuit;
-    /// stock is ≈49.5 Hz (default -2.4035)
-    #[signal(type = pitch, default = -2.4035, range = (-3.5, -1.0))]
-    #[deserr(default)]
-    freq: Option<PolySignal>,
-    /// fade out a still-ringing hit over 2 ms as the next one strikes, so
-    /// every hit starts from rest; otherwise hits add to the ring, as on the
-    /// hardware (default false)
-    #[serde(default)]
-    #[deserr(default)]
-    choke: bool,
-}
-
-#[derive(Outputs, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-struct Bd808Outputs {
-    #[output("output", "drum output", default, range = (-10.0, 10.0))]
-    sample: PolyOutput,
-}
-
 /// The circuit's state for one hit sequence.
 #[derive(Clone, Copy)]
 struct Voice {
@@ -138,10 +98,6 @@ struct Voice {
     arm1: f32,
     arm2: f32,
     vcomm: f32,
-    network: Network,
-    /// `tone` the low-pass coefficient is computed for.
-    tone: f32,
-    tone_coeff: f32,
     tone_lp: f32,
     level_hp: f32,
     output_hp: f32,
@@ -157,10 +113,6 @@ impl Default for Voice {
             arm1: 0.0,
             arm2: 0.0,
             vcomm: 0.0,
-            network: Network::default(),
-            // NaN never compares equal, so the first sample always computes.
-            tone: f32::NAN,
-            tone_coeff: 0.0,
             tone_lp: 0.0,
             level_hp: 0.0,
             output_hp: 0.0,
@@ -168,7 +120,15 @@ impl Default for Voice {
     }
 }
 
-impl Voice {
+impl Circuit for Voice {
+    type Shared = Bd808State;
+    type Controls = Controls;
+
+    fn fire(&mut self, accent: f32, st: &Bd808State) {
+        self.pulse
+            .fire(pulse_volts(accent), st.timing.pulse_samples);
+    }
+
     fn settled(&self) -> bool {
         !self.pulse.active()
             && self.c38 > Q42_ON_START + Q42_ON_WIDTH
@@ -184,12 +144,16 @@ impl Voice {
             .iter()
             .all(|v| v.abs() < SILENCE)
     }
+
+    fn step(&mut self, st: &Bd808State, c: &Controls) -> f32 {
+        self.advance(st, c)
+    }
 }
 
 #[derive(Default)]
 struct Bd808State {
-    pulse_samples: u32,
-    choke_samples: u32,
+    timing: Timing,
+    dt: f32,
     /// Per-sample decay multipliers, which depend only on the sample rate.
     shaper_mul: f32,
     c38_coeff: f32,
@@ -197,6 +161,7 @@ struct Bd808State {
     c39_step: f32,
     level_hp_coeff: f32,
     output_hp_coeff: f32,
+    sample_rate: f32,
     /// Centre frequency of the stock bridged-T at rest, Hz.
     rest_hz: f32,
 }
@@ -253,103 +218,19 @@ impl Network {
     }
 }
 
-/// TR-808 bass drum.
-///
-/// Each rising edge on **trigger** fires the 808's 1 ms trigger pulse into a
-/// circuit model of its bass drum: a resonant bridged-T filter rings at
-/// ≈49.5 Hz with a short frequency jump on the attack and a falling pitch
-/// "sigh". **decay** sets how long the ring lasts, **tone** how much of the
-/// attack click comes through, and **accent**, sampled at each strike, drives
-/// the circuit harder. Retriggering a ringing drum adds to its current state
-/// rather than restarting it, as on the hardware, so long decays at fast
-/// tempos swing in level from hit to hit; **choke** starts every hit from rest
-/// instead.
-///
-/// An unaccented hit peaks near **±5 V** and a fully accented one near
-/// **±10 V**; higher **freq** and **tone** run hotter, up to where the
-/// circuit's op-amp clips.
-///
-/// ```js
-/// $tr808.bd($clock.beatTrigger, { decay: 2 }).out()
-/// ```
-#[module(name = "$tr808.bd", has_init, args(trigger))]
-pub struct Bd808 {
-    outputs: Bd808Outputs,
-    params: Bd808Params,
-    state: Bd808State,
-    channel_state: Box<[ChannelState]>,
-}
-
-#[derive(Clone, Copy, Default)]
-struct ChannelState {
-    strike: Strike,
-    voice: Voice,
-    /// A choked hit fading out under `voice` for `tail_left` more samples.
-    tail: Voice,
-    tail_left: u32,
-}
-
-impl Bd808 {
-    fn init(&mut self, sample_rate: f32) {
-        let st = &mut self.state;
-        let dt = 1.0 / sample_rate;
-        st.pulse_samples = samples(PULSE_SECS, sample_rate);
-        st.choke_samples = samples(CHOKE_SECS, sample_rate);
-        let shaper_tau = C40 * R162 * R163 / (R162 + R163);
-        st.shaper_mul = (-dt / shaper_tau).exp();
-        st.c38_coeff = 1.0 - (-dt / R156_C38).exp();
-        st.c39_step = dt / (R161 * C39);
-        st.level_hp_coeff = one_pole_coeff(LEVEL_HP_HZ, sample_rate);
-        st.output_hp_coeff = one_pole_coeff(OUTPUT_HP_HZ, sample_rate);
-        let rest_r = 1.0 / (1.0 / R161 + 1.0 / R170 + 1.0 / (R165 + R166));
-        st.rest_hz = 1.0 / (std::f32::consts::TAU * (rest_r * R167).sqrt() * C41_42);
-    }
-
-    fn update(&mut self, sample_rate: f32) {
-        let st = &self.state;
-        for ch in 0..self.channel_count() {
-            let p = &self.params;
-            let cs = &mut self.channel_state[ch];
-
-            if let Some(volts) = cs
-                .strike
-                .process(p.trigger.get_value(ch), &p.accent, ch)
-                .map(pulse_volts)
-            {
-                if p.choke && !cs.voice.settled() {
-                    cs.tail = cs.voice;
-                    cs.tail_left = st.choke_samples;
-                    cs.voice = Voice {
-                        network: cs.voice.network,
-                        tone: cs.voice.tone,
-                        tone_coeff: cs.voice.tone_coeff,
-                        ..Voice::default()
-                    };
-                }
-                cs.voice.pulse.fire(volts, st.pulse_samples);
-            }
-            let freq = p.freq.value_or(ch, DEFAULT_FREQ);
-            let decay = p.decay.value_or(ch, DEFAULT_DECAY);
-            let tone = p.tone.value_or(ch, DEFAULT_TONE);
-            let mut out = if cs.voice.settled() {
-                0.0
-            } else {
-                cs.voice.step(st, freq, decay, tone, sample_rate)
-            };
-            if cs.tail_left > 0 {
-                let fade = cs.tail_left as f32 / st.choke_samples as f32;
-                cs.tail_left -= 1;
-                out += fade * cs.tail.step(st, freq, decay, tone, sample_rate);
-            }
-            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
-        }
-    }
+/// The settings for one sample: the bridged-T tuned for `freq` and
+/// `decay`, and the tone low-pass coefficient.
+#[derive(Clone, Copy)]
+struct Controls {
+    network: Network,
+    tone_coeff: f32,
 }
 
 impl Voice {
     /// Advances the circuit one sample and returns the output stage's voltage.
-    fn step(&mut self, st: &Bd808State, freq: f32, decay: f32, tone: f32, sample_rate: f32) -> f32 {
-        let dt = 1.0 / sample_rate;
+    #[inline]
+    fn advance(&mut self, st: &Bd808State, controls: &Controls) -> f32 {
+        let dt = st.dt;
         let vtrig = self.pulse.next();
 
         // Pulse shaper: the shelf passes the edges, and D53 stops the
@@ -398,10 +279,7 @@ impl Voice {
         };
         let g_ground = (1.0 - attack) / (R165 + R166) + attack / R166 + leak_g;
 
-        if freq != self.network.freq || decay != self.network.decay {
-            self.network = Network::new(freq, decay, st.rest_hz);
-        }
-        let Network { c, a, g, .. } = self.network;
+        let Network { c, a, g, .. } = controls.network;
         let g_total = 1.0 / R161 + 1.0 / R170 + g_ground;
 
         // States u = (arm1, arm2), the voltages across C41 and C42, with
@@ -446,11 +324,7 @@ impl Voice {
         self.vcomm = vcomm;
 
         // Tone low-pass, then the level and output coupling high-passes.
-        if tone != self.tone {
-            self.tone = tone;
-            self.tone_coeff = one_pole_coeff(tone_hz(tone), sample_rate);
-        }
-        let lp = low_pass(&mut self.tone_lp, vbt, self.tone_coeff);
+        let lp = low_pass(&mut self.tone_lp, vbt, controls.tone_coeff);
         let level = high_pass(&mut self.level_hp, lp, st.level_hp_coeff);
         let out = high_pass(&mut self.output_hp, level, st.output_hp_coeff);
 
@@ -466,5 +340,3 @@ fn tone_hz(tone: f32) -> f32 {
     let r_eq = R171 + R172 * vr5 / (R172 + vr5);
     1.0 / (std::f32::consts::TAU * r_eq * C45)
 }
-
-message_handlers!(impl Bd808 {});
