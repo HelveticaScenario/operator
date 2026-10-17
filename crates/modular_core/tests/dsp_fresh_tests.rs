@@ -2468,6 +2468,36 @@ fn cycle_swap_does_not_fire_in_progress_note_until_its_onset() {
 }
 
 #[test]
+fn cycle_swap_fires_new_onset_inside_old_pattern_span() {
+    // `c4` has no window edge inside cycle 0, so the playhead runs through it
+    // without entering any window. After a swap to `c4 e4`, e4's onset at 0.5
+    // lies inside that edge-free stretch and must still fire when crossed.
+    let a = cycle_patch(mini_payload("c4"), Some(1), None);
+    for _ in 0..60 {
+        process_frame(&a); // playhead ~0.25
+    }
+    let b = cycle_patch(mini_payload("c4 e4"), Some(1), None);
+    transfer_into(&b, &a);
+
+    let mut onsets = 0;
+    let mut prev_hi = false;
+    for _ in 0..100 {
+        process_frame(&b); // through ~0.67
+        let hi = seq_val(&b, "trig", 0) > 2.5;
+        if hi && !prev_hi {
+            onsets += 1;
+        }
+        prev_hi = hi;
+    }
+    assert_eq!(onsets, 1, "e4 must fire once when the playhead crosses 0.5");
+    let cv = seq_val(&b, "cv", 0);
+    assert!(
+        (cv - 0.3333).abs() < 0.02,
+        "cv should be e4 (~0.333 V), got {cv}"
+    );
+}
+
+#[test]
 fn cycle_onset_fires_on_backward_entry() {
     // The playhead is an arbitrary signal; a hap fires on ENTERING its window
     // from EITHER direction. `g4 c5`: g4 window [0,0.5], c5 window [0.5,1].
