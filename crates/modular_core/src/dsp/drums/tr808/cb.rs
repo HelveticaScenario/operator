@@ -1,0 +1,317 @@
+//! TR-808 cowbell, simulated from the 808 service notes' voicing board
+//! schematic. Part names (R28, C9, …) are the service notes' designators.
+//!
+//! Two of the six Schmitt-trigger oscillators shared by the 808's metal
+//! voices, tuned near 540 and 800 Hz, switch Q15 and Q14. Each transistor
+//! pulls its node down through a diode while its oscillator is high; while
+//! it is low the node rises toward the envelope on C9 through R28 or R29.
+//! These "swing-type" VCAs feed IC2's band-pass filter. C9 is charged by the
+//! trigger pulse and drains through the VCAs, and R82 with C34 across it
+//! pulls the envelope down quickly at first, for a sharp attack.
+
+use deserr::Deserr;
+use schemars::JsonSchema;
+
+use super::circuit::{Timing, pulse_volts};
+use crate::dsp::drums::analog::{high_pass, one_pole_coeff, rc_hz};
+use crate::dsp::drums::mna::{GROUND, Mna, MnaBuilder, MnaState, Switch};
+use crate::dsp::drums::voice::{Circuit, Pulse, Voices};
+use crate::dsp::utils::voct_to_hz;
+use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
+
+// Network unknowns: the envelope on C9, the R82/C34 junction, the two VCA
+// nodes, the junctions of R26/C30 and R27/C31, IC2's summing node M, its
+// inverting input, its output, and its output current.
+const ENV: usize = 0;
+const C34_NODE: usize = 1;
+const VCA_A: usize = 2;
+const VCA_B: usize = 3;
+const IN_A: usize = 4;
+const IN_B: usize = 5;
+const M: usize = 6;
+const INV: usize = 7;
+const OUT: usize = 8;
+const OPAMP: usize = 9;
+const UNKNOWNS: usize = 10;
+const CAPS: usize = 6;
+// Switches: the trigger pulse charging C9 through Q5, R122 and D2; Q15 and
+// Q14 pulling their nodes down through D3 and D4 and R31/R33.
+const CHARGE: usize = 0;
+const Q15: usize = 1;
+const Q14: usize = 2;
+const SWITCHES: usize = 3;
+const COMBOS: usize = 1 << SWITCHES;
+
+const R122: f32 = 1.0e3;
+/// D2's forward drop while C9 charges.
+const D2_DROP: f32 = 0.6;
+/// A conducting transistor holds its node here: its saturation voltage plus
+/// D3's drop at the tens of microamps R28 passes.
+const VCA_LOW: f32 = 0.45;
+/// R31 (100 Ω) and the diode's resistance at those currents.
+const R_ON: f32 = 1.0e3;
+
+// The metal voices' trigger buffer, IC2a, maps the common trigger pulse
+// V to 0.824·V + 3.29, which the 808's service notes and Werner, Abel and
+// Smith's cymbal analysis put at 7–14 V over the accent range.
+const METAL_GAIN: f32 = 0.824;
+const METAL_OFFSET: f32 = 3.29;
+
+// The output: C75 and R116 into the level pot, then C76 into R117 at IC6's
+// input. Only C76's high-pass falls in the audio band.
+const C76: f32 = 0.022e-6;
+const R117: f32 = 22.0e3;
+
+/// The two oscillators' stock frequencies, Hz, and their duty cycle: the
+/// HD14584's thresholds at 5 V hold each one high for 47.98% of its period.
+const OSC_LOW_HZ: f32 = 540.0;
+const OSC_HIGH_HZ: f32 = 800.0;
+const DUTY: f32 = 0.4798;
+
+/// Rate the cowbell circuit is simulated at, Hz: fine enough that the
+/// oscillators' switching edges land close to their true times.
+const CB_RATE: f32 = 96_000.0;
+
+/// The bell is spent once C9 is within this of the clamp: its swing is then
+/// some 75 dB down.
+const SPENT_ABOVE_CLAMP: f32 = 1.0e-3;
+const SETTLED_OUT: f32 = 1.0e-3;
+
+/// Scales the output so an unaccented hit peaks near 5 V.
+const OUTPUT_GAIN: f32 = 0.87;
+
+/// The stock low oscillator's pitch in V/Oct.
+const DEFAULT_FREQ: f32 = 1.0454;
+
+fn network() -> MnaBuilder<UNKNOWNS> {
+    let mut b = MnaBuilder::<UNKNOWNS>::default();
+    b.capacitor(ENV, GROUND, 0.47e-6)
+        .resistor(ENV, C34_NODE, 33.0e3)
+        .capacitor(C34_NODE, GROUND, 1.0e-6)
+        .resistor(ENV, VCA_A, 100.0e3)
+        .resistor(ENV, VCA_B, 100.0e3)
+        .resistor(VCA_A, IN_A, 10.0e3)
+        .capacitor(IN_A, M, 0.0022e-6)
+        .resistor(VCA_B, IN_B, 10.0e3)
+        .capacitor(IN_B, M, 0.0022e-6)
+        .resistor(M, GROUND, 2.2e3)
+        .capacitor(M, OUT, 0.0033e-6)
+        .capacitor(M, INV, 0.01e-6)
+        .resistor(INV, OUT, 470.0e3)
+        .opamp(GROUND, INV, OUT, OPAMP);
+    b
+}
+
+/// The cowbell's circuit state.
+#[derive(Clone, Copy, Default)]
+struct Bell {
+    pulse: Pulse,
+    net: MnaState<CAPS>,
+    env: f32,
+    vca_a: f32,
+    vca_b: f32,
+    out: f32,
+    couple: f32,
+}
+
+#[derive(Default)]
+struct BellShared {
+    timing: Timing,
+    substeps: u32,
+    /// Seconds per substep.
+    dt: f32,
+    net: Mna<UNKNOWNS, CAPS, SWITCHES, COMBOS>,
+    couple_coeff: f32,
+}
+
+/// The oscillators at the start of the sample: phase in cycles and advance
+/// per sample. They run freely between hits, like the 808's.
+struct BellControls {
+    low: (f32, f32),
+    high: (f32, f32),
+}
+
+/// Whether an oscillator is high `frac` of the way through the sample.
+#[inline]
+fn osc_high((phase, inc): (f32, f32), frac: f32) -> bool {
+    (phase + inc * frac).fract() < DUTY
+}
+
+impl Circuit for Bell {
+    type Shared = BellShared;
+    type Controls = BellControls;
+
+    fn fire(&mut self, accent: f32, shared: &BellShared) {
+        let volts = pulse_volts(accent);
+        self.pulse.fire(volts, shared.timing.pulse_samples);
+    }
+
+    fn settled(&self) -> bool {
+        // C9 drains toward the clamp, where the swing it can give the VCAs,
+        // and so the bell, has faded away; it holds what charge it has left.
+        !self.pulse.active()
+            && self.env < VCA_LOW + SPENT_ABOVE_CLAMP
+            && self.out.abs() < SETTLED_OUT
+            && self.couple.abs() < SETTLED_OUT
+    }
+
+    fn step(&mut self, sh: &BellShared, osc: &BellControls) -> f32 {
+        let vtrig = self.pulse.next();
+        let charge_to = if vtrig > 0.0 {
+            METAL_GAIN * vtrig + METAL_OFFSET - D2_DROP
+        } else {
+            0.0
+        };
+        let mut sum = 0.0;
+        for k in 0..sh.substeps {
+            let phase = (k as f32 + 0.5) / sh.substeps as f32;
+            let mut closed = 0;
+            if charge_to > self.env {
+                closed |= 1 << CHARGE;
+            }
+            // Each transistor conducts while its oscillator is high, and its
+            // diode only while the node sits above the clamp.
+            if osc_high(osc.low, phase) && self.vca_a > VCA_LOW {
+                closed |= 1 << Q15;
+            }
+            if osc_high(osc.high, phase) && self.vca_b > VCA_LOW {
+                closed |= 1 << Q14;
+            }
+            let mut injected = [0.0; UNKNOWNS];
+            if closed & (1 << CHARGE) != 0 {
+                injected[ENV] = charge_to / R122;
+            }
+            let x = sh.net.step(&mut self.net, closed, &injected);
+            self.env = x[ENV];
+            self.vca_a = x[VCA_A];
+            self.vca_b = x[VCA_B];
+            self.out = x[OUT];
+            sum += high_pass(&mut self.couple, x[OUT], sh.couple_coeff);
+        }
+        sum / sh.substeps as f32
+    }
+}
+
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[serde(rename_all = "camelCase")]
+#[deserr(rename_all = camelCase, deny_unknown_fields)]
+struct Cb808Params {
+    /// rising edges strike the bell
+    #[signal(type = trig, range = (0.0, 5.0))]
+    trigger: PolySignal,
+    /// accent, 0–5 V, sampled on each trigger and held for the hit; raises
+    /// the trigger pulse, for a hit up to twice as loud (default 0)
+    #[signal(default = 0.0, range = (0.0, 5.0))]
+    #[deserr(default)]
+    accent: Option<PolySignal>,
+    /// pitch of the lower oscillator in V/Oct, scaling both; stock is
+    /// 540 Hz against 800 Hz (default 1.0454)
+    #[signal(type = pitch, default = 1.0454, range = (-0.5, 2.5))]
+    #[deserr(default)]
+    freq: Option<PolySignal>,
+    /// fade out a still-sounding hit over 2 ms as the next one strikes, so
+    /// every hit starts from rest; otherwise hits add to the envelope, as on
+    /// the hardware (default false)
+    #[serde(default)]
+    #[deserr(default)]
+    choke: bool,
+}
+
+#[derive(Outputs, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct Cb808Outputs {
+    #[output("output", "drum output", default, range = (-10.0, 10.0))]
+    sample: PolyOutput,
+}
+
+/// TR-808 cowbell.
+///
+/// Each rising edge on **trigger** fires the 808's trigger pulse into a
+/// circuit model of its cowbell: two square-wave oscillators near 540 and
+/// 800 Hz, gated by a sharp-attacked envelope and shaped by a band-pass
+/// filter. **accent**, sampled at each strike, drives it harder.
+///
+/// An unaccented hit peaks near **±5 V** and a fully accented one near
+/// **±10 V**.
+///
+/// ```js
+/// $tr808.cb($clock.beatTrigger).out()
+/// ```
+#[module(name = "$tr808.cb", has_init, args(trigger))]
+pub struct Cb808 {
+    outputs: Cb808Outputs,
+    params: Cb808Params,
+    state: BellShared,
+    channel_state: Box<[Channel]>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct Channel {
+    voices: Voices<Bell>,
+    /// The oscillators' phases, in cycles.
+    phases: [f32; 2],
+}
+
+impl Cb808 {
+    fn init(&mut self, sample_rate: f32) {
+        let sh = &mut self.state;
+        sh.timing = Timing::new(sample_rate);
+        sh.substeps = (CB_RATE / sample_rate).round().max(1.0) as u32;
+        let rate = sample_rate * sh.substeps as f32;
+        sh.dt = 1.0 / rate;
+        let on = 1.0 / R_ON;
+        sh.net = network().build(
+            sh.dt,
+            [
+                Switch {
+                    node: ENV,
+                    other: GROUND,
+                    g: 1.0 / R122,
+                    volts: 0.0,
+                },
+                Switch {
+                    node: VCA_A,
+                    other: GROUND,
+                    g: on,
+                    volts: VCA_LOW,
+                },
+                Switch {
+                    node: VCA_B,
+                    other: GROUND,
+                    g: on,
+                    volts: VCA_LOW,
+                },
+            ],
+        );
+        sh.couple_coeff = one_pole_coeff(rc_hz(R117, C76), rate);
+    }
+
+    fn update(&mut self, sample_rate: f32) {
+        let sh = &self.state;
+        for ch in 0..self.channel_count() {
+            let p = &self.params;
+            let cs = &mut self.channel_state[ch];
+            let r = voct_to_hz(p.freq.value_or(ch, DEFAULT_FREQ)) / OSC_LOW_HZ;
+            let inc = [OSC_LOW_HZ * r / sample_rate, OSC_HIGH_HZ * r / sample_rate];
+            let phases = &mut cs.phases;
+            let controls = BellControls {
+                low: (phases[0], inc[0]),
+                high: (phases[1], inc[1]),
+            };
+            let out = cs.voices.process(
+                p.trigger.get_value(ch),
+                &p.accent,
+                ch,
+                p.choke,
+                sh.timing.choke_samples,
+                sh,
+                &controls,
+            );
+            phases[0] = (phases[0] + inc[0]).fract();
+            phases[1] = (phases[1] + inc[1]).fract();
+            self.outputs.sample.set(ch, out * OUTPUT_GAIN);
+        }
+    }
+}
+
+message_handlers!(impl Cb808 {});
