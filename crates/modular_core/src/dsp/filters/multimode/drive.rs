@@ -9,7 +9,8 @@
 
 use std::sync::LazyLock;
 
-use super::components::{DIODE_IS, DIODE_NVT, ZENER_MIN_LN_I, zener_pair_voltage};
+use super::components::{DIODE_IS, DIODE_NVT, zener_clamp};
+use super::curve::Curve;
 
 /// Drive transimpedance feedback resistor (R24), in parallel with the zener pair.
 const R_DRIVE_FB: f64 = 30.0e3;
@@ -20,53 +21,6 @@ const R_FOLD_CLAMP: f64 = 100.0e3;
 const FOLD1_RATIO: f64 = 30.0 / 100.0;
 /// Second folder stage: same topology with R51/R50, both 100k.
 const FOLD2_RATIO: f64 = 1.0;
-
-/// Tables cover `|x|` in `[0, X_MAX]`; beyond that both curves are extrapolated
-/// linearly, where the zener clamp makes them nearly flat.
-const X_MAX: f64 = 16.0;
-const SEGMENTS: usize = 2048;
-const STEP: f64 = X_MAX / SEGMENTS as f64;
-
-/// Odd transfer curve sampled on `[0, X_MAX]`, plus its (even) antiderivative.
-struct Curve {
-    value: Box<[f64]>,
-    integral: Box<[f64]>,
-}
-
-impl Curve {
-    fn build(f: impl Fn(f64) -> f64) -> Self {
-        let value: Box<[f64]> = (0..=SEGMENTS).map(|i| f(i as f64 * STEP)).collect();
-        let mut integral = vec![0.0; SEGMENTS + 1].into_boxed_slice();
-        for i in 1..=SEGMENTS {
-            integral[i] = integral[i - 1] + 0.5 * (value[i - 1] + value[i]) * STEP;
-        }
-        Self { value, integral }
-    }
-
-    /// Segment index and fractional position for `a = |x|`, clamped to the last
-    /// segment so positions past `X_MAX` extrapolate it.
-    #[inline]
-    fn locate(a: f64) -> (usize, f64) {
-        let pos = a / STEP;
-        let i = (pos as usize).min(SEGMENTS - 1);
-        (i, pos - i as f64)
-    }
-
-    #[inline]
-    fn eval(&self, x: f64) -> f64 {
-        let (i, t) = Self::locate(x.abs());
-        let v = self.value[i] + (self.value[i + 1] - self.value[i]) * t;
-        if x < 0.0 { -v } else { v }
-    }
-
-    /// Exact integral of the piecewise-linear interpolant from 0 to `x`.
-    #[inline]
-    fn antiderivative(&self, x: f64) -> f64 {
-        let (i, t) = Self::locate(x.abs());
-        let (v0, v1) = (self.value[i], self.value[i + 1]);
-        self.integral[i] + (v0 * t + 0.5 * (v1 - v0) * t * t) * STEP
-    }
-}
 
 pub(super) struct DriveCurves {
     clip: Curve,
@@ -83,21 +37,9 @@ pub(super) fn prime() {
     LazyLock::force(&CURVES);
 }
 
-/// Magnitude of the drive transimpedance output for an unclamped target `x`:
-/// solves `v + R24 · i_zener(v) = x`, parametrised by the zener current so both
-/// sides are explicit and monotonic. Below the pair's 1 pA floor the clamp
-/// carries under 30 nV through R24, so the output is `x`.
+/// Magnitude of the drive transimpedance output for an unclamped target `x`.
 fn zener_clip(x: f64) -> f64 {
-    let (mut lo, mut hi) = (ZENER_MIN_LN_I, 0.0_f64);
-    for _ in 0..80 {
-        let mid = 0.5 * (lo + hi);
-        if zener_pair_voltage(mid) + R_DRIVE_FB * mid.exp() < x {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    zener_pair_voltage(0.5 * (lo + hi)).min(x)
+    zener_clamp(x, 1.0, R_DRIVE_FB)
 }
 
 /// Voltage across an anti-parallel 1N4148 pair fed from `v` through 100 kΩ.
@@ -220,15 +162,17 @@ mod tests {
 
     #[test]
     fn clip_is_transparent_below_the_zener_knee() {
-        for x in [0.0, 0.5, 1.0, 2.5, 4.0] {
+        for x in [0.0, 0.5, 1.0, 2.0] {
             assert!((zener_clip(x) - x).abs() < 1e-3, "x={x}");
         }
     }
 
     #[test]
-    fn clip_saturates_near_zener_plus_forward_drop() {
+    fn clip_compresses_softly_then_saturates() {
+        // The 5.1 V zeners' soft knee bends the curve from about 3 V.
+        assert!(zener_clip(4.0) < 3.85);
         let at_12 = zener_clip(12.0);
-        assert!((5.5..5.8).contains(&at_12), "clip(12) = {at_12}");
+        assert!((5.1..5.3).contains(&at_12), "clip(12) = {at_12}");
         assert!(zener_clip(16.0) > at_12, "clip must stay monotonic");
     }
 
@@ -241,22 +185,23 @@ mod tests {
     #[test]
     fn drive_curves_match_spice() {
         // Each row is (x, clipped, folded) from an ngspice DC sweep of the
-        // transcribed drive stage, with signs referred to the filter input.
+        // transcribed drive stage with the vendor zener model, with signs
+        // referred to the filter input.
         let reference = [
-            (0.5, 0.5, 0.1858),
-            (1.0, 1.0, 0.1473),
-            (2.0, 2.0, -0.0801),
-            (3.0, 3.0, -0.1770),
-            (4.0, 4.0, -0.0106),
-            (5.0, 4.991, 0.2198),
-            (6.0, 5.501, 0.3471),
-            (12.0, 5.641, 0.383),
+            (0.5, 0.5, 0.1857),
+            (1.0, 1.0, 0.1470),
+            (2.0, 1.9999, -0.0810),
+            (3.0, 2.9918, -0.1772),
+            (4.0, 3.8085, -0.0486),
+            (5.0, 4.2939, 0.0553),
+            (6.0, 4.5751, 0.1201),
+            (12.0, 5.2084, 0.2736),
         ];
         for (x, clip, fold) in reference {
             let c = zener_clip(x);
             let f = wavefold(c);
-            assert!((c - clip).abs() < 0.03, "clip({x}) = {c}, SPICE {clip}");
-            assert!((f - fold).abs() < 0.01, "fold({x}) = {f}, SPICE {fold}");
+            assert!((c - clip).abs() < 0.002, "clip({x}) = {c}, SPICE {clip}");
+            assert!((f - fold).abs() < 0.003, "fold({x}) = {f}, SPICE {fold}");
         }
     }
 

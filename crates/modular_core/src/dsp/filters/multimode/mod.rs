@@ -9,7 +9,9 @@
 //! such diode.
 
 mod components;
+mod curve;
 mod drive;
+mod output;
 mod svf;
 
 use deserr::Deserr;
@@ -26,9 +28,10 @@ use crate::{
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 
-use components::ZENER_CAPACITANCE;
+use components::{ZENER_PAIR_CAPACITANCE_0V, vca_hd2};
 use drive::{DriveState, PreEmphasis};
-use svf::{DAMPING_PER_GAIN, NEGATIVE_DAMPING, SvfCore, integrator_gains};
+use output::{OUTPUT_POLE_HZ, output_amp, rails};
+use svf::{CoreTuning, NEGATIVE_DAMPING, SvfCore};
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +39,7 @@ use svf::{DAMPING_PER_GAIN, NEGATIVE_DAMPING, SvfCore, integrator_gains};
 struct MultimodeParams {
     /// signal input (DC-coupled)
     input: PolySignal,
-    /// cutoff frequency in V/Oct (0V = C4), capped at ~18.6 kHz
+    /// cutoff frequency in V/Oct (0V = C4), capped at ~21 kHz
     #[signal(type = frequency, default = 0.0, range = (-5.0, 5.0))]
     cutoff: PolySignal,
     /// resonance (0-5). Self-oscillates from ~4.3.
@@ -55,10 +58,10 @@ struct MultimodeParams {
     #[signal(type = control, default = 0.0, range = (0.0, 5.0))]
     #[deserr(default)]
     fold: Option<PolySignal>,
-    /// when true (default), the drive stage and filter run at twice the
-    /// engine rate, which reduces aliasing from the clipper, wavefolder and
-    /// self-oscillation and keeps the highpass accurate at high cutoffs;
-    /// false halves the CPU cost
+    /// when true (default), the circuit runs at twice the engine rate, which
+    /// reduces aliasing from the clipper, wavefolder and self-oscillation and
+    /// keeps the highpass accurate at high cutoffs; false costs about 40% less
+    /// CPU
     #[serde(default = "default_true")]
     #[deserr(default = default_true())]
     high_res: bool,
@@ -113,18 +116,14 @@ const FOLD_TAPER_BASE: f32 = 81.0;
 const MODE_SCALE: f32 = 1.0 / 2.5;
 const MODE_OFFSET_A: f32 = 1.0;
 const MODE_OFFSET_B: f32 = 0.02;
-/// Output amp gain R153 / R173 = 120k / 62k.
-const OUTPUT_GAIN: f32 = 120.0 / 62.0;
-/// OPA1679 output swing on ±12 V rails.
-const RAIL_V: f32 = 11.5;
+/// Mode VCA input resistors (R96, R98, and the R111/R118 summer's equivalent).
+const R_MODE_IN: f32 = 62.0e3;
+/// Drive VCA input resistor (R33).
+const R_DRIVE_IN: f32 = 30.0e3;
 /// Drive transimpedance feedback: R24 (30k) across C12 (18 pF) and the D4/D5
-/// zener pair.
+/// zener pair at its 0 V capacitance.
 const DRIVE_POLE_HZ: f32 =
-    1.0 / (std::f32::consts::TAU * 30.0e3 * (18.0e-12 + ZENER_CAPACITANCE / 2.0));
-/// Output amp feedback: R153 (120k) across C86 (18 pF) and the four-zener chain
-/// D38/D40/D41/D44.
-const OUTPUT_POLE_HZ: f32 =
-    1.0 / (std::f32::consts::TAU * 120.0e3 * (18.0e-12 + ZENER_CAPACITANCE / 4.0));
+    1.0 / (std::f32::consts::TAU * 30.0e3 * (18.0e-12 + ZENER_PAIR_CAPACITANCE_0V));
 /// Circuit noise at the filter's summing node (~10 µV). Self-oscillation grows
 /// from it, so the filter starts ringing without any input, as the hardware does.
 const NOISE_FLOOR_V: f32 = 1.0e-5;
@@ -135,22 +134,19 @@ const NOISE_FLOOR_V: f32 = 1.0e-5;
 struct Controls {
     drive_gain: Cached<f32>,
     fold_gains: Cached<(f32, f32)>,
-    integrator_gains: Cached<(f32, f32)>,
-    damping: Cached<f32>,
+    tuning: Cached<CoreTuning>,
+    res_gain: Cached<f32>,
 }
 
-/// With `highRes` the drive stage and filter core run at twice the engine rate;
-/// the LP, BP and HP taps are decimated separately and mixed by the mode VCAs
-/// at the engine rate, where their gains are held for the whole sample anyway.
+/// With `highRes` the whole circuit runs at twice the engine rate, and the
+/// four outputs are decimated separately.
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
     /// Rate the core and its caches are configured for; 0 until configured.
     core_rate: f32,
     controls: Controls,
     up: Halfband2xUp,
-    down_lp: Halfband2xDown,
-    down_bp: Halfband2xDown,
-    down_hp: Halfband2xDown,
+    down: [Halfband2xDown; 4],
     drive_pole: OnePole,
     output_poles: [OnePole; 3],
     drive: DriveState,
@@ -167,11 +163,9 @@ impl ChannelState {
             return;
         }
         self.core_rate = rate;
-        self.controls.integrator_gains = Cached::default();
+        self.controls.tuning = Cached::default();
         self.up = Halfband2xUp::default();
-        self.down_lp = Halfband2xDown::default();
-        self.down_bp = Halfband2xDown::default();
-        self.down_hp = Halfband2xDown::default();
+        self.down = Default::default();
         self.pre_emphasis = PreEmphasis::default();
         let coeff = |hz: f32| 1.0 - (-std::f32::consts::TAU * hz / rate).exp();
         self.drive_pole.set_coeff(coeff(DRIVE_POLE_HZ));
@@ -180,25 +174,32 @@ impl ChannelState {
         }
     }
 
-    /// One core-rate sample from drive VCA output `x`, returning the circuit's
-    /// `(lp, bp, hp)` nodes as the output amp's feedback pole shapes them. The
-    /// mode VCAs only rescale these taps, so filtering each one equals filtering
-    /// their mix.
+    /// One core-rate sample from drive VCA output `x`, returning the outputs
+    /// `[output, lp, bp, hp]`. The output amp's feedback pole filters the LP,
+    /// BP and HP nodes before the mode VCAs, which only rescale them, so
+    /// filtering each one equals filtering their mix.
     #[inline]
     fn tick(
         &mut self,
         x: f32,
         fold_gains: (f32, f32),
-        integrator_gains: (f32, f32),
-        damping: f32,
-    ) -> (f32, f32, f32) {
+        tuning: CoreTuning,
+        res_gain: f32,
+        mode_gains: (f32, f32),
+    ) -> [f32; 4] {
         let x = self.drive_pole.process(x);
         let filter_in = self.drive.process(x, fold_gains.0, fold_gains.1);
         let u = NOISE_FLOOR_V * self.noise.next_bipolar() - filter_in;
-        let (lp, bp) = self.core.step(u, integrator_gains, damping);
+        let (lp, bp) = self.core.step(u, tuning, res_gain);
         let hp = -filter_in - lp - NEGATIVE_DAMPING * bp;
         let [p_lp, p_bp, p_hp] = &mut self.output_poles;
-        (p_lp.process(lp), p_bp.process(bp), p_hp.process(hp))
+        let (lp, bp, hp) = (p_lp.process(lp), p_bp.process(bp), p_hp.process(hp));
+        [
+            output_amp(morph(lp, bp, hp, mode_gains)),
+            output_amp(lp),
+            output_amp(-bp),
+            output_amp(hp),
+        ]
     }
 }
 
@@ -210,23 +211,24 @@ impl ChannelState {
 /// The signal path is DC-coupled, so it can process CVs too.
 ///
 /// - **cutoff** — V/Oct. Tracks exactly at low cutoffs and runs progressively
-///   flat in the top octaves (−25 cents at 1 kHz, about a semitone at 5 kHz),
-///   topping out near 18.6 kHz, as the hardware does. Responds at audio rate, so
-///   an oscillator patched in gives exponential FM.
+///   flat in the top octaves (−15 cents at 1 kHz, about half a semitone at
+///   5 kHz), topping out near 21 kHz, as the circuit does. Responds at audio
+///   rate, so an oscillator patched in gives exponential FM.
 /// - **resonance** — 0–5. Self-oscillates above ~4.3; the bandpass is then
-///   clamped near ±5.5 V by the integrator's zeners. With no input, `mode`
-///   shifts the phase of the sine.
+///   held near ±4 V by the soft knee of the integrator's zeners. With no input,
+///   `mode` shifts the phase of the sine.
 /// - **mode** — 0 lowpass, 2.5 bandpass, 5 highpass; values between crossfade.
 /// - **drive** — input gain ahead of everything else: 0 is unity, 5 is about
-///   +18 dB. A ±5 V input starts to clip just above 0.
+///   +18 dB. The zeners' soft knee already rounds a ±5 V input at 0.
 /// - **fold** — 0 soft clipping only, 5 the two-stage wavefolder.
 /// - **highRes** — on by default. Off runs the circuit at the engine rate for
-///   half the CPU, with more aliasing from hot drive, folding and
+///   about 40% less CPU, with more aliasing from hot drive, folding and
 ///   self-oscillation, and a highpass that attenuates more below the cutoff
 ///   once the cutoff is above ~8 kHz (about 2 dB more at 15 kHz).
 ///
-/// Passband gain in lowpass mode is about +2.9 dB at unity drive, rolling off
-/// above ~14 kHz at the output amp.
+/// Passband gain in lowpass mode is about +2.8 dB at unity drive, rolling off
+/// above ~20 kHz at the output amp, whose zeners compress the output softly
+/// above about 6 V.
 ///
 /// ```js
 /// // resonant sweep that morphs from lowpass to highpass
@@ -235,7 +237,7 @@ impl ChannelState {
 /// $multimode($sine('c3'), 'c6', 1, 0, { drive: 3, fold: 3 }).out()
 /// // no input: a self-oscillating sine at A3
 /// $multimode(0, 'a3', 5).out()
-/// // without oversampling, for half the CPU
+/// // without oversampling, for less CPU
 /// $multimode($saw('c2'), 'c5', 2, 0, { highRes: false }).out()
 /// ```
 #[module(
@@ -280,9 +282,31 @@ fn vca_gain(control_v: f32) -> f32 {
     10.0_f32.powf(-control_v / VCA_VOLTS_PER_DECADE)
 }
 
+/// Gains `(a, b)` of the two mode VCAs: `a` blends HP into the BP path, `b`
+/// crossfades from LP to it.
+#[inline]
+fn mode_gains(mode: f32) -> (f32, f32) {
+    (
+        (mode * MODE_SCALE - MODE_OFFSET_A).clamp(0.0, 1.0),
+        (mode * MODE_SCALE - MODE_OFFSET_B).clamp(0.0, 1.0),
+    )
+}
+
+/// The mode VCAs' mix into the output amp, in volts across R173. VCA A takes
+/// BP and HP through 62k each; VCA B takes its output less BP and LP (through
+/// the IC14C summer) and adds to the LP that reaches the output directly.
+#[inline]
+fn morph(lp: f32, bp: f32, hp: f32, (gain_a, gain_b): (f32, f32)) -> f32 {
+    let a = gain_a * (bp + hp) * vca_hd2(gain_a, (bp + hp) / R_MODE_IN);
+    let w = a - bp - lp;
+    lp + gain_b * w * vca_hd2(gain_b, w / R_MODE_IN)
+}
+
 impl Multimode {
     fn init(&mut self, sample_rate: f32) {
+        components::prime();
         drive::prime();
+        output::prime();
         self.state.sample_rate = sample_rate;
         let base = seed_base(self);
         for (i, channel) in self.channel_state.iter_mut().enumerate() {
@@ -316,44 +340,33 @@ impl Multimode {
             let fold = controls
                 .fold_gains
                 .get(p.fold.value_or(ch, 0.0), |fold| fold_gains(sanitize(fold)));
-            let integrators = controls
-                .integrator_gains
-                .get(p.cutoff.get_value(ch), |voct| {
-                    let fc = voct_to_hz(sanitize(voct)).clamp(FC_MIN_HZ, FC_MAX_HZ);
-                    integrator_gains(fc, fc / FC_MAX_HZ, rate)
-                });
-            let damping = controls
-                .damping
+            let tuning = controls.tuning.get(p.cutoff.get_value(ch), |voct| {
+                let fc = voct_to_hz(sanitize(voct)).clamp(FC_MIN_HZ, FC_MAX_HZ);
+                CoreTuning::new(fc, fc / FC_MAX_HZ, rate)
+            });
+            let res_gain = controls
+                .res_gain
                 .get(p.resonance.value_or(ch, 0.0), |resonance| {
-                    let res_control = (sanitize(resonance) * RES_CONTROL_SCALE).max(0.0);
-                    DAMPING_PER_GAIN * vca_gain(res_control) - NEGATIVE_DAMPING
+                    vca_gain((sanitize(resonance) * RES_CONTROL_SCALE).max(0.0))
                 });
+            let modes = mode_gains(sanitize(p.mode.value_or(ch, 0.0)));
 
-            let x = sanitize(drive_gain * p.input.get_value(ch));
-            let (lp, bp, hp) = if p.high_res {
+            let input = p.input.get_value(ch);
+            let x = sanitize(drive_gain * input * vca_hd2(drive_gain, input / R_DRIVE_IN));
+            let out = if p.high_res {
                 let (even, odd) = state.up.process(x);
-                let even = state.tick(even, fold, integrators, damping);
-                let odd = state.tick(odd, fold, integrators, damping);
-                (
-                    state.down_lp.process(even.0, odd.0),
-                    state.down_bp.process(even.1, odd.1),
-                    state.down_hp.process(even.2, odd.2),
-                )
+                let even = state.tick(even, fold, tuning, res_gain, modes);
+                let odd = state.tick(odd, fold, tuning, res_gain, modes);
+                std::array::from_fn(|k| state.down[k].process(even[k], odd[k]))
             } else {
                 let x = state.pre_emphasis.process(x);
-                state.tick(x, fold, integrators, damping)
+                state.tick(x, fold, tuning, res_gain, modes)
             };
 
-            let mode = sanitize(p.mode.value_or(ch, 0.0));
-            let gain_a = (mode * MODE_SCALE - MODE_OFFSET_A).clamp(0.0, 1.0);
-            let gain_b = (mode * MODE_SCALE - MODE_OFFSET_B).clamp(0.0, 1.0);
-            let morph = lp * (1.0 - gain_b) + gain_b * (gain_a * (bp + hp) - bp);
-
-            let out = |v: f32| (-OUTPUT_GAIN * v).clamp(-RAIL_V, RAIL_V);
-            self.outputs.sample.set(ch, out(morph));
-            self.outputs.lp.set(ch, out(lp));
-            self.outputs.bp.set(ch, out(-bp));
-            self.outputs.hp.set(ch, out(hp));
+            self.outputs.sample.set(ch, rails(out[0]));
+            self.outputs.lp.set(ch, rails(out[1]));
+            self.outputs.bp.set(ch, rails(out[2]));
+            self.outputs.hp.set(ch, rails(out[3]));
         }
     }
 }

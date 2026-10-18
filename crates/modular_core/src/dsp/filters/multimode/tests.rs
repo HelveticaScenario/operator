@@ -143,9 +143,9 @@ both_resolutions! {
         assert!((low + 11.58).abs() < 0.3, "100 Hz: {low} dB");
         let mut m = make(high_res, SPICE_FC, 0.0, 5.0);
         let high = db(sine_peak(&mut m, 10_000.0, 1.0));
-        // At the engine rate the pre-emphasis leaves ~0.5 dB of extra lift here.
-        let tol = if high_res { 0.5 } else { 0.8 };
-        assert!((high - 0.5).abs() < tol, "10 kHz: {high} dB");
+        // At the engine rate the pre-emphasis leaves ~0.3 dB of extra lift here.
+        let tol = if high_res { 0.3 } else { 0.6 };
+        assert!((high - 1.46).abs() < tol, "10 kHz: {high} dB");
     }
 
     fn resonance_raises_the_peak(high_res: bool) {
@@ -170,7 +170,8 @@ both_resolutions! {
         let run = free_run(&mut m, 3.0);
         let tail = &run[run.len() / 2..];
         let peak = tail.iter().fold(0.0_f32, |a, &v| a.max(v.abs()));
-        assert!((peak - 10.7).abs() < 0.6, "self-oscillation peak {peak}");
+        // SPICE: 7.34 V, the bandpass held near ±4 V by the zeners' soft knee.
+        assert!((peak - 7.34).abs() < 0.2, "self-oscillation peak {peak}");
         let hz = zero_crossing_hz(tail);
         assert!(
             (hz / 440.0 - 1.0).abs() < 0.02,
@@ -178,12 +179,13 @@ both_resolutions! {
         );
     }
 
-    fn self_oscillation_tops_out_near_eighteen_and_a_half_khz(high_res: bool) {
-        // SPICE: knob fully clockwise resonates at 18.59 kHz.
+    fn self_oscillation_tops_out_near_twenty_one_khz(high_res: bool) {
+        // SPICE: knob fully clockwise resonates at 21.03 kHz, where the zener
+        // capacitance has shrunk under the full bandpass swing.
         let mut m = make(high_res, 40_000.0, 5.0, 0.0);
         let run = free_run(&mut m, 1.0);
         let hz = zero_crossing_hz(&run[run.len() / 2..]);
-        assert!((hz / 18_590.0 - 1.0).abs() < 0.01, "top cutoff {hz} Hz");
+        assert!((hz / 21_030.0 - 1.0).abs() < 0.01, "top cutoff {hz} Hz");
     }
 
     fn self_oscillation_tracks_one_volt_per_octave_at_low_cutoffs(high_res: bool) {
@@ -214,8 +216,9 @@ both_resolutions! {
         let mut clip = make(high_res, 20_000.0, 0.0, 0.0);
         clip.params.drive = Some(volts(5.0));
         let clipped = 5.0 * sine_peak(&mut clip, 100.0, 5.0);
-        // Zener clamp ±~5.6 V × clean path 0.719 × output 1.935.
-        assert!((clipped - 7.8).abs() < 0.5, "clipped peak {clipped}");
+        // Zener clamp ±5.7 V × clean path 0.719 × output gain 1.935 asks for
+        // 7.9 V, which the output amp's zeners soften.
+        assert!((clipped - 7.39).abs() < 0.1, "clipped peak {clipped}");
 
         // A ±1 V sine at unity drive crosses the folder's first peak; at full fold
         // only the folded path, with its 15.6× makeup gain, reaches the filter.
@@ -223,7 +226,7 @@ both_resolutions! {
         fold.params.fold = Some(volts(5.0));
         let folded = sine_peak(&mut fold, 100.0, 1.0);
         // The folder peaks at 0.186 V (x ≈ 0.45 V) in SPICE.
-        let expected = 15.6 * 0.186 * OUTPUT_GAIN;
+        let expected = 15.6 * 0.186 * output::OUTPUT_GAIN;
         assert!(
             (folded / expected - 1.0).abs() < 0.1,
             "folded gain {folded} vs {expected}"
@@ -248,7 +251,10 @@ both_resolutions! {
                 &m.outputs.hp,
             ] {
                 let v = out.get(0);
-                assert!(v.is_finite() && v.abs() <= RAIL_V, "sample {n}: {v}");
+                assert!(
+                    (output::RAIL_NEG..=output::RAIL_POS).contains(&v),
+                    "sample {n}: {v}"
+                );
             }
         }
     }
@@ -292,7 +298,7 @@ fn switching_resolution_keeps_oscillating_at_the_same_pitch() {
     let run = free_run(&mut m, 1.0);
     let tail = &run[run.len() / 2..];
     let peak = tail.iter().fold(0.0_f32, |a, &v| a.max(v.abs()));
-    assert!((peak - 10.7).abs() < 0.6, "peak {peak}");
+    assert!((peak - 7.34).abs() < 0.2, "peak {peak}");
     let hz = zero_crossing_hz(tail);
     assert!(
         (hz / 440.0 - 1.0).abs() < 0.02,
@@ -303,13 +309,19 @@ fn switching_resolution_keeps_oscillating_at_the_same_pitch() {
 #[test]
 fn low_res_treble_tracks_high_res() {
     // Highpass passes the drive stage's treble straight through, so it shows
-    // the pre-emphasis against ADAA's roll-off; bandpass also shows the core's
-    // frequency warping at the engine rate.
-    for (mode, top_hz, tol) in [(5.0, 16_000.0, 0.6), (2.5, 10_000.0, 0.6)] {
+    // the pre-emphasis against ADAA's roll-off; above 14 kHz the engine-rate
+    // output pole (19.5 kHz) and ADAA's residual roll-off leave up to 1 dB.
+    // Bandpass also shows the core's frequency warping at the engine rate.
+    for (mode, top_hz) in [(5.0, 16_000.0), (2.5, 10_000.0)] {
         let mut hz = 1000.0;
         while hz <= top_hz {
             let high = db(rms_gain(&mut make(true, SPICE_FC, 0.0, mode), hz));
             let low = db(rms_gain(&mut make(false, SPICE_FC, 0.0, mode), hz));
+            let tol = match (mode == 5.0, hz > 14_000.0) {
+                (true, false) => 0.6,
+                (true, true) => 1.0,
+                (false, _) => 0.8,
+            };
             assert!(
                 (low - high).abs() < tol,
                 "mode {mode} at {hz} Hz: low {low} dB, high {high} dB"
