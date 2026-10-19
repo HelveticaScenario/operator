@@ -1357,7 +1357,13 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
             // column, so a stride mismatch would land channel >= 1 cells on
             // the wrong (voice, channel) coordinates.
             "freq": [-2.0, -1.9],
-            "voices": voices
+            "voices": voices,
+            // Constant-high sync: its one rising edge (the trigger's first
+            // sample) resets every voice to phase 0, so the carried voices'
+            // phases at the transfer frame are fixed rather than seeded from
+            // the module's address. The latched trigger state transfers with
+            // the module, so the new patch sees no further edge.
+            "sync": 5.0
         })
     };
 
@@ -1391,13 +1397,20 @@ fn supersaw_voice_state_transfers_intact_across_a_voice_count_change() {
     process_frame(&new_patch);
     let new_ss = new_patch.sampleables.get("ss").unwrap();
 
-    // The added voices must be silent on the transfer frame: their mute is
-    // armed and releases only at their own first zero crossing.
+    // The added voices must be (near-)silent on the transfer frame: their mute
+    // is armed and releases only at their own first rising zero crossing. A
+    // seeded phase within one step below that crossing releases on this very
+    // frame, contributing at most one ramp step (2 * dt) per input channel, so
+    // the bound is that step summed over both channels at the highest detuned
+    // pitch, times the 5 / sqrt(2) channel-compensated gain (~0.02 V).
+    let max_hz = 261.63 * 2.0f32.powf(-1.9 + 0.09 / 12.0);
+    let max_release_step = 2.0 * max_hz / SAMPLE_RATE;
+    let fresh_bound = 2.0 * max_release_step * 5.0 / 2.0f32.sqrt();
     for voice in 5..7 {
         let v = new_ss.get_value_at(DEFAULT_PORT, voice, 0);
-        assert_eq!(
-            v, 0.0,
-            "fresh voice {voice} must start muted on the transfer frame, got {v}"
+        assert!(
+            v.abs() <= fresh_bound,
+            "fresh voice {voice} must start muted on the transfer frame, got {v} (bound {fresh_bound})"
         );
     }
 
