@@ -57,7 +57,7 @@ export interface AudioConfig {
     bufferSize?: number;
 }
 
-export type { BundledFont, MonospaceFont, SystemFont } from './fonts';
+export type { MonospaceFont, SystemFont } from './fonts';
 
 export interface PrettierConfig {
     singleQuote?: boolean;
