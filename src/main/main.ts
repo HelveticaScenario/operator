@@ -74,6 +74,7 @@ import { executePatchScript } from './dsl/executor';
 import { buildLibSource } from './dsl/typescriptLibGen';
 import type { WavsFolderNode } from './dsl/typescriptLibGen';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import { promises as fsPromises } from 'fs';
 import * as path from 'path';
@@ -2643,13 +2644,21 @@ app.on('ready', () => {
     }
 
     // Dev-only: register a hotkey to restart the main process.
-    // Sends SIGUSR1 to the wrapper script, which injects `rs` into forge's stdin
-    // So the Vite dev server stays alive and only Electron restarts. The hotkey
-    // is system-wide, so a background launch leaves it to the user's instance.
-    if (!app.isPackaged && process.env.DEV_WRAPPER_PID && !BACKGROUND_LAUNCH) {
+    // Connecting to the wrapper script's restart socket makes it inject `rs`
+    // into forge's stdin, so the Vite dev server stays alive and only Electron
+    // restarts. The hotkey is system-wide, so a background launch leaves it to
+    // the user's instance.
+    const devRestartSocket = process.env.DEV_RESTART_SOCKET;
+    if (!app.isPackaged && devRestartSocket && !BACKGROUND_LAUNCH) {
         globalShortcut.register('CommandOrControl+Shift+R', () => {
             console.log('[dev] Restarting main process...');
-            process.kill(parseInt(process.env.DEV_WRAPPER_PID!), 'SIGUSR1');
+            net.connect(devRestartSocket)
+                .on('error', (err) =>
+                    console.warn(
+                        `[dev] Restart request failed: ${err.message}`,
+                    ),
+                )
+                .end();
         });
     }
 });
