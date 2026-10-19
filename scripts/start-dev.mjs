@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -11,13 +12,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 // Run the CLI's JS entry with node: the `.bin` shim is a `.cmd` on Windows,
 // which `spawn` cannot execute without a shell.
+const FORGE_PKG = createRequire(import.meta.url).resolve(
+    '@electron-forge/cli/package.json',
+);
 const FORGE_CLI = join(
-    ROOT,
-    'node_modules',
-    '@electron-forge',
-    'cli',
-    'dist',
-    'electron-forge.js',
+    dirname(FORGE_PKG),
+    JSON.parse(readFileSync(FORGE_PKG, 'utf8')).bin['electron-forge'],
 );
 
 // Name the dev Electron.app after this checkout before launching it.
@@ -30,7 +30,7 @@ execFileSync(
 );
 
 // Electron connects to this socket (a named pipe on Windows) to ask for a
-// main-process restart; signals cannot carry that request on Windows.
+// main-process restart.
 const RESTART_SOCKET =
     process.platform === 'win32'
         ? `\\\\.\\pipe\\operator-dev-restart-${process.pid}`
@@ -55,13 +55,16 @@ const restartServer = createServer((socket) => {
 restartServer.on('error', (err) => {
     console.warn(`[dev] Restart socket unavailable: ${err.message}`);
 });
-restartServer.listen(RESTART_SOCKET);
 
+// A Unix socket file outlives a wrapper that was killed outright, and its path
+// repeats whenever the PID is reused.
 function removeSocket() {
     if (process.platform !== 'win32') {
         rmSync(RESTART_SOCKET, { force: true });
     }
 }
+removeSocket();
+restartServer.listen(RESTART_SOCKET);
 
 child.on('exit', (code) => {
     removeSocket();

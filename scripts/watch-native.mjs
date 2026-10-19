@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readdirSync, renameSync, rmSync, watch } from 'node:fs';
+import { watch } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const CRATES_DIR = join(ROOT, 'crates');
-const NATIVE_DIR = join(CRATES_DIR, 'modular');
 const DEBOUNCE_MS = 500;
 
 // `yarn watch-native-alloc` passes --features=alloc-detector so rebuilds keep the
@@ -38,25 +37,6 @@ function killBuild() {
     }
 }
 
-// Windows locks a DLL while it is loaded, so the running app's `.node` cannot
-// be overwritten by the build, but it can be renamed. Move it aside and delete
-// earlier set-aside copies that are no longer loaded.
-function releaseLoadedAddon() {
-    if (process.platform !== 'win32') return;
-    for (const name of readdirSync(NATIVE_DIR)) {
-        const path = join(NATIVE_DIR, name);
-        if (name.includes('.node.stale-')) {
-            try {
-                rmSync(path);
-            } catch {
-                // Still loaded by a running app
-            }
-        } else if (name.endsWith('.node')) {
-            renameSync(path, `${path}.stale-${Date.now()}`);
-        }
-    }
-}
-
 function startBuild() {
     const wasCancelled = buildProcess !== null;
     killBuild();
@@ -65,14 +45,14 @@ function startBuild() {
         console.log('[watch] Cancelled in-progress build');
     }
     console.log('[watch] Rebuilding native module...');
-    releaseLoadedAddon();
 
-    // `yarn` is a `.cmd` shim on Windows, which only runs through a shell.
-    const isWindows = process.platform === 'win32';
-    const child = spawn('yarn', [buildScript], {
+    // `yarn` is a `.cmd` shim on Windows, which only runs through a shell. On
+    // Windows a detached child gets its own console, so builds stay attached
+    // and killBuild ends their tree with taskkill instead.
+    const child = spawn(`yarn ${buildScript}`, {
         stdio: 'inherit',
-        detached: !isWindows,
-        shell: isWindows,
+        detached: process.platform !== 'win32',
+        shell: true,
         cwd: ROOT,
     });
 

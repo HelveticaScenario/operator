@@ -18,7 +18,8 @@ import * as os from 'os';
 
 // Resolve paths relative to the project root
 const projectRoot = path.resolve(__dirname, '..');
-const electronBin = path.join(projectRoot, 'node_modules', '.bin', 'electron');
+// In Node, the `electron` package exports the path of the Electron executable.
+const electronBin = require('electron') as unknown as string;
 const mainEntry = path.join(projectRoot, '.vite', 'build', 'main.js');
 
 export type TestFixtures = {
