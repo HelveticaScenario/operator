@@ -26,9 +26,13 @@ describe('applySliderChange', () => {
 
         applySliderChange(SLIDER, 0.75, 'signal-1', model, setModuleParam);
 
-        expect(setModuleParam).toHaveBeenCalledWith('signal-1', '$signal', {
-            source: 0.75,
-        });
+        expect(setModuleParam).toHaveBeenCalledWith(
+            'signal-1',
+            '_smoothControl',
+            {
+                value: 0.75,
+            },
+        );
         expect(pushEditOperations).toHaveBeenCalledTimes(1);
         const [, edits] = pushEditOperations.mock.calls[0];
         expect(edits[0].text).toBe('0.75');
@@ -50,9 +54,13 @@ describe('applySliderChange', () => {
 
         applySliderChange(SLIDER, 0.25, 'signal-1', null, setModuleParam);
 
-        expect(setModuleParam).toHaveBeenCalledWith('signal-1', '$signal', {
-            source: 0.25,
-        });
+        expect(setModuleParam).toHaveBeenCalledWith(
+            'signal-1',
+            '_smoothControl',
+            {
+                value: 0.25,
+            },
+        );
     });
 
     test('the engine receives exactly the value the rewritten literal parses to', () => {
@@ -68,7 +76,7 @@ describe('applySliderChange', () => {
         );
 
         expect(written).toBe(0.333333);
-        expect(setModuleParam.mock.calls[0][2]).toEqual({ source: 0.333333 });
+        expect(setModuleParam.mock.calls[0][2]).toEqual({ value: 0.333333 });
     });
 
     test('writes hz and note values back in their own unit and quote style', () => {

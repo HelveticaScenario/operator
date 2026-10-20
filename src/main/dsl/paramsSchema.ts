@@ -573,13 +573,6 @@ export function processSchemas(
 }
 
 /**
- * Modules that take a (poly)signal first argument but must not appear in the
- * `.$.`/`.$m.` chainable namespaces: `_clock` is an internal module, and
- * `$buffer` returns a buffer reference rather than a signal output.
- */
-const DOLLAR_EXCLUDED = new Set(['_clock', '$buffer']);
-
-/**
  * Whether a module qualifies for the `.$.`/`.$m.` chainable namespaces.
  *
  * A module qualifies when its first positional argument is a `signal` or
@@ -589,7 +582,9 @@ const DOLLAR_EXCLUDED = new Set(['_clock', '$buffer']);
  * can never drift.
  */
 export function qualifiesForDollarChain(s: ProcessedModuleSchema): boolean {
-    if (DOLLAR_EXCLUDED.has(s.name)) {
+    // Modules named with a leading `_` are internal, and `$buffer` returns a
+    // buffer reference rather than a signal output.
+    if (s.name.startsWith('_') || s.name === '$buffer') {
         return false;
     }
     if (!s.outputs || s.outputs.length === 0) {

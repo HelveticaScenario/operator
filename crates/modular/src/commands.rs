@@ -5,16 +5,13 @@
 
 use modular_core::patch::Patch;
 use modular_core::profiling::ModuleProfileAccum;
-use modular_core::types::{
-    Message, ModuleIdRemap, Sampleable, ScopeBufferKey, ScopeXyBufferKey, ScopeXyRanges,
-};
+use modular_core::types::{Message, ModuleIdRemap, Sampleable, ScopeBufferKey};
 use napi::Error;
 use napi_derive::napi;
 use rtrb::PushError;
 use std::collections::HashMap;
-use std::sync::Arc;
 
-use crate::audio::{ScopeBuffer, ScopeXyBuffer, VuMeterState};
+use crate::audio::{ScopeBuffer, VuMeterState};
 use crate::link::LinkResources;
 
 /// When a queued patch update should be applied.
@@ -73,17 +70,6 @@ pub struct PatchUpdate {
     /// through the garbage queue.
     pub scope_next: HashMap<ScopeBufferKey, ScopeBuffer>,
 
-    /// The complete next XY-scope membership, built on the main thread:
-    /// carried-over pairs keep their live buffer `Arc` (ring continuity), new
-    /// pairs get fresh buffers. The audio thread swaps this in wholesale — it
-    /// never inserts into or removes from the shared map — and the evicted map
-    /// rides this update back through the garbage queue.
-    pub scope_xy_next: HashMap<ScopeXyBufferKey, Arc<ScopeXyBuffer>>,
-
-    /// The same membership as `scope_xy_next`, as the flat list the audio
-    /// thread iterates per sample. Swapped wholesale for the same reason.
-    pub scope_xy_audio_next: Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>,
-
     /// The complete next VU meter membership, built on the main thread with
     /// running levels carried over from matching current entries. The audio
     /// thread swaps this in wholesale; the displaced Vec rides this update
@@ -102,10 +88,6 @@ pub struct PatchUpdate {
     /// Tempo/time-signature for the meter + Link, applied when this update is
     /// applied. `None` when the patch has no ROOT_CLOCK.
     pub transport_meta: Option<TransportMeta>,
-
-    /// XY-scope display window, applied atomically with the XY scope
-    /// buffer swap. `None` when the patch has no `$scopeXY` (clears the display).
-    pub scope_xy_ranges: Option<ScopeXyRanges>,
 
     /// When true, restart ROOT_CLOCK's transport (phase, beat, bar count) to zero
     /// as this update is applied. Set by the main thread when the update switches
@@ -136,13 +118,10 @@ impl PatchUpdate {
             process_order_ids: Vec::new(),
             transfer_sources: HashMap::new(),
             scope_next: HashMap::new(),
-            scope_xy_next: HashMap::new(),
-            scope_xy_audio_next: Vec::new(),
             vu_next: Vec::new(),
             process_order_scratch: Vec::new(),
             sample_rate,
             transport_meta: None,
-            scope_xy_ranges: None,
             reset_clock: false,
             profile_records_seed: HashMap::new(),
             profile_shared_seed: HashMap::new(),
@@ -254,10 +233,8 @@ pub enum GarbageItem {
     /// A module replaced by `SingleModuleUpdate`, paired with the command's id
     /// string so both heap owners drop together on the main thread.
     Module((String, Box<dyn Sampleable>)),
-    /// The audio thread's private XY-scope list, taken on `ClearPatch`.
-    ScopeXyAudio(Vec<(ScopeXyBufferKey, Arc<ScopeXyBuffer>)>),
     /// A patch update after it is applied (carrying everything it displaced:
-    /// old patch, order ids, scope map, XY scope map/list, evicted profiler
+    /// old patch, order ids, scope map, evicted profiler
     /// maps) or one superseded by a newer update before it was applied.
     PatchUpdate(PatchUpdate),
     /// The old patch swapped out by `ClearPatch`.
