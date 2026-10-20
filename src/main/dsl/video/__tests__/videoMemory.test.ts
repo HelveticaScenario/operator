@@ -150,7 +150,7 @@ describe('$v memory and previews', () => {
 
         it('returns the signal it previews', () => {
             const { video } = exec(`
-                $v.out($v.colorize($v.preview($v.ramp()), 0, 0));
+                $v.out($v.solid($v.preview($v.ramp()), 0, 0));
             `);
             expect(video!.previewCount).toBe(1);
         });
