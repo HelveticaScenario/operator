@@ -9,12 +9,11 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::Arc;
 
 use modular_core::Patch;
 use modular_core::dsp::get_params_deserializers;
 use modular_core::params::DeserializedParams;
-use modular_core::types::{ProcessingMode, SampleBuffer, WavData};
+use modular_core::types::ProcessingMode;
 use serde_json::{Value, json};
 
 pub const SAMPLE_RATE: f32 = 48000.0;
@@ -31,7 +30,7 @@ pub fn poly_cable(module: &str, channels: usize) -> Value {
 }
 
 /// `src` (a `CHANNELS`-wide saw) and `lfo` (a `CHANNELS`-wide sine) feed
-/// `dut`, a `module_type` with `params`. The wav `table` holds [`wavetable`].
+/// `dut`, a `module_type` with `params`.
 pub fn build(
     src_mode: ProcessingMode,
     dut_mode: ProcessingMode,
@@ -65,29 +64,8 @@ pub fn build(
             BLOCK_SIZE,
         )
         .unwrap();
-    patch.wav_data.insert("table".into(), wavetable());
-    for module in patch.sampleables.values() {
-        module.prepare_resources(&patch.wav_data);
-    }
     patch.connect_all();
     patch
-}
-
-/// A 16-frame wavetable of 256-sample cycles, each frame brighter than the last.
-pub fn wavetable() -> Arc<WavData> {
-    const SIZE: usize = 256;
-    let samples = (0..16)
-        .flat_map(|frame| {
-            (0..SIZE).map(move |i| {
-                let phase = std::f32::consts::TAU * i as f32 / SIZE as f32;
-                (phase.sin() + (phase * (2 + frame) as f32).sin() * 0.3) * 0.7
-            })
-        })
-        .collect();
-    Arc::new(WavData::new(
-        SampleBuffer::from_samples(vec![samples], 48_000.0),
-        Some(SIZE),
-    ))
 }
 
 /// Advance every module through `steps` (ascending slot targets ending at
