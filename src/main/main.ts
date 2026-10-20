@@ -113,6 +113,17 @@ if (BACKGROUND_LAUNCH && process.platform === 'darwin') {
 
 /** Show a window created with `show: false` behind every other window. */
 function showInBackground(win: BrowserWindow): void {
+    if (process.platform !== 'darwin') {
+        // Windows and Linux show an inactive window on top, so it is placed
+        // left of every display instead; it still renders, since native
+        // occlusion tracking is off.
+        const [width] = win.getSize();
+        const left = Math.min(
+            ...screen.getAllDisplays().map((d) => d.bounds.x),
+        );
+        win.setPosition(left - width - 100, 0);
+        win.setSkipTaskbar(true);
+    }
     win.showInactive();
     // On macOS, blurring an inactive window orders it to the back.
     win.blur();
