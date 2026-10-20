@@ -17,11 +17,12 @@ use arrayvec::ArrayVec;
 
 use crate::{
     MonoSignal,
-    dsp::utils::{TempGate, TempGateState, min_gate_samples},
+    dsp::utils::{GATE_HIGH_VOLTAGE, TempGate, TempGateState, min_gate_samples},
     param_errors::ModuleParamErrors,
     poly::{MonoSignalExt, PORT_MAX_CHANNELS, PolyOutput},
 };
 
+use super::groove::{GrooveHold, before_first_step, fill_groove_inputs};
 use super::seq_value::{SeqCycleStorage, SeqPatternParam, SeqValue};
 
 /// Cached hap copied into voice state as scalars. Voices can hold these
@@ -38,19 +39,22 @@ struct CachedHap {
     whole_begin: f64,
     /// `whole_end` in the logical frame (see `whole_begin`).
     whole_end: f64,
-    /// Note onset in the monotonic clock (`raw`) frame.
-    raw_begin: f64,
-    /// Note end in the monotonic clock (`raw`) frame. Release keys off `raw`
-    /// so a note plays its full length across the ribbon wrap, where the
-    /// logical frame is non-monotonic.
+    /// Note end in the grooved clock (`raw`) frame. Past it, the note only
+    /// sounds to keep its length, and a new onset may take the voice.
     raw_end: f64,
+    /// Note onset in the straight clock frame.
+    straight_begin: f64,
+    /// Note end in the straight clock frame. Release keys off straight time so
+    /// a grooved note keeps its length, and so a note plays its full length
+    /// across the ribbon wrap, where the logical frame is non-monotonic.
+    straight_end: f64,
     /// Cached value for CV/rest detection.
     value: SeqValue,
 }
 
 impl CachedHap {
-    fn contains(&self, raw: f64) -> bool {
-        raw >= self.raw_begin && raw < self.raw_end
+    fn contains(&self, straight: f64) -> bool {
+        straight >= self.straight_begin && straight < self.straight_end
     }
 
     fn get_cv(&self) -> Option<f64> {
@@ -121,6 +125,18 @@ pub struct SeqParams {
     #[signal(range = (0.0, 1.0))]
     #[deserr(default)]
     playhead: Option<MonoSignal>,
+    /// groove offset added to the playhead to time note onsets; follows the
+    /// global groove by default, and is 0 when `playhead` is set without it
+    #[default_connection(module = RootClock, port = "grooveOffset", channel = 0)]
+    #[deserr(default)]
+    groove: Option<MonoSignal>,
+    /// groove velocity (0-5V), sampled at each note onset; follows the global
+    /// groove by default, and is full (5V) when `playhead` or `groove` is set
+    /// without it
+    #[default_connection(module = RootClock, port = "grooveVelocity", channel = 0)]
+    #[signal(range = (0.0, 5.0))]
+    #[deserr(default)]
+    velocity: Option<MonoSignal>,
     /// Number of polyphonic voices (1-64)
     #[deserr(default)]
     pub channels: Option<usize>,
@@ -170,6 +186,7 @@ fn seq_bake_ribbon(
             "ribbon offset must be {MAX_RIBBON_OFFSET} cycles or fewer"
         ));
     }
+    fill_groove_inputs(&params.playhead, &mut params.groove, &mut params.velocity);
     params.pattern.bake(offset, length);
     Ok(params)
 }
@@ -244,6 +261,8 @@ struct SeqOutputs {
     gate: PolyOutput,
     #[output("trig", "short pulse (5 V) at the start of each note", range = (0.0, 5.0))]
     trig: PolyOutput,
+    #[output("velocity", "groove velocity (0-5 V) of the current or last note", range = (0.0, 5.0))]
+    velocity: PolyOutput,
 }
 
 /// Pattern sequencer using mini-notation strings.
@@ -341,6 +360,23 @@ struct SeqOutputs {
 /// - **cv** — V/Oct pitch (C4 = 0 V).
 /// - **gate** — 5 V while a note is active, 0 V otherwise.
 /// - **trig** — single-sample 5 V pulse at each note onset.
+/// - **velocity** — groove velocity (0–5 V) sampled at each note onset.
+///
+/// ## Groove
+///
+/// By default notes start on the global groove set with `$setGroove`, and
+/// `velocity` reports that groove's step velocity. The groove moves when each
+/// note starts; every note keeps its written length. Pass a `$groove` as
+/// `groove` (with its `velocity`) to use a different groove, or `groove: 0` to
+/// play straight.
+///
+/// ```js
+/// $setGroove($swing(0.6))
+/// const hats = $cycle($p('c5*8'))
+/// const bass = $cycle($p('c2*4'), { groove: 0 })
+/// $sine(hats).amp($adsr(hats.gate)).amp(hats.velocity).out()
+/// $sine(bass).amp($adsr(bass.gate)).out()
+/// ```
 #[module(
     name = "$cycle",
     channels_derive = seq_derive_channel_count,
@@ -366,6 +402,8 @@ struct SeqChannel {
     /// Last CV voltage — holds through rest periods and state transfers. Also
     /// the "value the voice held before", used for nearest-value allocation.
     last_cv: f32,
+    /// Velocity input latched at this voice's last onset.
+    velocity: f32,
 }
 
 /// Module-level state for the Seq module.
@@ -379,8 +417,11 @@ struct SeqState {
     /// edge check must fire even a hap whose part contained `prev_logical`
     /// (e.g. one covering the entire window).
     prev_raw: f64,
-    /// False until the first `update`. On the first frame there is no previous
-    /// position, so every in-window onset fires (a fresh `$cycle` starts playing
+    /// Keeps the grooved position from running backwards when the groove
+    /// changes mid-play.
+    groove_hold: GrooveHold,
+    /// False until the first `update` not waiting for a late first step. On
+    /// that frame there is no previous position, so every in-window onset fires (a fresh `$cycle` starts playing
     /// from the current position).
     started: bool,
     /// Scratch buffer for voice release — reused each frame to avoid heap alloc
@@ -419,6 +460,7 @@ impl Default for SeqState {
         Self {
             prev_logical: 0.0,
             prev_raw: 0.0,
+            groove_hold: GrooveHold::default(),
             started: false,
             voices_to_release: ArrayVec::new(),
             events_to_process: ArrayVec::new(),
@@ -469,8 +511,19 @@ impl Seq {
         // ribbon folds it into the baked window with a continuous-time modulo,
         // so a fractional `offset`/`length` defines a loop window whose seam
         // can fall mid-cycle. The window loops forever, phase-locked to the
-        // clock: clock pos 0 plays the window start (`offset`).
-        let raw = self.params.playhead.value_or_zero() as f64;
+        // clock: clock pos 0 plays the window start (`offset`). The groove
+        // offset shifts when notes start; `straight` times how long they last.
+        let straight = self
+            .params
+            .playhead
+            .as_ref()
+            .map_or(0.0, MonoSignal::get_value_f64);
+        let raw = self.state.groove_hold.apply(
+            straight,
+            straight + self.params.groove.value_or_zero() as f64,
+        );
+        let waiting = before_first_step(straight, raw);
+        let velocity = self.params.velocity.value_or(GATE_HIGH_VOLTAGE);
         let hold = min_gate_samples(sample_rate);
         let num_channels = self.channel_count();
 
@@ -478,7 +531,7 @@ impl Seq {
         // Fold the clock into the baked window. Clamp once for the window math
         // so a (deliberately wired) negative playhead pins to the window start
         // rather than producing a spurious mid-cycle phase. Release below keys
-        // off the unclamped monotonic `raw`, tracking each note's true span.
+        // off the unclamped monotonic `straight`, tracking each note's true span.
         let raw_clamped = raw.max(0.0);
         let base = offset.floor() as i64; // first baked cycle = floor(offset)
         let phase = raw_clamped.rem_euclid(length); // [0, length)
@@ -494,30 +547,33 @@ impl Seq {
         let storage_index = (current_cycle - base) as usize;
 
         // Window-membership edge detection baseline: capture last frame's folded
-        // position, then advance it for this frame (unconditionally, so the
-        // baseline stays correct even on the no-pattern early-return below). A
-        // hap fires only on an outside→inside transition (see the collection
-        // pass), so a mid-window pattern swap or scrub does not re-trigger it.
+        // position, then advance it for this frame (on every frame not waiting
+        // for a late first step, so the baseline stays correct even on the
+        // no-pattern early-return below). A hap fires only on an
+        // outside→inside transition (see the collection pass), so a mid-window
+        // pattern swap or scrub does not re-trigger it.
         let prev_logical = self.state.prev_logical;
         let started = self.state.started;
-        self.state.prev_logical = logical;
-        self.state.started = true;
+        let prev_raw = self.state.prev_raw;
+        if !waiting {
+            self.state.prev_logical = logical;
+            self.state.started = true;
+            self.state.prev_raw = raw_clamped;
+        }
 
         // Forward seam crossing: the raw playhead moved onto a new lap of the
         // window, so the whole window replays and in-window onsets fire again.
         // Both lap indices use the current `length`, so a ribbon edit cannot
         // fabricate a crossing on its own.
-        let prev_raw = self.state.prev_raw;
-        self.state.prev_raw = raw_clamped;
         let lap_wrapped = (raw_clamped / length).floor() > (prev_raw / length).floor();
 
         // Release voices whose notes have ended. A note's life is tracked in
-        // the monotonic `raw` frame (two-sided, so a backward scrub also
+        // the monotonic `straight` frame (two-sided, so a backward scrub also
         // frees), because `logical` wraps at the ribbon seam.
         self.state.voices_to_release.clear();
         for i in 0..num_channels {
             if let Some(cached) = self.channel_state[i].voice.cached_hap {
-                if !cached.contains(raw) {
+                if !cached.contains(straight) {
                     self.state.voices_to_release.push(i);
                 }
             }
@@ -535,12 +591,19 @@ impl Seq {
             for ch in 0..num_channels {
                 self.outputs.cv.set(ch, 0.0);
                 self.outputs
+                    .velocity
+                    .set(ch, self.channel_state[ch].velocity);
+                self.outputs
                     .gate
                     .set(ch, self.channel_state[ch].voice.gate.process());
                 self.outputs
                     .trig
                     .set(ch, self.channel_state[ch].voice.trigger.process());
             }
+            return;
+        }
+        if waiting {
+            self.write_voice_outputs();
             return;
         }
 
@@ -620,11 +683,13 @@ impl Seq {
         }
 
         // Assign this frame's onsets to voices by nearest previously-held value
-        // (voice leading). Tier 1 draws from the free (inactive) voices; only if
-        // they run out does Tier 2 steal "orphaned" voices — old-pattern notes
-        // that no longer exist in the current pattern — so a new hap is never
-        // dropped while a stale note rings. A current-pattern continuation is
-        // never stolen. Onsets with no free or orphan voice are dropped.
+        // (voice leading). Tier 1 draws from the free (inactive) voices. If
+        // they run out, Tier 2 takes voices whose note has passed its grooved
+        // end and only sounds to keep its length, then Tier 3 steals "orphaned"
+        // voices — old-pattern notes that no longer exist in the current
+        // pattern — so a new hap is never dropped while a stale note rings. A
+        // current-pattern continuation is never stolen. Onsets with no free,
+        // ended or orphan voice are dropped.
         let n = self.state.events_to_process.len();
         if n > 0 {
             let mut assigned: [Option<usize>; PORT_MAX_CHANNELS] = [None; PORT_MAX_CHANNELS];
@@ -651,12 +716,39 @@ impl Seq {
                 );
             }
 
-            // Tier 2: steal orphaned voices, computed lazily only when onsets
+            // Tier 2: voices past their grooved end, computed lazily only when
+            // onsets remain unplaced.
+            if (0..n).any(|ei| assigned[ei].is_none()) {
+                let mut ended: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
+                for i in 0..num_channels {
+                    if self.channel_state[i].voice.active
+                        && let Some(cached) = self.channel_state[i].voice.cached_hap
+                        && raw >= cached.raw_end
+                    {
+                        ended.push(i);
+                    }
+                }
+                let SeqState {
+                    events_to_process,
+                    assign,
+                    ..
+                } = &mut self.state;
+                assign_nearest(
+                    events_to_process,
+                    &mut assigned,
+                    &ended,
+                    &self.channel_state,
+                    assign,
+                );
+            }
+
+            // Tier 3: steal orphaned voices, computed lazily only when onsets
             // remain unplaced (the steady state never reaches here).
             if (0..n).any(|ei| assigned[ei].is_none()) {
                 let mut orphans: ArrayVec<usize, PORT_MAX_CHANNELS> = ArrayVec::new();
                 for i in 0..num_channels {
                     if self.channel_state[i].voice.active
+                        && !assigned[..n].contains(&Some(i))
                         && let Some(cached) = self.channel_state[i].voice.cached_hap
                         && self.voice_is_orphan(&cached)
                     {
@@ -678,22 +770,23 @@ impl Seq {
             }
 
             // Apply the chosen voice for each placed onset. Map the note's logical
-            // span onto the current absolute lap so release keys off the monotonic
-            // `raw` clock and the note plays its full length across the ribbon
-            // wrap. A stolen voice re-triggers (gate Low→High), cutting its old note.
+            // span onto the straight clock so release keys off monotonic straight
+            // time and the note plays its full length across the ribbon wrap. A stolen voice re-triggers (gate Low→High), cutting its old note.
             for ei in 0..n {
                 let Some(voice_idx) = assigned[ei] else {
                     continue;
                 };
                 let event = self.state.events_to_process[ei];
+                self.channel_state[voice_idx].velocity = velocity;
                 let voice = &mut self.channel_state[voice_idx].voice;
                 voice.cached_hap = Some(CachedHap {
                     hap_index: event.hap_index,
                     cached_cycle: current_cycle,
                     whole_begin: event.whole_begin,
                     whole_end: event.whole_end,
-                    raw_begin: raw - (logical - event.whole_begin),
                     raw_end: raw + (event.whole_end - logical),
+                    straight_begin: straight - (logical - event.whole_begin),
+                    straight_end: straight + (event.whole_end - logical),
                     value: event.value,
                 });
                 voice.active = true;
@@ -706,7 +799,11 @@ impl Seq {
             }
         }
 
-        for ch in 0..num_channels {
+        self.write_voice_outputs();
+    }
+
+    fn write_voice_outputs(&mut self) {
+        for ch in 0..self.channel_count() {
             let channel = &mut self.channel_state[ch];
             if let Some(cached) = channel.voice.cached_hap
                 && let Some(cv) = cached.get_cv()
@@ -716,6 +813,7 @@ impl Seq {
             self.outputs.cv.set(ch, channel.last_cv);
             self.outputs.gate.set(ch, channel.voice.gate.process());
             self.outputs.trig.set(ch, channel.voice.trigger.process());
+            self.outputs.velocity.set(ch, channel.velocity);
         }
     }
 }
@@ -765,7 +863,7 @@ impl Default for AssignScratch {
 /// repeated global-nearest scan — cheap even at the max channel count.
 ///
 /// Onsets already placed (by an earlier tier) are skipped, so this is called
-/// once per tier (free voices, then orphaned voices). Allocation-free: fixed
+/// once per tier (free, ended, then orphaned voices). Allocation-free: fixed
 /// `[_; PORT_MAX_CHANNELS]` stacks, an in-place `sort_unstable`, and the boxed
 /// `scratch` decision table. Each candidate's previously-held value is read
 /// from `channel_state[voice].last_cv`.
@@ -959,6 +1057,8 @@ mod tests {
         SeqParams {
             pattern: SeqPatternParam::default(),
             playhead: None,
+            groove: None,
+            velocity: None,
             channels: None,
             ribbon,
             pattern_source: String::new(),

@@ -4,6 +4,11 @@ import { mapVSCodeTheme } from './types';
 import { bundledThemes } from './bundled';
 import electronAPI from '../electronAPI';
 import type { PrettierConfig } from '../../shared/ipcTypes';
+import {
+    DEFAULT_PERFORMANCE_VIEW,
+    performanceViewSettings,
+    type PerformanceViewSettings,
+} from '../performance/settings';
 
 type CursorStyle =
     | 'line'
@@ -21,10 +26,9 @@ interface ThemeContextValue {
     fontLigatures: boolean;
     fontSize: number;
     prettierConfig: PrettierConfig;
-    xyScopeIntensity: number;
-    xyScopePersistence: number;
-    xyScopeUpsample: boolean;
-    xyScopeLineWidth: number;
+    codeBackdropOpacity: number;
+    performanceScale: number;
+    performanceView: PerformanceViewSettings;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -83,10 +87,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const [fontLigatures, setFontLigatures] = useState(true);
     const [fontSize, setFontSize] = useState(17);
     const [prettierConfig, setPrettierConfig] = useState<PrettierConfig>({});
-    const [xyScopeIntensity, setXyScopeIntensity] = useState(0.6);
-    const [xyScopePersistence, setXyScopePersistence] = useState(0.6);
-    const [xyScopeUpsample, setXyScopeUpsample] = useState(true);
-    const [xyScopeLineWidth, setXyScopeLineWidth] = useState(0.012);
+    const [codeBackdropOpacity, setCodeBackdropOpacity] = useState(0.6);
+    const [performanceScale, setPerformanceScale] = useState(1);
+    const [performanceView, setPerformanceView] = useState(
+        DEFAULT_PERFORMANCE_VIEW,
+    );
 
     // Load initial config and set up watcher
     useEffect(() => {
@@ -113,18 +118,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
             if (config.prettier) {
                 setPrettierConfig(config.prettier);
             }
-            if (config.xyScopeIntensity != null) {
-                setXyScopeIntensity(config.xyScopeIntensity);
+            if (config.codeBackdropOpacity != null) {
+                setCodeBackdropOpacity(config.codeBackdropOpacity);
             }
-            if (config.xyScopePersistence != null) {
-                setXyScopePersistence(config.xyScopePersistence);
+            if (config.performanceScale != null) {
+                setPerformanceScale(config.performanceScale);
             }
-            if (config.xyScopeUpsample != null) {
-                setXyScopeUpsample(config.xyScopeUpsample);
-            }
-            if (config.xyScopeLineWidth != null) {
-                setXyScopeLineWidth(config.xyScopeLineWidth);
-            }
+            setPerformanceView(performanceViewSettings(config));
 
             // Subscribe to config changes
             unsubscribe = electronAPI.config.onChange((newConfig) => {
@@ -146,18 +146,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 if (newConfig.prettier) {
                     setPrettierConfig(newConfig.prettier);
                 }
-                if (newConfig.xyScopeIntensity != null) {
-                    setXyScopeIntensity(newConfig.xyScopeIntensity);
+                if (newConfig.codeBackdropOpacity != null) {
+                    setCodeBackdropOpacity(newConfig.codeBackdropOpacity);
                 }
-                if (newConfig.xyScopePersistence != null) {
-                    setXyScopePersistence(newConfig.xyScopePersistence);
+                if (newConfig.performanceScale != null) {
+                    setPerformanceScale(newConfig.performanceScale);
                 }
-                if (newConfig.xyScopeUpsample != null) {
-                    setXyScopeUpsample(newConfig.xyScopeUpsample);
-                }
-                if (newConfig.xyScopeLineWidth != null) {
-                    setXyScopeLineWidth(newConfig.xyScopeLineWidth);
-                }
+                setPerformanceView(performanceViewSettings(newConfig));
             });
         }
 
@@ -185,10 +180,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
                 prettierConfig,
                 theme,
                 themes,
-                xyScopeIntensity,
-                xyScopePersistence,
-                xyScopeUpsample,
-                xyScopeLineWidth,
+                codeBackdropOpacity,
+                performanceScale,
+                performanceView,
             }}
         >
             {children}
