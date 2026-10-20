@@ -1364,7 +1364,7 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
    * narrower argument across the channels. Bare {@link Signal} literals
    * (numbers, note/Hz strings) are lifted into $signal modules, matching $c —
    * a string is one signal, not spread into characters.
-   * @param polySignal A Poly<Signal> (single signal, array, or iterable) to distribute across outputs
+   * @param polySignal A {@link Poly<Signal>} (single signal, array, or iterable) to distribute across outputs
    */
   set(polySignal: Poly<Signal>): void;
 }
@@ -1452,7 +1452,7 @@ function $setTempo(tempo: number): void;
 
 /**
  * Set the global output gain applied to the final mix.
- * @param gain Gain as a Mono<Signal> (2.5 is default, 5.0 is unity)
+ * @param gain Gain as a {@link Mono<Signal>} (2.5 is default, 5.0 is unity)
  * @example $setOutputGain(2.5) // 50% gain (default)
  * @example $setOutputGain(5.0) // unity
  * @example $setOutputGain($adsr($clock.beatTrigger, {})) // modulate gain from envelope
