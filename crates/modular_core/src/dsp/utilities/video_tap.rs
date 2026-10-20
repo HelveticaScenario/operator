@@ -1,8 +1,10 @@
+use std::ops::Range;
 use std::sync::atomic::{AtomicU32, Ordering, fence};
 
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use crate::block_input::InputScratch;
 use crate::{param_errors::ModuleParamErrors, poly::MonoSignal};
 
 /// Number of tap slots the video renderer can read.
@@ -16,7 +18,7 @@ pub const VIDEO_HISTORY_LEN: usize = 4096;
 static VIDEO_HISTORY: [[AtomicU32; VIDEO_HISTORY_LEN]; MAX_VIDEO_TAPS] =
     [const { [const { AtomicU32::new(0) }; VIDEO_HISTORY_LEN] }; MAX_VIDEO_TAPS];
 
-/// How many samples each tap has written, wrapping; the next write goes to
+/// How many samples each tap has published, wrapping; the next write goes to
 /// `head % VIDEO_HISTORY_LEN`.
 static VIDEO_HEADS: [AtomicU32; MAX_VIDEO_TAPS] = [const { AtomicU32::new(0) }; MAX_VIDEO_TAPS];
 
@@ -28,6 +30,11 @@ pub struct VideoTapChunk {
     /// The new samples, oldest first, in volts.
     pub samples: Vec<f32>,
 }
+
+/// Most samples a tap writes past its published head before publishing them,
+/// so a reader treats that many of the oldest ring slots as possibly
+/// overwritten.
+const PUBLISH_CHUNK: usize = 64;
 
 /// Samples returned the first time a tap is read.
 const FIRST_READ_SAMPLES: usize = 1024;
@@ -59,7 +66,7 @@ pub fn read_video_since(slot: usize, since: Option<u32>) -> Option<VideoTapChunk
     // are dropped rather than returned out of order.
     fence(Ordering::Acquire);
     let after = VIDEO_HEADS[slot].load(Ordering::Relaxed);
-    let oldest_intact = after.wrapping_sub(VIDEO_HISTORY_LEN as u32 - 1);
+    let oldest_intact = after.wrapping_sub((VIDEO_HISTORY_LEN - 1 - PUBLISH_CHUNK) as u32);
     let torn = oldest_intact.wrapping_sub(first) as i32;
     if torn > 0 {
         samples.drain(..(torn as usize).min(count));
@@ -102,7 +109,7 @@ struct VideoTapOutputs {
 /// Publishes its input to the video renderer, which polls the latest value
 /// and the recent samples of each tap slot. The DSL inserts one per audio
 /// signal a `$v` input reads.
-#[module(name = "_videoTap", args(input, slot))]
+#[module(name = "_videoTap", args(input, slot), block)]
 pub struct VideoTap {
     outputs: VideoTapOutputs,
     params: VideoTapParams,
@@ -117,6 +124,36 @@ impl VideoTap {
         VIDEO_HISTORY[slot][head as usize & (VIDEO_HISTORY_LEN - 1)]
             .store(value.to_bits(), Ordering::Release);
         VIDEO_HEADS[slot].store(head.wrapping_add(1), Ordering::Release);
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut VideoTapBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let mut scratch = InputScratch::new();
+        let poly = self.params.input.poly();
+        let input = poly.block_input(range.clone(), poly.channels(), &mut scratch)?;
+        let slot = self.params.slot.min(MAX_VIDEO_TAPS - 1);
+        let ring = &VIDEO_HISTORY[slot];
+        let mut head = VIDEO_HEADS[slot].load(Ordering::Relaxed);
+        let end = range.end;
+        for start in range.step_by(PUBLISH_CHUNK) {
+            // A reader that sees any write below synchronizes with this fence,
+            // so it sees every head published before the chunk.
+            fence(Ordering::Release);
+            for i in start..(start + PUBLISH_CHUNK).min(end) {
+                // Summed as `MonoSignal::get_value` sums.
+                let value = input.row(i).iter().sum();
+                outputs.sample.slot_mut(i)[0] = value;
+                ring[head as usize & (VIDEO_HISTORY_LEN - 1)]
+                    .store(value.to_bits(), Ordering::Relaxed);
+                head = head.wrapping_add(1);
+            }
+            VIDEO_HEADS[slot].store(head, Ordering::Release);
+        }
+        Some(())
     }
 }
 
@@ -240,6 +277,41 @@ mod tests {
             let chunk = read(55, Some(0));
             for pair in chunk.samples.windows(2) {
                 assert_eq!(pair[1], pair[0] + 1.0);
+            }
+        }
+        writer.join().unwrap();
+    }
+
+    fn render_blocks(tap: &mut VideoTap, blocks: impl Iterator<Item = f32>) {
+        let mut outputs = VideoTapBlockOutputs::new(256, 1);
+        for v in blocks {
+            tap.params.input = MonoSignal::from_poly(PolySignal::mono(Signal::Volts(v)));
+            tap.process_block(&mut outputs, 0..256, SR);
+        }
+    }
+
+    #[test]
+    fn block_writes_read_back_like_sample_writes() {
+        let mut tap = make(56, 0.0);
+        render_blocks(&mut tap, [1.0, 2.0].into_iter());
+        drive(&mut tap, [3.0].into_iter());
+        let chunk = read(56, Some(0));
+        let mut want = vec![1.0; 256];
+        want.extend([2.0; 256]);
+        want.push(3.0);
+        assert_eq!(chunk.samples, want);
+    }
+
+    #[test]
+    fn block_writes_a_concurrent_reader_overtakes_are_never_returned() {
+        let writer = std::thread::spawn(|| {
+            let mut tap = make(57, 0.0);
+            render_blocks(&mut tap, (0..100_000).map(|v| v as f32));
+        });
+        while !writer.is_finished() {
+            let chunk = read(57, Some(0));
+            for pair in chunk.samples.windows(2) {
+                assert!(pair[1] == pair[0] || pair[1] == pair[0] + 1.0, "{pair:?}");
             }
         }
         writer.join().unwrap();
