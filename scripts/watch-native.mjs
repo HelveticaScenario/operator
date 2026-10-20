@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { watch } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -22,6 +22,13 @@ function killBuild() {
     if (buildProcess) {
         const pid = buildProcess.pid;
         buildProcess = null;
+        if (process.platform === 'win32') {
+            // Windows has no process groups; taskkill /T ends the build's tree.
+            spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+                stdio: 'ignore',
+            });
+            return;
+        }
         try {
             process.kill(-pid, 'SIGTERM');
         } catch {
@@ -39,9 +46,13 @@ function startBuild() {
     }
     console.log('[watch] Rebuilding native module...');
 
-    const child = spawn('yarn', [buildScript], {
+    // `yarn` is a `.cmd` shim on Windows, which only runs through a shell. On
+    // Windows a detached child gets its own console, so builds stay attached
+    // and killBuild ends their tree with taskkill instead.
+    const child = spawn(`yarn ${buildScript}`, {
         stdio: 'inherit',
-        detached: true,
+        detached: process.platform !== 'win32',
+        shell: true,
         cwd: ROOT,
     });
 

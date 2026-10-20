@@ -1,11 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import electronAPI from '../electronAPI';
-import type { AppConfig } from '../../shared/ipcTypes';
 import { useTheme } from '../themes/ThemeContext';
 import { type AudioSettingsHandle, AudioSettingsTab } from './AudioSettings';
 import { EditorSettingsTab } from './EditorSettingsTab';
 import { FormatterSettingsTab } from './FormatterSettingsTab';
 import { bindSettingsModal } from '../keybindings/contextKeyBootstrap';
+import { useEditableConfig } from '../hooks/useEditableConfig';
 import './Settings.css';
 
 type SettingsTabId = 'editor' | 'audio' | 'formatter';
@@ -28,46 +27,12 @@ interface SettingsProps {
 
 export function Settings({ isOpen, onClose }: SettingsProps) {
     const [activeTab, setActiveTab] = useState<SettingsTabId>('editor');
-    // Draft config (local edits, persisted immediately on change)
-    const [draftConfig, setDraftConfig] = useState<AppConfig>({});
+    const [draftConfig, handleDraftChange] = useEditableConfig(isOpen);
     const [saving, setSaving] = useState(false);
     const { themes } = useTheme();
 
     const audioRef = useRef<AudioSettingsHandle>(null);
     const panelRef = useRef<HTMLDivElement>(null);
-
-    // Load config when opened
-    useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
-        electronAPI.config
-            .read()
-            .then((cfg) => {
-                setDraftConfig(cfg);
-            })
-            .catch(console.error);
-    }, [isOpen]);
-
-    // Listen for external config changes (e.g. manual JSON edits)
-    useEffect(() => {
-        if (!isOpen) {
-            return;
-        }
-        const unsubscribe = electronAPI.config.onChange((newConfig) => {
-            setDraftConfig(newConfig);
-        });
-        return unsubscribe;
-    }, [isOpen]);
-
-    const handleDraftChange = useCallback((partial: Partial<AppConfig>) => {
-        setDraftConfig((prev) => {
-            const updated = { ...prev, ...partial };
-            // Auto-save editor/formatter config changes immediately
-            electronAPI.config.write(updated).catch(console.error);
-            return updated;
-        });
-    }, []);
 
     const handleAudioSave = useCallback(async () => {
         setSaving(true);
