@@ -96,6 +96,7 @@ use crate::commands::{
 };
 use crate::midi::MidiInputManager;
 use crate::recording::{RecordingFeed, RecordingSession};
+use crate::tap::Tap;
 
 // ============================================================================
 // Audio Host Information
@@ -780,6 +781,44 @@ impl ScopeBuffer {
         }
     }
 
+    /// Push slots `range` of a tap in order; equivalent to calling `push` on
+    /// each. A free-running scope keeps its cursor in locals across the block;
+    /// a triggered one goes through `push` because the trigger sees every
+    /// sample.
+    pub fn push_block(&mut self, range: std::ops::Range<usize>, sample: impl Fn(usize) -> f32) {
+        if self.trigger_threshold.is_some() {
+            for i in range {
+                self.push(sample(i));
+            }
+            return;
+        }
+        if range.is_empty() {
+            return;
+        }
+        self.trigger.reset();
+        self.recording = true;
+        let skip = self.skip_rate;
+        let mut idx = self.buffer_idx;
+        let mut last_start = idx;
+        let mut counter = self.sample_counter;
+        let buf = &mut self.buffer[if self.buffer_select { 1 } else { 0 }];
+        for i in range {
+            last_start = idx;
+            idx %= SCOPE_CAPACITY as usize;
+            if counter == 0 {
+                buf[idx] = sample(i);
+                idx += 1;
+            }
+            counter += 1;
+            if counter > skip {
+                counter = 0;
+            }
+        }
+        self.buffer_idx = idx;
+        self.read_idx = last_start % SCOPE_CAPACITY as usize;
+        self.sample_counter = counter;
+    }
+
     fn read_buffer_idx(&self) -> usize {
         let write_buf = if self.buffer_select { 1 } else { 0 };
         let other_buf = if write_buf == 0 { 1 } else { 0 };
@@ -833,14 +872,44 @@ pub struct VuMeterState {
     /// controls can track them live.
     pub pan_source: Option<modular_core::types::ScopeChannel>,
     pub gain_source: Option<modular_core::types::ScopeChannel>,
+    levels: VuLevels,
+    /// Most recent samples of the control taps.
+    pan_value: f32,
+    gain_value: f32,
+}
+
+/// A VU meter's running levels, kept apart from its tap description so the
+/// drain can read the tap while it accumulates.
+struct VuLevels {
     /// One-pole EMA of x² per channel (300 ms time constant), in volts².
     rms_sq: [f32; 2],
     /// Max |x| per channel since the last `get_vu_meter_frames` read.
     window_peak: [f32; 2],
-    /// Most recent samples of the control taps.
-    pan_value: f32,
-    gain_value: f32,
     rms_coeff: f32,
+}
+
+impl VuLevels {
+    /// Accumulate slots `range` of channel `ch`'s tap in order.
+    fn accumulate_block(
+        &mut self,
+        ch: usize,
+        range: std::ops::Range<usize>,
+        sample: impl Fn(usize) -> f32,
+    ) {
+        let coeff = self.rms_coeff;
+        let mut rms_sq = self.rms_sq[ch];
+        let mut peak = self.window_peak[ch];
+        for i in range {
+            let x = sample(i);
+            rms_sq += coeff * (x * x - rms_sq);
+            let a = x.abs();
+            if a > peak {
+                peak = a;
+            }
+        }
+        self.rms_sq[ch] = rms_sq;
+        self.window_peak[ch] = peak;
+    }
 }
 
 impl VuMeterState {
@@ -851,11 +920,13 @@ impl VuMeterState {
             channels: (spec.channels as usize).clamp(1, 2),
             pan_source: spec.pan_source.clone(),
             gain_source: spec.gain_source.clone(),
-            rms_sq: [0.0; 2],
-            window_peak: [0.0; 2],
+            levels: VuLevels {
+                rms_sq: [0.0; 2],
+                window_peak: [0.0; 2],
+                rms_coeff: 1.0 - (-1.0f32 / (0.3 * sample_rate)).exp(),
+            },
             pan_value: 0.0,
             gain_value: 0.0,
-            rms_coeff: 1.0 - (-1.0f32 / (0.3 * sample_rate)).exp(),
         }
     }
 
@@ -872,17 +943,8 @@ impl VuMeterState {
     /// Carry running levels over from this meter's predecessor so a patch
     /// update doesn't blink the display.
     pub fn transfer_levels_from(&mut self, prev: &VuMeterState) {
-        self.rms_sq = prev.rms_sq;
-        self.window_peak = prev.window_peak;
-    }
-
-    #[inline]
-    pub fn accumulate(&mut self, ch: usize, x: f32) {
-        self.rms_sq[ch] += self.rms_coeff * (x * x - self.rms_sq[ch]);
-        let a = x.abs();
-        if a > self.window_peak[ch] {
-            self.window_peak[ch] = a;
-        }
+        self.levels.rms_sq = prev.levels.rms_sq;
+        self.levels.window_peak = prev.levels.window_peak;
     }
 
     /// Snapshot the current levels and reset the peak window. Main thread only.
@@ -890,16 +952,63 @@ impl VuMeterState {
         let frame = modular_core::types::VuMeterFrame {
             module_id: self.module_id.clone(),
             rms: (0..self.channels)
-                .map(|c| self.rms_sq[c].sqrt() as f64)
+                .map(|c| self.levels.rms_sq[c].sqrt() as f64)
                 .collect(),
             peak: (0..self.channels)
-                .map(|c| self.window_peak[c] as f64)
+                .map(|c| self.levels.window_peak[c] as f64)
                 .collect(),
             pan: self.pan_source.as_ref().map(|_| self.pan_value as f64),
             gain: self.gain_source.as_ref().map(|_| self.gain_value as f64),
         };
-        self.window_peak = [0.0; 2];
+        self.levels.window_peak = [0.0; 2];
         frame
+    }
+}
+
+#[cfg(test)]
+mod scope_buffer_tests {
+    use super::{ScopeBuffer, ScopeMode};
+
+    fn assert_same(a: &ScopeBuffer, b: &ScopeBuffer) {
+        assert_eq!(a.buffer[0].map(f32::to_bits), b.buffer[0].map(f32::to_bits));
+        assert_eq!(a.buffer[1].map(f32::to_bits), b.buffer[1].map(f32::to_bits));
+        assert_eq!(a.buffer_idx, b.buffer_idx);
+        assert_eq!(a.read_idx, b.read_idx);
+        assert_eq!(a.sample_counter, b.sample_counter);
+        assert_eq!(a.recording, b.recording);
+        assert_eq!(a.buffer_select, b.buffer_select);
+    }
+
+    #[test]
+    fn push_block_matches_per_sample_push() {
+        let sample_rate = 48_000.0f32;
+        let signal = |n: usize| 3.0 * (n as f32 * 0.013).sin();
+        for trigger in [
+            None,
+            Some((500, ScopeMode::Wait)),
+            Some((500, ScopeMode::Roll)),
+        ] {
+            for ms_per_frame in [10, 100] {
+                let mut per_sample = ScopeBuffer::new(ms_per_frame, trigger, sample_rate);
+                let mut per_block = ScopeBuffer::new(ms_per_frame, trigger, sample_rate);
+                // Uneven block lengths so blocks straddle the buffer wrap
+                // and the skip counter's period.
+                let mut start = 0;
+                for len in [1, 256, 77, 1024, 513, 3, 2048]
+                    .into_iter()
+                    .cycle()
+                    .take(40)
+                {
+                    let range = start..start + len;
+                    for n in range.clone() {
+                        per_sample.push(signal(n));
+                    }
+                    per_block.push_block(range, signal);
+                    assert_same(&per_sample, &per_block);
+                    start += len;
+                }
+            }
+        }
     }
 }
 
@@ -923,10 +1032,11 @@ mod vu_meter_state_tests {
         let mut state = VuMeterState::new(&spec, sample_rate);
         let amp = 5.0f32;
         let freq = 440.0f32;
-        for n in 0..sample_rate as usize {
-            let x = amp * (2.0 * std::f32::consts::PI * freq * n as f32 / sample_rate).sin();
-            state.accumulate(0, x);
-        }
+        state
+            .levels
+            .accumulate_block(0, 0..sample_rate as usize, |n| {
+                amp * (2.0 * std::f32::consts::PI * freq * n as f32 / sample_rate).sin()
+            });
         let mut frame = state.take_frame();
         let expected_rms = (amp / 2.0f32.sqrt()) as f64;
         assert!(
@@ -2207,6 +2317,59 @@ impl AudioProcessor {
         }
     }
 
+    /// Feed slots `range` of every scope and VU meter tap. Runs only after
+    /// `process_all_modules_to` has advanced the whole patch through
+    /// `range.end`, so every tap read is of a computed slot; while stopped the
+    /// patch is frozen and the taps are not fed.
+    fn drain_taps(&self, range: std::ops::Range<usize>) {
+        let sampleables = &self.patch.sampleables;
+        if let Some(mut scopes) = self.scope_collection.try_lock() {
+            for (key, buffer) in scopes.iter_mut() {
+                if let Some(tap) = Tap::resolve(
+                    sampleables,
+                    &key.module_id,
+                    &key.port_name,
+                    key.channel as usize,
+                ) {
+                    buffer.push_block(range.clone(), |i| tap.get(i));
+                }
+            }
+        }
+        if let Some(mut meters) = self.vu_collection.try_lock() {
+            for meter in meters.iter_mut() {
+                for ch in 0..meter.channels {
+                    if let Some(tap) =
+                        Tap::resolve(sampleables, &meter.module_id, &meter.port_name, ch)
+                    {
+                        meter
+                            .levels
+                            .accumulate_block(ch, range.clone(), |i| tap.get(i));
+                    }
+                }
+                // Signal-driven pan/gain are display-only and each write
+                // overwrites the last, so only the block's final slot is read.
+                let last = range.end - 1;
+                let sample = |src: &Option<modular_core::types::ScopeChannel>| {
+                    src.as_ref().and_then(|src| {
+                        Tap::resolve(
+                            sampleables,
+                            &src.module_id,
+                            &src.port_name,
+                            src.channel as usize,
+                        )
+                        .map(|tap| tap.get(last))
+                    })
+                };
+                if let Some(v) = sample(&meter.pan_source) {
+                    meter.set_pan_value(v);
+                }
+                if let Some(v) = sample(&meter.gain_source) {
+                    meter.set_gain_value(v);
+                }
+            }
+        }
+    }
+
     /// Eager-fill ROOT_CLOCK from per-block slot `from` (inclusive) to `end`
     /// (exclusive). Each slot is synced under this callback's Link host-time
     /// anchor — the cpal-frame index for in-block slot `i` is
@@ -2474,11 +2637,14 @@ where
 
                             // Force every module to advance to `end`, in cache-efficient
                             // producer-before-consumer order, so modules not reachable from
-                            // the output or any scope still process. The root/scope reads in
-                            // the drain below then become pure cache hits. Skipped while
-                            // stopped so the patch freezes on stop — the drain still ramps
-                            // connected modules out via the root pull during the fade.
-                            if end > audio_processor.block_pos && !audio_processor.is_stopped() {
+                            // the output or any scope still process. The root reads in the
+                            // drain below then become pure cache hits. Skipped while stopped
+                            // so the patch freezes on stop — the drain still ramps connected
+                            // modules out via the root pull during the fade, and feeds the
+                            // scope and meter taps only on blocks where this ran.
+                            let processed_all =
+                                end > audio_processor.block_pos && !audio_processor.is_stopped();
+                            if processed_all {
                                 audio_processor.process_all_modules_to(end);
                             }
 
@@ -2486,9 +2652,7 @@ where
                             // volume-change state machine + soft clip that
                             // `FinalStateProcessor` used to provide per-frame.
                             if end > audio_processor.block_pos {
-                                let mut scope_guard = audio_processor.scope_collection.try_lock();
                                 let mut recording_guard = recording_feed.try_lock();
-                                let mut vu_guard = audio_processor.vu_collection.try_lock();
                                 for i in audio_processor.block_pos..end {
                                     let is_stopped = audio_processor.is_stopped();
                                     match (final_state_processor.prev_is_stopped, is_stopped) {
@@ -2592,76 +2756,6 @@ where
                                                 * final_state_processor.attenuation_factor;
                                             feed.push(safety_soft_clip(v));
                                         }
-                                        if let Some(scope_lock) = scope_guard.as_mut() {
-                                            for (key, scope_buffer) in scope_lock.iter_mut() {
-                                                if let Some(module) = audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&key.module_id)
-                                                {
-                                                    let s = module.get_value_at(
-                                                        &key.port_name,
-                                                        key.channel as usize,
-                                                        i,
-                                                    );
-                                                    scope_buffer.push(s);
-                                                }
-                                            }
-                                        }
-                                        if let Some(vu_lock) = vu_guard.as_mut() {
-                                            for meter in vu_lock.iter_mut() {
-                                                if let Some(module) = audio_processor
-                                                    .patch
-                                                    .sampleables
-                                                    .get(&meter.module_id)
-                                                {
-                                                    for ch in 0..meter.channels {
-                                                        meter.accumulate(
-                                                            ch,
-                                                            module.get_value_at(
-                                                                &meter.port_name,
-                                                                ch,
-                                                                i,
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-                                                // Signal-driven pan/gain are
-                                                // display-only and each write
-                                                // overwrites the last, so only
-                                                // the block's final sample ever
-                                                // reaches take_frame. Sample the
-                                                // taps once here, not per sample
-                                                // (a String-keyed HashMap lookup
-                                                // each time).
-                                                if i == end - 1 {
-                                                    let sampleables =
-                                                        &audio_processor.patch.sampleables;
-                                                    let sample_tap = |tap: &Option<
-                                                        modular_core::types::ScopeChannel,
-                                                    >| {
-                                                        tap.as_ref().and_then(|src| {
-                                                            sampleables
-                                                                .get(&src.module_id)
-                                                                .map(|m| {
-                                                                    m.get_value_at(
-                                                                        &src.port_name,
-                                                                        src.channel as usize,
-                                                                        i,
-                                                                    )
-                                                                })
-                                                        })
-                                                    };
-                                                    if let Some(v) = sample_tap(&meter.pan_source) {
-                                                        meter.set_pan_value(v);
-                                                    }
-                                                    if let Some(v) = sample_tap(&meter.gain_source)
-                                                    {
-                                                        meter.set_gain_value(v);
-                                                    }
-                                                }
-                                            }
-                                        }
                                     } else {
                                         final_state_processor.reset_declick();
                                         for ch in 0..num_channels {
@@ -2670,6 +2764,9 @@ where
                                     }
 
                                     written += 1;
+                                }
+                                if processed_all {
+                                    audio_processor.drain_taps(audio_processor.block_pos..end);
                                 }
                                 audio_processor.block_pos = end;
                             }
