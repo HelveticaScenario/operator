@@ -33,6 +33,8 @@ export interface VideoGraphHost {
      * chain of them) through its own `$cycle`, as a signal parameter does.
      */
     playPattern(pattern: unknown): AudioSignal;
+    /** A number or note/Hz string as a constant audio signal, as `$c` lifts it. */
+    constantSignal(value: number | string): AudioSignal;
     /**
      * Publishes `signal` to tap slot `slot`, as the engine's `_videoTap`
      * module, which sums its channels to one.
@@ -70,6 +72,23 @@ export interface VideoAudioConfig {
     samples?: number;
     /** Start the window at a rising zero crossing so a periodic wave holds still (default true). */
     trigger?: boolean;
+}
+
+export interface VideoScopeConfig {
+    /** Volts at the left and right edges (default [-5, 5]). */
+    xRange?: [number, number];
+    /** Volts at the bottom and top edges (default [-5, 5]). */
+    yRange?: [number, number];
+    /** Samples of each signal drawn per frame, 2 to 4096 (default 2048). */
+    samples?: number;
+    /** Brightness of the beam, 0 to 1 (default 0.6). */
+    intensity?: number | AudioSignal;
+    /** How much of the trail survives each frame, 0 to 1 (default 0.6). */
+    persistence?: number | AudioSignal;
+    /** Thickness of the beam: 1 is the standard width, 2 twice as thick, 0.1 to 5 (default 1). */
+    lineWidth?: number | AudioSignal;
+    /** Draw a smooth curve between samples instead of straight segments (default false). */
+    upsample?: boolean;
 }
 
 export interface VideoCvConfig {
@@ -134,6 +153,13 @@ export interface VideoKeepConfig {
     invert?: boolean;
 }
 
+export interface VideoMaskConfig {
+    /** Scale only the alpha, leaving the color for what reads this as a number (default false). */
+    keepColor?: boolean;
+}
+
+export interface VideoLumaConfig extends VideoKeepConfig, VideoMaskConfig {}
+
 export interface VideoEdgeConfig extends VideoPositionConfig {
     /** The curve the soft edge follows from inside to outside (default 'linear'). */
     falloff?: 'linear' | 'smooth' | 'smoother' | 'in' | 'out';
@@ -148,7 +174,7 @@ export type VideoInputs = Record<string, VideoValue>;
 /** A node's options and the buffer, audio history row or media it uses. */
 export type VideoNodeExtra = Pick<
     VideoNode,
-    'params' | 'buffer' | 'history' | 'source'
+    'params' | 'buffer' | 'history' | 'source' | 'scope'
 >;
 
 export function describe(value: unknown): string {

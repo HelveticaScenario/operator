@@ -3,6 +3,7 @@ import { IPC_CHANNELS } from '../shared/ipcTypes';
 import type {
     CompiledVideoShader,
     VideoPull,
+    VideoRestart,
     VideoShaderUpdate,
     VideoTapSamples,
     VideoUniformUpdate,
@@ -84,11 +85,13 @@ function track(applied: number): void {
  * Whether the engine is running, and every audio sample the shader's taps have
  * produced since the last pull. The renderer asks once per display frame and
  * plays the samples back against its own clock, so the signals it reads are as
- * smooth as the audio however the engine's callbacks fall. A `fresh` pull
- * restarts every tap from the engine's newest samples, as a new shader needs.
+ * smooth as the audio however the engine's callbacks fall. The taps in
+ * `restart` start over from the engine's newest samples, as a tap that now
+ * carries another signal needs.
  */
-export function pullVideo(fresh = false): VideoPull {
-    if (fresh) tapHeads.clear();
+export function pullVideo(restart: VideoRestart = []): VideoPull {
+    if (restart === 'all') tapHeads.clear();
+    else for (const tap of restart) tapHeads.delete(tap);
     if (tapSource === null) {
         return { applied: 0, cancelled: 0, running: false, taps: [] };
     }
@@ -124,6 +127,16 @@ export function updateVideoShader(
 ): void {
     latest = { shader, updateId };
     send(IPC_CHANNELS.VIDEO_ON_SHADER, latest);
+}
+
+/**
+ * The value a single-module param update sets on a control: the constant
+ * `value` of a slider's `_smoothControl` or a button's `$signal`. Undefined
+ * for any other update.
+ */
+export function controlParamValue(params: unknown): number | undefined {
+    const { value } = (params ?? {}) as { value?: unknown };
+    return typeof value === 'number' ? value : undefined;
 }
 
 /**

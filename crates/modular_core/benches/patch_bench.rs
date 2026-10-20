@@ -197,7 +197,7 @@ fn wide_mix_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
             "$clamp" => {
                 json!({ "input": poly_cable("src", "output", channels), "min": -1.0, "max": 1.0 })
             }
-            "$signal" => json!({ "source": poly_cable("src", "output", channels) }),
+            "$signal" => json!({ "value": poly_cable("src", "output", channels) }),
             _ => json!({ "input": poly_cable("src", "output", channels), "scale": 4.0 }),
         };
         modules.push((format!("m{i}"), ty, params));

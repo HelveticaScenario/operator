@@ -21,6 +21,7 @@ import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
 import type {
     VideoCvValue,
     VideoPull,
+    VideoRestart,
     VideoShaderUpdate,
     VideoUniformUpdate,
 } from '../shared/video/videoGraph';
@@ -65,9 +66,6 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_CHANNELS]
         >;
         getScopes: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPES]>;
-        getScopeXy: Promisify<
-            IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPE_XY]
-        >;
         getVuMeters: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_VU_METERS]
         >;
@@ -253,8 +251,8 @@ export interface ElectronAPI {
         onUniform: (
             callback: (updates: VideoUniformUpdate[]) => void,
         ) => () => void;
-        /** `fresh` restarts every tap from the engine's newest samples. */
-        pull: (fresh: boolean) => Promise<VideoPull>;
+        /** Reads the taps that `restart` names from the engine's newest samples, the rest from where the last pull left off. */
+        pull: (restart: VideoRestart) => Promise<VideoPull>;
         /** Asks the system for camera access when it has not been asked; whether it is allowed. */
         requestCameraAccess: () => Promise<boolean>;
         /** The capture source of display number `display`, counting from 1, or why there is none. */
@@ -376,8 +374,6 @@ const electronAPI: ElectronAPI = {
         getSampleRate: (...args) => invokeIPC('SYNTH_GET_SAMPLE_RATE', ...args),
 
         getScopes: (...args) => invokeIPC('SYNTH_GET_SCOPES', ...args),
-
-        getScopeXy: (...args) => invokeIPC('SYNTH_GET_SCOPE_XY', ...args),
 
         getVuMeters: (...args) => invokeIPC('SYNTH_GET_VU_METERS', ...args),
 
@@ -550,7 +546,7 @@ const electronAPI: ElectronAPI = {
         onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
             IPC_CHANNELS.VIDEO_ON_UNIFORM,
         ),
-        pull: (fresh) => invokeIPC('VIDEO_PULL', fresh),
+        pull: (restart) => invokeIPC('VIDEO_PULL', restart),
         requestCameraAccess: () => invokeIPC('VIDEO_REQUEST_CAMERA'),
         getScreenSource: (display) => invokeIPC('VIDEO_SCREEN_SOURCE', display),
         sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
