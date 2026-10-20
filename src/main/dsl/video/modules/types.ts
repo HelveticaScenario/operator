@@ -5,6 +5,14 @@ export interface VideoParamSpec {
     default: string;
 }
 
+/** The resources a node uses, by index into each kind. */
+export interface VideoNodeIndices {
+    buffer: number;
+    history: number;
+    source: number;
+    scope: number;
+}
+
 export interface VideoModuleDef {
     inputs: Record<string, VideoInputKind>;
     /**
@@ -24,6 +32,8 @@ export interface VideoModuleDef {
     history?: boolean;
     /** Marks a node that samples the media named by its `source` field. */
     source?: boolean;
+    /** Marks a node that samples the XY scope named by its `scope` field. */
+    scope?: boolean;
     /**
      * What `emit` returns: an RGBA `vec4f`, or for `gray` an `f32` that is
      * shown as an opaque gray of that level.
@@ -44,12 +54,12 @@ export interface VideoModuleDef {
     /**
      * WGSL expression for the module's value. `args` holds one WGSL
      * expression per input, `params` the resolved option per param, and
-     * `indices` the node's feedback buffer and audio history row (0 for
-     * modules without one).
+     * `indices` the node's feedback buffer, audio history row, media source
+     * and XY scope (0 for modules without one).
      */
     emit(
         args: Record<string, string>,
         params: Record<string, string>,
-        indices: { buffer: number; history: number; source: number },
+        indices: VideoNodeIndices,
     ): string;
 }

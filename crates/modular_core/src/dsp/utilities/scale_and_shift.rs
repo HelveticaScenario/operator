@@ -3,10 +3,10 @@ use schemars::JsonSchema;
 
 use std::ops::Range;
 
-use crate::block_input::{self, InputScratch, OptionBlockInput};
+use crate::block_input;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct ScaleAndShiftParams {
@@ -68,24 +68,14 @@ impl ScaleAndShift {
         range: Range<usize>,
         _sample_rate: f32,
     ) -> Option<()> {
-        let channels = self.channel_count();
-        let p = &self.params;
-        let (mut s0, mut s1, mut s2) = (
-            InputScratch::new(),
-            InputScratch::new(),
-            InputScratch::new(),
-        );
-        let input = p.input.block_input(range.clone(), channels, &mut s0)?;
-        let scale = p
-            .scale
-            .block_input_or(range.clone(), channels, 5.0, &mut s1)?;
-        let shift = p
-            .shift
-            .block_input_or(range.clone(), channels, 0.0, &mut s2)?;
+        let mut scratch = Default::default();
+        let inputs = self
+            .params
+            .block_inputs(range.clone(), self.channel_count(), &mut scratch)?;
         block_input::map(
             &mut outputs.sample,
             range,
-            [input, scale, shift],
+            [inputs.input, inputs.scale, inputs.shift],
             |[x, scale, shift]| x * (scale / 5.0) + shift,
         );
         Some(())

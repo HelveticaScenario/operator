@@ -40,6 +40,10 @@ yarn lint:fix              # oxlint --fix
 
 E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run `yarn start` once first.
 
+### Launching the app as an agent
+
+Always set `MODULAR_BACKGROUND_LAUNCH=1` when launching the app (`yarn start`, Playwright, or the built entry): the app never takes focus, its windows open behind the user's, and it runs on a throwaway profile so it never touches the user's running instance. Set `MODULAR_AUDIO_OUTPUT_DEVICE` / `MODULAR_AUDIO_INPUT_DEVICE` to a loopback device id (e.g. `coreaudio:BlackHole64ch_UID`) so test audio stays off the speakers and microphone. `yarn test:e2e` sets all three. See the `verify` skill for driving the app.
+
 ## Architecture
 
 ### Data Flow
@@ -59,7 +63,7 @@ E2E tests require the Vite main/preload bundles (`.vite/build`) to exist — run
 
 ### Frontend Structure
 
-- **`src/main/`** — Electron main process (`main.ts`), DSL runtime (`dsl/executor.ts`, `dsl/factories.ts`, `dsl/GraphBuilder.ts`).
+- **`src/main/`** — Electron main process (`main.ts` checks the CPU can run the addon, then loads `app.ts`), DSL runtime (`dsl/executor.ts`, `dsl/factories.ts`, `dsl/GraphBuilder.ts`).
 - **`src/renderer/`** — React app (`App.tsx`), Monaco editor (`components/MonacoPatchEditor.tsx`, `components/monaco/`), UI components.
 - **`src/preload/`** — Electron context isolation bridge.
 - **`src/shared/`** — Shared IPC types.
@@ -100,7 +104,7 @@ init (construct, main thread) → transfer_state_from → connect → on_patch_u
 
 Examples: `supersaw` — `init` seeds phases + `inv_sample_rate` (sr-only); `on_patch_update` computes `voice_t`/`gain`/`voices` (param-derived). `sampler` — `rate_ratio` is in `on_patch_update` because `wav.sample_rate()` only resolves in `connect()`. Test harnesses that build a module directly must mirror this: call `init` then `on_patch_update` before driving `update`.
 
-**Block modules (`#[module(block)]`).** The module keeps its per-sample `update` and adds `fn process_block(&mut self, outputs: &mut XBlockOutputs, range: Range<usize>, sample_rate: f32) -> Option<()>`. The wrapper runs `process_block` in Block mode and `update` in Sample mode (feedback cycles). Put the per-sample math in one shared function (or a `ChannelState::step`) that both call, so the paths cannot drift; each block module's `tests/block_<module>.rs` checks its paths agree bit for bit and stay allocation-free, using the harness in `tests/block_common`. `process_block` resolves each input once per range (`PolySignal::block_input`, `Option<PolySignal>::block_input_or`) and writes straight into the block buffers — `block_input::map` for elementwise math. Return `None` (before writing anything) to fall back: the wrapper retries shorter sub-ranges, then `update` slot by slot. Pays off where per-sample input reads dominate (cheap modules like `$scaleAndShift`) or where per-channel work can be hoisted out of the slot loop for a constant input; not where the cost is per-sample memory reads, such as `$grains`. Measure with `cargo bench -p modular_core --bench patch_bench` and real patches before converting.
+**Block modules (`#[module(block)]`).** The module keeps its per-sample `update` and adds `fn process_block(&mut self, outputs: &mut XBlockOutputs, range: Range<usize>, sample_rate: f32) -> Option<()>`. The wrapper runs `process_block` in Block mode and `update` in Sample mode (feedback cycles). Put the per-sample math in one shared function (or a `ChannelState::step`) that both call, so the paths cannot drift; each block module's `tests/block_<module>.rs` checks its paths agree bit for bit and stay allocation-free, using the harness in `tests/block_common`. `process_block` resolves each input once per range and writes straight into the block buffers. `#[derive(BlockInputs)]` on the params struct generates `params.block_inputs(range, channels, &mut scratch)`, which resolves every `PolySignal` and `Option<PolySignal>` field at once; a disconnected optional input reads as its `#[signal(default)]`, or as `None` with `#[block_input(optional)]` (an input whose absence changes behaviour, like `sync`). Inputs resolved at other channel counts use `PolySignal::block_input` and `block_input_or` directly — `block_input::map` for elementwise math. Return `None` (before writing anything) to fall back: the wrapper retries shorter sub-ranges, then `update` slot by slot. Pays off where per-sample input reads dominate (cheap modules like `$scaleAndShift`) or where per-channel work can be hoisted out of the slot loop for a constant input; not where the cost is per-sample memory reads, such as `$grains`. Measure with `cargo bench -p modular_core --bench patch_bench` and real patches before converting.
 
 ### Detecting audio-thread allocations (dev-only)
 
@@ -163,5 +167,6 @@ Models to emulate: `crates/modular_core/src/types.rs` (safety invariants), `src/
 
 - **Node 24.12.0 / Yarn 4.12.0** pinned via Volta.
 - **Rust edition 2024**.
+- **Release targets**: macOS arm64 + x64, Windows x64, Linux x64. x86_64 builds assume `x86-64-v2` (root `.cargo/config.toml`), so benchmark that build, never `-C target-cpu=native`.
 - **Husky pre-commit hooks** run Prettier on `*.{ts,tsx,js,jsx,mjs,json,css,md}` and `cargo fmt` on Rust files.
 - **Vitest** for JS/TS tests, **Playwright** for E2E, **cargo test** for Rust.

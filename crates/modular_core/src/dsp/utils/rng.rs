@@ -2,7 +2,8 @@
 //!
 //! A small linear-congruential generator plus a stable, per-instance seeding
 //! scheme, used by the modules that need cheap non-deterministic randomness:
-//! noise color, dither, grain jitter, and oscillator phase spread.
+//! noise color, dither, grain jitter, and oscillator phase spread. A stateless
+//! hash covers randomness that must repeat exactly, such as groove timing.
 //!
 //! The pattern system deliberately does **not** use this — its randomness must
 //! be deterministic and reproducible.
@@ -27,6 +28,17 @@ const U32_TO_UNIT: f32 = 1.0 / 4_294_967_296.0;
 #[inline]
 pub fn seed_base<T>(module: &T) -> u64 {
     module as *const T as usize as u64
+}
+
+/// Value in `[-1, 1)` determined only by `seed` and `index` (a SplitMix64
+/// hash), identical across runs and builds.
+#[inline]
+pub fn hash_bipolar(seed: u64, index: u64) -> f64 {
+    let mut z = (index ^ seed).wrapping_add(GOLDEN_RATIO_ODD);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f64 / (1u64 << 53) as f64 * 2.0 - 1.0
 }
 
 /// Cheap, non-cryptographic linear-congruential generator for audio-thread
