@@ -18,7 +18,8 @@ import * as os from 'os';
 
 // Resolve paths relative to the project root
 const projectRoot = path.resolve(__dirname, '..');
-const electronBin = path.join(projectRoot, 'node_modules', '.bin', 'electron');
+// In Node, the `electron` package exports the path of the Electron executable.
+const electronBin = require('electron') as unknown as string;
 const mainEntry = path.join(projectRoot, '.vite', 'build', 'main.js');
 
 export type TestFixtures = {
@@ -55,6 +56,19 @@ export const test = base.extend<TestFixtures>({
                 ...process.env,
                 E2E_TEST: '1',
                 E2E_WORKSPACE: tmpWorkspace,
+                // Open behind the user's active app without taking focus;
+                // MODULAR_BACKGROUND_LAUNCH=0 shows the app in front instead.
+                MODULAR_BACKGROUND_LAUNCH:
+                    process.env.MODULAR_BACKGROUND_LAUNCH ?? '1',
+                // Test audio uses a loopback device rather than the speakers
+                // and microphone. A device that isn't installed falls back to
+                // the system default.
+                MODULAR_AUDIO_OUTPUT_DEVICE:
+                    process.env.MODULAR_AUDIO_OUTPUT_DEVICE ??
+                    'coreaudio:BlackHole64ch_UID',
+                MODULAR_AUDIO_INPUT_DEVICE:
+                    process.env.MODULAR_AUDIO_INPUT_DEVICE ??
+                    'coreaudio:BlackHole64ch_UID',
                 // Disable hardware acceleration for CI/headless stability
                 ELECTRON_DISABLE_GPU: '1',
                 // Prevent the app from trying to restore window positions

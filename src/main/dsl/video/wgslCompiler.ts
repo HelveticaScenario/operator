@@ -11,7 +11,7 @@ import {
 } from '../../../shared/video/uniformLayout';
 import { VIDEO_MODULES } from './modules';
 import { gray, LUMA_HELPER } from './modules/rgba';
-import type { VideoModuleDef } from './modules/types';
+import type { VideoModuleDef, VideoNodeIndices } from './modules/types';
 
 /**
  * `video_display`: what the screen shows of a color, its channels clipped to
@@ -109,7 +109,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
     let bufferCount = 0;
 
     /**
-     * Each node as a function of the coordinate, `fn f<index>(uv) -> vec4f`, for
+     * Each node as a function of the coordinate, `fn node<index>(uv) -> vec4f`, for
      * modules that re-evaluate an input at other coordinates. Written on
      * demand; the statement per node above is the same node at the pixel's own
      * coordinate, computed once and shared.
@@ -119,7 +119,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         node: VideoGraph['nodes'][number];
         def: VideoModuleDef;
         params: Record<string, string>;
-        indices: { buffer: number; history: number; source: number };
+        indices: VideoNodeIndices;
     }
     const records = new Map<string, NodeRecord>();
     /** Evaluations one call of each node's coordinate function costs, its inputs' included. */
@@ -175,7 +175,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         if (value.kind !== 'node') return resolve(value, kind);
         checkNode(value.id);
         defineFunction(value.id);
-        return readColor(`f${records.get(value.id)!.index}(uv)`, kind);
+        return readColor(`node${records.get(value.id)!.index}(uv)`, kind);
     };
 
     /** An input handed to a module as a function from coordinates to its color. */
@@ -183,7 +183,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         if (value.kind === 'node') {
             checkNode(value.id);
             defineFunction(value.id);
-            return `f${records.get(value.id)!.index}`;
+            return `node${records.get(value.id)!.index}`;
         }
         const expression = resolve(value, 'rgba');
         let name = constantFunctions.get(expression);
@@ -223,7 +223,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
         const { index, node, def, params, indices } = records.get(id)!;
         const args = argsOf(node, def, resolveInFunction);
         functions.push(
-            `fn f${index}(uv: vec2f) -> vec4f {\n    return ${emitRgba(def, args, params, indices)};\n}`,
+            `fn node${index}(uv: vec2f) -> vec4f {\n    return ${emitRgba(def, args, params, indices)};\n}`,
         );
     }
 
@@ -270,6 +270,13 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 'media source',
             );
             checkIndex(
+                def.scope !== undefined,
+                node.scope,
+                graph.scopes.length,
+                'XY scope',
+                'XY scope',
+            );
+            checkIndex(
                 def.buffer !== undefined,
                 node.buffer,
                 MAX_FEEDBACK_BUFFERS,
@@ -286,6 +293,7 @@ export function compileVideoGraph(graph: VideoGraph): CompiledVideoShader {
                 buffer: node.buffer ?? 0,
                 history: node.history ?? 0,
                 source: node.source ?? 0,
+                scope: node.scope ?? 0,
             };
             records.set(node.id, { def, index, indices, node, params });
             let callCost = 1;
@@ -374,9 +382,13 @@ ${body}
     });
 
     const slotVecs = Math.max(1, Math.ceil(graph.uniforms.length / 4));
-    const slots = bindingSlots(bufferCount, graph.histories.length);
+    const slots = bindingSlots(
+        bufferCount,
+        graph.histories.length,
+        graph.sources.length,
+    );
     const samplerDeclaration =
-        bufferCount > 0 || graph.sources.length > 0
+        bufferCount > 0 || graph.sources.length > 0 || graph.scopes.length > 0
             ? `@group(0) @binding(${slots.sampler}) var fb_sampler: sampler;\n`
             : '';
     const bufferDeclarations = Array.from(
@@ -394,6 +406,12 @@ ${body}
                 `@group(0) @binding(${slots.source + k}) var src_${k}: texture_2d<f32>;\n`,
         )
         .join('');
+    const scopeDeclarations = graph.scopes
+        .map(
+            (_, k) =>
+                `@group(0) @binding(${slots.scope + k}) var scope_${k}: texture_2d<f32>;\n`,
+        )
+        .join('');
     const outputStruct =
         bufferCount === 0
             ? ''
@@ -403,10 +421,14 @@ struct FragOut {
 ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}: vec4f,`).join('\n')}
 }
 `;
+    // Each frame is held 0 to 1 per channel, as in Hydra's 8-bit buffers, so
+    // values beyond that cannot build up through a feedback loop.
+    const stored = (k: number) =>
+        `clamp(${bufferWrites.get(k)}, vec4f(0.0), vec4f(1.0))`;
     const result =
         bufferCount === 0
             ? `video_display(${names.get(graph.output)})`
-            : `FragOut(video_display(${names.get(graph.output)}), ${Array.from({ length: bufferCount }, (_, k) => bufferWrites.get(k)).join(', ')})`;
+            : `FragOut(video_display(${names.get(graph.output)}), ${Array.from({ length: bufferCount }, (_, k) => stored(k)).join(', ')})`;
     const wgsl = `struct Uniforms {
     time: f32,
     resolution: vec2f,
@@ -414,7 +436,7 @@ ${Array.from({ length: bufferCount }, (_, k) => `    @location(${k + 1}) fb${k}:
 }
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-${samplerDeclaration}${bufferDeclarations}${historyDeclaration}${sourceDeclarations}${outputStruct}${[...helpers].map((h) => `\n${h}\n`).join('')}${functions.map((f) => `\n${f}\n`).join('')}
+${samplerDeclaration}${bufferDeclarations}${historyDeclaration}${sourceDeclarations}${scopeDeclarations}${outputStruct}${[...helpers].map((h) => `\n${h}\n`).join('')}${functions.map((f) => `\n${f}\n`).join('')}
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
     let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
@@ -435,6 +457,7 @@ ${previewEntries.join('')}`;
         feedbackBufferCount: bufferCount,
         histories: graph.histories,
         sources: graph.sources,
+        scopes: graph.scopes,
         hasOutput: graph.hasOutput,
         previewCount: graph.previews.length,
         cvSamples: graph.previews.flatMap((preview, index) =>

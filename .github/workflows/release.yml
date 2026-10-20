@@ -12,7 +12,7 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                os: [macos-latest, ubuntu-latest, windows-latest]
+                os: [macos-latest, macos-15-intel, ubuntu-latest, windows-latest]
 
         steps:
             - name: Checkout code
@@ -42,7 +42,7 @@ jobs:
             # this step is a no-op on the current runner image and starts working
             # automatically once macos-latest moves to Xcode 26.
             - name: Install Metal Toolchain
-              if: matrix.os == 'macos-latest'
+              if: runner.os == 'macOS'
               run: |
                   if xcrun --find metal >/dev/null 2>&1; then
                       echo "Metal toolchain already present; skipping download."
@@ -72,7 +72,7 @@ jobs:
 
             # macOS-specific: Import Apple certificate for signing
             - name: Import Apple Certificate
-              if: matrix.os == 'macos-latest'
+              if: runner.os == 'macOS'
               env:
                   APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
                   APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -132,7 +132,7 @@ jobs:
 
             # macOS-specific: Cleanup keychain
             - name: Cleanup Keychain
-              if: matrix.os == 'macos-latest' && always()
+              if: runner.os == 'macOS' && always()
               run: |
                   KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
                   if [ -f "$KEYCHAIN_PATH" ]; then
