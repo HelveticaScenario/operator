@@ -256,9 +256,9 @@ impl Supersaw {
         let mut detune = [0.0f32; PORT_MAX_CHANNELS];
         for input_ch in 0..input_channels {
             let pitch = p.freq.get_value(input_ch);
-            let fm = p.fm.value_or(input_ch, 0.0);
+            let fm = p.fm.value_or(input_ch, SupersawParams::FM_DEFAULT);
             base_freq[input_ch] = apply_fm(pitch, fm, p.fm_mode);
-            detune[input_ch] = p.detune.value_or(input_ch, 0.18);
+            detune[input_ch] = p.detune.value_or(input_ch, SupersawParams::DETUNE_DEFAULT);
         }
 
         for voice in 0..voices {
