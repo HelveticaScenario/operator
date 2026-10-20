@@ -11,6 +11,7 @@ import {
 } from './factories';
 import type {
     BufferOutputRef,
+    GrooveTemplate,
     Signal,
     PolySignal,
     SourceLocation,
@@ -30,6 +31,7 @@ import {
     PORT_MAX_CHANNELS,
 } from './GraphBuilder';
 import { $g1, $g2, $g3 } from './signalGroups';
+import { createOutLane, type OutLane } from './outLane';
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
@@ -45,6 +47,7 @@ import { assertControlsPlaced, createControls } from './controls';
 import { $p, setActiveCycleFactory, type CycleFactory } from './miniNotation';
 import { isPatternValue } from './patternKinds';
 import { VideoGraphBuilder } from './video/VideoGraphBuilder';
+import type { VideoOutput } from './video/VideoOutput';
 import type {
     CompiledVideoShader,
     VideoPreviewSite,
@@ -193,8 +196,13 @@ export function executePatchScript(
 
     // Create the execution environment with all DSL functions
     // Remove _clock from user-facing namespace (it's internal, used only for ROOT_CLOCK)
-    const { _clock, _videoTap, _mediaAudio, ...userNamespaceTree } =
-        context.namespaceTree;
+    const {
+        _clock,
+        _videoTap,
+        _mediaAudio,
+        _smoothControl,
+        ...userNamespaceTree
+    } = context.namespaceTree;
 
     if (typeof _clock !== 'function') {
         throw new Error(
@@ -246,82 +254,6 @@ export function executePatchScript(
         builder.setOutputGain(gain);
     };
 
-    interface ScopeXYConfig {
-        /** Horizontal voltage window. Default [-5, 5]. */
-        xRange?: [number, number];
-        /** Vertical voltage window. Default [-5, 5]. */
-        yRange?: [number, number];
-    }
-
-    /**
-     * Render a Lissajous-style XY oscilloscope as the editor background.
-     * `x` and `y` are flattened to `ModuleOutput[]` (matching `$c`), then
-     * cycled to the longer arity so `max(len(x), len(y))` traces overlay.
-     * Last call wins.
-     */
-    const $scopeXY = (
-        x: PolySignal,
-        y: PolySignal,
-        config?: ScopeXYConfig,
-    ): void => {
-        const flatten = (v: unknown): ModuleOutput[] => {
-            // Bare Signal literals (numbers, note/Hz strings) are lifted into
-            // $signal modules, matching `$c`. A string is one signal, not
-            // spread into characters.
-            if (typeof v === 'number' || typeof v === 'string') {
-                return [...(signal(v) as Collection)];
-            }
-            if (v instanceof ModuleOutput) return [v];
-            if (v instanceof BaseCollection) return [...v];
-            if (Array.isArray(v)) return v.flatMap((e: unknown) => flatten(e));
-            throw new Error(
-                '$scopeXY: arguments must be a number, note/Hz string, ModuleOutput, Collection, or array thereof',
-            );
-        };
-        const xs = flatten(x);
-        const ys = flatten(y);
-        if (xs.length === 0 || ys.length === 0) return;
-
-        const validateRange = (
-            r: [number, number] | undefined,
-            axis: 'x' | 'y',
-        ): [number, number] => {
-            if (r === undefined) return [-5, 5];
-            if (
-                !Array.isArray(r) ||
-                r.length !== 2 ||
-                !Number.isFinite(r[0]) ||
-                !Number.isFinite(r[1]) ||
-                r[0] >= r[1]
-            ) {
-                throw new Error(
-                    `$scopeXY: ${axis}Range must be [min, max] with min < max`,
-                );
-            }
-            return [r[0], r[1]];
-        };
-        const xRange = validateRange(config?.xRange, 'x');
-        const yRange = validateRange(config?.yRange, 'y');
-
-        // Cap traces to what the renderer actually draws (MAX_TRACES in
-        // scopexy/pipeline.ts). Each pair allocates a sample-rate ring buffer
-        // and costs a per-sample read on the audio thread, so an uncapped
-        // max(len(x), len(y)) would let user input balloon audio-thread work
-        // for traces that are never shown.
-        const MAX_SCOPE_XY_TRACES = 64;
-        const requested = Math.max(xs.length, ys.length);
-        const n = Math.min(requested, MAX_SCOPE_XY_TRACES);
-        if (requested > MAX_SCOPE_XY_TRACES) {
-            console.warn(
-                `$scopeXY: ${requested} traces requested; drawing the first ${MAX_SCOPE_XY_TRACES}.`,
-            );
-        }
-        const pairs: { x: ModuleOutput; y: ModuleOutput }[] = [];
-        for (let i = 0; i < n; i++) {
-            pairs.push({ x: xs[i % xs.length], y: ys[i % ys.length] });
-        }
-        builder.setScopeXY(pairs, xRange, yRange, captureSourceLocation());
-    };
     const $setTimeSignature = (numerator: number, denominator: number) => {
         if (!Number.isInteger(numerator) || numerator < 1) {
             throw new Error(
@@ -334,6 +266,52 @@ export function executePatchScript(
             );
         }
         builder.setTimeSignature(numerator, denominator);
+    };
+
+    // Shape is checked here; step ordering and ranges are validated in Rust.
+    const $setGroove = (template: GrooveTemplate) => {
+        if (
+            typeof template !== 'object' ||
+            template === null ||
+            !Array.isArray(template.timing)
+        ) {
+            throw new Error(
+                '$setGroove: expected a groove template with a `timing` array, e.g. $setGroove($swing(0.6))',
+            );
+        }
+        builder.setGroove(template);
+    };
+
+    const $swing = (
+        ratio: number,
+        config: { grid?: number; humanize?: number } = {},
+    ): GrooveTemplate => {
+        if (typeof ratio !== 'number' || !(ratio > 0 && ratio < 1)) {
+            throw new Error(
+                `$swing: ratio must be a number between 0 and 1 (0.5 is straight), got ${ratio}`,
+            );
+        }
+        if (
+            typeof config !== 'object' ||
+            config === null ||
+            Array.isArray(config)
+        ) {
+            throw new Error(
+                '$swing: expected a config object as the second argument, e.g. $swing(0.66, { grid: 8 })',
+            );
+        }
+        const { grid = 16, humanize = 0 } = config;
+        if (typeof humanize !== 'number' || !(humanize >= 0)) {
+            throw new Error(
+                `$swing: humanize must be a number 0 or greater, got ${humanize}`,
+            );
+        }
+        // The pair spans two grid steps; the second starts `2 * ratio` steps in.
+        const template: GrooveTemplate = { grid, timing: [0, 2 * ratio - 1] };
+        if (humanize > 0) {
+            template.random = humanize;
+        }
+        return template;
     };
 
     /**
@@ -353,6 +331,8 @@ export function executePatchScript(
         }
         return new DeferredCollection(...items);
     };
+
+    const $outLane = (label: string): OutLane => createOutLane(builder, label);
 
     const $bus = (cb: (mixed: Collection) => unknown): Bus =>
         new Bus(builder, cb);
@@ -683,10 +663,19 @@ export function executePatchScript(
         return $track(frames, { playhead, interpolationType }) as Collection;
     };
 
+    if (typeof _smoothControl !== 'function') {
+        throw new Error(
+            'DSL execution error: "_smoothControl" module not found in schemas',
+        );
+    }
+
     // Control factories; their collectors fill as the patch calls them.
+    const controlFactories = { $signal: signal, _smoothControl };
     const controls = createControls({
-        rangedSignal: (value, id, min, max) =>
-            builder.$c(signal(value, { id })).withRange(min, max),
+        rangedSignal: (moduleType, value, id, min, max) =>
+            builder
+                .$c(controlFactories[moduleType](value, { id }))
+                .withRange(min, max),
     });
 
     if (typeof _videoTap !== 'function') {
@@ -733,7 +722,13 @@ export function executePatchScript(
         },
         mediaExists: options.mediaExists,
         sourceLocation: captureSourceLocation,
+        constantSignal: (value) => signal(value) as Collection,
     });
+
+    /** `$v.scopeXY(...)` shown as the patch's picture. */
+    const $scopeXY = (
+        ...args: Parameters<VideoGraphBuilder['scopeXY']>
+    ): VideoOutput => videoBuilder.out(videoBuilder.scopeXY(...args));
 
     /**
      * Load WAV samples from the wavs/ folder.
@@ -984,10 +979,13 @@ export function executePatchScript(
         $cGroup: controls.$cGroup,
         // Bus
         $bus,
+        $outLane,
         // Global settings
         $setTempo,
         $setOutputGain,
         $setTimeSignature,
+        $setGroove,
+        $swing,
         $setEndOfChainCb,
         // XY background oscilloscope
         $scopeXY,

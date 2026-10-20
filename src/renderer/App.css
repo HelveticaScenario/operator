@@ -117,14 +117,18 @@
     background: var(--code-backing);
 }
 
-/* Lissajous background canvas — sits behind Monaco, never receives events. */
-.scope-xy-background {
+/* A copy of the performance window, over the code in the corner. */
+.performance-preview {
     position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
-    z-index: 0;
+    right: 16px;
+    bottom: 16px;
+    width: clamp(160px, 22%, 360px);
+    z-index: 5;
     pointer-events: none;
+    background: #000;
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
 }
 
 .patch-editor {
@@ -138,7 +142,7 @@
     height: 100%;
 }
 
-/* Let the $scopeXY background canvas show through. The theme override at
+/* Let the video backdrop show through. The theme override at
  * `components/monaco/theme.ts` already zeroes editor.background in Monaco's
  * colour map; this catches any inline background Monaco paints on chrome. */
 .editor-panel .monaco-editor,

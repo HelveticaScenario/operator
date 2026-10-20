@@ -5,6 +5,7 @@
  * Shared between main and renderer processes.
  */
 
+import type { MonospaceFont } from './fonts';
 import type {
     ApplyPatchError,
     AudioConfigOptions,
@@ -28,6 +29,7 @@ import type {
     VideoCvValue,
     VideoPreviewSite,
     VideoPull,
+    VideoRestart,
     VideoShaderUpdate,
     VideoUniformUpdate,
 } from './video/videoGraph';
@@ -55,36 +57,7 @@ export interface AudioConfig {
     bufferSize?: number;
 }
 
-/** Bundled fonts (shipped with the app) */
-export type BundledFont =
-    | 'Fira Code'
-    | 'JetBrains Mono'
-    | 'Cascadia Code'
-    | 'Source Code Pro'
-    | 'IBM Plex Mono'
-    | 'Hack'
-    | 'Inconsolata'
-    | 'Monaspace Neon'
-    | 'Monaspace Argon'
-    | 'Monaspace Xenon'
-    | 'Monaspace Krypton'
-    | 'Monaspace Radon'
-    | 'Geist Mono'
-    | 'Iosevka'
-    | 'Victor Mono'
-    | 'Roboto Mono'
-    | 'Maple Mono'
-    | 'Commit Mono'
-    | '0xProto'
-    | 'Intel One Mono'
-    | 'Mononoki'
-    | 'Anonymous Pro'
-    | 'Recursive';
-
-/** System fonts (available only if installed on the OS) */
-export type SystemFont = 'SF Mono' | 'Monaco' | 'Menlo' | 'Consolas';
-
-export type MonospaceFont = BundledFont | SystemFont;
+export type { MonospaceFont, SystemFont } from './fonts';
 
 export interface PrettierConfig {
     singleQuote?: boolean;
@@ -126,20 +99,32 @@ export interface AppConfig {
     lastOpenedFolder?: string;
     audioConfig?: AudioConfig;
     skippedUpdateVersion?: string;
-    /** XY scope beam intensity (0..1). Default 0.6. */
-    xyScopeIntensity?: number;
-    /** XY scope phosphor persistence (0..1). 1 = never fade. Default 0.6. */
-    xyScopePersistence?: number;
-    /** XY scope GPU upscaling (clamped Lanczos). Default true. */
-    xyScopeUpsample?: boolean;
-    /** XY scope beam half-width in clip-space units. Default 0.012. */
-    xyScopeLineWidth?: number;
     /** Opacity (0..1) of the dark backing behind each line of code while video shows behind the code. Default 0.6. */
     codeBackdropOpacity?: number;
     /** Shape of the performance window: a fixed aspect ratio, or free. Default 'free'. */
     performanceAspect?: 'free' | '16:9' | '4:3' | '1:1' | '9:16';
     /** Fraction of the performance window's pixels the picture is drawn at (0.1..1). Default 1. */
     performanceScale?: number;
+    /** Whether the performance window shows the code. Default true. */
+    performanceCodeVisible?: boolean;
+    /** Opacity (0..1) of the code in the performance window while it shows. Default 1. */
+    performanceCodeOpacity?: number;
+    /** Opacity (0..1) of the backing behind each line of code in the performance window. Default 0.6. */
+    performanceCodeBacking?: number;
+    /** Monospace font of the code in the performance window. Default 'Fira Code'. */
+    performanceFont?: MonospaceFont;
+    /** Font size (8–160) of the code in the performance window. Default 28. */
+    performanceFontSize?: number;
+    /** Line height (1–3) of the code in the performance window, as a multiple of its font size. Default 1.4. */
+    performanceLineHeight?: number;
+    /** Font ligatures in the performance window. Default true. */
+    performanceFontLigatures?: boolean;
+    /** Line numbers in the performance window. Default false. */
+    performanceLineNumbers?: boolean;
+    /** How quickly (0..1) the performance window's code scrolls to follow the editor; 1 jumps. Default 0.5. */
+    performanceScrollSpeed?: number;
+    /** Theme id for the code's colors in the performance window; absent follows the editor's theme. */
+    performanceTheme?: string;
     /** VU meter panel visibility. Default false. */
     vuPanelVisible?: boolean;
     /** VU meter panel height in px (84–480). Default 150. */
@@ -340,7 +325,6 @@ export const IPC_CHANNELS = {
     SYNTH_GET_SAMPLE_RATE: 'modular:synth:get-sample-rate',
     SYNTH_GET_CHANNELS: 'modular:synth:get-channels',
     SYNTH_GET_SCOPES: 'modular:synth:get-scopes',
-    SYNTH_GET_SCOPE_XY: 'modular:synth:get-scope-xy',
     SYNTH_GET_VU_METERS: 'modular:synth:get-vu-meters',
     SYNTH_UPDATE_PATCH: 'modular:synth:update-patch',
     SYNTH_START_RECORDING: 'modular:synth:start-recording',
@@ -497,8 +481,6 @@ export interface IPCHandlers {
 
     [IPC_CHANNELS.SYNTH_GET_SCOPES]: typeof Synthesizer.prototype.getScopes;
 
-    [IPC_CHANNELS.SYNTH_GET_SCOPE_XY]: typeof Synthesizer.prototype.getScopeXy;
-
     [IPC_CHANNELS.SYNTH_GET_VU_METERS]: typeof Synthesizer.prototype.getVuMeters;
 
     [IPC_CHANNELS.SYNTH_UPDATE_PATCH]: (
@@ -636,7 +618,7 @@ export interface IPCHandlers {
     [IPC_CHANNELS.VIDEO_SET_OUTPUT_OPEN]: (open: boolean) => void;
     [IPC_CHANNELS.VIDEO_GET_SHADER]: () => VideoShaderUpdate;
     [IPC_CHANNELS.VIDEO_CV_VALUES]: (values: VideoCvValue[]) => void;
-    [IPC_CHANNELS.VIDEO_PULL]: (fresh: boolean) => VideoPull;
+    [IPC_CHANNELS.VIDEO_PULL]: (restart: VideoRestart) => VideoPull;
     [IPC_CHANNELS.VIDEO_REQUEST_CAMERA]: () => Promise<boolean>;
     [IPC_CHANNELS.VIDEO_SCREEN_SOURCE]: (
         display: number,

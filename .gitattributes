@@ -2,3 +2,6 @@
 /.yarn/releases/*    binary
 /.yarn/plugins/**/*  binary
 /.pnp.*              binary linguist-generated
+
+# Hooks run under sh, which reads a trailing CR as part of the command.
+/.husky/*            text eol=lf

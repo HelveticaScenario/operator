@@ -61,6 +61,7 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
         mac: 'Control+Shift+v',
         command: 'operator.togglePerformanceWindow',
     },
+    { key: 'Control+Shift+h', command: 'operator.togglePerformanceCode' },
 
     // VS Code editor command ids that mirror VS Code's own default keybindings
     // so the editor context menu can display the shortcut. Monaco handles the
@@ -248,10 +249,10 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
         command: 'editor.action.previousSelectionMatchFindAction',
         when: 'editorFocus',
     },
-    // mac-only: on non-mac $mod+. resolves to Ctrl+. which is Operator's Stop
-    // transport binding; keep Stop authoritative there.
+    // Off macOS, $mod+. would be Ctrl+., Operator's Stop transport binding, so
+    // quick fix takes Alt+. there.
     {
-        key: '',
+        key: 'alt+.',
         mac: '$mod+.',
         command: 'editor.action.quickFix',
         when: '!editorReadonly && editorHasCodeActionsProvider && textInputFocus',
