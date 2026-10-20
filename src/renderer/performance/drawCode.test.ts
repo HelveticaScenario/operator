@@ -1,0 +1,76 @@
+import { describe, expect, it } from 'vitest';
+import { expandTabs, spansOnLine, styledRuns } from './drawCode';
+
+describe('expandTabs', () => {
+    it('expands each tab to the next tab stop and maps characters to columns', () => {
+        expect(expandTabs('a\tb', 4)).toEqual({
+            columns: [0, 1, 4, 5],
+            text: 'a   b',
+        });
+    });
+
+    it('indexes columns by UTF-16 offset, an emoji spanning two', () => {
+        const line = '\t🎛 x';
+        const { columns, text } = expandTabs(line, 2);
+        expect(text).toBe('  🎛 x');
+        expect(columns).toHaveLength(line.length + 1);
+        expect(columns).toEqual([0, 2, 3, 4, 5, 6]);
+        expect(text.slice(columns[1], columns[3])).toBe('🎛');
+    });
+
+    it('leaves a line without tabs as it is', () => {
+        expect(expandTabs('abc', 2)).toEqual({
+            columns: [0, 1, 2, 3],
+            text: 'abc',
+        });
+    });
+});
+
+describe('spansOnLine', () => {
+    const range = {
+        end: { column: 3, line: 2 },
+        start: { column: 5, line: 0 },
+    };
+
+    it('covers from the start to the end of the line on the first line', () => {
+        expect(spansOnLine([range], 0, 8)).toEqual([[5, 8]]);
+    });
+
+    it('covers whole lines in the middle', () => {
+        expect(spansOnLine([range], 1, 6)).toEqual([[0, 6]]);
+    });
+
+    it('covers up to the end column on the last line', () => {
+        expect(spansOnLine([range], 2, 10)).toEqual([[0, 3]]);
+    });
+
+    it('covers nothing outside the range', () => {
+        expect(spansOnLine([range], 3, 10)).toEqual([]);
+    });
+});
+
+describe('styledRuns', () => {
+    const tokens = [
+        { offset: 0, type: 'identifier.js' },
+        { offset: 5, type: 'delimiter.js' },
+        { offset: 6, type: 'string.js' },
+    ];
+
+    it('splits a line at token boundaries', () => {
+        expect(styledRuns(10, tokens)).toEqual([
+            { bracket: null, from: 0, to: 5, token: 0 },
+            { bracket: null, from: 5, to: 6, token: 1 },
+            { bracket: null, from: 6, to: 10, token: 2 },
+        ]);
+    });
+
+    it('splits a token around a bracket and gives the bracket its color', () => {
+        expect(styledRuns(10, tokens, [[7, 8, '#ffd700']])).toEqual([
+            { bracket: null, from: 0, to: 5, token: 0 },
+            { bracket: null, from: 5, to: 6, token: 1 },
+            { bracket: null, from: 6, to: 7, token: 2 },
+            { bracket: '#ffd700', from: 7, to: 8, token: 2 },
+            { bracket: null, from: 8, to: 10, token: 2 },
+        ]);
+    });
+});

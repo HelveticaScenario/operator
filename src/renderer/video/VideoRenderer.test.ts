@@ -4,6 +4,7 @@ import type {
     CompiledVideoShader,
     VideoPreviewFrame,
     VideoPull,
+    VideoRestart,
 } from '../../shared/video/videoGraph';
 
 const gpu = vi.hoisted(() => ({
@@ -15,6 +16,13 @@ const gpu = vi.hoisted(() => ({
         | ((frame: VideoPreviewFrame, drawnBy: number) => void)
         | null,
     delivered: [] as number[],
+    /** What the audio inputs forget on the next reset. */
+    forgotten: [] as number[],
+    /** Each push of samples into the audio inputs, by tap. */
+    pushed: [] as number[][],
+    /** Audio input and scope trail clears. */
+    clears: 0,
+    trailClears: 0,
 }));
 
 vi.mock('./ShaderProgram', () => ({
@@ -34,6 +42,17 @@ vi.mock('./SourceTextures', () => ({
         destroy() {}
     },
 }));
+vi.mock('./ScopeBeams', () => ({
+    ScopeBeams: class {
+        sync() {}
+        resize() {}
+        draw() {}
+        clearTrails() {
+            gpu.trailClears++;
+        }
+        destroy() {}
+    },
+}));
 vi.mock('./FeedbackBuffers', () => ({
     FeedbackBuffers: class {
         currentParity = 0;
@@ -48,8 +67,15 @@ vi.mock('./FeedbackBuffers', () => ({
 vi.mock('./AudioInputs', () => ({
     AudioInputs: class {
         history = {};
-        reset() {}
-        push() {}
+        reset() {
+            return gpu.forgotten;
+        }
+        push(chunks: { tap: number }[]) {
+            gpu.pushed.push(chunks.map(({ tap }) => tap));
+        }
+        clear() {
+            gpu.clears++;
+        }
         ready() {
             return true;
         }
@@ -91,7 +117,9 @@ function fakeProgram(previewCount = 0) {
         previewCount,
         setControl: vi.fn(),
         sources: [],
+        scopes: [],
         tapSlots: [],
+        tapStamps: undefined as number[] | undefined,
         uniformBuffer: {},
         uniforms: new Float32Array(8),
     };
@@ -141,6 +169,10 @@ describe('VideoRenderer', () => {
     beforeEach(() => {
         gpu.builds = [];
         gpu.delivered = [];
+        gpu.forgotten = [];
+        gpu.pushed = [];
+        gpu.clears = 0;
+        gpu.trailClears = 0;
         nextFrame = null;
         engine = { applied: 0, cancelled: 0, running: true, taps: [] };
         gpuDevice = fakeDevice();
@@ -309,9 +341,91 @@ describe('VideoRenderer', () => {
         expect(cv).toHaveBeenCalledTimes(1);
     });
 
+    describe('audio taps across a patch update', () => {
+        const samples = (...taps: number[]) =>
+            taps.map((tap) => ({
+                sampleRate: 48_000,
+                samples: new Float32Array(1),
+                tap,
+            }));
+
+        it('reads every tap afresh at first, then only as asked', async () => {
+            const renderer = await makeRenderer();
+            const pull = vi.fn(async (_restart: VideoRestart) => ({
+                ...engine,
+            }));
+            renderer.setPullSource(pull);
+            await frame();
+            await frame();
+            expect(pull.mock.calls.map(([restart]) => restart)).toEqual([
+                'all',
+                [],
+            ]);
+        });
+
+        it('reads afresh only the taps that now carry another signal', async () => {
+            const renderer = await makeRenderer();
+            const pull = vi.fn(async (_restart: VideoRestart) => ({
+                ...engine,
+            }));
+            renderer.setPullSource(pull);
+            await frame();
+            gpu.forgotten = [3];
+            await goLive(
+                renderer,
+                { ...fakeProgram(), tapStamps: [1, 0, 0, 5] },
+                1,
+            );
+            await frame();
+            expect(pull.mock.calls.at(-1)?.[0]).toEqual([3]);
+            await frame();
+            expect(pull.mock.calls.at(-1)?.[0]).toEqual([]);
+        });
+
+        it('keeps the samples that span the switch for carried taps only', async () => {
+            const renderer = await makeRenderer();
+            await frame();
+            gpu.forgotten = [3];
+            engine.taps = samples(0, 3);
+            await goLive(
+                renderer,
+                { ...fakeProgram(), tapStamps: [1, 0, 0, 5] },
+                1,
+            );
+            expect(gpu.pushed.at(-1)).toEqual([0]);
+            await frame();
+            await frame();
+            expect(gpu.pushed.at(-1)).toEqual([0, 3]);
+        });
+
+        it('reads every tap afresh after a shader without stamps', async () => {
+            const renderer = await makeRenderer();
+            const pull = vi.fn(async (_restart: VideoRestart) => ({
+                ...engine,
+            }));
+            renderer.setPullSource(pull);
+            await frame();
+            await goLive(renderer, fakeProgram(), 1);
+            await frame();
+            expect(pull.mock.calls.at(-1)?.[0]).toBe('all');
+        });
+    });
+
+    it('starts the taps and the scope trails over when the engine plays again', async () => {
+        const renderer = await makeRenderer();
+        await goLive(renderer, fakeProgram(), 1);
+        engine.running = false;
+        await frame();
+        expect(gpu.clears).toBe(0);
+        engine.running = true;
+        await frame();
+        expect(gpu.clears).toBe(1);
+        expect(gpu.trailClears).toBe(1);
+    });
+
     it('keeps asking the engine for its state while it has nothing to draw', async () => {
         const renderer = await makeRenderer();
-        const pull = vi.fn(async () => ({ ...engine }));
+        const pull = vi.fn(async (_restart: VideoRestart) => ({ ...engine }));
         renderer.setPullSource(pull);
         await frame();
         await frame();
