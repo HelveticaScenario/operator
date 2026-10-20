@@ -9,16 +9,12 @@ The app is Electron + Vite (`@electron-forge/plugin-vite`). The built entry is `
 
 ## Launch recipe (Playwright, coexists with a running dev instance)
 
-1. Build once: `npx electron-forge start` (then let it exit or kill it). If another dev instance is running, the launched app quits via the single-instance lock — the build artifacts still land in `.vite/build/`.
+1. Build once: `MODULAR_BACKGROUND_LAUNCH=1 npx electron-forge start` writes `.vite/build/` and launches an instance; kill that instance once the build lands.
 2. Serve the renderer on the baked port: `npx vite --config vite.renderer.config.ts --port <baked-port> --strictPort` (index.html at repo root).
-3. The single-instance lock is keyed on the userData dir. Launch through a wrapper CJS that redirects it, so a concurrently running dev instance is untouched:
-    ```js
-    const { app } = require('electron');
-    app.setPath('userData', process.env.QF_USER_DATA);
-    require('<repo>/.vite/build/main.js');
-    ```
-4. Playwright: `_electron.launch({ args: [wrapper.cjs], executablePath: '<repo>/node_modules/.bin/electron', cwd: repo, env: { E2E_TEST: '1', E2E_WORKSPACE: tmpDir, QF_USER_DATA: tmpDir2, ELECTRON_DISABLE_GPU: '1', NODE_ENV: 'test' } })`. `main.ts` honors `E2E_WORKSPACE` directly.
-5. After `firstWindow()`: `domcontentloaded` → `reload()` → `networkidle` (mirrors e2e/fixtures.ts).
+3. Playwright: `_electron.launch({ args: ['<repo>/.vite/build/main.js'], executablePath: require('electron'), cwd: repo, env: { E2E_TEST: '1', E2E_WORKSPACE: tmpDir, ELECTRON_DISABLE_GPU: '1', NODE_ENV: 'test', MODULAR_BACKGROUND_LAUNCH: '1', MODULAR_AUDIO_OUTPUT_DEVICE: 'coreaudio:BlackHole64ch_UID', MODULAR_AUDIO_INPUT_DEVICE: 'coreaudio:BlackHole64ch_UID' } })`. `src/main/app.ts` honors `E2E_WORKSPACE` directly.
+    - `MODULAR_BACKGROUND_LAUNCH=1` never activates the app and opens its windows at the back of the stack, so the user's work is never covered. Each launch gets a fresh temporary profile (its own single-instance lock, config and buffers), so it coexists with the user's own instance and never focuses it, and it skips the system-wide ⌘⇧R dev hotkey. Playwright still drives it fully (it emulates page focus). The app has no Dock icon or menu bar.
+    - `MODULAR_AUDIO_OUTPUT_DEVICE` / `MODULAR_AUDIO_INPUT_DEVICE` override the saved devices, keeping test audio off the speakers and microphone.
+4. After `firstWindow()`: `domcontentloaded` → `reload()` → `networkidle` (mirrors e2e/fixtures.ts).
 
 ## Driving the editor
 
@@ -31,5 +27,5 @@ The app is Electron + Vite (`@electron-forge/plugin-vite`). The built entry is `
 
 ## Gotchas
 
-- Kill only your own instances: `pkill -f <your-wrapper-name>` — the user often has a dev instance from another worktree running.
+- Kill only your own instances (by the pid Playwright or your launch reports) — the user often has their own dev instance running.
 - The Monaco lightbulb renders on the line **below** the cursor when the current line is cramped; its codicon class varies (`lightbulb-autofix` when an action `isPreferred`), so assert on the action widget, not the bulb icon.
