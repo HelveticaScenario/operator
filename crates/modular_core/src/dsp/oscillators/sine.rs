@@ -110,9 +110,11 @@ impl SineOscillator {
         let p = &self.params;
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
             let pitch = p.freq.get_value(ch);
-            let fm = p.fm.value_or(ch, 0.0);
+            let fm = p.fm.value_or(ch, SineOscillatorParams::FM_DEFAULT);
             let increment = apply_fm(pitch, fm, p.fm_mode) / sample_rate;
-            let offset = p.phase_offset.value_or(ch, 0.0);
+            let offset = p
+                .phase_offset
+                .value_or(ch, SineOscillatorParams::PHASE_OFFSET_DEFAULT);
             let sync = p.sync.as_ref().map(|sync| sync.get_value(ch));
             self.outputs
                 .sample
