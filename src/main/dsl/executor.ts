@@ -11,6 +11,7 @@ import {
 } from './factories';
 import type {
     BufferOutputRef,
+    GrooveTemplate,
     Signal,
     PolySignal,
     SourceLocation,
@@ -30,6 +31,7 @@ import {
     PORT_MAX_CHANNELS,
 } from './GraphBuilder';
 import { $g1, $g2, $g3 } from './signalGroups';
+import { createOutLane, type OutLane } from './outLane';
 import { analyzeSourceSpans } from './analyzeSource';
 import type { CallSiteSpanRegistry } from './analyzeSource';
 import type { InterpolationResolutionMap } from '../../shared/dsl/spanTypes';
@@ -39,9 +41,19 @@ import {
 } from '../../shared/dsl/spanTypes';
 import type { SliderDefinition } from '../../shared/dsl/sliderTypes';
 import type { ButtonDefinition } from '../../shared/dsl/buttonTypes';
+import type { EqPanelDef } from '../../shared/dsl/eqPanelTypes';
+import { GATE_HIGH_VOLTAGE } from '../../shared/dsl/buttonTypes';
 import { assertControlsPlaced, createControls } from './controls';
 import { $p, setActiveCycleFactory, type CycleFactory } from './miniNotation';
 import { isPatternValue } from './patternKinds';
+import { VideoGraphBuilder } from './video/VideoGraphBuilder';
+import type { VideoOutput } from './video/VideoOutput';
+import type {
+    CompiledVideoShader,
+    VideoPreviewSite,
+} from '../../shared/video/videoGraph';
+import { compileVideoGraph } from './video/wgslCompiler';
+import { VIDEO_DOCS } from '../../shared/dsl/videoDocs';
 
 // Augment Array.prototype with pipe() for TypeScript
 declare global {
@@ -66,12 +78,70 @@ export interface DSLExecutionResult {
     buttons: ButtonDefinition[];
     /** Full call expression spans for DSL methods (.scope(), $slider(), etc.) */
     callSiteSpans: CallSiteSpanRegistry;
+    /** Inline panels requested by `ui: true` EQs */
+    eqPanels: EqPanelDef[];
+    /** Shader for the video renderer; null when the patch has no `$v.out` or `$v.preview` */
+    video: CompiledVideoShader | null;
+    /** One entry per `$v.preview` call, in the order the shader draws them */
+    videoPreviews: VideoPreviewSite[];
 }
 
 export interface WavsFolderNode {
     [name: string]: WavsFolderNode | 'file';
 }
 
+/** What the engine reports about a decoded WAV or media audio track. */
+interface LoadedWav {
+    channels: number;
+    frameCount: number;
+    path: string;
+    sampleRate: number;
+    duration: number;
+    bitDepth: number;
+    pitch?: number | null;
+    playback?: string | null;
+    bpm?: number | null;
+    beats?: number | null;
+    timeSignature?: { num: number; den: number } | null;
+    barCount?: number | null;
+    loops: Array<{ loopType: string; start: number; end: number }>;
+    cuePoints: Array<{ position: number; label: string }>;
+    mtime: number;
+}
+
+/** The `wav` parameter value that refers to decoded audio held by the engine. */
+function wavRef(path: string, info: LoadedWav) {
+    return {
+        type: 'wav_ref' as const,
+        path,
+        channels: info.channels,
+        sampleRate: info.sampleRate,
+        frameCount: info.frameCount,
+        duration: info.duration,
+        bitDepth: info.bitDepth,
+        mtime: info.mtime,
+        ...(info.pitch != null && { pitch: info.pitch }),
+        ...(info.playback != null && { playback: info.playback }),
+        ...(info.bpm != null && { bpm: info.bpm }),
+        ...(info.beats != null && { beats: info.beats }),
+        ...(info.timeSignature != null && {
+            timeSignature: {
+                num: info.timeSignature.num,
+                den: info.timeSignature.den,
+            },
+        }),
+        ...(info.barCount != null && { barCount: info.barCount }),
+        loops: info.loops.map((l) => ({
+            type: l.loopType as 'forward' | 'pingpong' | 'backward',
+            start: l.start,
+            end: l.end,
+        })),
+        cuePoints: info.cuePoints.map((c) => ({
+            position: c.position,
+            label: c.label,
+        })),
+    };
+}
 export interface DSLExecutionOptions {
     sampleRate?: number;
     /**
@@ -83,25 +153,16 @@ export interface DSLExecutionOptions {
      * device is.
      */
     inputChannels?: number;
+    /** Whether a workspace-relative path names an existing file, for media errors. */
+    mediaExists?: (path: string) => boolean;
     workspaceRoot?: string | null;
     wavsFolderTree?: WavsFolderNode | null;
-    loadWav?: (path: string) => {
-        channels: number;
-        frameCount: number;
-        path: string;
-        sampleRate: number;
-        duration: number;
-        bitDepth: number;
-        pitch?: number | null;
-        playback?: string | null;
-        bpm?: number | null;
-        beats?: number | null;
-        timeSignature?: { num: number; den: number } | null;
-        barCount?: number | null;
-        loops: Array<{ loopType: string; start: number; end: number }>;
-        cuePoints: Array<{ position: number; label: string }>;
-        mtime: number;
-    };
+    loadWav?: (path: string) => LoadedWav;
+    /**
+     * Decodes the audio track of a workspace media file, or returns null when
+     * it has none. The returned `path` names the decoded audio for a `Wav`.
+     */
+    loadMediaAudio?: (path: string) => LoadedWav | null;
 }
 
 // Install pipe() on Array.prototype so arrays in the DSL can use it.
@@ -135,7 +196,13 @@ export function executePatchScript(
 
     // Create the execution environment with all DSL functions
     // Remove _clock from user-facing namespace (it's internal, used only for ROOT_CLOCK)
-    const { _clock, ...userNamespaceTree } = context.namespaceTree;
+    const {
+        _clock,
+        _videoTap,
+        _mediaAudio,
+        _smoothControl,
+        ...userNamespaceTree
+    } = context.namespaceTree;
 
     if (typeof _clock !== 'function') {
         throw new Error(
@@ -187,82 +254,6 @@ export function executePatchScript(
         builder.setOutputGain(gain);
     };
 
-    interface ScopeXYConfig {
-        /** Horizontal voltage window. Default [-5, 5]. */
-        xRange?: [number, number];
-        /** Vertical voltage window. Default [-5, 5]. */
-        yRange?: [number, number];
-    }
-
-    /**
-     * Render a Lissajous-style XY oscilloscope as the editor background.
-     * `x` and `y` are flattened to `ModuleOutput[]` (matching `$c`), then
-     * cycled to the longer arity so `max(len(x), len(y))` traces overlay.
-     * Last call wins.
-     */
-    const $scopeXY = (
-        x: PolySignal,
-        y: PolySignal,
-        config?: ScopeXYConfig,
-    ): void => {
-        const flatten = (v: unknown): ModuleOutput[] => {
-            // Bare Signal literals (numbers, note/Hz strings) are lifted into
-            // $signal modules, matching `$c`. A string is one signal, not
-            // spread into characters.
-            if (typeof v === 'number' || typeof v === 'string') {
-                return [...(signal(v) as Collection)];
-            }
-            if (v instanceof ModuleOutput) return [v];
-            if (v instanceof BaseCollection) return [...v];
-            if (Array.isArray(v)) return v.flatMap((e: unknown) => flatten(e));
-            throw new Error(
-                '$scopeXY: arguments must be a number, note/Hz string, ModuleOutput, Collection, or array thereof',
-            );
-        };
-        const xs = flatten(x);
-        const ys = flatten(y);
-        if (xs.length === 0 || ys.length === 0) return;
-
-        const validateRange = (
-            r: [number, number] | undefined,
-            axis: 'x' | 'y',
-        ): [number, number] => {
-            if (r === undefined) return [-5, 5];
-            if (
-                !Array.isArray(r) ||
-                r.length !== 2 ||
-                !Number.isFinite(r[0]) ||
-                !Number.isFinite(r[1]) ||
-                r[0] >= r[1]
-            ) {
-                throw new Error(
-                    `$scopeXY: ${axis}Range must be [min, max] with min < max`,
-                );
-            }
-            return [r[0], r[1]];
-        };
-        const xRange = validateRange(config?.xRange, 'x');
-        const yRange = validateRange(config?.yRange, 'y');
-
-        // Cap traces to what the renderer actually draws (MAX_TRACES in
-        // scopexy/pipeline.ts). Each pair allocates a sample-rate ring buffer
-        // and costs a per-sample read on the audio thread, so an uncapped
-        // max(len(x), len(y)) would let user input balloon audio-thread work
-        // for traces that are never shown.
-        const MAX_SCOPE_XY_TRACES = 64;
-        const requested = Math.max(xs.length, ys.length);
-        const n = Math.min(requested, MAX_SCOPE_XY_TRACES);
-        if (requested > MAX_SCOPE_XY_TRACES) {
-            console.warn(
-                `$scopeXY: ${requested} traces requested; drawing the first ${MAX_SCOPE_XY_TRACES}.`,
-            );
-        }
-        const pairs: { x: ModuleOutput; y: ModuleOutput }[] = [];
-        for (let i = 0; i < n; i++) {
-            pairs.push({ x: xs[i % xs.length], y: ys[i % ys.length] });
-        }
-        builder.setScopeXY(pairs, xRange, yRange, captureSourceLocation());
-    };
     const $setTimeSignature = (numerator: number, denominator: number) => {
         if (!Number.isInteger(numerator) || numerator < 1) {
             throw new Error(
@@ -275,6 +266,52 @@ export function executePatchScript(
             );
         }
         builder.setTimeSignature(numerator, denominator);
+    };
+
+    // Shape is checked here; step ordering and ranges are validated in Rust.
+    const $setGroove = (template: GrooveTemplate) => {
+        if (
+            typeof template !== 'object' ||
+            template === null ||
+            !Array.isArray(template.timing)
+        ) {
+            throw new Error(
+                '$setGroove: expected a groove template with a `timing` array, e.g. $setGroove($swing(0.6))',
+            );
+        }
+        builder.setGroove(template);
+    };
+
+    const $swing = (
+        ratio: number,
+        config: { grid?: number; humanize?: number } = {},
+    ): GrooveTemplate => {
+        if (typeof ratio !== 'number' || !(ratio > 0 && ratio < 1)) {
+            throw new Error(
+                `$swing: ratio must be a number between 0 and 1 (0.5 is straight), got ${ratio}`,
+            );
+        }
+        if (
+            typeof config !== 'object' ||
+            config === null ||
+            Array.isArray(config)
+        ) {
+            throw new Error(
+                '$swing: expected a config object as the second argument, e.g. $swing(0.66, { grid: 8 })',
+            );
+        }
+        const { grid = 16, humanize = 0 } = config;
+        if (typeof humanize !== 'number' || !(humanize >= 0)) {
+            throw new Error(
+                `$swing: humanize must be a number 0 or greater, got ${humanize}`,
+            );
+        }
+        // The pair spans two grid steps; the second starts `2 * ratio` steps in.
+        const template: GrooveTemplate = { grid, timing: [0, 2 * ratio - 1] };
+        if (humanize > 0) {
+            template.random = humanize;
+        }
+        return template;
     };
 
     /**
@@ -294,6 +331,8 @@ export function executePatchScript(
         }
         return new DeferredCollection(...items);
     };
+
+    const $outLane = (label: string): OutLane => createOutLane(builder, label);
 
     const $bus = (cb: (mixed: Collection) => unknown): Bus =>
         new Bus(builder, cb);
@@ -624,11 +663,72 @@ export function executePatchScript(
         return $track(frames, { playhead, interpolationType }) as Collection;
     };
 
+    if (typeof _smoothControl !== 'function') {
+        throw new Error(
+            'DSL execution error: "_smoothControl" module not found in schemas',
+        );
+    }
+
     // Control factories; their collectors fill as the patch calls them.
+    const controlFactories = { $signal: signal, _smoothControl };
     const controls = createControls({
-        rangedSignal: (value, id, min, max) =>
-            builder.$c(signal(value, { id })).withRange(min, max),
+        rangedSignal: (moduleType, value, id, min, max) =>
+            builder
+                .$c(controlFactories[moduleType](value, { id }))
+                .withRange(min, max),
     });
+
+    if (typeof _videoTap !== 'function') {
+        throw new Error(
+            'DSL execution error: "_videoTap" module not found in schemas',
+        );
+    }
+    if (typeof _mediaAudio !== 'function') {
+        throw new Error(
+            'DSL execution error: "_mediaAudio" module not found in schemas',
+        );
+    }
+    const videoBuilder = new VideoGraphBuilder({
+        controlValue: (moduleId) => {
+            const slider = controls.sliders.find(
+                (s) => s.moduleId === moduleId,
+            );
+            if (slider) return slider.value;
+            const button = controls.buttons.find(
+                (b) => b.moduleId === moduleId,
+            );
+            if (button) return button.value ? GATE_HIGH_VOLTAGE : 0;
+            return undefined;
+        },
+        playPattern: (pattern) =>
+            cycleFactory(pattern) as
+                | ModuleOutput
+                | BaseCollection<ModuleOutput>,
+        publishTap: (output, slot) => {
+            _videoTap(output, slot);
+        },
+        cvSignal: (id) => builder.$c(signal(0, { id })).withRange(0, 1),
+        mediaAudio: (path, playback) => {
+            if (!options.loadMediaAudio) {
+                throw new Error(
+                    '$v.video(...).audio: media audio loading is not available',
+                );
+            }
+            const info = timedWavLoad(() => options.loadMediaAudio!(path));
+            if (info === null) {
+                throw new Error(`$v.video(...).audio: "${path}" has no audio`);
+            }
+            return _mediaAudio(wavRef(info.path, info), playback) as Collection;
+        },
+        mediaExists: options.mediaExists,
+        sourceLocation: captureSourceLocation,
+        constantSignal: (value) => signal(value) as Collection,
+    });
+
+    /** `$v.scopeXY(...)` shown as the patch's picture. */
+    const $scopeXY = (
+        ...args: Parameters<VideoGraphBuilder['scopeXY']>
+    ): VideoOutput => videoBuilder.out(videoBuilder.scopeXY(...args));
 
     /**
      * Load WAV samples from the wavs/ folder.
@@ -644,6 +744,21 @@ export function executePatchScript(
     // count the interrupted load itself.
     let wavLoadMs = 0;
     let wavLoadStart: number | null = null;
+
+    /** Runs a synchronous host load, billing its time to WAV loading. */
+    const timedWavLoad = <T>(load: () => T): T => {
+        const loadStart = performance.now();
+        wavLoadStart = loadStart;
+        try {
+            return load();
+        } finally {
+            // Also on throw: the time was still spent loading, and a
+            // stale wavLoadStart would bill everything after a caught
+            // load failure — even an infinite loop — to WAV loading.
+            wavLoadMs += performance.now() - loadStart;
+            wavLoadStart = null;
+        }
+    };
 
     const $wavs = (): unknown => {
         const tree = options.wavsFolderTree;
@@ -684,59 +799,10 @@ export function executePatchScript(
                 if (!options.loadWav) {
                     throw new Error('$wavs(): loadWav function not provided');
                 }
-                const loadStart = performance.now();
-                wavLoadStart = loadStart;
-                let info;
-                try {
-                    info = options.loadWav(relPath);
-                } finally {
-                    // Also on throw: the time was still spent loading, and a
-                    // stale wavLoadStart would bill everything after a caught
-                    // load failure — even an infinite loop — to WAV loading.
-                    wavLoadMs += performance.now() - loadStart;
-                    wavLoadStart = null;
-                }
-                return {
-                    type: 'wav_ref' as const,
-                    path: relPath,
-                    channels: info.channels,
-                    sampleRate: info.sampleRate,
-                    frameCount: info.frameCount,
-                    duration: info.duration,
-                    bitDepth: info.bitDepth,
-                    mtime: info.mtime,
-                    ...(info.pitch != null && { pitch: info.pitch }),
-                    ...(info.playback != null && { playback: info.playback }),
-                    ...(info.bpm != null && { bpm: info.bpm }),
-                    ...(info.beats != null && { beats: info.beats }),
-                    ...(info.timeSignature != null && {
-                        timeSignature: {
-                            num: info.timeSignature.num,
-                            den: info.timeSignature.den,
-                        },
-                    }),
-                    ...(info.barCount != null && { barCount: info.barCount }),
-                    loops: info.loops.map(
-                        (l: {
-                            loopType: string;
-                            start: number;
-                            end: number;
-                        }) => ({
-                            type: l.loopType as
-                                | 'forward'
-                                | 'pingpong'
-                                | 'backward',
-                            start: l.start,
-                            end: l.end,
-                        }),
-                    ),
-                    cuePoints: info.cuePoints.map(
-                        (c: { position: number; label: string }) => ({
-                            position: c.position,
-                            label: c.label,
-                        }),
-                    ),
-                };
+                return wavRef(
+                    relPath,
+                    timedWavLoad(() => options.loadWav!(relPath)),
+                );
             }
 
             return new Proxy(
@@ -913,13 +979,23 @@ export function executePatchScript(
         $cGroup: controls.$cGroup,
         // Bus
         $bus,
+        $outLane,
         // Global settings
         $setTempo,
         $setOutputGain,
         $setTimeSignature,
+        $setGroove,
+        $swing,
         $setEndOfChainCb,
         // XY background oscilloscope
         $scopeXY,
+        // Video synthesis
+        $v: Object.fromEntries(
+            VIDEO_DOCS.map(({ name }) => [
+                name,
+                videoBuilder[name as keyof VideoGraphBuilder],
+            ]),
+        ),
         $buffer,
         $delay,
         $ott,
@@ -1009,7 +1085,9 @@ export function executePatchScript(
             ...controls.groups,
         ]);
 
-        // Build and return the patch with source locations
+        // The video graph goes first: building it publishes the audio taps
+        // it reads into the patch.
+        const videoGraph = videoBuilder.build();
         const resultBuilder = context.getBuilder();
         const patch = resultBuilder.toPatch();
         const sourceLocationMap = resultBuilder.getSourceLocationMap();
@@ -1017,10 +1095,13 @@ export function executePatchScript(
         return {
             buttons: controls.buttons,
             callSiteSpans,
+            eqPanels: resultBuilder.getEqPanels(),
             interpolationResolutions,
             patch,
             sliders: controls.sliders,
             sourceLocationMap,
+            video: videoGraph === null ? null : compileVideoGraph(videoGraph),
+            videoPreviews: videoBuilder.getPreviewSites(),
         };
     } catch (error) {
         if (

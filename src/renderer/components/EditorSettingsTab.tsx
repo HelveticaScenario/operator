@@ -1,11 +1,8 @@
-import React, { useState } from 'react';
-import type {
-    AppConfig,
-    BundledFont,
-    MonospaceFont,
-    SystemFont,
-} from '../../shared/ipcTypes';
+import React from 'react';
+import type { AppConfig, MonospaceFont } from '../../shared/ipcTypes';
 import type { AppTheme } from '../themes/types';
+import { BUNDLED_FONTS } from '../../shared/fonts';
+import { useInstalledSystemFonts } from './fonts';
 
 type CursorStyle =
     | 'line'
@@ -14,34 +11,6 @@ type CursorStyle =
     | 'line-thin'
     | 'block-outline'
     | 'underline-thin';
-
-const BUNDLED_FONTS: BundledFont[] = [
-    'Fira Code',
-    'JetBrains Mono',
-    'Cascadia Code',
-    'Source Code Pro',
-    'IBM Plex Mono',
-    'Hack',
-    'Inconsolata',
-    'Monaspace Neon',
-    'Monaspace Argon',
-    'Monaspace Xenon',
-    'Monaspace Krypton',
-    'Monaspace Radon',
-    'Geist Mono',
-    'Iosevka',
-    'Victor Mono',
-    'Roboto Mono',
-    'Maple Mono',
-    'Commit Mono',
-    '0xProto',
-    'Intel One Mono',
-    'Mononoki',
-    'Anonymous Pro',
-    'Recursive',
-];
-
-const SYSTEM_FONTS: SystemFont[] = ['SF Mono', 'Monaco', 'Menlo', 'Consolas'];
 
 const CURSOR_STYLES: CursorStyle[] = [
     'line',
@@ -58,44 +27,12 @@ interface EditorSettingsTabProps {
     onConfigChange: (partial: Partial<AppConfig>) => void;
 }
 
-/**
- * Detect whether a font is installed by measuring text against baseline fonts.
- * If the candidate font renders at a different width than all baselines, it's installed.
- */
-function isFontInstalled(fontName: string): boolean {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-        return false;
-    }
-
-    const testString = 'mmmmmmmmmmlli1WWW@#$';
-    const baselines = ['monospace', 'sans-serif', 'serif'] as const;
-    const size = '72px';
-
-    for (const baseline of baselines) {
-        ctx.font = `${size} ${baseline}`;
-        const baselineWidth = ctx.measureText(testString).width;
-
-        ctx.font = `${size} "${fontName}", ${baseline}`;
-        const candidateWidth = ctx.measureText(testString).width;
-
-        if (candidateWidth !== baselineWidth) {
-            return true;
-        }
-    }
-    return false;
-}
-
 export function EditorSettingsTab({
     config,
     themes,
     onConfigChange,
 }: EditorSettingsTabProps) {
-    const [availableSystemFonts] = useState<SystemFont[]>(() =>
-        // Detect which system fonts are actually installed via canvas measurement
-        SYSTEM_FONTS.filter(isFontInstalled),
-    );
+    const availableSystemFonts = useInstalledSystemFonts();
 
     return (
         <div className="settings-tab-content">
@@ -202,9 +139,9 @@ export function EditorSettingsTab({
                 </select>
             </div>
 
-            {/* XY Scope Intensity */}
+            {/* Code Backdrop Opacity */}
             <div className="settings-section">
-                <h3>XY Scope Beam Intensity</h3>
+                <h3>Code Backing Over Video</h3>
                 <div className="settings-row">
                     <input
                         type="range"
@@ -212,78 +149,15 @@ export function EditorSettingsTab({
                         min={0}
                         max={1}
                         step={0.01}
-                        value={config.xyScopeIntensity ?? 0.6}
+                        value={config.codeBackdropOpacity ?? 0.6}
                         onChange={(e) =>
                             onConfigChange({
-                                xyScopeIntensity: Number(e.target.value),
+                                codeBackdropOpacity: Number(e.target.value),
                             })
                         }
                     />
                     <span className="settings-range-value">
-                        {(config.xyScopeIntensity ?? 0.6).toFixed(2)}
-                    </span>
-                </div>
-            </div>
-
-            {/* XY Scope Persistence */}
-            <div className="settings-section">
-                <h3>XY Scope Persistence</h3>
-                <div className="settings-row">
-                    <input
-                        type="range"
-                        className="settings-range"
-                        min={0}
-                        max={1}
-                        step={0.01}
-                        value={config.xyScopePersistence ?? 0.6}
-                        onChange={(e) =>
-                            onConfigChange({
-                                xyScopePersistence: Number(e.target.value),
-                            })
-                        }
-                    />
-                    <span className="settings-range-value">
-                        {(config.xyScopePersistence ?? 0.6).toFixed(2)}
-                    </span>
-                </div>
-            </div>
-
-            {/* XY Scope Upscaling */}
-            <div className="settings-section">
-                <h3>XY Scope Upscaling</h3>
-                <label className="settings-toggle-label">
-                    <input
-                        type="checkbox"
-                        className="settings-toggle"
-                        checked={config.xyScopeUpsample ?? true}
-                        onChange={(e) =>
-                            onConfigChange({
-                                xyScopeUpsample: e.target.checked,
-                            })
-                        }
-                    />
-                </label>
-            </div>
-
-            {/* XY Scope Line Width */}
-            <div className="settings-section">
-                <h3>XY Scope Line Width</h3>
-                <div className="settings-row">
-                    <input
-                        type="range"
-                        className="settings-range"
-                        min={0.002}
-                        max={0.06}
-                        step={0.001}
-                        value={config.xyScopeLineWidth ?? 0.012}
-                        onChange={(e) =>
-                            onConfigChange({
-                                xyScopeLineWidth: Number(e.target.value),
-                            })
-                        }
-                    />
-                    <span className="settings-range-value">
-                        {(config.xyScopeLineWidth ?? 0.012).toFixed(3)}
+                        {(config.codeBackdropOpacity ?? 0.6).toFixed(2)}
                     </span>
                 </div>
             </div>

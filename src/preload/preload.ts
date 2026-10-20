@@ -18,6 +18,13 @@ import {
     UpdateAvailableInfo,
 } from '../shared/ipcTypes';
 import type { FileChange, QueuedTrigger } from '../shared/ipcTypes';
+import type {
+    VideoCvValue,
+    VideoPull,
+    VideoRestart,
+    VideoShaderUpdate,
+    VideoUniformUpdate,
+} from '../shared/video/videoGraph';
 
 /**
  * Type-safe wrapper for IPC invoke calls
@@ -59,9 +66,6 @@ export interface ElectronAPI {
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_CHANNELS]
         >;
         getScopes: Promisify<IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPES]>;
-        getScopeXy: Promisify<
-            IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_SCOPE_XY]
-        >;
         getVuMeters: Promisify<
             IPCHandlers[typeof IPC_CHANNELS.SYNTH_GET_VU_METERS]
         >;
@@ -200,6 +204,7 @@ export interface ElectronAPI {
     onMenuNewFile: (callback: () => void) => () => void;
     onMenuSave: (callback: () => void) => () => void;
     onMenuStop: (callback: () => void) => () => void;
+    onMenuTogglePerformanceWindow: (callback: () => void) => () => void;
     onMenuCancelQueuedUpdate: (callback: () => void) => () => void;
     onMenuUpdatePatch: (
         callback: (trigger?: QueuedTrigger) => void,
@@ -234,6 +239,28 @@ export interface ElectronAPI {
             symbolName: string;
         }) => void,
     ) => () => void;
+
+    // Performance window
+    performanceWindow: {
+        /** Tells the main process whether the performance window is open, so it keeps this window painting. */
+        setOpen: (open: boolean) => Promise<void>;
+    };
+    video: {
+        getShader: () => Promise<VideoShaderUpdate>;
+        onShader: (callback: (update: VideoShaderUpdate) => void) => () => void;
+        onUniform: (
+            callback: (updates: VideoUniformUpdate[]) => void,
+        ) => () => void;
+        /** Reads the taps that `restart` names from the engine's newest samples, the rest from where the last pull left off. */
+        pull: (restart: VideoRestart) => Promise<VideoPull>;
+        /** Asks the system for camera access when it has not been asked; whether it is allowed. */
+        requestCameraAccess: () => Promise<boolean>;
+        /** The capture source of display number `display`, counting from 1, or why there is none. */
+        getScreenSource: (
+            display: number,
+        ) => Promise<{ id: string } | { error: string }>;
+        sendCvValues: (values: VideoCvValue[]) => Promise<void>;
+    };
 
     // Config operations
     config: {
@@ -347,8 +374,6 @@ const electronAPI: ElectronAPI = {
         getSampleRate: (...args) => invokeIPC('SYNTH_GET_SAMPLE_RATE', ...args),
 
         getScopes: (...args) => invokeIPC('SYNTH_GET_SCOPES', ...args),
-
-        getScopeXy: (...args) => invokeIPC('SYNTH_GET_SCOPE_XY', ...args),
 
         getVuMeters: (...args) => invokeIPC('SYNTH_GET_VU_METERS', ...args),
 
@@ -487,6 +512,9 @@ const electronAPI: ElectronAPI = {
     onMenuCloseBuffer: menuEventHandler(MENU_CHANNELS.CLOSE_BUFFER),
     onMenuToggleRecording: menuEventHandler(MENU_CHANNELS.TOGGLE_RECORDING),
     onMenuToggleVuMeters: menuEventHandler(MENU_CHANNELS.TOGGLE_VU_METERS),
+    onMenuTogglePerformanceWindow: menuEventHandler(
+        MENU_CHANNELS.TOGGLE_PERFORMANCE_WINDOW,
+    ),
     onMenuOpenSettings: menuEventHandler(MENU_CHANNELS.OPEN_SETTINGS),
     onMenuOpenEngineHealth: menuEventHandler(MENU_CHANNELS.OPEN_ENGINE_HEALTH),
     onMenuOpenModuleProfile: menuEventHandler(
@@ -505,6 +533,24 @@ const electronAPI: ElectronAPI = {
     ),
     showUnsavedChangesDialog: (fileName) =>
         invokeIPC('SHOW_UNSAVED_CHANGES_DIALOG', fileName),
+
+    // Performance window
+    performanceWindow: {
+        setOpen: (open) => invokeIPC('VIDEO_SET_OUTPUT_OPEN', open),
+    },
+    video: {
+        getShader: () => invokeIPC('VIDEO_GET_SHADER'),
+        onShader: menuEventHandler<[VideoShaderUpdate]>(
+            IPC_CHANNELS.VIDEO_ON_SHADER,
+        ),
+        onUniform: menuEventHandler<[VideoUniformUpdate[]]>(
+            IPC_CHANNELS.VIDEO_ON_UNIFORM,
+        ),
+        pull: (restart) => invokeIPC('VIDEO_PULL', restart),
+        requestCameraAccess: () => invokeIPC('VIDEO_REQUEST_CAMERA'),
+        getScreenSource: (display) => invokeIPC('VIDEO_SCREEN_SOURCE', display),
+        sendCvValues: (values) => invokeIPC('VIDEO_CV_VALUES', values),
+    },
 
     // Config operations
     config: {

@@ -35,7 +35,6 @@ fn make_graph(modules: Vec<(&str, &str, serde_json::Value)>) -> PatchGraph {
         module_id_remaps: None,
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     }
 }
 
@@ -60,7 +59,7 @@ fn profiler_attributes_work_to_both_modules() {
             "sig",
             "$signal",
             json!({
-                "source": {
+                "value": {
                     "type": "cable",
                     "module": "osc",
                     "port": "output",

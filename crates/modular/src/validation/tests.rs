@@ -25,75 +25,9 @@ fn test_valid_patch() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
-}
-
-fn patch_with_scope_xy(x_port: &str, x_module: &str) -> PatchGraph {
-    use modular_core::types::{ScopeChannel, ScopeXy, ScopeXyPair};
-    PatchGraph {
-        modules: vec![ModuleSpec {
-            id: "sine-1".to_string(),
-            module_type: "$sine".to_string(),
-            id_is_explicit: None,
-            skip_state_transfer: None,
-            params: json!({ "freq": 4.0 }),
-        }],
-        module_id_remaps: None,
-        scopes: vec![],
-        vu_meters: vec![],
-        scope_xy: Some(ScopeXy {
-            pairs: vec![ScopeXyPair {
-                x: ScopeChannel {
-                    module_id: x_module.to_string(),
-                    port_name: x_port.to_string(),
-                    channel: 0,
-                },
-                y: ScopeChannel {
-                    module_id: "sine-1".to_string(),
-                    port_name: "output".to_string(),
-                    channel: 0,
-                },
-            }],
-            x_range: (-5.0, 5.0),
-            y_range: (-5.0, 5.0),
-        }),
-    }
-}
-
-#[test]
-fn test_scope_xy_valid() {
-    let schemas = schemas();
-    let patch = patch_with_scope_xy("output", "sine-1");
-    assert!(validate_patch(&patch, &schemas).is_ok());
-}
-
-#[test]
-fn test_scope_xy_missing_module() {
-    let schemas = schemas();
-    let patch = patch_with_scope_xy("output", "ghost");
-    let errors = validate_patch(&patch, &schemas).unwrap_err();
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.field == "scopeXY" && e.message.contains("missing module")),
-        "expected a missing-module scopeXY error, got {errors:?}"
-    );
-}
-
-#[test]
-fn test_scope_xy_missing_port() {
-    let schemas = schemas();
-    let patch = patch_with_scope_xy("nope", "sine-1");
-    let errors = validate_patch(&patch, &schemas).unwrap_err();
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.field == "scopeXY" && e.message.contains("missing output port")),
-        "expected a missing-output-port scopeXY error, got {errors:?}"
-    );
 }
 
 fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
@@ -111,7 +45,7 @@ fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
                 module_type: "$signal".to_string(),
                 id_is_explicit: Some(true),
                 skip_state_transfer: None,
-                params: json!({ "source": 5.0 }),
+                params: json!({ "value": 5.0 }),
             },
             ModuleSpec {
                 id: "not-signal".to_string(),
@@ -124,7 +58,6 @@ fn patch_with_vu_meter(spec: modular_core::types::VuMeterSpec) -> PatchGraph {
         module_id_remaps: None,
         scopes: vec![],
         vu_meters: vec![spec],
-        scope_xy: None,
     }
 }
 
@@ -240,7 +173,6 @@ fn test_unknown_module_type() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -275,14 +207,13 @@ fn test_cable_to_nonexistent_module() {
             id_is_explicit: None,
             skip_state_transfer: None,
             params: json!({
-                "source": {"type": "cable", "module": "nonexistent", "port": "output"}
+                "value": {"type": "cable", "module": "nonexistent", "port": "output"}
             }),
         }],
         module_id_remaps: None,
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -328,7 +259,6 @@ fn test_cable_in_slice_tuple_to_nonexistent_module() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -365,7 +295,7 @@ fn test_cable_to_invalid_port() {
                 id_is_explicit: None,
                 skip_state_transfer: None,
                 params: json!({
-                    "source": {"type": "cable", "module": "sine-1", "port": "invalid_port"}
+                    "value": {"type": "cable", "module": "sine-1", "port": "invalid_port"}
                 }),
             },
         ],
@@ -373,7 +303,6 @@ fn test_cable_to_invalid_port() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -406,7 +335,6 @@ fn test_nested_signal_cable_to_nonexistent_module() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let result = validate_patch(&patch, &schemas);
@@ -450,7 +378,6 @@ fn test_nested_signal_valid_cable_connection() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
@@ -476,7 +403,7 @@ fn test_valid_cable_connection() {
                 id_is_explicit: None,
                 skip_state_transfer: None,
                 params: json!({
-                    "source": {"type": "cable", "module": "sine-1", "port": "output"}
+                    "value": {"type": "cable", "module": "sine-1", "port": "output"}
                 }),
             },
         ],
@@ -484,7 +411,6 @@ fn test_valid_cable_connection() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
@@ -531,7 +457,6 @@ fn test_non_object_multibyte_params_reported_not_panicking() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let errors = validate_patch(&patch, &schemas).unwrap_err();
@@ -559,7 +484,6 @@ fn test_duplicate_module_ids_rejected() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let errors = validate_patch(&patch, &schemas).unwrap_err();
@@ -586,7 +510,6 @@ fn test_hidden_audio_in_id_rejected() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let errors = validate_patch(&patch, &schemas).unwrap_err();
@@ -613,7 +536,6 @@ fn test_root_clock_id_requires_clock_type() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     let errors = validate_patch(&mk_patch("$noise"), &schemas).unwrap_err();
@@ -664,7 +586,6 @@ fn patch_with_buffer_ref(target_module: &str, port: &str) -> PatchGraph {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     }
 }
 
@@ -710,7 +631,6 @@ fn test_empty_patch_is_valid() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
@@ -734,7 +654,6 @@ fn test_null_params_is_tolerated() {
 
         scopes: vec![],
         vu_meters: vec![],
-        scope_xy: None,
     };
 
     assert!(validate_patch(&patch, &schemas).is_ok());
