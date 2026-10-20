@@ -51,6 +51,40 @@ impl OnePole {
     }
 }
 
+/// One-pole coefficient cached against the time it was computed from, so a
+/// constant time costs no `exp` per sample.
+#[derive(Clone, Copy)]
+pub struct CachedCoeff {
+    secs: f32,
+    coeff: f32,
+}
+
+impl Default for CachedCoeff {
+    fn default() -> Self {
+        // NaN never compares equal, so the first `get` always computes.
+        Self {
+            secs: f32::NAN,
+            coeff: 1.0,
+        }
+    }
+}
+
+impl CachedCoeff {
+    /// Coefficient for a one-pole with time constant `secs`; `secs <= 0` is instant.
+    #[inline]
+    pub fn get(&mut self, secs: f32, sample_rate: f32) -> f32 {
+        if secs != self.secs {
+            self.secs = secs;
+            self.coeff = if secs > 0.0 {
+                1.0 - (-1.0 / (secs * sample_rate)).exp()
+            } else {
+                1.0
+            };
+        }
+        self.coeff
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

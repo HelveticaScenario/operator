@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use crate::{
     dsp::{
         oscillators::{FmMode, apply_fm, sync_blep, sync_edge_fraction},
-        utils::{SchmittTrigger, wrap_phase},
+        utils::{SchmittTrigger, poly_blep, wrap_phase},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
     types::Clickless,
@@ -115,8 +115,8 @@ impl PulseOscillator {
             // interval, so these operate on the real, pre-reset phase.
             let abs_phase_inc = phase_increment.abs();
             let mut body = naive_pulse(read_phase);
-            body += poly_blep_pulse(read_phase, abs_phase_inc);
-            body -= poly_blep_pulse(
+            body += poly_blep(read_phase, abs_phase_inc);
+            body -= poly_blep(
                 if read_phase >= pulse_width {
                     read_phase - pulse_width
                 } else {
@@ -149,21 +149,6 @@ impl PulseOscillator {
             self.outputs.sample.set(ch, (body + pending + now) * 5.0);
         }
     }
-}
-
-// PolyBLEP for pulse wave
-fn poly_blep_pulse(phase: f32, phase_increment: f32) -> f32 {
-    // Detect discontinuity at phase wrap (0.0)
-    if phase < phase_increment {
-        let t = phase / phase_increment;
-        return t + t - t * t - 1.0;
-    }
-    // Detect discontinuity approaching 1.0
-    else if phase > 1.0 - phase_increment {
-        let t = (phase - 1.0) / phase_increment;
-        return t * t + t + t + 1.0;
-    }
-    0.0
 }
 
 message_handlers!(impl PulseOscillator {});

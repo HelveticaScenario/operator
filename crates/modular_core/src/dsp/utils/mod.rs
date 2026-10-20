@@ -52,6 +52,25 @@ pub fn wrap_phase(phase: f32) -> f32 {
     sanitize(phase.rem_euclid(1.0))
 }
 
+/// PolyBLEP residual for a unit step at phase 0 (in cycles), with `dt` the
+/// phase advance per sample. Adding it to a naive waveform at each of its
+/// jumps smooths the edge over one sample either side.
+#[inline(always)]
+pub fn poly_blep(phase: f32, dt: f32) -> f32 {
+    if dt < 1.0e-7 {
+        return 0.0;
+    }
+    if phase < dt {
+        let t = phase / dt;
+        t + t - t * t - 1.0
+    } else if phase > 1.0 - dt {
+        let t = (phase - 1.0) / dt;
+        t * t + t + t + 1.0
+    } else {
+        0.0
+    }
+}
+
 /// [`wrap_phase`] for the f64 accumulators used by DPW-based oscillators.
 #[inline]
 pub fn wrap_phase_f64(phase: f64) -> f64 {
