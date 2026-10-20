@@ -268,7 +268,7 @@ impl WavetableOsc {
             state.tune(
                 prepared,
                 p.pitch.get_value(ch),
-                p.fm.value_or(ch, 0.0),
+                p.fm.value_or(ch, WavetableOscParams::FM_DEFAULT),
                 p.fm_mode,
             );
             let warp = |x: f32| match &p.phase {
@@ -278,8 +278,10 @@ impl WavetableOsc {
             let sample = state.step(
                 prepared,
                 inv_sr,
-                p.position.value_or(ch, 0.0),
-                p.phase_offset.value_or(ch, 0.0),
+                p.position
+                    .value_or(ch, WavetableOscParams::POSITION_DEFAULT),
+                p.phase_offset
+                    .value_or(ch, WavetableOscParams::PHASE_OFFSET_DEFAULT),
                 warp,
                 p.sync.as_ref().map(|sync| sync.get_value(ch)),
             );
