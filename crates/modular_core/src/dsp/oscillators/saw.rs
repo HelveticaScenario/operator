@@ -7,7 +7,7 @@ use crate::{
         utils::{SchmittTrigger, wrap_phase_f64},
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
-    types::Clickless,
+    types::SwapGlide,
 };
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
@@ -62,7 +62,7 @@ struct ChannelState {
     /// (which divides a difference of near-equal integral values by the phase
     /// increment) stays well-conditioned at low, LFO-rate frequencies.
     phase: f64,
-    shape: Clickless,
+    shape: SwapGlide,
     /// False until the voice has seeded its starting phase to a zero crossing
     /// (done on the first `update`). A voice whose state was carried over by
     /// `transfer_state_from` arrives with this already set, so it keeps its
@@ -100,7 +100,7 @@ struct ChannelState {
 /// ```js
 /// $saw('a3', { shape: 2.5 }).out() // triangle wave
 /// ```
-#[module(name = "$saw", args(freq))]
+#[module(name = "$saw", patch_update, args(freq))]
 pub struct SawOscillator {
     outputs: SawOscillatorOutputs,
     channel_state: Box<[ChannelState]>,
@@ -119,9 +119,8 @@ impl SawOscillator {
         for ch in 0..num_channels {
             let state = &mut self.channel_state[ch];
 
-            // Update shape with smoothing - clamp to valid range
             let shape_val = self.params.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
-            state.shape.update(shape_val);
+            state.shape.update(shape_val, sample_rate);
 
             let pitch = self.params.freq.get_value(ch);
             let fm = self.params.fm.value_or(ch, 0.0);
@@ -258,6 +257,14 @@ fn naive_triangle(phase: f64, s: f64) -> f64 {
         2.0 * phase / s - 1.0
     } else {
         1.0 - 2.0 * (phase - s) / (1.0 - s)
+    }
+}
+
+impl crate::types::PatchUpdateHandler for SawOscillator {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.shape.arm();
+        }
     }
 }
 

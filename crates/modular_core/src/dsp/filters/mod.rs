@@ -8,7 +8,9 @@ pub mod eq;
 pub mod highpass;
 pub mod jup6f;
 pub mod lowpass;
+pub mod resonant_svf;
 pub mod surge;
+pub mod svf_core;
 
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     lowpass::LowpassFilter::install_constructor(map);

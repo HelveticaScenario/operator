@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use crate::dsp::fx::enosc_tables::{aa_segment, interpolate_segment};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -35,14 +35,14 @@ struct SegmentOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
 }
 
 /// Waveshaper that morphs through 8 distinct tonal shapes as you sweep the
 /// amount control. Low settings pass the signal cleanly; mid settings compress
 /// and square it off; high settings introduce stepped, ripple-like overtone
 /// patterns. Works best on simple waveforms like sines or triangles.
-#[module(name = "$segment", args(input, amount))]
+#[module(name = "$segment", patch_update, args(input, amount))]
 pub struct Segment {
     outputs: SegmentOutputs,
     channel_state: Box<[ChannelState]>,
@@ -60,8 +60,7 @@ impl Segment {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state.amount.update(amount_raw, sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -83,6 +82,14 @@ impl Segment {
 
             // Scale back to output range
             self.outputs.sample.set(ch, shaped * 5.0);
+        }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Segment {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.amount.arm();
         }
     }
 }

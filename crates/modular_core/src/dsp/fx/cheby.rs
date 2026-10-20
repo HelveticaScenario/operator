@@ -11,7 +11,7 @@ use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -47,7 +47,7 @@ struct ChebyOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
     /// DC blocker (one-pole high-pass) on the output — the even-order harmonics
     /// introduce a DC offset this removes.
     dc_blocker: DcBlocker,
@@ -70,7 +70,7 @@ struct ChebyState {
 /// At low amounts the signal passes through cleanly; turning it up
 /// progressively emphasizes higher harmonics (2nd, 3rd, … up to 16th),
 /// thickening and brightening the tone.
-#[module(name = "$cheby", args(input, amount), has_init)]
+#[module(name = "$cheby", patch_update, args(input, amount), has_init)]
 pub struct Cheby {
     outputs: ChebyOutputs,
     state: ChebyState,
@@ -101,8 +101,7 @@ impl Cheby {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state.amount.update(amount_raw, sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -137,6 +136,14 @@ impl Cheby {
 
             // Scale back to output range
             self.outputs.sample.set(ch, out * 5.0 * fade);
+        }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Cheby {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.amount.arm();
         }
     }
 }

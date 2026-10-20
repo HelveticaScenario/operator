@@ -43,7 +43,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::cell::UnsafeCell;
 use std::fmt::Debug;
-use std::ops::{Add, Deref, Div, Mul, Sub};
+use std::ops::Deref;
 use std::ptr::NonNull;
 use std::result::Result as StdResult;
 use std::{collections::HashMap, sync::Arc};
@@ -378,115 +378,91 @@ pub type SampleableMap = HashMap<String, Box<dyn Sampleable>>;
 /// audio-thread reads; callers must not hold or use it across another reconnect.
 pub type SampleablePtr = NonNull<dyn Sampleable>;
 
-/// One-pole lowpass filter for parameter smoothing to prevent clicking
-/// Coefficient of 0.99 gives roughly 5ms smoothing time at 48kHz
-const SMOOTHING_COEFF: f32 = 0.99;
+/// Default time constant of the [`SwapGlide`] offset decay.
+const SWAP_GLIDE_TAU_SECONDS: f32 = 0.002;
+/// Below this magnitude the offset snaps to zero and the input passes through.
+const SWAP_GLIDE_EPSILON: f32 = 1e-6;
 
-pub fn smooth_value(current: f32, target: f32) -> f32 {
-    current * SMOOTHING_COEFF + target * (1.0 - SMOOTHING_COEFF)
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct Clickless {
+/// Passes a control value through unchanged, except that across a patch update
+/// it glides from the pre-swap value onto the new input with a decaying offset.
+/// Call [`arm`](Self::arm) from `on_patch_update`; the jump is measured on the
+/// next [`update`](Self::update), and the current value is read through `Deref`.
+#[derive(Debug, Clone, Copy)]
+pub struct SwapGlide {
+    /// Current value; `NaN` until the first `update`, so a freshly
+    /// constructed module starts on its input with no glide.
     value: f32,
-    initialized: bool,
-}
-impl Clickless {
-    pub fn update(&mut self, input: f32) {
-        if !self.initialized {
-            // On first call, snap to input — but guard against NaN/Inf
-            // so the smoother never starts in a corrupted state.
-            self.value = if input.is_finite() { input } else { 0.0 };
-            self.initialized = true;
-            return;
-        }
-        let smoothed = smooth_value(self.value, input);
-        if smoothed.is_finite() {
-            self.value = smoothed;
-        } else if input.is_finite() {
-            // Smoother corrupted but input is valid — snap to input to recover.
-            self.value = input;
-        }
-        // If neither is finite, hold previous value (best-effort freeze).
-    }
+    offset: f32,
+    coeff: f32,
+    armed: bool,
+    /// Offset decay time constant, in seconds.
+    tau: f32,
 }
 
-impl From<Clickless> for f32 {
-    fn from(clickless: Clickless) -> Self {
-        clickless.value
-    }
-}
-
-impl From<f32> for Clickless {
-    fn from(value: f32) -> Self {
-        Clickless {
-            value,
-            initialized: false,
+impl Default for SwapGlide {
+    fn default() -> Self {
+        Self {
+            value: f32::NAN,
+            offset: 0.0,
+            coeff: 0.0,
+            armed: false,
+            tau: SWAP_GLIDE_TAU_SECONDS,
         }
     }
 }
 
-impl Deref for Clickless {
+impl SwapGlide {
+    pub fn with_time_constant(seconds: f32) -> Self {
+        Self {
+            tau: seconds,
+            ..Self::default()
+        }
+    }
+
+    pub fn arm(&mut self) {
+        self.armed = true;
+    }
+
+    /// Whether a patch-update glide is still in progress.
+    pub fn gliding(&self) -> bool {
+        self.armed || self.offset != 0.0
+    }
+
+    /// A non-finite input holds the current value (0 before the first update).
+    #[inline]
+    pub fn update(&mut self, input: f32, sample_rate: f32) {
+        let input = if input.is_finite() {
+            input
+        } else if self.value.is_finite() {
+            self.value
+        } else {
+            0.0
+        };
+        if self.armed {
+            self.armed = false;
+            if self.value.is_finite() {
+                self.offset = self.value - input;
+                self.coeff = (-1.0 / (self.tau * sample_rate)).exp();
+            }
+        }
+        self.value = if self.offset == 0.0 {
+            input
+        } else {
+            let out = input + self.offset;
+            self.offset *= self.coeff;
+            if self.offset.abs() < SWAP_GLIDE_EPSILON {
+                self.offset = 0.0;
+            }
+            out
+        };
+    }
+}
+
+impl Deref for SwapGlide {
     type Target = f32;
 
     fn deref(&self) -> &Self::Target {
         &self.value
-    }
-}
-
-impl Add<f32> for Clickless {
-    type Output = f32;
-    fn add(self, rhs: f32) -> Self::Output {
-        self.value + rhs
-    }
-}
-
-impl Add for Clickless {
-    type Output = f32;
-    fn add(self, rhs: Self) -> Self::Output {
-        self.value + rhs.value
-    }
-}
-
-impl Sub<f32> for Clickless {
-    type Output = f32;
-    fn sub(self, rhs: f32) -> Self::Output {
-        self.value - rhs
-    }
-}
-
-impl Sub for Clickless {
-    type Output = f32;
-    fn sub(self, rhs: Self) -> Self::Output {
-        self.value - rhs.value
-    }
-}
-
-impl Mul<f32> for Clickless {
-    type Output = f32;
-    fn mul(self, rhs: f32) -> Self::Output {
-        self.value * rhs
-    }
-}
-
-impl Mul for Clickless {
-    type Output = f32;
-    fn mul(self, rhs: Self) -> Self::Output {
-        self.value * rhs.value
-    }
-}
-
-impl Div<f32> for Clickless {
-    type Output = f32;
-    fn div(self, rhs: f32) -> Self::Output {
-        self.value / rhs
-    }
-}
-
-impl Div for Clickless {
-    type Output = f32;
-    fn div(self, rhs: Self) -> Self::Output {
-        self.value / rhs.value
     }
 }
 
@@ -4130,5 +4106,70 @@ mod table_tests {
             }
             _ => panic!("expected Pipe"),
         }
+    }
+}
+
+#[cfg(test)]
+mod swap_glide_tests {
+    use super::SwapGlide;
+
+    const SR: f32 = 48_000.0;
+
+    fn step(g: &mut SwapGlide, x: f32) -> f32 {
+        g.update(x, SR);
+        **g
+    }
+
+    #[test]
+    fn passes_modulation_through_unfiltered() {
+        let mut g = SwapGlide::default();
+        for i in 0..1000 {
+            let x = if (i / 7) % 2 == 0 { -5.0 } else { 5.0 };
+            assert_eq!(step(&mut g, x), x);
+        }
+    }
+
+    #[test]
+    fn fresh_module_starts_on_input_even_when_armed() {
+        let mut g = SwapGlide::default();
+        g.arm();
+        assert_eq!(step(&mut g, 3.0), 3.0);
+    }
+
+    #[test]
+    fn armed_jump_continues_from_last_value_and_converges() {
+        let mut g = SwapGlide::default();
+        step(&mut g, 0.0);
+        g.arm();
+        assert!(g.gliding());
+        let mut prev = step(&mut g, 4.0);
+        assert_eq!(prev, 0.0);
+        for _ in 0..(SR as usize / 20) {
+            let y = step(&mut g, 4.0);
+            assert!(y >= prev && y <= 4.0);
+            prev = y;
+        }
+        assert_eq!(prev, 4.0);
+        assert!(!g.gliding());
+    }
+
+    #[test]
+    fn glide_preserves_modulation_on_top_of_offset() {
+        let mut g = SwapGlide::default();
+        step(&mut g, 0.0);
+        g.arm();
+        let a = step(&mut g, 4.0);
+        let b = step(&mut g, 5.0);
+        let c = step(&mut g, 4.0);
+        assert!(b - a > 0.9);
+        assert!(b - c > 0.9);
+    }
+
+    #[test]
+    fn non_finite_input_holds_the_current_value() {
+        let mut g = SwapGlide::default();
+        assert_eq!(step(&mut g, f32::NAN), 0.0);
+        step(&mut g, 2.0);
+        assert_eq!(step(&mut g, f32::INFINITY), 2.0);
     }
 }

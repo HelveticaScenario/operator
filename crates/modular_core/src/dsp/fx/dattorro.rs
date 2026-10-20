@@ -10,7 +10,7 @@ use crate::dsp::utils::dc_blocker::DcBlocker;
 use crate::dsp::utils::delay_line::DelayLine;
 use crate::dsp::utils::{map_range, sanitize};
 use crate::poly::{MonoSignal, MonoSignalExt, PolyOutput, PolySignal};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 // ─── Dattorro delay lengths (reference sample rate: 29761 Hz) ────────────────
 
@@ -144,15 +144,13 @@ struct DattorroState {
     feedback_l: f32,
     feedback_r: f32,
 
-    // Parameter smoothing — prevents zipper noise when params change
-    // continuously, since these control delay lengths where
-    // discontinuities get amplified by the feedback loop.
-    smoothed_size: Clickless,
-    smoothed_predelay: Clickless,
-    // Decay diffusion allpass gains are inside the feedback loop, so
-    // abrupt changes create transients that recirculate.
-    smoothed_decay_diff_1: Clickless,
-    smoothed_decay_diff_2: Clickless,
+    // Patch-update glides. Size and predelay set delay lengths, whose jumps
+    // recirculate through the feedback loop.
+    smoothed_size: SwapGlide,
+    smoothed_predelay: SwapGlide,
+    // Decay diffusion allpass gains sit inside the feedback loop.
+    smoothed_decay_diff_1: SwapGlide,
+    smoothed_decay_diff_2: SwapGlide,
 
     // Output tap positions, scaled by sample rate only (NOT by size).
     // Taps are fixed positions into the delay lines, unaffected by the
@@ -185,7 +183,7 @@ struct DattorroState {
 /// ```js
 /// $dattorro($saw('c3'), { decay: 3, damping: 1, size: 2 }).out()
 /// ```
-#[module(name = "$dattorro", channels = 2, has_init, args(input))]
+#[module(name = "$dattorro", channels = 2, patch_update, has_init, args(input))]
 pub struct Dattorro {
     outputs: DattorroOutputs,
     state: DattorroState,
@@ -268,10 +266,7 @@ impl Dattorro {
 
         let size_v = self.params.size.value_or(0.0);
         let size_raw = map_range(size_v, -5.0, 5.0, 0.25, 2.0).clamp(0.25, 2.0);
-        // Smooth the size parameter to prevent zipper noise.  Abrupt
-        // changes to delay lengths inside the recirculating tank cause
-        // discontinuities that get amplified by feedback on every iteration.
-        self.state.smoothed_size.update(size_raw);
+        self.state.smoothed_size.update(size_raw, sample_rate);
         let size = *self.state.smoothed_size;
 
         let predelay_secs = self
@@ -280,17 +275,23 @@ impl Dattorro {
             .value_or(0.0)
             .clamp(0.0, MAX_PREDELAY_SECS);
         let predelay_raw = predelay_secs * sample_rate;
-        self.state.smoothed_predelay.update(predelay_raw);
+        self.state
+            .smoothed_predelay
+            .update(predelay_raw, sample_rate);
         let predelay_samples = *self.state.smoothed_predelay;
 
         let diff_v = self.params.diffusion.value_or(3.5);
         let input_diff_coeff = map_range(diff_v, 0.0, 5.0, 0.0, 0.75).clamp(0.0, 0.75);
         let decay_diff_1_coeff = map_range(diff_v, 0.0, 5.0, 0.0, 0.70).clamp(0.0, 0.70);
-        self.state.smoothed_decay_diff_1.update(decay_diff_1_coeff);
+        self.state
+            .smoothed_decay_diff_1
+            .update(decay_diff_1_coeff, sample_rate);
         let decay_diff_1_coeff = *self.state.smoothed_decay_diff_1;
 
         let decay_diff_2_coeff = map_range(diff_v, 0.0, 5.0, 0.0, 0.50).clamp(0.0, 0.50);
-        self.state.smoothed_decay_diff_2.update(decay_diff_2_coeff);
+        self.state
+            .smoothed_decay_diff_2
+            .update(decay_diff_2_coeff, sample_rate);
         let decay_diff_2_coeff = *self.state.smoothed_decay_diff_2;
 
         // Modulation: convert voltage to delay excursion in samples.
@@ -424,6 +425,15 @@ impl Dattorro {
         let output_gain = 0.6;
         self.outputs.sample.set(0, left_ac * output_gain);
         self.outputs.sample.set(1, right_ac * output_gain);
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Dattorro {
+    fn on_patch_update(&mut self) {
+        self.state.smoothed_size.arm();
+        self.state.smoothed_predelay.arm();
+        self.state.smoothed_decay_diff_1.arm();
+        self.state.smoothed_decay_diff_2.arm();
     }
 }
 

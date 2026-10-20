@@ -1,6 +1,6 @@
 //! Shared engine for the `$unstable.shape.*` waveshaper family.
 //!
-//! Every `$unstable.shape.*` module is the same machine — smooth the drive, normalize the
+//! Every `$unstable.shape.*` module is the same machine — glide the drive, normalize the
 //! signal into the shaper's `[-1, 1]` domain, optionally 2× oversample, apply a
 //! per-`mode` nonlinearity, fade in the onset, and scale back to modular level —
 //! differing only in the set of nonlinearities (the [`Shaper`] impl). Channels
@@ -10,7 +10,7 @@ use crate::dsp::utils::dc_blocker::{DEFAULT_DC_BLOCK_FC_HZ, DcBlocker};
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
 use crate::dsp::utils::halfband::{Halfband2xDown, Halfband2xUp};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 /// Modular audio level. Signals swing ±5 V; the Surge XT shapers work in `[-1, 1]`,
 /// so we divide going in and multiply coming out.
@@ -21,7 +21,7 @@ pub(crate) const AUDIO_LEVEL: f32 = 5.0;
 /// over the same true-dB curve (+12 dB ≈ ×4 at the top instead of ×16).
 const DRIVE_DB_PER_UNIT: f32 = 12.0 / 5.0;
 
-/// Map the smoothed, clamped `drive` parameter to a linear gain using Surge XT's
+/// Map the glided, clamped `drive` parameter to a linear gain using Surge XT's
 /// `db_to_linear` curve — true dB, `10^(dB/20)` (0 = unity, +6 dB ≈ ×2).
 #[inline]
 fn drive_map(drive_param: f32) -> f32 {
@@ -46,11 +46,11 @@ pub trait Shaper: Copy + Default {
     fn prime() {}
 }
 
-/// Per-channel runtime state: drive smoother, onset fade, oversampling pair, and
+/// Per-channel runtime state: drive glide, onset fade, oversampling pair, and
 /// the shaper's own state. One instance per channel.
 #[derive(Clone, Copy, Default)]
 pub struct ShapeChannel<S: Shaper> {
-    drive: Clickless,
+    drive: SwapGlide,
     fade: FadeIn,
     up: Halfband2xUp,
     down: Halfband2xDown,
@@ -66,8 +66,9 @@ impl<S: Shaper> ShapeChannel<S> {
         mode: S::Mode,
         dc_coeff: f32,
         fade_inc: f32,
+        sample_rate: f32,
     ) -> f32 {
-        self.drive.update(drive_raw);
+        self.drive.update(drive_raw, sample_rate);
         let drive = drive_map(*self.drive);
         let x = x_in / AUDIO_LEVEL;
 
@@ -112,11 +113,19 @@ pub fn run<S: Shaper>(
     state: &ShapeModuleState,
     channel_state: &mut [ShapeChannel<S>],
     out: &mut PolyOutput,
+    sample_rate: f32,
 ) {
     for ch in 0..channels {
         let x = input.get_value(ch);
         let d = drive.value_or(ch, 0.0);
-        let y = channel_state[ch].process(x, d, mode, state.dc_coeff, state.fade_inc);
+        let y = channel_state[ch].process(x, d, mode, state.dc_coeff, state.fade_inc, sample_rate);
         out.set(ch, y);
+    }
+}
+
+/// Arms every channel's drive glide; called from each module's `on_patch_update`.
+pub fn on_patch_update<S: Shaper>(channel_state: &mut [ShapeChannel<S>]) {
+    for cs in channel_state.iter_mut() {
+        cs.drive.arm();
     }
 }

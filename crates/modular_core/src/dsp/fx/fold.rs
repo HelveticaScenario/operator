@@ -10,7 +10,7 @@ use crate::dsp::fx::enosc_tables::{aa_fold, lookup_fold};
 use crate::dsp::utils::fade::{DEFAULT_FADE_IN_SECS, FadeIn};
 use crate::dsp::utils::voct_to_hz;
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
-use crate::types::Clickless;
+use crate::types::SwapGlide;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +36,7 @@ struct FoldOutputs {
 
 #[derive(Default, Clone, Copy)]
 struct ChannelState {
-    amount: Clickless,
+    amount: SwapGlide,
     /// Onset fade-in — suppresses the click when the module is first added
     /// (`amount` snaps to its full value on the first sample, so the output
     /// would otherwise jump from silence).
@@ -53,7 +53,7 @@ struct FoldState {
 /// Wavefolder that reflects the signal back when it exceeds a threshold,
 /// producing dense, harmonically rich tones. Higher amounts create more
 /// complex, metallic timbres.
-#[module(name = "$fold", args(input, amount), has_init)]
+#[module(name = "$fold", patch_update, args(input, amount), has_init)]
 pub struct Fold {
     outputs: FoldOutputs,
     state: FoldState,
@@ -81,8 +81,7 @@ impl Fold {
             let input = self.params.input.get_value(ch);
             let amount_raw = self.params.amount.get_value(ch);
 
-            // Smooth amount parameter to avoid clicks
-            state.amount.update(amount_raw);
+            state.amount.update(amount_raw, sample_rate);
             let amount = *state.amount;
 
             // Normalize amount from [0, 5] to [0, 1] for table lookup
@@ -108,6 +107,14 @@ impl Fold {
 
             // Scale back to output range
             self.outputs.sample.set(ch, folded * 5.0 * fade);
+        }
+    }
+}
+
+impl crate::types::PatchUpdateHandler for Fold {
+    fn on_patch_update(&mut self) {
+        for cs in self.channel_state.iter_mut() {
+            cs.amount.arm();
         }
     }
 }
@@ -143,14 +150,15 @@ mod tests {
     /// constant input means any jump is a transition artifact, not signal.
     fn max_step_through_threshold(input: f32, target_amount: f32) -> f32 {
         let mut fold = make(input, 0.0);
-        // Settle the amount smoother at 0.
+        // Settle at amount 0.
         for _ in 0..256 {
             fold.update(48000.0);
         }
         let mut prev = fold.outputs.sample.get(0);
         let mut max_step = 0.0_f32;
-        // Step the param; the Clickless smoother drives the transition.
+        // Step the param through a patch update, whose glide drives the transition.
         fold.params.amount = PolySignal::mono(Signal::Volts(target_amount));
+        crate::types::PatchUpdateHandler::on_patch_update(&mut fold);
         for _ in 0..4000 {
             fold.update(48000.0);
             let cur = fold.outputs.sample.get(0);
