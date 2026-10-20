@@ -236,11 +236,16 @@ impl SawOscillator {
     fn update(&mut self, sample_rate: f32) {
         let p = &self.params;
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
-            let shape = p.shape.value_or(ch, 0.0).clamp(0.0, 5.0);
+            let shape = p
+                .shape
+                .value_or(ch, SawOscillatorParams::SHAPE_DEFAULT)
+                .clamp(0.0, 5.0);
             let pitch = p.freq.get_value(ch);
-            let fm = p.fm.value_or(ch, 0.0);
+            let fm = p.fm.value_or(ch, SawOscillatorParams::FM_DEFAULT);
             let increment = phase_increment(pitch, fm, p.fm_mode, sample_rate);
-            let offset = p.phase_offset.value_or(ch, 0.0);
+            let offset = p
+                .phase_offset
+                .value_or(ch, SawOscillatorParams::PHASE_OFFSET_DEFAULT);
             let sync = p.sync.as_ref().map(|sync| sync.get_value(ch));
             let sample = state.step(increment, shape, offset, sync, p.wait_for_zero_cross);
             self.outputs.sample.set(ch, sample);
