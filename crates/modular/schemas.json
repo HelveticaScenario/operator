@@ -5755,6 +5755,186 @@
     ]
   },
   {
+    "name": "$lpg",
+    "documentation": "Vactrol low pass gate modeled on the one built into Mutable Instruments Plaits.\n\nThe gate is a filter and VCA driven together by a simulated vactrol: as it\nopens, the signal gets both louder and brighter, and it closes with the\nslow, non-linear tail that gives plucked and struck sounds their bounce.\n\n- **trigger** — each rising edge pings the vactrol fully open, then it\n  decays back to **level**.\n- **level** — the floor the vactrol rests at, 0–5 V on Plaits' compressing\n  curve: about 0.9 V opens it halfway, 2.5 V about 80%, 5 V fully. With no\n  trigger it works as a CV-controlled gate; with a trigger, each ping\n  swings the gate from the floor to fully open and back.\n- **color** — low values close the filter as the gate closes (mellow,\n  woody); high values let highs through, approaching a plain VCA.\n- **decay** — length of the vactrol's release.\n\nWith neither **trigger** nor **level** patched the gate is bypassed and\nthe input passes through unchanged; patching or unpatching them\ncrossfades over 5 ms.\n\n```js\n// plucked saw pinged on every beat\n$lpg($saw('c3'), $clock.beatTrigger, { color: 1.5, decay: 2 }).out()\n```",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "LpgParams",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "filter response (0-5) - low = mellow lowpass gate, high = bright, VCA-like",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "decay": {
+          "description": "vactrol decay (0-5) - low = short pluck, high = long ring",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input": {
+          "description": "signal input",
+          "$ref": "#/$defs/PolySignal"
+        },
+        "level": {
+          "description": "level CV (0-5V) - the floor pings rise from and decay back to, on Plaits' compressing curve; 5V fully open",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "description": "trigger input (rising edge pings the vactrol fully open)",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "input"
+      ],
+      "$defs": {
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "gated signal",
+        "polyphonic": true,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [
+      {
+        "name": "input",
+        "description": "signal input",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "trigger",
+        "description": "trigger input (rising edge pings the vactrol fully open)",
+        "signalType": "trig",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "level",
+        "description": "level CV (0-5V) - the floor pings rise from and decay back to, on Plaits' compressing curve; 5V fully open",
+        "signalType": "control",
+        "defaultValue": 0.0,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "color",
+        "description": "filter response (0-5) - low = mellow lowpass gate, high = bright, VCA-like",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      },
+      {
+        "name": "decay",
+        "description": "vactrol decay (0-5) - low = short pluck, high = long ring",
+        "signalType": "control",
+        "defaultValue": 2.5,
+        "minValue": 0.0,
+        "maxValue": 5.0
+      }
+    ],
+    "positionalArgs": [
+      {
+        "name": "input"
+      },
+      {
+        "name": "trigger"
+      }
+    ]
+  },
+  {
     "name": "$eq",
     "documentation": "Parametric EQ: shape the tone of a sound with up to 8 bands.\n\nEach band in **sections** has a **type**:\n\n- `'peak'` (default): boost or cut around a frequency.\n- `'lowShelf'` / `'highShelf'`: boost or cut everything below / above a\n  frequency.\n- `'lowpass'` / `'highpass'`: remove everything above / below a frequency.\n- `'notch'`: remove a narrow band around a frequency.\n\nand sets:\n\n- **freq**: where the band sits, like `'1000hz'` or `'c4'`.\n- **gain**: how much to boost or cut, in dB (-24 to 24). Peaks and shelves\n  only.\n- **q**: how narrow the band is (0.1 to 20, default 0.707). On shelves and\n  lowpass/highpass, values above 0.707 add a resonant bump at the\n  frequency; on shelves, lower values make a gentler slope.\n\nAny of them can be modulated. With no sections, the sound passes through\nunchanged.\n\nTo EQ channels differently, give **sections** one list of bands per\nchannel, like one for left and one for right.\n\n**adaptiveQ** makes peaks narrower the more you boost or cut them, like\nmany classic analog EQs.\n\n**ui: true** shows an editor under the call. Drag a band's dot to move it,\nscroll over it or drag its handles to change q, and double-click to add a\nband. Changes play right away and are written into your code. Hold\nCtrl/Cmd to change only the code, and right-click a control to reset it.\n\n```js\n// Warm up the lows, sweep a dip through the mids, clear out rumble\n$eq($saw('c2'), {\n  sections: [\n    { type: 'lowShelf', freq: '150hz', gain: 3 },\n    { type: 'peak', freq: $sine('0.5hz').range('400hz', '2000hz'), gain: -6, q: 2 },\n    { type: 'highpass', freq: '40hz' },\n  ],\n  adaptiveQ: true,\n})\n\n// A darker left channel, a brighter right one\n$eq($saw(['c2', 'g2']), {\n  sections: [\n    [{ type: 'highShelf', freq: '3000hz', gain: -6 }],\n    [{ type: 'highShelf', freq: '3000hz', gain: 4 }],\n  ],\n})\n\n// Start empty and build the EQ in the editor\n$eq($saw('c2'), { ui: true })\n```",
     "paramsSchema": {
