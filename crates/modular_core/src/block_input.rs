@@ -66,6 +66,8 @@ pub struct BlockInput<'a> {
     /// Stride 0 repeats one row.
     data: *const f32,
     first: usize,
+    /// One past the last resolved slot.
+    end: usize,
     stride: usize,
     channels: usize,
     _rows: PhantomData<&'a [f32]>,
@@ -79,9 +81,13 @@ impl BlockInput<'_> {
         self.stride == 0
     }
 
-    /// Slot `i`'s values. `i` must lie in the range the input was resolved for.
+    /// Slot `i`'s values. Panics unless `i` lies in the resolved range.
     #[inline(always)]
     pub fn row(&self, i: usize) -> &[f32] {
+        assert!(
+            (self.first..self.end).contains(&i),
+            "slot outside the resolved range"
+        );
         // SAFETY: resolution guarantees `channels` initialised values per row
         // for every slot in the resolved range: a rendered producer buffer
         // (which outlives the call, see `PolyCableView`), the input's own
@@ -95,7 +101,8 @@ impl BlockInput<'_> {
 impl PolySignal {
     /// Resolve this input for slots `range` across `channels` consumer
     /// channels, using `scratch` when it cannot be read in place. See the
-    /// module docs for when this returns `None`.
+    /// module docs for when this returns `None`. Panics if `channels` exceeds
+    /// `PORT_MAX_CHANNELS`.
     #[inline(always)]
     pub fn block_input<'a>(
         &'a self,
@@ -103,6 +110,10 @@ impl PolySignal {
         channels: usize,
         scratch: &'a mut InputScratch,
     ) -> Option<BlockInput<'a>> {
+        assert!(
+            channels <= PORT_MAX_CHANNELS,
+            "more channels than a port holds"
+        );
         // Inputs read in place resolve inline; copies go out of line.
         if channels <= self.channels() {
             let volts = self.volts();
@@ -110,6 +121,7 @@ impl PolySignal {
                 return Some(BlockInput {
                     data: volts.as_ptr(),
                     first: range.start,
+                    end: range.end,
                     stride: 0,
                     channels,
                     _rows: PhantomData,
@@ -123,6 +135,7 @@ impl PolySignal {
                     // SAFETY: `range.start < range.end`, a rendered slot.
                     data: unsafe { data.add(range.start * stride) },
                     first: range.start,
+                    end: range.end,
                     stride,
                     channels,
                     _rows: PhantomData,
@@ -140,6 +153,7 @@ impl PolySignal {
             return Some(BlockInput {
                 data: row,
                 first: range.start,
+                end: range.end,
                 stride: 0,
                 channels,
                 _rows: PhantomData,
@@ -167,6 +181,7 @@ impl PolySignal {
             return Some(BlockInput {
                 data: row,
                 first: range.start,
+                end: range.end,
                 stride: 0,
                 channels,
                 _rows: PhantomData,
@@ -194,6 +209,7 @@ impl PolySignal {
             return Some(BlockInput {
                 data: rows,
                 first: range.start,
+                end: range.end,
                 stride: channels,
                 channels,
                 _rows: PhantomData,
@@ -221,6 +237,7 @@ impl PolySignal {
         Some(BlockInput {
             data: rows,
             first: range.start,
+            end: range.end,
             stride: channels,
             channels,
             _rows: PhantomData,
@@ -252,11 +269,16 @@ impl OptionBlockInput for Option<PolySignal> {
         default: f32,
         scratch: &'a mut InputScratch,
     ) -> Option<BlockInput<'a>> {
+        assert!(
+            channels <= PORT_MAX_CHANNELS,
+            "more channels than a port holds"
+        );
         match self {
             Some(signal) => signal.block_input(range, channels, scratch),
             None if default == 0.0 => Some(BlockInput {
                 data: ZERO_ROW.as_ptr(),
                 first: range.start,
+                end: range.end,
                 stride: 0,
                 channels,
                 _rows: PhantomData,
@@ -270,6 +292,7 @@ impl OptionBlockInput for Option<PolySignal> {
                 Some(BlockInput {
                     data: row,
                     first: range.start,
+                    end: range.end,
                     stride: 0,
                     channels,
                     _rows: PhantomData,
@@ -285,8 +308,8 @@ impl OptionBlockInput for Option<PolySignal> {
 const CHUNK: usize = PORT_MAX_CHANNELS;
 
 /// Write `f(inputs)` to every channel of `out` for slots `range`, sanitising
-/// each result. The inputs must be resolved for `range` at `out`'s channel
-/// count.
+/// each result. Panics unless every input was resolved for `range` at `out`'s
+/// channel count.
 ///
 /// When every input is either contiguous rows or one repeated row, a
 /// multi-slot range is processed as a single flat run, which vectorises at any
@@ -299,7 +322,12 @@ pub fn map<const N: usize>(
     f: impl Fn([f32; N]) -> f32,
 ) {
     let channels = out.channels();
-    debug_assert!(inputs.iter().all(|input| input.channels == channels));
+    assert!(
+        inputs.iter().all(|input| input.channels == channels
+            && input.first == range.start
+            && input.end == range.end),
+        "input resolved for another range or width"
+    );
     if channels == 0 {
         return;
     }
