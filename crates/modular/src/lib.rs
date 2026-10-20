@@ -65,6 +65,36 @@ pub fn get_reserved_output_names() -> Vec<String> {
         .collect()
 }
 
+/// Whether this CPU has every x86 extension the addon was compiled to assume
+/// (`target-cpu` in `.cargo/config.toml`). Compiled code may use those
+/// instructions anywhere, so the app calls this only from a probe child
+/// process (`src/main/cpuGate.ts`) where an illegal instruction cannot take
+/// down the app. It reads CPUID directly because `is_x86_feature_detected!`
+/// folds to `true` for any feature enabled at compile time.
+#[napi]
+pub fn cpu_supports_build() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // (compiled to assume it, CPUID leaf 1 ECX bit)
+        let required = [
+            (cfg!(target_feature = "sse3"), 0),
+            (cfg!(target_feature = "ssse3"), 9),
+            (cfg!(target_feature = "cmpxchg16b"), 13),
+            (cfg!(target_feature = "sse4.1"), 19),
+            (cfg!(target_feature = "sse4.2"), 20),
+            (cfg!(target_feature = "popcnt"), 23),
+        ];
+        let ecx = std::arch::x86_64::__cpuid(1).ecx;
+        required
+            .iter()
+            .all(|&(compiled, bit)| !compiled || ecx & (1 << bit) != 0)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        true
+    }
+}
+
 /// Number of video tap slots the engine publishes.
 #[napi]
 pub const MAX_VIDEO_TAPS: u32 = video_tap::MAX_VIDEO_TAPS as u32;

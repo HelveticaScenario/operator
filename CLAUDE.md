@@ -63,7 +63,7 @@ Always set `MODULAR_BACKGROUND_LAUNCH=1` when launching the app (`yarn start`, P
 
 ### Frontend Structure
 
-- **`src/main/`** — Electron main process (`main.ts`), DSL runtime (`dsl/executor.ts`, `dsl/factories.ts`, `dsl/GraphBuilder.ts`).
+- **`src/main/`** — Electron main process (`main.ts` checks the CPU can run the addon, then loads `app.ts`), DSL runtime (`dsl/executor.ts`, `dsl/factories.ts`, `dsl/GraphBuilder.ts`).
 - **`src/renderer/`** — React app (`App.tsx`), Monaco editor (`components/MonacoPatchEditor.tsx`, `components/monaco/`), UI components.
 - **`src/preload/`** — Electron context isolation bridge.
 - **`src/shared/`** — Shared IPC types.
@@ -165,5 +165,6 @@ Models to emulate: `crates/modular_core/src/types.rs` (safety invariants), `src/
 
 - **Node 24.12.0 / Yarn 4.12.0** pinned via Volta.
 - **Rust edition 2024**.
+- **Release targets**: macOS arm64 + x64, Windows x64, Linux x64. x86_64 builds assume `x86-64-v2` (root `.cargo/config.toml`), so benchmark that build, never `-C target-cpu=native`.
 - **Husky pre-commit hooks** run Prettier on `*.{ts,tsx,js,jsx,mjs,json,css,md}` and `cargo fmt` on Rust files.
 - **Vitest** for JS/TS tests, **Playwright** for E2E, **cargo test** for Rust.

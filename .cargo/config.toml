@@ -1,0 +1,11 @@
+# x86_64 builds assume x86-64-v2 (SSE4.2, POPCNT). `cpu_supports_build` in
+# crates/modular checks the same features at startup, so raising this level
+# needs its feature list extended to match.
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "target-cpu=x86-64-v2"]
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-cpu=x86-64-v2", "-C", "target-feature=+crt-static"]

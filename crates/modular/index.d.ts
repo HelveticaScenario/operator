@@ -220,6 +220,16 @@ export interface BufferSizeRange {
   max: number
 }
 
+/**
+ * Whether this CPU has every x86 extension the addon was compiled to assume
+ * (`target-cpu` in `.cargo/config.toml`). Compiled code may use those
+ * instructions anywhere, so the app calls this only from a probe child
+ * process (`src/main/cpuGate.ts`) where an illegal instruction cannot take
+ * down the app. It reads CPUID directly because `is_x86_feature_detected!`
+ * folds to `true` for any feature enabled at compile time.
+ */
+export declare function cpuSupportsBuild(): boolean
+
 /** Current audio state information */
 export interface CurrentAudioState {
   hostId: string
