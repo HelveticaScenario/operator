@@ -16,6 +16,7 @@ extern crate serde;
 extern crate serde_json;
 extern crate simple_easing;
 
+pub mod block_input;
 pub mod block_port;
 pub mod dsp;
 pub mod module_state;
