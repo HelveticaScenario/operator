@@ -5,8 +5,6 @@ import type {
     Scope,
     ScopeChannel,
     ScopeMode,
-    ScopeXy,
-    ScopeXyPair,
 } from '@modular/core';
 import type { VuMeterDef } from '../../shared/dsl/vuMeterTypes';
 import {
@@ -30,7 +28,9 @@ import { isPatternValue, type PatternValue } from './patternKinds';
 import {
     assertSignalGroupsTopLevelOnly,
     expandSignalGroups,
+    isSignalGroupLike,
 } from './signalGroups';
+import type { OutLaneControl, OutLaneTap } from './outLane';
 
 import z from 'zod';
 
@@ -45,17 +45,6 @@ export type ScopeWithLocation = Scope & {
     sourceLocation?: { line: number; column: number };
     /** Feeds an editor panel, never drawn as a scope view of its own. */
     headless?: boolean;
-};
-
-/**
- * Per-call $scopeXY state with an optional source location. Lives on
- * GraphBuilder until `toPatch` resolves the deferred outputs.
- */
-export type ScopeXYWithLocation = {
-    pairs: ScopeXyPair[];
-    xRange: [number, number];
-    yRange: [number, number];
-    sourceLocation?: { line: number; column: number };
 };
 
 // Extended OutputSchema interface that includes optional range
@@ -99,6 +88,17 @@ type DollarChainProxy = Record<string, (...args: unknown[]) => unknown>;
 interface DollarNamespaceNode {
     leaves: Map<string, string>;
     children: Map<string, DollarNamespaceNode>;
+}
+
+/** Groove template; mirrors Rust `GrooveTemplate` (camelCase). */
+export interface GrooveTemplate {
+    timing: number[];
+    velocity?: number[];
+    grid?: number;
+    amount?: number;
+    velocityAmount?: number;
+    random?: number;
+    seed?: number;
 }
 
 /**
@@ -249,8 +249,8 @@ function resolveMonoOutArgs(
 /**
  * Live-display tap for a locked VU control: the (module, port, channel)
  * address the engine samples so the panel can track the signal. Collections
- * and arrays tap their first channel; deferred outputs still hold
- * placeholder ids here, so they get no tap.
+ * and arrays tap their first channel. A deferred output's placeholder id is
+ * resolved once every deferred is set (see `resolveControlTap`).
  */
 function controlSourceTap(
     value: PolySignal | undefined,
@@ -271,10 +271,7 @@ function controlSourceTap(
     ) {
         single = [...(value as Iterable<unknown>)][0];
     }
-    if (
-        single instanceof ModuleOutput &&
-        !(single instanceof DeferredModuleOutput)
-    ) {
+    if (single instanceof ModuleOutput) {
         return {
             channel: single.channel ?? 0,
             moduleId: single.moduleId,
@@ -844,11 +841,6 @@ export class GraphBuilder {
     private scopes: ScopeWithLocation[] = [];
     /** `ui: true` EQ panels, collected by `toPatch`. */
     private eqPanels: EqPanelDef[] = [];
-    /**
-     * Latest call to `$scopeXY` — last-call-wins (only one global XY scope
-     * at a time). Resolved during `toPatch` like deferred outputs in scopes.
-     */
-    private scopeXY: ScopeXYWithLocation | null = null;
     /** Output groups keyed by baseChannel */
     private outGroups = new Map<number, OutGroup[]>();
     /** Monotonic source-order counter for out groups */
@@ -859,6 +851,12 @@ export class GraphBuilder {
     private sourceLocationMap = new Map<string, SourceLocation>();
     /** Track all deferred outputs for string replacement during toPatch */
     private deferredOutputs = new Map<string, DeferredModuleOutput>();
+    /** `$outLane` taps, resolved against their labeled out in toPatch */
+    private outLaneTaps: {
+        label: string;
+        tap: OutLaneTap;
+        sourceLocation?: { line: number; column: number };
+    }[] = [];
     /** Global tempo for ROOT_CLOCK in BPM (default: 120) */
     private tempo: number = 120;
     /** Whether $setTempo was explicitly called in the DSL */
@@ -869,6 +867,8 @@ export class GraphBuilder {
     private timeSignatureNumerator: number = 4;
     /** Time signature denominator (beat value) for ROOT_CLOCK */
     private timeSignatureDenominator: number = 4;
+    /** Global groove template for ROOT_CLOCK; straight when unset */
+    private groove: GrooveTemplate | undefined = undefined;
     private busses: Bus[] = [];
     private endOfChainCb: (
         mixed: Collection,
@@ -1123,6 +1123,13 @@ export class GraphBuilder {
         this.timeSignatureDenominator = denominator;
     }
 
+    /**
+     * Set the global groove ROOT_CLOCK reports to every $cycle and $drumMap
+     */
+    setGroove(template: GrooveTemplate): void {
+        this.groove = template;
+    }
+
     setEndOfChainCb(
         cb: (
             mixed: Collection,
@@ -1214,10 +1221,24 @@ export class GraphBuilder {
         const scaleAndShiftFactory = this.getFactory('$scaleAndShift');
         const curveFactory = this.getFactory('$curve');
         const slewFactory = this.getFactory('$slew');
+        const smoothControlFactory = this.getFactory('_smoothControl');
 
         // VU meter entries, one per out group, collected in compile order and
         // sorted into source order before emission.
         const vuMeters: (VuMeterDef & { ordinal: number })[] = [];
+
+        // Each labeled lane's compiled stages, for `$outLane` taps.
+        const lanesByLabel = new Map<
+            string,
+            {
+                audio: ModuleOutput[];
+                active: ModuleOutput;
+                gainStageId: string;
+                gain: PolySignal | undefined;
+                panMixId?: string;
+                pan: PolySignal | undefined;
+            }
+        >();
 
         // Process output groups and build channel collections
         if (this.outGroups.size > 0) {
@@ -1296,8 +1317,8 @@ export class GraphBuilder {
                     const tapId = `__vuTap_${sk}`;
 
                     // A numeric (or absent) stereo pan is lifted into a
-                    // $signal so the VU panel's knob can drive it live via
-                    // the single-module update path; a signal-valued pan
+                    // _smoothControl so the VU panel's knob can drive it live
+                    // via the single-module update path; a signal-valued pan
                     // stays wired as given and renders as a locked knob that
                     // tracks the signal.
                     const panControllable =
@@ -1311,9 +1332,9 @@ export class GraphBuilder {
                         group.type === 'stereo' && !panControllable;
 
                     // Likewise a numeric (or absent) gain is lifted into a
-                    // $signal so the VU panel's fader triangle can drive it;
-                    // the gain stage always compiles so the fader has a
-                    // target (absent gain seeds unity).
+                    // _smoothControl so the VU panel's fader triangle can
+                    // drive it; the gain stage always compiles so the fader
+                    // has a target (absent gain seeds unity).
                     const gainControllable =
                         group.gain === undefined ||
                         typeof group.gain === 'number';
@@ -1321,7 +1342,9 @@ export class GraphBuilder {
                         ? ((group.gain as number | undefined) ?? UNITY_OUT_GAIN)
                         : null;
                     const gainSource = gainControllable
-                        ? signalFactory(gainValue, { id: `__vuGain_${sk}` })
+                        ? smoothControlFactory(gainValue, {
+                              id: `__vuGain_${sk}`,
+                          })
                         : group.gain!;
 
                     // Group mix, then the gain stage — the tap: the meter
@@ -1331,7 +1354,7 @@ export class GraphBuilder {
                             ? [
                                   ...(stereoMixerFactory(group.outputs, {
                                       pan: panControllable
-                                          ? signalFactory(panValue, {
+                                          ? smoothControlFactory(panValue, {
                                                 id: `__vuPan_${sk}`,
                                             })
                                           : group.pan,
@@ -1364,7 +1387,7 @@ export class GraphBuilder {
                     const gate = (anySolo ? group.solo : !group.mute) ? 5 : 0;
                     const muteSig = signalFactory(gate, {
                         id: `__vuMute_${sk}`,
-                    });
+                    }) as Collection;
                     const smoothed = slewFactory(muteSig, {
                         fall: 0.002,
                         id: `__vuSlew_${sk}`,
@@ -1386,6 +1409,21 @@ export class GraphBuilder {
                     ) as Collection;
                     outputSignals = [...gated];
 
+                    if (group.label !== undefined) {
+                        lanesByLabel.set(group.label, {
+                            active: muteSig[0],
+                            audio: outputSignals,
+                            gain: group.gain,
+                            gainStageId: this.$c(curvedAmp)[0].moduleId,
+                            pan:
+                                group.type === 'stereo' ? group.pan : undefined,
+                            panMixId:
+                                group.type === 'stereo'
+                                    ? mixSignals[0].moduleId
+                                    : undefined,
+                        });
+                    }
+
                     // Unlabeled outs' id suffix comes from a positional
                     // counter that shifts when outs elsewhere are added or
                     // removed, so these ids carry no identity across edits.
@@ -1404,6 +1442,20 @@ export class GraphBuilder {
                             const spec = this.modules.get(hiddenId);
                             if (spec) {
                                 spec.idIsExplicit = false;
+                            }
+                        }
+                        // A structural match can pair a gain or pan control
+                        // with another out's, so they start at this patch's
+                        // value rather than ramp from a stranger's. Live
+                        // fader drags are single-module updates and still
+                        // ramp.
+                        for (const controlId of [
+                            `__vuGain_${sk}`,
+                            `__vuPan_${sk}`,
+                        ]) {
+                            const spec = this.modules.get(controlId);
+                            if (spec) {
+                                spec.skipStateTransfer = true;
                             }
                         }
                     }
@@ -1464,17 +1516,17 @@ export class GraphBuilder {
             const finalMix = mixFactory(allChannelCollections) as Collection;
 
             // Apply end of chain processing and global output gain. A
-            // numeric output gain is lifted into a $signal so the master
-            // fader can drive it live; the fader's source edits go through
-            // $setOutputGain. A signal-valued output gain renders as a
-            // locked, live-tracking fader.
+            // numeric output gain is lifted into a _smoothControl so the
+            // master fader can drive it live; the fader's source edits go
+            // through $setOutputGain. A signal-valued output gain renders as
+            // a locked, live-tracking fader.
             this.processingEndOfChain = true;
             const masterGainControllable = typeof this.outputGain === 'number';
             const masterGainValue = masterGainControllable
                 ? (this.outputGain as number)
                 : null;
             const masterGainSignal = masterGainControllable
-                ? (signalFactory(this.outputGain, {
+                ? (smoothControlFactory(this.outputGain, {
                       id: '__vuGain_main',
                   }) as ModuleOutput)
                 : this.outputGain;
@@ -1515,6 +1567,72 @@ export class GraphBuilder {
             signalFactory(0, { id: 'ROOT_OUTPUT' });
         }
 
+        // Lane taps read the gain stage's and stereo mix's processed params,
+        // so a pattern-valued gain or pan plays through the one $cycle the
+        // lane itself uses. Processed params are serialized cables, so the
+        // declared range comes from the out's own option value.
+        const constants = new Map<number, ModuleOutput>();
+        const toOutput = (value: Signal): ModuleOutput => {
+            if (value instanceof ModuleOutput) {
+                return value;
+            }
+            if (typeof value === 'number') {
+                let constant = constants.get(value);
+                if (!constant) {
+                    constant = this.$c(value)[0];
+                    constants.set(value, constant);
+                }
+                return constant;
+            }
+            return this.$c(value)[0];
+        };
+        const control = (
+            processed: unknown,
+            option: PolySignal | undefined,
+            defaultMin: number,
+            defaultMax: number,
+        ): OutLaneControl => {
+            const ranged = firstChannel(this, option);
+            const hasRange = ranged instanceof ModuleOutputWithRange;
+            return {
+                max: toOutput(hasRange ? ranged.maxValue : defaultMax),
+                min: toOutput(hasRange ? ranged.minValue : defaultMin),
+                output: toOutput(firstChannel(this, processed)),
+            };
+        };
+        for (const { label, tap, sourceLocation } of this.outLaneTaps) {
+            const lane = lanesByLabel.get(label);
+            if (!lane) {
+                const at = sourceLocation
+                    ? ` (line ${sourceLocation.line})`
+                    : '';
+                throw new Error(`$outLane: no out is labeled "${label}"${at}`);
+            }
+            tap.resolve({
+                active: lane.active,
+                audio: lane.audio,
+                level: control(
+                    this.modules.get(lane.gainStageId)!.params.input,
+                    lane.gain,
+                    0,
+                    10,
+                ),
+                pan: control(
+                    lane.panMixId === undefined
+                        ? 0
+                        : this.modules.get(lane.panMixId)!.params.pan,
+                    lane.pan,
+                    -5,
+                    5,
+                ),
+            });
+        }
+
+        for (const meter of vuMeters) {
+            meter.panSource = this.resolveControlTap(meter.panSource);
+            meter.gainSource = this.resolveControlTap(meter.gainSource);
+        }
+
         // The VU panel lists meters in source order, not channel order.
         vuMeters.sort((a, b) => a.ordinal - b.ordinal);
 
@@ -1525,6 +1643,9 @@ export class GraphBuilder {
             rootClock.params.numerator = this.timeSignatureNumerator;
             rootClock.params.denominator = this.timeSignatureDenominator;
             rootClock.params.tempoSet = this.tempoExplicitlySet;
+            if (this.groove !== undefined) {
+                rootClock.params.groove = this.groove;
+            }
         }
 
         const { eqPanels, eqScopes } = this.collectEqPanels();
@@ -1584,7 +1705,6 @@ export class GraphBuilder {
                 ),
                 ...eqScopes,
             ],
-            scopeXy: this.resolveScopeXY(),
             // Napi maps both null and undefined to None, so the renderer's
             // null-based VuMeterDef satisfies VuMeterSpec's optional fields.
             vuMeters: vuMeters as unknown as PatchGraph['vuMeters'],
@@ -1681,17 +1801,18 @@ export class GraphBuilder {
         this.modules.clear();
         this.scopes = [];
         this.eqPanels = [];
-        this.scopeXY = null;
         this.counters.clear();
         this.outGroups.clear();
         this.outGroupOrdinal = 0;
         this.outLabels.clear();
         this.sourceLocationMap.clear();
         this.deferredOutputs.clear();
+        this.outLaneTaps = [];
         this.tempo = 120;
         this.outputGain = DEFAULT_OUTPUT_GAIN;
         this.timeSignatureNumerator = 4;
         this.timeSignatureDenominator = 4;
+        this.groove = undefined;
     }
 
     /**
@@ -1817,6 +1938,18 @@ export class GraphBuilder {
     }
 
     /**
+     * Register an `$outLane` tap. It resolves in toPatch, so the out may be
+     * declared after the tap; a label no out declares throws there.
+     */
+    addOutLaneTap(
+        label: string,
+        tap: OutLaneTap,
+        sourceLocation?: { line: number; column: number },
+    ): void {
+        this.outLaneTaps.push({ label, sourceLocation, tap });
+    }
+
+    /**
      * Register a deferred output for tracking.
      * Called by DeferredModuleOutput constructor.
      */
@@ -1865,10 +1998,30 @@ export class GraphBuilder {
     }
 
     /**
+     * Resolve a VU control tap naming a deferred output to the output it was
+     * set to. An unset deferred has nothing to sample, so it gets no tap.
+     */
+    private resolveControlTap(
+        tap: VuMeterDef['panSource'],
+    ): VuMeterDef['panSource'] {
+        const deferred = tap && this.deferredOutputs.get(tap.moduleId);
+        if (!deferred) {
+            return tap;
+        }
+        const resolved = deferred.resolve();
+        return resolved
+            ? {
+                  channel: resolved.channel ?? 0,
+                  moduleId: resolved.moduleId,
+                  portName: resolved.portName,
+              }
+            : undefined;
+    }
+
+    /**
      * Resolve a scope channel ref against the $deferred outputs: a channel
      * naming a deferred module is replaced by the module it was set to.
-     * Throws if the $deferred was never set. Shared by the per-scope and
-     * $scopeXY resolution in `toPatch`.
+     * Throws if the $deferred was never set.
      */
     private resolveScopeChannel(ch: ScopeChannel): ScopeChannel {
         const deferred = this.deferredOutputs.get(ch.moduleId);
@@ -1883,57 +2036,6 @@ export class GraphBuilder {
             channel: ch.channel,
             moduleId: resolved.moduleId,
             portName: resolved.portName,
-        };
-    }
-
-    /**
-     * Resolve the current $scopeXY's channel refs against deferred outputs.
-     * Returns undefined when no scope is registered; throws if a referenced
-     * $deferred was never set, mirroring the per-scope resolution path.
-     */
-    private resolveScopeXY(): ScopeXy | undefined {
-        if (this.scopeXY === null) return undefined;
-        const resolvedPairs: ScopeXyPair[] = [];
-        for (const pair of this.scopeXY.pairs) {
-            resolvedPairs.push({
-                x: this.resolveScopeChannel(pair.x),
-                y: this.resolveScopeChannel(pair.y),
-            });
-        }
-        return {
-            pairs: resolvedPairs,
-            xRange: this.scopeXY.xRange,
-            yRange: this.scopeXY.yRange,
-        };
-    }
-
-    /**
-     * Replace the current $scopeXY (last-call-wins). Pairs are already
-     * cycled to a common arity by the caller; this just records the channel
-     * refs and per-axis display range. Resolved in `toPatch`.
-     */
-    setScopeXY(
-        pairs: { x: ModuleOutput; y: ModuleOutput }[],
-        xRange: [number, number],
-        yRange: [number, number],
-        sourceLocation?: { line: number; column: number },
-    ) {
-        this.scopeXY = {
-            pairs: pairs.map((p) => ({
-                x: {
-                    channel: p.x.channel,
-                    moduleId: p.x.moduleId,
-                    portName: p.x.portName,
-                },
-                y: {
-                    channel: p.y.channel,
-                    moduleId: p.y.moduleId,
-                    portName: p.y.portName,
-                },
-            })),
-            xRange,
-            yRange,
-            sourceLocation,
         };
     }
 }
@@ -2649,6 +2751,43 @@ function replaceDeferred(
 
         return replace(value);
     });
+}
+
+/**
+ * First channel of a signal param value, raw or serialized: the value itself
+ * for a scalar or ModuleOutput, a ModuleOutput for a serialized cable, else
+ * the first element of an array, Collection, or `$gN` group. An empty or
+ * absent value reads as 0.
+ */
+function firstChannel(builder: GraphBuilder, value: unknown): Signal {
+    if (isSignalGroupLike(value)) {
+        return firstChannel(builder, value.signals);
+    }
+    const cable = ResolvedModuleOutput.safeParse(value);
+    if (cable.success) {
+        return new ModuleOutput(
+            builder,
+            cable.data.module,
+            cable.data.port,
+            cable.data.channel,
+        );
+    }
+    if (
+        value instanceof ModuleOutput ||
+        typeof value === 'number' ||
+        typeof value === 'string'
+    ) {
+        return value;
+    }
+    if (
+        typeof value === 'object' &&
+        value !== null &&
+        Symbol.iterator in value
+    ) {
+        const [first] = value as Iterable<unknown>;
+        return first === undefined ? 0 : firstChannel(builder, first);
+    }
+    return 0;
 }
 
 function valueToSignal(value: unknown): unknown {

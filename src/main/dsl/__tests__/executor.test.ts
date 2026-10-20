@@ -500,7 +500,7 @@ describe('sequencing', () => {
         const patch = execPatch('$c($p("c4 e4"), "c4", 440).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
         const lifted = findModules(patch, '$signal').filter(
-            (m) => m.params.source === 'c4' || m.params.source === 440,
+            (m) => m.params.value === 'c4' || m.params.value === 440,
         );
         expect(lifted.length).toBe(2);
     });
@@ -1551,11 +1551,11 @@ describe('control groups', () => {
 // ─── Buttons ─────────────────────────────────────────────────────────────────
 
 describe('buttons', () => {
-    /** Read the constant source volts off a $signal module's params. */
+    /** Read the constant volts off a $signal module's params. */
     function signalSource(patch: PatchGraph, id: string): unknown {
         const m = patch.modules.find((mod) => mod.id === id);
         expect(m).toBeDefined();
-        const source = (m as { params: { source: unknown } }).params.source;
+        const source = (m as { params: { value: unknown } }).params.value;
         return Array.isArray(source) ? source[0] : source;
     }
 
@@ -1674,6 +1674,40 @@ describe('global settings', () => {
         expect(() => execPatch('$setTempo(0)')).toThrow(/\$setTempo/);
         expect(() => execPatch('$setTempo(-120)')).toThrow(/\$setTempo/);
     });
+
+    test('$setGroove puts the template on ROOT_CLOCK', () => {
+        const patch = execPatch('$setGroove($swing(0.75, { grid: 8 }))');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toEqual({ grid: 8, timing: [0, 0.5] });
+    });
+
+    test('ROOT_CLOCK has no groove param without $setGroove', () => {
+        const patch = execPatch('$setTempo(120)');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toBeUndefined();
+    });
+
+    test('$setGroove rejects a value without a timing array', () => {
+        expect(() => execPatch('$setGroove(0.6)')).toThrow(/\$setGroove/);
+    });
+
+    test('$swing humanize sets the random timing offset', () => {
+        const patch = execPatch('$setGroove($swing(0.6, { humanize: 0.05 }))');
+        const clock = patch.modules.find((m) => m.id === 'ROOT_CLOCK');
+        expect(clock?.params.groove).toMatchObject({
+            grid: 16,
+            random: 0.05,
+        });
+        expect(() => execPatch('$swing(0.6, { humanize: -0.1 })')).toThrow(
+            /\$swing/,
+        );
+        expect(() => execPatch('$swing(0.6, 8)')).toThrow(/config object/);
+    });
+
+    test('$swing rejects a ratio outside (0, 1)', () => {
+        expect(() => execPatch('$swing(1)')).toThrow(/\$swing/);
+        expect(() => execPatch('$swing(0)')).toThrow(/\$swing/);
+    });
 });
 
 // ─── Built-in modules ────────────────────────────────────────────────────────
@@ -1707,7 +1741,7 @@ describe('built-in modules', () => {
                 inputChannels: channels,
             }).patch;
             const source = patch.modules.find((m) => m.id === 'ROOT_INPUT')!
-                .params.source as unknown[];
+                .params.value as unknown[];
             return source.length;
         };
 
@@ -2731,155 +2765,6 @@ describe('$table helpers', () => {
             first: { type: 'bend', amount: 0.3 },
             second: { type: 'mirror', amount: 0.5 },
         });
-    });
-});
-
-// ─── $scopeXY (background Lissajous) ─────────────────────────────────────────
-
-describe('$scopeXY', () => {
-    test('records a single (x, y) pair with default range', () => {
-        const patch = execPatch(`
-            const a = $sine($hz(440))
-            const b = $sine($hz(330))
-            $scopeXY(a, b)
-            a.out()
-        `);
-        expect(patch.scopeXy).toBeDefined();
-        expect(patch.scopeXy!.pairs).toHaveLength(1);
-        expect(patch.scopeXy!.pairs[0].x.portName).toBe('output');
-        expect(patch.scopeXy!.pairs[0].y.portName).toBe('output');
-        expect(patch.scopeXy!.xRange).toEqual([-5, 5]);
-        expect(patch.scopeXy!.yRange).toEqual([-5, 5]);
-    });
-
-    test('cycles the shorter axis to match the longer one', () => {
-        const patch = execPatch(`
-            const a = $sine($hz(110))
-            const b = $sine($hz(220))
-            const c = $sine($hz(440))
-            $scopeXY($c(a, b), c)
-            a.out()
-        `);
-        expect(patch.scopeXy!.pairs).toHaveLength(2);
-        // Both pairs share the same y module (cycling c with len 1)
-        const yModules = patch.scopeXy!.pairs.map((p) => p.y.moduleId);
-        expect(new Set(yModules).size).toBe(1);
-    });
-
-    test('cycles both ways when neither length divides the other', () => {
-        const patch = execPatch(`
-            const a = $sine($hz(110))
-            const b = $sine($hz(220))
-            const p = $sine($hz(330))
-            const q = $sine($hz(440))
-            const r = $sine($hz(550))
-            $scopeXY($c(a, b), $c(p, q, r))
-            a.out()
-        `);
-        expect(patch.scopeXy!.pairs).toHaveLength(3);
-        // x: [a, b, a] (cycle), y: [p, q, r]
-        const xs = patch.scopeXy!.pairs.map((p) => p.x.moduleId);
-        const ys = patch.scopeXy!.pairs.map((p) => p.y.moduleId);
-        expect(xs[0]).toBe(xs[2]);
-        expect(xs[0]).not.toBe(xs[1]);
-        expect(new Set(ys).size).toBe(3);
-    });
-
-    test('last call wins', () => {
-        const patch = execPatch(`
-            const a = $sine($hz(110))
-            const b = $sine($hz(220))
-            const c = $sine($hz(330))
-            $scopeXY(a, b)
-            $scopeXY(b, c)
-            a.out()
-        `);
-        expect(patch.scopeXy!.pairs).toHaveLength(1);
-        // second call's pair must be the visible one
-        expect(patch.scopeXy!.pairs[0].x.moduleId).not.toBe(
-            patch.scopeXy!.pairs[0].y.moduleId,
-        );
-    });
-
-    test('custom xRange / yRange flow through to the patch', () => {
-        const patch = execPatch(`
-            const a = $sine($hz(440))
-            $scopeXY(a, a, { xRange: [-1, 1], yRange: [0, 10] })
-            a.out()
-        `);
-        expect(patch.scopeXy!.xRange).toEqual([-1, 1]);
-        expect(patch.scopeXy!.yRange).toEqual([0, 10]);
-    });
-
-    test('empty x or y is a no-op', () => {
-        const patch = execPatch(`
-            const a = $sine($hz(440))
-            $scopeXY([], a)
-            a.out()
-        `);
-        expect(patch.scopeXy).toBeUndefined();
-    });
-
-    test('bad range throws', () => {
-        expect(() =>
-            execPatch(`
-                const a = $sine($hz(440))
-                $scopeXY(a, a, { xRange: [5, -5] })
-                a.out()
-            `),
-        ).toThrow(/xRange/);
-    });
-
-    test('bad yRange throws', () => {
-        expect(() =>
-            execPatch(`
-                const a = $sine($hz(440))
-                $scopeXY(a, a, { yRange: [10, 0] })
-                a.out()
-            `),
-        ).toThrow(/yRange/);
-    });
-
-    test('non-finite range throws', () => {
-        expect(() =>
-            execPatch(`
-                const a = $sine($hz(440))
-                $scopeXY(a, a, { yRange: [0, Infinity] })
-                a.out()
-            `),
-        ).toThrow(/yRange/);
-    });
-
-    test('lifts bare signal literals into $signal modules', () => {
-        const patch = execPatch(`
-            const a = $sine('c4')
-            $scopeXY(a, 2.5)
-            a.out()
-        `);
-        expect(patch.scopeXy!.pairs).toHaveLength(1);
-        const y = patch.scopeXy!.pairs[0].y;
-        expect(patch.modules.find((m) => m.id === y.moduleId)?.moduleType).toBe(
-            '$signal',
-        );
-    });
-
-    test('lifts literals nested in arrays, cycling to the longer axis', () => {
-        const patch = execPatch(`
-            $scopeXY([$sine(0), 0], $saw('c3'))
-            $sine(0).out()
-        `);
-        expect(patch.scopeXy!.pairs).toHaveLength(2);
-    });
-
-    test('unset deferred used in $scopeXY throws', () => {
-        expect(() =>
-            execPatch(`
-                const d = $deferred()
-                const a = $sine($hz(440))
-                $scopeXY(d[0], a)
-                a.out()
-            `),
-        ).toThrow(/Unset DeferredModuleOutput used in a scope/);
     });
 });
 

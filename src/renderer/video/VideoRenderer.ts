@@ -4,6 +4,7 @@ import { AudioInputs } from './AudioInputs';
 import { withinTextureLimit } from './canvasSize';
 import { PreviewCapture } from './PreviewCapture';
 import { regionAverage } from './cvSample';
+import { ScopeBeams } from './ScopeBeams';
 import { ShaderProgram } from './ShaderProgram';
 import { SourceTextures, type OpenStream } from './SourceTextures';
 import { ShaderGate } from './shaderGate';
@@ -11,6 +12,7 @@ import type {
     VideoCvValue,
     VideoPreviewFrame,
     VideoPull,
+    VideoRestart,
     VideoShaderUpdate,
 } from '../../shared/video/videoGraph';
 import { MAX_FEEDBACK_BUFFERS } from '../../shared/video/videoGraph';
@@ -43,14 +45,18 @@ export class VideoRenderer {
     private pendingControls = new Map<string, number>();
     private frameHandle = 0;
     private frameIndex = 0;
-    private pullSource: ((fresh: boolean) => Promise<VideoPull>) | null = null;
+    private pullSource: ((restart: VideoRestart) => Promise<VideoPull>) | null =
+        null;
     /**
      * Counts shader changes, so a pull begun before one is not applied after
      * it, and a preview read back from one program is not taken for another's.
      */
     private epoch = 0;
-    /** True until the first pull after a shader change, which restarts every tap. */
-    private freshPull = true;
+    /**
+     * The taps the next pull reads afresh: every tap at first, then those a
+     * shader change moved onto another signal.
+     */
+    private restart: VideoRestart = 'all';
     /** False while the engine is stopped, when the picture holds still. */
     private running = true;
     /** When the shader's time was 0: the engine's latest start. */
@@ -68,6 +74,7 @@ export class VideoRenderer {
     private readonly previews: PreviewCapture;
     private readonly audio: AudioInputs;
     private readonly sources: SourceTextures;
+    private readonly scopes: ScopeBeams;
     private errorSink: ((message: string) => void) | null = null;
     private liveSink: ((hasOutput: boolean) => void) | null = null;
     private lostSink: ((message: string) => void) | null = null;
@@ -89,6 +96,7 @@ export class VideoRenderer {
             (message) => this.errorSink?.(message),
             openStream,
         );
+        this.scopes = new ScopeBeams(device);
         this.previews = new PreviewCapture(device, (frame, drawnBy) =>
             this.routeFrame(frame, drawnBy),
         );
@@ -195,7 +203,7 @@ export class VideoRenderer {
      * shader's time starts over from 0 and videos from their loop start.
      */
     setPullSource(
-        source: ((fresh: boolean) => Promise<VideoPull>) | null,
+        source: ((restart: VideoRestart) => Promise<VideoPull>) | null,
     ): void {
         this.pullSource = source;
     }
@@ -252,6 +260,7 @@ export class VideoRenderer {
         this.buffers.destroy();
         this.audio.destroy();
         this.sources.destroy();
+        this.scopes.destroy();
         this.device.destroy();
     }
 
@@ -263,8 +272,11 @@ export class VideoRenderer {
     }
 
     private activate(program: ShaderProgram | null): void {
-        this.audio.reset(program?.histories ?? []);
-        this.freshPull = true;
+        const forgotten = this.audio.reset(
+            program?.histories ?? [],
+            program?.tapStamps ?? [],
+        );
+        this.restart = program?.tapStamps === undefined ? 'all' : forgotten;
         this.epoch++;
         this.liveSink?.(program?.hasOutput ?? false);
         if (program === null) {
@@ -282,6 +294,7 @@ export class VideoRenderer {
             this.canvas.height,
         );
         this.sources.sync(program.sources);
+        this.scopes.sync(program.scopes);
         for (const [moduleId, value] of this.pendingControls) {
             program.setControl(moduleId, value);
         }
@@ -297,6 +310,7 @@ export class VideoRenderer {
         this.releaseProgram();
         this.audio.reset([]);
         this.sources.sync([]);
+        this.scopes.sync([]);
         this.previews.resize(0, 0, 0);
     }
 
@@ -350,6 +364,9 @@ export class VideoRenderer {
         if (running) {
             this.timeOriginMs = performance.now();
             this.sources.restart();
+            // A new start draws only what is played from now on.
+            this.audio.clear();
+            this.scopes.clearTrails();
         } else {
             this.sources.pause();
         }
@@ -375,26 +392,36 @@ export class VideoRenderer {
     private pull(): void {
         if (this.pullSource === null || this.pulling) return;
         this.pulling = true;
-        const { epoch } = this;
-        const fresh = this.freshPull;
-        this.freshPull = false;
-        this.pullSource(fresh)
+        const { epoch, restart } = this;
+        this.pullSource(restart)
             .then(({ applied, cancelled, running, taps }) => {
+                // These samples may span the moment the engine changed
+                // patch, so only taps carrying the same signal through the
+                // change keep them; the rest are read afresh.
+                const carried = () =>
+                    taps.filter(({ tap }) => this.carries(tap));
                 if (epoch !== this.epoch) {
-                    this.freshPull = true;
+                    this.audio.push(carried());
                     return;
                 }
+                if (this.restart === restart) this.restart = [];
                 const restarted = this.gate.report(applied, cancelled);
                 this.setRunning(running);
-                // These samples may span the moment the engine changed
-                // patch, so they go to neither shader.
-                if (this.settle(restarted) || this.gate.holding) return;
+                if (this.settle(restarted)) {
+                    this.audio.push(carried());
+                    return;
+                }
                 this.audio.push(taps);
             })
             .catch(() => undefined)
             .finally(() => {
                 this.pulling = false;
             });
+    }
+
+    /** Whether tap `tap` carries on unbroken, needing no fresh read. */
+    private carries(tap: number): boolean {
+        return this.restart !== 'all' && !this.restart.includes(tap);
     }
 
     private frame = (): void => {
@@ -419,9 +446,20 @@ export class VideoRenderer {
                 this.canvas.width,
                 this.canvas.height,
             );
+            this.scopes.resize(this.canvas.width, this.canvas.height);
         }
 
         const encoder = this.device.createCommandEncoder();
+        const now = performance.now();
+        if (program !== null) {
+            this.audio.update(program, now);
+            this.scopes.draw(
+                encoder,
+                this.audio.history,
+                program.uniforms,
+                (row) => this.audio.filled(row),
+            );
+        }
         const pass = encoder.beginRenderPass({
             colorAttachments: this.colorAttachments(program?.bufferCount ?? 0),
         });
@@ -429,8 +467,6 @@ export class VideoRenderer {
         let groups: ReturnType<ShaderProgram['bindGroups']> | null = null;
         if (program !== null) {
             const { uniformBuffer, uniforms } = program;
-            const now = performance.now();
-            this.audio.update(program, now);
             this.sources.update();
             uniforms[UNIFORM_TIME_OFFSET] = (now - this.timeOriginMs) / 1000;
             uniforms[UNIFORM_RESOLUTION_OFFSET] = this.canvas.width;
@@ -441,6 +477,7 @@ export class VideoRenderer {
                 this.buffers,
                 this.audio.history,
                 this.sources,
+                this.scopes,
                 this.sampler,
             );
             pass.setPipeline(program.pipeline);

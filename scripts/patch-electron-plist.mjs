@@ -6,7 +6,7 @@
  * camera usage string that `$v.camera` needs for the system to ask, and
  * names the bundle "Operator Dev (<checkout folder>)" so the macOS menu bar
  * and Dock tell dev builds from different worktrees apart. The name matches
- * the dev app name set in src/main/main.ts.
+ * the dev app name set in src/main/app.ts.
  *
  * The name is a localized display name: macOS shows it only while the base
  * CFBundleName/CFBundleDisplayName still match the bundle's file name

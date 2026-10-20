@@ -21,7 +21,7 @@ async function setEditor(window: Page, code: string) {
 
 async function save(window: Page) {
     await window.locator('.monaco-editor').first().click();
-    await window.keyboard.press('Meta+s');
+    await window.keyboard.press('ControlOrMeta+s');
 }
 
 test.describe('editor buffers', () => {
