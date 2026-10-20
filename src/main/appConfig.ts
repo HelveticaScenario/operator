@@ -1,6 +1,9 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { z } from 'zod';
+import { MONOSPACE_FONTS } from '../shared/fonts';
+
+const MonospaceFontSchema = z.enum(MONOSPACE_FONTS);
 
 export const AppConfigSchema = z.object({
     audioConfig: z
@@ -22,54 +25,28 @@ export const AppConfigSchema = z.object({
             'underline-thin',
         ])
         .optional(),
-    font: z
-        .enum([
-            // Bundled fonts
-            'Fira Code',
-            'JetBrains Mono',
-            'Cascadia Code',
-            'Source Code Pro',
-            'IBM Plex Mono',
-            'Hack',
-            'Inconsolata',
-            'Monaspace Neon',
-            'Monaspace Argon',
-            'Monaspace Xenon',
-            'Monaspace Krypton',
-            'Monaspace Radon',
-            'Geist Mono',
-            'Iosevka',
-            'Victor Mono',
-            'Roboto Mono',
-            'Maple Mono',
-            'Commit Mono',
-            '0xProto',
-            'Intel One Mono',
-            'Mononoki',
-            'Anonymous Pro',
-            'Recursive',
-            // System fonts (available only if installed)
-            'SF Mono',
-            'Monaco',
-            'Menlo',
-            'Consolas',
-        ])
-        .optional(),
+    font: MonospaceFontSchema.optional(),
     fontLigatures: z.boolean().optional(),
     fontSize: z.number().min(8).max(72).optional(),
     lastOpenedFolder: z.string().optional(),
     prettier: z.record(z.string(), z.unknown()).optional(),
     skippedUpdateVersion: z.string().optional(),
     theme: z.string().optional(),
-    xyScopeIntensity: z.number().min(0).max(1).optional(),
-    xyScopePersistence: z.number().min(0).max(1).optional(),
-    xyScopeUpsample: z.boolean().optional(),
-    xyScopeLineWidth: z.number().min(0.002).max(0.06).optional(),
     codeBackdropOpacity: z.number().min(0).max(1).optional(),
     performanceAspect: z
         .enum(['free', '16:9', '4:3', '1:1', '9:16'])
         .optional(),
     performanceScale: z.number().min(0.1).max(1).optional(),
+    performanceCodeVisible: z.boolean().optional(),
+    performanceCodeOpacity: z.number().min(0).max(1).optional(),
+    performanceCodeBacking: z.number().min(0).max(1).optional(),
+    performanceFont: MonospaceFontSchema.optional(),
+    performanceFontSize: z.number().min(8).max(160).optional(),
+    performanceLineHeight: z.number().min(1).max(3).optional(),
+    performanceFontLigatures: z.boolean().optional(),
+    performanceLineNumbers: z.boolean().optional(),
+    performanceScrollSpeed: z.number().min(0).max(1).optional(),
+    performanceTheme: z.string().optional(),
     vuPanelVisible: z.boolean().optional(),
     vuPanelHeight: z.number().min(84).max(480).optional(),
 });

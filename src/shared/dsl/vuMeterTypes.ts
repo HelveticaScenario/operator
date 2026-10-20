@@ -18,7 +18,7 @@ export interface VuMeterDef {
     /** 1 (mono) or 2 (stereo). */
     channels: number;
     /**
-     * `$signal` driving the mute gate: source 5 = audible, 0 = silenced.
+     * `$signal` driving the mute gate: value 5 = audible, 0 = silenced.
      * Absent for the end-of-chain master meter, which has no mute/solo
      * (undefined rather than null: napi's Option only accepts undefined).
      */
@@ -32,7 +32,7 @@ export interface VuMeterDef {
      * signal-driven or the out is mono (no knob).
      */
     pan: number | null;
-    /** `$signal` driving the stereo mixer's pan; null when `pan` is null. */
+    /** `_smoothControl` driving the stereo mixer's pan; null when `pan` is null. */
     panModuleId: string | null;
     /**
      * True when pan is signal-driven: the knob renders locked (externally
@@ -45,7 +45,7 @@ export interface VuMeterDef {
      * Null when gain is signal-driven.
      */
     gain: number | null;
-    /** `$signal` driving the gain stage; null when `gain` is null. */
+    /** `_smoothControl` driving the gain stage; null when `gain` is null. */
     gainModuleId: string | null;
     /** True when gain is signal-driven: the fader is locked and live. */
     gainLocked: boolean;
