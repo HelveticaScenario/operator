@@ -3,25 +3,14 @@
 
 use std::sync::LazyLock;
 
+use super::lanes::Lanes;
+
 /// Thermal voltage at 27 °C, the temperature the SPICE models are fitted at.
 pub(super) const VT: f64 = 0.025_865;
 
 /// 1N4148 small-signal diode (onsemi SPICE model).
 pub(super) const DIODE_IS: f64 = 2.52e-9;
 pub(super) const DIODE_NVT: f64 = 1.752 * VT;
-
-/// V2164 second-harmonic coefficient, per ampere of input current, fitted to
-/// the datasheet's class-A 0.15 % THD at ±20 dB. Blades biases its VCAs in
-/// class A (6.2k from MODE to +12 V).
-const VCA_HD2_PER_AMP: f32 = 28.9;
-
-/// V2164 gain error for input current `i` (A) at gain `gain`: the output is
-/// `gain · i · vca_hd2(gain, i)`. Mismatched emitter resistances in the cell's
-/// NPN and PNP halves add a second harmonic that vanishes at unity gain.
-#[inline]
-pub(super) fn vca_hd2(gain: f32, i: f32) -> f32 {
-    1.0 + (1.0 - gain) * VCA_HD2_PER_AMP * i
-}
 
 /// A junction's current law with PSpice's high-injection knee,
 /// `i = inrm · √(ikf / (ikf + inrm))` where `inrm = is · (exp(v / nvt) − 1)`.
@@ -165,7 +154,8 @@ pub(super) struct ZenerPoint {
     pub slope: f64,
 }
 
-/// Lowest current [`zener_pair`] models (10 nA, about 2.27 V across the pair).
+/// Lowest current [`ZenerTables::pair`] models (10 nA, about 2.27 V across the
+/// pair).
 /// Below it the pair carries too little to matter against the tens of kΩ
 /// around it.
 pub(super) const ZENER_MIN_LN_I: f64 = -18.420_680_743_952_367;
@@ -185,7 +175,7 @@ const PAIR_STEPS: usize = 1179;
 const CAP_PER_VOLT: f64 = 128.0;
 const CAP_MAX_V: f64 = 6.0;
 
-struct ZenerTables {
+pub(super) struct ZenerTables {
     /// Pair `(voltage, d voltage / d ln current)` on the log-current grid from
     /// [`ZENER_MIN_LN_I`].
     pair: Box<[(f64, f64)]>,
@@ -236,40 +226,56 @@ pub(super) fn prime() {
     LazyLock::force(&ZENER);
 }
 
-/// The pair's operating point at current `exp(ln_i)`, for `ln_i` at or above
-/// [`ZENER_MIN_LN_I`]: cubic Hermite interpolation of the tabulated curve,
-/// extended linearly in `ln_i` above 1 A.
-#[inline]
-pub(super) fn zener_pair(ln_i: f64) -> ZenerPoint {
-    let table = &ZENER.pair;
-    let pos = (ln_i - ZENER_MIN_LN_I) * PER_LN_I;
-    let k = (pos as usize).min(table.len() - 2);
-    let t = pos - k as f64;
-    let ((v0, s0), (v1, s1)) = (table[k], table[k + 1]);
-    let h = 1.0 / PER_LN_I;
-    let (voltage, slope) = if t > 1.0 {
-        (v1 + s1 * (t - 1.0) * h, s1)
-    } else {
-        let (t2, t3) = (t * t, t * t * t);
-        let voltage = (2.0 * t3 - 3.0 * t2 + 1.0) * v0
-            + (t3 - 2.0 * t2 + t) * h * s0
-            + (3.0 * t2 - 2.0 * t3) * v1
-            + (t3 - t2) * h * s1;
-        let slope = ((6.0 * t2 - 6.0 * t) * (v0 - v1)) / h
-            + (3.0 * t2 - 4.0 * t + 1.0) * s0
-            + (3.0 * t2 - 2.0 * t) * s1;
-        (voltage, slope)
-    };
-    ZenerPoint {
-        current: ln_i.exp(),
-        voltage,
-        slope,
+/// The zener tables, built by [`prime`].
+pub(super) fn zener_tables() -> &'static ZenerTables {
+    &ZENER
+}
+
+impl ZenerTables {
+    /// The pair's operating point at current `exp(ln_i)`, for `ln_i` at or
+    /// above [`ZENER_MIN_LN_I`]: cubic Hermite interpolation of the tabulated
+    /// curve, extended linearly in `ln_i` above 1 A.
+    #[inline]
+    pub(super) fn pair(&self, ln_i: f64) -> ZenerPoint {
+        let table = &self.pair;
+        let pos = (ln_i - ZENER_MIN_LN_I) * PER_LN_I;
+        let k = (pos as usize).min(table.len() - 2);
+        let t = pos - k as f64;
+        let ((v0, s0), (v1, s1)) = (table[k], table[k + 1]);
+        let h = 1.0 / PER_LN_I;
+        let (voltage, slope) = if t > 1.0 {
+            (v1 + s1 * (t - 1.0) * h, s1)
+        } else {
+            let (t2, t3) = (t * t, t * t * t);
+            let voltage = (2.0 * t3 - 3.0 * t2 + 1.0) * v0
+                + (t3 - 2.0 * t2 + t) * h * s0
+                + (3.0 * t2 - 2.0 * t3) * v1
+                + (t3 - t2) * h * s1;
+            let slope = ((6.0 * t2 - 6.0 * t) * (v0 - v1)) / h
+                + (3.0 * t2 - 4.0 * t + 1.0) * s0
+                + (3.0 * t2 - 2.0 * t) * s1;
+            (voltage, slope)
+        };
+        ZenerPoint {
+            current: ln_i.exp(),
+            voltage,
+            slope,
+        }
+    }
+
+    /// Capacitance of the pair with `v` across it, per lane. The
+    /// reverse-biased junction's depletion layer widens with voltage, so it
+    /// falls from 100 pF at 0 V to about 55 pF at 4.5 V; past the table it
+    /// holds its last value.
+    #[inline]
+    pub(super) fn capacitance<L: Lanes>(&self, v: L) -> L {
+        L::lerp(&self.capacitance, v.abs() * L::splat(CAP_PER_VOLT as f32))
     }
 }
 
 /// Voltage across the pair carrying current `exp(ln_i)`.
 pub(super) fn zener_pair_voltage(ln_i: f64) -> f64 {
-    zener_pair(ln_i).voltage
+    ZENER.pair(ln_i).voltage
 }
 
 /// Output magnitude of a transimpedance amp whose feedback is `r` across
@@ -292,18 +298,6 @@ pub(super) fn zener_clamp(x: f64, pairs: f64, r: f64) -> f64 {
 /// Small-signal capacitance of the pair at 0 V: two zero-bias junctions in
 /// series.
 pub(super) const ZENER_PAIR_CAPACITANCE_0V: f32 = (ZENER_CJO / 2.0) as f32;
-
-/// Capacitance of the pair with `v` across it. The reverse-biased junction's
-/// depletion layer widens with voltage, so it falls from 100 pF at 0 V to
-/// about 55 pF at 4.5 V.
-#[inline]
-pub(super) fn zener_pair_capacitance(v: f32) -> f32 {
-    let table = &ZENER.capacitance;
-    let pos = v.abs() * CAP_PER_VOLT as f32;
-    let k = (pos as usize).min(table.len() - 2);
-    let t = (pos - k as f32).min(1.0);
-    table[k] + (table[k + 1] - table[k]) * t
-}
 
 #[cfg(test)]
 mod tests {
@@ -345,7 +339,7 @@ mod tests {
         for ln_i in [-18.0, -14.3, -9.0, -6.0, -3.0] {
             let h = 1.0e-5;
             let fd = (zener_pair_voltage(ln_i + h) - zener_pair_voltage(ln_i - h)) / (2.0 * h);
-            let slope = zener_pair(ln_i).slope;
+            let slope = ZENER.pair(ln_i).slope;
             assert!(
                 (fd - slope).abs() < 1.0e-4 * slope,
                 "ln_i={ln_i}: {fd} vs {slope}"
@@ -355,13 +349,16 @@ mod tests {
 
     #[test]
     fn capacitance_falls_with_voltage() {
-        assert!((zener_pair_capacitance(0.0) - ZENER_PAIR_CAPACITANCE_0V).abs() < 0.5e-12);
+        let c = |v: f32| ZENER.capacitance(v);
+        assert!((c(0.0) - ZENER_PAIR_CAPACITANCE_0V).abs() < 0.5e-12);
         let mut last = f32::INFINITY;
         for n in 0..12 {
-            let c = zener_pair_capacitance(n as f32 * 0.5);
-            assert!(c <= last, "{c} at {} V", n as f32 * 0.5);
-            last = c;
+            let at = c(n as f32 * 0.5);
+            assert!(at <= last, "{at} at {} V", n as f32 * 0.5);
+            last = at;
         }
-        assert!((40.0e-12..60.0e-12).contains(&zener_pair_capacitance(5.0)));
+        assert!((40.0e-12..60.0e-12).contains(&c(5.0)));
+        // Past the table the last value holds.
+        assert_eq!(c(1.0e6), c(6.0));
     }
 }

@@ -11,10 +11,10 @@
 use super::sanitize;
 
 /// Coefficients for the cascade in branch A. Cascaded as stage1 → stage2.
-const BRANCH_A: [f32; 2] = [0.07471, 0.42943];
+pub(crate) const BRANCH_A: [f32; 2] = [0.07471, 0.42943];
 
 /// Coefficients for the cascade in branch B.
-const BRANCH_B: [f32; 2] = [0.24847, 0.79847];
+pub(crate) const BRANCH_B: [f32; 2] = [0.24847, 0.79847];
 
 #[derive(Clone, Copy, Default)]
 struct Allpass1 {

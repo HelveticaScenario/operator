@@ -11,27 +11,29 @@
 mod components;
 mod curve;
 mod drive;
+mod lanes;
 mod output;
 mod svf;
+mod vca;
 
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
     dsp::utils::{
-        cached::Cached,
-        halfband::{Halfband2xDown, Halfband2xUp},
-        one_pole::OnePole,
         rng::{LcgRng, seed_base},
         sanitize, voct_to_hz,
     },
     poly::{PolyOutput, PolySignal, PolySignalExt},
 };
 
-use components::{ZENER_PAIR_CAPACITANCE_0V, vca_hd2};
-use drive::{DriveState, PreEmphasis};
+use components::{ZENER_PAIR_CAPACITANCE_0V, ZenerTables};
+use curve::Curve;
+use drive::{DriveCurves, DriveState, PreEmphasis};
+use lanes::{HalfbandDown, HalfbandUp, LANES, LaneCache, Lanes, OnePole, f32x4};
 use output::{OUTPUT_POLE_HZ, output_amp, rails};
-use svf::{CoreTuning, NEGATIVE_DAMPING, SvfCore};
+use svf::{CoreTuning, NEGATIVE_DAMPING, SvfCore, TuningX4};
+use vca::GainX4;
 
 #[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
 #[serde(rename_all = "camelCase")]
@@ -128,43 +130,81 @@ const DRIVE_POLE_HZ: f32 =
 /// from it, so the filter starts ringing without any input, as the hardware does.
 const NOISE_FLOOR_V: f32 = 1.0e-5;
 
-/// Per-channel caches of the control laws. The integrator gains also depend on
-/// the core rate; [`ChannelState::configure`] clears them when it changes.
+/// Control laws per lane, each stored in the form its stage reads and
+/// recomputed only for lanes whose control changed. The integrator gains also
+/// depend on the core rate; [`GroupState::configure`] clears them when it
+/// changes.
 #[derive(Default, Clone, Copy)]
 struct Controls {
-    drive_gain: Cached<f32>,
-    fold_gains: Cached<(f32, f32)>,
-    tuning: Cached<CoreTuning>,
-    res_gain: Cached<f32>,
+    drive: LaneCache,
+    drive_x4: GainX4,
+    fold: LaneCache,
+    fold_gains: [(f32, f32); LANES],
+    tuning: LaneCache,
+    tuning_x4: TuningX4,
+    res: LaneCache,
+    res_x4: GainX4,
+    mode: LaneCache,
+    mode_x4: (GainX4, GainX4),
 }
 
-/// With `highRes` the whole circuit runs at twice the engine rate, and the
-/// four outputs are decimated separately.
+impl Controls {
+    fn clear(&mut self) {
+        self.drive.clear();
+        self.fold.clear();
+        self.tuning.clear();
+        self.res.clear();
+        self.mode.clear();
+    }
+}
+
+/// The shared tables, fetched once per update so evaluations skip their
+/// lazy-initialisation checks.
+#[derive(Clone, Copy)]
+struct Tables {
+    zener: &'static ZenerTables,
+    drive: &'static DriveCurves,
+    chain: &'static Curve,
+}
+
+impl Tables {
+    fn get() -> Self {
+        Self {
+            zener: components::zener_tables(),
+            drive: drive::curves(),
+            chain: output::chain(),
+        }
+    }
+}
+
+/// Four channels' state, one lane each; group `g` holds channels `4g..4g + 4`
+/// and lives in `channel_state[g]`. With `highRes` the whole circuit runs at
+/// twice the engine rate, and the four outputs are decimated separately.
 #[derive(Default, Clone, Copy)]
-struct ChannelState {
+struct GroupState {
     /// Rate the core and its caches are configured for; 0 until configured.
     core_rate: f32,
     controls: Controls,
-    up: Halfband2xUp,
-    down: [Halfband2xDown; 4],
+    up: HalfbandUp,
+    down: [HalfbandDown; 4],
     drive_pole: OnePole,
     output_poles: [OnePole; 3],
     drive: DriveState,
     core: SvfCore,
-    noise: LcgRng,
+    noise: [LcgRng; LANES],
     pre_emphasis: PreEmphasis,
 }
 
-impl ChannelState {
+impl GroupState {
     /// Sets the core's rate-dependent coefficients, clearing the oversampling
-    /// filters and integrator cache when the rate changes.
+    /// filters and integrator caches when the rate changes.
     fn configure(&mut self, rate: f32) {
         if self.core_rate == rate {
             return;
         }
         self.core_rate = rate;
-        self.controls.tuning = Cached::default();
-        self.up = Halfband2xUp::default();
+        self.controls.tuning.clear();
+        self.up = HalfbandUp::default();
         self.down = Default::default();
         self.pre_emphasis = PreEmphasis::default();
         let coeff = |hz: f32| 1.0 - (-std::f32::consts::TAU * hz / rate).exp();
@@ -174,31 +214,59 @@ impl ChannelState {
         }
     }
 
-    /// One core-rate sample from drive VCA output `x`, returning the outputs
+    /// Returns lane `lane` to rest, as a fresh channel starts. Its noise
+    /// generator keeps its seed.
+    fn clear_lane(&mut self, lane: usize) {
+        let c = &mut self.controls;
+        c.drive.clear_lane(lane);
+        c.fold.clear_lane(lane);
+        c.tuning.clear_lane(lane);
+        c.res.clear_lane(lane);
+        c.mode.clear_lane(lane);
+        self.up.clear_lane(lane);
+        self.down.iter_mut().for_each(|d| d.clear_lane(lane));
+        self.drive_pole.clear_lane(lane);
+        self.output_poles
+            .iter_mut()
+            .for_each(|p| p.clear_lane(lane));
+        self.drive.clear_lane(lane);
+        self.core.clear_lane(lane);
+        self.pre_emphasis.clear_lane(lane);
+    }
+
+    /// One core-rate sample from drive VCA outputs `x`, returning the outputs
     /// `[output, lp, bp, hp]`. The output amp's feedback pole filters the LP,
     /// BP and HP nodes before the mode VCAs, which only rescale them, so
-    /// filtering each one equals filtering their mix.
+    /// filtering each one equals filtering their mix. The drive stage runs on
+    /// the first `active` lanes.
     #[inline]
-    fn tick(
+    fn tick<L: Lanes>(
         &mut self,
-        x: f32,
-        fold_gains: (f32, f32),
-        tuning: CoreTuning,
-        res_gain: f32,
-        mode_gains: (f32, f32),
-    ) -> [f32; 4] {
+        x: L,
+        fold_gains: &[(f32, f32); LANES],
+        tables: Tables,
+        active: usize,
+    ) -> [L; 4] {
         let x = self.drive_pole.process(x);
-        let filter_in = self.drive.process(x, fold_gains.0, fold_gains.1);
-        let u = NOISE_FLOOR_V * self.noise.next_bipolar() - filter_in;
-        let (lp, bp) = self.core.step(u, tuning, res_gain);
-        let hp = -filter_in - lp - NEGATIVE_DAMPING * bp;
+        let filter_in = self.drive.process(tables.drive, x, fold_gains, active);
+        let mut noise = [0.0; LANES];
+        for (noise, rng) in noise.iter_mut().zip(&mut self.noise).take(active) {
+            *noise = rng.next_bipolar();
+        }
+        let u = L::splat(NOISE_FLOOR_V) * L::from_lanes(noise) - filter_in;
+        let c = &self.controls;
+        let (lp, bp) = self
+            .core
+            .step(u, &c.tuning_x4, &c.res_x4, tables.zener, active);
+        let hp = -filter_in - lp - L::splat(NEGATIVE_DAMPING) * bp;
         let [p_lp, p_bp, p_hp] = &mut self.output_poles;
         let (lp, bp, hp) = (p_lp.process(lp), p_bp.process(bp), p_hp.process(hp));
+        let amp = |v| output_amp(tables.chain, v, active);
         [
-            output_amp(morph(lp, bp, hp, mode_gains)),
-            output_amp(lp),
-            output_amp(-bp),
-            output_amp(hp),
+            amp(morph(lp, bp, hp, &c.mode_x4)),
+            amp(lp),
+            amp(-bp),
+            amp(hp),
         ]
     }
 }
@@ -249,13 +317,15 @@ impl ChannelState {
 pub struct Multimode {
     outputs: MultimodeOutputs,
     state: MultimodeState,
-    channel_state: Box<[ChannelState]>,
+    channel_state: Box<[GroupState]>,
     params: MultimodeParams,
 }
 
 #[derive(Default)]
 struct MultimodeState {
     sample_rate: f32,
+    /// Channel count the groups' lanes were last set up for.
+    channels: usize,
 }
 
 /// Gains of the two R80 crossfade paths into the filter, as `(clean, folded)`.
@@ -284,22 +354,43 @@ fn vca_gain(control_v: f32) -> f32 {
 
 /// Gains `(a, b)` of the two mode VCAs: `a` blends HP into the BP path, `b`
 /// crossfades from LP to it.
-#[inline]
-fn mode_gains(mode: f32) -> (f32, f32) {
-    (
-        (mode * MODE_SCALE - MODE_OFFSET_A).clamp(0.0, 1.0),
-        (mode * MODE_SCALE - MODE_OFFSET_B).clamp(0.0, 1.0),
-    )
+fn mode_gains(mode: f32) -> (vca::Gain, vca::Gain) {
+    let gain = |offset: f32| vca::Gain::new((mode * MODE_SCALE - offset).clamp(0.0, 1.0));
+    (gain(MODE_OFFSET_A), gain(MODE_OFFSET_B))
 }
 
 /// The mode VCAs' mix into the output amp, in volts across R173. VCA A takes
 /// BP and HP through 62k each; VCA B takes its output less BP and LP (through
 /// the IC14C summer) and adds to the LP that reaches the output directly.
 #[inline]
-fn morph(lp: f32, bp: f32, hp: f32, (gain_a, gain_b): (f32, f32)) -> f32 {
-    let a = gain_a * (bp + hp) * vca_hd2(gain_a, (bp + hp) / R_MODE_IN);
+fn morph<L: Lanes>(lp: L, bp: L, hp: L, (gain_a, gain_b): &(GainX4, GainX4)) -> L {
+    // Below mode 2.5 VCA A is off, and at mode 0 VCA B too, so LP reaches the
+    // output alone.
+    let live = |gain: &GainX4| L::bits(gain.gain::<L>().ge(L::splat(f32::MIN_POSITIVE))) != 0;
+    let (r, inv_r) = (L::splat(R_MODE_IN), L::splat(1.0 / R_MODE_IN));
+    let a = if live(gain_a) {
+        r * vca::output(gain_a, (bp + hp) * inv_r)
+    } else {
+        L::splat(0.0)
+    };
+    if !live(gain_b) {
+        return lp;
+    }
     let w = a - bp - lp;
-    lp + gain_b * w * vca_hd2(gain_b, w / R_MODE_IN)
+    lp + r * vca::output(gain_b, w * inv_r)
+}
+
+/// `read(channel)` for the first `active` channels from `base`, 0 for dead
+/// lanes.
+#[inline]
+fn lanes(base: usize, active: usize, read: impl Fn(usize) -> f32) -> [f32; LANES] {
+    std::array::from_fn(|lane| {
+        if lane < active {
+            read(base + lane)
+        } else {
+            0.0
+        }
+    })
 }
 
 impl Multimode {
@@ -309,8 +400,10 @@ impl Multimode {
         output::prime();
         self.state.sample_rate = sample_rate;
         let base = seed_base(self);
-        for (i, channel) in self.channel_state.iter_mut().enumerate() {
-            channel.noise.seed(base, i);
+        for (group, state) in self.channel_state.iter_mut().enumerate() {
+            for (lane, noise) in state.noise.iter_mut().enumerate() {
+                noise.seed(base, group * LANES + lane);
+            }
         }
     }
 
@@ -323,60 +416,170 @@ impl Multimode {
     }
 
     fn update(&mut self, _sample_rate: f32) {
-        let num_channels = self.channel_count();
+        let channels = self.channel_count();
         let rate = self.core_rate();
-        let p = &self.params;
-
-        for ch in 0..num_channels {
-            let state = &mut self.channel_state[ch];
-
-            let controls = &mut state.controls;
-            // Each control law sanitizes its input, so a non-finite control acts
-            // as 0 V rather than reaching the filter state.
-            let drive_gain = controls.drive_gain.get(p.drive.value_or(ch, 0.0), |drive| {
-                let servo = (1.0 + sanitize(drive) * DRIVE_SERVO_SCALE).max(0.0);
-                servo.powf(DRIVE_EXPONENT).min(DRIVE_MAX_GAIN)
-            });
-            let fold = controls
-                .fold_gains
-                .get(p.fold.value_or(ch, 0.0), |fold| fold_gains(sanitize(fold)));
-            let tuning = controls.tuning.get(p.cutoff.get_value(ch), |voct| {
-                let fc = voct_to_hz(sanitize(voct)).clamp(FC_MIN_HZ, FC_MAX_HZ);
-                CoreTuning::new(fc, fc / FC_MAX_HZ, rate)
-            });
-            let res_gain = controls
-                .res_gain
-                .get(p.resonance.value_or(ch, 0.0), |resonance| {
-                    vca_gain((sanitize(resonance) * RES_CONTROL_SCALE).max(0.0))
-                });
-            let modes = mode_gains(sanitize(p.mode.value_or(ch, 0.0)));
-
-            let input = p.input.get_value(ch);
-            let x = sanitize(drive_gain * input * vca_hd2(drive_gain, input / R_DRIVE_IN));
-            let out = if p.high_res {
-                let (even, odd) = state.up.process(x);
-                let even = state.tick(even, fold, tuning, res_gain, modes);
-                let odd = state.tick(odd, fold, tuning, res_gain, modes);
-                std::array::from_fn(|k| state.down[k].process(even[k], odd[k]))
-            } else {
-                let x = state.pre_emphasis.process(x);
-                state.tick(x, fold, tuning, res_gain, modes)
-            };
-
-            self.outputs.sample.set(ch, rails(out[0]));
-            self.outputs.lp.set(ch, rails(out[1]));
-            self.outputs.bp.set(ch, rails(out[2]));
-            self.outputs.hp.set(ch, rails(out[3]));
+        let tables = Tables::get();
+        let (p, outputs) = (&self.params, &mut self.outputs);
+        // A single channel runs on lane 0 alone, without three dead lanes.
+        if channels == 1 {
+            process::<f32>(&mut self.channel_state[0], p, outputs, 0, 1, rate, tables);
+            return;
         }
+        for (group, state) in self
+            .channel_state
+            .iter_mut()
+            .take(channels.div_ceil(LANES))
+            .enumerate()
+        {
+            let base = group * LANES;
+            let active = (channels - base).min(LANES);
+            // A group's one live channel runs on lane 0 as well.
+            if active == 1 {
+                process_group::<f32>(state, p, outputs, base, active, rate, tables);
+            } else {
+                process_group::<f32x4>(state, p, outputs, base, active, rate, tables);
+            }
+        }
+    }
+}
+
+/// [`process`] kept out of line, so `update` carries one inlined copy.
+#[inline(never)]
+fn process_group<L: Lanes>(
+    state: &mut GroupState,
+    p: &MultimodeParams,
+    outputs: &mut MultimodeOutputs,
+    base: usize,
+    active: usize,
+    rate: f32,
+    tables: Tables,
+) {
+    process::<L>(state, p, outputs, base, active, rate, tables);
+}
+
+/// One sample for the `active` channels of group `state`, from channel `base`.
+#[inline(always)]
+fn process<L: Lanes>(
+    state: &mut GroupState,
+    p: &MultimodeParams,
+    outputs: &mut MultimodeOutputs,
+    base: usize,
+    active: usize,
+    rate: f32,
+    tables: Tables,
+) {
+    let read = |signal: &Option<PolySignal>| lanes(base, active, |ch| signal.value_or(ch, 0.0));
+
+    let c = &mut state.controls;
+    let dead = active.min(L::WIDTH)..L::WIDTH;
+    // Each control law sanitizes its input, so a non-finite control acts
+    // as 0 V rather than reaching the filter state.
+    c.drive.update(
+        read(&p.drive),
+        active,
+        dead.clone(),
+        |drive| {
+            let servo = (1.0 + sanitize(drive) * DRIVE_SERVO_SCALE).max(0.0);
+            vca::Gain::new(servo.powf(DRIVE_EXPONENT).min(DRIVE_MAX_GAIN))
+        },
+        |lane, g| c.drive_x4.set(lane, g),
+    );
+    c.fold.update(
+        read(&p.fold),
+        active,
+        dead.clone(),
+        |fold| fold_gains(sanitize(fold)),
+        |lane, g| c.fold_gains[lane] = *g,
+    );
+    let fold = c.fold_gains;
+    c.tuning.update(
+        lanes(base, active, |ch| p.cutoff.get_value(ch)),
+        active,
+        dead.clone(),
+        |voct| {
+            let fc = voct_to_hz(sanitize(voct)).clamp(FC_MIN_HZ, FC_MAX_HZ);
+            CoreTuning::new(fc, fc / FC_MAX_HZ, rate)
+        },
+        |lane, t| c.tuning_x4.set(lane, t),
+    );
+    c.res.update(
+        read(&p.resonance),
+        active,
+        dead.clone(),
+        |resonance| vca::Gain::new(vca_gain((sanitize(resonance) * RES_CONTROL_SCALE).max(0.0))),
+        |lane, g| c.res_x4.set(lane, g),
+    );
+    c.mode.update(
+        read(&p.mode),
+        active,
+        dead,
+        |mode| mode_gains(sanitize(mode)),
+        |lane, (a, b)| {
+            c.mode_x4.0.set(lane, a);
+            c.mode_x4.1.set(lane, b);
+        },
+    );
+
+    let input = L::from_lanes(lanes(base, active, |ch| p.input.get_value(ch)));
+    let drive_in = input * L::splat(1.0 / R_DRIVE_IN);
+    let x = (L::splat(R_DRIVE_IN) * vca::output(&c.drive_x4, drive_in)).sanitize();
+    let out = if p.high_res {
+        let (even, odd) = state.up.process(x);
+        let even = state.tick(even, &fold, tables, active);
+        let odd = state.tick(odd, &fold, tables, active);
+        // A lone channel decimates its four outputs as one downsampler's lanes.
+        if L::WIDTH == 1 {
+            let pack = |o: [L; 4]| f32x4::new(o.map(|v| v.to_lanes()[0]));
+            let y = state.down[0].process(pack(even), pack(odd)).to_array();
+            y.map(L::splat)
+        } else {
+            std::array::from_fn(|k| state.down[k].process(even[k], odd[k]))
+        }
+    } else {
+        let x = state.pre_emphasis.process(x);
+        state.tick(x, &fold, tables, active)
+    };
+
+    let [sample, lp, bp, hp] = out.map(|v| rails(v).to_lanes());
+    for lane in 0..active {
+        let ch = base + lane;
+        outputs.sample.set(ch, sample[lane]);
+        outputs.lp.set(ch, lp[lane]);
+        outputs.bp.set(ch, bp[lane]);
+        outputs.hp.set(ch, hp[lane]);
     }
 }
 
 impl crate::types::PatchUpdateHandler for Multimode {
     fn on_patch_update(&mut self) {
         let rate = self.core_rate();
-        for channel in self.channel_state.iter_mut() {
-            channel.configure(rate);
+        for group in self.channel_state.iter_mut() {
+            group.configure(rate);
         }
+        let (old, channels) = (self.state.channels, self.channel_count());
+        // A group with one live channel keeps that channel's four output
+        // downsamplers in one downsampler's lanes; a group moving between one
+        // live channel and several transposes them.
+        let live = |count: usize, group: usize| count.saturating_sub(group * LANES).min(LANES);
+        for (group, state) in self.channel_state.iter_mut().enumerate() {
+            let (before, after) = (live(old, group), live(channels, group));
+            if before != 0 && after != 0 && (before == 1) != (after == 1) {
+                HalfbandDown::transpose(&mut state.down);
+            }
+        }
+        // Channels new to this patch start from rest, as they would in a fresh
+        // module, rather than from a lane that ran dead before.
+        for ch in old.min(channels)..channels {
+            self.channel_state[ch / LANES].clear_lane(ch % LANES);
+        }
+        // A new channel count changes which lanes are dead; recomputing every
+        // law sets them to follow lane 0 again.
+        if old != channels {
+            for group in self.channel_state.iter_mut() {
+                group.controls.clear();
+            }
+        }
+        self.state.channels = channels;
     }
 }
 

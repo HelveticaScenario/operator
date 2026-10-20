@@ -28,13 +28,55 @@ fn make(high_res: bool, cutoff_hz: f32, resonance: f32, mode: f32) -> Multimode 
         _channel_count: 1,
         _block_index: Default::default(),
         state: MultimodeState::default(),
-        channel_state: vec![ChannelState::default(); 1].into_boxed_slice(),
+        channel_state: vec![GroupState::default(); 1].into_boxed_slice(),
     };
     m.init(SR);
     m.on_patch_update();
     m
 }
 
+/// A module with one channel per `(cutoff_hz, resonance, mode)`.
+fn make_channels(high_res: bool, channels: &[(f32, f32, f32)]) -> Multimode {
+    let poly = |f: fn(&(f32, f32, f32)) -> f32| {
+        PolySignal::poly(
+            &channels
+                .iter()
+                .map(|c| Signal::Volts(f(c)))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let n = channels.len();
+    let mut outputs = MultimodeOutputs::default();
+    outputs.set_all_channels(n);
+    let mut m = Multimode {
+        params: MultimodeParams {
+            input: volts(0.0),
+            cutoff: poly(|c| hz_to_voct(c.0)),
+            resonance: Some(poly(|c| c.1)),
+            mode: Some(poly(|c| c.2)),
+            drive: None,
+            fold: None,
+            high_res,
+        },
+        outputs,
+        _channel_count: n,
+        _block_index: Default::default(),
+        state: MultimodeState::default(),
+        channel_state: vec![GroupState::default(); n].into_boxed_slice(),
+    };
+    m.init(SR);
+    m.on_patch_update();
+    m
+}
+
+/// Moves `old`'s state into `new` as a patch update does: the whole `state`,
+/// and the overlapping `channel_state` entries.
+fn transfer(new: &mut Multimode, old: &mut Multimode) {
+    std::mem::swap(&mut new.state, &mut old.state);
+    let n = new.channel_state.len().min(old.channel_state.len());
+    new.channel_state[..n].swap_with_slice(&mut old.channel_state[..n]);
+    new.on_patch_update();
+}
 /// Steady-state peak gain for a sine of `amp` volts at `hz`.
 fn sine_peak(m: &mut Multimode, hz: f32, amp: f32) -> f32 {
     let settle = (SR * 0.5) as usize;
@@ -286,6 +328,104 @@ both_resolutions! {
         m.params.resonance = Some(volts(0.0));
         m.params.mode = Some(volts(0.0));
         assert!(sine_peak(&mut m, 100.0, 1.0) > 1.0);
+    }
+}
+
+both_resolutions! {
+    fn each_lane_matches_a_single_channel(high_res: bool) {
+        // Five channels: a full group of four, then one beside three dead lanes.
+        let settings = [
+            (220.0, 0.0, 0.0),
+            (1_000.0, 3.0, 2.5),
+            (5_000.0, 2.0, 5.0),
+            (12_000.0, 3.5, 1.0),
+            (440.0, 1.0, 4.0),
+        ];
+        let mut poly = make_channels(high_res, &settings);
+        let mut monos: Vec<_> = settings
+            .iter()
+            .map(|&(hz, res, mode)| make(high_res, hz, res, mode))
+            .collect();
+        for n in 0..4800 {
+            let t = n as f32 / SR;
+            let x = 4.0 * (2.0 * PI * 110.0 * t).sin() + 2.0 * (2.0 * PI * 1730.0 * t).sin();
+            poly.params.input = volts(x);
+            poly.update(SR);
+            for (ch, mono) in monos.iter_mut().enumerate() {
+                mono.params.input = volts(x);
+                mono.update(SR);
+                let pairs = [
+                    (&poly.outputs.sample, &mono.outputs.sample),
+                    (&poly.outputs.lp, &mono.outputs.lp),
+                    (&poly.outputs.bp, &mono.outputs.bp),
+                    (&poly.outputs.hp, &mono.outputs.hp),
+                ];
+                for (a, b) in pairs {
+                    // The lanes' noise generators are seeded per channel.
+                    let (a, b) = (a.get(ch), b.get(0));
+                    assert!((a - b).abs() < 1.0e-3, "sample {n} channel {ch}: {a} vs {b}");
+                }
+            }
+        }
+    }
+
+    fn outputs_stay_continuous_into_and_out_of_a_lone_channel(high_res: bool) {
+        // Channels carried across a change that leaves a group with one live
+        // channel, or takes it out of one, continue exactly as channels that
+        // ran at the new count throughout.
+        let input = |n: usize| volts(4.0 * (2.0 * PI * 110.0 * n as f32 / SR).sin());
+        let setting = (2_000.0, 3.5, 2.5);
+        for (before, after) in [(1, 2), (2, 1), (5, 6), (6, 5)] {
+            let mut switched = make_channels(high_res, &vec![setting; before]);
+            let mut reference = make_channels(high_res, &vec![setting; after]);
+            for n in 0..2400 {
+                switched.params.input = input(n);
+                switched.update(SR);
+                reference.params.input = input(n);
+                reference.update(SR);
+            }
+            let mut carried = make_channels(high_res, &vec![setting; after]);
+            transfer(&mut carried, &mut switched);
+            for n in 2400..2600 {
+                carried.params.input = input(n);
+                carried.update(SR);
+                reference.params.input = input(n);
+                reference.update(SR);
+                for ch in 0..before.min(after) {
+                    let outputs = |m: &Multimode| {
+                        let o = &m.outputs;
+                        [o.sample.get(ch), o.lp.get(ch), o.bp.get(ch), o.hp.get(ch)]
+                    };
+                    for (a, b) in outputs(&carried).into_iter().zip(outputs(&reference)) {
+                        assert!(
+                            (a - b).abs() < 1.0e-3,
+                            "{before}→{after} sample {n} channel {ch}: {a} vs {b}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn channels_added_by_a_patch_update_start_from_rest(high_res: bool) {
+        // Three self-oscillating channels leave the group's fourth lane dead.
+        let mut old = make_channels(high_res, &[(440.0, 5.0, 0.0); 3]);
+        free_run(&mut old, 1.0);
+        let mut new = make_channels(high_res, &[(440.0, 5.0, 0.0); 4]);
+        transfer(&mut new, &mut old);
+        let mut peaks = [0.0_f32; 4];
+        for _ in 0..(SR * 0.005) as usize {
+            new.update(SR);
+            for (ch, peak) in peaks.iter_mut().enumerate() {
+                *peak = peak.max(new.outputs.sample.get(ch).abs());
+            }
+        }
+        // The carried channels keep ringing; the new one starts silent and
+        // grows from the noise floor.
+        for (ch, &peak) in peaks[..3].iter().enumerate() {
+            assert!(peak > 5.0, "channel {ch} peak {peak}");
+        }
+        assert!(peaks[3] < 0.1, "new channel peak {}", peaks[3]);
     }
 }
 
