@@ -20,7 +20,7 @@ import * as os from 'os';
 const projectRoot = path.resolve(__dirname, '..');
 // In Node, the `electron` package exports the path of the Electron executable.
 const electronBin = require('electron') as unknown as string;
-const mainEntry = path.join(projectRoot, '.vite', 'build', 'main.js');
+const mainEntry = path.join(projectRoot, '.vite', 'build', 'app.js');
 
 export type TestFixtures = {
     electronApp: ElectronApplication;

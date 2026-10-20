@@ -3,7 +3,7 @@
     "productName": "Operator",
     "version": "0.0.125",
     "description": "Operator - a real-time modular synthesizer desktop app with a JavaScript DSL for live-coding audio patches",
-    "main": ".vite/build/main.js",
+    "main": ".vite/build/app.js",
     "repository": {
         "type": "git",
         "url": "https://github.com/HelveticaScenario/operator"

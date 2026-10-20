@@ -274,7 +274,7 @@ const config: ForgeConfig = {
             // `build` can specify multiple entry points for the main process
             build: [
                 {
-                    entry: 'src/main/main.ts',
+                    entry: 'src/main/app.ts',
                     config: 'vite.main.config.ts',
                     target: 'main',
                 },

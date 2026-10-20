@@ -3,7 +3,7 @@
     "workspaces": {
         ".": {
             "entry": [
-                "src/main/main.ts",
+                "src/main/app.ts",
                 "src/preload/preload.ts",
                 "vite.main.config.ts",
                 "vite.preload.config.ts",
