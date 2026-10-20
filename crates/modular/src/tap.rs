@@ -10,6 +10,7 @@ pub(crate) enum Tap<'a> {
         data: *const f32,
         stride: usize,
         offset: usize,
+        processed: *const std::cell::Cell<usize>,
     },
     /// A port with no raw view (Sample-mode wrappers), read through the module.
     Module {
@@ -33,10 +34,15 @@ impl<'a> Tap<'a> {
     ) -> Option<Self> {
         let module = sampleables.get(module_id)?.as_ref();
         Some(match module.port_view(port) {
-            Some(PortView { data, channels, .. }) => Tap::View {
+            Some(PortView {
+                data,
+                channels,
+                processed,
+            }) => Tap::View {
                 data,
                 stride: channels,
                 offset: channel % channels,
+                processed,
             },
             None => Tap::Module {
                 module,
@@ -56,7 +62,11 @@ impl<'a> Tap<'a> {
                 data,
                 stride,
                 offset,
-            } => unsafe { *data.add(index * stride + offset) },
+                processed,
+            } => unsafe {
+                debug_assert!(index < (*processed).get());
+                *data.add(index * stride + offset)
+            },
             Tap::Module {
                 module,
                 port,

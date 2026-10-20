@@ -2322,6 +2322,9 @@ impl AudioProcessor {
     /// `range.end`, so every tap read is of a computed slot; while stopped the
     /// patch is frozen and the taps are not fed.
     fn drain_taps(&self, range: std::ops::Range<usize>) {
+        if range.is_empty() {
+            return;
+        }
         let sampleables = &self.patch.sampleables;
         if let Some(mut scopes) = self.scope_collection.try_lock() {
             for (key, buffer) in scopes.iter_mut() {
