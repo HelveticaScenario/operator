@@ -110,7 +110,9 @@ impl PercussionEnvelope {
         let attack_step = attack_step(sample_rate);
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
             let trigger = p.trigger.get_value(ch);
-            let decay = p.decay.value_or(ch, 0.1);
+            let decay = p
+                .decay
+                .value_or(ch, PercussionEnvelopeParams::DECAY_DEFAULT);
             self.outputs
                 .sample
                 .set(ch, state.step(trigger, decay, attack_step, sample_rate));
