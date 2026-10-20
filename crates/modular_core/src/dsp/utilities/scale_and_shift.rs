@@ -55,8 +55,12 @@ impl ScaleAndShift {
         for i in 0..self.channel_count() {
             let value = scale_and_shift(
                 self.params.input.get_value(i),
-                self.params.scale.value_or(i, 5.0),
-                self.params.shift.value_or(i, 0.0),
+                self.params
+                    .scale
+                    .value_or(i, ScaleAndShiftParams::SCALE_DEFAULT),
+                self.params
+                    .shift
+                    .value_or(i, ScaleAndShiftParams::SHIFT_DEFAULT),
             );
             self.outputs.sample.set(i, value);
         }
@@ -76,7 +80,7 @@ impl ScaleAndShift {
             &mut outputs.sample,
             range,
             [inputs.input, inputs.scale, inputs.shift],
-            |[x, scale, shift]| x * (scale / 5.0) + shift,
+            |[x, scale, shift]| scale_and_shift(x, scale, shift),
         );
         Some(())
     }
