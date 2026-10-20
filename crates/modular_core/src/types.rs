@@ -2186,6 +2186,70 @@ impl CableView {
     }
 }
 
+/// A polyphonic input whose channel `i` is a cable to channel `first + i` of a
+/// single upstream port, resolved to that port's block buffer so a block
+/// module can read whole rows in place.
+///
+/// Shares [`CableView`]'s lifetime invariant.
+#[derive(Clone, Copy, Debug)]
+pub struct PolyCableView {
+    data: *const f32,
+    stride: usize,
+    processed: *const std::cell::Cell<usize>,
+    source: SampleablePtr,
+}
+
+// SAFETY: built during `connect()` on the audio thread and only read there;
+// it crosses threads only as part of params, like `Signal`.
+unsafe impl Send for PolyCableView {}
+
+impl PolyCableView {
+    /// `None` unless every signal is a viewed cable onto the same port, signal
+    /// `i` reading the port channel just after signal `i - 1`'s.
+    pub(crate) fn resolve(signals: &[Signal]) -> Option<Self> {
+        let mut port: Option<(CableView, SampleablePtr)> = None;
+        for (i, signal) in signals.iter().enumerate() {
+            let Signal::Cable {
+                view: Some(view),
+                resolved: Some(source),
+                ..
+            } = signal
+            else {
+                return None;
+            };
+            match port {
+                None => port = Some((*view, *source)),
+                Some((first, _)) if first.data == view.data && view.offset == first.offset + i => {}
+                Some(_) => return None,
+            }
+        }
+        let (first, source) = port?;
+        Some(Self {
+            // SAFETY: `offset < stride`, inside the port's first row.
+            data: unsafe { first.data.add(first.offset) },
+            stride: first.stride,
+            processed: first.processed,
+            source,
+        })
+    }
+
+    /// Render the producer through slot `end` and return the first viewed
+    /// channel's data and the port's stride (channel width); slot `i` starts
+    /// at `data + i * stride`. `None` when the producer cannot reach `end`,
+    /// e.g. a feedback cycle reading back into a module mid-computation.
+    #[inline]
+    pub(crate) fn rendered_to(&self, end: usize) -> Option<(*const f32, usize)> {
+        // SAFETY: see the type-level invariant. `ensure_processed_to` runs on
+        // the audio thread, which owns every module.
+        unsafe {
+            if (*self.processed).get() < end {
+                self.source.as_ref().ensure_processed_to(end);
+            }
+            ((*self.processed).get() >= end).then_some((self.data, self.stride))
+        }
+    }
+}
+
 // SAFETY: cable variants cache a `NonNull<dyn Sampleable>` during `connect()`. That cached pointer
 // is only dereferenced from the audio thread after connection finishes, but `Signal` values still
 // need to cross from main-thread deserialization into audio-thread-owned params.
@@ -2846,7 +2910,7 @@ pub struct VuMeterSpec {
     pub port_name: String,
     /// 1 (mono) or 2 (stereo).
     pub channels: u32,
-    /// `$signal` module driving the mute gate (source 5 = audible, 0 =
+    /// `$signal` module driving the mute gate (value 5 = audible, 0 =
     /// silenced). None for the end-of-chain master meter, which has no gate.
     pub mute_module_id: Option<String>,
     /// When the out's pan is signal-driven, the output to sample so the

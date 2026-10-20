@@ -249,10 +249,10 @@ export const DEFAULT_KEYMAP: readonly DefaultKeybinding[] = [
         command: 'editor.action.previousSelectionMatchFindAction',
         when: 'editorFocus',
     },
-    // mac-only: on non-mac $mod+. resolves to Ctrl+. which is Operator's Stop
-    // transport binding; keep Stop authoritative there.
+    // Off macOS, $mod+. would be Ctrl+., Operator's Stop transport binding, so
+    // quick fix takes Alt+. there.
     {
-        key: '',
+        key: 'alt+.',
         mac: '$mod+.',
         command: 'editor.action.quickFix',
         when: '!editorReadonly && editorHasCodeActionsProvider && textInputFocus',

@@ -500,7 +500,7 @@ describe('sequencing', () => {
         const patch = execPatch('$c($p("c4 e4"), "c4", 440).out()');
         expect(findModules(patch, '$cycle').length).toBe(1);
         const lifted = findModules(patch, '$signal').filter(
-            (m) => m.params.source === 'c4' || m.params.source === 440,
+            (m) => m.params.value === 'c4' || m.params.value === 440,
         );
         expect(lifted.length).toBe(2);
     });
@@ -1551,11 +1551,11 @@ describe('control groups', () => {
 // ─── Buttons ─────────────────────────────────────────────────────────────────
 
 describe('buttons', () => {
-    /** Read the constant source volts off a $signal module's params. */
+    /** Read the constant volts off a $signal module's params. */
     function signalSource(patch: PatchGraph, id: string): unknown {
         const m = patch.modules.find((mod) => mod.id === id);
         expect(m).toBeDefined();
-        const source = (m as { params: { source: unknown } }).params.source;
+        const source = (m as { params: { value: unknown } }).params.value;
         return Array.isArray(source) ? source[0] : source;
     }
 
@@ -1741,7 +1741,7 @@ describe('built-in modules', () => {
                 inputChannels: channels,
             }).patch;
             const source = patch.modules.find((m) => m.id === 'ROOT_INPUT')!
-                .params.source as unknown[];
+                .params.value as unknown[];
             return source.length;
         };
 

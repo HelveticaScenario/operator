@@ -59,7 +59,7 @@ fn profiler_attributes_work_to_both_modules() {
             "sig",
             "$signal",
             json!({
-                "source": {
+                "value": {
                     "type": "cable",
                     "module": "osc",
                     "port": "output",
