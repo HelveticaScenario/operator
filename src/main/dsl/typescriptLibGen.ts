@@ -20,6 +20,12 @@ import {
     generateVideoChainMembers,
     generateVideoNamespace,
 } from './videoLibGen';
+import {
+    MONO_OUT_OPTIONS,
+    STEREO_OUT_OPTIONS,
+    renderOutOptionsJsDocList,
+    renderOutOptionsMembers,
+} from '../../shared/dsl/outOptions';
 export type { WavsFolderNode } from './executor';
 
 const BASE_LIB_SOURCE = `
@@ -791,20 +797,7 @@ type WavHandle = {
  * @see {@link Collection.out}
  */
 interface StereoOutOptions {
-  /** Base output channel (0-62, default 0). Left plays on baseChannel, right on baseChannel+1 */
-  baseChannel?: number;
-  /** Output gain. If set, a $scaleAndShift module is added after the stereo mix */
-  gain?: Poly<Signal>;
-  /** Pan position (-5 = left, 0 = center, +5 = right). Default 0 */
-  pan?: Poly<Signal>;
-  /** Stereo width/spread (0 = no spread, 5 = full spread). Default 0 */
-  width?: Mono<Signal>;
-  /** Label shown on this output's VU meter. Must be unique across outs */
-  label?: string;
-  /** Silence this output. It is still metered; its VU meter greys out */
-  mute?: boolean;
-  /** When any output is soloed, only soloed outputs are audible */
-  solo?: boolean;
+${renderOutOptionsMembers(STEREO_OUT_OPTIONS)}
 }
 
 /**
@@ -813,16 +806,7 @@ interface StereoOutOptions {
  * @see {@link Collection.outMono}
  */
 interface MonoOutOptions {
-  /** Output channel (0-63, default 0). Wins over the positional channel argument */
-  channel?: number;
-  /** Output gain. If set, a $scaleAndShift module is added after the mix */
-  gain?: Poly<Signal>;
-  /** Label shown on this output's VU meter. Must be unique across outs */
-  label?: string;
-  /** Silence this output. It is still metered; its VU meter greys out */
-  mute?: boolean;
-  /** When any output is soloed, only soloed outputs are audible */
-  solo?: boolean;
+${renderOutOptionsMembers(MONO_OUT_OPTIONS)}
 }
 
 /**
@@ -923,6 +907,9 @@ interface ModuleOutput {
   
   /**
    * Send this output to speakers as stereo.
+   *
+   * Options:
+${renderOutOptionsJsDocList(STEREO_OUT_OPTIONS)}
    * @param options Stereo output options ({@link StereoOutOptions})
    * @example $sine("c4").out({ gain: 2.5, pan: -2 })
    * @example $sine("c4").out({ label: 'lead' })
@@ -931,12 +918,15 @@ interface ModuleOutput {
 
   /**
    * Send this output to speakers as mono.
+   *
+   * Options:
+${renderOutOptionsJsDocList(MONO_OUT_OPTIONS)}
    * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
-    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
-    * @example $sine("1hz").outMono(2, 0.3)
-    * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
-    */
-   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
+   * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+   * @example $sine("1hz").outMono(2, 0.3)
+   * @example $sine("c3").outMono({ channel: 2, gain: 2.5, label: 'sub' })
+   */
+  outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
   /**
    * Pipe this output through a transform function.
@@ -1186,6 +1176,9 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Send all outputs to speakers as stereo, summed together.
+   *
+   * Options:
+${renderOutOptionsJsDocList(STEREO_OUT_OPTIONS)}
    * @param options Stereo output options ({@link StereoOutOptions})
    * @example $saw(['c3', 'e3', 'g3']).out({ label: 'chord' })
    */
@@ -1193,11 +1186,14 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
 
   /**
    * Send all outputs to speakers as mono, summed together.
+   *
+   * Options:
+${renderOutOptionsJsDocList(MONO_OUT_OPTIONS)}
    * @param channelOrOptions Output channel (0-63, default 0), or mono output options ({@link MonoOutOptions})
-    * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
-    * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
-    */
-   outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
+   * @param gainOrOptions Output gain as {@link Poly<Signal>}, or the same options (an explicit channel there wins)
+   * @example $saw(['c2', 'c3']).outMono(0, { label: 'bass' })
+   */
+  outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this;
 
 
   /**

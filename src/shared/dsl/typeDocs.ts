@@ -3,6 +3,12 @@
  * Used by both TypeScript lib generator (JSDoc) and HelpWindow (rendered docs).
  */
 
+import {
+    MONO_OUT_OPTIONS,
+    STEREO_OUT_OPTIONS,
+    outOptionsDefinition,
+} from './outOptions';
+
 export interface TypeMethod {
     name: string;
     signature: string;
@@ -33,6 +39,7 @@ export const DSL_TYPE_NAMES = [
     'Note',
     'HZ',
     'StereoOutOptions',
+    'MonoOutOptions',
 ] as const;
 
 export type DslTypeName = (typeof DSL_TYPE_NAMES)[number];
@@ -109,7 +116,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'outMono',
                 signature:
-                    'outMono(channel?: number, gain?: Poly<Signal>): this',
+                    'outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this',
                 description:
                     'Send all outputs to a single speaker channel as mono, summed together.',
                 example: '$c(osc1, osc2).outMono(0, 0.3)',
@@ -269,7 +276,7 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             {
                 name: 'outMono',
                 signature:
-                    'outMono(channel?: number, gain?: Poly<Signal>): this',
+                    'outMono(channelOrOptions?: number | MonoOutOptions, gainOrOptions?: Poly<Signal> | MonoOutOptions): this',
                 description:
                     'Send this output to a single speaker channel as mono audio.',
                 example: 'lfo.outMono(2, 0.3)',
@@ -413,11 +420,10 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
     },
 
     StereoOutOptions: {
-        definition:
-            'interface { baseChannel?: number; gain?: Poly<Signal>; pan?: Poly<Signal>; width?: Signal }',
+        definition: outOptionsDefinition(STEREO_OUT_OPTIONS),
         description:
             'Options for stereo output routing via the out() method. ' +
-            'Controls base channel, gain, panning, and stereo width.',
+            'Controls base channel, gain, panning, stereo width, and the VU meter label, mute, and solo.',
         examples: [
             "$sine('c').out({ baseChannel: 4 })      // Output of channels 4 and 5",
             "$sine('c').out({ gain: 2.5 })           // 50% gain",
@@ -426,7 +432,21 @@ export const TYPE_DOCS: Record<DslTypeName, TypeDocumentation> = {
             "$sine('c').out({ gain: $perc($pulse('8hz')), pan: $sine('1hz') })  // Modulated",
         ],
         name: 'StereoOutOptions',
-        seeAlso: ['ModuleOutput', 'Collection', 'Poly<Signal>'],
+        seeAlso: ['MonoOutOptions', 'ModuleOutput', 'Collection', 'Poly<Signal>'],
+    },
+
+    MonoOutOptions: {
+        definition: outOptionsDefinition(MONO_OUT_OPTIONS),
+        description:
+            'Options for mono output routing via the outMono() method. ' +
+            'Controls the output channel, gain, and the VU meter label, mute, and solo.',
+        examples: [
+            "$sine('c').outMono({ channel: 2 })              // Output on channel 2",
+            "$sine('c').outMono({ channel: 2, gain: 2.5 })   // 50% gain",
+            "$sine('c').outMono(0, { label: 'sub' })         // Labelled VU meter",
+        ],
+        name: 'MonoOutOptions',
+        seeAlso: ['StereoOutOptions', 'ModuleOutput', 'Collection', 'Poly<Signal>'],
     },
 };
 
