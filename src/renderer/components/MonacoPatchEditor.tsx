@@ -5,7 +5,7 @@ import { useTheme } from '../themes/ThemeContext';
 import { useCustomMonaco } from '../hooks/useCustomMonaco';
 import { configSchema } from '../configSchema';
 import { formatPath } from './monaco/monacoHelpers';
-import type { ScopeView } from '../types/editor';
+import type { ScopeView, VideoPreviewZone } from '../types/editor';
 import { setupMonacoJavascript } from './monaco/monacoLanguage';
 import {
     DEFAULT_PRETTIER_OPTIONS,
@@ -18,8 +18,14 @@ import {
     type ScopeViewZoneHandle,
     createScopeViewZones,
 } from './monaco/scopeViewZones';
+import {
+    type VideoPreviewViewZoneHandle,
+    createVideoPreviewViewZones,
+} from './monaco/videoPreviewViewZones';
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
+import { trackCodeBacking } from './monaco/codeBacking';
+import { createModelValueSync } from './monaco/modelValueSync';
 import { registerControlQuickFixProvider } from './monaco/controlQuickFixProvider';
 import { codeStyleFromPrettier } from '../dsl/objectPropertyInsert';
 import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
@@ -53,7 +59,18 @@ export interface PatchEditorProps {
     onRegisterScopeCanvas?: (key: string, canvas: HTMLCanvasElement) => void;
     onUnregisterScopeCanvas?: (key: string) => void;
     runningBufferId?: string | null;
+    /** `$v.preview` panels, anchored by `videoPreviewDecorations`. */
+    videoPreviewZones?: VideoPreviewZone[];
+    videoPreviewDecorations?: editor.IEditorDecorationsCollection | null;
 }
+
+/**
+ * A line number in a box of its own, which Monaco places in the gutter as
+ * markup. Over a picture the box carries the backing, so it is as tall as the
+ * line and as wide as the digits.
+ */
+const renderLineNumber = (lineNumber: number): string =>
+    `<span class="line-number-text">${lineNumber}</span>`;
 
 export function MonacoPatchEditor({
     value,
@@ -67,6 +84,8 @@ export function MonacoPatchEditor({
     onRegisterScopeCanvas,
     onUnregisterScopeCanvas,
     runningBufferId,
+    videoPreviewZones = [],
+    videoPreviewDecorations = null,
 }: PatchEditorProps) {
     // Fetch DSL lib source once at mount for Monaco autocomplete
     const [libSource, setLibSource] = useState<string | null>(null);
@@ -166,14 +185,41 @@ export function MonacoPatchEditor({
         onUnregisterScopeCanvas,
     ]);
 
+    const previewZoneHandleRef = useRef<VideoPreviewViewZoneHandle | null>(
+        null,
+    );
+    const activeVideoPreviewZones = useMemo(
+        () => videoPreviewZones.filter((zone) => zone.file === currentFile),
+        [videoPreviewZones, currentFile],
+    );
+
+    // Create / recreate the `$v.preview` panels when the preview list changes
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        const handle = createVideoPreviewViewZones({
+            decorations: videoPreviewDecorations,
+            editor,
+            zones: activeVideoPreviewZones,
+        });
+        previewZoneHandleRef.current = handle;
+        return () => {
+            handle.dispose();
+            previewZoneHandleRef.current = null;
+        };
+    }, [editor, activeVideoPreviewZones, videoPreviewDecorations]);
+
     // On every content change, re-read positions from tracked decorations and
-    // Reposition view zones if any scope call has moved to a different line.
+    // reposition view zones if any scope or preview call has moved to a
+    // different line.
     useEffect(() => {
         if (!editor) {
             return;
         }
         const disposable = editor.onDidChangeModelContent(() => {
             scopeZoneHandleRef.current?.repositionZones();
+            previewZoneHandleRef.current?.repositionZones();
         });
         return () => disposable.dispose();
     }, [editor]);
@@ -243,6 +289,48 @@ export function MonacoPatchEditor({
         }
         openModelPathsRef.current = paths;
     }, [monaco, openFiles]);
+
+    // The model, not `value`, is the source of truth for the active buffer:
+    // `value` is written into it only when it is text the editor did not
+    // emit, so a value that arrives after newer keystrokes never replaces
+    // them (or moves the caret). The Editor gets `defaultValue` alone, which
+    // seeds a model it creates for a new path.
+    const [valueSync] = useState(createModelValueSync);
+    const syncedModelRef = useRef<editor.ITextModel | null>(null);
+    const writingValueRef = useRef(false);
+    const handleEditorChange = (text: string | undefined) => {
+        if (writingValueRef.current) {
+            return;
+        }
+        valueSync.noteEmitted(text ?? '');
+        onChange(text ?? '');
+    };
+    useEffect(() => {
+        const model = editor?.getModel();
+        if (!editor || !model) {
+            return;
+        }
+        if (model !== syncedModelRef.current) {
+            syncedModelRef.current = model;
+            valueSync.reset();
+        }
+        if (!valueSync.shouldWrite(value, model.getValue())) {
+            return;
+        }
+        writingValueRef.current = true;
+        try {
+            editor.executeEdits('', [
+                {
+                    forceMoveMarkers: true,
+                    range: model.getFullModelRange(),
+                    text: value,
+                },
+            ]);
+            editor.pushUndoStop();
+        } finally {
+            writingValueRef.current = false;
+        }
+    }, [editor, value, currentFile, valueSync]);
 
     const handleMount: OnMount = (ed) => {
         setEditor(ed);
@@ -354,6 +442,13 @@ export function MonacoPatchEditor({
         return () => disposable.dispose();
     }, [editor, prettierConfig.tabWidth]);
 
+    useEffect(() => {
+        if (!editor) {
+            return;
+        }
+        return trackCodeBacking(editor);
+    }, [editor]);
+
     // Register MIDI device autocomplete provider
     useEffect(() => {
         if (!monaco) {
@@ -439,7 +534,7 @@ export function MonacoPatchEditor({
             // through a pinned sticky header as a ghosted duplicate, so the
             // sticky-scroll feature is disabled here.
             stickyScroll: { enabled: false },
-            lineNumbers: 'on',
+            lineNumbers: renderLineNumber,
             folding: false,
             matchBrackets: 'always',
             automaticLayout: true,
@@ -482,10 +577,8 @@ export function MonacoPatchEditor({
                     path={formatPath(currentFile)}
                     language={editorLanguage}
                     theme={monacoThemeId}
-                    value={value}
-                    onChange={(val) => {
-                        onChange(val ?? '');
-                    }}
+                    defaultValue={value}
+                    onChange={handleEditorChange}
                     onMount={handleMount}
                     keepCurrentModel
                     options={editorOptions}

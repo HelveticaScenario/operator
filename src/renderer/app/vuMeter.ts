@@ -37,9 +37,7 @@ export function formatDb(db: number): string {
         return '-∞';
     }
     const rounded = Math.round(db * 10) / 10;
-    return Number.isInteger(rounded)
-        ? String(rounded)
-        : rounded.toFixed(1);
+    return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
 /** Per-channel meter display state, advanced once per drawn frame: the
@@ -280,8 +278,7 @@ export function drawVuMeter(
     // Thin per-channel bars, centered in the track.
     const barW = 3.5 * dpr;
     const barGap = 2.5 * dpr;
-    const totalBarsW =
-        channels.length * barW + (channels.length - 1) * barGap;
+    const totalBarsW = channels.length * barW + (channels.length - 1) * barGap;
     const firstBarX = barsLeft + (barsW - totalBarsW) / 2;
     const yZero = dbToY(0);
     const yMid = dbToY(-12);

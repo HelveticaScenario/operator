@@ -66,7 +66,7 @@ export const drawOscilloscope = (
     const mutedColor = colors.muted;
     const accentColor = colors.accent;
 
-    // Semi-transparent fill so the $scopeXY background canvas reads through.
+    // Semi-transparent fill so the video backdrop reads through.
     ctx.clearRect(0, 0, w, h);
     ctx.fillStyle = bgColor;
     ctx.globalAlpha = 0.65;

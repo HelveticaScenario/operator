@@ -31,6 +31,8 @@ const config: ForgeConfig = {
             NSLocalNetworkUsageDescription:
                 'Operator uses the local network to sync tempo with other music apps via Ableton Link.',
             NSBonjourServices: ['_SessionStatus._tcp'],
+            NSCameraUsageDescription:
+                'Operator shows the camera in video patches that use $v.camera.',
         },
         osxSign: {
             identity: 'Developer ID Application: Daniel Lewis (HA98TTLCR7)',

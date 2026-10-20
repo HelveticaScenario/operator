@@ -25,8 +25,10 @@ pub mod sample_and_hold;
 pub mod scale;
 pub mod scale_and_shift;
 pub mod scale_names;
+pub mod smooth_control;
 pub mod spread;
 pub mod unison;
+pub mod video_tap;
 pub mod wrap;
 
 // Re-export useful types
@@ -56,8 +58,10 @@ pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     percussion_envelope::PercussionEnvelope::install_constructor(map);
     quantizer::Quantizer::install_constructor(map);
     scale_and_shift::ScaleAndShift::install_constructor(map);
+    smooth_control::SmoothControl::install_constructor(map);
     spread::Spread::install_constructor(map);
     unison::Unison::install_constructor(map);
+    video_tap::VideoTap::install_constructor(map);
     wrap::Wrap::install_constructor(map);
 }
 
@@ -84,8 +88,10 @@ pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer
     percussion_envelope::PercussionEnvelope::install_params_deserializer(map);
     quantizer::Quantizer::install_params_deserializer(map);
     scale_and_shift::ScaleAndShift::install_params_deserializer(map);
+    smooth_control::SmoothControl::install_params_deserializer(map);
     spread::Spread::install_params_deserializer(map);
     unison::Unison::install_params_deserializer(map);
+    video_tap::VideoTap::install_params_deserializer(map);
     wrap::Wrap::install_params_deserializer(map);
 }
 
@@ -113,8 +119,10 @@ pub fn schemas() -> Vec<ModuleSchema> {
         percussion_envelope::PercussionEnvelope::get_schema(),
         quantizer::Quantizer::get_schema(),
         scale_and_shift::ScaleAndShift::get_schema(),
+        smooth_control::SmoothControl::get_schema(),
         spread::Spread::get_schema(),
         unison::Unison::get_schema(),
+        video_tap::VideoTap::get_schema(),
         wrap::Wrap::get_schema(),
     ]
 }

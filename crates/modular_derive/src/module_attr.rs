@@ -703,15 +703,20 @@ fn impl_module_macro_attr(
                 };
                 if process(start_index..target).is_none() {
                     // Retry in sub-ranges short enough for every input to
-                    // resolve (see crate::block_input); a sub-range that is
-                    // still declined runs `update` slot by slot.
+                    // resolve (see crate::block_input), halving the length
+                    // while a sub-range is declined; a single slot that is
+                    // still declined runs `update`.
                     let channels = unsafe { (*self.module.get())._channel_count.max(1) };
-                    let step = (crate::block_input::SCRATCH_LEN / channels).max(1);
+                    let mut step = (crate::block_input::SCRATCH_LEN / channels).max(1);
                     let mut start = start_index;
                     while start < target {
                         let end = (start + step).min(target);
                         self.index.set(start);
                         if process(start..end).is_none() {
+                            if end - start > 1 {
+                                step = (end - start) / 2;
+                                continue;
+                            }
                             self.index.set(start);
                             let target = end;
                             #sample_loop

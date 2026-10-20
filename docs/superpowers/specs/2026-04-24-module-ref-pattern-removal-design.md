@@ -109,8 +109,8 @@ Use TDD for the removal:
 1. Flip parser and seq tests so `module(...)` is expected to fail
 2. Remove parser/runtime support until those failures become the new GREEN behavior
 3. Re-run the fresh verification slice:
-   - `cargo test -p modular_core`
-   - `cargo test -p modular --no-run`
+    - `cargo test -p modular_core`
+    - `cargo test -p modular --no-run`
 
 Required coverage:
 

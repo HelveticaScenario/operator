@@ -197,7 +197,7 @@ fn wide_mix_modules(channels: usize) -> Vec<(String, &'static str, Value)> {
             "$clamp" => {
                 json!({ "input": poly_cable("src", "output", channels), "min": -1.0, "max": 1.0 })
             }
-            "$signal" => json!({ "source": poly_cable("src", "output", channels) }),
+            "$signal" => json!({ "value": poly_cable("src", "output", channels) }),
             _ => json!({ "input": poly_cable("src", "output", channels), "scale": 4.0 }),
         };
         modules.push((format!("m{i}"), ty, params));
@@ -373,8 +373,65 @@ fn wavetables(channels: usize) -> BenchPatch {
     BenchPatch::new(modules)
 }
 
+/// 8 `$eq`s in series, 4 sections each: four at fixed settings, four with an
+/// LFO sweeping a peak.
+fn eqs(channels: usize) -> BenchPatch {
+    let mut modules = vec![
+        (
+            "src".to_string(),
+            "$saw",
+            json!({ "freq": poly(-1.0, channels) }),
+        ),
+        ("lfo".to_string(), "$sine", json!({ "freq": -6.0 })),
+    ];
+    let mut prev = "src".to_string();
+    for i in 0..8 {
+        let id = format!("eq{i}");
+        let sweep = if i % 2 == 0 {
+            json!(1.0)
+        } else {
+            json!([{ "type": "cable", "module": "lfo", "port": "output", "channel": 0 }])
+        };
+        modules.push((
+            id.clone(),
+            "$eq",
+            json!({
+                "input": poly_cable(&prev, "output", channels),
+                "sections": [
+                    { "type": "lowShelf", "freq": -2.0, "gain": 3.0 },
+                    { "type": "peak", "freq": sweep, "gain": -6.0, "q": 2.0 },
+                    { "type": "highShelf", "freq": 3.0, "gain": -4.0 },
+                    { "type": "highpass", "freq": -3.0 },
+                ],
+            }),
+        ));
+        prev = id;
+    }
+    BenchPatch::new(modules)
+}
+
+/// 16 `_videoTap`s, one per slot, each reading a channel of a `$saw`.
+fn video_taps(channels: usize) -> BenchPatch {
+    let mut modules = vec![(
+        "src".to_string(),
+        "$saw",
+        json!({ "freq": poly(-1.0, channels) }),
+    )];
+    for i in 0..16 {
+        modules.push((
+            format!("tap{i}"),
+            "_videoTap",
+            json!({
+                "input": [{ "type": "cable", "module": "src", "port": "output", "channel": i % channels }],
+                "slot": i,
+            }),
+        ));
+    }
+    BenchPatch::new(modules)
+}
+
 fn bench_patches(c: &mut Criterion) {
-    let cases: [(&str, fn(usize) -> BenchPatch); 10] = [
+    let cases: [(&str, fn(usize) -> BenchPatch); 12] = [
         ("wide_mix_sample_160", wide_mix_sample),
         ("remap_chain_32", remap_chain),
         ("wide_mix_160", wide_mix),
@@ -385,6 +442,8 @@ fn bench_patches(c: &mut Criterion) {
         ("comp_chain_8", comp_chain),
         ("grains_4", grains),
         ("wavetable_8", wavetables),
+        ("eq_8", eqs),
+        ("video_tap_16", video_taps),
     ];
     for (name, build) in cases {
         let mut group = c.benchmark_group(name);
