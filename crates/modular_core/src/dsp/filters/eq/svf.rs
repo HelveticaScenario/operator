@@ -70,12 +70,28 @@ impl SectionRuntime {
         if self.settled {
             return;
         }
-        let s = &mut self.smooth;
-        let (target_f, target_g, target_q) = (
-            sec.freq.get_value(),
-            sec.gain.value_or(0.0),
-            sec.q.value_or(DEFAULT_Q),
+        self.advance(
+            sec,
+            [
+                sec.freq.get_value(),
+                sec.gain.value_or(0.0),
+                sec.q.value_or(DEFAULT_Q),
+            ],
+            sample_rate,
+            adaptive_q,
         );
+    }
+
+    /// One sample of [`refresh`](Self::refresh) toward `targets`, the
+    /// section's freq, gain and q, on a runtime that is not settled.
+    pub(super) fn advance(
+        &mut self,
+        sec: &EqSection,
+        [target_f, target_g, target_q]: [f32; 3],
+        sample_rate: f32,
+        adaptive_q: bool,
+    ) {
+        let s = &mut self.smooth;
         s.smooth_freq.update(target_f);
         s.smooth_gain.update(target_g);
         s.smooth_q.update(target_q);
@@ -110,6 +126,10 @@ impl SectionRuntime {
             (*s.smooth_gain).clamp(-24.0, 24.0),
             (*s.smooth_q).clamp(MIN_Q, MAX_Q),
         ]
+    }
+
+    pub(super) fn is_settled(&self) -> bool {
+        self.settled
     }
 
     /// Forces the next refresh to recompute coefficients, keeping the smoothers.
