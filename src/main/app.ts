@@ -80,7 +80,6 @@ import * as os from 'os';
 import { promises as fsPromises } from 'fs';
 import * as path from 'path';
 import { createOpenFileWatcher } from './openFileWatcher';
-import electronSquirrelStartup from 'electron-squirrel-startup';
 import { z } from 'zod';
 
 // Enable Node's source-map support so production stack traces (panics, errors)
@@ -500,11 +499,6 @@ function initAutoUpdater(): void {
 }
 
 // ========================================================================
-
-// Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (electronSquirrelStartup) {
-    app.quit();
-}
 
 // The single-instance lock and Chromium's profile storage are both keyed on the
 // userData directory, so each dev checkout gets its own to run alongside the

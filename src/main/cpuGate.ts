@@ -13,6 +13,17 @@ const PROBE_TIMEOUT_MS = 15_000;
 /** `STATUS_ILLEGAL_INSTRUCTION`, the exit code of a Windows process killed by one. */
 const WINDOWS_ILLEGAL_INSTRUCTION = 0xc000001d;
 
+/** `/proc/cpuinfo` flags for the x86-64-v2 extensions the addon is compiled to assume. */
+const LINUX_REQUIRED_FLAGS = [
+    'pni',
+    'ssse3',
+    'cx16',
+    'sse4_1',
+    'sse4_2',
+    'popcnt',
+    'lahf_lm',
+];
+
 export type ProbeOutcome = 'supported' | 'unsupported' | 'inconclusive';
 
 /**
@@ -39,6 +50,17 @@ export function interpretProbe(
     return 'inconclusive';
 }
 
+/** Reads the first CPU's feature flags from `/proc/cpuinfo` text. */
+export function cpuinfoOutcome(cpuinfo: string): ProbeOutcome {
+    const flags = /^flags\s*:(.*)$/m.exec(cpuinfo)?.[1].trim().split(/\s+/);
+    if (!flags) {
+        return 'inconclusive';
+    }
+    return LINUX_REQUIRED_FLAGS.every((flag) => flags.includes(flag))
+        ? 'supported'
+        : 'unsupported';
+}
+
 /**
  * Probe-child entry point: loads the addon, asks it whether this CPU has the
  * instructions it was compiled for, and exits with the answer. Every error
@@ -60,36 +82,19 @@ export function runCpuProbe(): void {
     );
 }
 
-function probeCacheKey(): string {
-    return `${app.getVersion()}|${os.cpus()[0]?.model ?? ''}`;
-}
-
 /**
- * Returns whether startup may continue, after showing an error dialog if
- * this CPU cannot run the engine addon. Packaged x86-64 builds for Windows
- * and Linux probe in a child process, since loading the addon on a CPU
- * without its compiled-for extensions crashes with an illegal instruction.
- * A passing result is cached per app version and CPU model.
- *
- * Skipped on macOS, where every Intel Mac that runs Electron's minimum macOS
- * (12) supports x86-64-v2; for Squirrel install/uninstall events, which must
- * work on any CPU; and for unpackaged dev and test launches.
+ * Windows has no file listing CPU features, so the app runs itself as a probe
+ * child that loads the addon. Any decisive or inconclusive result is cached
+ * per app version and CPU model, so the probe runs once per update. The cache
+ * lives in the temp dir, outside every profile.
  */
-export function ensureCpuSupported(): boolean {
-    if (
-        !app.isPackaged ||
-        process.arch !== 'x64' ||
-        process.platform === 'darwin' ||
-        process.argv.some((arg) => arg.startsWith('--squirrel-'))
-    ) {
-        return true;
-    }
-
-    const cachePath = path.join(app.getPath('userData'), 'cpu-probe.json');
-    const key = probeCacheKey();
+function windowsProbeOutcome(): ProbeOutcome {
+    const cachePath = path.join(os.tmpdir(), 'operator-cpu-probe.json');
+    const key = `${app.getVersion()}|${os.cpus()[0]?.model ?? ''}`;
     try {
-        if (JSON.parse(fs.readFileSync(cachePath, 'utf8')).key === key) {
-            return true;
+        const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+        if (cached.key === key && cached.outcome !== 'unsupported') {
+            return cached.outcome;
         }
     } catch {
         // No cached result; probe below.
@@ -101,22 +106,58 @@ export function ensureCpuSupported(): boolean {
             timeout: PROBE_TIMEOUT_MS,
         }),
     );
-    if (outcome === 'supported') {
+    try {
+        fs.writeFileSync(cachePath, JSON.stringify({ key, outcome }));
+    } catch {
+        // Caching is an optimisation; the next launch probes again.
+    }
+    return outcome;
+}
+
+/**
+ * Shows an error dialog and quits. Waits for `ready`, because before it Linux
+ * prints the dialog to stderr instead of showing it.
+ */
+export function failStartup(title: string, message: string): void {
+    void app.whenReady().then(() => {
+        dialog.showErrorBox(title, message);
+        app.exit(1);
+    });
+}
+
+/**
+ * Returns whether startup may continue. On a packaged x86-64 Windows or Linux
+ * build whose CPU lacks the extensions the engine addon was compiled for, it
+ * shows an error and quits instead, since loading the addon there crashes
+ * with an illegal instruction.
+ *
+ * Skipped on macOS, where every Intel Mac that runs Electron's minimum macOS
+ * (12) supports x86-64-v2, and for unpackaged dev and test launches.
+ */
+export function ensureCpuSupported(): boolean {
+    if (!app.isPackaged || process.arch !== 'x64') {
+        return true;
+    }
+
+    let outcome: ProbeOutcome;
+    if (process.platform === 'linux') {
         try {
-            fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-            fs.writeFileSync(cachePath, JSON.stringify({ key }));
+            outcome = cpuinfoOutcome(fs.readFileSync('/proc/cpuinfo', 'utf8'));
         } catch {
-            // Caching is an optimisation; the next launch probes again.
+            outcome = 'inconclusive';
         }
+    } else if (process.platform === 'win32') {
+        outcome = windowsProbeOutcome();
+    } else {
+        return true;
     }
     if (outcome !== 'unsupported') {
         return true;
     }
 
-    dialog.showErrorBox(
+    failStartup(
         'Unsupported processor',
         `Operator needs a processor with SSE4.2 and POPCNT: Intel Core from 2008 onward, or AMD from 2011 onward.\n\nThis computer's processor (${os.cpus()[0]?.model ?? 'unknown'}) does not support them.`,
     );
-    app.exit(1);
     return false;
 }
