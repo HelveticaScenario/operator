@@ -38,7 +38,7 @@ describe('applyButtonChange', () => {
         expect(setModuleParam).toHaveBeenCalledWith(
             '__button_drone',
             '$signal',
-            { source: 5 },
+            { value: 5 },
         );
         expect(pushEditOperations).toHaveBeenCalledTimes(1);
         expect(pushEditOperations.mock.calls[0][1][0].text).toBe('true');
@@ -64,8 +64,8 @@ describe('applyButtonChange', () => {
         applyButtonChange(GATE, false, '__button_hit', model, setModuleParam);
 
         expect(setModuleParam.mock.calls.map((c) => c[2])).toEqual([
-            { source: 5 },
-            { source: 0 },
+            { value: 5 },
+            { value: 0 },
         ]);
         expect(pushEditOperations).not.toHaveBeenCalled();
     });
@@ -108,7 +108,10 @@ function collapseLast(
 describe('applyGroupCollapse', () => {
     test('replaces an existing collapsed literal', () => {
         expect(
-            collapseLast("const g = $cGroup('Filter', { collapsed: false });", true),
+            collapseLast(
+                "const g = $cGroup('Filter', { collapsed: false });",
+                true,
+            ),
         ).toBe("const g = $cGroup('Filter', { collapsed: true });");
     });
 
