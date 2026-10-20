@@ -147,11 +147,14 @@ impl PulseOscillator {
     fn update(&mut self, sample_rate: f32) {
         let p = &self.params;
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
-            let width = p.width.value_or(ch, 2.5) + p.pwm.value_or(ch, 0.0);
+            let width = p.width.value_or(ch, PulseOscillatorParams::WIDTH_DEFAULT)
+                + p.pwm.value_or(ch, PulseOscillatorParams::PWM_DEFAULT);
             let pitch = p.freq.get_value(ch);
-            let fm = p.fm.value_or(ch, 0.0);
+            let fm = p.fm.value_or(ch, PulseOscillatorParams::FM_DEFAULT);
             let increment = apply_fm(pitch, fm, p.fm_mode) / sample_rate;
-            let offset = p.phase_offset.value_or(ch, 0.0);
+            let offset = p
+                .phase_offset
+                .value_or(ch, PulseOscillatorParams::PHASE_OFFSET_DEFAULT);
             let sync = p.sync.as_ref().map(|sync| sync.get_value(ch));
             self.outputs
                 .sample
