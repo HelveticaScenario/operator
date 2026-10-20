@@ -1,6 +1,9 @@
 use deserr::Deserr;
 use schemars::JsonSchema;
 
+use std::ops::Range;
+
+use crate::block_input::{self, InputScratch};
 use crate::poly::{PolyOutput, PolySignal};
 
 #[derive(Clone, Deserr, JsonSchema, ChannelCount, SignalParams, Connect)]
@@ -19,7 +22,7 @@ struct SignalOutputs {
 }
 
 /// Utility module for routing, naming, and exposing signals in a patch.
-#[module(name = "$signal", args(value))]
+#[module(name = "$signal", args(value), block)]
 pub struct Signal {
     outputs: SignalOutputs,
     params: SignalParams,
@@ -32,6 +35,22 @@ impl Signal {
             let val = self.params.value.get_value(i);
             self.outputs.sample.set(i, val);
         }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut SignalBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let mut scratch = InputScratch::new();
+        let value = self
+            .params
+            .value
+            .block_input(range.clone(), channels, &mut scratch)?;
+        block_input::map(&mut outputs.sample, range, [value], |[x]| x);
+        Some(())
     }
 }
 
