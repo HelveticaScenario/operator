@@ -12,6 +12,8 @@ use crate::params::ParamsDeserializer;
 use crate::types::{Module, ModuleSchema, SampleableConstructor};
 
 pub(crate) mod cache;
+pub mod drum_map;
+pub mod groove;
 pub mod highlight;
 pub mod interval_value;
 pub mod seq;
@@ -23,16 +25,25 @@ pub use highlight::{SeqHighlightMeta, SeqHighlightState, seq_state_builder};
 pub use interval_value::IntervalValue;
 pub use seq_value::{SeqPatternParam, SeqValue};
 
+/// A sequencer created at most this long after a step boundary plays that
+/// step. Quantized patch swaps land within a sample or two of the bar or beat
+/// line.
+pub(crate) const FRESH_WINDOW_SECS: f64 = 0.002;
+
 pub fn install_constructors(map: &mut HashMap<String, SampleableConstructor>) {
     seq::Seq::install_constructor(map);
     track::Track::install_constructor(map);
     step::Step::install_constructor(map);
+    drum_map::DrumMap::install_constructor(map);
+    groove::Groove::install_constructor(map);
 }
 
 pub fn install_params_deserializers(map: &mut HashMap<String, ParamsDeserializer>) {
     seq::Seq::install_params_deserializer(map);
     track::Track::install_params_deserializer(map);
     step::Step::install_params_deserializer(map);
+    drum_map::DrumMap::install_params_deserializer(map);
+    groove::Groove::install_params_deserializer(map);
 }
 
 /// Register the per-module editor-state builders for this category.
@@ -48,5 +59,7 @@ pub fn schemas() -> Vec<ModuleSchema> {
         seq::Seq::get_schema(),
         track::Track::get_schema(),
         step::Step::get_schema(),
+        drum_map::DrumMap::get_schema(),
+        groove::Groove::get_schema(),
     ]
 }

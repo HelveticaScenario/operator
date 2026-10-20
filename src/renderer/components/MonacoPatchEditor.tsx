@@ -25,6 +25,7 @@ import {
 import { startModuleStatePolling } from './monaco/moduleStateTracking';
 import { registerMidiCompletionProvider } from './monaco/midiCompletionProvider';
 import { trackCodeBacking } from './monaco/codeBacking';
+import { createModelValueSync } from './monaco/modelValueSync';
 import { registerControlQuickFixProvider } from './monaco/controlQuickFixProvider';
 import { codeStyleFromPrettier } from '../dsl/objectPropertyInsert';
 import { registerKeybindingsCompletionProvider } from './monaco/keybindingsCompletion';
@@ -289,6 +290,48 @@ export function MonacoPatchEditor({
         openModelPathsRef.current = paths;
     }, [monaco, openFiles]);
 
+    // The model, not `value`, is the source of truth for the active buffer:
+    // `value` is written into it only when it is text the editor did not
+    // emit, so a value that arrives after newer keystrokes never replaces
+    // them (or moves the caret). The Editor gets `defaultValue` alone, which
+    // seeds a model it creates for a new path.
+    const [valueSync] = useState(createModelValueSync);
+    const syncedModelRef = useRef<editor.ITextModel | null>(null);
+    const writingValueRef = useRef(false);
+    const handleEditorChange = (text: string | undefined) => {
+        if (writingValueRef.current) {
+            return;
+        }
+        valueSync.noteEmitted(text ?? '');
+        onChange(text ?? '');
+    };
+    useEffect(() => {
+        const model = editor?.getModel();
+        if (!editor || !model) {
+            return;
+        }
+        if (model !== syncedModelRef.current) {
+            syncedModelRef.current = model;
+            valueSync.reset();
+        }
+        if (!valueSync.shouldWrite(value, model.getValue())) {
+            return;
+        }
+        writingValueRef.current = true;
+        try {
+            editor.executeEdits('', [
+                {
+                    forceMoveMarkers: true,
+                    range: model.getFullModelRange(),
+                    text: value,
+                },
+            ]);
+            editor.pushUndoStop();
+        } finally {
+            writingValueRef.current = false;
+        }
+    }, [editor, value, currentFile, valueSync]);
+
     const handleMount: OnMount = (ed) => {
         setEditor(ed);
         editorRef.current = ed;
@@ -534,10 +577,8 @@ export function MonacoPatchEditor({
                     path={formatPath(currentFile)}
                     language={editorLanguage}
                     theme={monacoThemeId}
-                    value={value}
-                    onChange={(val) => {
-                        onChange(val ?? '');
-                    }}
+                    defaultValue={value}
+                    onChange={handleEditorChange}
                     onMount={handleMount}
                     keepCurrentModel
                     options={editorOptions}

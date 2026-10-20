@@ -119,3 +119,6 @@ test-results
 # docs/superpowers/specs/2026-05-29-sp-combine-fixtures-generate-on-demand-design.md
 crates/modular_core/src/pattern_system/__fixtures__/sp_combine.json
 crates/modular_core/src/pattern_system/__fixtures__/sp_combine_chain2.json
+
+# Per-machine Claude Code settings
+.claude/settings.local.json

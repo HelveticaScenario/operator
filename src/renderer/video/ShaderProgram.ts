@@ -3,6 +3,7 @@ import type {
     CompiledVideoShader,
     VideoCvSample,
     VideoHistory,
+    VideoScope,
     VideoSourceDef,
 } from '../../shared/video/videoGraph';
 import {
@@ -11,12 +12,19 @@ import {
 } from '../../shared/video/uniformLayout';
 import { FEEDBACK_FORMAT, type FeedbackBuffers } from './FeedbackBuffers';
 import type { HistoryTexture } from './HistoryTexture';
+import type { ScopeBeams } from './ScopeBeams';
 import type { SourceTextures } from './SourceTextures';
 import { PREVIEW_FORMAT } from './PreviewCapture';
 
 type ParityGroups = [GPUBindGroup, GPUBindGroup];
 
-type ResourceKind = 'uniform' | 'sampler' | 'buffer' | 'history' | 'source';
+type ResourceKind =
+    | 'uniform'
+    | 'sampler'
+    | 'buffer'
+    | 'history'
+    | 'source'
+    | 'scope';
 
 /** What each kind of resource looks like in the bind group layout. */
 const LAYOUT_ENTRIES: Record<
@@ -26,6 +34,7 @@ const LAYOUT_ENTRIES: Record<
     buffer: { texture: { sampleType: 'float' } },
     history: { texture: { sampleType: 'unfilterable-float' } },
     sampler: { sampler: { type: 'filtering' } },
+    scope: { texture: { sampleType: 'float' } },
     source: { texture: { sampleType: 'float' } },
     uniform: { buffer: { type: 'uniform' } },
 };
@@ -33,14 +42,16 @@ const LAYOUT_ENTRIES: Record<
 /**
  * Every resource a shader binds, in binding order: the uniforms, the sampler
  * when anything is sampled, each feedback buffer, the audio history when
- * there is any, and each media source. `index` counts within its kind.
+ * there is any, each media source and each XY scope. `index` counts within
+ * its kind.
  */
 function resourceSlots(
     bufferCount: number,
     historyCount: number,
     sourceCount: number,
+    scopeCount: number,
 ): { binding: number; kind: ResourceKind; index: number }[] {
-    const at = bindingSlots(bufferCount, historyCount);
+    const at = bindingSlots(bufferCount, historyCount, sourceCount);
     const many = (kind: ResourceKind, start: number, count: number) =>
         Array.from({ length: count }, (_, index) => ({
             binding: start + index,
@@ -52,11 +63,12 @@ function resourceSlots(
         ...many(
             'sampler',
             at.sampler,
-            bufferCount > 0 || sourceCount > 0 ? 1 : 0,
+            bufferCount > 0 || sourceCount > 0 || scopeCount > 0 ? 1 : 0,
         ),
         ...many('buffer', at.buffer, bufferCount),
         ...many('history', at.history, historyCount > 0 ? 1 : 0),
         ...many('source', at.source, sourceCount),
+        ...many('scope', at.scope, scopeCount),
     ];
 }
 
@@ -73,7 +85,7 @@ export class ShaderProgram {
     readonly cvSamples: ReadonlyMap<number, VideoCvSample>;
     /** Uniform slots fed by an audio signal, with the engine tap that carries it. */
     readonly tapSlots: { slot: number; tap: number }[];
-    /** Uniform slots fed by each control, by the module id of its `$signal`. */
+    /** Uniform slots fed by each control, by the module id of its backing module. */
     private readonly controlSlots: ReadonlyMap<string, number[]>;
     /** True when the patch calls `$v.out`, so the picture is worth showing. */
     readonly hasOutput: boolean;
@@ -81,6 +93,10 @@ export class ShaderProgram {
     readonly histories: VideoHistory[];
     /** Media the shader samples, one texture each. */
     readonly sources: VideoSourceDef[];
+    /** XY scopes drawn before the picture, one texture each. */
+    readonly scopes: VideoScope[];
+    /** Each tap slot's signal stamp, when the main process has set them. */
+    readonly tapStamps: number[] | undefined;
     readonly uniforms: Float32Array<ArrayBuffer>;
     readonly previewUniforms: Float32Array<ArrayBuffer>;
     private groups: { main: ParityGroups; preview: ParityGroups } | null = null;
@@ -98,6 +114,8 @@ export class ShaderProgram {
         this.previewCount = compiled.previewCount;
         this.histories = compiled.histories;
         this.sources = compiled.sources;
+        this.scopes = compiled.scopes;
+        this.tapStamps = compiled.tapStamps;
         this.tapSlots = compiled.uniforms.flatMap((u) =>
             u.kind === 'tap' ? [{ slot: u.slot, tap: u.tap }] : [],
         );
@@ -146,6 +164,7 @@ export class ShaderProgram {
                 bufferCount,
                 compiled.histories.length,
                 compiled.sources.length,
+                compiled.scopes.length,
             ).map(({ binding, kind }) => ({
                 binding,
                 visibility: GPUShaderStage.FRAGMENT,
@@ -222,14 +241,16 @@ export class ShaderProgram {
         buffers: FeedbackBuffers,
         history: HistoryTexture,
         sources: SourceTextures,
+        scopes: ScopeBeams,
         sampler: GPUSampler,
     ): { main: ParityGroups; preview: ParityGroups } {
-        const generation = `${buffers.generation}:${history.generation}:${sources.generation}`;
+        const generation = `${buffers.generation}:${history.generation}:${sources.generation}:${scopes.generation}`;
         if (this.groups === null || this.groupsGeneration !== generation) {
             const slots = resourceSlots(
                 this.bufferCount,
                 this.histories.length,
                 this.sources.length,
+                this.scopes.length,
             );
             const build = (uniform: GPUBuffer, parity: number) => {
                 const resources: Record<
@@ -239,6 +260,7 @@ export class ShaderProgram {
                     buffer: (index) => buffers.readView(index, parity),
                     history: () => history.view,
                     sampler: () => sampler,
+                    scope: (index) => scopes.view(index),
                     source: (index) => sources.view(index),
                     uniform: () => ({ buffer: uniform }),
                 };

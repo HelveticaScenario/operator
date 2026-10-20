@@ -122,7 +122,7 @@ export function applySliderChange(
     });
 
     if (moduleId !== null) {
-        setModuleParam(moduleId, '$signal', { source: written });
+        setModuleParam(moduleId, '_smoothControl', { value: written });
     }
     return written;
 }

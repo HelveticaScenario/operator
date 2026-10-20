@@ -8,7 +8,7 @@ describe('$v inputs from the audio graph', () => {
         it('binds a slider to a uniform slot carrying its current value', () => {
             const { video } = exec(`
                 const freq = $slider('Freq', 4, 1, 10);
-                $v.out($v.colorize($v.osc(freq), 0, 0));
+                $v.out($v.solid($v.osc(freq), 0, 0));
             `);
             expect(video!.uniforms).toEqual([
                 {
@@ -25,7 +25,7 @@ describe('$v inputs from the audio graph', () => {
             const { video } = exec(`
                 const amt = $slider('Amt', 0.5, 0, 1);
                 const a = $v.osc(3, amt);
-                $v.out($v.colorize(a, amt, $slider('Other', 1, 0, 2)));
+                $v.out($v.solid(a, amt, $slider('Other', 1, 0, 2)));
             `);
             expect(
                 video!.uniforms.map((u) =>
@@ -36,7 +36,7 @@ describe('$v inputs from the audio graph', () => {
 
         it('binds a button as 0 until pressed', () => {
             const { video } = exec(`
-                $v.out($v.colorize($btn('Flash'), 0, 0));
+                $v.out($v.solid($btn('Flash'), 0, 0));
             `);
             expect(video!.uniforms).toEqual([
                 {
@@ -57,7 +57,7 @@ describe('$v inputs from the audio graph', () => {
 
         it('publishes an audio signal through a tap bound to a uniform slot', () => {
             const result = exec(`
-                $v.out($v.colorize($sine('1hz').range(0, 1), 0, 0));
+                $v.out($v.solid($sine('1hz').range(0, 1), 0, 0));
             `);
             expect(result.video!.uniforms).toEqual([
                 { kind: 'tap', slot: 0, tap: 0, value: 0 },
@@ -72,7 +72,7 @@ describe('$v inputs from the audio graph', () => {
         it('shares one tap between every use of a signal', () => {
             const found = taps(`
                 const lfo = $sine('1hz').range(0, 1);
-                $v.out($v.colorize(lfo, $v.osc(lfo), 0));
+                $v.out($v.solid(lfo, $v.osc(lfo), 0));
             `);
             expect(found).toHaveLength(1);
         });
@@ -81,7 +81,7 @@ describe('$v inputs from the audio graph', () => {
             const { video } = exec(`
                 const a = $sine('1hz').range(0, 1);
                 const b = $saw('2hz').range(0, 1);
-                $v.out($v.colorize(a, b, 0));
+                $v.out($v.solid(a, b, 0));
             `);
             expect(
                 video!.uniforms.map((u) => u.kind === 'tap' && u.tap),
@@ -90,14 +90,14 @@ describe('$v inputs from the audio graph', () => {
 
         it('uses a control directly rather than through a tap', () => {
             expect(
-                taps(`$v.out($v.colorize($slider('Level', 1, 0, 1), 0, 0));`),
+                taps(`$v.out($v.solid($slider('Level', 1, 0, 1), 0, 0));`),
             ).toHaveLength(0);
         });
 
         it('sums a signal of several channels through one tap', () => {
             const found = taps(`
                 const pair = $c($sine('1hz'), $sine('2hz'));
-                $v.out($v.colorize(pair, $v.osc(pair), 0));
+                $v.out($v.solid(pair, $v.osc(pair), 0));
             `);
             expect(found).toHaveLength(1);
             expect(found[0].params.input).toHaveLength(2);
@@ -106,7 +106,7 @@ describe('$v inputs from the audio graph', () => {
         it('shares a tap between a one-channel collection and its output', () => {
             const found = taps(`
                 const lfo = $sine('1hz');
-                $v.out($v.colorize(lfo, $c(lfo), 0));
+                $v.out($v.solid(lfo, $c(lfo), 0));
             `);
             expect(found).toHaveLength(1);
         });
@@ -117,7 +117,7 @@ describe('$v inputs from the audio graph', () => {
                 (_, i) => `$v.osc($sine(${i + 1}))`,
             ).join(', ');
             expect(() =>
-                exec(`const f = [${reads}]; $v.out($v.colorize(f[0], 0, 0));`),
+                exec(`const f = [${reads}]; $v.out($v.solid(f[0], 0, 0));`),
             ).toThrow(/at most 64 audio signals/);
         });
 
@@ -180,7 +180,7 @@ describe('$v inputs from the audio graph', () => {
     describe('fromAudio', () => {
         it('reads a window of an audio signal along the horizontal ramp', () => {
             const { video, patch } = exec(`
-                $v.out($v.colorize($v.fromAudio($sine('110hz'), $v.ramp(), { samples: 256 }), 0, 0));
+                $v.out($v.solid($v.fromAudio($sine('110hz'), $v.ramp(), { samples: 256 }), 0, 0));
             `);
             expect(video!.histories).toEqual([
                 { samples: 256, tap: 0, trigger: true },
@@ -193,7 +193,7 @@ describe('$v inputs from the audio graph', () => {
 
         it('defaults to the horizontal ramp and 512 samples', () => {
             const { video } = exec(
-                `$v.out($v.colorize($v.fromAudio($saw('55hz')), 0, 0));`,
+                `$v.out($v.solid($v.fromAudio($saw('55hz')), 0, 0));`,
             );
             expect(video!.histories[0]).toMatchObject({
                 samples: 512,
@@ -209,7 +209,7 @@ describe('$v inputs from the audio graph', () => {
                 const lfo = $sine('2hz');
                 const a = $v.fromAudio(lfo);
                 const b = $v.fromAudio(lfo, $v.ramp('vertical'));
-                $v.out($v.colorize(a, b, lfo));
+                $v.out($v.solid(a, b, lfo));
             `);
             expect(video!.histories).toHaveLength(1);
             expect(
@@ -221,7 +221,7 @@ describe('$v inputs from the audio graph', () => {
         it('gives a different window length its own row', () => {
             const { video } = exec(`
                 const lfo = $sine('2hz');
-                $v.out($v.colorize($v.fromAudio(lfo, 0.5, { samples: 64 }), $v.fromAudio(lfo, 0.5, { samples: 128 }), 0));
+                $v.out($v.solid($v.fromAudio(lfo, 0.5, { samples: 64 }), $v.fromAudio(lfo, 0.5, { samples: 128 }), 0));
             `);
             expect(video!.histories.map((h) => h.samples)).toEqual([64, 128]);
         });
@@ -295,7 +295,7 @@ describe('$v inputs from the audio graph', () => {
         it('closes the loop: video drives audio drives video', () => {
             const { video } = exec(`
                 const level = $v.toCV($v.ramp(), { x: 0.9, size: 0.02 });
-                $v.out($v.colorize(level, level, level));
+                $v.out($v.solid(level, level, level));
             `);
             expect(video!.uniforms.map((u) => u.kind)).toEqual(['tap']);
             expect(video!.cvSamples).toHaveLength(1);
