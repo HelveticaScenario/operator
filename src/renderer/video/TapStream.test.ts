@@ -320,6 +320,18 @@ describe('TapStream', () => {
         expect(out[0]).toBe(0);
     });
 
+    it('counts the real samples leading up to the cursor', () => {
+        const stream = new TapStream();
+        expect(stream.available).toBe(0);
+        stream.push(Float32Array.from([5, 6]), 48_000, 0);
+        stream.advance(0);
+        const out = new Float32Array(6);
+        stream.recent(out);
+        const real = out.slice(out.length - stream.available);
+        expect(stream.available).toBeGreaterThan(0);
+        expect(real.every((v) => v === 5 || v === 6)).toBe(true);
+    });
+
     it('reports whether any samples have arrived', () => {
         const stream = new TapStream();
         expect(stream.hasData).toBe(false);

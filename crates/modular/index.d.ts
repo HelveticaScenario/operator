@@ -63,13 +63,6 @@ export declare class Synthesizer {
    * of statistical smoothing in the UI.
    */
   setModuleProfilingSampleRate(rate: number): void
-  /**
-   * Snapshot every active $scopeXY pair as (key, x samples, y samples,
-   * ranges). Samples are chronological — element 0 is the oldest of the
-   * window, the last element the newest — and `ranges` is the per-axis volt
-   * window the renderer maps into clip space.
-   */
-  getScopeXy(): Array<[ScopeXyBufferKey, Float32Array, Float32Array, ScopeXyRanges]>
   updatePatch(patch: PatchGraph, trigger?: QueuedTrigger | undefined | null, resetClock?: boolean | undefined | null): PatchUpdateResult
   /** Load a WAV file into the cache, returning metadata about the loaded sample. */
   loadWav(path: string): WavLoadInfo
@@ -226,6 +219,16 @@ export interface BufferSizeRange {
   min: number
   max: number
 }
+
+/**
+ * Whether this CPU has every x86 extension the addon was compiled to assume
+ * (`target-cpu` in `.cargo/config.toml`). Compiled code may use those
+ * instructions anywhere, so the app calls this only from a probe child
+ * process (`src/main/cpuGate.ts`) where an illegal instruction cannot take
+ * down the app. Reads CPUID at runtime, since compile-time feature detection
+ * reports every compiled-in feature as present.
+ */
+export declare function cpuSupportsBuild(): boolean
 
 /** Current audio state information */
 export interface CurrentAudioState {
@@ -515,7 +518,6 @@ export interface PatchGraph {
   modules: Array<ModuleSpec>
   moduleIdRemaps?: Array<ModuleIdRemap>
   scopes: Array<Scope>
-  scopeXy?: ScopeXy
   vuMeters: Array<VuMeterSpec>
 }
 
@@ -556,40 +558,6 @@ export interface ScopeStats {
   readOffset: number
 }
 
-export interface ScopeXy {
-  pairs: Array<ScopeXyPair>
-  /** (xMin, xMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
-  xRange: [number, number]
-  /** (yMin, yMax) volts for display; defaults to [-5, 5] via `default_scope_range`. */
-  yRange: [number, number]
-}
-
-export interface ScopeXyBufferKey {
-  /** Index of this pair inside the active `$scopeXY` call. */
-  index: number
-  pair: ScopeXyPair
-}
-
-export interface ScopeXyPair {
-  x: ScopeChannel
-  y: ScopeChannel
-}
-
-/**
- * Per-axis display window shipped alongside each `$scopeXY` snapshot so the
- * renderer maps sampled volts to the configured clip-space window.
- */
-export interface ScopeXyRanges {
-  /** Horizontal voltage window minimum. */
-  xMin: number
-  /** Horizontal voltage window maximum. */
-  xMax: number
-  /** Vertical voltage window minimum. */
-  yMin: number
-  /** Vertical voltage window maximum. */
-  yMax: number
-}
-
 export interface SignalParamSchema {
   name: string
   description: string
@@ -625,7 +593,7 @@ export interface VuMeterSpec {
   /** 1 (mono) or 2 (stereo). */
   channels: number
   /**
-   * `$signal` module driving the mute gate (source 5 = audible, 0 =
+   * `$signal` module driving the mute gate (value 5 = audible, 0 =
    * silenced). None for the end-of-chain master meter, which has no gate.
    */
   muteModuleId?: string

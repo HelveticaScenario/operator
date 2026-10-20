@@ -11,7 +11,7 @@ use crate::poly::{PolyOutput, PolySignal};
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct SignalParams {
     /// Input signal to forward.
-    source: PolySignal,
+    value: PolySignal,
 }
 
 #[derive(Outputs, JsonSchema)]
@@ -22,7 +22,7 @@ struct SignalOutputs {
 }
 
 /// Utility module for routing, naming, and exposing signals in a patch.
-#[module(name = "$signal", args(source), block)]
+#[module(name = "$signal", args(value), block)]
 pub struct Signal {
     outputs: SignalOutputs,
     params: SignalParams,
@@ -32,7 +32,7 @@ impl Signal {
     fn update(&mut self, _sample_rate: f32) {
         let channels = self.channel_count();
         for i in 0..channels as usize {
-            let val = self.params.source.get_value(i);
+            let val = self.params.value.get_value(i);
             self.outputs.sample.set(i, val);
         }
     }
@@ -45,11 +45,11 @@ impl Signal {
     ) -> Option<()> {
         let channels = self.channel_count();
         let mut scratch = InputScratch::new();
-        let source = self
+        let value = self
             .params
-            .source
+            .value
             .block_input(range.clone(), channels, &mut scratch)?;
-        block_input::map(&mut outputs.sample, range, [source], |[x]| x);
+        block_input::map(&mut outputs.sample, range, [value], |[x]| x);
         Some(())
     }
 }

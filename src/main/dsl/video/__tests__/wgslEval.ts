@@ -26,8 +26,8 @@ function map3(
     c: Value,
     f: (x: number, y: number, z: number) => number,
 ): Value {
-    const n = [a, b, c].reduce<number>(
-        (m, v) => (typeof v === 'number' ? m : Math.max(m, v.length)),
+    const n = [a, b, c].reduce(
+        (m: number, v) => (typeof v === 'number' ? m : Math.max(m, v.length)),
         0,
     );
     if (n === 0) return f(a as number, b as number, c as number);
@@ -59,6 +59,7 @@ const BUILTINS: Record<string, (...args: Value[]) => Value> = {
     fract: (v) => unary(v, (x) => x - Math.floor(x)),
     max: (a, b) => zip(a, b, Math.max),
     min: (a, b) => zip(a, b, Math.min),
+    pow: (a, b) => zip(a, b, Math.pow),
     step: (e, x) => zip(e, x, (ei, xi) => (xi >= ei ? 1 : 0)),
     clamp: (v, lo, hi) =>
         map3(v, lo, hi, (x, l, h) => Math.min(Math.max(x, l), h)),

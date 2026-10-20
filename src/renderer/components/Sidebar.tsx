@@ -1,34 +1,48 @@
 import { type ReactNode, useState } from 'react';
 import './Sidebar.css';
 
-export type SidebarTab = 'explorer' | 'control';
+export type SidebarTab = 'explorer' | 'control' | 'perform';
+
+const TABS: { id: SidebarTab; label: string }[] = [
+    { id: 'explorer', label: 'Explorer' },
+    { id: 'control', label: 'Control' },
+    { id: 'perform', label: 'Perform' },
+];
 
 interface SidebarProps {
     explorerContent: ReactNode;
     controlContent: ReactNode;
+    performContent: ReactNode;
 }
 
-export function Sidebar({ explorerContent, controlContent }: SidebarProps) {
+export function Sidebar({
+    explorerContent,
+    controlContent,
+    performContent,
+}: SidebarProps) {
     const [activeTab, setActiveTab] = useState<SidebarTab>('explorer');
 
     return (
         <div className="app-sidebar">
             <div className="app-sidebar-tabs">
-                <button
-                    className={`app-sidebar-tab ${activeTab === 'explorer' ? 'active' : ''}`}
-                    onClick={() => setActiveTab('explorer')}
-                >
-                    Explorer
-                </button>
-                <button
-                    className={`app-sidebar-tab ${activeTab === 'control' ? 'active' : ''}`}
-                    onClick={() => setActiveTab('control')}
-                >
-                    Control
-                </button>
+                {TABS.map(({ id, label }) => (
+                    <button
+                        key={id}
+                        className={`app-sidebar-tab ${activeTab === id ? 'active' : ''}`}
+                        onClick={() => setActiveTab(id)}
+                    >
+                        {label}
+                    </button>
+                ))}
             </div>
             <div className="app-sidebar-content">
-                {activeTab === 'explorer' ? explorerContent : controlContent}
+                {
+                    {
+                        control: controlContent,
+                        explorer: explorerContent,
+                        perform: performContent,
+                    }[activeTab]
+                }
             </div>
         </div>
     );

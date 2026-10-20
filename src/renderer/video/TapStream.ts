@@ -99,6 +99,11 @@ export class TapStream {
         return a + (b - a) * fraction;
     }
 
+    /** How many samples lead up to the cursor, counting the one at it. */
+    get available(): number {
+        return this.cursor < 0 ? 0 : Math.floor(this.cursor) + 1;
+    }
+
     /**
      * Fills `into` with the samples leading up to the cursor, oldest first;
      * anything before the first sample reads as silence.
