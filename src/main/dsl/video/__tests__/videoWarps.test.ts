@@ -14,10 +14,10 @@ describe('$v warps and modulators', () => {
             // The noise and both of its coordinates are functions of the
             // coordinate; the warp calls the noise at the moved one.
             expect(wgsl).toContain(
-                'fn f2(uv: vec2f) -> vec4f {\n    return vec4f(vec3f(clamp((0.5 + 0.5 * noise_simplex(vec3f(video_frame_point(vec2f(video_luma(f0(uv)), video_luma(f1(uv)))) * 4.0, 0.0))), 0.0, 1.0)), 1.0);',
+                'fn node2(uv: vec2f) -> vec4f {\n    return vec4f(vec3f(clamp((0.5 + 0.5 * noise_simplex(vec3f(video_frame_point(vec2f(video_luma(node0(uv)), video_luma(node1(uv)))) * 4.0, 0.0))), 0.0, 1.0)), 1.0);',
             );
             expect(wgsl).toContain(
-                'let v3: vec4f = f2(video_transform(uv, 1.0, 0.1, vec2f(0.0, 0.0)));',
+                'let v3: vec4f = node2(video_transform(uv, 1.0, 0.1, vec2f(0.0, 0.0)));',
             );
         });
 
@@ -25,8 +25,8 @@ describe('$v warps and modulators', () => {
             const wgsl = wgslOf(`
                 $v.out($v.hsv($v.kaleid($v.osc(3), 6)));
             `);
-            expect(wgsl).toContain('fn f1(uv: vec2f) -> vec4f');
-            expect(wgsl).toContain('f0(uv)');
+            expect(wgsl).toContain('fn node1(uv: vec2f) -> vec4f');
+            expect(wgsl).toContain('node0(uv)');
             expect(wgsl).toContain('video_kaleid(uv, 6.0, 0.0)');
         });
 
@@ -38,8 +38,22 @@ describe('$v warps and modulators', () => {
             // The outer transform calls the inner one as a function, and the
             // inner one calls the noise as a function in turn.
             expect(wgsl).toMatch(
-                /fn f3\(uv: vec2f\) -> vec4f \{\n    return f2\(video_pixelate/,
+                /fn node3\(uv: vec2f\) -> vec4f \{\n    return node2\(video_pixelate/,
             );
+        });
+
+        it('names node functions apart from WGSL types at any node count', () => {
+            const wgsl = wgslOf(`
+                let s = $v.osc(3);
+                for (let i = 0; i < 40; i++) s = $v.hue(s, 0.01);
+                $v.out($v.kaleid(s, 4));
+            `);
+            const names = [...wgsl.matchAll(/fn (\w+)\(uv: vec2f\)/g)].map(
+                (m) => m[1],
+            );
+            expect(names.length).toBeGreaterThan(33);
+            expect(names).not.toContain('f16');
+            expect(names).not.toContain('f32');
         });
 
         it('warps a constant or time input through a constant function', () => {
@@ -63,12 +77,12 @@ describe('$v warps and modulators', () => {
             const wgsl = wgslOf(`
                 $v.out($v.pixelate($v.hsv($v.ramp()), 8, 4));
             `);
-            expect(wgsl).toMatch(/let v\d: vec4f = f\d\(video_pixelate/);
+            expect(wgsl).toMatch(/let v\d: vec4f = node\d\(video_pixelate/);
         });
 
         it('pulls a channel or the brightness out of a signal', () => {
             const wgsl = wgslOf(`
-                $v.out($v.colorize($v.channel($v.hsv($v.ramp()), 'g'), $v.channel($v.hsv($v.ramp())), 0));
+                $v.out($v.solid($v.channel($v.hsv($v.ramp()), 'g'), $v.channel($v.hsv($v.ramp())), 0));
             `);
             expect(wgsl).toMatch(/vec4f\(vec3f\(v\d+\.g\), 1\.0\)/);
             expect(wgsl).toMatch(/vec4f\(vec3f\(video_luma\(v\d+\)\), 1\.0\)/);
@@ -79,9 +93,7 @@ describe('$v warps and modulators', () => {
                 /\$v\.warp: input must be a video signal/,
             );
             expect(() =>
-                exec(
-                    `$v.out($v.colorize($v.channel($v.hsv(0), 'alpha'), 0, 0));`,
-                ),
+                exec(`$v.out($v.solid($v.channel($v.hsv(0), 'alpha'), 0, 0));`),
             ).toThrow(/param "channel" must be one of r, g, b, a, luma/);
         });
     });
@@ -110,7 +122,7 @@ describe('$v warps and modulators', () => {
                     `$v.out($v.hsv($v.${name}($v.osc(4), ${noise})));`,
                 );
                 expect(wgsl).toContain(emitted);
-                expect(wgsl).toMatch(/let v\d+: vec4f = f\d+\(/);
+                expect(wgsl).toMatch(/let v\d+: vec4f = node\d+\(/);
             },
         );
 
@@ -119,7 +131,7 @@ describe('$v warps and modulators', () => {
                 `$v.out($v.${name}($v.hsv($v.ramp()), $v.hsv(${noise})));`,
             );
             expect(wgsl).toContain(emitted);
-            expect(wgsl).toMatch(/let v\d+: vec4f = f\d+\(/);
+            expect(wgsl).toMatch(/let v\d+: vec4f = node\d+\(/);
         });
 
         it('reads the modulator whole and takes its channels', () => {
@@ -179,7 +191,7 @@ describe('$v warps and modulators', () => {
             const wgsl = wgslOf(
                 `$v.out($v.modulate($v.hsv($v.ramp()), $v.hsv(${noise}), 0.2));`,
             );
-            expect(wgsl).toMatch(/f\d+\(uv \+ v\d+\.rg \* 0\.2\)/);
+            expect(wgsl).toMatch(/node\d+\(uv \+ v\d+\.rg \* 0\.2\)/);
         });
 
         it('samples pixelated cells at their centers', () => {

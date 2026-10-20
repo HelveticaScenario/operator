@@ -11,7 +11,7 @@ describe('$v in the DSL executor', () => {
             const x = $v.ramp('horizontal');
             const wave = $v.osc(4, $v.time, { shape: 'triangle', input: x });
             $v.ramp('vertical');
-            $v.out($v.colorize(wave, 0.5, 1));
+            $v.out($v.solid(wave, 0.5, 1));
         `);
         expect(video).not.toBeNull();
         expect(video!.wgsl).toContain('abs(2.0 * fract(');
@@ -46,7 +46,7 @@ describe('$v in the DSL executor', () => {
     });
 
     it('reports an invalid enumerated option', () => {
-        expect(() => exec(`$v.out($v.colorize($v.ramp('z'), 0, 0));`)).toThrow(
+        expect(() => exec(`$v.out($v.solid($v.ramp('z'), 0, 0));`)).toThrow(
             /param "axis" must be one of/,
         );
     });
