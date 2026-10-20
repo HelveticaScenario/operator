@@ -24,7 +24,7 @@ export const stripes: VideoGraph = {
         },
         {
             id: 'rgb',
-            kind: 'colorize',
+            kind: 'solid',
             inputs: {
                 r: { kind: 'node', id: 'wave' },
                 g: { kind: 'const', value: 0.5 },
@@ -41,6 +41,7 @@ export const stripes: VideoGraph = {
     histories: [],
     output: 'out',
     sources: [],
+    scopes: [],
     previews: [],
     uniforms: [{ kind: 'control', slot: 0, moduleId: 'knob', value: 3 }],
 };

@@ -45,6 +45,7 @@ describe('compileVideoGraph feedback', () => {
         output: 'out',
         previews: [],
         sources: [],
+        scopes: [],
         uniforms: [],
     };
 
@@ -60,7 +61,7 @@ describe('compileVideoGraph feedback', () => {
             'feedback_mirror(video_transform(uv, 1.01',
         );
         expect(shader.wgsl).toMatch(
-            /return FragOut\(video_display\(v3\), v2\);/,
+            /return FragOut\(video_display\(v3\), clamp\(v2, vec4f\(0\.0\), vec4f\(1\.0\)\)\);/,
         );
     });
 
@@ -189,7 +190,7 @@ describe('compileVideoGraph audio history', () => {
             },
             {
                 id: 'rgb',
-                kind: 'colorize',
+                kind: 'solid',
                 inputs: {
                     r: { kind: 'node', id: 'wave' },
                     g: { kind: 'const', value: 0 },
@@ -291,7 +292,7 @@ describe('compileVideoGraph warped inputs', () => {
             },
             {
                 id: 'rgb',
-                kind: 'colorize',
+                kind: 'solid',
                 inputs: {
                     r: { kind: 'node', id: 'shifted' },
                     g: { kind: 'const', value: 0 },
@@ -310,14 +311,14 @@ describe('compileVideoGraph warped inputs', () => {
     it('hands a warped input to the module as a function name', () => {
         const wgsl = compileVideoGraph(warpGraph).wgsl;
         expect(wgsl).toContain(
-            'fn f0(uv: vec2f) -> vec4f {\n    return vec4f(vec3f(uv.x), 1.0);',
+            'fn node0(uv: vec2f) -> vec4f {\n    return vec4f(vec3f(uv.x), 1.0);',
         );
         expect(wgsl).toContain(
-            'let v1: vec4f = f0(video_pixelate(uv, vec2f(8.0, 8.0)));',
+            'let v1: vec4f = node0(video_pixelate(uv, vec2f(8.0, 8.0)));',
         );
     });
 
     it('writes no functions for a graph without warps', () => {
-        expect(compileVideoGraph(stripes).wgsl).not.toMatch(/fn f\d+\(/);
+        expect(compileVideoGraph(stripes).wgsl).not.toMatch(/fn node\d+\(/);
     });
 });

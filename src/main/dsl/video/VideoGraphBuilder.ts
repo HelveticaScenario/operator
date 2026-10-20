@@ -1,5 +1,7 @@
 import {
+    MAX_SCOPE_TRACES,
     MAX_VIDEO_TAPS,
+    SCOPE_SETTING_RANGES,
     sameSource,
     type VideoGraph,
     type VideoHistory,
@@ -7,6 +9,8 @@ import {
     type VideoNode,
     type VideoPreview,
     type VideoPreviewSite,
+    type VideoScope,
+    type VideoScopeSetting,
     type VideoSourceDef,
     type VideoUniform,
     type VideoValue,
@@ -38,6 +42,7 @@ import {
     type VideoCvConfig,
     type VideoGraphHost,
     type VideoPreviewConfig,
+    type VideoScopeConfig,
     type VideoSource,
 } from './videoBuilderTypes';
 
@@ -86,6 +91,7 @@ export class VideoGraphBuilder implements VideoCore {
     private tapIndexes = new Map<string, number>();
     private histories: VideoHistory[] = [];
     private sources: VideoSourceDef[] = [];
+    private scopes: VideoScope[] = [];
     /** The audio signal each tap carries, published once `build` knows which taps are live. */
     private tapSignals: AudioSignal[] = [];
     /** The signal each pattern plays as, so a pattern used twice shares one `$cycle`. */
@@ -259,14 +265,7 @@ export class VideoGraphBuilder implements VideoCore {
         }
         const trigger = config?.trigger ?? true;
         const tap = this.tapFor('$v.fromAudio', 'signal', single(played));
-        let row = this.histories.findIndex(
-            (h) =>
-                h.tap === tap && h.samples === samples && h.trigger === trigger,
-        );
-        if (row < 0) {
-            row = this.histories.length;
-            this.histories.push({ samples, tap, trigger });
-        }
+        const row = this.historyRow({ samples, tap, trigger });
         return this.addNode(
             'audioHistory',
             {
@@ -276,6 +275,134 @@ export class VideoGraphBuilder implements VideoCore {
             { history: row },
         );
     };
+
+    /** The row of audio history showing `history`, adding it on first use. */
+    private historyRow(history: VideoHistory): number {
+        const known = this.histories.findIndex(
+            (h) =>
+                h.tap === history.tap &&
+                h.samples === history.samples &&
+                h.trigger === history.trigger,
+        );
+        if (known >= 0) return known;
+        return this.histories.push(history) - 1;
+    }
+
+    /**
+     * An XY scope of audio signals: `x` moves the beam across the frame and
+     * `y` up it. Each channel is its own signal, and the two are paired off
+     * channel by channel, the shorter cycling, one trace per pair. The beam
+     * is white on a transparent background, its opacity its brightness.
+     */
+    scopeXY = (
+        x: unknown,
+        y: unknown,
+        config?: VideoScopeConfig,
+    ): VideoOutput => {
+        const fn = '$v.scopeXY';
+        const xs = this.channelsOf(fn, 'x', x);
+        const ys = this.channelsOf(fn, 'y', y);
+        for (const [name, channels] of [
+            ['x', xs],
+            ['y', ys],
+        ] as const) {
+            if (channels.length === 0) {
+                throw new Error(`${fn}: ${name} has no channels`);
+            }
+        }
+        const traceCount = Math.max(xs.length, ys.length);
+        if (traceCount > MAX_SCOPE_TRACES) {
+            throw new Error(
+                `${fn}: ${traceCount} traces requested; a scope draws at most ${MAX_SCOPE_TRACES}`,
+            );
+        }
+        const samples = config?.samples ?? 2048;
+        if (
+            !Number.isInteger(samples) ||
+            samples < 2 ||
+            samples > VIDEO_HISTORY_LEN
+        ) {
+            throw new Error(
+                `${fn}: samples must be an integer from 2 to ${VIDEO_HISTORY_LEN}, got ${describe(samples)}`,
+            );
+        }
+        const row = (signal: ModuleOutput, axis: string) =>
+            this.historyRow({
+                samples,
+                tap: this.tapFor(fn, axis, signal),
+                trigger: false,
+            });
+        const traces = Array.from({ length: traceCount }, (_, i) => ({
+            x: row(xs[i % xs.length], 'x'),
+            y: row(ys[i % ys.length], 'y'),
+        }));
+        const setting = (
+            name: keyof typeof SCOPE_SETTING_RANGES,
+        ): VideoScopeSetting => {
+            const range = SCOPE_SETTING_RANGES[name];
+            const given = config?.[name];
+            if (given === undefined || typeof given === 'number') {
+                return {
+                    kind: 'const',
+                    value: boundedNumber(
+                        fn,
+                        name,
+                        given,
+                        range.default,
+                        range.min,
+                        range.max,
+                    ),
+                };
+            }
+            const value = this.value(fn, name, given);
+            if (value.kind !== 'uniform') {
+                throw new Error(
+                    `${fn}: ${name} takes a number, a slider, a pattern or an audio signal, not a video signal: the beam has one ${name} for the whole frame`,
+                );
+            }
+            return value;
+        };
+        const scope = this.scopes.push({
+            intensity: setting('intensity'),
+            lineWidth: setting('lineWidth'),
+            persistence: setting('persistence'),
+            samples,
+            traces,
+            upsample: config?.upsample ?? false,
+            xRange: voltRange(fn, 'xRange', config?.xRange),
+            yRange: voltRange(fn, 'yRange', config?.yRange),
+        });
+        return this.addNode('scopeXY', {}, { scope: scope - 1 });
+    };
+
+    /**
+     * Every channel of an audio signal, pattern or array of them, in order. A
+     * number or note string is a constant signal.
+     */
+    private channelsOf(
+        fn: string,
+        name: string,
+        value: unknown,
+    ): ModuleOutput[] {
+        if (Array.isArray(value)) {
+            return value.flatMap((v: unknown) => this.channelsOf(fn, name, v));
+        }
+        const played = this.play(
+            typeof value === 'number' || typeof value === 'string'
+                ? this.host.constantSignal(value)
+                : value,
+        );
+        if (played instanceof ModuleOutput) return [played];
+        if (played instanceof BaseCollection) {
+            if (played.length === 0) {
+                throw new Error(`${fn}: ${name} has no channels`);
+            }
+            return [...played];
+        }
+        throw new Error(
+            `${fn}: ${name} must be an audio signal, a pattern, a number or an array of them, got ${describe(value)}`,
+        );
+    }
 
     sourceIndex(def: VideoSourceDef): number {
         const known = this.sources.findIndex((s) => sameSource(s, def));
@@ -424,12 +551,19 @@ export class VideoGraphBuilder implements VideoCore {
         // Each index the shader binds is renumbered over the live nodes, so
         // what only pruned nodes used leaves no gaps.
         const buffers = keptIndices(liveNodes.map((n) => n.buffer));
-        const histories = keptIndices(liveNodes.map((n) => n.history));
+        const scopes = keptIndices(liveNodes.map((n) => n.scope));
+        const histories = keptIndices([
+            ...liveNodes.map((n) => n.history),
+            ...scopes.flatMap((k) =>
+                this.scopes[k].traces.flatMap(({ x, y }) => [x, y]),
+            ),
+        ]);
         const sources = keptIndices(liveNodes.map((n) => n.source));
         const slots = keptIndices(
             [
                 ...liveNodes.flatMap((n) => Object.values(n.inputs)),
                 ...this.previews.map((p) => p.value),
+                ...scopes.flatMap((k) => scopeSettings(this.scopes[k])),
             ].map((v) => (v.kind === 'uniform' ? v.slot : undefined)),
         );
         const taps = keptIndices([
@@ -443,10 +577,13 @@ export class VideoGraphBuilder implements VideoCore {
             buffers.length,
             histories.length > 0 ? 1 : 0,
             sources.length,
+            scopes.length,
         );
         taps.forEach((tap, k) => this.host.publishTap(this.tapSignals[tap], k));
 
         const remap = (v: VideoValue): VideoValue =>
+            v.kind === 'uniform' ? { ...v, slot: slots.indexOf(v.slot) } : v;
+        const remapSetting = (v: VideoScopeSetting): VideoScopeSetting =>
             v.kind === 'uniform' ? { ...v, slot: slots.indexOf(v.slot) } : v;
         return {
             nodes: liveNodes.map((n) => ({
@@ -463,6 +600,9 @@ export class VideoGraphBuilder implements VideoCore {
                 ...(n.source !== undefined && {
                     source: sources.indexOf(n.source),
                 }),
+                ...(n.scope !== undefined && {
+                    scope: scopes.indexOf(n.scope),
+                }),
             })),
             output: this.outputId,
             hasOutput,
@@ -471,6 +611,16 @@ export class VideoGraphBuilder implements VideoCore {
                 tap: taps.indexOf(this.histories[row].tap),
             })),
             sources: sources.map((k) => this.sources[k]),
+            scopes: scopes.map((k) => ({
+                ...this.scopes[k],
+                intensity: remapSetting(this.scopes[k].intensity),
+                lineWidth: remapSetting(this.scopes[k].lineWidth),
+                persistence: remapSetting(this.scopes[k].persistence),
+                traces: this.scopes[k].traces.map(({ x, y }) => ({
+                    x: histories.indexOf(x),
+                    y: histories.indexOf(y),
+                })),
+            })),
             previews: this.previews.map((p) => ({
                 ...p,
                 value: remap(p.value),
@@ -532,19 +682,62 @@ function checkTextures(
     buffers: number,
     histories: number,
     sources: number,
+    scopes: number,
 ): void {
-    if (buffers + histories + sources <= MAX_SAMPLED_TEXTURES) return;
+    if (buffers + histories + sources + scopes <= MAX_SAMPLED_TEXTURES) return;
     const used = (
         [
             [buffers, 'feedback buffer'],
             [histories, 'audio history'],
             [sources, 'source'],
+            [scopes, 'XY scope'],
         ] as const
     )
         .filter(([count]) => count > 0)
         .map(([count, what]) => `${count} ${what}${count === 1 ? '' : 's'}`);
     const listed = `${used.slice(0, -1).join(', ')} and ${used[used.length - 1]}`;
     throw new Error(
-        `$v: a patch can use at most ${MAX_SAMPLED_TEXTURES} textures, counting feedback buffers and frame delays, one for all of $v.fromAudio, and one per media source; this one uses ${listed}`,
+        `$v: a patch can use at most ${MAX_SAMPLED_TEXTURES} textures, counting feedback buffers and frame delays, one for all of $v.fromAudio and the XY scopes' signals, one per media source and one per XY scope; this one uses ${listed}`,
     );
+}
+
+/** The settings of a scope that may read uniform slots. */
+const scopeSettings = (scope: VideoScope): VideoScopeSetting[] => [
+    scope.intensity,
+    scope.lineWidth,
+    scope.persistence,
+];
+
+/** A config number from `min` to `max`, or `fallback` when absent. */
+function boundedNumber(
+    fn: string,
+    name: string,
+    value: unknown,
+    fallback: number,
+    min: number,
+    max: number,
+): number {
+    if (value === undefined) return fallback;
+    if (typeof value !== 'number' || !(value >= min && value <= max)) {
+        throw new Error(
+            `${fn}: ${name} must be a number from ${min} to ${max}, got ${describe(value)}`,
+        );
+    }
+    return value;
+}
+
+/** A `[min, max]` window in volts, [-5, 5] when absent. */
+function voltRange(fn: string, name: string, value: unknown): [number, number] {
+    if (value === undefined) return [-5, 5];
+    if (
+        !Array.isArray(value) ||
+        value.length !== 2 ||
+        !value.every((v) => typeof v === 'number' && Number.isFinite(v)) ||
+        value[0] >= value[1]
+    ) {
+        throw new Error(
+            `${fn}: ${name} must be [min, max] in volts with min < max, got ${describe(value)}`,
+        );
+    }
+    return [value[0], value[1]];
 }

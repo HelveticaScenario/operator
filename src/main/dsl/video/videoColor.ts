@@ -13,16 +13,13 @@ export function colorMethods(core: VideoCore) {
 
     return {
         /** A color from red, green, blue and alpha levels. */
-        colorize: (
-            r: VideoSource,
-            g: VideoSource,
-            b: VideoSource,
+        solid: (
+            r: VideoSource = 0,
+            g: VideoSource = 0,
+            b: VideoSource = 0,
             a: VideoSource = 1,
         ): VideoOutput =>
-            core.addNode(
-                'colorize',
-                core.values('$v.colorize', { r, g, b, a }),
-            ),
+            core.addNode('solid', core.values('$v.solid', { r, g, b, a })),
 
         /** Color from hue (wraps every 1.0), saturation and value. */
         hsv: (
@@ -36,10 +33,42 @@ export function colorMethods(core: VideoCore) {
             ),
 
         /** Turns every hue of `input` by `amount` of a full circle. */
-        hueShift: (
+        hue: (input: VideoOutput, amount: VideoSource = 0.4): VideoOutput =>
+            adjust('hue', input, { amount }),
+
+        /** Tints `input` by a multiplier per channel; a negative one inverts its channel. */
+        color: (
             input: VideoOutput,
-            amount: VideoSource = 0.5,
-        ): VideoOutput => adjust('hueShift', input, { amount }),
+            r: VideoSource = 1,
+            g: VideoSource = 1,
+            b: VideoSource = 1,
+            a: VideoSource = 1,
+        ): VideoOutput => adjust('color', input, { r, g, b, a }),
+
+        /** Adds the fractional part of each amount to its channel. */
+        shift: (
+            input: VideoOutput,
+            r: VideoSource = 0.5,
+            g: VideoSource = 0,
+            b: VideoSource = 0,
+            a: VideoSource = 0,
+        ): VideoOutput => adjust('shift', input, { r, g, b, a }),
+
+        /** Adds `amount` to red, green and blue. */
+        brightness: (
+            input: VideoOutput,
+            amount: VideoSource = 0.4,
+        ): VideoOutput => adjust('brightness', input, { amount }),
+
+        /** Scales each channel's distance from the color's gray by `amount`. */
+        saturate: (input: VideoOutput, amount: VideoSource = 2): VideoOutput =>
+            adjust('saturate', input, { amount }),
+
+        /** Shifts hue, saturation and value by `amount` and wraps each channel, cycling colors through bands. */
+        colorama: (
+            input: VideoOutput,
+            amount: VideoSource = 0.005,
+        ): VideoOutput => adjust('colorama', input, { amount }),
 
         /** Scales each channel's distance from mid-gray by `amount`. */
         contrast: (

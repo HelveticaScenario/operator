@@ -20,18 +20,40 @@ export class AudioInputs {
     private scratch: Float32Array[] = [];
     /** The window each history row shows, rewritten every frame. */
     private windows: Float32Array<ArrayBuffer>[] = [];
+    private histories: VideoHistory[] = [];
+    /** Each tap slot's signal stamp in the shader the streams belong to. */
+    private stamps: readonly number[] = [];
 
     constructor(device: GPUDevice) {
         this.history = new HistoryTexture(device);
     }
 
     /**
-     * Forgets every signal and sizes the history for `histories`. Taps are
-     * numbered afresh by every compile, so what the streams hold belongs to
-     * the previous patch's signals.
+     * Sizes the history for `histories` and forgets every signal whose tap
+     * slot carries another signal now, which `stamps` tells: a slot keeps its
+     * samples when its stamp is the same as before. Returns the slots
+     * forgotten, which must be read afresh.
      */
-    reset(histories: VideoHistory[]): void {
-        this.streams.clear();
+    reset(histories: VideoHistory[], stamps: readonly number[] = []): number[] {
+        const forgotten: number[] = [];
+        for (const tap of this.streams.keys()) {
+            const stamp = stamps[tap] ?? 0;
+            if (stamp === 0 || stamp !== this.stamps[tap]) {
+                this.streams.delete(tap);
+                forgotten.push(tap);
+            }
+        }
+        stamps.forEach((stamp, tap) => {
+            if (
+                stamp !== 0 &&
+                !this.streams.has(tap) &&
+                !forgotten.includes(tap)
+            ) {
+                forgotten.push(tap);
+            }
+        });
+        this.stamps = stamps;
+        this.histories = histories;
         this.history.resize(histories.length);
         this.scratch = histories.map(
             ({ samples, trigger }) =>
@@ -44,6 +66,12 @@ export class AudioInputs {
         this.windows = histories.map(
             ({ samples }) => new Float32Array(samples),
         );
+        return forgotten;
+    }
+
+    /** Forgets every signal's samples, as when the engine starts playing again. */
+    clear(): void {
+        this.streams.clear();
     }
 
     /** Adds audio samples that have just arrived. */
@@ -88,6 +116,19 @@ export class AudioInputs {
                 alignWindow(recent, this.windows[row], trigger),
             );
         });
+    }
+
+    /**
+     * How many samples at the end of untriggered row `row` are real; the rest,
+     * from before the signal's first sample, read as silence.
+     */
+    filled(row: number): number {
+        const history = this.histories[row];
+        if (history === undefined) return 0;
+        return Math.min(
+            history.samples,
+            this.streams.get(history.tap)?.available ?? 0,
+        );
     }
 
     destroy(): void {

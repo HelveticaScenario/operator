@@ -123,6 +123,9 @@ Cargo.lock
 # debug-info bundle co-located with the .node by scripts/copy-debuginfo.mjs
 # so std::backtrace can resolve file:line in production panic logs
 *.dSYM
+*.node.pdb
+# loaded addons set aside by scripts/watch-native.mjs for a Windows rebuild
+*.node.stale-*
 .pnp.*
 .yarn/*
 !.yarn/patches
