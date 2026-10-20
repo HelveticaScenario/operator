@@ -183,13 +183,13 @@
       "title": "SignalParams",
       "type": "object",
       "properties": {
-        "source": {
+        "value": {
           "description": "Input signal to forward.",
           "$ref": "#/$defs/PolySignal"
         }
       },
       "required": [
-        "source"
+        "value"
       ],
       "$defs": {
         "PolySignal": {
@@ -262,7 +262,7 @@
     "bufferOutputs": [],
     "signalParams": [
       {
-        "name": "source",
+        "name": "value",
         "description": "Input signal to forward.",
         "signalType": "control",
         "defaultValue": 0.0,
@@ -272,7 +272,7 @@
     ],
     "positionalArgs": [
       {
-        "name": "source"
+        "name": "value"
       }
     ]
   },
@@ -18241,6 +18241,40 @@
       },
       {
         "name": "shift"
+      }
+    ]
+  },
+  {
+    "name": "_smoothControl",
+    "documentation": "A UI-driven constant: the editor sets `value` through the single-module\nupdate path, and the output ramps linearly to it over [`RAMP_SECONDS`] so\na drag's stepped values move without zipper noise. A freshly built control\nstarts at its value; one that replaces another continues from the old\noutput. Backs `$slider`, the out gain/pan faders, and the mute/solo gate.",
+    "paramsSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "SmoothControlParams",
+      "type": "object",
+      "properties": {
+        "value": {
+          "description": "value the output ramps to",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "outputs": [
+      {
+        "name": "output",
+        "description": "smoothed control value",
+        "polyphonic": false,
+        "default": true
+      }
+    ],
+    "bufferOutputs": [],
+    "signalParams": [],
+    "positionalArgs": [
+      {
+        "name": "value"
       }
     ]
   },

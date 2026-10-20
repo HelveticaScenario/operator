@@ -220,6 +220,16 @@ export interface BufferSizeRange {
   max: number
 }
 
+/**
+ * Whether this CPU has every x86 extension the addon was compiled to assume
+ * (`target-cpu` in `.cargo/config.toml`). Compiled code may use those
+ * instructions anywhere, so the app calls this only from a probe child
+ * process (`src/main/cpuGate.ts`) where an illegal instruction cannot take
+ * down the app. Reads CPUID at runtime, since compile-time feature detection
+ * reports every compiled-in feature as present.
+ */
+export declare function cpuSupportsBuild(): boolean
+
 /** Current audio state information */
 export interface CurrentAudioState {
   hostId: string
@@ -583,7 +593,7 @@ export interface VuMeterSpec {
   /** 1 (mono) or 2 (stereo). */
   channels: number
   /**
-   * `$signal` module driving the mute gate (source 5 = audible, 0 =
+   * `$signal` module driving the mute gate (value 5 = audible, 0 =
    * silenced). None for the end-of-chain master meter, which has no gate.
    */
   muteModuleId?: string
