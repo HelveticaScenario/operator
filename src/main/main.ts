@@ -50,6 +50,7 @@ import {
     registerMediaScheme,
 } from './mediaProtocol';
 import {
+    controlParamValue,
     getVideoShader,
     pullVideo,
     setVideoControl,
@@ -1205,7 +1206,7 @@ registerIPCHandler('VIDEO_CV_VALUES', (values) => {
     }
     for (const { id, value } of values) {
         if (cvSent.values.get(id) === value) continue;
-        synth.setModuleParam(id, '$signal', { source: value });
+        synth.setModuleParam(id, '$signal', { value });
         cvSent.values.set(id, value);
     }
 });
@@ -1282,9 +1283,9 @@ registerIPCHandler('SYNTH_IS_STOPPED', () => synth.isStopped());
 
 registerIPCHandler('SYNTH_SET_MODULE_PARAM', (moduleId, moduleType, params) => {
     synth.setModuleParam(moduleId, moduleType, params);
-    const { source } = params as { source?: unknown };
-    if (typeof source === 'number') {
-        setVideoControl(moduleId, source);
+    const value = controlParamValue(params);
+    if (value !== undefined) {
+        setVideoControl(moduleId, value);
     }
 });
 

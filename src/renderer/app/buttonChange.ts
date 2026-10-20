@@ -27,7 +27,7 @@ export function applyButtonChange(
 ): void {
     if (moduleId !== null) {
         setModuleParam(moduleId, '$signal', {
-            source: pressed ? GATE_HIGH_VOLTAGE : 0,
+            value: pressed ? GATE_HIGH_VOLTAGE : 0,
         });
     }
 

@@ -359,7 +359,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$track" => json!({ "keyframes": [] }),
         "$math" => json!({ "expression": "1+1" }),
         "$spread" => json!({ "min": -1.0, "max": 1.0, "count": 3 }),
-        "$signal" => json!({ "source": 0.0 }),
+        "$signal" => json!({ "value": 0.0 }),
         "$scaleAndShift" => json!({ "input": 0.0 }),
         "$chord" => json!({ "chord": "C[maj]" }),
         "$cheby" | "$fold" | "$segment" => json!({ "input": 0.0, "amount": 0.0 }),
@@ -416,6 +416,7 @@ fn minimal_params(module_type: &str) -> serde_json::Value {
         "$midiCC" => json!({ "cc": 1 }),
         "_clock" => json!({ "tempo": 120.0, "numerator": 4, "denominator": 4 }),
         "_videoTap" => json!({ "input": 0.0, "slot": 0 }),
+        "_smoothControl" => json!({ "value": 0.0 }),
         _ => json!({}),
     }
 }
@@ -565,7 +566,7 @@ fn from_graph_creates_patch_with_modules() {
 /// device tap uses reports silence there instead.
 #[test]
 fn reads_cycle_past_port_width_unless_no_cycle() {
-    let module = make_module("$signal", "sig", json!({ "source": [1.0, 2.0] }));
+    let module = make_module("$signal", "sig", json!({ "value": [1.0, 2.0] }));
     module.start_block();
     module.ensure_processed();
 
@@ -638,14 +639,14 @@ fn from_graph_params_are_applied() {
 #[test]
 fn from_graph_cable_routing_sine_to_signal() {
     // Sine oscillator → $signal module via cable.
-    // The $signal module passes its `source` input straight through.
+    // The $signal module passes its `value` input straight through.
     let graph = make_graph(vec![
         ("osc", "$sine", json!({ "freq": 0.0 })),
         (
             "sig",
             "$signal",
             json!({
-                "source": { "type": "cable", "module": "osc", "port": "output", "channel": 0 }
+                "value": { "type": "cable", "module": "osc", "port": "output", "channel": 0 }
             }),
         ),
     ]);

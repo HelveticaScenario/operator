@@ -85,7 +85,7 @@ export class ShaderProgram {
     readonly cvSamples: ReadonlyMap<number, VideoCvSample>;
     /** Uniform slots fed by an audio signal, with the engine tap that carries it. */
     readonly tapSlots: { slot: number; tap: number }[];
-    /** Uniform slots fed by each control, by the module id of its `$signal`. */
+    /** Uniform slots fed by each control, by the module id of its backing module. */
     private readonly controlSlots: ReadonlyMap<string, number[]>;
     /** True when the patch calls `$v.out`, so the picture is worth showing. */
     readonly hasOutput: boolean;
