@@ -1,3 +1,4 @@
+use convert_case::{Case, Casing};
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
@@ -5,7 +6,10 @@ use syn::spanned::Spanned;
 use syn::{Data, DeriveInput, Fields, LitFloat};
 
 use crate::signal_params::{SignalAttr, parse_signal_attr};
-use crate::utils::{is_option_poly_signal_type, is_poly_signal_type};
+use crate::utils::{
+    is_mono_signal_type, is_option_mono_signal_type, is_option_poly_signal_type,
+    is_poly_signal_type,
+};
 
 /// `#[block_input(optional)]`: a disconnected input resolves to `None`
 /// instead of its `#[signal(default)]`.
@@ -36,6 +40,22 @@ fn f32_literal(value: f64) -> TokenStream2 {
     } else {
         quote! { #lit }
     }
+}
+
+/// `Vec<PolySignal>` or `Vec<MonoSignal>`.
+fn is_signal_vec(ty: &syn::Type) -> bool {
+    let syn::Type::Path(path) = ty else {
+        return false;
+    };
+    let Some(last) = path.path.segments.last() else {
+        return false;
+    };
+    let syn::PathArguments::AngleBracketed(args) = &last.arguments else {
+        return false;
+    };
+    last.ident == "Vec"
+        && matches!(args.args.first(), Some(syn::GenericArgument::Type(inner))
+            if is_poly_signal_type(inner) || is_mono_signal_type(inner))
 }
 
 pub fn impl_block_inputs_macro(ast: &DeriveInput) -> TokenStream {
@@ -70,6 +90,7 @@ fn block_inputs(ast: &DeriveInput) -> syn::Result<TokenStream2> {
     let mut field_decls = Vec::new();
     let mut resolutions = Vec::new();
     let mut scratches = Vec::new();
+    let mut defaults = Vec::new();
     for field in fields {
         let ident = field.ident.as_ref().expect("named field");
         let scratch = format_ident!("scratch_{}", scratches.len());
@@ -91,18 +112,39 @@ fn block_inputs(ast: &DeriveInput) -> syn::Result<TokenStream2> {
                     None => SignalAttr::default(),
                 };
                 let default = f32_literal(attr.default_value);
+                let default_name =
+                    format_ident!("{}_DEFAULT", ident.to_string().to_case(Case::UpperSnake));
+                defaults.push(quote! {
+                    /// What a disconnected input reads, on both paths.
+                    #vis const #default_name: f32 = #default;
+                });
                 field_decls.push(quote! { pub #ident: crate::block_input::BlockInput<'a> });
                 quote! {
                     crate::block_input::OptionBlockInput::block_input_or(
-                        &self.#ident, range.clone(), channels, #default, #scratch,
+                        &self.#ident, range.clone(), channels, Self::#default_name, #scratch,
                     )?
                 }
             }
+        } else if is_mono_signal_type(&field.ty)
+            || is_option_mono_signal_type(&field.ty)
+            || is_signal_vec(&field.ty)
+        {
+            return Err(syn::Error::new(
+                field.span(),
+                "#[derive(BlockInputs)] resolves PolySignal and Option<PolySignal> fields only; \
+                 resolve this input by hand",
+            ));
         } else {
             continue;
         };
         resolutions.push(quote! { #ident: #resolution });
         scratches.push(scratch);
+    }
+    if resolutions.is_empty() {
+        return Err(syn::Error::new(
+            ast.span(),
+            "#[derive(BlockInputs)] needs at least one PolySignal or Option<PolySignal> field",
+        ));
     }
     let count = scratches.len();
 
@@ -114,9 +156,12 @@ fn block_inputs(ast: &DeriveInput) -> syn::Result<TokenStream2> {
         }
 
         impl #name {
+            #(#defaults)*
+
             /// Resolve every signal input for slots `range` across `channels`
             /// channels, in field order. A disconnected input reads as its
-            /// `#[signal(default)]`, or as `None` when marked
+            /// `#[signal(default)]` (the generated `<FIELD>_DEFAULT`), or as
+            /// `None` when marked
             /// `#[block_input(optional)]`. `None` when any input declines.
             #[inline(always)]
             #vis fn block_inputs<'a>(
