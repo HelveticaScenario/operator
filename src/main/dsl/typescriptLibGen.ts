@@ -267,6 +267,12 @@ type Signal = number | Note | HZ | ModuleOutput;
 type Poly<T extends Signal = Signal> = OrArray<T> | Iterable<ModuleOutput> | SignalGroup | PatternSource;
 
 /**
+ * An axis of an XY scope: signals, collections and patterns, or an array mixing
+ * them. Every channel is its own trace.
+ */
+type ScopeAxis = OrArray<Signal | Iterable<ModuleOutput> | PatternSource>;
+
+/**
  * A param value tagged into a cartesian signal group by {@link $g1}, {@link $g2},
  * or {@link $g3}. Params in different groups multiply within a module — its
  * channel count becomes the product of the group widths — while params in the
@@ -1367,6 +1373,27 @@ class DeferredCollection extends BaseCollection<DeferredModuleOutput> {
   set(polySignal: Poly<Signal>): void;
 }
 
+/**
+ * A tap on a labeled out lane, returned by {@link $outLane}. As a
+ * {@link Collection} it is the lane's audio after its gain and mute/solo gate:
+ * two channels, with a mono lane's signal on both.
+ */
+class OutLane extends Collection {
+  private constructor();
+  /** 5V while the lane is audible, 0V while it is muted or silenced by another out's solo. */
+  readonly active: ModuleOutputWithRange;
+  /**
+   * The lane's gain in out-gain units (5 = unity), as the VU fader shows it.
+   * Ranged 0 to 10, or the gain signal's own range when it declares one.
+   */
+  readonly level: ModuleOutputWithRange;
+  /**
+   * The lane's pan (-5 left to +5 right); 0 for mono outs. Ranged -5 to 5, or
+   * the pan signal's own range when it declares one.
+   */
+  readonly pan: ModuleOutputWithRange;
+}
+
 
 // Helper functions exposed by the DSL runtime
 
@@ -1437,23 +1464,20 @@ function $setTempo(tempo: number): void;
 function $setOutputGain(gain: Mono<Signal>): void;
 
 /**
- * Render a Lissajous-style XY oscilloscope as the editor background.
- * Each axis is cycled to the longer arity, producing one trace per pair.
- * Bare {@link Signal} literals (numbers, note/Hz strings) are lifted into
- * $signal modules, matching $c.
- * Last call wins; only one global XY scope can be active at a time.
- * @param x Horizontal channel(s)
- * @param y Vertical channel(s)
- * @param config.xRange Horizontal voltage window (default [-5, 5])
- * @param config.yRange Vertical voltage window (default [-5, 5])
+ * An XY oscilloscope as the patch's picture: shorthand for
+ * \`$v.scopeXY(x, y, config).out()\`. Each channel of \`x\` and \`y\` is its own
+ * signal, paired off in order with the shorter side cycling, one trace per pair.
+ * @param x Horizontal signal(s)
+ * @param y Vertical signal(s)
+ * @param config See \`$v.scopeXY\`
  * @example $scopeXY($sine($hz(440)), $sine($hz(311)))
  * @example $scopeXY($c($sine('c3'), $sine('e3')), $sine('g3')) // 2 traces, both share the same Y
  */
 function $scopeXY(
-  x: Poly<Signal>,
-  y: Poly<Signal>,
-  config?: { xRange?: [number, number]; yRange?: [number, number] },
-): void;
+  x: ScopeAxis,
+  y: ScopeAxis,
+  config?: { xRange?: [number, number]; yRange?: [number, number]; samples?: number; intensity?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; persistence?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; lineWidth?: number | ModuleOutput | Collection | CollectionWithRange | PatternSource; upsample?: boolean },
+): VideoSignal;
 
 /**
  * Set the time signature for the root clock.
@@ -1467,6 +1491,52 @@ function $scopeXY(
  * @example $setTimeSignature(5, 4)  // 5/4 time
  */
 function $setTimeSignature(numerator: number, denominator: number): void;
+
+/**
+ * Groove template: per-step timing offsets and velocities over a grid. Step
+ * offsets are in grid steps (positive = late), and the template repeats every
+ * timing.length steps.
+ */
+interface GrooveTemplate {
+  /** Per-step timing offset in grid steps (positive = late). */
+  timing: number[];
+  /** Per-step velocity (0-1), one per timing entry; every step is 1 when omitted. */
+  velocity?: number[];
+  /** Grid steps per cycle (default 16 = sixteenth notes in a 4/4 bar). */
+  grid?: number;
+  /** Timing strength: scales every offset (0 = straight, default 1 = as written). */
+  amount?: number;
+  /** Velocity strength (0 = every step full, default 1 = as written). */
+  velocityAmount?: number;
+  /** Largest random timing offset per step, in grid steps (default 0). */
+  random?: number;
+  /** Seed for the per-step random offsets. */
+  seed?: number;
+}
+
+/**
+ * Set the global groove. Every $cycle and $drumMap starts its notes on it,
+ * keeping their lengths, unless given its own groove or playhead; $clock.grooveOffset,
+ * $clock.grooveVelocity and $clock.grooveTrigger expose it directly.
+ * @param template Groove template, e.g. from $swing
+ * @example $setGroove($swing(0.6))  // MPC-style 60% sixteenth swing
+ * @example $setGroove({ timing: [0, 0.2, 0, 0.15], velocity: [1, 0.6, 0.8, 0.5] })
+ */
+function $setGroove(template: GrooveTemplate): void;
+
+/**
+ * Swing template: each pair of grid steps is split ratio : (1 - ratio).
+ * @param ratio Share of each pair given to its first step (0.5 = straight, 0.66 = triplet feel)
+ * @param config.grid Grid steps per cycle (default 16 = sixteenth swing; 8 = eighth swing)
+ * @param config.humanize Largest random timing offset per step, in grid steps (default 0)
+ * @example $setGroove($swing(0.58))
+ * @example $setGroove($swing(0.66, { grid: 8 }))
+ * @example $setGroove($swing(0.6, { humanize: 0.05 }))  // swing with a little looseness
+ */
+function $swing(
+  ratio: number,
+  config?: { grid?: number; humanize?: number },
+): GrooveTemplate;
 
 /**
  * Create a DeferredCollection with placeholder signals that can be assigned later.
@@ -1615,6 +1685,25 @@ class Bus {
  * $sine('a2').send(reverb, 0.4);
  */
 function $bus(cb: (mixed: Collection) => unknown): Bus;
+
+/**
+ * Tap the out labeled \`label\`: its audio after gain and mute/solo, plus its
+ * \`.active\` gate, \`.level\` gain, and \`.pan\` as ranged signals. Follows
+ * live VU-panel changes. The out may be declared before or after the tap; a
+ * label no out declares is an error.
+ *
+ * @param label Label of the out lane to follow
+ * @returns An {@link OutLane}
+ *
+ * @example
+ * $saw('c2').out({ label: 'bass' });
+ * const bass = $outLane('bass');
+ * // Follows the bass fader and pan
+ * $sine('c5').gain(bass.level).out({ pan: bass.pan });
+ * // Silent while bass is muted or soloed out
+ * $sine('g5').gain(bass.active).out();
+ */
+function $outLane(label: string): OutLane;
 
 /**
  * Set a custom end-of-chain processor applied to the final mix before output gain.
@@ -1801,7 +1890,7 @@ declare const $table: {
 /**
  * A video signal: a color with an alpha at every pixel, each channel in the
  * range 0..1. Generators such as \`$v.osc\`, \`$v.noise\` and \`$v.shape\`
- * make gray signals; \`$v.hsv\`, \`$v.colorize\`, \`$v.image\` and others
+ * make gray signals; \`$v.hsv\`, \`$v.solid\`, \`$v.image\` and others
  * make colors. Display one with \`$v.out\`. Where a module wants a number,
  * a signal gives its brightness.
  */

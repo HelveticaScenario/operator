@@ -35,6 +35,8 @@ export interface VideoNode {
      * holds what its write node saw on the previous frame.
      */
     buffer?: number;
+    /** Index into the graph's `scopes` of the XY scope a `scopeXY` node shows. */
+    scope?: number;
 }
 
 /** Samples per row of the audio history texture; matches `VIDEO_HISTORY_LEN` in Rust. */
@@ -51,7 +53,7 @@ export type VideoUniform = {
     | {
           /** A slider or button. */
           kind: 'control';
-          /** Module id of the control's backing `$signal`. */
+          /** Module id of the control's backing module. */
           moduleId: string;
       }
     | {
@@ -120,6 +122,12 @@ export interface VideoShaderUpdate {
     updateId: number;
 }
 
+/**
+ * The taps a pull reads afresh from the engine's newest samples, rather than
+ * from where the previous pull left off: every tap, or the listed slots.
+ */
+export type VideoRestart = 'all' | number[];
+
 /** What the video renderer asks the main process for once per frame. */
 export interface VideoPull {
     /** False while the engine is stopped; the picture holds still until it runs again. */
@@ -138,7 +146,7 @@ export interface VideoPull {
  * program it holds.
  */
 export interface VideoUniformUpdate {
-    /** Module id of the control's backing `$signal`. */
+    /** Module id of the control's backing module. */
     moduleId: string;
     value: number;
 }
@@ -158,9 +166,54 @@ export interface VideoGraph {
     histories: VideoHistory[];
     /** Media the picture samples; `sources[i]` is what `source` nodes with `source: i` read. */
     sources: VideoSourceDef[];
+    /** XY scopes the picture samples; `scopes[i]` is what `scopeXY` nodes with `scope: i` read. */
+    scopes: VideoScope[];
     /** True when the patch calls `$v.out`; without it the picture is black and only previews draw. */
     hasOutput: boolean;
 }
+
+/**
+ * An XY scope: pairs of audio signals drawn as a glowing beam, x across and y
+ * up, into a texture the size of the frame that `scopeXY` nodes sample. The
+ * beam fades by `persistence` each frame, so it leaves a trail.
+ */
+export interface VideoScope {
+    /** Each trace's horizontal and vertical signal, as rows of `histories`. */
+    traces: { x: number; y: number }[];
+    /** Samples of each signal drawn per frame, newest last; at most {@link VIDEO_HISTORY_LEN}. */
+    samples: number;
+    /** Volts at the left and right edges. */
+    xRange: [number, number];
+    /** Volts at the bottom and top edges. */
+    yRange: [number, number];
+    /** Brightness of the beam, 0 to 1. */
+    intensity: VideoScopeSetting;
+    /** How much of the trail survives each frame, 0 (none) to 1 (all). */
+    persistence: VideoScopeSetting;
+    /** Thickness of the beam relative to the standard width, which is 1. */
+    lineWidth: VideoScopeSetting;
+    /** Draw a smooth curve between samples instead of straight segments. */
+    upsample: boolean;
+}
+
+/**
+ * A scope setting: a constant, or a uniform slot read once per frame, held
+ * within its range in {@link SCOPE_SETTING_RANGES}.
+ */
+export type VideoScopeSetting = Extract<
+    VideoValue,
+    { kind: 'const' } | { kind: 'uniform' }
+>;
+
+/** The range each scope setting is held in, and its default. */
+export const SCOPE_SETTING_RANGES = {
+    intensity: { default: 0.6, max: 1, min: 0 },
+    lineWidth: { default: 1, max: 5, min: 0.1 },
+    persistence: { default: 0.6, max: 1, min: 0 },
+} as const;
+
+/** Most traces one XY scope draws. */
+export const MAX_SCOPE_TRACES = 32;
 
 /** A picture, recording, camera or screen that a patch draws from. */
 export interface VideoSourceDef {
@@ -225,6 +278,14 @@ export interface CompiledVideoShader {
     histories: VideoHistory[];
     /** Media the shader samples, one texture each; see `bindingSlots`. */
     sources: VideoSourceDef[];
+    /** XY scopes drawn before the picture, one texture each; see `bindingSlots`. */
+    scopes: VideoScope[];
     /** True when the patch calls `$v.out`, so the picture is worth showing. */
     hasOutput: boolean;
+    /**
+     * A stamp per tap slot, set by the main process: a slot whose stamp is the
+     * same in two shaders carries the same signal, unbroken, through the patch
+     * update between them; 0 marks a slot the shader does not use.
+     */
+    tapStamps?: number[];
 }
