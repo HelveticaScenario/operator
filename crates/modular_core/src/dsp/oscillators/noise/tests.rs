@@ -22,8 +22,8 @@ fn with_rate(color: NoiseKind, hz: f32, interp: NoiseInterp) -> NoiseParams {
 }
 
 /// Build a Noise module with the given params, mirroring the production
-/// lifecycle: the macro allocates `channel_state` to the channel count, then
-/// `on_patch_update` seeds each channel's RNG.
+/// lifecycle: the macro allocates `channel_state` to the channel count, `init`
+/// caches the sample rate, then `on_patch_update` seeds each channel's RNG.
 fn make_noise(params: NoiseParams) -> Noise {
     let channels = __noise_derive_channel_count(&params);
     let mut outputs = NoiseOutputs::default();
@@ -39,6 +39,7 @@ fn make_noise(params: NoiseParams) -> Noise {
         _channel_count: channels,
         _block_index: Default::default(),
     };
+    n.init(SR);
     n.on_patch_update();
     n
 }
@@ -163,7 +164,7 @@ fn velvet_fires_once_per_tick() {
         48_000,
     );
     let impulses = out.iter().filter(|v| v.abs() == 5.0).count();
-    assert!((478..=481).contains(&impulses), "{impulses} impulses");
+    assert!((480..=481).contains(&impulses), "{impulses} impulses");
     assert!(out.iter().all(|&v| v == 0.0 || v.abs() == 5.0));
 }
 
@@ -235,4 +236,75 @@ fn polyphonic_rate_sets_channels_and_clocks_each() {
     for (ch, (&c, expected)) in changes.iter().zip([48, 96, 192]).enumerate() {
         assert!(c.abs_diff(expected) <= 1, "channel {ch}: {c} ticks");
     }
+}
+
+#[test]
+fn velvet_without_rate_fires_every_sample() {
+    let out = render(params(NoiseKind::Velvet, 1), 1000);
+    assert!(out.iter().all(|v| v.abs() == 5.0));
+}
+
+#[test]
+fn channels_added_by_a_patch_update_get_their_own_sequence() {
+    let mut n = make_noise(params(NoiseKind::Lfsr, 4));
+    for state in n.channel_state[1..].iter_mut() {
+        *state = NoiseChannelState::default();
+    }
+    n.on_patch_update();
+    let mut series = [[0.0f32; 64]; 4];
+    for i in 0..64 {
+        n.update(SR);
+        for (ch, s) in series.iter_mut().enumerate() {
+            s[i] = n.outputs.sample.get(ch);
+        }
+    }
+    for a in 0..4 {
+        for b in (a + 1)..4 {
+            assert_ne!(series[a], series[b], "channels {a} and {b} match");
+        }
+    }
+}
+
+#[test]
+fn slow_rates_start_as_noise() {
+    for kind in [NoiseKind::White, NoiseKind::Pink, NoiseKind::Brown] {
+        for interp in [NoiseInterp::Step, NoiseInterp::Linear, NoiseInterp::Smooth] {
+            let first = render(with_rate(kind, 0.2, interp), 1)[0];
+            assert_ne!(first, 0.0, "{kind:?}/{interp:?} started at 0V");
+        }
+    }
+    // A settled pink filter is at full level from its first slow tick.
+    let mut rms = 0.0;
+    for seed_offset in 0..64 {
+        let p = NoiseParams {
+            channels: 64,
+            ..with_rate(NoiseKind::Pink, 0.2, NoiseInterp::Step)
+        };
+        let mut n = make_noise(p);
+        n.update(SR);
+        let v = n.outputs.sample.get(seed_offset);
+        rms += v * v / 64.0;
+    }
+    assert!(rms.sqrt() > 0.5, "pink starts quiet: rms {}V", rms.sqrt());
+}
+
+#[test]
+fn lfsr_short_rate_sets_loop_pitch() {
+    // A 480 Hz loop at 48 kHz repeats every 100 samples.
+    let out = render(
+        with_rate(NoiseKind::LfsrShort, 480.0, NoiseInterp::Step),
+        10_000,
+    );
+    let matches = (0..9_900).filter(|&i| out[i] == out[i + 100]).count();
+    assert!(
+        matches > 9_700,
+        "{matches}/9900 samples repeat at the loop period"
+    );
+}
+
+#[test]
+fn brown_bounces_off_the_rails() {
+    let out = render(params(NoiseKind::Brown, 1), 480_000);
+    let pinned = out.iter().filter(|v| v.abs() == 5.0).count();
+    assert!(pinned < 10, "{pinned} samples pinned at the rails");
 }
