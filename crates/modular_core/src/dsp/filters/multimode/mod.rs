@@ -704,12 +704,16 @@ impl crate::types::PatchUpdateHandler for Multimode {
         }
         // A group with one live channel keeps that channel's four output
         // downsamplers in one downsampler's lanes; a group moving between one
-        // live channel and several transposes them.
+        // live channel and several transposes them. A group that comes back
+        // with one live channel starts all four from rest, since clearing its
+        // lane alone would leave the other three outputs' history.
         let live = |count: usize, group: usize| count.saturating_sub(group * LANES).min(LANES);
         for (group, state) in self.channel_state.iter_mut().enumerate() {
             let (before, after) = (live(old, group), live(channels, group));
             if before != 0 && after != 0 && (before == 1) != (after == 1) {
                 HalfbandDown::transpose(&mut state.down);
+            } else if before == 0 && after == 1 {
+                state.down = Default::default();
             }
         }
         // Channels new to this patch start from rest, as they would in a fresh

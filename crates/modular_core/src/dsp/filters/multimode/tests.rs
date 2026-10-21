@@ -469,6 +469,28 @@ both_resolutions! {
         }
         assert!(peaks[3] < 0.1, "new channel peak {}", peaks[3]);
     }
+
+    fn a_lone_channel_reviving_a_group_starts_from_rest(high_res: bool) {
+        // The second group runs dead at 4 channels, then comes back with one
+        // live channel, whose four outputs share one downsampler.
+        for first in [5, 8] {
+            let mut old = make_channels(high_res, &vec![(440.0, 5.0, 0.0); first]);
+            free_run(&mut old, 1.0);
+            let mut dead = make_channels(high_res, &[(440.0, 5.0, 0.0); 4]);
+            transfer(&mut dead, &mut old);
+            let mut new = make_channels(high_res, &[(440.0, 5.0, 0.0); 5]);
+            transfer(&mut new, &mut dead);
+            let mut peak = 0.0_f32;
+            for _ in 0..(SR * 0.005) as usize {
+                new.update(SR);
+                let o = &new.outputs;
+                for v in [o.sample.get(4), o.lp.get(4), o.bp.get(4), o.hp.get(4)] {
+                    peak = peak.max(v.abs());
+                }
+            }
+            assert!(peak < 0.1, "{first}→4→5 new channel peak {peak}");
+        }
+    }
 }
 
 #[test]
