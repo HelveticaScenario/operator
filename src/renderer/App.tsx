@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MonacoPatchEditor as PatchEditor } from './components/MonacoPatchEditor';
 import { VideoBackdrop } from './app/video/VideoBackdrop';
 import { PerformancePreview } from './app/video/PerformancePreview';
+import { PartyLayer } from './party/PartyLayer';
+import { partyLevels } from './party/partyLevels';
 import { PerformancePanel } from './components/PerformancePanel';
 import { usePerformanceCode } from './performance/usePerformanceCode';
 import { performanceOutput } from './video/PerformanceOutput';
@@ -1527,12 +1529,13 @@ function App() {
                 electronAPI.synthesizer.getScopes(),
                 electronAPI.synthesizer.getTransportState(),
                 // Hidden panel costs zero IPC.
-                isVuPanelVisibleRef.current
+                isVuPanelVisibleRef.current || partyLevels.wanted
                     ? electronAPI.synthesizer.getVuMeters()
                     : Promise.resolve([]),
             ])
                 .then(([scopeData, transport, vuFrames]) => {
                     if (cancelled) return;
+                    if (partyLevels.wanted) partyLevels.push(vuFrames);
                     // Build a map of buffer key → (Float32Array, ScopeStats)
                     const bufferMap = new Map<
                         string,
@@ -2829,6 +2832,7 @@ function App() {
                                 codeBackdropOpacity={codeBackdropOpacity}
                                 performanceScale={performanceScale}
                             />
+                            <PartyLayer />
                             <PatchEditor
                                 value={patchCode}
                                 runningBufferId={runningBufferId}
