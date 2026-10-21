@@ -4070,25 +4070,59 @@
   },
   {
     "name": "$noise",
-    "documentation": "Polyphonic noise generator with selectable color.\n\nGenerates random noise in one of three spectral colors:\n- **White**: equal energy across all frequencies (bright, hissy)\n- **Pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **Brown**: steep low-frequency emphasis (deep, rumbling)\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n```",
+    "documentation": "Polyphonic noise generator with selectable color and clock rate.\n\nSpectral colors:\n- **white**: equal energy across all frequencies (bright, hissy)\n- **pink**: equal energy per octave (warm, balanced — good for \"ocean\" textures)\n- **brown**: steep low-frequency emphasis (deep, rumbling)\n- **blue** / **violet**: high-frequency emphasis (+3 / +6 dB/octave), for hats and air\n\nDistributions and digital noise:\n- **binary**: only −5V or +5V — at the same peak it is louder than white\n- **gaussian**: values cluster near 0V with occasional large excursions\n- **lfsr** / **lfsrShort**: NES-style shift-register noise; short mode is pitched and metallic\n\nImpulse and switching noise:\n- **velvet**: exactly one ±5V impulse per tick, at a random moment within it\n- **telegraph**: ±5V that flips at random moments, on average `rate` times per second\n- **dust**: rests at −5V with single-sample +5V triggers at random moments, on average `rate` per second\n\n`rate` clocks the generator: the color is computed at that rate, so slow\nrates give random CV (a slow brown is a drunk walk) and audio rates give\nlo-fi, band-limited noise. `interp` shapes the output between ticks;\n`linear` and `smooth` turn any color into a smooth random LFO. Unconnected,\nthe generator draws a new value every sample, and telegraph and dust switch\non half of all samples.\n\nThe `channels` parameter sets how many independent channels are generated;\neach channel runs its own RNG seeded distinctly, so every channel is a\ndifferent random sequence.\n\nOutput range is **±5V**.\n\n## Example\n\n```js\n$noise(\"pink\").out()\n$noise(\"white\", { channels: 4 }).out()\n$noise(\"lfsrShort\", { rate: \"c6\" }).out()\n$sine($noise(\"brown\", { rate: $hz(4), interp: \"smooth\" })).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "NoiseParams",
       "type": "object",
       "properties": {
         "channels": {
-          "description": "number of independent noise channels (1–64), each a different sequence",
+          "description": "number of independent noise channels (1–64), each a different sequence;\na polyphonic `rate` raises it to that many channels",
           "type": "integer",
           "format": "uint",
           "default": 1,
           "minimum": 0
         },
         "color": {
-          "description": "color of the noise: white, pink, brown",
+          "description": "kind of noise: white, pink, brown, blue, violet, binary, gaussian,\nlfsr, lfsrShort, velvet, telegraph, dust",
           "$ref": "#/$defs/NoiseKind"
+        },
+        "interp": {
+          "description": "how the output moves between ticks: step, linear, smooth",
+          "$ref": "#/$defs/NoiseInterp"
+        },
+        "rate": {
+          "description": "generator clock in V/Oct (use `$hz()` or a note name); a new value is drawn\neach tick. For telegraph and dust it is the average events per second.\nUnconnected, the generator runs at the sample rate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolySignal"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "$defs": {
+        "NoiseInterp": {
+          "oneOf": [
+            {
+              "description": "hold each value until the next tick",
+              "type": "string",
+              "const": "step"
+            },
+            {
+              "description": "ramp straight from one value to the next",
+              "type": "string",
+              "const": "linear"
+            },
+            {
+              "description": "curve through the values with no corners",
+              "type": "string",
+              "const": "smooth"
+            }
+          ]
+        },
         "NoiseKind": {
           "oneOf": [
             {
@@ -4105,6 +4139,108 @@
               "description": "deep rumble (−6 dB/octave)",
               "type": "string",
               "const": "brown"
+            },
+            {
+              "description": "boosted highs (+3 dB/octave)",
+              "type": "string",
+              "const": "blue"
+            },
+            {
+              "description": "strongly boosted highs (+6 dB/octave), thin and airy",
+              "type": "string",
+              "const": "violet"
+            },
+            {
+              "description": "only −5V or +5V, a coin flip each tick",
+              "type": "string",
+              "const": "binary"
+            },
+            {
+              "description": "bell-curve values clustered around 0V (σ ≈ 1.67V)",
+              "type": "string",
+              "const": "gaussian"
+            },
+            {
+              "description": "15-bit shift-register noise (NES-style), ±5V",
+              "type": "string",
+              "const": "lfsr"
+            },
+            {
+              "description": "93-step shift-register loop: pitched, metallic, ±5V",
+              "type": "string",
+              "const": "lfsrShort"
+            },
+            {
+              "description": "one ±5V impulse at a random point in every tick",
+              "type": "string",
+              "const": "velvet"
+            },
+            {
+              "description": "±5V that flips sign at random moments, `rate` times per second on average",
+              "type": "string",
+              "const": "telegraph"
+            },
+            {
+              "description": "rests at −5V with single-sample +5V triggers at random moments, `rate`\nper second on average",
+              "type": "string",
+              "const": "dust"
+            }
+          ]
+        },
+        "PolySignal": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Signal"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Signal"
+              }
+            }
+          ]
+        },
+        "Signal": {
+          "anyOf": [
+            {
+              "type": "number",
+              "format": "double"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "$ref": "#/$defs/SignalTaggedSchema"
+            }
+          ]
+        },
+        "SignalTaggedSchema": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "integer",
+                  "format": "uint",
+                  "default": 0,
+                  "minimum": 0
+                },
+                "module": {
+                  "type": "string"
+                },
+                "port": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "const": "cable"
+                }
+              },
+              "required": [
+                "type",
+                "module",
+                "port"
+              ]
             }
           ]
         }
@@ -4121,13 +4257,21 @@
       }
     ],
     "bufferOutputs": [],
-    "signalParams": [],
+    "signalParams": [
+      {
+        "name": "rate",
+        "description": "generator clock in V/Oct (use `$hz()` or a note name); a new value is drawn\neach tick. For telegraph and dust it is the average events per second.\nUnconnected, the generator runs at the sample rate.",
+        "signalType": "pitch",
+        "defaultValue": 0.0,
+        "minValue": -5.0,
+        "maxValue": 5.0
+      }
+    ],
     "positionalArgs": [
       {
         "name": "color"
       }
-    ],
-    "channelsParam": "channels"
+    ]
   },
   {
     "name": "$macro",
