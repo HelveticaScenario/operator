@@ -83,7 +83,7 @@ struct MultimodeOutputs {
     sample: PolyOutput,
     #[output("lp", "lowpass (the output at mode 0)", range = (-10.0, 10.0))]
     lp: PolyOutput,
-    #[output("bp", "bandpass (the output at mode 2.5)", range = (-10.0, 10.0))]
+    #[output("bp", "bandpass (the output near mode 2.5)", range = (-10.0, 10.0))]
     bp: PolyOutput,
     #[output("hp", "highpass (the output at mode 5)", range = (-10.0, 10.0))]
     hp: PolyOutput,
@@ -697,10 +697,11 @@ fn step<L: Lanes>(
 impl crate::types::PatchUpdateHandler for Multimode {
     fn on_patch_update(&mut self) {
         let rate = self.core_rate();
-        for group in self.channel_state.iter_mut() {
+        let (old, channels) = (self.state.channels, self.channel_count());
+        let groups = channels.div_ceil(LANES);
+        for group in self.channel_state.iter_mut().take(groups) {
             group.configure(rate);
         }
-        let (old, channels) = (self.state.channels, self.channel_count());
         // A group with one live channel keeps that channel's four output
         // downsamplers in one downsampler's lanes; a group moving between one
         // live channel and several transposes them.
@@ -719,7 +720,7 @@ impl crate::types::PatchUpdateHandler for Multimode {
         // A new channel count changes which lanes are dead; recomputing every
         // law sets them to follow lane 0 again.
         if old != channels {
-            for group in self.channel_state.iter_mut() {
+            for group in self.channel_state.iter_mut().take(groups) {
                 group.controls.clear();
             }
         }

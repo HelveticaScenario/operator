@@ -15,9 +15,8 @@ use crate::dsp::utils::{
 /// Channels per group.
 pub(super) const LANES: usize = 4;
 
-/// Every lane set to `value`, broadcast in a register. `f32x4::splat` builds
-/// an `[f32; 4]` repeat array instead, which LLVM can lower to a
-/// `memset_pattern16` call per use on Apple targets.
+/// Every lane set to `value`, broadcast in a register so that no use lowers to
+/// a `memset_pattern16` call on Apple targets.
 #[inline(always)]
 fn broadcast(value: f32) -> f32x4 {
     // SAFETY: both types are four `f32` lanes, and every bit pattern is a valid

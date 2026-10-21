@@ -282,8 +282,9 @@ fn solve_clamped(
     }
     let (target, denom, gr) = (rhs.abs() as f64, denom as f64, g as f64 * R_INTEGRATOR);
     // At the 10 nA floor the pair sits at the onset; at the upper bound the
-    // resistor term alone meets the target.
-    let (mut lo, mut hi) = (ZENER_MIN_LN_I, (target / gr).ln());
+    // resistor term alone meets the target. `clamp` panics on an empty or NaN
+    // bracket, so the upper bound never falls below the floor.
+    let (mut lo, mut hi) = (ZENER_MIN_LN_I, (target / gr).ln().max(ZENER_MIN_LN_I));
     let guess = if continuing {
         seed.ln_i + seed.step
     } else {

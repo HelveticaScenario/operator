@@ -5903,7 +5903,7 @@
       },
       {
         "name": "bp",
-        "description": "bandpass (the output at mode 2.5)",
+        "description": "bandpass (the output near mode 2.5)",
         "polyphonic": true,
         "default": false,
         "minValue": -10.0,
