@@ -12,6 +12,7 @@ mod midi;
 mod panic_log;
 mod params_cache;
 mod recording;
+mod tap;
 mod validation;
 mod wav_bpm;
 mod wav_metadata;
