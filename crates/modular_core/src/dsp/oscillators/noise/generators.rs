@@ -38,11 +38,30 @@ pub(super) const PINK_GAIN: f32 = 0.11;
 pub(super) const BLUE_GAIN: f32 = 0.35;
 
 /// Brown random-walk step per tick.
-pub(super) const BROWN_STEP: f32 = 0.024;
+pub(super) const BROWN_STEP: f32 = 0.02;
 
-/// Per-tick decay that pulls the brown walk back toward 0, keeping its RMS
-/// near 0.3 so it rarely reaches the rails.
-pub(super) const BROWN_LEAK: f32 = 0.999;
+/// Fold a value that stepped past ±1 back inside, so a random walk bounces off
+/// the rails instead of sticking to them. Its values stay uniformly spread
+/// over `[-1, 1]`.
+pub(super) fn reflect(x: f32) -> f32 {
+    if x > 1.0 {
+        2.0 - x
+    } else if x < -1.0 {
+        -2.0 - x
+    } else {
+        x
+    }
+}
+
+/// ±1 for a high or low rail.
+pub(super) fn rail(high: bool) -> f32 {
+    if high { 1.0 } else { -1.0 }
+}
+
+/// A fair coin flip, ±1.
+pub(super) fn coin(rng: &mut LcgRng) -> f32 {
+    rail(rng.next_unit() >= 0.5)
+}
 
 /// Standard deviation of a sum of four uniform `[-1, 1)` draws.
 const SUM4_STD: f32 = 1.154_700_5;
@@ -55,7 +74,7 @@ pub(super) fn gaussian(rng: &mut LcgRng) -> f32 {
 }
 
 /// Length of the 15-bit LFSR's short-mode cycle that contains state 1.
-const LFSR_SHORT_CYCLE: u32 = 93;
+pub(super) const LFSR_SHORT_CYCLE: u32 = 93;
 
 /// 15-bit linear-feedback shift register in the style of the NES noise
 /// channel. Long mode (tap 1) cycles through all 32767 nonzero states; short
@@ -84,7 +103,7 @@ impl Lfsr {
     pub(super) fn step(&mut self, tap: u32) -> f32 {
         let bit = (self.state ^ (self.state >> tap)) & 1;
         self.state = (self.state >> 1) | (bit << 14);
-        if self.state & 1 == 1 { 1.0 } else { -1.0 }
+        rail(self.state & 1 == 1)
     }
 }
 
