@@ -1,9 +1,10 @@
 //! Per-channel generator state for `$noise`.
 
 use super::generators::{
-    BLUE_GAIN, BROWN_STEP, Lfsr, PINK_GAIN, PinkFilter, catmull_rom, coin, gaussian, rail, reflect,
+    BLUE_GAIN, BROWN_STEP, Lfsr, PINK_GAIN, PinkFilter, coin, gaussian, rail, reflect,
 };
 use super::{NoiseInterp, NoiseKind};
+use crate::dsp::utils::catmull_rom;
 use crate::dsp::utils::rng::LcgRng;
 
 /// Draws that settle the pink filter bank before its first output. Its slowest
@@ -26,8 +27,9 @@ pub(super) struct NoiseChannelState {
     white_prev: f32,
     brown: f32,
     lfsr: Lfsr,
-    /// Clock phase in `[0, 1)`; a tick fires each time it wraps.
-    phase: f32,
+    /// Clock phase in `[0, 1)`; a tick fires each time it wraps. f64, so the
+    /// tiny increments of slow rates still advance it near 1.
+    phase: f64,
     /// The last four drawn values, oldest first.
     history: [f32; 4],
     /// Telegraph level: +1 when set, −1 otherwise.
@@ -118,16 +120,17 @@ impl NoiseChannelState {
     /// Advance the clock by `inc` ticks and return the output for a clocked
     /// value kind. Every tick that elapses within the sample is drawn.
     pub(super) fn clocked(&mut self, kind: NoiseKind, inc: f32, interp: NoiseInterp) -> f32 {
-        self.phase += inc;
+        self.phase += f64::from(inc);
         while self.phase >= 1.0 {
             self.phase -= 1.0;
             self.push(kind);
         }
+        let t = self.phase as f32;
         let h = self.history;
         match interp {
             NoiseInterp::Step => h[3],
-            NoiseInterp::Linear => h[2] + (h[3] - h[2]) * self.phase,
-            NoiseInterp::Smooth => catmull_rom(h, self.phase).clamp(-1.0, 1.0),
+            NoiseInterp::Linear => h[2] + (h[3] - h[2]) * t,
+            NoiseInterp::Smooth => catmull_rom(h, t).clamp(-1.0, 1.0),
         }
     }
 
@@ -143,7 +146,7 @@ impl NoiseChannelState {
     /// that would land on the same sample fires on the next.
     pub(super) fn velvet(&mut self, inc: f32) -> f32 {
         let mut out = 0.0;
-        self.phase += inc;
+        self.phase += f64::from(inc);
         if self.phase >= 1.0 {
             self.phase -= 1.0;
             if self.impulse_pending {
@@ -151,7 +154,7 @@ impl NoiseChannelState {
             }
             self.schedule_impulse();
         }
-        if out == 0.0 && self.impulse_pending && self.phase > self.impulse_at {
+        if out == 0.0 && self.impulse_pending && self.phase > f64::from(self.impulse_at) {
             self.impulse_pending = false;
             out = self.impulse_sign;
         }
@@ -167,5 +170,26 @@ impl NoiseChannelState {
     /// Dust: +1 with probability `p`, else −1.
     pub(super) fn dust(&mut self, p: f32) -> f32 {
         rail(self.generator.next_unit() < p)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An increment below an f32 step near 1 still advances the clock at its
+    /// full speed.
+    #[test]
+    fn tiny_increments_keep_advancing() {
+        let mut state = NoiseChannelState::default();
+        state.seed(0x5eed, 0, NoiseKind::White);
+        state.phase = 0.75;
+        let inc = 2e-8;
+        let samples = 48_000;
+        for _ in 0..samples {
+            state.clocked(NoiseKind::White, inc, NoiseInterp::Linear);
+        }
+        let expected = 0.75 + f64::from(inc) * samples as f64;
+        assert!((state.phase - expected).abs() < 1e-9);
     }
 }

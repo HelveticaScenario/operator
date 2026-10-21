@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use std::ops::Range;
 
 use crate::dsp::utils::rng::{LcgRng, seed_base};
-use crate::dsp::utils::{SchmittState, SchmittTrigger, sanitize};
+use crate::dsp::utils::{CatmullRom, SchmittState, SchmittTrigger, sanitize};
 use crate::poly::{PolyOutput, PolySignal, PolySignalExt};
 
 /// Rate of new random points at `speed = 5`, in Hz. At or above the engine
@@ -66,11 +66,13 @@ struct ErraticOutputs {
 struct ErraticChannelState {
     rng: LcgRng,
     seeded: bool,
-    /// Position between `from` and `to`, in [0, 1).
-    phase: f32,
-    /// Random points in [-1, 1] the shift glides between.
-    from: f32,
-    to: f32,
+    /// Position between `points[1]` and `points[2]`, in [0, 1). f64, so the
+    /// tiny increments of low speeds still advance it near 1.
+    phase: f64,
+    /// The last four random points in [-1, 1], oldest first.
+    points: [f32; 4],
+    /// The curve through `points`, from the second toward the third.
+    curve: CatmullRom,
     trigger: SchmittTrigger,
     held: f32,
 }
@@ -92,13 +94,18 @@ impl ErraticChannelState {
     #[inline(always)]
     fn step(&mut self, f: Frame, clamp: bool, sample_rate: f32) -> f32 {
         let inc = (speed_to_hz(f.speed) / sample_rate).min(1.0);
-        self.phase += inc;
+        self.phase += f64::from(inc);
         if self.phase >= 1.0 {
             self.phase -= 1.0;
-            self.from = self.to;
-            self.to = self.rng.next_bipolar();
+            self.points = [
+                self.points[1],
+                self.points[2],
+                self.points[3],
+                self.rng.next_bipolar(),
+            ];
+            self.curve = CatmullRom::new(self.points);
         }
-        let wander = self.from + (self.to - self.from) * smoothstep(self.phase);
+        let wander = self.curve.at(self.phase as f32).clamp(-1.0, 1.0);
 
         let r = match f.trigger {
             Some(trig) => {
@@ -154,11 +161,6 @@ pub struct Erratic {
 fn speed_to_hz(speed: f32) -> f32 {
     let s = speed.clamp(0.0, 5.0) / 5.0;
     MAX_RATE_HZ * ((SPEED_OCTAVES * s).exp2() - 1.0) / (SPEED_OCTAVES.exp2() - 1.0)
-}
-
-#[inline]
-fn smoothstep(t: f32) -> f32 {
-    t * t * (3.0 - 2.0 * t)
 }
 
 impl Erratic {
@@ -229,8 +231,8 @@ impl crate::types::PatchUpdateHandler for Erratic {
         for (ch, state) in self.channel_state.iter_mut().enumerate() {
             if !state.seeded {
                 state.rng.seed(base, ch);
-                state.from = state.rng.next_bipolar();
-                state.to = state.rng.next_bipolar();
+                state.points = std::array::from_fn(|_| state.rng.next_bipolar());
+                state.curve = CatmullRom::new(state.points);
                 state.seeded = true;
             }
         }
@@ -415,6 +417,19 @@ mod tests {
             assert!(expected.windows(2).any(|w| w[0] != w[1]));
             assert_eq!(actual, expected, "trigger connected: {trigger}");
         }
+    }
+
+    /// A speed whose per-sample increment is below an f32 step near 1 still
+    /// moves the shift at its full rate.
+    #[test]
+    fn low_speed_keeps_moving() {
+        let speed = 0.1;
+        let mut m = make(params(0.0, 5.0, speed, 0.0));
+        m.channel_state[0].phase = 0.75;
+        let samples = 48_000;
+        run(&mut m, samples);
+        let expected = 0.75 + f64::from(speed_to_hz(speed) / SR) * samples as f64;
+        assert!((m.channel_state[0].phase - expected).abs() < 1e-9);
     }
 
     #[test]

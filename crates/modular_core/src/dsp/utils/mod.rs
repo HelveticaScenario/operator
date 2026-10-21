@@ -90,6 +90,38 @@ pub fn interpolate(table: &'static [f32], mut index: f32, size: usize) -> f32 {
     a + (b - a) * index_fractional
 }
 
+/// Catmull–Rom spline segment through `p0..p3`, running from `p1` (t = 0) to
+/// `p2` (t = 1). Building it once per segment leaves three multiply-adds per
+/// evaluation.
+#[derive(Default, Clone, Copy)]
+pub struct CatmullRom {
+    a: f32,
+    b: f32,
+    c: f32,
+    d: f32,
+}
+
+impl CatmullRom {
+    pub fn new(p: [f32; 4]) -> Self {
+        let [p0, p1, p2, p3] = p;
+        Self {
+            a: -0.5 * p0 + 1.5 * p1 - 1.5 * p2 + 0.5 * p3,
+            b: p0 - 2.5 * p1 + 2.0 * p2 - 0.5 * p3,
+            c: 0.5 * (p2 - p0),
+            d: p1,
+        }
+    }
+
+    #[inline]
+    pub fn at(&self, t: f32) -> f32 {
+        ((self.a * t + self.b) * t + self.c) * t + self.d
+    }
+}
+
+pub fn catmull_rom(p: [f32; 4], t: f32) -> f32 {
+    CatmullRom::new(p).at(t)
+}
+
 pub fn wrap<T>(range: std::ops::Range<T>, val: T) -> T
 where
     T: std::ops::Sub<Output = T>
@@ -356,6 +388,13 @@ pub fn voct_to_hz(voct: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catmull_rom_hits_its_knots() {
+        let p = [0.3, -0.2, 0.8, 0.1];
+        assert!((catmull_rom(p, 0.0) - p[1]).abs() < 1e-6);
+        assert!((catmull_rom(p, 1.0) - p[2]).abs() < 1e-6);
+    }
 
     // Tests for make_integral_fractional
     #[test]
