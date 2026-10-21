@@ -47,10 +47,10 @@ fn render(params: SwellParams, samples: usize) -> Vec<f32> {
 
 /// Horizontal offset of the surface point above rest position `p`, minus `p`'s
 /// own position: zero exactly when that particle sits over the gauge.
-fn gauge_residual(state: &ChannelState, count: usize, q: f32) -> f32 {
+fn gauge_residual(state: &ChannelState, q: f32) -> f32 {
     let p = state.origin;
     let mut x = p;
-    for wave in &state.waves[..count] {
+    for wave in &state.waves[..state.span] {
         let theta = wave.k * (wave.dir[0] * p[0] + wave.dir[1] * p[1]) - TAU * wave.phase;
         x[0] -= q * wave.orbit * wave.dir[0] * theta.sin();
         x[1] -= q * wave.orbit * wave.dir[1] * theta.sin();
@@ -94,30 +94,45 @@ fn steepness_narrows_crests_and_widens_troughs() {
     assert!(steep < 0.4, "steep crests should be narrow: {steep}");
 }
 
-#[test]
-fn gauge_solve_converges() {
-    let mut p = params(40.0);
+fn stormy(hz: f32) -> SwellParams {
+    let mut p = params(hz);
     p.waves = MAX_WAVES;
     p.steepness = volts(5.0);
     p.chop = volts(5.0);
     p.spread = volts(5.0);
-    let mut s = make(p);
-    for n in 0..48_000 {
-        s.update(SR);
-        let residual = gauge_residual(&s.channel_state[0], MAX_WAVES, MAX_STEEPNESS);
-        assert!(residual < 1e-4, "sample {n}: residual {residual}");
+    p
+}
+
+#[test]
+fn gauge_solve_converges() {
+    for hz in [40.0, 440.0] {
+        let mut s = make(stormy(hz));
+        for n in 0..48_000 {
+            s.update(SR);
+            let residual = gauge_residual(&s.channel_state[0], MAX_STEEPNESS);
+            assert!(residual < 1e-4, "{hz} Hz, sample {n}: residual {residual}");
+        }
     }
 }
 
 #[test]
+fn gauge_solve_converges_after_reseeding() {
+    // A new seed moves every wave, so the warm start is far from the answer.
+    let mut s = make(stormy(1.0));
+    for _ in 0..4800 {
+        s.update(SR);
+    }
+    s.params.seed = 99;
+    s.on_patch_update();
+    s.update(SR);
+    let residual = gauge_residual(&s.channel_state[0], MAX_STEEPNESS);
+    assert!(residual < 1e-4, "residual {residual}");
+}
+
+#[test]
 fn outputs_stay_bounded_at_extremes() {
-    for hz in [0.01, 1.0, 200.0] {
-        let mut p = params(hz);
-        p.waves = MAX_WAVES;
-        p.steepness = volts(5.0);
-        p.chop = volts(5.0);
-        p.spread = volts(5.0);
-        let mut s = make(p);
+    for hz in [0.01, 1.0, 200.0, 440.0] {
+        let mut s = make(stormy(hz));
         for _ in 0..9600 {
             s.update(SR);
             for v in [
@@ -179,6 +194,23 @@ fn spread_drives_roll() {
 
 #[test]
 fn channels_and_seeds_are_distinct_seas() {
+    // Seeds and channels that share bits must still place every wave anew.
+    let places = |seed: u32, channel: usize| {
+        let mut state = ChannelState::default();
+        state.scatter(seed, channel, MAX_WAVES);
+        state.waves[1..].iter().map(|w| w.place).collect::<Vec<_>>()
+    };
+    let seas = [(0, 0), (1, 0), (2, 0), (32, 0), (0, 1), (1, 1), (7, 3)];
+    for (a, &(seed_a, ch_a)) in seas.iter().enumerate() {
+        for &(seed_b, ch_b) in &seas[a + 1..] {
+            let (pa, pb) = (places(seed_a, ch_a), places(seed_b, ch_b));
+            assert!(
+                pa.iter().all(|x| !pb.contains(x)),
+                "seed {seed_a} ch {ch_a} shares waves with seed {seed_b} ch {ch_b}"
+            );
+        }
+    }
+
     let mut p = params(10.0);
     p.freq = PolySignal::poly(&[
         Signal::Volts(hz_to_voct(10.0)),
@@ -191,17 +223,74 @@ fn channels_and_seeds_are_distinct_seas() {
         diff = diff.max((s.outputs.height.get(0) - s.outputs.height.get(1)).abs());
     }
     assert!(diff > 0.1, "channels should differ: {diff}");
+}
 
-    let mut seeded = params(10.0);
-    seeded.seed = 7;
-    let a = render(params(10.0), 9600);
-    let b = render(seeded, 9600);
-    let diff = a
-        .iter()
-        .zip(&b)
-        .map(|(x, y)| (x - y).abs())
-        .fold(0.0, f32::max);
-    assert!(diff > 0.1, "seeds should differ: {diff}");
+#[test]
+fn tilt_fills_its_range_and_rises_with_the_water() {
+    for steepness in [0.0, 2.5, 5.0] {
+        let mut p = params(10.0);
+        p.waves = 1;
+        p.steepness = volts(steepness);
+        let mut s = make(p);
+        let (mut peak, mut agree, mut prev) = (0.0f32, 0.0f32, 0.0f32);
+        for n in 0..4800 {
+            s.update(SR);
+            let (h, t) = (s.outputs.height.get(0), s.outputs.tilt.get(0));
+            peak = peak.max(t.abs());
+            if n > 0 {
+                agree += (h - prev) * t;
+            }
+            prev = h;
+        }
+        assert!(peak > 4.9, "steepness {steepness}: tilt peaks at {peak}");
+        assert!(
+            agree > 0.0,
+            "steepness {steepness}: tilt should rise with the water"
+        );
+    }
+}
+
+/// Largest sample-to-sample step in `height` over `samples`.
+fn largest_step(s: &mut Swell, samples: usize) -> f32 {
+    let mut prev = s.outputs.height.get(0);
+    let mut step = 0.0f32;
+    for _ in 0..samples {
+        s.update(SR);
+        let h = s.outputs.height.get(0);
+        step = step.max((h - prev).abs());
+        prev = h;
+    }
+    step
+}
+
+#[test]
+fn changing_wave_count_fades() {
+    let mut p = params(1.0);
+    p.steepness = volts(3.0);
+    p.chop = volts(1.0);
+    let mut s = make(p);
+    s.update(SR);
+    let settled = largest_step(&mut s, 96_000);
+    for waves in [MAX_WAVES, 2, 9] {
+        s.params.waves = waves;
+        s.on_patch_update();
+        let step = largest_step(&mut s, 96_000);
+        assert!(
+            step < settled * 2.0,
+            "{waves} waves: step {step} vs settled {settled}"
+        );
+        assert_eq!(s.channel_state[0].span, waves, "faded-out waves leave play");
+    }
+}
+
+#[test]
+fn wave_count_is_validated() {
+    for waves in [0, MAX_WAVES + 1] {
+        let mut p = params(1.0);
+        p.waves = waves;
+        assert!(validate_swell_params(p, deserr::ValuePointerRef::Origin).is_err());
+    }
+    assert!(validate_swell_params(params(1.0), deserr::ValuePointerRef::Origin).is_ok());
 }
 
 #[test]

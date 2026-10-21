@@ -177,7 +177,7 @@
   },
   {
     "name": "$swell",
-    "documentation": "Ocean swell as CV: the surface of a simulated sea, read at a fixed point.\n\nThe sea sums `waves` Gerstner waves. Each moves the water in circles rather\nthan just up and down, which bunches the surface into sharp crests between\nwide, flat troughs — the shape of real swell, set by `steepness`. The first\nwave rolls at `freq`; `chop` spreads the others above it, so their crests\ndrift in and out of line and the sea arrives in sets, with the occasional\nwave far bigger than the rest. `spread` scatters their directions.\n\n- **height** (default) — surface height, ±5V. It reaches ±5V only when\n  every wave lines up, so a sea with `chop` above 0 usually stays inside it.\n- **tilt** / **roll** — slope of the surface along and across the swell's\n  direction, as the angle a moored boat would lean (±5V = ±90°). Tilt swings\n  hardest at each crest, flipping sign as it passes, more so as `steepness` rises.\n\nEvery input can be modulated live: the waves bend to the new values without\nrestarting. Each channel is its own sea.\n\n## Example\n\n```js\n// A slow, steep swell sweeping a filter\n$lpf($saw('a1'), $swell('0.1hz', { steepness: 4 }).range('200hz', '2000hz')).out()\n\n// A choppy, confused sea: the surface leans as a boat would\nconst sea = $swell('0.2hz', { chop: 4, spread: 5, waves: 12 })\n$sine('c3').amp(sea.tilt.range(0, 5)).out()\n```",
+    "documentation": "Ocean swell as CV: the surface of a simulated sea, read at a fixed point.\n\nThe sea sums `waves` Gerstner waves. Each moves the water in circles rather\nthan just up and down, which bunches the surface into sharp crests between\nwide, flat troughs — the shape of real swell, set by `steepness`. The first\nwave rolls at `freq`; `chop` spreads the others above it, so their crests\ndrift in and out of line and the sea arrives in sets, with the occasional\nwave far bigger than the rest. `spread` scatters their directions.\n\n- **height** (default) — surface height, ±5V. It reaches ±5V only when\n  every wave lines up, so a sea with `chop` above 0 usually stays inside it.\n- **tilt** — how the surface leans along the swell, the way a moored boat\n  pitches: positive while the water rises, negative while it falls. A sine\n  at `steepness` 0; when steep, a sawtooth that snaps down at each crest.\n- **roll** — the sideways lean from waves arriving off-axis. Silent at\n  `spread` 0, and busier as `spread` and `chop` rise.\n\nEvery input can be modulated live: the waves bend to the new values without\nrestarting. Each channel is its own sea.\n\n## Example\n\n```js\n// A slow, steep swell sweeping a filter\n$lpf($saw('a1'), $swell('0.1hz', { steepness: 4 }).range('200hz', '2000hz')).out()\n\n// A choppy, confused sea: the swell's lean swaying a sine's level\nconst sea = $swell('0.2hz', { chop: 4, spread: 5, waves: 12 })\n$sine('c3').amp(sea.tilt.range(0, 5)).out()\n```",
     "paramsSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "title": "SwellParams",
@@ -228,11 +228,12 @@
           ]
         },
         "waves": {
-          "description": "number of wave components (1–16)",
+          "description": "number of wave components (1–16); waves added or removed by a patch\nupdate fade over one swell period",
           "type": "integer",
           "format": "uint",
           "default": 6,
-          "minimum": 0
+          "maximum": 16,
+          "minimum": 1
         }
       },
       "required": [
@@ -309,7 +310,7 @@
       },
       {
         "name": "tilt",
-        "description": "surface tilt along the swell's direction, ±5V = ±90°",
+        "description": "lean along the swell: positive while the water rises, ±5V",
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
@@ -317,7 +318,7 @@
       },
       {
         "name": "roll",
-        "description": "surface tilt across the swell's direction, ±5V = ±90°",
+        "description": "lean across the swell from waves arriving off-axis, ±5V",
         "polyphonic": true,
         "default": false,
         "minValue": -5.0,
