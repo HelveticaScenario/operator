@@ -38,7 +38,7 @@ pub(super) fn chain() -> &'static Curve {
 /// Output voltages for `v`, the mode VCAs' output expressed as the voltage it
 /// would develop across R173 (the amp inverts). The chain is evaluated on the
 /// first `active` lanes that reach it.
-#[inline]
+#[inline(always)]
 pub(super) fn output_amp<L: Lanes>(chain: &Curve, v: L, active: usize) -> L {
     let x = L::splat(-OUTPUT_GAIN) * v;
     // Below two pairs' floor voltage the chain carries nothing.

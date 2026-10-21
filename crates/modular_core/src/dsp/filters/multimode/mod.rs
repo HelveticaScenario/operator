@@ -16,10 +16,13 @@ mod output;
 mod svf;
 mod vca;
 
+use std::ops::Range;
+
 use deserr::Deserr;
 use schemars::JsonSchema;
 
 use crate::{
+    block_input::BlockInput,
     dsp::utils::{
         rng::{LcgRng, seed_base},
         sanitize, voct_to_hz,
@@ -35,7 +38,7 @@ use output::{OUTPUT_POLE_HZ, output_amp, rails};
 use svf::{CoreTuning, NEGATIVE_DAMPING, SvfCore, TuningX4};
 use vca::GainX4;
 
-#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams)]
+#[derive(Clone, Deserr, JsonSchema, Connect, ChannelCount, SignalParams, BlockInputs)]
 #[serde(rename_all = "camelCase")]
 #[deserr(rename_all = camelCase, deny_unknown_fields)]
 struct MultimodeParams {
@@ -312,7 +315,8 @@ impl GroupState {
     name = "$multimode",
     args(input, cutoff, resonance, mode),
     has_init,
-    patch_update
+    patch_update,
+    block
 )]
 pub struct Multimode {
     outputs: MultimodeOutputs,
@@ -417,12 +421,27 @@ impl Multimode {
 
     fn update(&mut self, _sample_rate: f32) {
         let channels = self.channel_count();
-        let rate = self.core_rate();
+        let (rate, high_res) = (self.core_rate(), self.params.high_res);
         let tables = Tables::get();
         let (p, outputs) = (&self.params, &mut self.outputs);
+        let write =
+            |outputs: &mut MultimodeOutputs, base: usize, active: usize, out: GroupOutputs| {
+                let [sample, lp, bp, hp] = out;
+                for lane in 0..active {
+                    let ch = base + lane;
+                    outputs.sample.set(ch, sample[lane]);
+                    outputs.lp.set(ch, lp[lane]);
+                    outputs.bp.set(ch, bp[lane]);
+                    outputs.hp.set(ch, hp[lane]);
+                }
+            };
         // A single channel runs on lane 0 alone, without three dead lanes.
         if channels == 1 {
-            process::<f32>(&mut self.channel_state[0], p, outputs, 0, 1, rate, tables);
+            let state = &mut self.channel_state[0];
+            update_controls::<f32>(&mut state.controls, &ControlInputs::read(p, 0, 1), 1, rate);
+            let input = lanes(0, 1, |ch| p.input.get_value(ch));
+            let out = step::<f32>(state, input, 1, high_res, tables);
+            write(outputs, 0, 1, out);
             return;
         }
         for (group, state) in self
@@ -433,49 +452,169 @@ impl Multimode {
         {
             let base = group * LANES;
             let active = (channels - base).min(LANES);
+            let controls = ControlInputs::read(p, base, active);
+            let input = lanes(base, active, |ch| p.input.get_value(ch));
+            let group = (active, high_res, rate, tables);
             // A group's one live channel runs on lane 0 as well.
-            if active == 1 {
-                process_group::<f32>(state, p, outputs, base, active, rate, tables);
+            let out = if active == 1 {
+                process_group::<f32>(state, &controls, input, group)
             } else {
-                process_group::<f32x4>(state, p, outputs, base, active, rate, tables);
+                process_group::<f32x4>(state, &controls, input, group)
+            };
+            write(outputs, base, active, out);
+        }
+    }
+
+    fn process_block(
+        &mut self,
+        outputs: &mut MultimodeBlockOutputs,
+        range: Range<usize>,
+        _sample_rate: f32,
+    ) -> Option<()> {
+        let channels = self.channel_count();
+        let (rate, high_res) = (self.core_rate(), self.params.high_res);
+        let tables = Tables::get();
+        let mut scratch = Default::default();
+        let inputs = self
+            .params
+            .block_inputs(range.clone(), channels, &mut scratch)?;
+        for (group, state) in self
+            .channel_state
+            .iter_mut()
+            .take(channels.div_ceil(LANES))
+            .enumerate()
+        {
+            let base = group * LANES;
+            let active = (channels - base).min(LANES);
+            let group = (base, active, high_res, rate, tables);
+            // A group's one live channel runs on lane 0, as in `update`.
+            if active == 1 {
+                process_block_group::<f32>(state, &inputs, outputs, range.clone(), group);
+            } else {
+                process_block_group::<f32x4>(state, &inputs, outputs, range.clone(), group);
+            }
+        }
+        Some(())
+    }
+}
+
+/// One sample's control inputs for a group's live channels, 0 in dead lanes.
+struct ControlInputs {
+    cutoff: [f32; LANES],
+    resonance: [f32; LANES],
+    mode: [f32; LANES],
+    drive: [f32; LANES],
+    fold: [f32; LANES],
+}
+
+impl ControlInputs {
+    /// The current sample's controls for the `active` channels from `base`.
+    #[inline(always)]
+    fn read(p: &MultimodeParams, base: usize, active: usize) -> Self {
+        let option = |signal: &Option<PolySignal>, default: f32| {
+            lanes(base, active, |ch| signal.value_or(ch, default))
+        };
+        Self {
+            cutoff: lanes(base, active, |ch| p.cutoff.get_value(ch)),
+            resonance: option(&p.resonance, MultimodeParams::RESONANCE_DEFAULT),
+            mode: option(&p.mode, MultimodeParams::MODE_DEFAULT),
+            drive: option(&p.drive, MultimodeParams::DRIVE_DEFAULT),
+            fold: option(&p.fold, MultimodeParams::FOLD_DEFAULT),
+        }
+    }
+
+    /// Slot `i`'s controls for the `active` channels from `base`.
+    #[inline(always)]
+    fn row(inputs: &MultimodeParamsBlockInputs, i: usize, base: usize, active: usize) -> Self {
+        Self {
+            cutoff: row(&inputs.cutoff, i, base, active),
+            resonance: row(&inputs.resonance, i, base, active),
+            mode: row(&inputs.mode, i, base, active),
+            drive: row(&inputs.drive, i, base, active),
+            fold: row(&inputs.fold, i, base, active),
+        }
+    }
+}
+
+/// Slot `i` of `input` for the `active` channels from `base`, 0 for dead
+/// lanes.
+#[inline(always)]
+fn row(input: &BlockInput, i: usize, base: usize, active: usize) -> [f32; LANES] {
+    let row = &input.row(i)[base..base + active];
+    lanes(0, active, |lane| row[lane])
+}
+
+/// One sample's `[output, lp, bp, hp]` for a group's lanes.
+type GroupOutputs = [[f32; LANES]; 4];
+
+/// One sample for the `active` channels of group `state`, kept out of line so
+/// `update` carries one inlined copy.
+#[inline(never)]
+fn process_group<L: Lanes>(
+    state: &mut GroupState,
+    controls: &ControlInputs,
+    input: [f32; LANES],
+    (active, high_res, rate, tables): (usize, bool, f32, Tables),
+) -> GroupOutputs {
+    update_controls::<L>(&mut state.controls, controls, active, rate);
+    step::<L>(state, input, active, high_res, tables)
+}
+
+/// Slots `range` for the `active` channels of group `state`, from channel
+/// `base`, read from `inputs` and written to `outputs`. Controls held over the
+/// range update once.
+#[inline(never)]
+fn process_block_group<L: Lanes>(
+    state: &mut GroupState,
+    inputs: &MultimodeParamsBlockInputs,
+    outputs: &mut MultimodeBlockOutputs,
+    range: Range<usize>,
+    (base, active, high_res, rate, tables): (usize, usize, bool, f32, Tables),
+) {
+    let held = [
+        &inputs.cutoff,
+        &inputs.resonance,
+        &inputs.mode,
+        &inputs.drive,
+        &inputs.fold,
+    ]
+    .iter()
+    .all(|input| input.is_constant());
+    if held {
+        let controls = ControlInputs::row(inputs, range.start, base, active);
+        update_controls::<L>(&mut state.controls, &controls, active, rate);
+    }
+    for i in range {
+        if !held {
+            let controls = ControlInputs::row(inputs, i, base, active);
+            update_controls::<L>(&mut state.controls, &controls, active, rate);
+        }
+        let input = row(&inputs.input, i, base, active);
+        let [sample, lp, bp, hp] = step::<L>(state, input, active, high_res, tables);
+        let ports = [
+            (&mut outputs.sample, sample),
+            (&mut outputs.lp, lp),
+            (&mut outputs.bp, bp),
+            (&mut outputs.hp, hp),
+        ];
+        for (port, values) in ports {
+            let slot = &mut port.slot_mut(i)[base..base + active];
+            for (out, &v) in slot.iter_mut().zip(&values) {
+                *out = sanitize(v);
             }
         }
     }
 }
 
-/// [`process`] kept out of line, so `update` carries one inlined copy.
-#[inline(never)]
-fn process_group<L: Lanes>(
-    state: &mut GroupState,
-    p: &MultimodeParams,
-    outputs: &mut MultimodeOutputs,
-    base: usize,
-    active: usize,
-    rate: f32,
-    tables: Tables,
-) {
-    process::<L>(state, p, outputs, base, active, rate, tables);
-}
-
-/// One sample for the `active` channels of group `state`, from channel `base`.
+/// Recomputes the control laws of the first `active` lanes whose controls
+/// changed.
 #[inline(always)]
-fn process<L: Lanes>(
-    state: &mut GroupState,
-    p: &MultimodeParams,
-    outputs: &mut MultimodeOutputs,
-    base: usize,
-    active: usize,
-    rate: f32,
-    tables: Tables,
-) {
-    let read = |signal: &Option<PolySignal>| lanes(base, active, |ch| signal.value_or(ch, 0.0));
-
-    let c = &mut state.controls;
+fn update_controls<L: Lanes>(c: &mut Controls, inputs: &ControlInputs, active: usize, rate: f32) {
     let dead = active.min(L::WIDTH)..L::WIDTH;
     // Each control law sanitizes its input, so a non-finite control acts
     // as 0 V rather than reaching the filter state.
     c.drive.update(
-        read(&p.drive),
+        inputs.drive,
         active,
         dead.clone(),
         |drive| {
@@ -485,15 +624,14 @@ fn process<L: Lanes>(
         |lane, g| c.drive_x4.set(lane, g),
     );
     c.fold.update(
-        read(&p.fold),
+        inputs.fold,
         active,
         dead.clone(),
         |fold| fold_gains(sanitize(fold)),
         |lane, g| c.fold_gains[lane] = *g,
     );
-    let fold = c.fold_gains;
     c.tuning.update(
-        lanes(base, active, |ch| p.cutoff.get_value(ch)),
+        inputs.cutoff,
         active,
         dead.clone(),
         |voct| {
@@ -503,14 +641,14 @@ fn process<L: Lanes>(
         |lane, t| c.tuning_x4.set(lane, t),
     );
     c.res.update(
-        read(&p.resonance),
+        inputs.resonance,
         active,
         dead.clone(),
         |resonance| vca::Gain::new(vca_gain((sanitize(resonance) * RES_CONTROL_SCALE).max(0.0))),
         |lane, g| c.res_x4.set(lane, g),
     );
     c.mode.update(
-        read(&p.mode),
+        inputs.mode,
         active,
         dead,
         |mode| mode_gains(sanitize(mode)),
@@ -519,11 +657,24 @@ fn process<L: Lanes>(
             c.mode_x4.1.set(lane, b);
         },
     );
+}
 
-    let input = L::from_lanes(lanes(base, active, |ch| p.input.get_value(ch)));
+/// One sample of the signal path for the first `active` lanes of group
+/// `state`, returning each output's lanes.
+#[inline(always)]
+fn step<L: Lanes>(
+    state: &mut GroupState,
+    input: [f32; LANES],
+    active: usize,
+    high_res: bool,
+    tables: Tables,
+) -> GroupOutputs {
+    let c = &state.controls;
+    let fold = c.fold_gains;
+    let input = L::from_lanes(input);
     let drive_in = input * L::splat(1.0 / R_DRIVE_IN);
     let x = (L::splat(R_DRIVE_IN) * vca::output(&c.drive_x4, drive_in)).sanitize();
-    let out = if p.high_res {
+    let out = if high_res {
         let (even, odd) = state.up.process(x);
         let even = state.tick(even, &fold, tables, active);
         let odd = state.tick(odd, &fold, tables, active);
@@ -540,14 +691,7 @@ fn process<L: Lanes>(
         state.tick(x, &fold, tables, active)
     };
 
-    let [sample, lp, bp, hp] = out.map(|v| rails(v).to_lanes());
-    for lane in 0..active {
-        let ch = base + lane;
-        outputs.sample.set(ch, sample[lane]);
-        outputs.lp.set(ch, lp[lane]);
-        outputs.bp.set(ch, bp[lane]);
-        outputs.hp.set(ch, hp[lane]);
-    }
+    out.map(|v| rails(v).to_lanes())
 }
 
 impl crate::types::PatchUpdateHandler for Multimode {

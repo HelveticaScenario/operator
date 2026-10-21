@@ -371,7 +371,7 @@ impl LaneCache {
     /// Hands `set` the law's value for each of the first `active` lanes whose
     /// input changed. Lanes in `dead` follow lane 0, so they compute on a
     /// valid operating point.
-    #[inline]
+    #[inline(always)]
     pub(super) fn update<T>(
         &mut self,
         inputs: [f32; LANES],

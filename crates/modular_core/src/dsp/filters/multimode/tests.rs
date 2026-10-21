@@ -332,6 +332,48 @@ both_resolutions! {
 }
 
 both_resolutions! {
+    fn block_path_matches_update(high_res: bool) {
+        // Five channels: a full group, then a group with one live channel.
+        let settings = [
+            (220.0, 0.0, 0.0),
+            (1_000.0, 3.0, 2.5),
+            (5_000.0, 2.0, 5.0),
+            (12_000.0, 4.5, 1.0),
+            (440.0, 5.0, 4.0),
+        ];
+        let channels = settings.len();
+        let mut per_sample = make_channels(high_res, &settings);
+        let mut block = make_channels(high_res, &settings);
+        let mut ports = MultimodeBlockOutputs::new(64, channels);
+        for n in 0..40 {
+            let t = n as f32 * 0.37;
+            for m in [&mut per_sample, &mut block] {
+                m.params.input = volts(4.0 * t.sin());
+                m.params.drive = Some(volts(2.5 + 2.5 * (0.7 * t).sin()));
+                m.params.fold = Some(volts(2.5 + 2.5 * (0.3 * t).cos()));
+            }
+            // Ranges of several lengths, as the engine's sub-range retries give.
+            for range in [0..1, 1..17, 17..64] {
+                block.process_block(&mut ports, range, SR);
+            }
+            for i in 0..64 {
+                per_sample.update(SR);
+                let o = &per_sample.outputs;
+                for ch in 0..channels {
+                    let pairs = [
+                        (o.sample.get(ch), ports.sample.get(i, ch)),
+                        (o.lp.get(ch), ports.lp.get(i, ch)),
+                        (o.bp.get(ch), ports.bp.get(i, ch)),
+                        (o.hp.get(ch), ports.hp.get(i, ch)),
+                    ];
+                    for (a, b) in pairs {
+                        assert_eq!(a.to_bits(), b.to_bits(), "block {n} slot {i} channel {ch}: {a} vs {b}");
+                    }
+                }
+            }
+        }
+    }
+
     fn each_lane_matches_a_single_channel(high_res: bool) {
         // Five channels: a full group of four, then one beside three dead lanes.
         let settings = [
