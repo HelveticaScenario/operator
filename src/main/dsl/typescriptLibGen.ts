@@ -809,6 +809,22 @@ interface MonoOutOptions {
 ${renderOutOptionsMembers(MONO_OUT_OPTIONS)}
 }
 
+/** Options for \`.erratic()\` on a signal without a known range */
+interface ErraticOptions {
+  /** Rising edge samples and holds the current random shift */
+  trigger?: Poly<Signal>;
+  /** How fast the shift wanders: 0 = frozen, 5 = white noise (default 2) */
+  speed?: Poly<Signal>;
+  /** Skews the shift upward (positive) or downward (negative); ±5 makes it one-sided (default 0) */
+  bias?: Poly<Signal>;
+}
+
+/** Options for \`.erratic()\` on a ranged signal */
+interface RangedErraticOptions extends ErraticOptions {
+  /** Clamp the output to the signal's range (default true) */
+  clamp?: boolean;
+}
+
 /**
  * A single output from a module, representing a mono signal connection.
  * 
@@ -893,6 +909,16 @@ interface ModuleOutput {
    * @example $sine("1hz").exp(2)  // Quadratic curve
    */
   exp(factor?: Poly<Signal>): Collection;
+
+  /**
+   * Apply a wandering random shift of up to ±\`amount\`, where 5 shifts by up
+   * to ±5 V.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, and bias ({@link ErraticOptions})
+   * @returns The shifted {@link Collection} for chaining
+   * @example $sine($c('a3').erratic(1 / 12, { speed: 1.5 })).out()  // drift up to a semitone either way
+   */
+  erratic(amount: Poly<Signal>, options?: ErraticOptions): Collection;
   
   /**
    * Add scope visualization for this output.
@@ -1081,6 +1107,18 @@ interface ModuleOutputWithRange extends ModuleOutput {
    * @example $sine("1hz").range("C3", "C5")
    */
   range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
+
+  /**
+   * Apply a wandering random shift scaled to this output's range: \`amount\` 5
+   * shifts by up to half the range either way, so on a 0–10 signal it spans
+   * 10. Clamps to the range unless \`clamp\` is false; the result keeps the
+   * range.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, bias, and clamp ({@link RangedErraticOptions})
+   * @returns A {@link CollectionWithRange} with the same range
+   * @example $saw('c3').amp($sine('4hz').range(2, 5).erratic(2, { trigger: $clock.beatTrigger })).out()
+   */
+  erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
 }
 
 
@@ -1163,6 +1201,15 @@ class BaseCollection<T extends ModuleOutput> implements Iterable<T> {
    * @see {@link ModuleOutput.exp}
    */
   exp(factor?: Poly<Signal>): Collection;
+
+  /**
+   * Apply a wandering random shift of up to ±\`amount\` to all signals, where
+   * 5 shifts by up to ±5 V. Each channel wanders independently.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, and bias ({@link ErraticOptions})
+   * @example $sine($c('c3', 'g3').erratic(1 / 12)).out()  // each voice drifts on its own
+   */
+  erratic(amount: Poly<Signal>, options?: ErraticOptions): Collection;
 
   /**
    * Add scope visualization for the first output in the collection.
@@ -1350,6 +1397,17 @@ class CollectionWithRange extends BaseCollection<ModuleOutputWithRange> {
    * @see {@link Collection.range} - for explicit input range
    */
   override range(outMin: Poly<Signal>, outMax: Poly<Signal>): CollectionWithRange;
+
+  /**
+   * Apply a wandering random shift to all outputs, scaled to each output's
+   * range. Clamps to the range unless \`clamp\` is false; the result keeps
+   * the ranges.
+   * @param amount Shift depth (0–5) as {@link Poly<Signal>}
+   * @param options Trigger, speed, bias, and clamp ({@link RangedErraticOptions})
+   * @returns A {@link CollectionWithRange} with the same ranges
+   * @example $saw('c3').amp($sine('4hz').range(2, 5).erratic(2, { trigger: $clock.beatTrigger })).out()
+   */
+  override erratic(amount: Poly<Signal>, options?: RangedErraticOptions): CollectionWithRange;
 }
 
 /**
