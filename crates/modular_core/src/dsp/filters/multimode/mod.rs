@@ -59,8 +59,7 @@ struct MultimodeParams {
     fold: Option<PolySignal>,
     /// when true (default), the circuit runs at twice the engine rate, which
     /// reduces aliasing from the clipper, wavefolder and self-oscillation and
-    /// keeps the highpass accurate at high cutoffs; false costs about 40% less
-    /// CPU
+    /// keeps the highpass accurate at high cutoffs; false costs less CPU
     #[serde(default = "default_true")]
     #[deserr(default = default_true())]
     high_res: bool,
@@ -102,9 +101,9 @@ struct MultimodeOutputs {
 ///   +18 dB. The zeners' soft knee already rounds a ±5 V input at 0.
 /// - **fold** — 0 soft clipping only, 5 the two-stage wavefolder.
 /// - **highRes** — on by default. Off runs the circuit at the engine rate for
-///   about 40% less CPU, with more aliasing from hot drive, folding and
-///   self-oscillation, and a highpass that attenuates more below the cutoff
-///   once the cutoff is above ~8 kHz (about 2 dB more at 15 kHz).
+///   less CPU, with more aliasing from hot drive, folding and self-oscillation,
+///   and a highpass that attenuates more below the cutoff once the cutoff is
+///   above ~8 kHz (about 2 dB more at 15 kHz).
 ///
 /// Passband gain in lowpass mode is about +2.8 dB at unity drive, rolling off
 /// above ~20 kHz at the output amp, whose zeners compress the output softly
