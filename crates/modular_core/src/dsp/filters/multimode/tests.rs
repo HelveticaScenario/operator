@@ -1,5 +1,6 @@
 use std::f32::consts::PI;
 
+use super::controls::DRIVE_EXPONENT;
 use super::*;
 use crate::dsp::utils::hz_to_voct;
 use crate::types::{OutputStruct, PatchUpdateHandler, Signal};
